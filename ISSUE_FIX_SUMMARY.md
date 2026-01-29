@@ -13,11 +13,11 @@ Based on your logs from January 28, 2026, you reported:
 
 **What was happening:**
 ```
-2026-01-28 13:10:16 | WARNING | ⚠️  Could not get positions for MASTER KRAKEN: 
+2026-01-28 13:10:16 | WARNING | ⚠️  Could not get positions for MASTER KRAKEN:
 KrakenBroker.get_account_balance() got an unexpected keyword argument 'verbose'
 ```
 
-**Root cause:** 
+**Root cause:**
 The position tracking code calls `broker.get_account_balance(verbose=False)` to suppress logs when checking positions frequently. However, `KrakenBroker` (and other brokers) didn't accept the `verbose` parameter, causing a crash.
 
 **Fix applied:**

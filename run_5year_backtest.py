@@ -69,38 +69,38 @@ class MarketRegimeDetector:
     """
     Detect market regimes based on price action and volatility
     """
-    
+
     def __init__(self, lookback_period: int = 50):
         self.lookback_period = lookback_period
-    
+
     def detect_regime(self, data: pd.DataFrame, idx: int) -> str:
         """
         Detect current market regime
-        
+
         Returns:
             One of: 'bull', 'bear', 'ranging', 'volatile'
         """
         if idx < self.lookback_period:
             return MarketRegime.RANGING
-        
+
         window = data.iloc[idx - self.lookback_period:idx]
-        
+
         # Calculate metrics
         returns = window['close'].pct_change()
         volatility = returns.std() * np.sqrt(252)  # Annualized
         trend = (window['close'].iloc[-1] / window['close'].iloc[0]) - 1
-        
+
         # High volatility threshold
         if volatility > 0.6:  # >60% annualized volatility
             return MarketRegime.VOLATILE
-        
+
         # Trending markets
         if abs(trend) > 0.15:  # >15% move over lookback period
             return MarketRegime.BULL if trend > 0 else MarketRegime.BEAR
-        
+
         # Ranging market
         return MarketRegime.RANGING
-    
+
     def classify_regimes(self, data: pd.DataFrame) -> pd.Series:
         """Classify regime for entire dataset"""
         regimes = []
@@ -114,7 +114,7 @@ class FiveYearBacktester:
     """
     Comprehensive 5-year backtesting engine with regime analysis
     """
-    
+
     def __init__(
         self,
         initial_balance: float = 10000.0,
@@ -125,35 +125,35 @@ class FiveYearBacktester:
         self.commission = commission
         self.slippage = slippage
         self.regime_detector = MarketRegimeDetector()
-    
+
     def load_historical_data(self, symbol: str, years: int = 5) -> pd.DataFrame:
         """
         Load historical data for backtesting
-        
+
         Note: In production, this would fetch from exchange API or data provider
         For now, expects CSV files in data/ directory
         """
         data_file = Path('data') / f'{symbol}_historical_5y.csv'
-        
+
         if not data_file.exists():
             logger.warning(f"Historical data file not found: {data_file}")
             logger.info("Generating synthetic data for demonstration...")
             return self._generate_synthetic_data(symbol, years)
-        
+
         df = pd.read_csv(data_file)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.set_index('timestamp')
-        
+
         return df
-    
+
     def _generate_synthetic_data(self, symbol: str, years: int = 5) -> pd.DataFrame:
         """
         Generate synthetic OHLCV data for testing
-        
+
         This creates realistic-looking price data with different regime characteristics
         """
         logger.info(f"Generating {years} years of synthetic data for {symbol}")
-        
+
         # Generate 5 years of hourly data
         periods = years * 365 * 24
         dates = pd.date_range(
@@ -161,18 +161,18 @@ class FiveYearBacktester:
             periods=periods,
             freq='1h'  # lowercase 'h' for hour
         )
-        
+
         # Start with random walk
         np.random.seed(42)
         returns = np.random.randn(periods) * 0.02  # 2% hourly volatility
-        
+
         # Add regime-specific characteristics
         regime_length = periods // 8  # 8 different regime periods
-        
+
         for i in range(8):
             start = i * regime_length
             end = (i + 1) * regime_length
-            
+
             if i % 4 == 0:  # Bull market
                 returns[start:end] += 0.001  # Positive drift
             elif i % 4 == 1:  # Bear market
@@ -181,10 +181,10 @@ class FiveYearBacktester:
                 returns[start:end] *= 0.5  # Lower volatility
             else:  # Volatile
                 returns[start:end] *= 2.0  # Higher volatility
-        
+
         # Generate price from returns
         price = 100 * np.exp(np.cumsum(returns))
-        
+
         # Create OHLCV data
         df = pd.DataFrame({
             'open': price * (1 + np.random.randn(periods) * 0.005),
@@ -193,13 +193,13 @@ class FiveYearBacktester:
             'close': price,
             'volume': np.random.randint(1000000, 10000000, periods)
         }, index=dates)
-        
+
         # Ensure OHLC relationships are correct
         df['high'] = df[['open', 'high', 'close']].max(axis=1)
         df['low'] = df[['open', 'low', 'close']].min(axis=1)
-        
+
         return df
-    
+
     def run_backtest(
         self,
         symbol: str,
@@ -212,30 +212,30 @@ class FiveYearBacktester:
         logger.info(f"Starting {years}-year backtest for {symbol}")
         logger.info(f"Strategy: {strategy_name}")
         logger.info(f"Initial Balance: ${self.initial_balance:,.2f}")
-        
+
         # Load data
         data = self.load_historical_data(symbol, years)
         logger.info(f"Loaded {len(data)} data points ({data.index[0]} to {data.index[-1]})")
-        
+
         # Detect regimes
         logger.info("Detecting market regimes...")
         data['regime'] = self.regime_detector.classify_regimes(data)
-        
+
         regime_counts = data['regime'].value_counts()
         logger.info(f"Regime distribution: {regime_counts.to_dict()}")
-        
+
         # Run simplified backtest (for demo)
         logger.info("Running backtest...")
         overall_results = self._run_simple_backtest(data, strategy_name)
-        
+
         # Analyze by regime
         logger.info("Analyzing performance by regime...")
         regime_results = self._analyze_by_regime_simple(data, overall_results)
-        
+
         # Run Monte Carlo simulation
         logger.info("Running Monte Carlo simulation...")
         monte_carlo_results = self._monte_carlo_simulation_simple(overall_results, n_simulations=1000)
-        
+
         # Generate comprehensive report
         report = {
             'metadata': {
@@ -254,36 +254,36 @@ class FiveYearBacktester:
             'monte_carlo': monte_carlo_results,
             'statistical_significance': self._statistical_tests_simple(overall_results)
         }
-        
+
         return report
-    
+
     def _run_simple_backtest(self, data: pd.DataFrame, strategy_name: str) -> Dict:
         """Simple backtest simulation for demonstration"""
         # This is a simplified backtest for demonstration
         # In production, use the full BacktestEngine with actual strategy
-        
+
         balance = self.initial_balance
         positions = []
         trades = []
-        
+
         # Simulate some trades based on simple RSI strategy
         for i in range(50, len(data), 24):  # Trade once per day (24 hours)
             # Calculate simple RSI
             window = data.iloc[max(0, i-14):i]
             if len(window) < 14:
                 continue
-            
+
             gains = window['close'].diff().clip(lower=0)
             losses = -window['close'].diff().clip(upper=0)
             avg_gain = gains.rolling(14).mean().iloc[-1]
             avg_loss = losses.rolling(14).mean().iloc[-1]
-            
+
             if avg_loss == 0:
                 continue
-            
+
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
-            
+
             # Entry signal
             if rsi < 30 and len(positions) == 0:  # Oversold
                 entry_price = data.iloc[i]['close']
@@ -293,14 +293,14 @@ class FiveYearBacktester:
                     'size': size,
                     'entry_idx': i
                 })
-            
+
             # Exit signal
             elif rsi > 70 and len(positions) > 0:  # Overbought
                 for pos in positions[:]:
                     exit_price = data.iloc[i]['close']
                     pnl = (exit_price - pos['entry_price']) * pos['size']
                     pnl_pct = ((exit_price / pos['entry_price']) - 1) * 100
-                    
+
                     trades.append({
                         'pnl': pnl,
                         'pnl_pct': pnl_pct,
@@ -308,10 +308,10 @@ class FiveYearBacktester:
                         'entry_time': data.index[pos['entry_idx']],
                         'exit_time': data.index[i]
                     })
-                    
+
                     balance += pnl
                     positions.remove(pos)
-        
+
         # Calculate metrics
         if not trades:
             return {
@@ -329,13 +329,13 @@ class FiveYearBacktester:
                 'max_drawdown_pct': 0,
                 'trades': []
             }
-        
+
         wins = [t for t in trades if t['pnl'] > 0]
         losses = [t for t in trades if t['pnl'] < 0]
-        
+
         total_pnl = sum(t['pnl'] for t in trades)
         final_balance = balance
-        
+
         return {
             'initial_balance': self.initial_balance,
             'final_balance': final_balance,
@@ -351,58 +351,58 @@ class FiveYearBacktester:
             'max_drawdown_pct': 0,
             'trades': trades
         }
-    
+
     def _calc_sharpe(self, returns: List[float]) -> float:
         """Calculate Sharpe ratio"""
         if not returns or len(returns) < 2:
             return 0
         return (np.mean(returns) / np.std(returns)) * np.sqrt(252) if np.std(returns) > 0 else 0
-    
+
     def _analyze_by_regime_simple(
         self,
         data: pd.DataFrame,
         overall_results: Dict
     ) -> Dict:
         """Analyze performance broken down by market regime (simplified)"""
-        
+
         regime_metrics = {}
         trades = overall_results.get('trades', [])
-        
-        for regime in [MarketRegime.BULL, MarketRegime.BEAR, 
+
+        for regime in [MarketRegime.BULL, MarketRegime.BEAR,
                        MarketRegime.RANGING, MarketRegime.VOLATILE]:
-            
+
             # Filter trades by regime
             regime_trades = [t for t in trades if t.get('regime') == regime]
-            
+
             if not regime_trades:
                 continue
-            
+
             # Calculate metrics
             wins = [t for t in regime_trades if t['pnl'] > 0]
             losses = [t for t in regime_trades if t['pnl'] < 0]
-            
+
             win_rate = len(wins) / len(regime_trades) if regime_trades else 0
-            
+
             total_win = sum(t['pnl'] for t in wins)
             total_loss = abs(sum(t['pnl'] for t in losses)) if losses else 1
             profit_factor = total_win / total_loss if total_loss > 0 else 0
-            
+
             avg_win = np.mean([t['pnl_pct'] for t in wins]) if wins else 0
             avg_loss = np.mean([t['pnl_pct'] for t in losses]) if losses else 0
-            
+
             total_return = sum(t['pnl'] for t in regime_trades)
             total_return_pct = (total_return / self.initial_balance) * 100
-            
+
             # Calculate regime duration
             regime_periods = data[data['regime'] == regime]
             duration_days = len(regime_periods) / 24  # Assuming hourly data
-            
+
             # Expectancy
             expectancy = (win_rate * avg_win) - ((1 - win_rate) * abs(avg_loss))
-            
+
             # Sharpe ratio
             sharpe = self._calc_sharpe([t['pnl_pct'] for t in regime_trades])
-            
+
             regime_metrics[regime] = {
                 'regime': regime,
                 'duration_days': int(duration_days),
@@ -416,9 +416,9 @@ class FiveYearBacktester:
                 'avg_loss_pct': avg_loss,
                 'expectancy': expectancy
             }
-        
+
         return regime_metrics
-    
+
     def _monte_carlo_simulation_simple(
         self,
         results: Dict,
@@ -430,23 +430,23 @@ class FiveYearBacktester:
         trades = results.get('trades', [])
         if not trades:
             return {}
-        
+
         trade_returns = [t['pnl_pct'] for t in trades]
-        
+
         simulated_returns = []
         simulated_sharpes = []
-        
+
         for _ in range(n_simulations):
             # Randomly sample trades with replacement
             sampled_returns = np.random.choice(trade_returns, size=len(trade_returns), replace=True)
-            
+
             # Calculate metrics for this simulation
             final_return = np.sum(sampled_returns)
             sharpe = self._calc_sharpe(sampled_returns.tolist())
-            
+
             simulated_returns.append(final_return)
             simulated_sharpes.append(sharpe)
-        
+
         return {
             'n_simulations': n_simulations,
             'expected_return': {
@@ -463,7 +463,7 @@ class FiveYearBacktester:
                 '95th_percentile': float(np.percentile(simulated_sharpes, 95))
             }
         }
-    
+
     def _statistical_tests_simple(self, results: Dict) -> Dict:
         """
         Run statistical significance tests (simplified)
@@ -474,13 +474,13 @@ class FiveYearBacktester:
                 'sample_size_adequate': False,
                 'message': 'Insufficient trades for statistical significance (need >= 30)'
             }
-        
+
         trade_returns = [t['pnl_pct'] for t in trades]
-        
+
         # T-test: Are returns significantly different from zero?
         from scipy import stats
         t_stat, p_value = stats.ttest_1samp(trade_returns, 0)
-        
+
         return {
             'sample_size_adequate': True,
             'total_trades': len(trades),
@@ -490,32 +490,32 @@ class FiveYearBacktester:
             'significant_at_1pct': p_value < 0.01,
             'conclusion': 'Strategy shows statistically significant edge' if p_value < 0.05 else 'No significant edge detected'
         }
-    
+
     def save_report(self, report: Dict, output_file: str):
         """Save backtest report to JSON file"""
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(output_path, 'w') as f:
             json.dump(report, f, indent=2, default=str)
-        
+
         logger.info(f"Report saved to: {output_path}")
-    
+
     def print_summary(self, report: Dict):
         """Print executive summary of backtest results"""
         print("\n" + "="*80)
         print("5-YEAR MULTI-REGIME BACKTEST SUMMARY")
         print("="*80)
-        
+
         meta = report['metadata']
         perf = report['overall_performance']
-        
+
         print(f"\n📊 BACKTEST DETAILS")
         print(f"Symbol: {meta['symbol']}")
         print(f"Strategy: {meta['strategy']}")
         print(f"Period: {meta['start_date'][:10]} to {meta['end_date'][:10]} ({meta['backtest_years']} years)")
         print(f"Initial Balance: ${meta['initial_balance']:,.2f}")
-        
+
         print(f"\n💰 OVERALL PERFORMANCE")
         print(f"Final Balance: ${perf['final_balance']:,.2f}")
         print(f"Total Return: {perf['total_return_pct']:.2f}%")
@@ -524,7 +524,7 @@ class FiveYearBacktester:
         print(f"Profit Factor: {perf['profit_factor']:.2f}")
         print(f"Sharpe Ratio: {perf['sharpe_ratio']:.2f}")
         print(f"Max Drawdown: {perf['max_drawdown_pct']:.2f}%")
-        
+
         print(f"\n📈 REGIME ANALYSIS")
         for regime, metrics in report['regime_analysis'].items():
             print(f"\n{regime.upper()} Market:")
@@ -534,14 +534,14 @@ class FiveYearBacktester:
             print(f"  Return: {metrics['total_return_pct']:.2f}%")
             print(f"  Profit Factor: {metrics['profit_factor']:.2f}")
             print(f"  Max DD: {metrics['max_drawdown_pct']:.2f}%")
-        
+
         if 'monte_carlo' in report and report['monte_carlo']:
             mc = report['monte_carlo']
             print(f"\n🎲 MONTE CARLO SIMULATION ({mc['n_simulations']} runs)")
             print(f"Expected Return: {mc['expected_return']['mean']:.2f}% ± {mc['expected_return']['std']:.2f}%")
             print(f"95% Confidence: [{mc['expected_return']['5th_percentile']:.2f}%, {mc['expected_return']['95th_percentile']:.2f}%]")
             print(f"Expected Sharpe: {mc['expected_sharpe']['mean']:.2f}")
-        
+
         if 'statistical_significance' in report:
             stat = report['statistical_significance']
             if stat.get('sample_size_adequate'):
@@ -549,7 +549,7 @@ class FiveYearBacktester:
                 print(f"Sample Size: {stat['total_trades']} trades")
                 print(f"P-Value: {stat['p_value']:.4f}")
                 print(f"Conclusion: {stat['conclusion']}")
-        
+
         print("\n" + "="*80 + "\n")
 
 
@@ -599,29 +599,29 @@ def main():
         default=0.0005,
         help='Slippage rate (default: 0.0005 = 0.05%%)'
     )
-    
+
     args = parser.parse_args()
-    
+
     # Create backtester
     backtester = FiveYearBacktester(
         initial_balance=args.initial_balance,
         commission=args.commission,
         slippage=args.slippage
     )
-    
+
     # Run backtest
     report = backtester.run_backtest(
         symbol=args.symbol,
         years=args.years,
         strategy_name=args.strategy
     )
-    
+
     # Save report
     backtester.save_report(report, args.output)
-    
+
     # Print summary
     backtester.print_summary(report)
-    
+
     logger.info("✅ 5-year backtest complete!")
 
 

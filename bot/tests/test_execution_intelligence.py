@@ -44,7 +44,7 @@ except ImportError:
 
 class TestMarketMicrostructure(unittest.TestCase):
     """Test market microstructure data class."""
-    
+
     def test_market_microstructure_creation(self):
         """Test creating market microstructure object."""
         ms = MarketMicrostructure(
@@ -59,7 +59,7 @@ class TestMarketMicrostructure(unittest.TestCase):
             price=50025.0,
             timestamp=time.time()
         )
-        
+
         self.assertEqual(ms.symbol, 'BTC-USD')
         self.assertEqual(ms.bid, 50000.0)
         self.assertEqual(ms.ask, 50050.0)
@@ -69,7 +69,7 @@ class TestMarketMicrostructure(unittest.TestCase):
 
 class TestSlippageModeler(unittest.TestCase):
     """Test slippage prediction model."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         self.modeler = SlippageModeler()
@@ -85,7 +85,7 @@ class TestSlippageModeler(unittest.TestCase):
             price=50025.0,
             timestamp=time.time()
         )
-    
+
     def test_predict_slippage_calm_market(self):
         """Test slippage prediction in calm market."""
         estimate = self.modeler.predict_slippage(
@@ -94,14 +94,14 @@ class TestSlippageModeler(unittest.TestCase):
             side='buy',
             market_condition=MarketCondition.CALM
         )
-        
+
         self.assertIsNotNone(estimate)
         self.assertGreater(estimate.expected_slippage_pct, 0)
         self.assertGreater(estimate.worst_case_slippage_pct, estimate.expected_slippage_pct)
         self.assertGreater(estimate.confidence, 0)
         self.assertLessEqual(estimate.confidence, 1.0)
         self.assertIn('base_slippage', estimate.factors)
-    
+
     def test_predict_slippage_volatile_market(self):
         """Test slippage prediction in volatile market."""
         estimate = self.modeler.predict_slippage(
@@ -110,7 +110,7 @@ class TestSlippageModeler(unittest.TestCase):
             side='buy',
             market_condition=MarketCondition.VOLATILE
         )
-        
+
         # Volatile markets should have higher slippage
         calm_estimate = self.modeler.predict_slippage(
             market_data=self.market_data,
@@ -118,12 +118,12 @@ class TestSlippageModeler(unittest.TestCase):
             side='buy',
             market_condition=MarketCondition.CALM
         )
-        
+
         self.assertGreater(
             estimate.expected_slippage_pct,
             calm_estimate.expected_slippage_pct
         )
-    
+
     def test_slippage_increases_with_size(self):
         """Test that slippage increases with order size."""
         small_estimate = self.modeler.predict_slippage(
@@ -132,19 +132,19 @@ class TestSlippageModeler(unittest.TestCase):
             side='buy',
             market_condition=MarketCondition.CALM
         )
-        
+
         large_estimate = self.modeler.predict_slippage(
             market_data=self.market_data,
             order_size_usd=50000.0,
             side='buy',
             market_condition=MarketCondition.CALM
         )
-        
+
         self.assertGreater(
             large_estimate.expected_slippage_pct,
             small_estimate.expected_slippage_pct
         )
-    
+
     def test_record_actual_slippage(self):
         """Test recording actual slippage."""
         symbol = 'BTC-USD'
@@ -154,10 +154,10 @@ class TestSlippageModeler(unittest.TestCase):
             actual_price=50025.0,
             side='buy'
         )
-        
+
         self.assertIn(symbol, self.modeler.historical_slippage)
         self.assertEqual(len(self.modeler.historical_slippage[symbol]), 1)
-        
+
         # Verify slippage calculation
         slippage = self.modeler.historical_slippage[symbol][0]
         expected_slippage = (50025.0 - 50000.0) / 50000.0
@@ -166,7 +166,7 @@ class TestSlippageModeler(unittest.TestCase):
 
 class TestSpreadPredictor(unittest.TestCase):
     """Test spread prediction model."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         self.predictor = SpreadPredictor()
@@ -182,42 +182,42 @@ class TestSpreadPredictor(unittest.TestCase):
             price=50025.0,
             timestamp=time.time()
         )
-    
+
     def test_predict_spread_tightening(self):
         """Test spread tightening prediction."""
         prediction = self.predictor.predict_spread_tightening(
             market_data=self.market_data,
             horizon_seconds=300
         )
-        
+
         self.assertIn('current_spread_pct', prediction)
         self.assertIn('tightening_probability', prediction)
         self.assertIn('expected_savings_pct', prediction)
         self.assertIn('recommendation', prediction)
         self.assertIn(prediction['recommendation'], ['wait', 'execute_now'])
-    
+
     def test_record_spread(self):
         """Test recording spread observations."""
         symbol = 'BTC-USD'
         self.predictor.record_spread(symbol, 0.001)
         self.predictor.record_spread(symbol, 0.0008)
         self.predictor.record_spread(symbol, 0.0012)
-        
+
         self.assertIn(symbol, self.predictor.spread_history)
         self.assertEqual(len(self.predictor.spread_history[symbol]), 3)
-    
+
     def test_spread_history_limit(self):
         """Test that spread history is limited to 100 records."""
         symbol = 'BTC-USD'
         for i in range(150):
             self.predictor.record_spread(symbol, 0.001)
-        
+
         self.assertEqual(len(self.predictor.spread_history[symbol]), 100)
 
 
 class TestLiquidityAnalyzer(unittest.TestCase):
     """Test liquidity analysis."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         self.analyzer = LiquidityAnalyzer()
@@ -233,7 +233,7 @@ class TestLiquidityAnalyzer(unittest.TestCase):
             price=50025.0,
             timestamp=time.time()
         )
-    
+
     def test_small_order_no_splitting(self):
         """Test that small orders don't need splitting."""
         result = self.analyzer.calculate_optimal_size(
@@ -241,12 +241,12 @@ class TestLiquidityAnalyzer(unittest.TestCase):
             desired_size_usd=1000.0,
             side='buy'
         )
-        
+
         self.assertFalse(result['needs_splitting'])
         self.assertEqual(result['num_chunks'], 1)
         self.assertEqual(result['recommended_size_usd'], 1000.0)
         self.assertIsNone(result['warning'])
-    
+
     def test_large_order_requires_splitting(self):
         """Test that large orders require splitting."""
         result = self.analyzer.calculate_optimal_size(
@@ -254,14 +254,14 @@ class TestLiquidityAnalyzer(unittest.TestCase):
             desired_size_usd=50000.0,  # Large order
             side='buy'
         )
-        
+
         # Should recommend splitting for this size
         # (depends on depth and volume ratios)
         if result['needs_splitting']:
             self.assertGreater(result['num_chunks'], 1)
             self.assertIsNotNone(result['warning'])
             self.assertLess(result['chunk_size_usd'], result['desired_size_usd'])
-    
+
     def test_liquidity_score(self):
         """Test liquidity score calculation."""
         result = self.analyzer.calculate_optimal_size(
@@ -269,14 +269,14 @@ class TestLiquidityAnalyzer(unittest.TestCase):
             desired_size_usd=1000.0,
             side='buy'
         )
-        
+
         self.assertGreater(result['liquidity_score'], 0)
         self.assertLessEqual(result['liquidity_score'], 1.0)
 
 
 class TestMarketImpactEstimator(unittest.TestCase):
     """Test market impact estimation."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         self.estimator = MarketImpactEstimator()
@@ -292,7 +292,7 @@ class TestMarketImpactEstimator(unittest.TestCase):
             price=50025.0,
             timestamp=time.time()
         )
-    
+
     def test_estimate_impact(self):
         """Test market impact estimation."""
         impact = self.estimator.estimate_impact(
@@ -300,12 +300,12 @@ class TestMarketImpactEstimator(unittest.TestCase):
             order_size_usd=10000.0,
             side='buy'
         )
-        
+
         self.assertIn('permanent_impact_pct', impact)
         self.assertIn('temporary_impact_pct', impact)
         self.assertIn('volume_fraction', impact)
         self.assertGreater(impact['temporary_impact_pct'], impact['permanent_impact_pct'])
-    
+
     def test_larger_orders_higher_impact(self):
         """Test that larger orders have higher market impact."""
         small_impact = self.estimator.estimate_impact(
@@ -313,13 +313,13 @@ class TestMarketImpactEstimator(unittest.TestCase):
             order_size_usd=1000.0,
             side='buy'
         )
-        
+
         large_impact = self.estimator.estimate_impact(
             market_data=self.market_data,
             order_size_usd=50000.0,
             side='buy'
         )
-        
+
         self.assertGreater(
             large_impact['permanent_impact_pct'],
             small_impact['permanent_impact_pct']
@@ -328,7 +328,7 @@ class TestMarketImpactEstimator(unittest.TestCase):
 
 class TestExecutionIntelligence(unittest.TestCase):
     """Test main execution intelligence engine."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         self.ei = ExecutionIntelligence()
@@ -344,7 +344,7 @@ class TestExecutionIntelligence(unittest.TestCase):
             price=50025.0,
             timestamp=time.time()
         )
-    
+
     def test_classify_market_condition(self):
         """Test market condition classification."""
         # Test calm market
@@ -362,7 +362,7 @@ class TestExecutionIntelligence(unittest.TestCase):
         )
         condition = self.ei.classify_market_condition(calm_data)
         self.assertEqual(condition, MarketCondition.CALM)
-        
+
         # Test volatile market
         volatile_data = MarketMicrostructure(
             symbol='BTC-USD',
@@ -378,7 +378,7 @@ class TestExecutionIntelligence(unittest.TestCase):
         )
         condition = self.ei.classify_market_condition(volatile_data)
         self.assertEqual(condition, MarketCondition.VOLATILE)
-        
+
         # Test illiquid market
         illiquid_data = MarketMicrostructure(
             symbol='SHIB-USD',
@@ -394,7 +394,7 @@ class TestExecutionIntelligence(unittest.TestCase):
         )
         condition = self.ei.classify_market_condition(illiquid_data)
         self.assertEqual(condition, MarketCondition.ILLIQUID)
-    
+
     def test_optimize_execution(self):
         """Test execution optimization."""
         plan = self.ei.optimize_execution(
@@ -404,7 +404,7 @@ class TestExecutionIntelligence(unittest.TestCase):
             market_data=self.market_data,
             urgency=0.5
         )
-        
+
         self.assertIsInstance(plan, ExecutionPlan)
         self.assertIsInstance(plan.order_type, OrderType)
         self.assertGreater(plan.expected_slippage, 0)
@@ -412,7 +412,7 @@ class TestExecutionIntelligence(unittest.TestCase):
         self.assertGreater(plan.total_cost_pct, 0)
         self.assertGreater(plan.confidence, 0)
         self.assertLessEqual(plan.confidence, 1.0)
-    
+
     def test_high_urgency_market_order(self):
         """Test that high urgency results in market order."""
         plan = self.ei.optimize_execution(
@@ -422,9 +422,9 @@ class TestExecutionIntelligence(unittest.TestCase):
             market_data=self.market_data,
             urgency=0.95  # Very urgent
         )
-        
+
         self.assertEqual(plan.order_type, OrderType.MARKET)
-    
+
     def test_low_urgency_may_use_limit(self):
         """Test that low urgency may use limit order."""
         plan = self.ei.optimize_execution(
@@ -434,10 +434,10 @@ class TestExecutionIntelligence(unittest.TestCase):
             market_data=self.market_data,
             urgency=0.2  # Very patient
         )
-        
+
         # May use either market or limit depending on conditions
         self.assertIn(plan.order_type, [OrderType.MARKET, OrderType.LIMIT])
-    
+
     def test_record_execution_result(self):
         """Test recording execution result."""
         # Should not raise any exceptions
@@ -448,24 +448,24 @@ class TestExecutionIntelligence(unittest.TestCase):
             side='buy',
             spread_pct=0.001
         )
-        
+
         # Verify slippage was recorded
         self.assertIn('BTC-USD', self.ei.slippage_modeler.historical_slippage)
-        
+
         # Verify spread was recorded
         self.assertIn('BTC-USD', self.ei.spread_predictor.spread_history)
-    
+
     def test_singleton_instance(self):
         """Test that get_execution_intelligence returns singleton."""
         ei1 = get_execution_intelligence()
         ei2 = get_execution_intelligence()
-        
+
         self.assertIs(ei1, ei2)
 
 
 class TestExecutionPlan(unittest.TestCase):
     """Test execution plan data structure."""
-    
+
     def test_execution_plan_creation(self):
         """Test creating execution plan."""
         plan = ExecutionPlan(
@@ -477,7 +477,7 @@ class TestExecutionPlan(unittest.TestCase):
             market_impact_pct=0.0002,
             confidence=0.9
         )
-        
+
         self.assertEqual(plan.order_type, OrderType.MARKET)
         self.assertEqual(plan.expected_slippage, 0.001)
         self.assertEqual(plan.urgency_score, 0.7)

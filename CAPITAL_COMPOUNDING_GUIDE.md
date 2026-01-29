@@ -259,24 +259,24 @@ class TradingStrategy:
             enable_protection=True,
             enable_milestones=True
         )
-    
+
     def calculate_position_size(self, available_balance):
         # Check if trading is allowed
         can_trade, reason = self.capital_engine.can_trade()
         if not can_trade:
             logger.warning(f"Trading blocked: {reason}")
             return 0.0
-        
+
         # Get optimal position size
         return self.capital_engine.get_optimal_position_size(available_balance)
-    
+
     def on_trade_close(self, profit, fees, is_win, new_balance):
         # Record trade in capital engine
         self.capital_engine.record_trade(profit, fees, is_win, new_balance)
-        
+
         # Log status
         logger.info(self.capital_engine.get_quick_summary())
-    
+
     def get_capital_report(self):
         return self.capital_engine.get_comprehensive_report()
 ```
@@ -357,7 +357,7 @@ engine = CapitalScalingEngine(
 
 ### "Trading halted due to drawdown"
 **Cause**: Drawdown exceeded 20% threshold
-**Solution**: 
+**Solution**:
 - Win 3 consecutive trades to begin recovery
 - Add capital to reduce drawdown percentage
 - Review and improve trading strategy
@@ -464,6 +464,6 @@ For issues or questions:
 
 ---
 
-**Version**: 1.0  
-**Last Updated**: January 28, 2026  
+**Version**: 1.0
+**Last Updated**: January 28, 2026
 **Author**: NIJA Trading Systems

@@ -201,10 +201,10 @@ while True:
         # Fetch candles
         candles = coinbase.get_candles(symbol, '5m', 100)
         df = pd.DataFrame(candles)
-        
+
         # Analyze entry
         analysis = strategy.analyze_entry_opportunity(df, symbol)
-        
+
         if analysis['should_enter']:
             # Place order
             broker_manager.place_order(
@@ -212,7 +212,7 @@ while True:
                 analysis['side'],
                 analysis['position_size_usd']
             )
-    
+
     time.sleep(300)  # Wait 5 minutes
 ```
 
@@ -641,8 +641,8 @@ Core principles:
 
 ---
 
-**Version**: 7.1  
-**Last Updated**: December 2024  
+**Version**: 7.1
+**Last Updated**: December 2024
 **Status**: Production Ready (Coinbase), Placeholder (Binance)
-**Last Updated**: December 12, 2025  
+**Last Updated**: December 12, 2025
 **Status**: Production-Ready Architecture

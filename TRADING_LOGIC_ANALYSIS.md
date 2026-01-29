@@ -1,5 +1,5 @@
 # NIJA Trading Logic Analysis
-**Date:** January 28, 2026  
+**Date:** January 28, 2026
 **Issue:** Master account losing money while user accounts making money
 
 ## Executive Summary
@@ -8,7 +8,7 @@
 
 The buy/sell signal chain is **CORRECT** throughout:
 - ✅ Bullish indicators → `buy_signal` → `long_signal` → `enter_long` → `side='long'` → `buy` order
-- ✅ Bearish indicators → `sell_signal` → `short_signal` → `enter_short` → `side='short'` → `sell` order  
+- ✅ Bearish indicators → `sell_signal` → `short_signal` → `enter_short` → `side='short'` → `sell` order
 - ✅ Master signals → Copy engine → Users receive identical `side` parameter
 
 ## Detailed Analysis
@@ -92,7 +92,7 @@ The master losing money while users profit is **NOT** due to inverted logic. Ins
 
 ```
 ✅ Long → Buy Mapping: PASSED
-✅ Short → Sell Mapping: PASSED  
+✅ Short → Sell Mapping: PASSED
 ✅ Copy Trading Propagation: PASSED
 ✅ Indicator Signals: PASSED
 ⚠️  RSI Signal Logic: SKIPPED (dependency issue)

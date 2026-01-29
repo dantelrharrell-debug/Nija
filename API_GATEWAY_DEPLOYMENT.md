@@ -297,10 +297,10 @@ server {
 server {
     listen 443 ssl;
     server_name api.nija.example.com;
-    
+
     ssl_certificate /path/to/cert.pem;
     ssl_certificate_key /path/to/key.pem;
-    
+
     location / {
         proxy_pass http://localhost:8000;
         proxy_set_header Host $host;
@@ -527,6 +527,6 @@ r = redis.Redis(host='localhost', port=6379, db=0)
 
 ---
 
-**Version**: 1.0.0  
-**Strategy**: v7.2 (Locked - Profitability Mode)  
+**Version**: 1.0.0
+**Strategy**: v7.2 (Locked - Profitability Mode)
 **Last Updated**: January 27, 2026

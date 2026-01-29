@@ -60,11 +60,11 @@ else:
 ```python
 class ApexStrategy:
     """APEX v7.1 strategy with unified execution."""
-    
+
     def __init__(self, exchange='coinbase'):
         self.exchange = exchange
         self.positions = {}
-    
+
     def execute_entry(self, symbol, entry_size_usd):
         """Execute entry with unified interface."""
         # Validate first
@@ -74,11 +74,11 @@ class ApexStrategy:
             side='buy',
             size=entry_size_usd
         )
-        
+
         if not validated.valid:
             logger.warning(f"⚠️ Entry validation failed: {validated.error_message}")
             return None
-        
+
         # Execute trade
         result = execute_trade(
             exchange=self.exchange,
@@ -87,7 +87,7 @@ class ApexStrategy:
             size=entry_size_usd,
             order_type='market'
         )
-        
+
         if result.success:
             # Track position
             self.positions[symbol] = {
@@ -95,9 +95,9 @@ class ApexStrategy:
                 'entry_size': result.size,
                 'exchange': self.exchange
             }
-        
+
         return result
-    
+
     def execute_exit(self, symbol, exit_size_base):
         """Execute exit with unified interface."""
         result = execute_trade(
@@ -108,10 +108,10 @@ class ApexStrategy:
             order_type='market',
             size_type='base'  # Selling base currency (e.g., 0.5 BTC)
         )
-        
+
         if result.success and symbol in self.positions:
             del self.positions[symbol]
-        
+
         return result
 ```
 
@@ -120,20 +120,20 @@ class ApexStrategy:
 ```python
 class MultiExchangePortfolio:
     """Manage positions across multiple exchanges."""
-    
+
     def __init__(self, exchanges=['coinbase', 'kraken', 'binance']):
         self.exchanges = exchanges
         self.positions = {ex: {} for ex in exchanges}
-    
+
     def distribute_buy(self, symbol, total_usd):
         """Distribute a buy order across all exchanges."""
         size_per_exchange = total_usd / len(self.exchanges)
-        
+
         results = []
         for exchange in self.exchanges:
             # Get exchange-specific symbol format
             exchange_symbol = self.normalize_symbol(symbol, exchange)
-            
+
             # Execute on this exchange
             result = execute_trade(
                 exchange=exchange,
@@ -142,14 +142,14 @@ class MultiExchangePortfolio:
                 size=size_per_exchange,
                 order_type='market'
             )
-            
+
             if result.success:
                 self.positions[exchange][symbol] = result
-            
+
             results.append((exchange, result))
-        
+
         return results
-    
+
     def normalize_symbol(self, symbol, exchange):
         """Convert symbol to exchange-specific format."""
         # The unified engine handles this automatically,
@@ -168,7 +168,7 @@ class MultiExchangePortfolio:
 ```python
 class StrategyRouter:
     """Route trades to the best exchange based on conditions."""
-    
+
     def __init__(self):
         self.exchange_fees = {
             'coinbase': 0.012,  # 1.20%
@@ -176,14 +176,14 @@ class StrategyRouter:
             'binance': 0.002,   # 0.20%
             'okx': 0.002        # 0.20%
         }
-    
+
     def execute_with_best_fees(self, symbol, side, size):
         """Execute on the exchange with the lowest fees."""
         # Choose exchange with lowest fees
         best_exchange = min(self.exchange_fees.items(), key=lambda x: x[1])[0]
-        
+
         logger.info(f"📊 Routing to {best_exchange} (lowest fees: {self.exchange_fees[best_exchange]*100}%)")
-        
+
         result = execute_trade(
             exchange=best_exchange,
             symbol=symbol,
@@ -191,16 +191,16 @@ class StrategyRouter:
             size=size,
             order_type='market'
         )
-        
+
         return result
-    
+
     def execute_with_fallback(self, symbol, side, size):
         """Try exchanges in order until one succeeds."""
         exchanges = ['kraken', 'binance', 'coinbase', 'okx']
-        
+
         for exchange in exchanges:
             logger.info(f"🎯 Attempting on {exchange}...")
-            
+
             result = execute_trade(
                 exchange=exchange,
                 symbol=symbol,
@@ -208,13 +208,13 @@ class StrategyRouter:
                 size=size,
                 order_type='market'
             )
-            
+
             if result.success:
                 logger.info(f"✅ Success on {exchange}")
                 return result
             else:
                 logger.warning(f"⚠️ Failed on {exchange}: {result.error_message}")
-        
+
         logger.error("❌ All exchanges failed")
         return None
 ```
@@ -231,12 +231,12 @@ class StrategyRouter:
 
 ## Benefits of Migration
 
-✅ **Simpler Code**: One function instead of many  
-✅ **More Exchanges**: Easy to add new exchanges  
-✅ **Better Validation**: Automatic pre-flight checks  
-✅ **Consistent Errors**: Same error handling everywhere  
-✅ **Symbol Normalization**: Automatic format conversion  
-✅ **Multi-Exchange**: Easy to distribute trades  
+✅ **Simpler Code**: One function instead of many
+✅ **More Exchanges**: Easy to add new exchanges
+✅ **Better Validation**: Automatic pre-flight checks
+✅ **Consistent Errors**: Same error handling everywhere
+✅ **Symbol Normalization**: Automatic format conversion
+✅ **Multi-Exchange**: Easy to distribute trades
 
 ## Need Help?
 

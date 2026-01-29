@@ -2,7 +2,7 @@
 
 ## Public-Facing Message
 
-> **"NIJA AI Trading is designed for accounts starting at $100.**  
+> **"NIJA AI Trading is designed for accounts starting at $100.**
 > **Smaller balances may connect, but full trading performance begins at Starter tier."**
 
 This simple message protects:

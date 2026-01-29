@@ -11,7 +11,7 @@ NIJA now features intelligent rate limiting profiles for Kraken API calls, optim
 Kraken's API has a unique cost structure where **AddOrder calls are FREE** (0 API points), but **Balance checks cost 1 point**. The new rate profiles take advantage of this by:
 
 - **Entry Operations (Buy)**: Minimal rate limiting (2-3s intervals) - FREE on Kraken
-- **Exit Operations (Sell)**: Minimal rate limiting (2-3s intervals) - FREE on Kraken  
+- **Exit Operations (Sell)**: Minimal rate limiting (2-3s intervals) - FREE on Kraken
 - **Monitoring Operations (Balance)**: Conservative rate limiting (10-30s intervals) - Saves API budget
 - **Query Operations (Order Status)**: Moderate rate limiting (5-15s intervals) - Controlled usage
 
@@ -69,7 +69,7 @@ result = self._kraken_private_call('AddOrder', params, category=api_category)
 # → Uses 2s interval (STANDARD mode)
 
 # Monitoring operation (balance check)
-api_category = KrakenAPICategory.MONITORING  
+api_category = KrakenAPICategory.MONITORING
 balance = self._kraken_private_call('Balance', category=api_category)
 # → Uses 10s interval (STANDARD mode)
 ```
@@ -126,7 +126,7 @@ Perfect for small accounts where API overhead matters:
 
 ```
 ⚡ ENTRY OPERATIONS: 3s interval, 20 trades/min, 0 API points
-🚪 EXIT OPERATIONS: 3s interval, 20 trades/min, 0 API points  
+🚪 EXIT OPERATIONS: 3s interval, 20 trades/min, 0 API points
 📈 MONITORING: 30s interval, 2 checks/min, 1 API point
 🔍 QUERIES: 15s interval, 4 queries/min, 1 API point
 
@@ -149,7 +149,7 @@ Balanced for medium accounts:
 ```
 ⚡ ENTRY OPERATIONS: 2s interval, 30 trades/min, 0 API points
 🚪 EXIT OPERATIONS: 2s interval, 30 trades/min, 0 API points
-📈 MONITORING: 10s interval, 6 checks/min, 1 API point  
+📈 MONITORING: 10s interval, 6 checks/min, 1 API point
 🔍 QUERIES: 5s interval, 12 queries/min, 1 API point
 
 💰 API BUDGET:
@@ -244,7 +244,7 @@ The system logs rate limiting activity:
 📊 Rate limit for AddOrder (entry): 2.0s
 🛡️ Rate limiting (entry): sleeping 150ms between Kraken calls
 
-📊 Rate limit for Balance (monitoring): 10.0s  
+📊 Rate limit for Balance (monitoring): 10.0s
 🛡️ Rate limiting (monitoring): sleeping 8500ms between Kraken calls
 ```
 
@@ -305,11 +305,11 @@ The system logs rate limiting activity:
 
 The Kraken rate limiting profiles provide:
 
-✅ **Separate budgets** for entry/exit vs monitoring operations  
-✅ **Low-capital mode** that minimizes API overhead for small accounts  
-✅ **Auto-selection** based on account balance  
-✅ **Smart allocation** of Kraken's 15 points/minute API budget  
-✅ **Fast execution** for trades (0 API points on Kraken)  
-✅ **Conservative monitoring** to save API budget  
+✅ **Separate budgets** for entry/exit vs monitoring operations
+✅ **Low-capital mode** that minimizes API overhead for small accounts
+✅ **Auto-selection** based on account balance
+✅ **Smart allocation** of Kraken's 15 points/minute API budget
+✅ **Fast execution** for trades (0 API points on Kraken)
+✅ **Conservative monitoring** to save API budget
 
 This ensures optimal performance across all account sizes while respecting Kraken's API rate limits.

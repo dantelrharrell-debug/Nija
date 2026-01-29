@@ -354,7 +354,7 @@ To customize rotation logic, edit `bot/rotation_manager.py`:
 def score_position_for_rotation(self, position, position_metrics):
     # Adjust weights for your strategy
     # Higher score = more likely to close
-    
+
     # Example: Prioritize age over P&L
     if age_hours > 6:
         score += 40  # Increased from 15

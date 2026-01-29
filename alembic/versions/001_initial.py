@@ -1,7 +1,7 @@
 """Initial database schema
 
 Revision ID: 001_initial
-Revises: 
+Revises:
 Create Date: 2026-01-29 13:15:00
 
 """
@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create initial schema for NIJA trading platform"""
-    
+
     # Create users table
     op.create_table(
         'users',

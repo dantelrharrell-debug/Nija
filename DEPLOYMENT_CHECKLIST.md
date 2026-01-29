@@ -178,8 +178,8 @@ SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 100;
 
 2. **User Authentication**: Monitor login_history
 ```sql
-SELECT user_id, success, COUNT(*) 
-FROM login_history 
+SELECT user_id, success, COUNT(*)
+FROM login_history
 WHERE timestamp > datetime('now', '-1 day')
 GROUP BY user_id, success;
 ```

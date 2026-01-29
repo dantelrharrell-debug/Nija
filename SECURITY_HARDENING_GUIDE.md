@@ -70,7 +70,7 @@ class WebhookSignal(BaseModel):
     symbol: str
     action: str
     price: float
-    
+
     @validator('action')
     def validate_action(cls, v):
         if v not in ['buy', 'sell']:

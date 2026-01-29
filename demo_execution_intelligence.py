@@ -28,9 +28,9 @@ def demo_scenario(scenario_name, market_data, order_size, urgency):
     print(f"Spread: {market_data.spread_pct*100:.3f}%")
     print(f"24h Volume: ${market_data.volume_24h:,.0f}")
     print(f"Volatility: {market_data.volatility*100:.2f}%")
-    
+
     ei = get_execution_intelligence()
-    
+
     # Optimize execution
     plan = ei.optimize_execution(
         symbol=market_data.symbol,
@@ -39,7 +39,7 @@ def demo_scenario(scenario_name, market_data, order_size, urgency):
         market_data=market_data,
         urgency=urgency
     )
-    
+
     print(f"\n🎯 OPTIMIZED EXECUTION PLAN:")
     print(f"   Recommended Order Type: {plan.order_type.value.upper()}")
     if plan.limit_price:
@@ -49,18 +49,18 @@ def demo_scenario(scenario_name, market_data, order_size, urgency):
     print(f"   Market Impact: {plan.market_impact_pct*100:.3f}%")
     print(f"   TOTAL EXECUTION COST: {plan.total_cost_pct*100:.3f}%")
     print(f"   Confidence Level: {plan.confidence*100:.0f}%")
-    
+
     if plan.warnings:
         print(f"\n⚠️  WARNINGS:")
         for warning in plan.warnings:
             print(f"   • {warning}")
-    
+
     # Calculate cost savings
     naive_cost = 0.55  # 0.55% typical without optimization
     optimized_cost = plan.total_cost_pct
     savings_pct = (naive_cost - optimized_cost) / naive_cost * 100
     savings_usd = order_size * (naive_cost - optimized_cost)
-    
+
     print(f"\n💰 COST ANALYSIS:")
     print(f"   Without Optimization: {naive_cost*100:.2f}% (${order_size * naive_cost:.2f})")
     print(f"   With Optimization: {optimized_cost*100:.2f}% (${order_size * optimized_cost:.2f})")
@@ -80,7 +80,7 @@ def main():
     print("  3. Medium order, volatile market")
     print("  4. Small order, illiquid market")
     print("  5. Large urgent exit")
-    
+
     # Scenario 1: Small order, calm market
     demo_scenario(
         "Small Order in Calm BTC Market",
@@ -99,7 +99,7 @@ def main():
         order_size=1000.0,
         urgency=0.5
     )
-    
+
     # Scenario 2: Large order, liquid market
     demo_scenario(
         "Large Order in Liquid ETH Market",
@@ -118,7 +118,7 @@ def main():
         order_size=50000.0,
         urgency=0.6
     )
-    
+
     # Scenario 3: Medium order, volatile market
     demo_scenario(
         "Medium Order in Volatile SOL Market",
@@ -137,7 +137,7 @@ def main():
         order_size=5000.0,
         urgency=0.7
     )
-    
+
     # Scenario 4: Small order, illiquid market
     demo_scenario(
         "Small Order in Illiquid Altcoin Market",
@@ -156,7 +156,7 @@ def main():
         order_size=500.0,
         urgency=0.4
     )
-    
+
     # Scenario 5: Large urgent exit
     demo_scenario(
         "Large Urgent Exit (Stop Loss)",
@@ -175,7 +175,7 @@ def main():
         order_size=25000.0,
         urgency=0.95  # Very urgent
     )
-    
+
     # Summary
     print(f"\n{'=' * 70}")
     print("📈 ANNUAL IMPACT PROJECTION")
@@ -191,7 +191,7 @@ def main():
     print(f"  Without optimization: $100,000 → $104,500 (4.5% net)")
     print(f"  With optimization: $100,000 → $127,500 (27.5% net)")
     print(f"  EXTRA PROFIT: $23,000 (23% improvement)")
-    
+
     print(f"\n{'=' * 70}")
     print("✅ EXECUTION INTELLIGENCE DEMONSTRATION COMPLETE")
     print(f"{'=' * 70}")

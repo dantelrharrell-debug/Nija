@@ -271,32 +271,32 @@ def trading_loop():
         # Update regime
         regime = detect_regime(get_market_data())
         portfolio.update_market_regime(regime)
-        
+
         # Get optimized allocation
         allocation = portfolio.optimize_allocation()
-        
+
         # Execute trades for each strategy
         for strategy_name, alloc_pct in allocation.allocations.items():
             # Get allocated capital
             capital = portfolio.get_strategy_capital(strategy_name)
-            
+
             # Execute strategy
             result = execute_strategy(strategy_name, capital)
-            
+
             # Update performance
             if result:
                 portfolio.update_strategy_performance(
                     strategy_name=strategy_name,
                     trade_result=result
                 )
-        
+
         # Update dashboard
         update_performance_snapshot()
-        
+
         # Rebalance if needed
         current_capital = get_total_capital()
         portfolio.rebalance(current_capital)
-        
+
         # Wait for next cycle
         sleep(300)  # 5 minutes
 ```
@@ -388,7 +388,7 @@ def detect_market_regime(price_data, volume_data):
     # Calculate metrics
     trend_strength = calculate_trend(price_data)
     volatility = calculate_volatility(price_data)
-    
+
     # Classify regime
     if trend_strength > 0.7 and volatility < 0.3:
         return MarketRegime.BULL_TRENDING
@@ -407,12 +407,12 @@ def detect_market_regime(price_data, volume_data):
 ```python
 def adjust_risk_multipliers(portfolio, market_conditions):
     """Dynamically adjust risk based on conditions"""
-    
+
     for name, strategy in portfolio.strategies.items():
         if market_conditions['high_volatility']:
             # Reduce risk in high volatility
             strategy.risk_multiplier *= 0.8
-        
+
         if market_conditions['trending']:
             # Increase trend strategy risk
             if strategy.strategy_type == TradingStrategy.TREND_FOLLOWING:
@@ -424,15 +424,15 @@ def adjust_risk_multipliers(portfolio, market_conditions):
 ```python
 def check_rebalancing_needed(portfolio, current_allocation, target_allocation):
     """Check if rebalancing is needed"""
-    
+
     max_deviation = 0.0
-    
+
     for strategy in current_allocation:
         current = current_allocation[strategy]
         target = target_allocation[strategy]
         deviation = abs(current - target)
         max_deviation = max(max_deviation, deviation)
-    
+
     # Rebalance if any strategy deviates by > 10%
     return max_deviation > 10.0
 ```
@@ -444,13 +444,13 @@ Track which strategies contribute to overall performance:
 ```python
 def calculate_strategy_attribution(portfolio):
     """Calculate performance attribution by strategy"""
-    
+
     total_pnl = 0.0
     strategy_contributions = {}
-    
+
     for name, perf in portfolio.performance.items():
         total_pnl += perf.total_pnl
-    
+
     for name, perf in portfolio.performance.items():
         contribution_pct = (perf.total_pnl / total_pnl * 100) if total_pnl > 0 else 0
         strategy_contributions[name] = {
@@ -458,7 +458,7 @@ def calculate_strategy_attribution(portfolio):
             'contribution_pct': contribution_pct,
             'allocation_pct': perf.current_allocation_pct
         }
-    
+
     return strategy_contributions
 ```
 

@@ -241,6 +241,6 @@ If you encounter issues:
 
 ---
 
-**Created**: 2026-01-23  
-**Version**: 1.0  
+**Created**: 2026-01-23
+**Version**: 1.0
 **Part of**: NIJA Trading Bot - Kraken Integration

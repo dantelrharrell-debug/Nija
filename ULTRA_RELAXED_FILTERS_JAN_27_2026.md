@@ -22,7 +22,7 @@ The previous filter relaxation (Jan 26, 2026) was **not aggressive enough**. The
 1. **Smart Filter** - Still blocking 25/30 markets (83%)
    - `volume_min_threshold = 0.05` (5%) - still too restrictive
    - `candle_exclusion_seconds = 6` - blocking too much of each candle
-   
+
 2. **Market Filter** - Still requiring strong conditions
    - `min_adx = 15` - still too high for current market volatility
    - `volume_threshold = 0.3` (30%) - still too high
@@ -46,7 +46,7 @@ self.min_adx = self.config.get('min_adx', 15)  # Still blocking many markets
 self.min_adx = self.config.get('min_adx', 12)  # Allow even weaker trends
 ```
 
-**Impact:** 
+**Impact:**
 - ADX 12-15 is still a measurable trend (not random)
 - Opens up more markets that were previously filtered
 - Still filters out completely choppy markets (ADX < 12)
@@ -376,8 +376,8 @@ self.volume_min_threshold = 0.03  # Between 0.02 and 0.05
 
 **Solution:** Ultra-relaxed filters (2% volume min, 12 ADX, 3s candle exclusion)
 
-**Expected Impact:** 
-- Smart filter blocks: 83% → 30% 
+**Expected Impact:**
+- Smart filter blocks: 83% → 30%
 - Signals found: 0 → 5-10 per scan
 - Trades per day: 0 → 2-5
 - User status: Losing → Opportunity to profit
@@ -388,9 +388,9 @@ self.volume_min_threshold = 0.03  # Between 0.02 and 0.05
 
 ---
 
-**Last Updated:** January 27, 2026  
-**Author:** GitHub Copilot Agent  
-**Priority:** CRITICAL - User actively losing money due to 0 trading activity  
+**Last Updated:** January 27, 2026
+**Author:** GitHub Copilot Agent
+**Priority:** CRITICAL - User actively losing money due to 0 trading activity
 **Expected Impact:** Enable bot to actually find trading opportunities and execute profitable trades
 
 ---

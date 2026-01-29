@@ -73,20 +73,20 @@ class RiskRegimeResult:
 class RiskOnRiskOffAllocator:
     """
     Dynamic capital allocator based on risk-on/risk-off regime detection
-    
+
     Automatically shifts capital allocation between aggressive (risk-on)
     and defensive (risk-off) based on multi-factor market analysis.
     """
-    
+
     def __init__(self, config: Dict = None):
         """
         Initialize Risk-On/Risk-Off Allocator
-        
+
         Args:
             config: Optional configuration dictionary
         """
         self.config = config or {}
-        
+
         # Regime detection parameters
         self.regime_factors = {
             'trend_strength': self.config.get('trend_strength_weight', 0.25),  # ADX, trend quality
@@ -95,7 +95,7 @@ class RiskOnRiskOffAllocator:
             'volume': self.config.get('volume_weight', 0.15),  # Volume trends
             'market_breadth': self.config.get('market_breadth_weight', 0.20),  # How many assets trending
         }
-        
+
         # Exposure levels for each regime
         self.exposure_levels = {
             MarketRegime.RISK_ON: {
@@ -117,17 +117,17 @@ class RiskOnRiskOffAllocator:
                 'reserve_pct': 0.70,  # 70% reserve
             },
         }
-        
+
         # Regime transition thresholds
         self.risk_on_threshold = self.config.get('risk_on_threshold', 40)  # Score > 40 = risk-on
         self.risk_off_threshold = self.config.get('risk_off_threshold', -40)  # Score < -40 = risk-off
         self.min_regime_duration = self.config.get('min_regime_duration', 3)  # Minimum periods before changing
-        
+
         # Historical regime tracking
         self.regime_history: List[RegimeSignal] = []
         self.current_regime: Optional[MarketRegime] = None
         self.regime_duration = 0  # How many periods in current regime
-        
+
         logger.info("=" * 70)
         logger.info("⚡ Risk-On/Risk-Off Capital Allocator Initialized")
         logger.info("=" * 70)
@@ -142,7 +142,7 @@ class RiskOnRiskOffAllocator:
             logger.info(f"    Position Multiplier: {levels['position_multiplier']:.1f}x")
             logger.info(f"    Max Positions: {levels['max_positions']}")
         logger.info("=" * 70)
-    
+
     def detect_regime(
         self,
         market_data: Dict[str, Dict],
@@ -150,11 +150,11 @@ class RiskOnRiskOffAllocator:
     ) -> RegimeSignal:
         """
         Detect current market regime based on multiple factors
-        
+
         Args:
             market_data: Dictionary of symbol -> market metrics (adx, rsi, atr, volume, etc.)
             portfolio_metrics: Optional portfolio-level metrics
-            
+
         Returns:
             RegimeSignal indicating detected regime
         """
@@ -166,14 +166,14 @@ class RiskOnRiskOffAllocator:
                 score=0.0,
                 factors={}
             )
-        
+
         # Calculate individual factor scores
         factor_scores = {}
-        
+
         # Factor 1: Trend Strength (based on ADX)
         adx_values = [data.get('adx', 0) for data in market_data.values()]
         avg_adx = np.mean(adx_values) if adx_values else 0
-        
+
         if avg_adx >= 35:
             factor_scores['trend_strength'] = 100  # Very strong trends
         elif avg_adx >= 25:
@@ -182,16 +182,16 @@ class RiskOnRiskOffAllocator:
             factor_scores['trend_strength'] = 20  # Weak trends
         else:
             factor_scores['trend_strength'] = -50  # No trends (choppy)
-        
+
         # Factor 2: Momentum (based on RSI)
         rsi_values = [data.get('rsi', 50) for data in market_data.values()]
         avg_rsi = np.mean(rsi_values) if rsi_values else 50
-        
+
         # Count bullish vs bearish RSI
         bullish_count = sum(1 for rsi in rsi_values if rsi > 50)
         bearish_count = sum(1 for rsi in rsi_values if rsi <= 50)
         total_count = len(rsi_values)
-        
+
         if bullish_count / total_count >= 0.7:
             factor_scores['momentum'] = 100  # Strong bullish momentum
         elif bullish_count / total_count >= 0.6:
@@ -202,19 +202,19 @@ class RiskOnRiskOffAllocator:
             factor_scores['momentum'] = -50  # Moderate bearish
         else:
             factor_scores['momentum'] = 0  # Mixed/neutral
-        
+
         # Factor 3: Volatility (based on ATR)
         atr_values = [data.get('atr', 0) for data in market_data.values()]
         prices = [data.get('price', 1) for data in market_data.values()]
-        
+
         # Calculate ATR as % of price
         atr_pct_values = []
         for atr, price in zip(atr_values, prices):
             if price > 0:
                 atr_pct_values.append((atr / price) * 100)
-        
+
         avg_atr_pct = np.mean(atr_pct_values) if atr_pct_values else 0
-        
+
         if avg_atr_pct >= 4.0:
             factor_scores['volatility'] = -80  # Very high volatility = risk-off
         elif avg_atr_pct >= 3.0:
@@ -225,11 +225,11 @@ class RiskOnRiskOffAllocator:
             factor_scores['volatility'] = 60  # Low-moderate volatility
         else:
             factor_scores['volatility'] = -20  # Very low volatility (choppy)
-        
+
         # Factor 4: Volume (based on volume trends)
         volume_ratios = [data.get('volume_ratio', 1.0) for data in market_data.values()]
         avg_volume_ratio = np.mean(volume_ratios) if volume_ratios else 1.0
-        
+
         if avg_volume_ratio >= 1.5:
             factor_scores['volume'] = 80  # High volume = strong conviction
         elif avg_volume_ratio >= 1.2:
@@ -238,12 +238,12 @@ class RiskOnRiskOffAllocator:
             factor_scores['volume'] = 0  # Normal volume
         else:
             factor_scores['volume'] = -60  # Low volume = weak conviction
-        
+
         # Factor 5: Market Breadth (how many assets are trending up)
         trending_up = sum(1 for data in market_data.values() if data.get('trend_direction', 0) > 0)
         trending_down = sum(1 for data in market_data.values() if data.get('trend_direction', 0) < 0)
         total_assets = len(market_data)
-        
+
         if trending_up / total_assets >= 0.7:
             factor_scores['market_breadth'] = 100  # Broad rally
         elif trending_up / total_assets >= 0.6:
@@ -254,13 +254,13 @@ class RiskOnRiskOffAllocator:
             factor_scores['market_breadth'] = -50  # Moderate decline
         else:
             factor_scores['market_breadth'] = 0  # Mixed market
-        
+
         # Calculate weighted total score
         total_score = sum(
             factor_scores.get(factor, 0) * self.regime_factors.get(factor, 0)
             for factor in self.regime_factors
         )
-        
+
         # Determine regime based on score
         if total_score >= self.risk_on_threshold:
             regime = MarketRegime.RISK_ON
@@ -271,7 +271,7 @@ class RiskOnRiskOffAllocator:
         else:
             regime = MarketRegime.NEUTRAL
             confidence = 0.6  # Moderate confidence in neutral
-        
+
         # Apply regime persistence (avoid rapid switching)
         if self.current_regime is not None and regime != self.current_regime:
             if self.regime_duration < self.min_regime_duration:
@@ -282,14 +282,14 @@ class RiskOnRiskOffAllocator:
                 )
                 regime = self.current_regime
                 confidence *= 0.7  # Reduce confidence when maintaining
-        
+
         signal = RegimeSignal(
             regime=regime,
             confidence=confidence,
             score=total_score,
             factors=factor_scores
         )
-        
+
         # Update tracking
         self.regime_history.append(signal)
         if self.current_regime == regime:
@@ -297,11 +297,11 @@ class RiskOnRiskOffAllocator:
         else:
             self.current_regime = regime
             self.regime_duration = 1
-        
+
         # Keep only last 100 regime signals
         if len(self.regime_history) > 100:
             self.regime_history = self.regime_history[-100:]
-        
+
         logger.info("=" * 70)
         logger.info("⚡ Market Regime Detection")
         logger.info("=" * 70)
@@ -316,9 +316,9 @@ class RiskOnRiskOffAllocator:
             weighted_score = score * weight
             logger.info(f"  {factor:20s}: {score:+6.1f} (weight: {weight:.2f}) = {weighted_score:+6.1f}")
         logger.info("=" * 70)
-        
+
         return signal
-    
+
     def calculate_allocation(
         self,
         regime_signal: RegimeSignal,
@@ -326,22 +326,22 @@ class RiskOnRiskOffAllocator:
     ) -> CapitalAllocation:
         """
         Calculate capital allocation based on detected regime
-        
+
         Args:
             regime_signal: Detected market regime
             total_capital: Total available capital
-            
+
         Returns:
             CapitalAllocation with deployment recommendations
         """
         regime = regime_signal.regime
         levels = self.exposure_levels[regime]
-        
+
         # Calculate deployment amounts
         exposure_pct = levels['exposure_pct']
         deployed_capital = total_capital * exposure_pct
         reserve_capital = total_capital * levels['reserve_pct']
-        
+
         # Generate reasoning
         reasoning_map = {
             MarketRegime.RISK_ON: (
@@ -364,7 +364,7 @@ class RiskOnRiskOffAllocator:
                 f"Preserving {levels['reserve_pct']*100:.0f}% in reserve."
             ),
         }
-        
+
         allocation = CapitalAllocation(
             regime=regime,
             total_capital=total_capital,
@@ -375,16 +375,16 @@ class RiskOnRiskOffAllocator:
             max_positions=levels['max_positions'],
             reasoning=reasoning_map[regime]
         )
-        
+
         logger.info("💰 Capital Allocation:")
         logger.info(f"  Total Capital: ${total_capital:,.2f}")
         logger.info(f"  Deployed: ${deployed_capital:,.2f} ({exposure_pct*100:.0f}%)")
         logger.info(f"  Reserve: ${reserve_capital:,.2f} ({levels['reserve_pct']*100:.0f}%)")
         logger.info(f"  Position Sizing: {levels['position_multiplier']:.1f}x")
         logger.info(f"  Max Positions: {levels['max_positions']}")
-        
+
         return allocation
-    
+
     def analyze_and_allocate(
         self,
         market_data: Dict[str, Dict],
@@ -393,31 +393,31 @@ class RiskOnRiskOffAllocator:
     ) -> RiskRegimeResult:
         """
         Complete analysis: detect regime and calculate allocation
-        
+
         Args:
             market_data: Market metrics for multiple symbols
             total_capital: Total available capital
             portfolio_metrics: Optional portfolio metrics
-            
+
         Returns:
             RiskRegimeResult with regime and allocation
         """
         # Detect regime
         regime_signal = self.detect_regime(market_data, portfolio_metrics)
-        
+
         # Calculate allocation
         allocation = self.calculate_allocation(regime_signal, total_capital)
-        
+
         # Generate summary
         summary = self._generate_summary(regime_signal, allocation)
-        
+
         return RiskRegimeResult(
             regime_signal=regime_signal,
             allocation=allocation,
             historical_regimes=self.regime_history.copy(),
             summary=summary
         )
-    
+
     def _generate_summary(
         self,
         regime_signal: RegimeSignal,
@@ -441,14 +441,14 @@ class RiskOnRiskOffAllocator:
             "",
             "📊 Factor Analysis:",
         ]
-        
+
         # Show top positive and negative factors
         sorted_factors = sorted(
             regime_signal.factors.items(),
             key=lambda x: x[1],
             reverse=True
         )
-        
+
         lines.append("  Positive Factors:")
         positive_factors = [(f, s) for f, s in sorted_factors if s > 0][:3]
         if positive_factors:
@@ -456,7 +456,7 @@ class RiskOnRiskOffAllocator:
                 lines.append(f"    {factor}: {score:+.1f}")
         else:
             lines.append("    None")
-        
+
         lines.append("  Negative Factors:")
         negative_factors = [(f, s) for f, s in sorted_factors if s < 0][:3]
         if negative_factors:
@@ -464,32 +464,32 @@ class RiskOnRiskOffAllocator:
                 lines.append(f"    {factor}: {score:+.1f}")
         else:
             lines.append("    None")
-        
+
         lines.append("")
         lines.append(f"Strategy: {allocation.reasoning}")
-        
+
         return "\n".join(lines)
-    
+
     def get_regime_history(self, lookback: int = 20) -> List[RegimeSignal]:
         """Get recent regime history"""
         return self.regime_history[-lookback:] if lookback > 0 else self.regime_history.copy()
-    
+
     def get_regime_stats(self) -> Dict:
         """Get statistics about regime changes"""
         if not self.regime_history:
             return {}
-        
+
         regime_counts = {
             MarketRegime.RISK_ON: 0,
             MarketRegime.NEUTRAL: 0,
             MarketRegime.RISK_OFF: 0,
         }
-        
+
         for signal in self.regime_history:
             regime_counts[signal.regime] += 1
-        
+
         total = len(self.regime_history)
-        
+
         return {
             'total_periods': total,
             'current_regime': self.current_regime.value if self.current_regime else 'unknown',
@@ -503,10 +503,10 @@ class RiskOnRiskOffAllocator:
 def create_risk_regime_allocator(config: Dict = None) -> RiskOnRiskOffAllocator:
     """
     Factory function to create RiskOnRiskOffAllocator instance
-    
+
     Args:
         config: Optional configuration
-        
+
     Returns:
         RiskOnRiskOffAllocator instance
     """
@@ -516,12 +516,12 @@ def create_risk_regime_allocator(config: Dict = None) -> RiskOnRiskOffAllocator:
 # Example usage
 if __name__ == "__main__":
     import logging
-    
+
     logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
-    
+
     # Create allocator
     allocator = create_risk_regime_allocator()
-    
+
     # Mock market data (risk-on scenario)
     market_data = {
         'BTC-USD': {
@@ -549,15 +549,15 @@ if __name__ == "__main__":
             'trend_direction': 1,  # Up
         },
     }
-    
+
     # Analyze and get allocation
     result = allocator.analyze_and_allocate(
         market_data=market_data,
         total_capital=100000
     )
-    
+
     print(result.summary)
-    
+
     # Get regime stats
     stats = allocator.get_regime_stats()
     print("\nRegime Statistics:")

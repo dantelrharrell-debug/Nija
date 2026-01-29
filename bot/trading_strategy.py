@@ -53,7 +53,7 @@ except ImportError:
         # NOTE: These values MUST match the enums defined in broker_manager.py
         # Source of truth: bot/broker_manager.py lines 160-177
         from enum import Enum
-        
+
         class BrokerType(Enum):
             COINBASE = "coinbase"
             BINANCE = "binance"
@@ -63,11 +63,11 @@ except ImportError:
             TD_AMERITRADE = "td_ameritrade"
             ALPACA = "alpaca"
             TRADIER = "tradier"
-        
+
         class AccountType(Enum):
             MASTER = "master"
             USER = "user"
-        
+
         # Also need MINIMUM_TRADING_BALANCE fallback
         MINIMUM_TRADING_BALANCE = 10.0  # Default minimum (updated from $25 for new tier structure)
 
@@ -144,7 +144,7 @@ MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 
 # If timeout occurs, cached balance is used as fallback (max age: 5 minutes)
 BALANCE_FETCH_TIMEOUT = 45  # Maximum time to wait for balance fetch (must be > Kraken API timeout of 30s)
 CACHED_BALANCE_MAX_AGE_SECONDS = 300  # Use cached balance if fresh (5 minutes max staleness)
-                            
+
 # Market scanning rotation (prevents scanning same markets every cycle)
 # UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
 MARKET_BATCH_SIZE_MIN = 10   # Start with 10 markets per cycle on fresh start (gradual warmup)
@@ -318,19 +318,19 @@ def get_dynamic_min_position_size(balance: float) -> float:
     """
     Calculate dynamic minimum position size based on account balance.
     OPTION 3 (BEST LONG-TERM): MIN_TRADE_USD = max(2.00, balance * 0.15)
-    
+
     Args:
         balance: Current account balance in USD
-        
+
     Returns:
         Minimum position size in USD
-        
+
     Raises:
         ValueError: If balance is negative
     """
     if balance < 0:
         raise ValueError(f"Balance cannot be negative: {balance}")
-    
+
     return max(BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT)
 
 # DEPRECATED: Use get_dynamic_min_position_size() instead
@@ -369,7 +369,7 @@ def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     Execute a function with a timeout. Returns (result, error).
     If timeout occurs, returns (None, TimeoutError).
     Default timeout is 30 seconds to accommodate production API latency.
-    
+
     CRITICAL FIX (Jan 27, 2026): Fixed race condition where queue.get_nowait()
     could raise queue.Empty even after successful completion.
     """
@@ -428,7 +428,7 @@ class TradingStrategy:
     def __init__(self):
         """Initialize production strategy with multi-broker support."""
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
-        
+
         # FIX #1: Initialize portfolio state manager for total equity tracking
         try:
             from portfolio_state import get_portfolio_manager
@@ -437,7 +437,7 @@ class TradingStrategy:
         except ImportError:
             logger.warning("⚠️ Portfolio state manager not available - falling back to cash-based sizing")
             self.portfolio_manager = None
-        
+
         # FIX #2: Initialize forced stop-loss executor
         try:
             from forced_stop_loss import create_forced_stop_loss
@@ -447,39 +447,39 @@ class TradingStrategy:
         except ImportError:
             logger.warning("⚠️ Forced stop-loss module not available")
             self.forced_stop_loss = None
-        
+
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
         # NEW (Jan 16, 2026): Track with timestamps to allow retry after timeout
         self.unsellable_positions = {}  # Dict of symbol -> timestamp when marked unsellable
         self.unsellable_retry_timeout = UNSELLABLE_RETRY_HOURS * 3600  # Convert hours to seconds
-        
+
         # Track failed broker connections for error reporting
         self.failed_brokers = {}  # Dict of BrokerType -> broker instance for failed connections
-        
+
         # Kraken order cleanup manager (initialized after Kraken connection)
         self.kraken_cleanup = None
-        
+
         # Market rotation state (prevents scanning same markets every cycle)
         self.market_rotation_offset = 0  # Tracks which batch of markets to scan next
         self.all_markets_cache = []      # Cache of all available markets
         self.markets_cache_time = 0      # Timestamp of last market list refresh
         self.MARKETS_CACHE_TTL = 3600    # Refresh market list every hour
-        
+
         # Rate limiting warmup state (prevents API bans on startup)
         self.cycle_count = 0             # Track number of cycles for warmup
         self.api_health_score = 100      # 0-100, degrades on errors, recovers on success
-        
+
         # Candle data cache (prevents duplicate API calls for same market/timeframe)
         self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
         self.CANDLE_CACHE_TTL = 150      # Cache candles for 2.5 minutes (one cycle)
-        
+
         # Initialize advanced trading features placeholder
         # NOTE: Advanced modules will be initialized AFTER first live balance fetch
         # and only if LIVE_CAPITAL_VERIFIED=true is set
         self.advanced_manager = None
         self.rotation_manager = None
         self.pro_mode_enabled = False
-        
+
         # Initialize credential health monitoring to detect credential loss
         # This helps diagnose recurring disconnection issues
         try:
@@ -490,31 +490,31 @@ class TradingStrategy:
         except Exception as e:
             logger.warning(f"⚠️  Could not start credential monitoring: {e}")
             self.credential_monitor = None
-        
+
         try:
             # Lazy imports to avoid circular deps and allow fallback
             # Note: BrokerType and AccountType are now imported at module level
             from broker_manager import (
-                BrokerManager, CoinbaseBroker, KrakenBroker, 
+                BrokerManager, CoinbaseBroker, KrakenBroker,
                 OKXBroker, BinanceBroker, AlpacaBroker
             )
             from multi_account_broker_manager import multi_account_broker_manager
             from position_cap_enforcer import PositionCapEnforcer
             from nija_apex_strategy_v71 import NIJAApexStrategyV71
-            
+
             # Initialize multi-account broker manager for user-specific trading
             logger.info("=" * 70)
             logger.info("🌐 MULTI-ACCOUNT TRADING MODE ACTIVATED")
             logger.info("=" * 70)
             logger.info("   Master account + User accounts trading independently")
             logger.info("=" * 70)
-            
+
             # Use the global singleton instance to ensure failed connection tracking persists
             self.multi_account_manager = multi_account_broker_manager
             self.broker_manager = BrokerManager()  # Keep for backward compatibility
             connected_brokers = []
             user_brokers = []
-            
+
             # Add startup delay to avoid immediate rate limiting on restart
             # CRITICAL (Jan 2026): Increased to 45s to ensure API rate limits fully reset
             # Previous 30s delay was still causing rate limit issues in production
@@ -525,14 +525,14 @@ class TradingStrategy:
             logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
             time.sleep(startup_delay)
             logger.info("✅ Startup delay complete, beginning broker connections...")
-            
+
             # Try to connect Kraken Pro (PRIMARY BROKER) - MASTER ACCOUNT
             logger.info("📊 Attempting to connect Kraken Pro (MASTER - PRIMARY)...")
             kraken = None  # Initialize to ensure variable exists for exception handler
             try:
                 kraken = KrakenBroker(account_type=AccountType.MASTER)
                 connection_successful = kraken.connect()
-                
+
                 # CRITICAL FIX (Jan 17, 2026): Allow Kraken to start even if connection test fails
                 # This prevents a single connection failure from permanently disabling Kraken trading
                 # The trading loop will retry connections in the background and self-heal
@@ -544,7 +544,7 @@ class TradingStrategy:
                     connected_brokers.append("Kraken")
                     logger.info("   ✅ Kraken MASTER connected")
                     logger.info("   ✅ Kraken registered as MASTER broker in multi-account manager")
-                    
+
                     # COPY TRADING INTEGRATION: Initialize and wrap Kraken broker
                     # CRITICAL FIX (Jan 18, 2026): Track if copy trading initialized users
                     # to prevent duplicate initialization in connect_users_from_config()
@@ -553,7 +553,7 @@ class TradingStrategy:
                             initialize_copy_trading_system,
                             wrap_kraken_broker_for_copy_trading
                         )
-                        
+
                         # Initialize copy trading system (master + users)
                         if initialize_copy_trading_system():
                             # Wrap the broker to enable automatic copy trading
@@ -569,7 +569,7 @@ class TradingStrategy:
                         logger.error(f"   ❌ Kraken copy trading setup error: {copy_err}")
                         import traceback
                         logger.error(traceback.format_exc())
-                    
+
                     # KRAKEN ORDER CLEANUP: Initialize automatic stale order cleanup
                     # This frees up capital tied in unfilled limit orders
                     try:
@@ -592,10 +592,10 @@ class TradingStrategy:
                     logger.warning("   ⚠️  Kraken MASTER connection test failed, will retry in background")
                     logger.warning("   📌 Kraken broker initialized - trading loop will attempt reconnection")
                     self._log_broker_independence_message()
-                    
+
                     # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
-                    
+
             except Exception as e:
                 # CRITICAL FIX (Jan 17, 2026): Handle exceptions consistently with connection failures
                 # Even if broker initialization throws an exception, register it for retry if possible
@@ -604,7 +604,7 @@ class TradingStrategy:
                     logger.warning(f"   ⚠️  Kraken MASTER initialization error: {e}")
                     logger.warning("   📌 Kraken broker will be registered for background retry")
                     self._log_broker_independence_message()
-                    
+
                     # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
                 else:
@@ -612,10 +612,10 @@ class TradingStrategy:
                     logger.error(f"   ❌ Kraken MASTER initialization failed: {e}")
                     logger.error("   ❌ Kraken will not be available for trading")
                     self._log_broker_independence_message()
-            
+
             # Add delay between broker connections
             time.sleep(2.0)  # Increased from 0.5s to 2.0s
-            
+
             # Try to connect Coinbase - MASTER ACCOUNT
             logger.info("📊 Attempting to connect Coinbase Advanced Trade (MASTER)...")
             try:
@@ -631,7 +631,7 @@ class TradingStrategy:
                     logger.warning("   ⚠️  Coinbase MASTER connection failed")
             except Exception as e:
                 logger.warning(f"   ⚠️  Coinbase MASTER error: {e}")
-            
+
             # Try to connect OKX - MASTER ACCOUNT
             logger.info("📊 Attempting to connect OKX (MASTER)...")
             try:
@@ -647,10 +647,10 @@ class TradingStrategy:
                     logger.warning("   ⚠️  OKX MASTER connection failed")
             except Exception as e:
                 logger.warning(f"   ⚠️  OKX MASTER error: {e}")
-            
+
             # Add delay between broker connections
             time.sleep(0.5)
-            
+
             # Try to connect Binance - MASTER ACCOUNT
             logger.info("📊 Attempting to connect Binance (MASTER)...")
             try:
@@ -666,10 +666,10 @@ class TradingStrategy:
                     logger.warning("   ⚠️  Binance MASTER connection failed")
             except Exception as e:
                 logger.warning(f"   ⚠️  Binance MASTER error: {e}")
-            
+
             # Add delay between broker connections
             time.sleep(0.5)
-            
+
             # Try to connect Alpaca (for stocks) - MASTER ACCOUNT
             logger.info("📊 Attempting to connect Alpaca (MASTER - Paper Trading)...")
             try:
@@ -685,35 +685,35 @@ class TradingStrategy:
                     logger.warning("   ⚠️  Alpaca MASTER connection failed")
             except Exception as e:
                 logger.warning(f"   ⚠️  Alpaca MASTER error: {e}")
-            
+
             # Add delay before user account connections to ensure master account
             # connection has completed and nonce ranges are separated
             # CRITICAL (Jan 14, 2026): Increased from 2.0s to 5.0s to prevent Kraken nonce conflicts
             # Master Kraken connection may still be using nonces in the current time window.
             # User connections should wait long enough to ensure non-overlapping nonce ranges.
             time.sleep(5.0)
-            
+
             # Connect User Accounts - Load from config files
             logger.info("=" * 70)
             logger.info("👤 CONNECTING USER ACCOUNTS FROM CONFIG FILES")
             logger.info("=" * 70)
-            
+
             # Use the new config-based user loading system
             connected_user_brokers = self.multi_account_manager.connect_users_from_config()
-            
+
             # Track which users were successfully connected
             user_brokers = []
             if connected_user_brokers:
                 for brokerage, user_ids in connected_user_brokers.items():
                     for user_id in user_ids:
                         user_brokers.append(f"{user_id}: {brokerage.title()}")
-            
+
             logger.info("=" * 70)
             logger.info("✅ Broker connection phase complete")
             if connected_brokers or user_brokers:
                 if connected_brokers:
                     logger.info(f"✅ MASTER ACCOUNT BROKERS: {', '.join(connected_brokers)}")
-                    
+
                     # HELPFUL TIP: If only Coinbase is connected, suggest enabling Kraken
                     # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
                     suppress_warning = os.getenv("SUPPRESS_SINGLE_EXCHANGE_WARNING", "false").lower() in ("true", "1", "yes")
@@ -745,18 +745,18 @@ class TradingStrategy:
                         logger.info("📖 To enable Kraken: See KRAKEN_QUICK_START.md for step-by-step instructions.")
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
-                
+
                 # FIX #1: Calculate LIVE multi-broker capital
                 # Total Capital = Coinbase (available, if >= min) + Kraken MASTER + Optional user balances
-                
+
                 # Get master balance from broker_manager (sums all connected master brokers)
                 master_balance = self.broker_manager.get_total_balance()
-                
+
                 # Break down master balance by broker for transparency
                 coinbase_balance = 0.0
                 kraken_balance = 0.0
                 other_balance = 0.0
-                
+
                 for broker_type, broker in self.multi_account_manager.master_brokers.items():
                     if broker and broker.connected:
                         try:
@@ -769,7 +769,7 @@ class TradingStrategy:
                                 other_balance += balance
                         except Exception as e:
                             logger.debug(f"Could not get balance for {broker_type.value}: {e}")
-                
+
                 # Get user balances dynamically from multi_account_manager (for copy-trading transparency)
                 user_total_balance = 0.0
                 if self.multi_account_manager.user_brokers:
@@ -781,7 +781,7 @@ class TradingStrategy:
                                     user_total_balance += user_balance
                             except Exception as e:
                                 logger.debug(f"Could not get balance for {user_id}: {e}")
-                
+
                 # Report balances with breakdown
                 logger.info("=" * 70)
                 logger.info("💰 LIVE MULTI-BROKER CAPITAL BREAKDOWN")
@@ -796,7 +796,7 @@ class TradingStrategy:
                 if user_total_balance > 0:
                     logger.info(f"   👥 USER ACCOUNTS (INDEPENDENT): ${user_total_balance:,.2f}")
                 logger.info("=" * 70)
-                
+
                 # FIX #2: Force capital re-hydration after broker connections
                 # MASTER AUTHORITY RULE: Master capital is always authoritative
                 # Users are followers, not required for startup
@@ -820,28 +820,28 @@ class TradingStrategy:
                     logger.error("   💵 Fund at least one account to continue")
                     logger.error("=" * 70)
                     raise RuntimeError("No capital detected from master or user accounts")
-                
+
                 # Build list of active exchanges for logging
                 active_exchanges = []
                 for broker_type, broker in self.multi_account_manager.master_brokers.items():
                     if broker and broker.connected:
                         active_exchanges.append(broker_type.value)
-                
+
                 # Update capital allocator with live total
                 if self.advanced_manager and total_capital > 0:
                     try:
                         self.advanced_manager.capital_allocator.update_total_capital(total_capital)
-                        
+
                         # Update progressive target manager if available
                         if hasattr(self.advanced_manager, 'target_manager') and self.advanced_manager.target_manager:
                             # Progressive targets scale with available capital
                             logger.info(f"   ✅ Progressive targets adjusted for ${total_capital:,.2f} capital")
-                        
+
                         logger.info(f"   ✅ Capital Allocator: ${total_capital:,.2f} (LIVE multi-broker total)")
                         logger.info(f"   ✅ Advanced Trading Manager: Using live capital")
                     except Exception as e:
                         logger.warning(f"   Failed to update capital allocation: {e}")
-                
+
                 # Update portfolio state manager with total equity
                 if self.portfolio_manager and total_capital > 0:
                     try:
@@ -850,34 +850,34 @@ class TradingStrategy:
                         logger.info(f"   ✅ Portfolio State Manager updated with ${total_capital:,.2f}")
                     except Exception as e:
                         logger.warning(f"   ⚠️ Could not update portfolio manager: {e}")
-                
+
                 # FIX #2: Explicit confirmation log (CRITICAL - must see this log)
                 if total_capital > 0:
                     logger.info("=" * 70)
                     logger.info(f"💰 LIVE CAPITAL SYNC COMPLETE: ${total_capital:.2f}")
                     logger.info(f"   Active exchanges: {', '.join(active_exchanges)}")
                     logger.info("=" * 70)
-                
+
                 # USER BALANCE SNAPSHOT - Visual certainty of all account balances
                 # Added per Jan 2026 requirement for absolute visual confirmation
                 logger.info("")
                 logger.info("=" * 70)
                 logger.info("💰 USER BALANCE SNAPSHOT")
                 logger.info("=" * 70)
-                
+
                 # Get all balances from multi_account_manager
                 all_balances = self.multi_account_manager.get_all_balances()
-                
+
                 # Master account
                 master_balances = all_balances.get('master', {})
                 master_total = sum(master_balances.values())
                 logger.info(f"   • Master: ${master_total:,.2f}")
                 for broker, balance in master_balances.items():
                     logger.info(f"      - {broker.upper()}: ${balance:,.2f}")
-                
+
                 # User accounts - specifically Daivon and Tania
                 users_balances = all_balances.get('users', {})
-                
+
                 # Find and display Daivon's balance
                 daivon_total = 0.0
                 daivon_brokers = {}
@@ -886,11 +886,11 @@ class TradingStrategy:
                         daivon_total = sum(balances.values())
                         daivon_brokers = balances
                         break
-                
+
                 logger.info(f"   • Daivon: ${daivon_total:,.2f}")
                 for broker, balance in daivon_brokers.items():
                     logger.info(f"      - {broker.upper()}: ${balance:,.2f}")
-                
+
                 # Find and display Tania's balance
                 tania_total = 0.0
                 tania_brokers = {}
@@ -899,14 +899,14 @@ class TradingStrategy:
                         tania_total = sum(balances.values())
                         tania_brokers = balances
                         break
-                
+
                 # Display Tania's balance, breaking down by broker type
                 # Based on config and README, Tania may have Kraken and/or Alpaca
                 tania_kraken = tania_brokers.get('kraken', 0.0)
                 tania_alpaca = tania_brokers.get('alpaca', 0.0)
                 logger.info(f"   • Tania (Kraken): ${tania_kraken:,.2f}")
                 logger.info(f"   • Tania (Alpaca): ${tania_alpaca:,.2f}")
-                
+
                 # Show grand total
                 # Note: This should match total_capital (master) + user_total_balance from above
                 # This provides a cross-check of the balance calculations
@@ -914,13 +914,13 @@ class TradingStrategy:
                 logger.info("")
                 logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
                 logger.info("=" * 70)
-                
+
                 # Initialize advanced trading features AFTER first live balance fetch
                 # This ensures advanced modules have access to real capital data
                 # Gated by LIVE_CAPITAL_VERIFIED environment variable
                 logger.info("🔧 Initializing advanced trading modules with live capital...")
                 self._init_advanced_features(total_capital)
-                
+
                 # FIX #3: Hard fail if capital below minimum (non-negotiable)
                 if total_capital < MINIMUM_TRADING_BALANCE:
                         logger.error("=" * 70)
@@ -934,31 +934,31 @@ class TradingStrategy:
                         logger.error("   💵 Fund your account to continue trading")
                         logger.error("=" * 70)
                         raise RuntimeError(f"Capital below minimum — trading disabled (${total_capital:.2f} < ${MINIMUM_TRADING_BALANCE:.2f})")
-                
+
                 # FIX #1: Select primary master broker with Kraken promotion logic
                 # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
                 # Only call this after all brokers are connected to make an informed decision
                 self.broker_manager.select_primary_master_broker()
-                
+
                 # Get the primary broker from broker_manager
                 # This is used for master account trading
                 self.broker = self.broker_manager.get_primary_broker()
                 if self.broker:
                     # Log the primary master broker with explicit reason if it was switched
                     broker_name = self.broker.broker_type.value.upper()
-                    
+
                     # Check if any other broker is in exit_only mode (indicates a switch happened)
                     exit_only_brokers = []
                     for broker_type, broker in self.multi_account_manager.master_brokers.items():
                         if broker and broker.connected and broker.exit_only_mode:
                             exit_only_brokers.append(broker_type.value.upper())
-                    
+
                     if exit_only_brokers and broker_name == "KRAKEN":
                         # Kraken was promoted because another broker is exit-only
                         logger.info(f"📌 Primary master broker: {broker_name} ({', '.join(exit_only_brokers)} EXIT-ONLY)")
                     else:
                         logger.info(f"📌 Primary master broker: {broker_name}")
-                    
+
                     # FIX #2: Initialize forced stop-loss with the connected broker
                     if self.forced_stop_loss is None:
                         try:
@@ -967,7 +967,7 @@ class TradingStrategy:
                             logger.info("✅ Forced stop-loss executor initialized with master broker")
                         except Exception as e:
                             logger.warning(f"⚠️ Could not initialize forced stop-loss: {e}")
-                    
+
                     # FIX #3: Initialize master portfolio state using SUM of ALL master brokers
                     # CRITICAL: Master portfolio must use total_master_equity = sum(all master brokers)
                     # Do NOT just use primary broker's balance - this ignores capital in other brokers
@@ -976,7 +976,7 @@ class TradingStrategy:
                             # Calculate total cash/balance across ALL connected master brokers
                             total_master_cash = 0.0
                             master_broker_balances = []
-                            
+
                             for broker_type, broker in self.multi_account_manager.master_brokers.items():
                                 if broker and broker.connected:
                                     try:
@@ -986,7 +986,7 @@ class TradingStrategy:
                                         logger.info(f"   💰 Master broker {broker_type.value}: ${broker_balance:.2f}")
                                     except Exception as broker_err:
                                         logger.warning(f"   ⚠️ Could not get balance from {broker_type.value}: {broker_err}")
-                            
+
                             if total_master_cash > 0:
                                 # Initialize/update master portfolio with TOTAL cash from all brokers
                                 # Note: portfolio.total_equity will be cash + position values
@@ -1013,35 +1013,35 @@ class TradingStrategy:
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
                 self.broker = None
-            
+
             # Log clear trading status summary
             logger.info("=" * 70)
             logger.info("📊 ACCOUNT TRADING STATUS SUMMARY")
             logger.info("=" * 70)
-            
+
             # Count active trading accounts
             active_master_count = 1 if self.broker else 0
             active_user_count = 0
-            
+
             # Master account status
             if self.broker:
                 logger.info(f"✅ MASTER ACCOUNT: TRADING (Broker: {self.broker.broker_type.value.upper()})")
             else:
                 logger.info("❌ MASTER ACCOUNT: NOT TRADING (No broker connected)")
-            
+
             # User account status - dynamically load from config
             try:
                 from config.user_loader import get_user_config_loader
                 user_loader = get_user_config_loader()
                 enabled_users = user_loader.get_all_enabled_users()
-                
+
                 if enabled_users:
                     for user in enabled_users:
                         # FIX #1: Check if this is a Kraken user managed by copy trading system
                         is_kraken = user.broker_type.upper() == "KRAKEN"
                         is_copy_trader = getattr(user, 'copy_from_master', False)
                         kraken_copy_active = getattr(self.multi_account_manager, 'kraken_copy_trading_active', False)
-                        
+
                         # If Kraken user is managed by copy trading, show special status and skip re-evaluation
                         if is_kraken and is_copy_trader and kraken_copy_active:
                             logger.info(f"✅ USER: {user.name}: ACTIVE (COPY TRADING) (Broker: KRAKEN)")
@@ -1052,13 +1052,13 @@ class TradingStrategy:
                                 logger.info(f"   ℹ️  Disabled symbols: {disabled_str} (configured for copy trading)")
                             active_user_count += 1
                             continue  # Skip re-evaluation for copy trading users
-                        
+
                         # Check if this user is actually connected
                         user_broker = self.multi_account_manager.get_user_broker(
-                            user.user_id, 
+                            user.user_id,
                             BrokerType[user.broker_type.upper()]
                         )
-                        
+
                         if user_broker and user_broker.connected:
                             logger.info(f"✅ USER: {user.name}: TRADING (Broker: {user.broker_type.upper()})")
                             active_user_count += 1
@@ -1087,9 +1087,9 @@ class TradingStrategy:
                                 active_user_count += 1
                             else:
                                 logger.info(f"❌ USER: {user_id}: NOT TRADING (Broker: {broker_type.value.upper()}, Connection failed)")
-            
+
             logger.info("=" * 70)
-            
+
             # Overall status and recommendations
             total_active = active_master_count + active_user_count
             if total_active > 0:
@@ -1113,14 +1113,14 @@ class TradingStrategy:
                 logger.error("   2. Fix any missing credentials")
                 logger.error("   3. Restart the bot")
                 logger.error("   4. See BROKER_CONNECTION_TROUBLESHOOTING.md for help")
-            
+
             logger.info("=" * 70)
-            
+
             # Initialize independent broker trader for multi-broker support
             try:
                 from independent_broker_trader import IndependentBrokerTrader
                 self.independent_trader = IndependentBrokerTrader(
-                    self.broker_manager, 
+                    self.broker_manager,
                     self,
                     self.multi_account_manager  # Pass multi-account manager for user trading
                 )
@@ -1129,11 +1129,11 @@ class TradingStrategy:
                 logger.warning(f"⚠️  Independent trader initialization failed: {indie_err}")
                 self.independent_trader = None
                 logger.warning("No primary broker available")
-            
+
             # Initialize position cap enforcer (Maximum 8 positions total across all brokers)
             if self.broker:
                 self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
-                
+
                 # Initialize broker failsafes (hard limits and circuit breakers)
                 # CRITICAL: Use ONLY master balance, not user balances
                 try:
@@ -1151,7 +1151,7 @@ class TradingStrategy:
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to initialize broker failsafes: {e}")
                     self.failsafes = None
-                
+
                 # Initialize market adaptation engine
                 try:
                     from market_adaptation import create_market_adapter
@@ -1160,13 +1160,13 @@ class TradingStrategy:
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to initialize market adaptation: {e}")
                     self.market_adapter = None
-                
+
                 # Initialize APEX strategy with primary broker
                 self.apex = NIJAApexStrategyV71(broker_client=self.broker)
-                
+
                 # Add delay before syncing positions to avoid rate limiting
                 time.sleep(0.5)
-                
+
                 # CRITICAL: Sync position tracker with actual broker positions at startup
                 if hasattr(self.broker, 'position_tracker') and self.broker.position_tracker:
                     try:
@@ -1176,13 +1176,13 @@ class TradingStrategy:
                             logger.info(f"🔄 Synced position tracker: removed {removed} orphaned positions")
                     except Exception as sync_err:
                         logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
-                
+
                 logger.info("✅ TradingStrategy initialized (APEX v7.1 + Multi-Broker + 8-Position Cap)")
             else:
                 logger.warning("Strategy initialized in monitor mode (no active brokers)")
                 self.enforcer = None
                 self.apex = None
-        
+
         except ImportError as e:
             logger.error(f"Failed to import strategy modules: {e}")
             logger.error("Falling back to safe monitor mode (no trades)")
@@ -1191,7 +1191,7 @@ class TradingStrategy:
             self.enforcer = None
             self.apex = None
             self.independent_trader = None
-    
+
     def _log_broker_independence_message(self):
         """
         Helper to log that other brokers continue trading independently.
@@ -1202,20 +1202,20 @@ class TradingStrategy:
         logger.info("   ✅ OTHER BROKERS CONTINUE TRADING INDEPENDENTLY")
         logger.info("   ℹ️  Kraken offline does NOT block Coinbase or other exchanges")
         logger.info("")
-    
+
     def _register_kraken_for_retry(self, kraken_broker):
         """
         Register a Kraken broker for background retry attempts.
-        
+
         This helper method extracts the dual registration logic to avoid code duplication.
         The broker is registered in multiple places for different purposes:
         - failed_brokers: Tracks error messages for diagnostics/debugging
         - broker_manager: Enables trading loop to monitor and retry
         - multi_account_manager: Consistent account management
-        
+
         This dual registration is intentional - the broker is "failed" for
         diagnostics but "active" for retry attempts, enabling self-healing.
-        
+
         Args:
             kraken_broker: KrakenBroker instance to register
         """
@@ -1223,23 +1223,23 @@ class TradingStrategy:
         self.broker_manager.add_broker(kraken_broker)
         self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken_broker
         logger.info("   ✅ Kraken registered for background connection retry")
-    
+
     def _get_total_capital_across_all_accounts(self) -> float:
         """
         Get total capital summed across ALL accounts and brokers.
-        
+
         ✅ CRITICAL (Jan 22, 2026): Capital must be fetched live and summed dynamically
         - Coinbase Master: fetched live
-        - Kraken Master: fetched live  
+        - Kraken Master: fetched live
         - Kraken Users: fetched live
         - OKX Master: fetched live (if available)
         - Summed before every allocation cycle
-        
+
         Returns:
             Total capital in USD across all accounts
         """
         total_capital = 0.0
-        
+
         try:
             # 1. Sum all MASTER broker balances
             if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
@@ -1251,7 +1251,7 @@ class TradingStrategy:
                             logger.debug(f"   Master {broker_type.value}: ${balance:.2f}")
                         except Exception as e:
                             logger.warning(f"   ⚠️ Could not fetch {broker_type.value} master balance: {e}")
-                
+
                 # 2. Sum all USER broker balances
                 if self.multi_account_manager.user_brokers:
                     for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
@@ -1263,31 +1263,31 @@ class TradingStrategy:
                                     logger.debug(f"   User {user_id} {broker_type.value}: ${balance:.2f}")
                                 except Exception as e:
                                     logger.warning(f"   ⚠️ Could not fetch user {user_id} balance: {e}")
-            
+
             # Fallback: use broker_manager if multi_account_manager not available
             elif hasattr(self, 'broker_manager') and self.broker_manager:
                 total_capital = self.broker_manager.get_total_balance()
                 logger.debug(f"   Broker manager total: ${total_capital:.2f}")
-            
+
             logger.info(f"💰 TOTAL CAPITAL (all accounts): ${total_capital:.2f}")
-            
+
         except Exception as e:
             logger.error(f"❌ Error calculating total capital: {e}")
             # Return 0 on error - better to halt trading than use stale data
             total_capital = 0.0
-        
+
         return total_capital
-    
+
     def _init_advanced_features(self, total_capital: float = 0.0):
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
-        
+
         This is optional and will gracefully degrade if modules are not available.
-        
+
         Also initializes PRO MODE rotation manager if enabled.
-        
+
         CRITICAL: This method is gated by LIVE_CAPITAL_VERIFIED environment variable.
         Advanced modules are only initialized if LIVE_CAPITAL_VERIFIED=true is set.
-        
+
         Args:
             total_capital: Live capital from broker connections (default: 0.0)
         """
@@ -1296,7 +1296,7 @@ class TradingStrategy:
         # to allow advanced trading features with real capital.
         live_capital_verified_str = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower().strip()
         live_capital_verified = live_capital_verified_str in ['true', '1', 'yes', 'enabled']
-        
+
         if not live_capital_verified:
             logger.info("=" * 70)
             logger.info("🔒 LIVE CAPITAL VERIFIED: FALSE")
@@ -1307,16 +1307,16 @@ class TradingStrategy:
             self.pro_mode_enabled = False
             self.advanced_manager = None
             return
-        
+
         logger.info("=" * 70)
         logger.info("🔓 LIVE CAPITAL VERIFIED: TRUE")
         logger.info("   Initializing advanced trading modules...")
         logger.info("=" * 70)
-        
+
         # Initialize PRO MODE rotation manager
         pro_mode_enabled = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
         min_free_reserve_pct = float(os.getenv('PRO_MODE_MIN_RESERVE_PCT', '0.15'))
-        
+
         if pro_mode_enabled:
             try:
                 from rotation_manager import RotationManager
@@ -1339,13 +1339,13 @@ class TradingStrategy:
         else:
             logger.info("ℹ️ PRO MODE disabled (set PRO_MODE=true to enable)")
             self.rotation_manager = None
-        
+
         self.pro_mode_enabled = pro_mode_enabled
-        
+
         try:
             # Import advanced trading modules
             from advanced_trading_integration import AdvancedTradingManager, ExchangeType
-            
+
             # FIX #1: Use live capital passed from broker connections
             # This is the actual balance fetched from Coinbase, Kraken, and other brokers
             # Only fall back to environment variable if no capital was passed
@@ -1356,7 +1356,7 @@ class TradingStrategy:
             else:
                 # Fallback: Try to get from environment variable
                 initial_capital_str = os.getenv('INITIAL_CAPITAL', 'auto').strip().upper()
-                
+
                 # Support "auto" and "LIVE" as aliases for automatic balance detection
                 if initial_capital_str in ('AUTO', 'LIVE'):
                     # Can't initialize without capital - skip initialization
@@ -1378,22 +1378,22 @@ class TradingStrategy:
                         logger.warning(f"⚠️ Invalid INITIAL_CAPITAL={initial_capital_str}, cannot initialize advanced manager")
                         self.advanced_manager = None
                         return
-            
+
             allocation_strategy = os.getenv('ALLOCATION_STRATEGY', 'conservative')
-            
+
             # Initialize advanced manager with live capital from broker connections
             self.advanced_manager = AdvancedTradingManager(
                 total_capital=initial_capital,
                 allocation_strategy=allocation_strategy
             )
-            
+
             logger.info("=" * 70)
             logger.info("✅ Advanced Trading Features Enabled:")
             logger.info(f"   📈 Progressive Targets: ${self.advanced_manager.target_manager.get_current_target():.2f}/day")
             logger.info(f"   🏦 Exchange Profiles: Loaded")
             logger.info(f"   💰 Capital Allocation: {allocation_strategy}")
             logger.info("=" * 70)
-            
+
         except ImportError as e:
             logger.info(f"ℹ️ Advanced trading features not available: {e}")
             logger.info("   Continuing with standard trading mode")
@@ -1401,23 +1401,23 @@ class TradingStrategy:
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize advanced features: {e}")
             self.advanced_manager = None
-    
+
     def start_independent_multi_broker_trading(self):
         """
         Start independent trading threads for all connected and funded brokers.
         Each broker operates in complete isolation to prevent cascade failures.
-        
+
         Returns:
             bool: True if independent trading started successfully
         """
         if not self.independent_trader:
             logger.warning("⚠️  Independent trader not initialized")
             return False
-        
+
         if not self.broker_manager or not self.broker_manager.brokers:
             logger.warning("⚠️  No brokers available for independent trading")
             return False
-        
+
         try:
             # Start independent trading threads and check if any were started
             success = self.independent_trader.start_independent_trading()
@@ -1425,7 +1425,7 @@ class TradingStrategy:
         except Exception as e:
             logger.error(f"❌ Failed to start independent trading: {e}")
             return False
-    
+
     def stop_independent_trading(self):
         """
         Stop all independent trading threads gracefully.
@@ -1434,11 +1434,11 @@ class TradingStrategy:
             self.independent_trader.stop_all_trading()
         else:
             logger.warning("⚠️  Independent trader not initialized, nothing to stop")
-    
+
     def get_multi_broker_status(self) -> Dict:
         """
         Get status of all brokers and independent trading.
-        
+
         Returns:
             dict: Status summary including broker health and trading activity
         """
@@ -1447,9 +1447,9 @@ class TradingStrategy:
                 'error': 'Independent trader not initialized',
                 'mode': 'single_broker'
             }
-        
+
         return self.independent_trader.get_status_summary()
-    
+
     def log_multi_broker_status(self):
         """
         Log current status of all brokers.
@@ -1458,82 +1458,82 @@ class TradingStrategy:
             self.independent_trader.log_status_summary()
         else:
             logger.info("📊 Single broker mode (independent trading not enabled)")
-    
+
     def _get_cached_candles(self, symbol: str, timeframe: str = '5m', count: int = 100, broker=None):
         """
         Get candles with caching to reduce API calls.
-        
+
         Args:
             symbol: Trading pair symbol
             timeframe: Candle timeframe
             count: Number of candles
             broker: Optional broker instance to use. If not provided, uses self.broker.
-            
+
         Returns:
             List of candle dicts or empty list
         """
         # Use provided broker or fall back to self.broker
         active_broker = broker if broker is not None else self.broker
-        
+
         cache_key = f"{symbol}_{timeframe}_{count}"
         current_time = time.time()
-        
+
         # Check cache first
         if cache_key in self.candle_cache:
             cached_time, cached_data = self.candle_cache[cache_key]
             if current_time - cached_time < self.CANDLE_CACHE_TTL:
                 logger.debug(f"   {symbol}: Using cached candles (age: {int(current_time - cached_time)}s)")
                 return cached_data
-        
+
         # Cache miss or expired - fetch fresh data
         candles = active_broker.get_candles(symbol, timeframe, count)
-        
+
         # Cache the result (even if empty, to avoid repeated failed requests)
         self.candle_cache[cache_key] = (current_time, candles)
-        
+
         return candles
-    
+
     def _get_broker_name(self, broker) -> str:
         """
         Get broker name for logging from broker instance.
-        
+
         Args:
             broker: Broker instance (may be None or lack broker_type)
-            
+
         Returns:
             str: Broker name (e.g., 'coinbase', 'kraken') or 'unknown'
         """
         return broker.broker_type.value if broker and hasattr(broker, 'broker_type') else 'unknown'
-    
+
     def _is_broker_eligible_for_entry(self, broker: Optional[object]) -> Tuple[bool, str]:
         """
         Check if a broker is eligible for new entry (BUY) orders.
-        
+
         A broker is eligible if:
         1. It's connected
         2. It's not in EXIT_ONLY mode
         3. Account balance meets minimum threshold
-        
+
         Args:
             broker: Broker instance to check (uses duck typing to avoid circular imports)
-            
+
         Returns:
             tuple: (is_eligible: bool, reason: str)
         """
         if not broker:
             return False, "Broker not available"
-        
+
         broker_name = self._get_broker_name(broker)
-        
+
         if not broker.connected:
             logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} not connected")
             return False, f"{broker_name.upper()} not connected"
-        
+
         # Check if broker is in EXIT_ONLY mode
         if hasattr(broker, 'exit_only_mode') and broker.exit_only_mode:
             logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} in EXIT_ONLY mode")
             return False, f"{broker_name.upper()} in EXIT-ONLY mode"
-        
+
         # Check if account balance meets minimum threshold
         # CRITICAL FIX (Jan 28, 2026): Use timeout to prevent hanging on slow balance fetches
         # Timeout configured to accommodate Kraken's API timeout (30s) plus network overhead (15s)
@@ -1542,19 +1542,19 @@ class TradingStrategy:
             # Uses BALANCE_FETCH_TIMEOUT (45s = 30s Kraken API timeout + 15s network/serialization buffer)
             # Note: Kraken makes 2 API calls (Balance + TradeBalance) with 1s minimum interval between calls
             balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=BALANCE_FETCH_TIMEOUT)
-            
+
             # Check if timeout or error occurred
             # call_with_timeout returns (value, None) on success, (None, error) on failure
             if balance_result[1] is not None:  # Error from call_with_timeout
                 error_msg = balance_result[1]
                 logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance fetch timed out or failed: {error_msg}")
-                
+
                 # CRITICAL FIX (Jan 27, 2026): More permissive cached balance fallback
                 # When API is slow/timing out, we should still try to trade using cached balance
                 # Previously was too conservative - would reject broker if no timestamp
                 if hasattr(broker, '_last_known_balance') and broker._last_known_balance is not None:
                     cached_balance = broker._last_known_balance
-                    
+
                     # Check if cached balance has a timestamp (for staleness check)
                     cache_is_fresh = False
                     if hasattr(broker, '_balance_last_updated') and broker._balance_last_updated is not None:
@@ -1567,14 +1567,14 @@ class TradingStrategy:
                         # If broker doesn't track timestamp, we can't verify age
                         # SAFE APPROACH: Only use cache if broker object was created recently (this session)
                         # This prevents trading with very stale data from previous sessions
-                        
+
                         # Check if broker has a 'connected_at' or similar timestamp
                         broker_session_age = None
                         if hasattr(broker, 'connected_at'):
                             broker_session_age = time.time() - broker.connected_at
                         elif hasattr(broker, 'created_at'):
                             broker_session_age = time.time() - broker.created_at
-                        
+
                         # Only use untimestamped cache if broker was connected/created in last 10 minutes
                         # This ensures cache is from current trading session, not stale from previous run
                         if broker_session_age is not None and broker_session_age <= 600:  # 10 minutes
@@ -1584,114 +1584,114 @@ class TradingStrategy:
                             # No timestamp and no session age - too risky to use
                             cache_is_fresh = False
                             logger.warning(f"   ⚠️  {broker_name} cached balance has no timestamp and no session age - rejecting for safety")
-                    
+
                     if cache_is_fresh:
                         logger.info(f"   ✅ Using cached balance for {broker_name}: ${cached_balance:.2f}")
                         broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
                         min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
-                        
+
                         if cached_balance >= min_balance:
                             return True, f"Eligible (cached ${cached_balance:.2f} >= ${min_balance:.2f} min)"
                         else:
                             return False, f"{broker_name.upper()} cached balance ${cached_balance:.2f} < ${min_balance:.2f} minimum"
-                
+
                 return False, f"{broker_name.upper()} balance fetch failed: timeout or error"
-            
+
             balance = balance_result[0] if balance_result[0] is not None else 0.0
             broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
             min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
-            
+
             logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} balance=${balance:.2f}, min=${min_balance:.2f}")
-            
+
             if balance < min_balance:
                 return False, f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
-            
+
             return True, f"Eligible (${balance:.2f} >= ${min_balance:.2f} min)"
         except Exception as e:
             logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance check exception: {e}")
             return False, f"{broker_name.upper()} balance check failed: {e}"
-    
+
     def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
         """
         Select the best broker for new entry (BUY) orders based on priority.
-        
+
         Checks brokers in ENTRY_BROKER_PRIORITY order and returns the first eligible one.
         Coinbase is automatically deprioritized if balance < $25.
-        
+
         Args:
             all_brokers: Dict of {BrokerType: broker_instance} for all available brokers
-            
+
         Returns:
             tuple: (broker_instance, broker_name, eligibility_reasons) or (None, None, reasons)
         """
         eligibility_status = {}
-        
+
         # CRITICAL FIX (Jan 24, 2026): Add debug logging to diagnose broker selection issues
         logger.debug(f"_select_entry_broker called with {len(all_brokers)} brokers: {[bt.value for bt in all_brokers.keys()]}")
-        
+
         # Check each broker in priority order
         for broker_type in ENTRY_BROKER_PRIORITY:
             broker = all_brokers.get(broker_type)
-            
+
             if not broker:
                 eligibility_status[broker_type.value] = "Not configured"
                 logger.debug(f"   {broker_type.value}: Not in all_brokers dict")
                 continue
-            
+
             is_eligible, reason = self._is_broker_eligible_for_entry(broker)
             eligibility_status[broker_type.value] = reason
             logger.debug(f"   {broker_type.value}: is_eligible={is_eligible}, reason={reason}")
-            
+
             if is_eligible:
                 broker_name = self._get_broker_name(broker)
                 logger.info(f"✅ Selected {broker_name.upper()} for entry (priority: {ENTRY_BROKER_PRIORITY.index(broker_type) + 1})")
                 return broker, broker_name, eligibility_status
-        
+
         # No eligible broker found
         logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
         return None, None, eligibility_status
-    
+
     def _is_zombie_position(self, pnl_percent: float, entry_time_available: bool, position_age_hours: float) -> bool:
         """
         Detect if a position is a "zombie" - stuck at ~0% P&L for too long.
-        
+
         Zombie positions occur when auto-import masks a losing trade by setting
         entry_price = current_price, causing P&L to reset to 0%. These positions
         never show as losing and can hold indefinitely, tying up capital.
-        
+
         Args:
             pnl_percent: Current P&L percentage
             entry_time_available: Whether position has entry time tracked
             position_age_hours: Hours since position entry
-            
+
         Returns:
             bool: True if position is a zombie (should be exited)
         """
         # Check if P&L is stuck near zero
         pnl_stuck_at_zero = abs(pnl_percent) < ZOMBIE_PNL_THRESHOLD
-        
+
         # Check if position is old enough to be suspicious
         old_enough = entry_time_available and position_age_hours >= ZOMBIE_POSITION_HOURS
-        
+
         # Zombie if both conditions are true
         return pnl_stuck_at_zero and old_enough
-    
+
     def _get_rotated_markets(self, all_markets: list) -> list:
         """
         Get next batch of markets to scan using rotation strategy.
-        
+
         UPDATED (Jan 10, 2026): Added adaptive batch sizing to prevent API rate limiting
         - Starts with small batch (5 markets) on fresh start or after API errors
         - Gradually increases to max batch size (15 markets) over warmup period
         - Reduces batch size when API health score is low
-        
+
         This prevents scanning the same markets every cycle and distributes
         API load across time. With 730 markets and batch size of 5-15,
         we complete a full rotation in multiple hours.
-        
+
         Args:
             all_markets: Full list of available markets
-            
+
         Returns:
             Subset of markets for this cycle
         """
@@ -1711,45 +1711,45 @@ class TradingStrategy:
         else:
             # Good health: use maximum batch size
             batch_size = MARKET_BATCH_SIZE_MAX
-        
+
         if not MARKET_ROTATION_ENABLED or len(all_markets) <= batch_size:
             # If rotation disabled or fewer markets than batch size, use all markets
             return all_markets[:batch_size]
-        
+
         # Calculate batch boundaries
         total_markets = len(all_markets)
         start_idx = self.market_rotation_offset
         end_idx = start_idx + batch_size
-        
+
         # Handle wrap-around
         if end_idx <= total_markets:
             batch = all_markets[start_idx:end_idx]
         else:
             # Wrap around to beginning
             batch = all_markets[start_idx:] + all_markets[:end_idx - total_markets]
-        
+
         # Update offset for next cycle
         self.market_rotation_offset = end_idx % total_markets
-        
+
         # Log rotation progress
         rotation_pct = (self.market_rotation_offset / total_markets) * 100
         logger.info(f"   📊 Market rotation: scanning batch {start_idx}-{min(end_idx, total_markets)} of {total_markets} ({rotation_pct:.0f}% through cycle)")
-        
+
         return batch
 
     def _get_stop_loss_tier(self, broker, account_balance: float) -> tuple:
         """
         Determine the appropriate stop-loss tier based on broker type and account balance.
-        
+
         Returns 3-tier stop-loss system:
         - Tier 1: Primary trading stop (for risk management)
         - Tier 2: Emergency micro-stop (for logic failure prevention)
         - Tier 3: Catastrophic failsafe (last resort)
-        
+
         Args:
             broker: Broker instance (to determine broker type)
             account_balance: Current account balance in USD
-            
+
         Returns:
             tuple: (primary_stop, micro_stop, catastrophic_stop, description)
         """
@@ -1762,32 +1762,32 @@ class TradingStrategy:
             broker_name = broker.broker_type.value.lower() if hasattr(broker.broker_type, 'value') else str(broker.broker_type).lower()
         elif hasattr(broker, '__class__'):
             broker_name = broker.__class__.__name__.lower()
-        
+
         # Kraken with small balance: Use -0.8% primary stop (conservative)
         if 'kraken' in broker_name and account_balance < 100:
             # For small Kraken balances, use conservative -0.8% primary stop
             # This accounts for spread (0.1%) + fees (0.36%) + slippage (0.1%) + buffer (0.24%)
             primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -0.8%
             description = f"Kraken small balance (${account_balance:.2f}): Primary -0.8%, Micro -2.0%, Failsafe -5.0%"
-        
+
         # Kraken with larger balance: Can use tighter stop
         elif 'kraken' in broker_name:
             # For larger Kraken balances, use -0.5% minimum (tighter for better capital preservation)
             primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -0.5%
             description = f"Kraken (${account_balance:.2f}): Primary -0.5%, Micro -2.0%, Failsafe -5.0%"
-        
+
         # 🚨 COINBASE TIGHTENED STOP-LOSS (Jan 28, 2026)
         # Improved to -1.0% max for better capital preservation and risk/reward ratio
         elif 'coinbase' in broker_name:
             primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -1.0% (improved from -1.25%)
             description = f"COINBASE (${account_balance:.2f}): Primary -1.0%, Micro -2.0%, Failsafe -5.0%"
-        
+
         # Other exchanges: Use -1.0% primary stop (conservative default)
         else:
             # Higher fees require wider stop-loss
             primary_stop = -0.010  # -1.0% for other exchanges
             description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.0%, Micro -2.0%, Failsafe -5.0%"
-        
+
         return (
             primary_stop,           # Tier 1: Primary trading stop
             STOP_LOSS_MICRO,        # Tier 2: Emergency micro-stop (-1%)
@@ -1797,7 +1797,7 @@ class TradingStrategy:
 
     def run_cycle(self, broker=None, user_mode=False):
         """Execute a complete trading cycle with position cap enforcement.
-        
+
         Args:
             broker: Optional broker instance to use for this cycle. If not provided,
                    uses self.broker (default behavior for backward compatibility).
@@ -1809,7 +1809,7 @@ class TradingStrategy:
                       - ONLY manages existing positions (exits, stops, targets)
                       - Users receive signals via CopyTradeEngine, not from strategy
                       Default False for MASTER accounts (full strategy execution)
-        
+
         Steps:
         1. Enforce position cap (auto-sell excess if needed)
         2. [MASTER ONLY] Scan markets for opportunities
@@ -1819,7 +1819,7 @@ class TradingStrategy:
         """
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
-        
+
         # Log mode for clarity
         mode_label = "USER (position management only)" if user_mode else "MASTER (full strategy)"
         logger.info(f"🔄 Trading cycle mode: {mode_label}")
@@ -1829,10 +1829,10 @@ class TradingStrategy:
             if os.path.exists(liquidate_all_file):
                 logger.error("🚨 EMERGENCY LIQUIDATION MODE ACTIVE")
                 logger.error("   SELLING ALL POSITIONS IMMEDIATELY")
-                
+
                 sold_count = 0
                 total_positions = 0
-                
+
                 try:
                     if active_broker:
                         try:
@@ -1845,22 +1845,22 @@ class TradingStrategy:
                         except Exception as e:
                             logger.error(f"   Exception getting positions: {e}")
                             positions = []
-                        
+
                         total_positions = len(positions)
                         logger.error(f"   Found {total_positions} positions to liquidate")
-                        
+
                         for i, pos in enumerate(positions, 1):
                             try:
                                 symbol = pos.get('symbol', 'UNKNOWN')
                                 currency = pos.get('currency', symbol.split('-')[0])
                                 quantity = pos.get('quantity', 0)
-                                
+
                                 if quantity <= 0:
                                     logger.error(f"   [{i}/{total_positions}] SKIPPING {currency} (quantity={quantity})")
                                     continue
-                                
+
                                 logger.error(f"   [{i}/{total_positions}] FORCE SELLING {quantity:.8f} {currency}...")
-                                
+
                                 try:
                                     result = call_with_timeout(
                                         active_broker.place_market_order,
@@ -1880,24 +1880,24 @@ class TradingStrategy:
                                             logger.error(f"   ❌ Failed to sell {currency}: {error_msg}")
                                 except Exception as e:
                                     logger.error(f"   ❌ Exception during sell: {e}")
-                                
+
                                 # Throttle to avoid Coinbase 429 rate limits
                                 try:
                                     time.sleep(1.0)
                                 except Exception:
                                     pass
-                            
+
                             except Exception as pos_err:
                                 logger.error(f"   ❌ Position processing error: {pos_err}")
                                 continue
-                        
+
                         logger.error(f"   Liquidation round complete: {sold_count}/{total_positions} sold")
-                
+
                 except Exception as liquidation_error:
                     logger.error(f"   ❌ Emergency liquidation critical error: {liquidation_error}")
                     import traceback
                     logger.error(traceback.format_exc())
-                
+
                 finally:
                     # GUARANTEED cleanup - always remove the trigger file
                     try:
@@ -1906,9 +1906,9 @@ class TradingStrategy:
                             logger.error("✅ Emergency liquidation cycle complete - removed LIQUIDATE_ALL_NOW.conf")
                     except Exception as cleanup_err:
                         logger.error(f"   Warning: Could not delete trigger file: {cleanup_err}")
-                
+
                 return  # Skip normal trading cycle
-            
+
             # CRITICAL: Enforce position cap first
             if self.enforcer:
                 logger.info(f"🔍 Enforcing position cap (max {MAX_POSITIONS_ALLOWED})...")
@@ -1916,13 +1916,13 @@ class TradingStrategy:
                 if result['excess'] > 0:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
                     logger.info(f"   Sold {result['sold']} positions")
-            
+
             # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
             # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.
             # Previously, switching active_broker to Kraken would cause Coinbase positions to be ignored
             current_positions = []
             positions_by_broker = {}  # Track which broker each position belongs to
-            
+
             # CRITICAL FIX (Jan 24, 2026): Periodic position tracker sync
             # Sync every 10 cycles (~25 minutes) to proactively clear phantom positions
             # Phantom positions = tracked internally but don't exist on exchange
@@ -1937,7 +1937,7 @@ class TradingStrategy:
                             logger.info(f"🔄 Periodic sync: Cleared {removed} phantom position(s) from tracker")
                     except Exception as sync_err:
                         logger.debug(f"   ⚠️ Periodic position sync failed: {sync_err}")
-            
+
             if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
                 # Get positions from all connected master brokers
                 for broker_type, broker in self.multi_account_manager.master_brokers.items():
@@ -1958,7 +1958,7 @@ class TradingStrategy:
                             # Safely get broker name for error logging
                             broker_name = broker_type.value.upper() if hasattr(broker_type, 'value') else str(broker_type).upper()
                             logger.warning(f"   ⚠️ Could not fetch positions from {broker_name}: {e}")
-                
+
                 # Log positions by broker for visibility
                 if positions_by_broker:
                     logger.info(f"   📊 Positions by broker: {', '.join([f'{name}={count}' for name, count in positions_by_broker.items()])}")
@@ -1969,7 +1969,7 @@ class TradingStrategy:
             else:
                 logger.warning("   ⚠️ No brokers available to fetch positions from")
                 current_positions = []
-            
+
             # CRITICAL FIX: Filter out unsellable positions (dust, unsupported symbols)
             # These positions can't be traded so they shouldn't count toward position cap
             # This prevents dust positions from blocking new entries
@@ -1989,17 +1989,17 @@ class TradingStrategy:
                             logger.debug(f"   Excluding {symbol} from position count (marked unsellable {time_since_marked/3600:.1f}h ago)")
                             continue  # Skip this position - don't count it
                     tradable_positions.append(pos)
-                
+
                 # Log if we filtered any positions
                 filtered_count = len(current_positions) - len(tradable_positions)
                 if filtered_count > 0:
                     logger.info(f"   ℹ️  Filtered {filtered_count} unsellable position(s) from count (dust or unsupported)")
-                
+
                 current_positions = tradable_positions
-            
+
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
-            
+
             if entries_blocked:
                 logger.error("🛑 ALL NEW ENTRIES BLOCKED: STOP_ALL_ENTRIES.conf is active")
                 logger.info("   Exiting positions only (no new buys)")
@@ -2008,12 +2008,12 @@ class TradingStrategy:
                 logger.info("   Closing positions only until below cap")
             else:
                 logger.info(f"✅ Position cap OK ({len(current_positions)}/{MAX_POSITIONS_ALLOWED}) - entries enabled")
-            
+
             # Get account balance for position sizing
             if not active_broker or not self.apex:
                 logger.info("📡 Monitor mode (strategy not loaded; no trades)")
                 return
-            
+
             # FIX #1: Update portfolio state from broker data
             # Get detailed balance including crypto holdings
             # PRO MODE: Also calculate total capital (free balance + position values)
@@ -2022,14 +2022,14 @@ class TradingStrategy:
             else:
                 balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
-            
+
             # ✅ CRITICAL FIX (Jan 22, 2026): Update capital dynamically BEFORE allocation
             # Capital must be fetched live, not stuck at initialization value
             # This ensures failsafes and allocators use current real balance
-            
+
             # Get total capital across ALL accounts (master + users)
             total_capital = self._get_total_capital_across_all_accounts()
-            
+
             # Update failsafes with TOTAL capital (all accounts summed)
             # Note: Failsafes protect the ENTIRE trading operation, not just one broker
             if hasattr(self, 'failsafes') and self.failsafes:
@@ -2037,7 +2037,7 @@ class TradingStrategy:
                     self.failsafes.update_account_balance(total_capital)
                 except Exception as e:
                     logger.warning(f"⚠️ Could not update failsafe balance: {e}")
-            
+
             # Update capital allocator with TOTAL capital (all accounts summed)
             if hasattr(self, 'advanced_manager') and self.advanced_manager:
                 try:
@@ -2045,7 +2045,7 @@ class TradingStrategy:
                         self.advanced_manager.capital_allocator.update_total_capital(total_capital)
                 except Exception as e:
                     logger.warning(f"⚠️ Could not update capital allocator balance: {e}")
-            
+
             # Update portfolio state (if available)
             if self.portfolio_manager and hasattr(self, 'master_portfolio') and self.master_portfolio:
                 try:
@@ -2055,7 +2055,7 @@ class TradingStrategy:
                         available_cash=account_balance,
                         positions=current_positions
                     )
-                    
+
                     # Log portfolio summary
                     summary = self.master_portfolio.get_summary()
                     logger.info(f"📊 Portfolio State (Total Equity Accounting):")
@@ -2067,19 +2067,19 @@ class TradingStrategy:
                     logger.info(f"   Cash Utilization: {summary['cash_utilization_pct']:.1f}%")
                 except Exception as e:
                     logger.warning(f"⚠️ Could not update portfolio state: {e}")
-            
+
             # ENHANCED FUND VISIBILITY (Jan 19, 2026)
             # Always track held funds and total capital - not just in PRO_MODE
             # This prevents "bleeding" confusion where funds in trades appear missing
             held_funds = balance_data.get('total_held', 0.0)
             total_funds = balance_data.get('total_funds', account_balance)
-            
+
             # ALWAYS calculate position values (not just in PRO_MODE)
             # Users need to see funds in active trades regardless of mode
             position_value = 0.0
             position_count = 0
             total_capital = account_balance
-            
+
             if hasattr(active_broker, 'get_total_capital'):
                 try:
                     capital_data = active_broker.get_total_capital(include_positions=True)
@@ -2091,21 +2091,21 @@ class TradingStrategy:
                     position_value = 0.0
                     position_count = 0
                     total_capital = account_balance
-            
+
             # Log comprehensive balance breakdown showing ALL fund allocations
             logger.info(f"💰 Account Balance Breakdown:")
             logger.info(f"   ✅ Available (free to trade): ${account_balance:.2f}")
-            
+
             if held_funds > 0:
                 logger.info(f"   🔒 Held (in open orders): ${held_funds:.2f}")
-            
+
             if position_value > 0:
                 logger.info(f"   📊 In Active Positions: ${position_value:.2f} ({position_count} positions)")
-            
+
             # Calculate grand total including held funds and position values
             grand_total = account_balance + held_funds + position_value
             logger.info(f"   💎 TOTAL ACCOUNT VALUE: ${grand_total:.2f}")
-            
+
             if position_value > 0 or held_funds > 0:
                 if grand_total > 0:
                     allocation_pct = (account_balance / grand_total * 100)
@@ -2113,7 +2113,7 @@ class TradingStrategy:
                     logger.info(f"   📈 Cash allocation: {allocation_pct:.1f}% available, {deployed_pct:.1f}% deployed")
                 else:
                     logger.info(f"   📈 Cash allocation: 0.0% available, 0.0% deployed")
-            
+
             # KRAKEN ORDER CLEANUP: Cancel stale limit orders to free capital
             # This runs every cycle if Kraken cleanup is available and broker is Kraken
             if self.kraken_cleanup and hasattr(active_broker, 'broker_type') and active_broker.broker_type == BrokerType.KRAKEN:
@@ -2137,13 +2137,13 @@ class TradingStrategy:
                                 logger.debug(f"   Could not refresh balance: {balance_err}")
                 except Exception as cleanup_err:
                     logger.warning(f"⚠️ Kraken order cleanup error: {cleanup_err}")
-            
+
             # Small delay after balance check to avoid rapid-fire API calls
             time.sleep(0.5)
-            
+
             # STEP 1: Manage existing positions (check for exits/profit taking)
             logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
-            
+
             # LOG POSITION PROFIT STATUS FOR VISIBILITY (Jan 26, 2026)
             if current_positions:
                 try:
@@ -2159,18 +2159,18 @@ class TradingStrategy:
                                     current_prices_dict[symbol] = candles[-1]['close']
                         except Exception as price_err:
                             logger.debug(f"Could not fetch price for {pos.get('symbol')}: {price_err}")
-                    
+
                     # Log position profit status summary
                     if hasattr(self, 'execution_engine') and self.execution_engine:
                         self.execution_engine.log_position_profit_status(current_prices_dict)
                 except Exception as log_err:
                     logger.debug(f"Could not log position profit status during position monitoring: {log_err}")
-            
+
             # NOTE (Jan 24, 2026): Stop-loss tiers are now calculated PER-POSITION based on each position's broker
             # This ensures correct stop-loss thresholds for positions on different exchanges (Kraken vs Coinbase)
             # See line ~2169 where position_primary_stop, position_micro_stop are calculated for each position
             # using self._get_stop_loss_tier(position_broker, position_broker_balance)
-            
+
             # CRITICAL: If over position cap, prioritize selling weakest positions immediately
             # This ensures we get back under cap quickly to avoid further bleeding
             # Position cap set to 8 maximum concurrent positions
@@ -2178,17 +2178,17 @@ class TradingStrategy:
             if positions_over_cap > 0:
                 logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} positions ({positions_over_cap} excess)")
                 logger.warning(f"   Will prioritize selling {positions_over_cap} weakest positions first")
-            
+
             # CRITICAL FIX: Identify ALL positions that need to exit first
             # Then sell them ALL concurrently, not one at a time
             positions_to_exit = []
-            
+
             for position_idx, position in enumerate(current_positions):
                 try:
                     symbol = position.get('symbol')
                     if not symbol:
                         continue
-                    
+
                     # Skip positions we know can't be sold (too small/dust)
                     # But allow retry after timeout in case position grew or API error was temporary
                     if symbol in self.unsellable_positions:
@@ -2202,37 +2202,37 @@ class TradingStrategy:
                             logger.info(f"   🔄 Retrying {symbol} (marked unsellable {time_since_marked/3600:.1f}h ago - timeout reached)")
                             # Remove from unsellable dict to allow full processing
                             del self.unsellable_positions[symbol]
-                    
+
                     # CRITICAL FIX (Jan 24, 2026): Use the correct broker for this position
                     # Each position is tagged with its broker when fetched from multi_account_manager
                     position_broker = position.get('_broker', active_broker)
                     position_broker_type = position.get('_broker_type')
                     # Safely get broker label (handles both enum and string)
                     broker_label = position_broker_type.value.upper() if (position_broker_type and hasattr(position_broker_type, 'value')) else "UNKNOWN"
-                    
+
                     logger.info(f"   Analyzing {symbol} on {broker_label}...")
-                    
+
                     # Get current price from the position's broker
                     current_price = position_broker.get_current_price(symbol)
                     if not current_price or current_price == 0:
                         logger.warning(f"   ⚠️ Could not get price for {symbol} from {broker_label}")
                         continue
-                    
+
                     # Get position value
                     quantity = position.get('quantity', 0)
                     position_value = current_price * quantity
-                    
+
                     logger.info(f"   {symbol} ({broker_label}): {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
-                    
+
                     # PROFITABILITY MODE: Aggressive exit on weak markets
                     # Exit positions when market conditions deteriorate to prevent bleeding
-                    
+
                     # CRITICAL FIX: We don't have entry_price from Coinbase API!
                     # Instead, use aggressive exit criteria based on:
                     # 1. Market conditions (if filter fails, exit immediately)
                     # 2. Small position size (anything under $1 should be exited)
                     # 3. RSI overbought/oversold (take profits or cut losses)
-                    
+
                     # AUTO-EXIT small positions (under $1) - these are likely losers
                     if position_value < MIN_POSITION_VALUE:
                         logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < ${MIN_POSITION_VALUE})")
@@ -2244,20 +2244,20 @@ class TradingStrategy:
                             'broker_label': broker_label
                         })
                         continue
-                    
+
                     # PROFIT-BASED EXIT LOGIC (NEW!)
                     # Check if we have entry price tracked for this position
                     entry_price_available = False
                     entry_time_available = False
                     position_age_hours = 0
                     just_auto_imported = False  # Track if position was just imported this cycle
-                    
+
                     if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                         try:
                             tracked_position = active_broker.position_tracker.get_position(symbol)
                             if tracked_position:
                                 entry_price_available = True
-                                
+
                                 # Calculate position age (needed for both stop-loss and time-based logic)
                                 entry_time = tracked_position.get('first_entry_time')
                                 if entry_time:
@@ -2268,7 +2268,7 @@ class TradingStrategy:
                                         entry_time_available = True
                                     except Exception as time_err:
                                         logger.debug(f"   Could not parse entry time for {symbol}: {time_err}")
-                            
+
                             # CRITICAL FIX (Jan 19, 2026): Calculate P&L FIRST, check stop-loss BEFORE time-based exits
                             # Railway Golden Rule #5: Stop-loss > time exit (always)
                             # The old logic had time-based exits BEFORE stop-loss checks, which is backwards!
@@ -2278,18 +2278,18 @@ class TradingStrategy:
                                 pnl_percent = pnl_data['pnl_percent']
                                 pnl_dollars = pnl_data['pnl_dollars']
                                 entry_price = pnl_data['entry_price']
-                                
+
                                 # CRITICAL: Validate PnL is in fractional format (not percentage)
                                 # If abs(pnl_percent) >= 1, it's likely using wrong scale (percentage instead of fractional)
                                 assert abs(pnl_percent) < 1.0, f"PNL scale mismatch for {symbol}: {pnl_percent} (expected fractional format like -0.01 for -1%)"
-                                
+
                                 logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent*100:+.2f}%) | Entry: ${entry_price:.2f}")
-                                
+
                                 # 🛡️ 3-TIER PROTECTIVE STOP-LOSS SYSTEM (JAN 21, 2026)
                                 # Tier 1: Primary trading stop (varies by broker and balance)
                                 # Tier 2: Emergency micro-stop to prevent logic failures
                                 # Tier 3: Catastrophic failsafe (last resort)
-                                
+
                                 # TIER 1: PRIMARY TRADING STOP-LOSS
                                 # This is the REAL stop-loss for risk management
                                 # For Kraken small balances: -0.6% to -0.8%
@@ -2297,7 +2297,7 @@ class TradingStrategy:
                                 if pnl_percent <= primary_stop:
                                     logger.warning(f"   🛡️ PRIMARY PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {primary_stop*100:.2f}%)")
                                     logger.warning(f"   💥 TIER 1: Protective trading stop triggered - capital preservation mode")
-                                    
+
                                     # FIX #2: Use protective stop-loss executor (risk management override)
                                     if self.forced_stop_loss:
                                         success, result, error = self.forced_stop_loss.force_sell_position(
@@ -2305,7 +2305,7 @@ class TradingStrategy:
                                             quantity=quantity,
                                             reason=f"Primary protective stop-loss: {pnl_percent*100:.2f}% <= {primary_stop*100:.2f}%"
                                         )
-                                        
+
                                         if success:
                                             logger.info(f"   ✅ PROTECTIVE STOP-LOSS EXECUTED: {symbol}")
                                             # Track the exit
@@ -2323,7 +2323,7 @@ class TradingStrategy:
                                                 quantity=quantity,
                                                 size_type='base'
                                             )
-                                            
+
                                             if result and result.get('status') not in ['error', 'unfilled']:
                                                 order_id = result.get('order_id', 'N/A')
                                                 logger.info(f"   ✅ ORDER ACCEPTED: Order ID {order_id}")
@@ -2334,10 +2334,10 @@ class TradingStrategy:
                                                 logger.error(f"   ❌ ORDER REJECTED: {error_msg}")
                                         except Exception as sell_err:
                                             logger.error(f"   ❌ ORDER EXCEPTION: {sell_err}")
-                                    
+
                                     # Skip ALL remaining logic for this position
                                     continue
-                                
+
                                 # TIER 2: EMERGENCY MICRO-STOP (Logic failure prevention)
                                 # This is NOT a trading stop - it's a failsafe to prevent logic failures
                                 # Examples: imported positions, calculation errors, data corruption
@@ -2348,7 +2348,7 @@ class TradingStrategy:
                                     logger.warning(f"   ⚠️ EMERGENCY MICRO-STOP: {symbol} at {pnl_percent:.2f}% (threshold: {micro_stop*100:.2f}%)")
                                     logger.warning(f"   💥 TIER 2: Emergency micro-stop to prevent logic failures (not a trading stop)")
                                     logger.warning(f"   ⚠️  NOTE: Tier 1 was bypassed - possible imported position or logic error")
-                                    
+
                                     # FIX #2: Use forced stop-loss for emergency too
                                     if self.forced_stop_loss:
                                         success, result, error = self.forced_stop_loss.force_sell_position(
@@ -2356,7 +2356,7 @@ class TradingStrategy:
                                             quantity=quantity,
                                             reason=f"Emergency micro-stop: {pnl_percent:.2f}% <= {micro_stop*100:.2f}%"
                                         )
-                                        
+
                                         if success:
                                             logger.info(f"   ✅ EMERGENCY STOP EXECUTED: {symbol}")
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
@@ -2372,7 +2372,7 @@ class TradingStrategy:
                                                 quantity=quantity,
                                                 size_type='base'
                                             )
-                                            
+
                                             if result and result.get('status') not in ['error', 'unfilled']:
                                                 order_id = result.get('order_id', 'N/A')
                                                 logger.info(f"   ✅ MICRO-STOP EXECUTED: Order ID {order_id}")
@@ -2383,9 +2383,9 @@ class TradingStrategy:
                                                 logger.error(f"   ❌ MICRO-STOP FAILED: {error_msg}")
                                         except Exception as sell_err:
                                             logger.error(f"   ❌ MICRO-STOP EXCEPTION: {sell_err}")
-                                    
+
                                     continue
-                                
+
                                 # 🚨 COINBASE LOCKDOWN (Jan 2026) - EXIT ANY LOSS IMMEDIATELY
                                 # Coinbase has been holding losing trades - enforce ZERO TOLERANCE for losses
                                 # Exit ANY position showing ANY loss on Coinbase (no waiting period)
@@ -2400,7 +2400,7 @@ class TradingStrategy:
                                         'broker_label': broker_label
                                     })
                                     continue
-                                
+
                                 # ✅ LOSING TRADES: 15-MINUTE MAXIMUM HOLD TIME (for non-Coinbase)
                                 # For tracked positions with P&L < 0%, enforce STRICT 15-minute max hold time
                                 # This prevents capital erosion from positions held too long in a losing state
@@ -2409,7 +2409,7 @@ class TradingStrategy:
                                 if pnl_percent < 0:
                                     # Convert position age from hours to minutes
                                     position_age_minutes = position_age_hours * MINUTES_PER_HOUR
-                                    
+
                                     # SCENARIO 1: Position with time tracking that exceeds max hold time
                                     if entry_time_available and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
                                         logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent*100:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
@@ -2435,7 +2435,7 @@ class TradingStrategy:
                                             'broker_label': broker_label
                                         })
                                         continue
-                                
+
                                 # TIER 3: CATASTROPHIC PROTECTIVE FAILSAFE (Last resort protection)
                                 # This should NEVER be reached in normal operation
                                 # Only triggers at -5.0% to catch extreme edge cases
@@ -2443,7 +2443,7 @@ class TradingStrategy:
                                     logger.warning(f"   🚨 CATASTROPHIC PROTECTIVE FAILSAFE TRIGGERED: {symbol} at {pnl_percent*100:.2f}% (threshold: {catastrophic_stop*100:.1f}%)")
                                     logger.warning(f"   💥 TIER 3: Last resort capital preservation - severe loss detected!")
                                     logger.warning(f"   🛡️ PROTECTIVE EXIT MODE — Risk Management Override Active")
-                                    
+
                                     # Use forced exit path with retry - bypasses ALL filters
                                     exit_success = False
                                     try:
@@ -2454,7 +2454,7 @@ class TradingStrategy:
                                             quantity=quantity,
                                             size_type='base'
                                         )
-                                        
+
                                         # Enhanced logging for catastrophic events
                                         if result and result.get('status') not in ['error', 'unfilled']:
                                             order_id = result.get('order_id', 'N/A')
@@ -2465,11 +2465,11 @@ class TradingStrategy:
                                         else:
                                             error_msg = result.get('error', 'Unknown error') if result else 'No response'
                                             logger.error(f"   ❌ CATASTROPHIC EXIT ATTEMPT 1 FAILED: {error_msg}")
-                                            
+
                                             # Retry once for catastrophic exits
                                             logger.error(f"   🔄 Retrying catastrophic exit (attempt 2/2)...")
                                             time.sleep(1)  # Brief pause
-                                            
+
                                             result = active_broker.place_market_order(
                                                 symbol=symbol,
                                                 side='sell',
@@ -2488,31 +2488,31 @@ class TradingStrategy:
                                     except Exception as emergency_err:
                                         logger.error(f"   ❌ CATASTROPHIC EXIT EXCEPTION: {symbol} - {emergency_err}")
                                         logger.error(f"   Exception type: {type(emergency_err).__name__}")
-                                    
+
                                     # Log final status
                                     if not exit_success:
                                         logger.error(f"   🛑 CATASTROPHIC EXIT FAILED AFTER 2 ATTEMPTS")
                                         logger.error(f"   🛑 MANUAL INTERVENTION REQUIRED FOR {symbol}")
                                         logger.error(f"   🛑 Position may still be open - check broker manually")
-                                    
+
                                     # Skip to next position - catastrophic exit overrides all other logic
                                     continue
-                                
+
                                 # 💎 PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
                                 # NIJA is for PROFIT ONLY - exit when profit decreases more than 0.5%
                                 # Fixed 0.5% pullback allowed - exit when profit drops 0.5%+ from previous check
                                 # Learning and adjusting: allow small pullback but exit on larger decrease
                                 if PROFIT_PROTECTION_ENABLED:
                                     previous_profit_pct = pnl_data.get('previous_profit_pct', 0.0)
-                                    
+
                                     # Determine minimum profit threshold based on broker
                                     try:
                                         broker_type = getattr(active_broker, 'broker_type', None)
                                     except AttributeError:
                                         broker_type = None
-                                    
+
                                     protection_min_profit = PROFIT_PROTECTION_MIN_PROFIT_KRAKEN if broker_type == BrokerType.KRAKEN else PROFIT_PROTECTION_MIN_PROFIT
-                                    
+
                                     # RULE 1: Exit on Profit Decrease > 0.5%
                                     # If position is profitable AND profit decreases by MORE than 0.5%, exit
                                     # Hold up to 0.5% pullback, exit when it exceeds
@@ -2523,7 +2523,7 @@ class TradingStrategy:
                                     if pnl_percent >= protection_min_profit and previous_profit_pct >= protection_min_profit:
                                         # Calculate decrease from previous profit
                                         profit_decrease = previous_profit_pct - pnl_percent
-                                        
+
                                         # Exit if decrease EXCEEDS 0.5% (> not >=)
                                         if profit_decrease > PROFIT_PROTECTION_PULLBACK_FIXED:
                                             logger.warning(f"   💎 PROFIT PROTECTION: {symbol} profit pullback exceeded")
@@ -2538,14 +2538,14 @@ class TradingStrategy:
                                                 'broker_label': broker_label
                                             })
                                             continue
-                                        
+
                                         # Log protection status
                                         if profit_decrease > 0:
                                             cushion = (PROFIT_PROTECTION_PULLBACK_FIXED - profit_decrease) * 100
                                             logger.debug(f"   💎 Profit pullback within limit: {symbol} at {pnl_percent*100:+.2f}% (pullback: {profit_decrease*100:.3f}%, cushion: {cushion:.3f}%)")
                                         else:
                                             logger.debug(f"   💎 Profit increasing: {symbol} at {pnl_percent*100:+.2f}% (previous: {previous_profit_pct*100:+.2f}%)")
-                                    
+
                                     # RULE 2: Never Break Even Protection
                                     # If position was profitable above minimum threshold and current profit approaches breakeven, exit immediately
                                     if PROFIT_PROTECTION_NEVER_BREAKEVEN and previous_profit_pct >= protection_min_profit and pnl_percent < protection_min_profit:
@@ -2560,7 +2560,7 @@ class TradingStrategy:
                                             'broker_label': broker_label
                                         })
                                         continue
-                                
+
                                 # STEPPED PROFIT TAKING - Exit portions at profit targets
                                 # This locks in gains and frees capital for new opportunities
                                 # Check targets from highest to lowest
@@ -2572,7 +2572,7 @@ class TradingStrategy:
                                     broker_type = getattr(active_broker, 'broker_type', None)
                                 except AttributeError:
                                     broker_type = None
-                                
+
                                 if broker_type == BrokerType.KRAKEN:
                                     profit_targets = PROFIT_TARGETS_KRAKEN
                                     min_threshold = 0.005  # 0.5% minimum for Kraken (0.36% fees)
@@ -2583,7 +2583,7 @@ class TradingStrategy:
                                     # Default to Coinbase targets for unknown brokers (conservative)
                                     profit_targets = PROFIT_TARGETS
                                     min_threshold = MIN_PROFIT_THRESHOLD
-                                
+
                                 for target_pct, reason in profit_targets:
                                     if pnl_percent >= target_pct:
                                         # Double-check: ensure profit meets minimum threshold
@@ -2603,7 +2603,7 @@ class TradingStrategy:
                                     # No profit target hit, check stop loss (LEGACY FALLBACK)
                                     # CRITICAL FIX (Jan 19, 2026): Stop-loss checks happen BEFORE time-based exits
                                     # This ensures losing trades get stopped out immediately, not held for hours
-                                    
+
                                     # CATASTROPHIC STOP LOSS: Force exit at -5% or worse (ABSOLUTE FAILSAFE)
                                     if pnl_percent <= STOP_LOSS_EMERGENCY:
                                         logger.warning(f"   🛡️ CATASTROPHIC PROTECTIVE EXIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_EMERGENCY*100:.0f}%)")
@@ -2648,10 +2648,10 @@ class TradingStrategy:
                                         # CRITICAL FIX (Jan 19, 2026): Add time-based exits AFTER stop-loss checks
                                         # Railway Golden Rule #5: Stop-loss > time exit (always)
                                         # Only check time-based exits if stop-loss didn't trigger
-                                        
+
                                         # Common holding message (avoid duplication)
                                         holding_msg = f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)"
-                                        
+
                                         if entry_time_available:
                                             # 🚨 COINBASE LOCKDOWN (Jan 2026) - FORCE EXIT AFTER 30 MINUTES
                                             # Coinbase positions MUST exit within 30 minutes (even if profitable)
@@ -2669,7 +2669,7 @@ class TradingStrategy:
                                                         'broker_label': broker_label
                                                     })
                                                     continue
-                                            
+
                                             # EMERGENCY TIME-BASED EXIT: Force exit ALL positions after 12 hours (FAILSAFE)
                                             # This is a last-resort failsafe for profitable positions that aren't hitting targets
                                             if position_age_hours >= MAX_POSITION_HOLD_EMERGENCY:
@@ -2700,23 +2700,23 @@ class TradingStrategy:
                                         else:
                                             logger.info(holding_msg)
                                     continue  # Continue to next position check
-                                
+
                                 # If we got here via break, skip remaining checks
                                 continue
-                                
+
                         except Exception as pnl_err:
                             logger.debug(f"   Could not calculate P&L for {symbol}: {pnl_err}")
-                    
+
                     # Log if no entry price available - this helps debug why positions aren't taking profit
                     if not entry_price_available:
                         logger.warning(f"   ⚠️ No entry price tracked for {symbol} - attempting auto-import")
-                        
+
                         # ✅ FIX 1: AUTO-IMPORTED POSITION EXIT SUPPRESSION FIX
                         # Auto-import orphaned positions with aggressive exit parameters
                         # These positions are likely losers and should be exited aggressively
                         auto_import_success = False
                         real_entry_price = None
-                        
+
                         # Try to get real entry price from broker API
                         if active_broker and hasattr(active_broker, 'get_real_entry_price'):
                             try:
@@ -2725,7 +2725,7 @@ class TradingStrategy:
                                     logger.info(f"   ✅ Real entry price fetched: ${real_entry_price:.2f}")
                             except Exception as fetch_err:
                                 logger.debug(f"   Could not fetch real entry price: {fetch_err}")
-                        
+
                         # If real entry cannot be fetched, use safety default
                         if not real_entry_price or real_entry_price <= 0:
                             # SAFETY DEFAULT: Assume entry was higher than current by multiplier
@@ -2733,12 +2733,12 @@ class TradingStrategy:
                             real_entry_price = current_price * SAFETY_DEFAULT_ENTRY_MULTIPLIER
                             logger.warning(f"   ⚠️ Using safety default entry price: ${real_entry_price:.2f} (current * {SAFETY_DEFAULT_ENTRY_MULTIPLIER})")
                             logger.warning(f"   🔴 This position will be flagged as losing and exited aggressively")
-                        
+
                         if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                             try:
                                 # Calculate position size
                                 size_usd = quantity * current_price
-                                
+
                                 # Track the position with real or estimated entry price
                                 # Set aggressive exit parameters for auto-imported positions
                                 auto_import_success = active_broker.position_tracker.track_entry(
@@ -2748,14 +2748,14 @@ class TradingStrategy:
                                     size_usd=size_usd,
                                     strategy="AUTO_IMPORTED"
                                 )
-                                
+
                                 if auto_import_success:
                                     # Compute real PnL immediately
                                     immediate_pnl = ((current_price - real_entry_price) / real_entry_price) * 100
                                     logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${real_entry_price:.2f}")
                                     logger.info(f"   💰 Immediate P&L: {immediate_pnl:+.2f}%")
                                     logger.info(f"   🔴 Aggressive exits enabled: force_stop_loss=True, max_loss_pct=1.5%")
-                                    
+
                                     # AUTO-IMPORTED LOSERS ARE EXITED FIRST
                                     # If position is immediately losing, queue it for exit NOW (not next cycle!)
                                     if immediate_pnl < 0:
@@ -2770,24 +2770,24 @@ class TradingStrategy:
                                         })
                                         # Skip all remaining logic for this position since it's queued for exit
                                         continue
-                                    
+
                                     logger.info(f"      Position now tracked - will use profit targets in next cycle")
                                     logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0) | "
                                               f"⚠️  WARNING: This position may have been losing before auto-import! | "
                                               f"Position now tracked - will evaluate exit in next cycle")
-                                    
+
                                     # CRITICAL FIX: Don't mark as just_auto_imported to allow stop-loss to execute
                                     # Auto-imported positions should NOT skip stop-loss checks!
                                     # Only skip profit-taking logic to avoid premature exits
                                     just_auto_imported = False  # Changed from True - stop-loss must execute!
-                                    
+
                                     # Re-fetch position data to get accurate tracking info
                                     # This ensures control flow variables reflect actual state
                                     try:
                                         tracked_position = active_broker.position_tracker.get_position(symbol)
                                         if tracked_position:
                                             entry_price_available = True
-                                            
+
                                             # Get entry time from newly tracked position
                                             entry_time = tracked_position.get('first_entry_time')
                                             if entry_time:
@@ -2800,7 +2800,7 @@ class TradingStrategy:
                                                     # Just imported, so age should be ~0
                                                     entry_time_available = True
                                                     position_age_hours = 0
-                                            
+
                                             logger.info(f"      Position verified in tracker - aggressive exits disabled")
                                     except Exception as verify_err:
                                         logger.warning(f"      Could not verify imported position: {verify_err}")
@@ -2811,15 +2811,15 @@ class TradingStrategy:
                             except Exception as import_err:
                                 logger.error(f"   ❌ Error auto-importing {symbol}: {import_err}")
                                 logger.error(f"      Will use fallback exit logic")
-                        
+
                         # If auto-import failed or not available, use fallback logic
                         if not auto_import_success:
                             logger.warning(f"      💡 Auto-import unavailable - using fallback exit logic")
-                            
+
                             # CRITICAL FIX: For positions without entry price, use technical indicators
                             # to determine if position is weakening (RSI < 52, price < EMA9)
                             # This conservative exit strategy prevents holding potentially losing positions
-                            
+
                             # Check if position was entered recently (less than 1 hour ago)
                             # If not, it's likely an old position that should be exited
                             if entry_time_available:
@@ -2840,7 +2840,7 @@ class TradingStrategy:
                                 # Be conservative: exit if position shows any signs of weakness
                                 logger.warning(f"   ⚠️ ORPHANED POSITION: {symbol} has no entry price or time tracking")
                                 logger.warning(f"      This position will be exited aggressively to prevent losses")
-                    
+
                     # Get market data for analysis (use cached method to prevent rate limiting)
                     candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
                     if not candles or len(candles) < MIN_CANDLES_REQUIRED:
@@ -2855,15 +2855,15 @@ class TradingStrategy:
                             'broker_label': broker_label
                         })
                         continue
-                    
+
                     # Convert to DataFrame
                     df = pd.DataFrame(candles)
-                    
+
                     # CRITICAL: Ensure numeric types for OHLCV data
                     for col in ['open', 'high', 'low', 'close', 'volume']:
                         if col in df.columns:
                             df[col] = pd.to_numeric(df[col], errors='coerce')
-                    
+
                     # Calculate indicators for exit signal detection
                     logger.debug(f"   DEBUG candle types → close={type(df['close'].iloc[-1])}, open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}")
                     indicators = self.apex.calculate_indicators(df)
@@ -2878,7 +2878,7 @@ class TradingStrategy:
                             'broker_label': broker_label
                         })
                         continue
-                    
+
                     # CRITICAL: Skip ALL exits for positions that were just auto-imported this cycle
                     # These positions have entry_price = current_price (P&L = $0), so evaluating them
                     # for ANY exit signals would defeat the purpose of auto-import
@@ -2889,24 +2889,24 @@ class TradingStrategy:
                         logger.info(f"      Will evaluate exit signals in next cycle after P&L develops")
                         logger.info(f"      🔍 Note: If this position shows 0% P&L for multiple cycles, it may be a masked loser")
                         continue
-                    
+
                     # MOMENTUM-BASED PROFIT TAKING (for positions without entry price)
                     # When we don't have entry price, use price momentum and trend reversal signals
                     # This helps lock in gains on strong moves and cut losses on weak positions
-                    
+
                     rsi = scalar(indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI)
-                    
+
                     # CRITICAL FIX (Jan 16, 2026): ORPHANED POSITION PROTECTION
                     # Positions without entry prices are more likely to be losing trades
                     # Apply ULTRA-AGGRESSIVE exits to prevent holding losers
                     if not entry_price_available:
                         # For orphaned positions, exit on ANY weakness signal
                         # This includes: RSI < 52 (below neutral), price below any EMA, or any downtrend
-                        
+
                         # Get EMAs for trend analysis
                         ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
                         ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
-                        
+
                         # Exit if RSI below 52 (slightly below neutral) - indicates weakening momentum
                         if rsi < 52:
                             logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (RSI={rsi:.1f} < 52, no entry price)")
@@ -2919,7 +2919,7 @@ class TradingStrategy:
                                 'broker_label': broker_label
                             })
                             continue
-                        
+
                         # Exit if price is below EMA9 (short-term weakness)
                         if current_price < ema9:
                             logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (price ${current_price:.2f} < EMA9 ${ema9:.2f})")
@@ -2932,27 +2932,27 @@ class TradingStrategy:
                                 'broker_label': broker_label
                             })
                             continue
-                        
+
                         # If orphaned position made it here, it's showing strength - still monitor closely
                         logger.info(f"   ✅ ORPHANED POSITION SHOWING STRENGTH: {symbol} (RSI={rsi:.1f}, price above EMA9)")
                         logger.info(f"      Will monitor with lenient criteria to allow P&L development (exit only on extreme RSI with confirmation)")
-                    
+
                     # PROFITABILITY FIX (Jan 28, 2026): REMOVE UNPROFITABLE RSI-ONLY EXITS
                     # Previous logic was exiting on RSI signals without verifying profitability
                     # This caused "buying low, selling low" and "buying high, selling high" scenarios
-                    # 
+                    #
                     # KEY INSIGHT: RSI overbought/oversold indicates MOMENTUM, not profitability
                     # - Position can be overbought (RSI > 55) but still losing money
                     # - Position can be oversold (RSI < 45) but still making money
-                    # 
+                    #
                     # NEW STRATEGY: For orphaned positions that passed aggressive checks (RSI >= 52, price >= EMA9)
                     # use EXTREME signals only to allow positions to develop proper P&L:
                     # - Only exit on VERY overbought (RSI > 70) with confirmed weakness (price < EMA9)
                     # - Only exit on VERY oversold (RSI < 30) with confirmed downtrend (price < EMA21)
                     # - Always verify price action confirms the RSI signal before exit
-                    # 
+                    #
                     # This prevents premature exits and lets positions develop proper P&L
-                    
+
                     # EXTREME overbought (RSI > 70) with momentum weakening - likely reversal
                     # Only exit if price is also below EMA9 (confirming momentum loss)
                     if rsi > 70:
@@ -2971,7 +2971,7 @@ class TradingStrategy:
                         else:
                             logger.info(f"   📊 {symbol} very overbought (RSI={rsi:.1f}) but still strong (price>EMA9) - HOLDING")
                             continue
-                    
+
                     # REMOVED (Jan 28, 2026): Moderate RSI exits (RSI 45-55, RSI 50+) were too aggressive
                     # These exits were triggering without profit verification, causing:
                     # - Selling winners too early (RSI 50-55 exits at small gains)
@@ -2980,7 +2980,7 @@ class TradingStrategy:
                     #
                     # Now only extreme RSI levels (>70, <30) with confirming signals trigger exits
                     # This allows positions to develop proper P&L before exiting
-                    
+
                     # EXTREME oversold (RSI < 30) with continued weakness - likely further decline
                     # Only exit if price is also below EMA21 (confirming downtrend)
                     if rsi < 30:
@@ -2999,11 +2999,11 @@ class TradingStrategy:
                         else:
                             logger.info(f"   📊 {symbol} very oversold (RSI={rsi:.1f}) but bouncing (price>EMA21) - HOLDING for recovery")
                             continue
-                    
+
                     # Check for weak market conditions (exit signal)
                     # This protects capital even without knowing entry price
                     allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
-                    
+
                     # AGGRESSIVE: If market conditions deteriorate, exit immediately
                     if not allow_trade:
                         logger.info(f"   ⚠️ Market conditions weak: {market_reason}")
@@ -3016,28 +3016,28 @@ class TradingStrategy:
                             'broker_label': broker_label
                         })
                         continue
-                    
+
                     # If we get here, position passes all checks - keep it
                     logger.info(f"   ✅ {symbol} passing all checks (RSI={rsi:.1f}, trend={trend})")
-                    
+
                 except Exception as e:
                     logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
-                
+
                 # Rate limiting: Add delay after each position check to prevent 429 errors
                 # Skip delay after the last position
                 if position_idx < len(current_positions) - 1:
                     jitter = random.uniform(0, 0.05)  # 0-50ms jitter
                     time.sleep(POSITION_CHECK_DELAY + jitter)
-            
+
             # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
             # Position cap set to 8 maximum concurrent positions
             if len(current_positions) > MAX_POSITIONS_ALLOWED and len(positions_to_exit) < (len(current_positions) - MAX_POSITIONS_ALLOWED):
                 logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - MAX_POSITIONS_ALLOWED - len(positions_to_exit)} more positions")
-                
+
                 # Identify positions not yet marked for exit
                 symbols_to_exit = {p['symbol'] for p in positions_to_exit}
                 remaining_positions = [p for p in current_positions if p.get('symbol') not in symbols_to_exit]
-                
+
                 # Sort by USD value (smallest first - easiest to exit and lowest capital impact)
                 # CRITICAL FIX: Add None-check safety guard for price fetching in sort key
                 def get_position_value(p):
@@ -3047,9 +3047,9 @@ class TradingStrategy:
                     price = active_broker.get_current_price(symbol)
                     # Return 0 if price is None to sort invalid positions first
                     return quantity * (price if price is not None else 0)
-                
+
                 remaining_sorted = sorted(remaining_positions, key=get_position_value)
-                
+
                 # Force-sell smallest positions to get under cap
                 positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
                 for pos_idx, pos in enumerate(remaining_sorted[:positions_needed]):
@@ -3057,7 +3057,7 @@ class TradingStrategy:
                     quantity = pos.get('quantity', 0)
                     try:
                         price = active_broker.get_current_price(symbol)
-                        
+
                         # CRITICAL FIX: Add None-check safety guard
                         # Prevents ghost positions from invalid price fetches
                         if price is None or price == 0:
@@ -3072,7 +3072,7 @@ class TradingStrategy:
                                 'broker_label': broker_label
                             })
                             continue
-                        
+
                         value = quantity * price
                         logger.warning(f"   🔴 FORCE-EXIT to meet cap: {symbol} (${value:.2f})")
                         positions_to_exit.append({
@@ -3092,22 +3092,22 @@ class TradingStrategy:
                             'broker': position_broker,
                             'broker_label': broker_label
                         })
-                    
+
                     # Rate limiting: Add delay after each price check (except last one)
                     if pos_idx < positions_needed - 1:
                         jitter = random.uniform(0, 0.05)  # 0-50ms jitter
                         time.sleep(POSITION_CHECK_DELAY + jitter)
-            
+
             # CRITICAL FIX: Now sell ALL positions concurrently (not one at a time)
             if positions_to_exit:
                 logger.info(f"")
                 logger.info(f"🔴 CONCURRENT EXIT: Selling {len(positions_to_exit)} positions NOW")
                 logger.info(f"="*80)
-                
+
                 # Track sell results to provide accurate summary
                 successful_sells = []
                 failed_sells = []
-                
+
                 for i, pos_data in enumerate(positions_to_exit, 1):
                     symbol = pos_data['symbol']
                     quantity = pos_data['quantity']
@@ -3115,9 +3115,9 @@ class TradingStrategy:
                     # CRITICAL FIX (Jan 24, 2026): Use the correct broker for each position
                     exit_broker = pos_data.get('broker', active_broker)
                     exit_broker_label = pos_data.get('broker_label', 'UNKNOWN')
-                    
+
                     logger.info(f"[{i}/{len(positions_to_exit)}] Selling {symbol} on {exit_broker_label} ({reason})")
-                    
+
                     # CRITICAL FIX (Jan 10, 2026): Validate symbol before placing order
                     # Prevents "ProductID is invalid" errors
                     if not symbol or not isinstance(symbol, str):
@@ -3125,17 +3125,17 @@ class TradingStrategy:
                         # Store descriptive string for logging - will be displayed in summary
                         failed_sells.append(f"INVALID_SYMBOL({symbol})")
                         continue
-                    
+
                     try:
                         # 🚨 COINBASE LOCKDOWN (Jan 2026) - FORCE LIQUIDATE MODE
                         # Use force_liquidate for Coinbase sells to bypass ALL validation
                         # This ensures stop-losses and profit-taking ALWAYS execute
                         is_coinbase = 'coinbase' in exit_broker_label.lower()
                         use_force_liquidate = is_coinbase and ('lockdown' in reason.lower() or 'loss' in reason.lower() or 'stop' in reason.lower())
-                        
+
                         if use_force_liquidate:
                             logger.info(f"  🛡️ PROTECTIVE MODE: Using force_liquidate for Coinbase exit")
-                        
+
                         result = exit_broker.place_market_order(
                             symbol=symbol,
                             side='sell',
@@ -3145,7 +3145,7 @@ class TradingStrategy:
                             ignore_balance=use_force_liquidate,   # Skip balance checks
                             ignore_min_trade=use_force_liquidate  # Skip minimum trade size checks
                         )
-                        
+
                         # Handle dust positions separately from actual failures
                         if result and result.get('status') == 'skipped_dust':
                             logger.info(f"  💨 {symbol} SKIPPED (dust position - too small to sell)")
@@ -3154,7 +3154,7 @@ class TradingStrategy:
                             self.unsellable_positions[symbol] = time.time()
                             # Don't add to failed_sells - this is expected behavior for dust
                             continue
-                        
+
                         if result and result.get('status') not in ['error', 'unfilled']:
                             logger.info(f"  ✅ {symbol} SOLD successfully on {exit_broker_label}!")
                             # ✅ FIX #3: EXPLICIT SELL CONFIRMATION LOG
@@ -3174,7 +3174,7 @@ class TradingStrategy:
                             logger.error(f"  ❌ {symbol} sell failed: {error_msg}")
                             logger.error(f"     Full result: {result}")
                             failed_sells.append(symbol)
-                            
+
                             # CRITICAL FIX (Jan 10, 2026): Handle INVALID_SYMBOL errors
                             # These indicate the symbol format is wrong or the product doesn't exist
                             is_invalid_symbol = (
@@ -3187,12 +3187,12 @@ class TradingStrategy:
                                 logger.error(f"     💡 This position will be skipped for 24 hours")
                                 self.unsellable_positions[symbol] = time.time()
                                 continue
-                            
+
                             # If it's a dust/too-small position, mark it as unsellable to prevent infinite retries
                             # Check both error code and message for robustness
                             is_size_error = (
-                                error_code == 'INVALID_SIZE' or 
-                                'INVALID_SIZE' in str(error_msg) or 
+                                error_code == 'INVALID_SIZE' or
+                                'INVALID_SIZE' in str(error_msg) or
                                 'too small' in str(error_msg).lower() or
                                 'minimum' in str(error_msg).lower()
                             )
@@ -3206,12 +3206,12 @@ class TradingStrategy:
                         logger.error(f"     Traceback: {traceback.format_exc()}")
                         # Convert symbol to string for consistent logging - prevents join() errors
                         failed_sells.append(str(symbol) if symbol else "UNKNOWN_SYMBOL")
-                    
+
                     # Rate limiting: Add delay after each sell order (except the last one)
                     if i < len(positions_to_exit):
                         jitter = random.uniform(0, 0.1)  # 0-100ms jitter
                         time.sleep(SELL_ORDER_DELAY + jitter)
-                
+
                 logger.info(f"="*80)
                 # CRITICAL FIX (Jan 22, 2026): Provide accurate exit summary with success/failure counts
                 # Previous version logged "positions processed" which was misleading - users thought all sells succeeded
@@ -3226,18 +3226,18 @@ class TradingStrategy:
                     logger.error(f"   💡 Check Coinbase manually and retry or sell manually if needed")
                 logger.info(f"="*80)
                 logger.info(f"")
-            
+
             # STEP 2: Look for new entry opportunities (only if entries allowed)
             # USER accounts NEVER generate entry signals - they receive signals via CopyTradeEngine
             # Only MASTER accounts scan markets and generate buy signals
             # PROFITABILITY FIX: Use module-level constants for consistency
-            
+
             # ENHANCED LOGGING (Jan 22, 2025): Show broker-aware condition checklist for trade execution
             logger.info("")
             logger.info("═" * 80)
             logger.info("🎯 TRADE EXECUTION CONDITION CHECKLIST (BROKER-AWARE)")
             logger.info("═" * 80)
-            
+
             if user_mode:
                 # USER MODE: Skip market scanning and entry signal generation entirely
                 logger.info("   ✅ Mode: USER (copy trading only)")
@@ -3253,37 +3253,37 @@ class TradingStrategy:
                 logger.info(f"   💵 Minimum to trade: ${MIN_BALANCE_TO_TRADE_USD:.2f}")
                 logger.info(f"   🚫 Entries blocked: {entries_blocked}")
                 logger.info("")
-                
+
                 # Check each condition individually
                 can_enter = True
                 skip_reasons = []
-                
+
                 if entries_blocked:
                     can_enter = False
                     skip_reasons.append("STOP_ALL_ENTRIES.conf is active")
                     logger.warning("   ❌ CONDITION FAILED: Entry blocking is active")
                 else:
                     logger.info("   ✅ CONDITION PASSED: Entry blocking is OFF")
-                
+
                 if len(current_positions) >= MAX_POSITIONS_ALLOWED:
                     can_enter = False
                     skip_reasons.append(f"Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
                     logger.warning(f"   ❌ CONDITION FAILED: Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
                 else:
                     logger.info(f"   ✅ CONDITION PASSED: Under position cap ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
-                
+
                 if account_balance < MIN_BALANCE_TO_TRADE_USD:
                     can_enter = False
                     skip_reasons.append(f"Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
                     logger.warning(f"   ❌ CONDITION FAILED: Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
                 else:
                     logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
-                
+
                 # BROKER-AWARE ENTRY GATING (Jan 22, 2025)
                 # Check broker eligibility - must not be in EXIT_ONLY mode and meet balance requirements
                 logger.info("")
                 logger.info("   🏦 BROKER ELIGIBILITY CHECK:")
-                
+
                 # CRITICAL FIX (Jan 24, 2026): Wrap entire broker selection in try-catch
                 # to prevent silent failures that cause market scanning to never execute
                 try:
@@ -3291,11 +3291,11 @@ class TradingStrategy:
                     all_brokers = {}
                     if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
                         all_brokers = getattr(self.multi_account_manager, 'master_brokers', {})
-                    
+
                     # Add current active broker if not in multi_account_manager
                     if active_broker and hasattr(active_broker, 'broker_type'):
                         all_brokers[active_broker.broker_type] = active_broker
-                    
+
                     # CRITICAL FIX (Jan 24, 2026): Log if no brokers are available for selection
                     # This helps diagnose why no trades are executing
                     if not all_brokers:
@@ -3304,13 +3304,13 @@ class TradingStrategy:
                         logger.warning(f"      Active broker: {'Yes' if active_broker else 'No'}")
                     else:
                         logger.info(f"      Available brokers for selection: {', '.join([bt.value.upper() for bt in all_brokers.keys()])}")
-                    
+
                     # Select best broker for entry based on priority
                     entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(all_brokers)
-                    
+
                     # Note: Broker eligibility logging moved to after exception handler (line ~3420)
                     # to ensure it happens even if an exception occurs
-                    
+
                     if not entry_broker:
                         can_enter = False
                         skip_reasons.append("No eligible broker for entry (all in EXIT_ONLY or below minimum balance)")
@@ -3320,7 +3320,7 @@ class TradingStrategy:
                         logger.info(f"   ✅ CONDITION PASSED: {entry_broker_name.upper()} available for entry")
                         # Update active_broker to use the selected entry broker
                         active_broker = entry_broker
-                        
+
                         # CRITICAL FIX (Jan 26, 2026): Update apex strategy's broker reference
                         # When switching brokers, we must update the execution engine's broker
                         # Otherwise position sizing is calculated correctly but execution uses wrong broker
@@ -3328,7 +3328,7 @@ class TradingStrategy:
                         if self.apex and hasattr(self.apex, 'update_broker_client'):
                             logger.info(f"   🔄 Updating apex strategy broker to {entry_broker_name.upper()}")
                             self.apex.update_broker_client(active_broker)
-                        
+
                         # CRITICAL FIX (Jan 22, 2026): Update account_balance from selected entry broker
                         # When switching brokers, we must re-fetch the balance from the NEW broker
                         # Otherwise position sizing uses the wrong broker's balance (e.g., Coinbase $20 instead of Kraken $28)
@@ -3336,7 +3336,7 @@ class TradingStrategy:
                         # Without timeout, slow Kraken API calls can block indefinitely, preventing market scanning
                         balance_data = None
                         balance_fetch_failed = False
-                        
+
                         try:
                             if hasattr(active_broker, 'get_account_balance_detailed'):
                                 # Use timeout to prevent hanging on slow balance fetches
@@ -3344,7 +3344,7 @@ class TradingStrategy:
                                     active_broker.get_account_balance_detailed,
                                     timeout_seconds=BALANCE_FETCH_TIMEOUT
                                 )
-                                
+
                                 if balance_result[1] is not None:  # Timeout or error
                                     logger.warning(f"   ⚠️  {entry_broker_name.upper()} detailed balance fetch timed out: {balance_result[1]}")
                                     balance_fetch_failed = True
@@ -3356,7 +3356,7 @@ class TradingStrategy:
                                     active_broker.get_account_balance,
                                     timeout_seconds=BALANCE_FETCH_TIMEOUT
                                 )
-                                
+
                                 if balance_result[1] is not None:  # Timeout or error
                                     logger.warning(f"   ⚠️  {entry_broker_name.upper()} balance fetch timed out: {balance_result[1]}")
                                     balance_fetch_failed = True
@@ -3365,12 +3365,12 @@ class TradingStrategy:
                         except Exception as e:
                             logger.warning(f"   ⚠️  {entry_broker_name.upper()} balance fetch exception: {e}")
                             balance_fetch_failed = True
-                        
+
                         # Use cached balance if fresh fetch failed
                         if balance_fetch_failed or balance_data is None:
                             if hasattr(active_broker, '_last_known_balance') and active_broker._last_known_balance is not None:
                                 cached_balance = active_broker._last_known_balance
-                                
+
                                 # Check if cached balance has a timestamp and is fresh
                                 cache_is_fresh = False
                                 if hasattr(active_broker, '_balance_last_updated') and active_broker._balance_last_updated is not None:
@@ -3382,7 +3382,7 @@ class TradingStrategy:
                                     # No timestamp - use cache anyway since fetch failed (better than nothing)
                                     cache_is_fresh = True
                                     logger.warning(f"   ⚠️  Cached balance for {entry_broker_name.upper()} has no timestamp, using anyway due to fetch failure")
-                                
+
                                 if cache_is_fresh:
                                     logger.warning(f"   ⚠️  Using cached balance for {entry_broker_name.upper()}: ${cached_balance:.2f}")
                                     balance_data = {'trading_balance': cached_balance, 'total_held': 0.0, 'total_funds': cached_balance}
@@ -3396,13 +3396,13 @@ class TradingStrategy:
                                 # Use the balance from eligibility check as last resort
                                 logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
                                 balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
-                        
+
                         account_balance = balance_data.get('trading_balance', 0.0)
-                        
+
                         # Also update position values and total capital from the new broker
                         held_funds = balance_data.get('total_held', 0.0)
                         total_funds = balance_data.get('total_funds', account_balance)
-                        
+
                         # Fetch total capital with timeout protection
                         if hasattr(active_broker, 'get_total_capital'):
                             try:
@@ -3411,7 +3411,7 @@ class TradingStrategy:
                                     kwargs={'include_positions': True},
                                     timeout_seconds=BALANCE_FETCH_TIMEOUT
                                 )
-                                
+
                                 if capital_result[1] is not None:  # Timeout or error
                                     logger.warning(f"   ⚠️  {entry_broker_name.upper()} capital fetch timed out: {capital_result[1]}")
                                     total_capital = account_balance
@@ -3425,9 +3425,9 @@ class TradingStrategy:
                                 total_capital = account_balance
                         else:
                             total_capital = account_balance
-                        
+
                         logger.info(f"   💰 {entry_broker_name.upper()} balance updated: ${account_balance:.2f} (total capital: ${total_capital:.2f})")
-                
+
                 except Exception as broker_check_error:
                     # CRITICAL FIX (Jan 27, 2026): Enhanced exception logging with line number
                     # This helps diagnose exactly where broker selection is failing
@@ -3444,7 +3444,7 @@ class TradingStrategy:
                     # Initialize empty broker_eligibility dict if it wasn't created
                     if 'broker_eligibility' not in locals():
                         broker_eligibility = {}
-                
+
                 # CRITICAL FIX (Jan 27, 2026): Always log broker eligibility status
                 # Even if exception occurred, we want to see which brokers were checked
                 if 'broker_eligibility' in locals() and broker_eligibility:
@@ -3457,10 +3457,10 @@ class TradingStrategy:
                             logger.info(f"      ⚪ {broker_name.upper()}: {status}")
                         else:
                             logger.warning(f"      ❌ {broker_name.upper()}: {status}")
-                
+
                 logger.info("")
                 logger.info("═" * 80)
-                
+
                 if can_enter:
                     logger.info(f"🟢 RESULT: CONDITIONS PASSED FOR {entry_broker_name.upper()}")
                     logger.info("═" * 80)
@@ -3470,16 +3470,16 @@ class TradingStrategy:
                     logger.warning(f"   Reasons: {', '.join(skip_reasons)}")
                     logger.warning("═" * 80)
                     logger.warning("")
-            
+
             # Continue with market scanning if conditions passed
             if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD and can_enter:
                 logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
-                
+
                 # Get top market candidates (limit scan to prevent timeouts)
                 try:
                     # Get list of all products (with caching to reduce API calls)
                     current_time = time.time()
-                    if (not self.all_markets_cache or 
+                    if (not self.all_markets_cache or
                         current_time - self.markets_cache_time > self.MARKETS_CACHE_TTL):
                         logger.info("   🔄 Refreshing market list from API...")
                         all_products = active_broker.get_all_products()
@@ -3491,14 +3491,14 @@ class TradingStrategy:
                             if broker_name == 'kraken':
                                 original_count = len(all_products)
                                 all_products = [
-                                    sym for sym in all_products 
-                                    if sym.endswith('/USD') or sym.endswith('/USDT') or 
+                                    sym for sym in all_products
+                                    if sym.endswith('/USD') or sym.endswith('/USDT') or
                                        sym.endswith('-USD') or sym.endswith('-USDT')
                                 ]
                                 filtered_count = original_count - len(all_products)
                                 logger.info(f"   🔍 Kraken market filter: {filtered_count} unsupported symbols removed at startup")
                                 logger.info(f"      Kraken markets cached: {len(all_products)} (*/USD and */USDT pairs ONLY)")
-                            
+
                             self.all_markets_cache = all_products
                             self.markets_cache_time = current_time
                             logger.info(f"   ✅ Cached {len(all_products)} markets")
@@ -3509,19 +3509,19 @@ class TradingStrategy:
                         all_products = self.all_markets_cache
                         cache_age = int(current_time - self.markets_cache_time)
                         logger.info(f"   ✅ Using cached market list ({len(all_products)} markets, age: {cache_age}s)")
-                    
+
                     if not all_products:
                         logger.warning("   No products available for scanning")
                         return
-                    
+
                     # Use rotation to scan different markets each cycle
                     markets_to_scan = self._get_rotated_markets(all_products)
-                    
+
                     # FIX #3 (Jan 20, 2026): Kraken markets already filtered at startup
                     # No need to filter again during scan - markets_to_scan already contains only supported pairs
                     scan_limit = len(markets_to_scan)
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
-                    
+
                     # Adaptive rate limiting: track consecutive errors (429, 403, or no data)
                     # UPDATED (Jan 10, 2026): Distinguish invalid symbols from genuine errors
                     rate_limit_counter = 0
@@ -3529,7 +3529,7 @@ class TradingStrategy:
                     invalid_symbol_counter = 0  # Track invalid/delisted symbols (don't count as errors)
                     max_consecutive_rate_limits = 2  # CRITICAL FIX (Jan 10): Reduced from 3 - activate circuit breaker faster
                     max_total_errors = 4  # CRITICAL FIX (Jan 10): Reduced from 5 - stop scan earlier to prevent API ban
-                    
+
                     # Track filtering reasons for debugging
                     filter_stats = {
                         'total': 0,
@@ -3542,7 +3542,7 @@ class TradingStrategy:
                         'rate_limited': 0,
                         'cache_hits': 0
                     }
-                    
+
                     for i, symbol in enumerate(markets_to_scan):
                         filter_stats['total'] += 1
                         try:
@@ -3550,17 +3550,17 @@ class TradingStrategy:
                             if symbol in DISABLED_PAIRS:
                                 logger.debug(f"   ⛔ SKIPPING {symbol}: Blacklisted pair (spread > profit edge)")
                                 continue
-                            
+
                             # CRITICAL: Add delay BEFORE fetching candles to prevent rate limiting
                             # This is in addition to the delay after processing (line ~1201)
                             # Pre-delay ensures we never make requests too quickly in succession
                             if i > 0:  # Don't delay before first market
                                 jitter = random.uniform(0, 0.3)  # Add 0-300ms jitter
                                 time.sleep(MARKET_SCAN_DELAY + jitter)
-                            
+
                             # Get candles with caching to reduce duplicate API calls
                             candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
-                            
+
                             # Check if we got candles or if rate limited
                             if not candles:
                                 # Empty candles could be:
@@ -3568,19 +3568,19 @@ class TradingStrategy:
                                 # 2. Rate limited (count as error)
                                 # 3. No data available (count as error)
                                 # We assume invalid symbol if we get consistent empty responses
-                                
+
                                 # Note: Invalid symbols are caught in get_candles() and return []
                                 # So if we get here with no candles, it's likely rate limiting or no data
                                 # We still increment counters but will check for invalid symbols in exceptions below
                                 rate_limit_counter += 1
                                 error_counter += 1
                                 filter_stats['insufficient_data'] += 1
-                                
+
                                 # Degrade API health score on errors
                                 self.api_health_score = max(0, self.api_health_score - 5)
-                                
+
                                 logger.debug(f"   {symbol}: No candles returned (may be rate limited or no data)")
-                                
+
                                 # GLOBAL CIRCUIT BREAKER: If too many total errors, stop scanning entirely
                                 if error_counter >= max_total_errors:
                                     filter_stats['rate_limited'] += 1
@@ -3593,7 +3593,7 @@ class TradingStrategy:
                                     self.api_health_score = max(0, self.api_health_score - 20)  # Major penalty
                                     time.sleep(30.0)  # CRITICAL FIX (Jan 10): Increased from 20s to 30s for better recovery
                                     break  # Exit the market scan loop entirely
-                                
+
                                 # If we're getting many consecutive failures, assume rate limiting
                                 if rate_limit_counter >= max_consecutive_rate_limits:
                                     filter_stats['rate_limited'] += 1
@@ -3613,22 +3613,22 @@ class TradingStrategy:
                                 # Success! Reset rate limit counter and improve health
                                 rate_limit_counter = 0
                                 self.api_health_score = min(100, self.api_health_score + 2)  # Gradual recovery
-                            
+
                             # Convert to DataFrame
                             df = pd.DataFrame(candles)
-                            
+
                             # CRITICAL: Ensure numeric types
                             for col in ['open', 'high', 'low', 'close', 'volume']:
                                 if col in df.columns:
                                     df[col] = pd.to_numeric(df[col], errors='coerce')
-                            
+
                             # FIX #4: PAIR QUALITY FILTER - Check spread, volume, and ATR before analyzing
                             # Only run if check_pair_quality is available (imported at module level)
                             if check_pair_quality is not None:
                                 try:
                                     # Get current bid/ask for spread check
                                     current_price = df['close'].iloc[-1]
-                                    
+
                                     # PLACEHOLDER: Estimate bid/ask from price
                                     # TODO: Replace with actual bid/ask from broker API for more accurate spread check
                                     # Most major pairs (BTC, ETH, SOL) have ~0.01-0.05% spread
@@ -3636,14 +3636,14 @@ class TradingStrategy:
                                     estimated_spread_pct = 0.001  # Assume 0.1% spread for estimation
                                     bid_price = current_price * (1 - estimated_spread_pct / 2)
                                     ask_price = current_price * (1 + estimated_spread_pct / 2)
-                                    
+
                                     # Calculate ATR percentage if available
                                     atr_pct = None
                                     if 'atr' in df.columns and len(df) > 0:
                                         atr_value = df['atr'].iloc[-1]
                                         if pd.notna(atr_value) and current_price > 0:
                                             atr_pct = atr_value / current_price
-                                    
+
                                     # Check pair quality
                                     quality_check = check_pair_quality(
                                         symbol=symbol,
@@ -3654,7 +3654,7 @@ class TradingStrategy:
                                         min_atr_pct=0.005,  # 0.5% minimum ATR
                                         disabled_pairs=DISABLED_PAIRS
                                     )
-                                    
+
                                     if not quality_check['quality_acceptable']:
                                         reasons = ', '.join(quality_check['reasons_failed'])
                                         logger.debug(f"   ⛔ QUALITY FILTER: {symbol} failed - {reasons}")
@@ -3665,14 +3665,14 @@ class TradingStrategy:
                                 except Exception as quality_err:
                                     # If quality check fails, log warning but don't block trading
                                     logger.debug(f"   ⚠️ Quality check error for {symbol}: {quality_err}")
-                            
+
                             # Analyze for entry
                             # PRO MODE: Use total capital instead of just free balance
                             sizing_balance = total_capital if self.pro_mode_enabled else account_balance
                             analysis = self.apex.analyze_market(df, symbol, sizing_balance)
                             action = analysis.get('action', 'hold')
                             reason = analysis.get('reason', '')
-                            
+
                             # Track why we didn't trade
                             if action == 'hold':
                                 if 'Insufficient data' in reason or 'candles' in reason:
@@ -3687,15 +3687,15 @@ class TradingStrategy:
                                     filter_stats['no_entry_signal'] += 1
                                     logger.debug(f"   {symbol}: No signal - {reason}")
                                 continue
-                            
+
                             # Execute buy actions
                             if action in ['enter_long', 'enter_short']:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
-                                
+
                                 # Calculate dynamic minimum based on account balance (OPTION 3)
                                 min_position_size_dynamic = get_dynamic_min_position_size(account_balance)
-                                
+
                                 # PROFITABILITY WARNING: Small positions have lower profitability
                                 # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
                                 # DYNAMIC MINIMUM: Position must meet max(2.00, balance * 0.15)
@@ -3710,7 +3710,7 @@ class TradingStrategy:
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
                                     logger.info(f"      📊 Would need {breakeven_pct:.1f}% gain just to break even on fees")
                                     continue
-                                
+
                                 # FIX #3 (Jan 20, 2026): Kraken-specific minimum position size check
                                 # Kraken requires larger minimum position size due to fees
                                 broker_name = self._get_broker_name(active_broker)
@@ -3721,7 +3721,7 @@ class TradingStrategy:
                                     logger.info(f"      💡 Kraken requires ${MIN_POSITION_SIZE} minimum trade size per exchange rules")
                                     logger.info(f"      📊 Current balance: ${account_balance:.2f}")
                                     continue
-                                
+
                                 # Warn if position is very small but allowed
                                 elif position_size < 2.0:
                                     logger.warning(f"   ⚠️  EXTREMELY SMALL POSITION: ${position_size:.2f} - profitability nearly impossible due to fees")
@@ -3731,46 +3731,46 @@ class TradingStrategy:
                                     logger.warning(f"      💡 Recommended: Fund account to $30+ for better trading results")
                                 elif position_size < 10.0:
                                     logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
-                                
+
                                 # CRITICAL: Verify we're still under position cap
                                 if len(current_positions) >= MAX_POSITIONS_ALLOWED:
                                     logger.warning(f"   ⚠️  Position cap ({MAX_POSITIONS_ALLOWED}) reached - STOP NEW ENTRIES")
                                     break
-                                
+
                                 # PRO MODE: Check if rotation is needed
                                 needs_rotation = False
                                 if self.pro_mode_enabled and self.rotation_manager and position_size > account_balance:
                                     logger.info(f"   🔄 PRO MODE: Position size ${position_size:.2f} exceeds free balance ${account_balance:.2f}")
                                     logger.info(f"   → Rotation needed: ${position_size - account_balance:.2f}")
-                                    
+
                                     # Check if we can rotate
                                     can_rotate, rotate_reason = self.rotation_manager.can_rotate(
                                         total_capital=total_capital,
                                         free_balance=account_balance,
                                         current_positions=len(current_positions)
                                     )
-                                    
+
                                     if can_rotate:
                                         logger.info(f"   ✅ Rotation allowed: {rotate_reason}")
-                                        
+
                                         # Build position metrics for rotation scoring
                                         position_metrics = {}
                                         for pos in current_positions:
                                             pos_symbol = pos.get('symbol')
                                             pos_qty = pos.get('quantity', 0)
-                                            
+
                                             try:
                                                 pos_price = active_broker.get_current_price(pos_symbol)
-                                                
+
                                                 # CRITICAL FIX: Add None-check safety guard
                                                 # Prevents errors from invalid price fetches
                                                 if pos_price is None:
                                                     logger.error(f"   ❌ Price fetch failed for {pos_symbol} — symbol mismatch")
                                                     logger.error(f"   💡 Skipping position from rotation scoring due to invalid price")
                                                     continue
-                                                
+
                                                 pos_value = pos_qty * pos_price if pos_price > 0 else 0
-                                                
+
                                                 # Get position age if available
                                                 pos_age_hours = 0
                                                 if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
@@ -3778,7 +3778,7 @@ class TradingStrategy:
                                                     if tracked and tracked.get('first_entry_time'):
                                                         entry_dt = datetime.fromisoformat(tracked['first_entry_time'])
                                                         pos_age_hours = (datetime.now() - entry_dt).total_seconds() / 3600
-                                                
+
                                                 # Calculate P&L if entry price available
                                                 pos_pnl_pct = 0.0
                                                 if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
@@ -3787,7 +3787,7 @@ class TradingStrategy:
                                                         entry_price = float(tracked['average_entry_price'])
                                                         if entry_price > 0:
                                                             pos_pnl_pct = ((pos_price - entry_price) / entry_price) * 100
-                                                
+
                                                 # Get RSI if available (from recent market data)
                                                 pos_rsi = 50  # Neutral default
                                                 try:
@@ -3806,7 +3806,7 @@ class TradingStrategy:
                                                 except Exception:
                                                     # Keep default RSI if calculation fails
                                                     pass
-                                                
+
                                                 position_metrics[pos_symbol] = {
                                                     'value': pos_value,
                                                     'age_hours': pos_age_hours,
@@ -3815,7 +3815,7 @@ class TradingStrategy:
                                                 }
                                             except Exception:
                                                 continue
-                                        
+
                                         # Select positions to close for rotation
                                         needed_capital = position_size - account_balance
                                         positions_to_close = self.rotation_manager.select_positions_for_rotation(
@@ -3824,16 +3824,16 @@ class TradingStrategy:
                                             needed_capital=needed_capital,
                                             total_capital=total_capital
                                         )
-                                        
+
                                         if positions_to_close:
                                             logger.info(f"   🔄 Closing {len(positions_to_close)} position(s) for rotation:")
-                                            
+
                                             # Close selected positions
                                             closed_count = 0
                                             for pos_to_close in positions_to_close:
                                                 close_symbol = pos_to_close.get('symbol')
                                                 close_qty = pos_to_close.get('quantity')
-                                                
+
                                                 try:
                                                     logger.info(f"      Closing {close_symbol}: {close_qty:.8f}")
                                                     result = active_broker.place_market_order(
@@ -3842,22 +3842,22 @@ class TradingStrategy:
                                                         close_qty,
                                                         size_type='base'
                                                     )
-                                                    
+
                                                     if result and result.get('status') not in ['error', 'unfilled']:
                                                         closed_count += 1
                                                         logger.info(f"      ✅ Closed {close_symbol} successfully")
                                                     else:
                                                         logger.warning(f"      ⚠️ Failed to close {close_symbol}")
-                                                    
+
                                                     time.sleep(0.5)  # Small delay between closes
-                                                    
+
                                                 except Exception as close_err:
                                                     logger.error(f"      ❌ Error closing {close_symbol}: {close_err}")
-                                            
+
                                             if closed_count > 0:
                                                 logger.info(f"   ✅ Rotation complete: Closed {closed_count} positions")
                                                 self.rotation_manager.record_rotation(success=True)
-                                                
+
                                                 # Update free balance after rotation
                                                 try:
                                                     time.sleep(1.0)  # Wait for balances to update
@@ -3875,7 +3875,7 @@ class TradingStrategy:
                                     else:
                                         logger.warning(f"   ⚠️ Cannot rotate: {rotate_reason}")
                                         continue  # Skip this trade if rotation not allowed
-                                
+
                                 logger.info(f"   🎯 BUY SIGNAL: {symbol} - size=${position_size:.2f} - {analysis.get('reason', '')}")
                                 success = self.apex.execute_action(analysis, symbol)
                                 if success:
@@ -3883,40 +3883,40 @@ class TradingStrategy:
                                     break  # Only open one position per cycle
                                 else:
                                     logger.error(f"   ❌ Failed to open position")
-                        
+
                         except Exception as e:
                             # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from rate limits
                             # Invalid symbols should NOT trigger circuit breakers or count as errors
                             error_str = str(e).lower()
-                            
+
                             # More specific patterns to avoid false positives
                             is_productid_invalid = 'productid is invalid' in error_str or 'product_id is invalid' in error_str
                             is_invalid_argument = '400' in error_str and 'invalid_argument' in error_str
                             is_invalid_product_symbol = (
-                                'invalid' in error_str and 
+                                'invalid' in error_str and
                                 ('product' in error_str or 'symbol' in error_str) and
                                 ('not found' in error_str or 'does not exist' in error_str or 'unknown' in error_str)
                             )
-                            
+
                             is_invalid_symbol = is_productid_invalid or is_invalid_argument or is_invalid_product_symbol
-                            
+
                             if is_invalid_symbol:
                                 # Invalid/delisted symbol - skip silently without counting as error
                                 invalid_symbol_counter += 1
                                 filter_stats['market_filter'] += 1  # Count as filtered, not error
                                 logger.debug(f"   ⚠️ Invalid/delisted symbol: {symbol} - skipping")
                                 continue
-                            
+
                             # Count as error only if not an invalid symbol
                             error_counter += 1
                             logger.debug(f"   Error scanning {symbol}: {e}")
-                            
+
                             # Check if it's a rate limit error
                             if '429' in str(e) or 'rate limit' in str(e).lower() or 'too many' in str(e).lower() or '403' in str(e):
                                 filter_stats['rate_limited'] += 1
                                 rate_limit_counter += 1
                                 logger.warning(f"   ⚠️ Rate limit error on {symbol}: {e}")
-                                
+
                                 # GLOBAL CIRCUIT BREAKER: Too many errors = stop scanning
                                 if error_counter >= max_total_errors:
                                     broker_name = self._get_broker_name(active_broker)
@@ -3927,41 +3927,41 @@ class TradingStrategy:
                                     logger.error(f"   📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
                                     time.sleep(10.0)
                                     break  # Exit market scan loop
-                                
+
                                 # Add extra delay to recover
                                 if rate_limit_counter >= 3:
                                     logger.warning(f"   🛑 CIRCUIT BREAKER: Pausing for 8s to allow API rate limits to reset...")
                                     time.sleep(8.0)  # Increased from 5.0s
                                     rate_limit_counter = 0
                             continue
-                    
+
                     # Note: Market scan delay is now applied BEFORE each candle fetch (see line ~1088)
                     # This ensures we never make requests too quickly in succession
                     # No post-delay needed since pre-delay is more effective at preventing rate limits
-                    
+
                     # Log filtering summary
                     logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
                     logger.info(f"      💡 Signals found: {filter_stats['signals_found']}")
                     logger.info(f"      📉 No data: {filter_stats['insufficient_data']}")
-                    
+
                     # Report invalid symbols separately (informational, not errors)
                     if invalid_symbol_counter > 0:
                         logger.info(f"      ℹ️ Invalid/delisted symbols: {invalid_symbol_counter} (skipped)")
-                    
+
                     if filter_stats['rate_limited'] > 0:
                         logger.warning(f"      ⚠️ Rate limited: {filter_stats['rate_limited']} times")
                     logger.info(f"      🔇 Smart filter: {filter_stats['smart_filter']}")
                     logger.info(f"      📊 Market filter: {filter_stats['market_filter']}")
                     logger.info(f"      🚫 No entry signal: {filter_stats['no_entry_signal']}")
                     logger.info(f"      💵 Position too small: {filter_stats['position_too_small']}")
-                    
+
                     # EXPLICIT: Log waiting status when no signals found
                     if filter_stats['signals_found'] == 0:
                         logger.info("")
                         logger.info("   ⏳ WAITING FOR MASTER ENTRY")
                         logger.info("   → No qualifying signals found in this cycle")
                         logger.info("   → Will continue monitoring markets...")
-                
+
                 except Exception as e:
                     logger.error(f"Error during market scan: {e}", exc_info=True)
             else:
@@ -3973,21 +3973,21 @@ class TradingStrategy:
                     reasons.append(f"Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
                 if account_balance < MIN_BALANCE_TO_TRADE_USD:
                     reasons.append(f"Balance ${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD} minimum (need buffer for fees)")
-                
+
                 reason_str = ", ".join(reasons) if reasons else "Unknown reason"
                 logger.info(f"   Skipping new entries: {reason_str}")
-            
+
             # Increment cycle counter for warmup tracking
             self.cycle_count += 1
-            
+
         except Exception as e:
             # Never raise to keep bot loop alive
             logger.error(f"Error in trading cycle: {e}", exc_info=True)
-    
+
     def record_trade_with_advanced_manager(self, symbol: str, profit_usd: float, is_win: bool):
         """
         Record a completed trade with the advanced trading manager.
-        
+
         Args:
             symbol: Trading symbol
             profit_usd: Profit/loss in USD
@@ -4000,7 +4000,7 @@ class TradingStrategy:
                 self.failsafes.record_trade_result(profit_usd, pnl_pct)
             except Exception as e:
                 logger.warning(f"Failed to record trade in failsafes: {e}")
-        
+
         # Record with market adaptation for learning
         if hasattr(self, 'market_adapter') and self.market_adapter:
             try:
@@ -4016,18 +4016,18 @@ class TradingStrategy:
                     )
             except Exception as e:
                 logger.warning(f"Failed to record trade in market adapter: {e}")
-        
+
         # Record with advanced manager (original functionality)
         if not self.advanced_manager:
             return
-        
+
         try:
             # Determine which exchange was used
             from advanced_trading_integration import ExchangeType
-            
+
             # Default to Coinbase as it's the primary broker
             exchange = ExchangeType.COINBASE
-            
+
             # Try to detect actual exchange if broker type is available
             if hasattr(self, 'broker') and self.broker:
                 broker_type = getattr(self.broker, 'broker_type', None)
@@ -4041,23 +4041,23 @@ class TradingStrategy:
                     }
                     broker_name = str(broker_type.value).lower() if hasattr(broker_type, 'value') else str(broker_type).lower()
                     exchange = exchange_mapping.get(broker_name, ExchangeType.COINBASE)
-            
+
             # Record the trade
             self.advanced_manager.record_completed_trade(
                 exchange=exchange,
                 profit_usd=profit_usd,
                 is_win=is_win
             )
-            
+
             logger.debug(f"Recorded trade in advanced manager: {symbol} profit=${profit_usd:.2f} win={is_win}")
-            
+
         except Exception as e:
             logger.warning(f"Failed to record trade in advanced manager: {e}")
-    
+
     def process_end_of_day(self):
         """
         Process end-of-day tasks for advanced trading features.
-        
+
         Should be called once per day to:
         - Check if daily profit target was achieved
         - Trigger rebalancing if needed
@@ -4065,20 +4065,20 @@ class TradingStrategy:
         """
         if not self.advanced_manager:
             return
-        
+
         try:
             # Process end-of-day in advanced manager
             self.advanced_manager.process_end_of_day()
-            
+
             # Log current status
             current_target = self.advanced_manager.target_manager.get_current_target()
             progress = self.advanced_manager.target_manager.get_progress_summary()
-            
+
             logger.info("=" * 70)
             logger.info("📊 END OF DAY SUMMARY")
             logger.info(f"   Current Target: ${current_target:.2f}/day")
             logger.info(f"   Progress: {progress}")
             logger.info("=" * 70)
-            
+
         except Exception as e:
             logger.warning(f"Failed to process end-of-day tasks: {e}")

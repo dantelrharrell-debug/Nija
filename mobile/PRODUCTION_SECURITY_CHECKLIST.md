@@ -37,11 +37,11 @@ from api_server import require_auth
 def register_device():
     data = request.get_json()
     user_id = data['user_id']
-    
+
     # Verify authenticated user matches requested user
     if request.user_id != user_id:
         return jsonify({'error': 'Unauthorized'}), 403
-    
+
     # ... rest of implementation
 ```
 
@@ -91,7 +91,7 @@ def send_notification():
   ```python
   import firebase_admin
   from firebase_admin import credentials, messaging
-  
+
   cred = credentials.Certificate("path/to/serviceAccountKey.json")
   firebase_admin.initialize_app(cred)
   ```

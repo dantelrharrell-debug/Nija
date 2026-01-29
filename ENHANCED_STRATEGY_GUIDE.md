@@ -2,8 +2,8 @@
 ## Multi-Indicator Consensus Trading with Market Regime Detection
 ## Optimized for 24/7 Cryptocurrency Day Trading
 
-**Version:** 1.0  
-**Created:** January 2026  
+**Version:** 1.0
+**Created:** January 2026
 **Based on:** Comprehensive 2026 cryptocurrency trading research
 
 ---
@@ -405,7 +405,7 @@ Regime: TRENDING (ADX: 32, Confidence: 0.85)
 Entry Score: 8/10 (High Confidence)
 Breakdown:
   - RSI: ✓ (1 point)
-  - MACD: ✓ (1 point)  
+  - MACD: ✓ (1 point)
   - Stochastic: ✓ (1 point)
   - EMA Alignment: ✓ (1 point)
   - VWAP: ✓ (1 point)
@@ -724,6 +724,6 @@ python bot/trade_analytics.py --by-session
 
 ---
 
-**Status:** Production Ready  
-**Last Updated:** January 22, 2026  
+**Status:** Production Ready
+**Last Updated:** January 22, 2026
 **Recommended for:** All users (with appropriate risk settings)

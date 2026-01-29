@@ -39,15 +39,15 @@ logger = logging.getLogger(__name__)
 class FounderDashboard:
     """
     Founder Control Dashboard
-    
+
     Centralized control center for platform founders to monitor and manage
     the entire NIJA trading ecosystem.
     """
-    
+
     def __init__(self, update_interval: int = 5):
         """
         Initialize Founder Dashboard
-        
+
         Args:
             update_interval: Seconds between metric updates (default: 5)
         """
@@ -56,14 +56,14 @@ class FounderDashboard:
         self._lock = threading.Lock()
         self._last_update = datetime.now()
         self._metrics_cache: Dict[str, Any] = {}
-        
+
         # Start background updater
         self._updater_thread = threading.Thread(target=self._background_updater, daemon=True)
         self._updater_running = True
         self._updater_thread.start()
-        
+
         logger.info("✅ Founder Dashboard initialized")
-    
+
     def _background_updater(self) -> None:
         """Background thread to update metrics periodically"""
         while self._updater_running:
@@ -72,7 +72,7 @@ class FounderDashboard:
             except Exception as e:
                 logger.error(f"Error updating dashboard metrics: {e}")
             time.sleep(self.update_interval)
-    
+
     def _update_metrics(self) -> None:
         """Update dashboard metrics from database and risk engine"""
         with self._lock:
@@ -81,23 +81,23 @@ class FounderDashboard:
                     # User metrics
                     total_users = session.query(User).count()
                     active_users = session.query(User).filter(User.is_active == True).count()
-                    
+
                     # Trading instance metrics
                     active_instances = session.query(TradingInstance).filter(
                         TradingInstance.status == 'active'
                     ).count()
-                    
+
                     # Position metrics
                     active_positions = session.query(Position).filter(
                         Position.status == 'open'
                     ).count()
-                    
+
                     # Trade metrics (last 24 hours)
                     yesterday = datetime.now() - timedelta(days=1)
                     recent_trades = session.query(Trade).filter(
                         Trade.entry_time >= yesterday
                     ).count()
-                    
+
                     # Calculate total PnL (last 24 hours)
                     recent_pnl_sum = session.query(Trade).filter(
                         Trade.entry_time >= yesterday,
@@ -105,9 +105,9 @@ class FounderDashboard:
                     ).with_entities(
                         Trade.realized_pnl
                     ).all()
-                    
+
                     total_pnl_24h = sum(pnl[0] for pnl in recent_pnl_sum if pnl[0])
-                    
+
                     self._metrics_cache = {
                         'users': {
                             'total': total_users,
@@ -126,26 +126,26 @@ class FounderDashboard:
                         },
                         'last_updated': datetime.now().isoformat()
                     }
-                    
+
                 self._last_update = datetime.now()
-                
+
             except Exception as e:
                 logger.error(f"Error in _update_metrics: {e}")
-    
+
     def get_dashboard_overview(self) -> Dict[str, Any]:
         """
         Get complete dashboard overview
-        
+
         Returns:
             Dictionary with all dashboard data
         """
         with self._lock:
             metrics = self._metrics_cache.copy()
-        
+
         # Add risk engine metrics
         portfolio_metrics = self.risk_engine.calculate_portfolio_metrics()
         risk_summary = self.risk_engine.get_status_summary()
-        
+
         return {
             'platform_metrics': metrics,
             'risk_metrics': {
@@ -155,14 +155,14 @@ class FounderDashboard:
             },
             'timestamp': datetime.now().isoformat()
         }
-    
+
     def get_all_users(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
         """
         Get all users with their current status
-        
+
         Args:
             include_inactive: Whether to include inactive users
-            
+
         Returns:
             List of user dictionaries
         """
@@ -170,9 +170,9 @@ class FounderDashboard:
             query = session.query(User)
             if not include_inactive:
                 query = query.filter(User.is_active == True)
-            
+
             users = query.all()
-            
+
             return [
                 {
                     'user_id': user.user_id,
@@ -184,14 +184,14 @@ class FounderDashboard:
                 }
                 for user in users
             ]
-    
+
     def get_user_details(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
         Get detailed information about a specific user
-        
+
         Args:
             user_id: User identifier
-            
+
         Returns:
             User details dictionary or None if not found
         """
@@ -199,21 +199,21 @@ class FounderDashboard:
             user = session.query(User).filter(User.user_id == user_id).first()
             if not user:
                 return None
-            
+
             # Get user's trading instances
             instances = session.query(TradingInstance).filter(
                 TradingInstance.user_id == user_id
             ).all()
-            
+
             # Get user's active positions
             positions = session.query(Position).filter(
                 Position.user_id == user_id,
                 Position.status == 'open'
             ).all()
-            
+
             # Get risk metrics for user
             account_metrics = self.risk_engine.get_account_metrics(user_id)
-            
+
             return {
                 'user': {
                     'user_id': user.user_id,
@@ -245,33 +245,33 @@ class FounderDashboard:
                 ],
                 'risk_metrics': account_metrics.to_dict() if account_metrics else None
             }
-    
+
     def get_system_health(self) -> Dict[str, Any]:
         """
         Get system health metrics
-        
+
         Returns:
             Dictionary with health status
         """
         import psutil
-        
+
         return {
             'cpu_percent': psutil.cpu_percent(interval=1),
             'memory_percent': psutil.virtual_memory().percent,
             'disk_percent': psutil.disk_usage('/').percent,
             'timestamp': datetime.now().isoformat()
         }
-    
-    def get_risk_events(self, 
+
+    def get_risk_events(self,
                        hours: int = 24,
                        risk_level: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get recent risk events
-        
+
         Args:
             hours: Number of hours to look back
             risk_level: Filter by risk level (optional)
-            
+
         Returns:
             List of risk events
         """
@@ -280,40 +280,40 @@ class FounderDashboard:
             hours=hours,
             risk_level=level_enum
         )
-        
+
         return [event.to_dict() for event in events]
-    
+
     def trigger_emergency_shutdown(self, reason: str) -> Dict[str, Any]:
         """
         Trigger emergency platform-wide shutdown
-        
+
         Args:
             reason: Reason for shutdown
-            
+
         Returns:
             Status dictionary
         """
         logger.critical(f"🚨 EMERGENCY SHUTDOWN TRIGGERED: {reason}")
-        
+
         # TODO: Implement actual shutdown logic
         # - Stop all trading instances
         # - Close all positions (or set to liquidation-only mode)
         # - Notify all users
         # - Lock platform
-        
+
         return {
             'status': 'shutdown_initiated',
             'reason': reason,
             'timestamp': datetime.now().isoformat()
         }
-    
+
     def approve_alpha_user(self, user_id: str) -> Dict[str, Any]:
         """
         Approve an alpha user for platform access
-        
+
         Args:
             user_id: User identifier
-            
+
         Returns:
             Status dictionary
         """
@@ -321,23 +321,23 @@ class FounderDashboard:
             user = session.query(User).filter(User.user_id == user_id).first()
             if not user:
                 return {'status': 'error', 'message': 'User not found'}
-            
+
             user.is_active = True
             user.subscription_tier = 'alpha'
             session.commit()
-            
+
             logger.info(f"✅ Alpha user approved: {user_id}")
-            
+
             return {
                 'status': 'approved',
                 'user_id': user_id,
                 'timestamp': datetime.now().isoformat()
             }
-    
+
     def get_revenue_metrics(self) -> Dict[str, Any]:
         """
         Get revenue and monetization metrics
-        
+
         Returns:
             Revenue metrics dictionary
         """
@@ -350,7 +350,7 @@ class FounderDashboard:
                     User.is_active == True
                 ).count()
                 tier_counts[tier] = count
-            
+
             # TODO: Calculate actual revenue based on tier pricing
             # This is a placeholder
             revenue_estimate = (
@@ -358,14 +358,14 @@ class FounderDashboard:
                 tier_counts.get('pro', 0) * 99 +
                 tier_counts.get('enterprise', 0) * 499
             )
-            
+
             return {
                 'users_by_tier': tier_counts,
                 'monthly_recurring_revenue': revenue_estimate,
                 'total_active_users': sum(tier_counts.values()),
                 'timestamp': datetime.now().isoformat()
             }
-    
+
     def shutdown(self) -> None:
         """Shutdown dashboard and background threads"""
         self._updater_running = False
@@ -377,31 +377,31 @@ class FounderDashboard:
 def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
     """
     Create and configure Flask application for Founder Dashboard
-    
+
     Args:
         config: Optional configuration dictionary
-        
+
     Returns:
         Configured Flask application
     """
     app = Flask(__name__)
     CORS(app)
-    
+
     # Initialize infrastructure
     setup_centralized_logging(log_level='INFO', enable_aggregator=True)
     init_database()
     init_redis()
-    
+
     # Initialize dashboard
     update_interval = config.get('update_interval', 5) if config else 5
     dashboard = FounderDashboard(update_interval=update_interval)
-    
+
     # Health check endpoint
     @app.route('/api/health', methods=['GET'])
     def health_check():
         """Health check endpoint"""
         return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
-    
+
     # Dashboard overview
     @app.route('/api/founder/overview', methods=['GET'])
     def get_overview():
@@ -412,7 +412,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         except Exception as e:
             logger.error(f"Error in get_overview: {e}")
             return jsonify({'error': 'Failed to retrieve dashboard overview'}), 500
-    
+
     # User management endpoints
     @app.route('/api/founder/users', methods=['GET'])
     def get_users():
@@ -424,7 +424,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         except Exception as e:
             logger.error(f"Error in get_users: {e}")
             return jsonify({'error': 'Failed to retrieve users'}), 500
-    
+
     @app.route('/api/founder/users/<user_id>', methods=['GET'])
     def get_user(user_id: str):
         """Get specific user details"""
@@ -436,7 +436,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         except Exception as e:
             logger.error(f"Error in get_user: {e}")
             return jsonify({'error': 'Failed to retrieve user details'}), 500
-    
+
     @app.route('/api/founder/users/<user_id>/approve', methods=['POST'])
     def approve_user(user_id: str):
         """Approve alpha user"""
@@ -446,7 +446,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         except Exception as e:
             logger.error(f"Error in approve_user: {e}")
             return jsonify({'error': 'Failed to approve user'}), 500
-    
+
     # System health
     @app.route('/api/founder/health', methods=['GET'])
     def system_health():
@@ -457,7 +457,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         except Exception as e:
             logger.error(f"Error in system_health: {e}")
             return jsonify({'error': 'Failed to retrieve system health'}), 500
-    
+
     # Risk management
     @app.route('/api/founder/risk/events', methods=['GET'])
     def risk_events():
@@ -470,7 +470,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         except Exception as e:
             logger.error(f"Error in risk_events: {e}")
             return jsonify({'error': 'Failed to retrieve risk events'}), 500
-    
+
     # Emergency controls
     @app.route('/api/founder/emergency/shutdown', methods=['POST'])
     def emergency_shutdown():
@@ -483,7 +483,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         except Exception as e:
             logger.error(f"Error in emergency_shutdown: {e}")
             return jsonify({'error': 'Failed to trigger emergency shutdown'}), 500
-    
+
     # Revenue metrics
     @app.route('/api/founder/revenue', methods=['GET'])
     def revenue_metrics():
@@ -494,15 +494,15 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         except Exception as e:
             logger.error(f"Error in revenue_metrics: {e}")
             return jsonify({'error': 'Failed to retrieve revenue metrics'}), 500
-    
+
     return app
 
 
 if __name__ == '__main__':
     import os
-    
+
     app = create_app({'update_interval': int(os.getenv('UPDATE_INTERVAL', '5'))})
     port = int(os.getenv('PORT', '5001'))
-    
+
     logger.info(f"🚀 Starting Founder Dashboard on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)

@@ -63,31 +63,31 @@ def main():
     print("COINBASE ADVANCED TRADE API FIELD NAME VALIDATION")
     print("=" * 80)
     print()
-    
+
     print("✅ CORRECT Field Names for spot_positions:")
     print("   - total_balance_crypto: Total balance of asset in crypto units")
     print("   - available_to_trade_crypto: Amount freely tradable in crypto units")
     print("   - total_balance_fiat: Total balance in fiat currency")
     print("   - available_to_trade_fiat: Amount freely tradable in fiat currency")
     print()
-    
+
     print("❌ INCORRECT Field Names (DO NOT USE):")
     print("   - available_to_trade_base (does not exist)")
     print("   - hold_base (does not exist)")
     print("   - available_to_trade (does not exist)")
     print("   - hold (does not exist)")
     print()
-    
+
     print("💡 KEY INSIGHT:")
     print("   total_balance_crypto = available_to_trade_crypto + held_amount")
     print("   For sells, use total_balance_crypto to get the FULL position size")
     print()
-    
+
     print("📚 Reference:")
     print("   https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/")
     print("   rest-api/portfolios/get-portfolio-breakdown")
     print()
-    
+
     print("=" * 80)
     print("✅ VALIDATION COMPLETE")
     print("=" * 80)

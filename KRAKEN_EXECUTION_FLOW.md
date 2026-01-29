@@ -18,7 +18,7 @@ if cycle_broker != execution_broker:
 ```
 
 ### 🛑 Safety Check #2: Hard-Stop on Rejected Orders
-**Location:** 
+**Location:**
 - `bot/broker_integration.py` (KrakenClient.place_market_order, line ~1098)
 - `bot/broker_integration.py` (KrakenClient.place_limit_order, line ~1324)
 - `bot/broker_manager.py` (KrakenBroker.place_order, line ~6218)

@@ -1,7 +1,7 @@
 # NIJA Profit-Taking Guarantee
 
-**Version:** 1.0  
-**Date:** January 22, 2026  
+**Version:** 1.0
+**Date:** January 22, 2026
 **Status:** ✅ ACTIVE
 
 ---
@@ -271,6 +271,6 @@ If you believe profit-taking is not working correctly:
 
 ---
 
-**Last Updated:** January 22, 2026  
-**Maintained By:** NIJA Trading Systems  
+**Last Updated:** January 22, 2026
+**Maintained By:** NIJA Trading Systems
 **Version:** 1.0

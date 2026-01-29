@@ -29,7 +29,7 @@ class UserPermissions:
     """
     User-specific trading permissions and limits.
     """
-    
+
     def __init__(
         self,
         user_id: str,
@@ -42,7 +42,7 @@ class UserPermissions:
     ):
         """
         Initialize user permissions.
-        
+
         Args:
             user_id: Unique user identifier
             allowed_pairs: List of allowed trading pairs (None = all allowed)
@@ -60,7 +60,7 @@ class UserPermissions:
         self.trade_only = trade_only  # Cannot modify strategy
         self.enabled = enabled
         self.created_at = datetime.now()
-        
+
     def can_trade_pair(self, pair: str) -> bool:
         """Check if user can trade this pair."""
         if not self.enabled:
@@ -68,11 +68,11 @@ class UserPermissions:
         if self.allowed_pairs is None:
             return True
         return pair in self.allowed_pairs
-    
+
     def validate_position_size(self, size_usd: float) -> bool:
         """Validate position size against user limits."""
         return size_usd <= self.max_position_size_usd
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {
@@ -91,16 +91,16 @@ class PermissionValidator:
     """
     Validates user permissions before executing trades.
     """
-    
+
     def __init__(self):
         self.user_permissions: Dict[str, UserPermissions] = {}
         logger.info("Permission validator initialized")
-    
+
     def register_user(self, permissions: UserPermissions):
         """Register user permissions."""
         self.user_permissions[permissions.user_id] = permissions
         logger.info(f"User {permissions.user_id} registered with permissions: {permissions.to_dict()}")
-    
+
     def validate_trade(
         self,
         user_id: str,
@@ -109,30 +109,30 @@ class PermissionValidator:
     ) -> tuple[bool, Optional[str]]:
         """
         Validate if user can execute this trade.
-        
+
         Returns:
             (is_valid, error_message)
         """
         # Check if user is registered
         if user_id not in self.user_permissions:
             return False, f"User {user_id} not registered"
-        
+
         perms = self.user_permissions[user_id]
-        
+
         # Check if trading is enabled
         if not perms.enabled:
             return False, "Trading disabled for this user"
-        
+
         # Check if pair is allowed
         if not perms.can_trade_pair(pair):
             return False, f"Trading pair {pair} not allowed for this user"
-        
+
         # Check position size
         if not perms.validate_position_size(position_size_usd):
             return False, f"Position size ${position_size_usd:.2f} exceeds limit ${perms.max_position_size_usd:.2f}"
-        
+
         return True, None
-    
+
     def get_user_permissions(self, user_id: str) -> Optional[UserPermissions]:
         """Get user permissions."""
         return self.user_permissions.get(user_id)

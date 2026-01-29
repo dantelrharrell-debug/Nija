@@ -284,7 +284,7 @@ Micro-master mode enforces:
 ### "Insufficient balance for trade"
 
 **Problem:** Not enough cash after position sizing
-**Solution:** 
+**Solution:**
 - Reduce `MAX_POSITION_SIZE_PCT` to 30% or 35%
 - Increase account balance
 - Wait for current position to close
@@ -313,7 +313,7 @@ Micro-master mode enforces:
 3. **Deposit When Possible:** Add $10-20 monthly
 4. **Track Progress:** Monitor balance weekly
 
-**Timeline:** 
+**Timeline:**
 - Aggressive: 4-8 weeks (risky)
 - Conservative: 8-16 weeks (safer)
 - Mixed: Add deposits + compound (fastest)
@@ -495,6 +495,6 @@ if is_micro_master(balance):
 
 ---
 
-**Version:** 1.0  
-**Date:** January 23, 2026  
+**Version:** 1.0
+**Date:** January 23, 2026
 **Author:** NIJA Trading Systems

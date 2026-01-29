@@ -304,11 +304,11 @@ Simple, mobile-first interface for essential trading controls.
 **Location**: `/frontend/templates/index.html`
 
 ### MVP Features (ONLY)
-✅ **Connect Exchange** - Add/remove broker credentials  
-✅ **See Balance** - Real-time account balance display  
-✅ **See Positions** - Active positions with P&L  
-✅ **See Profit** - Total P&L and win rate stats  
-✅ **On/Off Toggle** - Start/stop trading with one tap  
+✅ **Connect Exchange** - Add/remove broker credentials
+✅ **See Balance** - Real-time account balance display
+✅ **See Positions** - Active positions with P&L
+✅ **See Profit** - Total P&L and win rate stats
+✅ **On/Off Toggle** - Start/stop trading with one tap
 
 ### UI Components
 ```
@@ -347,7 +347,7 @@ Simple, mobile-first interface for essential trading controls.
 async function handleTradingToggle() {
     const toggle = document.getElementById('trading-toggle');
     const action = toggle.checked ? 'start' : 'stop';
-    
+
     await apiRequest('/api/trading/control', {
         method: 'POST',
         body: JSON.stringify({ action })
@@ -356,11 +356,11 @@ async function handleTradingToggle() {
 ```
 
 ### What's NOT in MVP
-❌ Advanced charts  
-❌ Strategy configuration  
-❌ Backtesting interface  
-❌ Social/sharing features  
-❌ Notifications (push)  
+❌ Advanced charts
+❌ Strategy configuration
+❌ Backtesting interface
+❌ Social/sharing features
+❌ Notifications (push)
 
 *Focus: Control trading, monitor results. That's it.*
 
@@ -460,10 +460,10 @@ docker run -d \
 - [ ] Enable database encryption at rest
 
 ### Compliance
-✅ **GDPR Ready**: User data can be exported/deleted  
-✅ **SOC 2**: Audit logging for all access  
-✅ **PCI DSS**: No payment card data stored  
-✅ **CCPA**: User privacy controls in place  
+✅ **GDPR Ready**: User data can be exported/deleted
+✅ **SOC 2**: Audit logging for all access
+✅ **PCI DSS**: No payment card data stored
+✅ **CCPA**: User privacy controls in place
 
 ---
 

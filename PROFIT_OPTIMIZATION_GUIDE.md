@@ -4,8 +4,8 @@
 
 This guide explains the profit optimization enhancements added to NIJA to help you **profit bigger and faster** on Coinbase and Kraken exchanges.
 
-**Date**: January 25, 2026  
-**Version**: v7.1 + Profit Optimizations  
+**Date**: January 25, 2026
+**Version**: v7.1 + Profit Optimizations
 **Status**: ✅ Ready for Production
 
 ---
@@ -14,7 +14,7 @@ This guide explains the profit optimization enhancements added to NIJA to help y
 
 ### 1. **Enhanced Entry Scoring (0-100 System)**
 
-**Before**: Basic 1-5 scoring (1 = weak, 5 = strong)  
+**Before**: Basic 1-5 scoring (1 = weak, 5 = strong)
 **Now**: Advanced 0-100 weighted scoring system
 
 **How it works**:
@@ -41,7 +41,7 @@ MIN_ENTRY_SCORE_THRESHOLD=60  # 60 = good, 70 = very good, 80+ = excellent
 
 ### 2. **Market Regime Detection (Adaptive Parameters)**
 
-**Before**: Same parameters in all market conditions  
+**Before**: Same parameters in all market conditions
 **Now**: Adaptive parameters based on market regime
 
 **3 Market Regimes Detected**:
@@ -79,7 +79,7 @@ USE_REGIME_DETECTION=true
 
 ### 3. **Stepped Profit-Taking (Partial Exits)**
 
-**Before**: Hold entire position until single exit signal  
+**Before**: Hold entire position until single exit signal
 **Now**: Exit portions at multiple profit levels
 
 **Coinbase Exit Levels** (accounts for 1.4% fees):
@@ -123,7 +123,7 @@ ENABLE_STEPPED_EXITS=true
 
 ### 4. **Fee Optimization & Smart Routing**
 
-**Before**: Trade on any available exchange  
+**Before**: Trade on any available exchange
 **Now**: Route trades to the best exchange based on fees and position size
 
 **Exchange Fee Comparison**:
@@ -175,7 +175,7 @@ SMALL_POSITION_THRESHOLD_USD=100
 
 ### 5. **Multi-Exchange Capital Allocation**
 
-**Before**: All capital on one exchange  
+**Before**: All capital on one exchange
 **Now**: Split capital 50/50 between Coinbase and Kraken
 
 **Why This Matters**:
@@ -420,7 +420,7 @@ strategy = NIJAApexStrategyV71(broker_client=broker, config=config)
 
 ### Issue: "Enhanced scoring not available"
 
-**Cause**: Missing dependencies  
+**Cause**: Missing dependencies
 **Fix**:
 ```bash
 # Check if modules exist
@@ -434,7 +434,7 @@ git pull origin main
 
 ### Issue: "Configuration validation failed"
 
-**Cause**: Invalid configuration values  
+**Cause**: Invalid configuration values
 **Fix**: Check logs for specific error, common issues:
 - Scoring weights don't sum to 100
 - Capital allocation doesn't sum to 1.0
@@ -442,7 +442,7 @@ git pull origin main
 
 ### Issue: "No trades executing"
 
-**Cause**: Entry score threshold too high  
+**Cause**: Entry score threshold too high
 **Fix**: Lower threshold:
 ```bash
 MIN_ENTRY_SCORE_THRESHOLD=55  # Was 60, try 55
@@ -450,7 +450,7 @@ MIN_ENTRY_SCORE_THRESHOLD=55  # Was 60, try 55
 
 ### Issue: "Kraken not routing trades"
 
-**Cause**: Kraken not connected or underfunded  
+**Cause**: Kraken not connected or underfunded
 **Fix**:
 1. Check Kraken credentials are set
 2. Verify Kraken balance > $10 minimum
@@ -485,8 +485,8 @@ MIN_ENTRY_SCORE_THRESHOLD=55  # Was 60, try 55
 - 📉 -29% lower trading fees
 - 📈 3-4x more trading opportunities
 
-**Setup Time**: 5 minutes  
-**Difficulty**: Easy (just copy `.env.profit_optimized` and add API keys)  
+**Setup Time**: 5 minutes
+**Difficulty**: Easy (just copy `.env.profit_optimized` and add API keys)
 **Status**: Production-ready ✅
 
 ---

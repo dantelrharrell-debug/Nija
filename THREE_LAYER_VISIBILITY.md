@@ -20,9 +20,9 @@ NIJA provides **three complementary visibility layers** to give you complete tra
 
 ### 1️⃣ Kraken Trade History (Execution Proof)
 
-**What It Shows**: Official record from the exchange  
-**Trust Level**: 🏦 Exchange-verified (100% accurate)  
-**Update Speed**: ⚡ 1-2 seconds  
+**What It Shows**: Official record from the exchange
+**Trust Level**: 🏦 Exchange-verified (100% accurate)
+**Update Speed**: ⚡ 1-2 seconds
 **Purpose**: Legal proof of what actually executed
 
 **Where to Access**:
@@ -53,9 +53,9 @@ NIJA provides **three complementary visibility layers** to give you complete tra
 
 ### 2️⃣ NIJA Activity Feed (Decision Truth)
 
-**What It Shows**: Every decision NIJA makes  
-**Trust Level**: 🤖 Bot reporting (NIJA's internal view)  
-**Update Speed**: ⚡ Real-time (instant)  
+**What It Shows**: Every decision NIJA makes
+**Trust Level**: 🤖 Bot reporting (NIJA's internal view)
+**Update Speed**: ⚡ Real-time (instant)
 **Purpose**: Understand WHY trades did or didn't happen
 
 **Where to Access**:
@@ -98,9 +98,9 @@ NIJA provides **three complementary visibility layers** to give you complete tra
 
 ### 3️⃣ Live Position Mirror (Real-Time Positions)
 
-**What It Shows**: Current open positions  
-**Trust Level**: 🤖 NIJA tracking (updated immediately)  
-**Update Speed**: ⚡ Instant (doesn't wait for broker)  
+**What It Shows**: Current open positions
+**Trust Level**: 🤖 NIJA tracking (updated immediately)
+**Update Speed**: ⚡ Instant (doesn't wait for broker)
 **Purpose**: Know what's open even when broker UI lags
 
 **Where to Access**:
@@ -330,6 +330,6 @@ For detailed Kraken verification steps, see [KRAKEN_TRADING_GUIDE.md](KRAKEN_TRA
 
 ---
 
-**Last Updated**: January 2026  
-**Version**: 1.0  
+**Last Updated**: January 2026
+**Version**: 1.0
 **Author**: NIJA Trading Systems

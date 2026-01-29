@@ -20,7 +20,7 @@ def load_env_from_file(path: str = ".env") -> None:
     """Load environment variables from .env file."""
     if not os.path.isfile(path):
         return
-    
+
     try:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
@@ -30,7 +30,7 @@ def load_env_from_file(path: str = ".env") -> None:
                 key, value = line.split("=", 1)
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
-                
+
                 if key not in os.environ:
                     os.environ[key] = value
     except Exception as e:
@@ -43,7 +43,7 @@ def main() -> None:
 
     api_key = get_env("COINBASE_API_KEY")
     api_secret = get_env("COINBASE_API_SECRET")
-    
+
     # Normalize PEM key if it has escaped newlines
     if '\\n' in api_secret:
         api_secret = api_secret.replace('\\n', '\n')
@@ -60,7 +60,7 @@ def main() -> None:
         print(f"ERROR: Failed to create REST client: {e}", file=sys.stderr)
         print(f"API Secret starts with: {api_secret[:50]}...", file=sys.stderr)
         sys.exit(2)
-    
+
     try:
         print("📡 Calling GET /v3/accounts...")
         resp = client.get_accounts()

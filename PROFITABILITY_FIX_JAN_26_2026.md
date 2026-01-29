@@ -105,7 +105,7 @@ The score is calculated from 5 weighted factors:
 - **Volume** (15 points): Volume confirmation
 - **Market Structure** (20 points): Support/resistance levels
 
-**Previous Minimum**: 60/100 (accepting "Fair" trades)  
+**Previous Minimum**: 60/100 (accepting "Fair" trades)
 **New Minimum**: 75/100 (only "Good" and better)
 
 ### Confidence Calculation
@@ -115,7 +115,7 @@ Confidence is derived from:
 confidence = entry_score / MAX_ENTRY_SCORE
 ```
 
-**Previous Minimum**: 0.60 (60% confidence)  
+**Previous Minimum**: 0.60 (60% confidence)
 **New Minimum**: 0.75 (75% confidence)
 
 ---
@@ -203,11 +203,11 @@ To prevent marginal trades (like the 63/100 example) from being executed and cau
 
 ---
 
-**Status**: ✅ IMPLEMENTED  
-**Date**: January 26, 2026  
-**Version**: Applied to APEX v7.1  
-**Risk Level**: LOW (config changes only)  
-**Deployment**: Ready for production  
+**Status**: ✅ IMPLEMENTED
+**Date**: January 26, 2026
+**Version**: Applied to APEX v7.1
+**Risk Level**: LOW (config changes only)
+**Deployment**: Ready for production
 
 ---
 

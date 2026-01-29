@@ -49,14 +49,14 @@ class PerformanceMetrics:
     monthly_return_pct: float
     annualized_return_pct: float
     cagr_pct: float  # Compound Annual Growth Rate
-    
+
     # Risk metrics
     sharpe_ratio: float
     sortino_ratio: float
     calmar_ratio: float  # Return / Max Drawdown
     max_drawdown_pct: float
     current_drawdown_pct: float
-    
+
     # Trade statistics
     total_trades: int
     winning_trades: int
@@ -65,13 +65,13 @@ class PerformanceMetrics:
     avg_win: float
     avg_loss: float
     profit_factor: float  # Gross profit / Gross loss
-    
+
     # Time metrics
     days_trading: int
     avg_trades_per_day: float
     longest_winning_streak: int
     longest_losing_streak: int
-    
+
     # Volatility
     daily_volatility_pct: float
     annualized_volatility_pct: float
@@ -80,7 +80,7 @@ class PerformanceMetrics:
 class PerformanceMetricsCalculator:
     """
     Calculate investor-grade performance metrics
-    
+
     Responsibilities:
     - Track daily NAV (Net Asset Value)
     - Calculate equity curves
@@ -88,11 +88,11 @@ class PerformanceMetricsCalculator:
     - Compute Sharpe and Sortino ratios
     - Produce monthly performance reports
     """
-    
+
     def __init__(self, initial_capital: float, data_dir: str = "./data/performance"):
         """
         Initialize performance metrics calculator
-        
+
         Args:
             initial_capital: Starting capital amount
             data_dir: Directory to store performance data
@@ -100,60 +100,60 @@ class PerformanceMetricsCalculator:
         self.initial_capital = initial_capital
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True, parents=True)
-        
+
         # Performance tracking
         self.snapshots: List[PerformanceSnapshot] = []
         self.daily_returns: List[float] = []
         self.equity_curve: List[Tuple[datetime, float]] = []
         self.drawdown_curve: List[Tuple[datetime, float]] = []
-        
+
         # State
         self.peak_equity = initial_capital
         self.current_equity = initial_capital
-        
+
         # Load existing data
         self._load_historical_data()
-        
+
         logger.info(f"✅ Performance Metrics Calculator initialized with ${initial_capital:,.2f}")
-    
+
     def record_snapshot(self, snapshot: PerformanceSnapshot) -> None:
         """
         Record a performance snapshot
-        
+
         Args:
             snapshot: Performance snapshot to record
         """
         self.snapshots.append(snapshot)
         self.current_equity = snapshot.equity
-        
+
         # Update equity curve
         self.equity_curve.append((snapshot.timestamp, snapshot.equity))
-        
+
         # Update peak and calculate drawdown
         if snapshot.equity > self.peak_equity:
             self.peak_equity = snapshot.equity
-        
+
         drawdown_pct = ((self.peak_equity - snapshot.equity) / self.peak_equity * 100) if self.peak_equity > 0 else 0.0
         self.drawdown_curve.append((snapshot.timestamp, drawdown_pct))
-        
+
         # Calculate daily return if we have previous data
         if len(self.snapshots) > 1:
             prev_snapshot = self.snapshots[-2]
             if prev_snapshot.equity > 0:
                 daily_return = ((snapshot.equity - prev_snapshot.equity) / prev_snapshot.equity) * 100
                 self.daily_returns.append(daily_return)
-        
+
         logger.debug(f"Recorded snapshot: NAV=${snapshot.nav:,.2f}, Equity=${snapshot.equity:,.2f}")
-    
+
     def calculate_nav(self, cash: float, positions_value: float, unrealized_pnl: float = 0.0) -> float:
         """
         Calculate Net Asset Value
-        
+
         Args:
             cash: Available cash
             positions_value: Market value of positions
             unrealized_pnl: Unrealized profit/loss (optional, may be included in positions_value)
-        
+
         Returns:
             Net Asset Value
         """
@@ -161,139 +161,139 @@ class PerformanceMetricsCalculator:
         # Note: positions_value should already include unrealized P&L
         nav = cash + positions_value
         return nav
-    
-    def get_equity_curve(self, start_date: Optional[datetime] = None, 
+
+    def get_equity_curve(self, start_date: Optional[datetime] = None,
                          end_date: Optional[datetime] = None) -> pd.DataFrame:
         """
         Get equity curve as pandas DataFrame
-        
+
         Args:
             start_date: Optional start date filter
             end_date: Optional end date filter
-        
+
         Returns:
             DataFrame with timestamp and equity columns
         """
         if not self.equity_curve:
             return pd.DataFrame(columns=['timestamp', 'equity'])
-        
+
         df = pd.DataFrame(self.equity_curve, columns=['timestamp', 'equity'])
-        
+
         if start_date:
             df = df[df['timestamp'] >= start_date]
         if end_date:
             df = df[df['timestamp'] <= end_date]
-        
+
         return df
-    
+
     def get_drawdown_curve(self, start_date: Optional[datetime] = None,
                            end_date: Optional[datetime] = None) -> pd.DataFrame:
         """
         Get drawdown curve as pandas DataFrame
-        
+
         Args:
             start_date: Optional start date filter
             end_date: Optional end date filter
-        
+
         Returns:
             DataFrame with timestamp and drawdown_pct columns
         """
         if not self.drawdown_curve:
             return pd.DataFrame(columns=['timestamp', 'drawdown_pct'])
-        
+
         df = pd.DataFrame(self.drawdown_curve, columns=['timestamp', 'drawdown_pct'])
-        
+
         if start_date:
             df = df[df['timestamp'] >= start_date]
         if end_date:
             df = df[df['timestamp'] <= end_date]
-        
+
         return df
-    
+
     def calculate_sharpe_ratio(self, risk_free_rate: float = 0.02) -> float:
         """
         Calculate Sharpe ratio
-        
+
         Args:
             risk_free_rate: Annual risk-free rate (default: 2%)
-        
+
         Returns:
             Sharpe ratio (annualized)
         """
         if len(self.daily_returns) < 2:
             return 0.0
-        
+
         returns_array = np.array(self.daily_returns)
-        
+
         # Convert to decimal
         returns_decimal = returns_array / 100.0
-        
+
         # Calculate excess returns
         daily_risk_free = risk_free_rate / 252  # Assume 252 trading days
         excess_returns = returns_decimal - daily_risk_free
-        
+
         # Calculate Sharpe ratio
         if np.std(excess_returns) == 0:
             return 0.0
-        
+
         sharpe = np.mean(excess_returns) / np.std(excess_returns)
-        
+
         # Annualize (assuming 252 trading days)
         sharpe_annualized = sharpe * np.sqrt(252)
-        
+
         return sharpe_annualized
-    
+
     def calculate_sortino_ratio(self, risk_free_rate: float = 0.02) -> float:
         """
         Calculate Sortino ratio (like Sharpe but only penalizes downside volatility)
-        
+
         Args:
             risk_free_rate: Annual risk-free rate (default: 2%)
-        
+
         Returns:
             Sortino ratio (annualized)
         """
         if len(self.daily_returns) < 2:
             return 0.0
-        
+
         returns_array = np.array(self.daily_returns)
         returns_decimal = returns_array / 100.0
-        
+
         daily_risk_free = risk_free_rate / 252
         excess_returns = returns_decimal - daily_risk_free
-        
+
         # Calculate downside deviation (only negative returns)
         negative_returns = excess_returns[excess_returns < 0]
-        
+
         if len(negative_returns) == 0 or np.std(negative_returns) == 0:
             return 0.0
-        
+
         downside_deviation = np.std(negative_returns)
         sortino = np.mean(excess_returns) / downside_deviation
-        
+
         # Annualize
         sortino_annualized = sortino * np.sqrt(252)
-        
+
         return sortino_annualized
-    
+
     def calculate_max_drawdown(self) -> Tuple[float, Optional[datetime], Optional[datetime]]:
         """
         Calculate maximum drawdown and its dates
-        
+
         Returns:
             Tuple of (max_drawdown_pct, start_date, end_date)
         """
         if not self.drawdown_curve:
             return 0.0, None, None
-        
+
         max_dd = 0.0
         max_dd_date = None
-        
+
         for timestamp, dd_pct in self.drawdown_curve:
             if dd_pct > max_dd:
                 max_dd = dd_pct
                 max_dd_date = timestamp
-        
+
         # Find start of max drawdown period
         start_date = None
         if max_dd_date:
@@ -302,13 +302,13 @@ class PerformanceMetricsCalculator:
                     break
                 if dd_pct == 0:  # Previous peak
                     start_date = timestamp
-        
+
         return max_dd, start_date, max_dd_date
-    
+
     def calculate_metrics(self) -> PerformanceMetrics:
         """
         Calculate comprehensive performance metrics
-        
+
         Returns:
             PerformanceMetrics object with all metrics
         """
@@ -323,21 +323,21 @@ class PerformanceMetricsCalculator:
                 longest_winning_streak=0, longest_losing_streak=0,
                 daily_volatility_pct=0.0, annualized_volatility_pct=0.0
             )
-        
+
         latest = self.snapshots[-1]
-        
+
         # Calculate returns
         total_return_pct = ((self.current_equity - self.initial_capital) / self.initial_capital * 100) if self.initial_capital > 0 else 0.0
-        
+
         daily_return_pct = self.daily_returns[-1] if self.daily_returns else 0.0
-        
+
         # Calculate days trading
         if len(self.snapshots) > 1:
             days_trading = (self.snapshots[-1].timestamp - self.snapshots[0].timestamp).days
             days_trading = max(days_trading, 1)  # At least 1 day
         else:
             days_trading = 1
-        
+
         # Annualized return (using compound growth)
         if days_trading > 0:
             try:
@@ -349,10 +349,10 @@ class PerformanceMetricsCalculator:
                 annualized_return_pct = total_return_pct * (365 / days_trading_for_annual)
         else:
             annualized_return_pct = 0.0
-        
+
         # CAGR (Compound Annual Growth Rate) - same as annualized return
         cagr_pct = annualized_return_pct
-        
+
         # Monthly return (geometric mean if we have monthly data)
         if len(self.snapshots) > 30:
             # Calculate actual monthly returns if we have enough data
@@ -367,28 +367,28 @@ class PerformanceMetricsCalculator:
             monthly_return_pct = np.mean(monthly_returns) if monthly_returns else annualized_return_pct / 12
         else:
             monthly_return_pct = annualized_return_pct / 12
-        
+
         # Risk metrics
         sharpe_ratio = self.calculate_sharpe_ratio()
         sortino_ratio = self.calculate_sortino_ratio()
         max_drawdown_pct, _, _ = self.calculate_max_drawdown()
         current_drawdown_pct = ((self.peak_equity - self.current_equity) / self.peak_equity * 100) if self.peak_equity > 0 else 0.0
-        
+
         # Calmar Ratio (Annualized Return / Max Drawdown)
         calmar_ratio = (annualized_return_pct / max_drawdown_pct) if max_drawdown_pct > 0 else 0.0
-        
+
         # Trade statistics
         total_trades = latest.total_trades
         winning_trades = latest.winning_trades
         losing_trades = latest.losing_trades
         win_rate_pct = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
-        
+
         # Calculate average win/loss and profit factor from snapshots
         gross_profit = 0.0
         gross_loss = 0.0
         win_count = 0
         loss_count = 0
-        
+
         # Approximate from daily realized P&L
         for snapshot in self.snapshots:
             if snapshot.realized_pnl_today > 0:
@@ -397,17 +397,17 @@ class PerformanceMetricsCalculator:
             elif snapshot.realized_pnl_today < 0:
                 gross_loss += abs(snapshot.realized_pnl_today)
                 loss_count += 1
-        
+
         avg_win = (gross_profit / win_count) if win_count > 0 else 0.0
         avg_loss = (gross_loss / loss_count) if loss_count > 0 else 0.0
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0.0
-        
+
         # Streaks - approximate from daily returns
         longest_winning_streak = 0
         longest_losing_streak = 0
         current_win_streak = 0
         current_loss_streak = 0
-        
+
         for ret in self.daily_returns:
             if ret > 0:
                 current_win_streak += 1
@@ -417,14 +417,14 @@ class PerformanceMetricsCalculator:
                 current_loss_streak += 1
                 current_win_streak = 0
                 longest_losing_streak = max(longest_losing_streak, current_loss_streak)
-        
+
         # Volatility
         daily_volatility_pct = np.std(self.daily_returns) if len(self.daily_returns) > 1 else 0.0
         annualized_volatility_pct = daily_volatility_pct * np.sqrt(252)
-        
+
         # Average trades per day (use original days_trading)
         avg_trades_per_day = total_trades / days_trading if days_trading > 0 else 0.0
-        
+
         return PerformanceMetrics(
             total_return_pct=total_return_pct,
             daily_return_pct=daily_return_pct,
@@ -450,15 +450,15 @@ class PerformanceMetricsCalculator:
             daily_volatility_pct=daily_volatility_pct,
             annualized_volatility_pct=annualized_volatility_pct
         )
-    
+
     def generate_monthly_report(self, year: int, month: int) -> Dict:
         """
         Generate monthly performance report
-        
+
         Args:
             year: Year for report
             month: Month for report (1-12)
-        
+
         Returns:
             Dictionary with monthly performance data
         """
@@ -468,34 +468,34 @@ class PerformanceMetricsCalculator:
             end_date = datetime(year + 1, 1, 1)
         else:
             end_date = datetime(year, month + 1, 1)
-        
+
         month_snapshots = [
-            s for s in self.snapshots 
+            s for s in self.snapshots
             if start_date <= s.timestamp < end_date
         ]
-        
+
         if not month_snapshots:
             return {
                 'year': year,
                 'month': month,
                 'error': 'No data available for this month'
             }
-        
+
         # Calculate monthly metrics
         start_equity = month_snapshots[0].equity
         end_equity = month_snapshots[-1].equity
         monthly_return = ((end_equity - start_equity) / start_equity * 100) if start_equity > 0 else 0.0
-        
+
         total_trades_month = month_snapshots[-1].total_trades - month_snapshots[0].total_trades
         winning_trades_month = month_snapshots[-1].winning_trades - month_snapshots[0].winning_trades
         losing_trades_month = month_snapshots[-1].losing_trades - month_snapshots[0].losing_trades
-        
+
         win_rate = (winning_trades_month / total_trades_month * 100) if total_trades_month > 0 else 0.0
-        
+
         # Get max drawdown for the month
         month_drawdowns = [dd for ts, dd in self.drawdown_curve if start_date <= ts < end_date]
         max_dd_month = max(month_drawdowns) if month_drawdowns else 0.0
-        
+
         return {
             'year': year,
             'month': month,
@@ -509,19 +509,19 @@ class PerformanceMetricsCalculator:
             'max_drawdown_pct': max_dd_month,
             'trading_days': len(month_snapshots)
         }
-    
+
     def _load_historical_data(self) -> None:
         """Load historical performance data from disk"""
         snapshots_file = self.data_dir / "snapshots.json"
-        
+
         if not snapshots_file.exists():
             logger.info("No historical performance data found")
             return
-        
+
         try:
             with open(snapshots_file, 'r') as f:
                 data = json.load(f)
-                
+
             # Reconstruct snapshots
             for item in data:
                 snapshot = PerformanceSnapshot(
@@ -537,16 +537,16 @@ class PerformanceMetricsCalculator:
                     losing_trades=item['losing_trades']
                 )
                 self.record_snapshot(snapshot)
-            
+
             logger.info(f"✅ Loaded {len(self.snapshots)} historical performance snapshots")
-            
+
         except Exception as e:
             logger.error(f"Error loading historical data: {e}")
-    
+
     def save_data(self) -> None:
         """Save performance data to disk"""
         snapshots_file = self.data_dir / "snapshots.json"
-        
+
         try:
             data = []
             for snapshot in self.snapshots:
@@ -562,12 +562,12 @@ class PerformanceMetricsCalculator:
                     'winning_trades': snapshot.winning_trades,
                     'losing_trades': snapshot.losing_trades
                 })
-            
+
             with open(snapshots_file, 'w') as f:
                 json.dump(data, f, indent=2)
-            
+
             logger.debug(f"Saved {len(self.snapshots)} performance snapshots")
-            
+
         except Exception as e:
             logger.error(f"Error saving performance data: {e}")
 
@@ -576,21 +576,21 @@ class PerformanceMetricsCalculator:
 _performance_calculator: Optional[PerformanceMetricsCalculator] = None
 
 
-def get_performance_calculator(initial_capital: float = 1000.0, 
+def get_performance_calculator(initial_capital: float = 1000.0,
                                reset: bool = False) -> PerformanceMetricsCalculator:
     """
     Get or create the performance metrics calculator singleton
-    
+
     Args:
         initial_capital: Initial capital (only used on first creation)
         reset: Force reset and create new instance
-    
+
     Returns:
         PerformanceMetricsCalculator instance
     """
     global _performance_calculator
-    
+
     if _performance_calculator is None or reset:
         _performance_calculator = PerformanceMetricsCalculator(initial_capital)
-    
+
     return _performance_calculator

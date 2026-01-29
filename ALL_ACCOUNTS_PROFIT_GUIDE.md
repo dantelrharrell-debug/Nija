@@ -1,8 +1,8 @@
 # NIJA All Accounts Profit-Taking Guide
 ## Ensuring Profit-Taking Works on EVERY Account Type
 
-**Version:** 1.0  
-**Date:** January 22, 2026  
+**Version:** 1.0
+**Date:** January 22, 2026
 **Status:** ✅ COMPREHENSIVE
 
 ---
@@ -147,9 +147,9 @@ Entry: $10,000 → BTC-USD          Entry: $500 → BTC-USD
 Position: $1,000 (10%)            Position: $50 (10% scaled)
 Price: $42,000                    Price: $42,000
 TP1: $42,840                      TP1: $42,840
-                                  
+
 [Price hits TP1]                  [Price hits TP1]
-                                  
+
 Exit: Sell $1,000 at $42,840      Exit: Sell $50 at $42,840
 Gross: +2.0%                      Gross: +2.0%
 Fees: -0.36% (Kraken)             Fees: -1.4% (Coinbase)
@@ -519,6 +519,6 @@ grep "PROFIT.*account" nija.log
 
 ---
 
-**Last Updated:** January 22, 2026  
-**Maintained By:** NIJA Trading Systems  
+**Last Updated:** January 22, 2026
+**Maintained By:** NIJA Trading Systems
 **Version:** 1.0
