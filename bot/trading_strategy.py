@@ -632,9 +632,6 @@ class TradingStrategy:
             except Exception as e:
                 logger.warning(f"   ⚠️  Coinbase MASTER error: {e}")
             
-            # Add delay between broker connections
-            time.sleep(0.5)
-            
             # Try to connect OKX - MASTER ACCOUNT
             logger.info("📊 Attempting to connect OKX (MASTER)...")
             try:

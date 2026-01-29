@@ -1257,8 +1257,8 @@ NIJA now supports multiple cryptocurrency exchanges:
 
 1. **Kraken Pro Exchange** (Primary) ✅
    - Status: ✅ **Full implementation complete** - PRIMARY BROKER
-   - Features: Spot trading, 200+ pairs, 0.16% maker / 0.26% taker fees
-   - **Low fees (0.36% round-trip)** - Excellent for small accounts
+   - Features: Spot trading, 200+ pairs
+   - **Fees: 0.10% maker / 0.16% taker (0.36% round-trip including spread)** - Excellent for small accounts
    - Setup: Set `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET` in `.env` (master account credentials)
    - Get credentials: https://www.kraken.com/u/security/api
    - Quick test: `python test_broker_integrations.py`
