@@ -1,6 +1,8 @@
 """
 NIJA Dashboard API
 
+Flask API endpoints for performance dashboard and investor reporting.
+Includes security measures to prevent path traversal attacks.
 Flask API endpoints for performance dashboard and reporting.
 Implements secure request handling with input validation.
 
@@ -18,6 +20,13 @@ from flask import Blueprint, jsonify, request
 from typing import Dict, Any
 import logging
 
+# Import dashboard and validation utilities
+from bot.performance_dashboard import get_performance_dashboard
+from bot.path_validator import PathValidationError
+
+logger = logging.getLogger(__name__)
+
+# Create Flask Blueprint
 from bot.performance_dashboard import get_performance_dashboard
 from bot.path_validator import PathValidator
 
@@ -33,6 +42,26 @@ def health_check():
     Health check endpoint.
     
     Returns:
+        JSON response with health status
+    """
+    return jsonify({
+        'status': 'healthy',
+        'service': 'NIJA Dashboard API',
+        'timestamp': 'now'
+    })
+
+
+@dashboard_bp.route('/portfolio/summary', methods=['GET'])
+def get_portfolio_summary():
+    """
+    Get portfolio summary.
+    
+    Returns:
+        JSON with portfolio metrics
+    """
+    try:
+        dashboard = get_performance_dashboard()
+        summary = dashboard.get_portfolio_summary()
         JSON with health status
     """
     return jsonify({
@@ -64,6 +93,7 @@ def get_performance():
             'data': summary
         })
     except Exception as e:
+        logger.error(f"Error getting portfolio summary: {e}")
         logger.error(f"Error getting performance metrics: {e}")
 try:
     from performance_dashboard import get_performance_dashboard
@@ -133,6 +163,24 @@ def get_equity_curve():
         }), 500
 
 
+@dashboard_bp.route('/analytics', methods=['GET'])
+def get_analytics():
+    """
+    Get trade analytics.
+    
+    Returns:
+        JSON with trade analytics
+    """
+    try:
+        dashboard = get_performance_dashboard()
+        analytics = dashboard.get_trade_analytics()
+        
+        return jsonify({
+            'success': True,
+            'data': analytics
+        })
+    except Exception as e:
+        logger.error(f"Error getting analytics: {e}")
 @dashboard_api.route('/drawdown-curve', methods=['GET'])
 def get_drawdown_curve():
     """
@@ -163,6 +211,24 @@ def get_drawdown_curve():
         }), 500
 
 
+@dashboard_bp.route('/risk', methods=['GET'])
+def get_risk_metrics():
+    """
+    Get risk metrics.
+    
+    Returns:
+        JSON with risk metrics
+    """
+    try:
+        dashboard = get_performance_dashboard()
+        risk_metrics = dashboard.get_risk_metrics()
+        
+        return jsonify({
+            'success': True,
+            'data': risk_metrics
+        })
+    except Exception as e:
+        logger.error(f"Error getting risk metrics: {e}")
 @dashboard_bp.route('/export', methods=['POST'])
 def export_report():
     """
@@ -253,6 +319,13 @@ def get_monthly_report(year: int, month: int):
         }), 500
 
 
+@dashboard_bp.route('/investor/summary', methods=['GET'])
+def get_investor_summary():
+    """
+    Get comprehensive investor summary.
+    
+    Returns:
+        JSON with complete investor report
 @dashboard_api.route('/monthly-reports', methods=['GET'])
 def get_all_monthly_reports():
     """
@@ -343,6 +416,7 @@ def get_investor_summary():
         return jsonify({
             'success': True,
             'data': summary
+        })
         }), 200
         
     except Exception as e:
@@ -353,6 +427,15 @@ def get_investor_summary():
         }), 500
 
 
+@dashboard_bp.route('/export/investor-report', methods=['POST'])
+def export_investor_report():
+    """
+    Export investor report to file.
+    
+    Request body (JSON):
+        {
+            "output_dir": "./reports"  # Optional, defaults to ./reports
+        }
 @dashboard_bp.route('/performance/summary', methods=['GET'])
 def get_summary():
     """
@@ -381,6 +464,16 @@ def export_investor_report():
         JSON with filepath to saved report
     """
     try:
+        # Get request data with safe defaults
+        # SECURITY NOTE: This is where user input enters the system
+        data = request.get_json() or {}
+        output_dir = data.get('output_dir', './reports')
+        
+        # Get dashboard instance
+        dashboard = get_performance_dashboard()
+        
+        # Export report - path validation happens inside export_investor_report()
+        # This prevents path traversal attacks like output_dir="../../../etc"
         data = request.get_json() or {}
         output_dir = data.get('output_dir', './reports')
         
@@ -389,6 +482,18 @@ def export_investor_report():
         
         return jsonify({
             'success': True,
+            'filepath': filepath,
+            'message': 'Investor report exported successfully'
+        })
+        
+    except PathValidationError as e:
+        # Security validation failed - log and return error
+        logger.warning(f"Path validation error in export_investor_report: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Invalid output directory path',
+            'details': str(e)
+        }), 400
             'data': {
                 'user_id': summary['user_id'],
                 'portfolio_value': summary['portfolio_value'],
@@ -407,6 +512,63 @@ def export_investor_report():
         logger.error(f"Error exporting investor report: {e}")
         return jsonify({
             'success': False,
+            'error': 'Failed to export report',
+            'details': str(e)
+        }), 500
+
+
+@dashboard_bp.route('/export/csv', methods=['POST'])
+def export_csv_report():
+    """
+    Export trade data as CSV.
+    
+    Request body (JSON):
+        {
+            "output_dir": "./reports"  # Optional, defaults to ./reports
+        }
+    
+    Returns:
+        JSON with filepath to saved CSV
+    """
+    try:
+        data = request.get_json() or {}
+        output_dir = data.get('output_dir', './reports')
+        
+        dashboard = get_performance_dashboard()
+        filepath = dashboard.export_csv_report(output_dir=output_dir)
+        
+        return jsonify({
+            'success': True,
+            'filepath': filepath,
+            'message': 'CSV report exported successfully'
+        })
+        
+    except PathValidationError as e:
+        logger.warning(f"Path validation error in export_csv_report: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Invalid output directory path',
+            'details': str(e)
+        }), 400
+        
+    except Exception as e:
+        logger.error(f"Error exporting CSV report: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to export CSV',
+            'details': str(e)
+        }), 500
+
+
+# For standalone testing
+if __name__ == '__main__':
+    from flask import Flask
+    import os
+    app = Flask(__name__)
+    app.register_blueprint(dashboard_bp)
+    # Only use debug mode in development, not production
+    debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(debug=debug_mode, port=5001)
             'error': str(e)
         }), 500
 
