@@ -217,7 +217,7 @@ def get_live_capital_status():
     except Exception as e:
         logger.error(f"Error getting live capital status: {e}")
         return jsonify({
-            'error': str(e),
+            'error': 'Failed to retrieve live capital status',
             'live_capital_verified': False,
             'can_trade': False,
             'status': 'error'
@@ -280,7 +280,7 @@ def list_users():
     
     except Exception as e:
         logger.error(f"Error listing users: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to list users'}), 500
 
 
 @app.route('/api/user/<user_id>/pnl', methods=['GET'])
@@ -321,7 +321,7 @@ def get_user_pnl(user_id: str):
     
     except Exception as e:
         logger.error(f"Error getting PnL for {user_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve PnL data'}), 500
 
 
 @app.route('/api/master/pnl', methods=['GET'])
@@ -1693,7 +1693,7 @@ def get_recent_activity():
     
     except Exception as e:
         logger.error(f"Error getting recent activity: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve recent activity'}), 500
 
 
 @app.route('/api/activity/summary')
@@ -1712,7 +1712,7 @@ def get_activity_summary():
     
     except Exception as e:
         logger.error(f"Error getting activity summary: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve activity summary'}), 500
 
 
 @app.route('/api/activity/rejections')
@@ -1742,7 +1742,7 @@ def get_rejection_reasons():
     
     except Exception as e:
         logger.error(f"Error getting rejection reasons: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve rejection reasons'}), 500
 
 
 @app.route('/api/positions/live')
@@ -1763,7 +1763,7 @@ def get_live_positions():
     
     except Exception as e:
         logger.error(f"Error getting live positions: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve live positions'}), 500
 
 
 @app.route('/api/positions/summary')
@@ -1780,7 +1780,7 @@ def get_positions_summary():
     
     except Exception as e:
         logger.error(f"Error getting positions summary: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve positions summary'}), 500
 
 
 @app.route('/api/positions/broker/<broker>')
@@ -1802,7 +1802,7 @@ def get_positions_by_broker(broker: str):
     
     except Exception as e:
         logger.error(f"Error getting positions for {broker}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve broker positions'}), 500
 
 
 @app.route('/reports/aggregated')
@@ -1916,7 +1916,7 @@ def get_aggregated_summary():
     
     except Exception as e:
         logger.error(f"Error getting aggregated summary: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to retrieve aggregated summary'}), 500
 
 
 @app.route('/api/restart', methods=['POST'])
@@ -1976,7 +1976,7 @@ def restart_bot():
         logger.error(f"Error restarting bot: {e}")
         return jsonify({
             'success': False,
-            'error': str(e),
+            'error': 'Failed to restart bot',
             'timestamp': datetime.now().isoformat()
         }), 500
 
