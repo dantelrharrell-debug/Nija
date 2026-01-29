@@ -411,7 +411,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             return jsonify(data)
         except Exception as e:
             logger.error(f"Error in get_overview: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'Failed to retrieve dashboard overview'}), 500
     
     # User management endpoints
     @app.route('/api/founder/users', methods=['GET'])
@@ -423,7 +423,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             return jsonify({'users': users, 'count': len(users)})
         except Exception as e:
             logger.error(f"Error in get_users: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'Failed to retrieve users'}), 500
     
     @app.route('/api/founder/users/<user_id>', methods=['GET'])
     def get_user(user_id: str):
@@ -435,7 +435,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             return jsonify(user_data)
         except Exception as e:
             logger.error(f"Error in get_user: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'Failed to retrieve user details'}), 500
     
     @app.route('/api/founder/users/<user_id>/approve', methods=['POST'])
     def approve_user(user_id: str):
@@ -445,7 +445,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             return jsonify(result)
         except Exception as e:
             logger.error(f"Error in approve_user: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'Failed to approve user'}), 500
     
     # System health
     @app.route('/api/founder/health', methods=['GET'])
@@ -456,7 +456,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             return jsonify(health)
         except Exception as e:
             logger.error(f"Error in system_health: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'Failed to retrieve system health'}), 500
     
     # Risk management
     @app.route('/api/founder/risk/events', methods=['GET'])
@@ -469,7 +469,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             return jsonify({'events': events, 'count': len(events)})
         except Exception as e:
             logger.error(f"Error in risk_events: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'Failed to retrieve risk events'}), 500
     
     # Emergency controls
     @app.route('/api/founder/emergency/shutdown', methods=['POST'])
@@ -482,7 +482,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             return jsonify(result)
         except Exception as e:
             logger.error(f"Error in emergency_shutdown: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'Failed to trigger emergency shutdown'}), 500
     
     # Revenue metrics
     @app.route('/api/founder/revenue', methods=['GET'])
@@ -493,7 +493,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             return jsonify(metrics)
         except Exception as e:
             logger.error(f"Error in revenue_metrics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'Failed to retrieve revenue metrics'}), 500
     
     return app
 
