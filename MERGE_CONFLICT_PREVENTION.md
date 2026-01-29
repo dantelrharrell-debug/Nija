@@ -43,23 +43,31 @@ The `.gitignore` file has been updated with comprehensive patterns to prevent th
 
 ```gitignore
 # Trading state files (runtime state, should not be committed)
+# Daily profit tracking
 data/daily_profit_history.json
 data/daily_profit_state.json
+# Progressive targets
 data/progressive_targets.json
+data/progressive_targets_*.json
+# Trade history and positions
 data/trade_history.json
+data/trade_history_*.json
 data/open_positions.json
 data/open_positions.json.*
-data/*.csv
+# Trade exports and database
+data/nija_trades_*.csv
 data/trade_ledger.db
 data/trade_ledger.db-journal
 
-# Kraken global nonce file (runtime state, should not be committed)
-data/kraken_global_nonce.txt
+# Kraken nonce files (already covered by existing patterns)
+# data/kraken_nonce*.txt covers data/kraken_global_nonce.txt
 
 # Demo and learning data (runtime state, should not be committed)
 data/demo_live_tracking/
 data/learning/
 ```
+
+**Note:** The Kraken global nonce file is already covered by the existing pattern `data/kraken_nonce*.txt` in lines 50-52 of `.gitignore`.
 
 ## Prevention Strategy
 
