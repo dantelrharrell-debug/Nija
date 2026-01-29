@@ -66,13 +66,21 @@ data/capital_allocation.json
 # Trading state files (runtime state, should not be committed)
 data/daily_profit_history.json
 data/daily_profit_state.json
+data/daily_profit*.json
+data/*daily_profit*.json
 data/progressive_targets.json
+data/progressive_targets*.json
 data/trade_history.json
+data/trade_history*.json
 data/open_positions.json
 data/open_positions.json.*
 data/*.csv
 data/trade_ledger.db
 data/trade_ledger.db-journal
+data/*_state.json
+data/*_history.json
+data/*_targets.json
+data/*_allocation.json
 
 # Kraken global nonce file (runtime state, should not be committed)
 data/kraken_global_nonce.txt
