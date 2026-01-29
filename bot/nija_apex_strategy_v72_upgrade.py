@@ -82,11 +82,11 @@ class NIJAApexStrategyV72:
     
     def check_long_entry_v72(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
-        Long Entry Logic v7.2 - HIGH CONVICTION ONLY
+        Long Entry Logic v7.2 - HIGH CONVICTION ONLY (INSTITUTIONAL GRADE)
         
         Requires 3/5 of these conditions:
         1. Pullback to EMA21 or VWAP (within 0.5%)
-        2. RSI bullish pullback (30-70, rising)
+        2. RSI bullish pullback (25-45, rising - buy low, early entry)
         3. Bullish candlestick (engulfing or hammer)
         4. MACD histogram ticking up
         5. Volume >= 60% of 2-candle average
@@ -146,12 +146,12 @@ class NIJAApexStrategyV72:
     
     def check_short_entry_v72(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
-        Short Entry Logic v7.2 - HIGH CONVICTION ONLY
+        Short Entry Logic v7.2 - HIGH CONVICTION ONLY (INSTITUTIONAL GRADE)
         
         Mirror of long entry with bearish conditions.
         Requires 3/5 of these conditions:
         1. Pullback to EMA21 or VWAP
-        2. RSI bearish pullback (30-70, falling)
+        2. RSI bearish pullback (55-75, falling - sell high, early entry)
         3. Bearish candlestick (engulfing or shooting star)
         4. MACD histogram ticking down
         5. Volume >= 60% of 2-candle average
