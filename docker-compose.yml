@@ -48,6 +48,17 @@ services:
       context: .
       dockerfile: Dockerfile.api
     container_name: nija-api
+    # Security: Run as non-root user
+    user: "1000:1000"
+    # Security: Read-only root filesystem
+    read_only: true
+    # Security: Drop all capabilities
+    cap_drop:
+      - ALL
+    # Security: No privilege escalation
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=security/seccomp-profile.json
     environment:
       # Database
       DATABASE_URL: postgresql://nija_user:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/nija
@@ -75,8 +86,10 @@ services:
       KRAKEN_MASTER_API_KEY: ${KRAKEN_MASTER_API_KEY:-}
       KRAKEN_MASTER_API_SECRET: ${KRAKEN_MASTER_API_SECRET:-}
     volumes:
-      - ./:/app
-      - /app/__pycache__
+      - ./:/app:ro  # Read-only application code
+      - api_tmp:/tmp  # Writable temp directory
+      - api_cache:/app/cache  # Writable cache directory
+      - api_logs:/app/logs  # Writable logs directory
     ports:
       - "${PORT:-8000}:8000"
     depends_on:
@@ -93,6 +106,15 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
   # Web Dashboard (Next.js) - TODO: Create separate service
   # web:
@@ -114,7 +136,18 @@ volumes:
     driver: local
   redis_data:
     driver: local
+  api_tmp:
+    driver: local
+  api_cache:
+    driver: local
+  api_logs:
+    driver: local
 
 networks:
   nija-network:
     driver: bridge
+    # Network isolation
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.bridge.host_binding_ipv4: "127.0.0.1"
