@@ -216,7 +216,7 @@ def get_portfolio_metrics():
         logger.error(f"Error getting portfolio metrics: {e}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': 'Failed to retrieve portfolio metrics'
         }), 500
 
 
@@ -264,7 +264,7 @@ def get_account_details(account_id: str):
         logger.error(f"Error getting account details: {e}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': 'Failed to retrieve account details'
         }), 500
 
 
@@ -340,7 +340,7 @@ def get_risk_events():
         logger.error(f"Error getting risk events: {e}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': 'Failed to retrieve risk events'
         }), 500
 
 
@@ -366,7 +366,7 @@ def get_risk_status():
         logger.error(f"Error getting risk status: {e}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': 'Failed to retrieve risk status'
         }), 500
 
 
@@ -416,7 +416,7 @@ def check_position():
         logger.error(f"Error checking position: {e}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': 'Failed to check position'
         }), 500
 
 
