@@ -1,5 +1,98 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+## 🚀 **NEW: Multi-Strategy Fund Engine** (January 29, 2026)
+
+**NIJA has evolved into a complete multi-strategy fund infrastructure.**
+
+Three new institutional-grade systems transform NIJA from a single-strategy bot into a professional fund management platform:
+
+### 1️⃣ Capital Scaling Framework - Self-Adjusting Compounding Engine
+
+Automated capital scaling based on:
+- **Equity growth** - Automatic profit compounding with drawdown protection
+- **Volatility regimes** - Dynamic position sizing based on market volatility
+- **Drawdown conditions** - Circuit breakers and gradual recovery protocols
+
+**Features:**
+- 5 protection levels from Normal to Halt
+- Volatility-based leverage (0.5x - 2.0x)
+- Regime-based allocation (Bull/Bear/Ranging/Volatile/Crisis)
+- Milestone-based profit locking
+
+**Quick Start:**
+```python
+from bot.autonomous_scaling_engine import get_autonomous_engine
+
+engine = get_autonomous_engine(base_capital=10000.0)
+position_size = engine.get_optimal_position_size(balance=12000.0)
+```
+
+**Complete Guide:** [CAPITAL_SCALING_FRAMEWORK.md](CAPITAL_SCALING_FRAMEWORK.md)
+
+---
+
+### 2️⃣ Performance Dashboard - Investor-Grade Reporting
+
+Build capital-raising infrastructure with:
+- **Daily NAV tracking** - Professional Net Asset Value calculation
+- **Equity curves** - Historical performance visualization
+- **Drawdown curves** - Risk exposure tracking
+- **Sharpe tracking** - Risk-adjusted performance metrics
+- **Monthly reports** - Comprehensive performance breakdowns
+
+**Features:**
+- Sharpe & Sortino ratios
+- Maximum drawdown tracking
+- Win rate and trade statistics
+- Strategy-level attribution
+- Automated investor reports
+
+**Quick Start:**
+```python
+from bot.performance_dashboard import get_performance_dashboard
+
+dashboard = get_performance_dashboard(initial_capital=10000.0)
+summary = dashboard.get_investor_summary()
+```
+
+**API Endpoints:**
+```bash
+GET /api/v1/dashboard/metrics
+GET /api/v1/dashboard/equity-curve
+GET /api/v1/dashboard/investor-summary
+```
+
+**Complete Guide:** [PERFORMANCE_DASHBOARD.md](PERFORMANCE_DASHBOARD.md)
+
+---
+
+### 3️⃣ Strategy Portfolio Manager - Multi-Strategy Fund Engine
+
+Multi-strategy coordination with:
+- **Uncorrelated strategies** - 6 different strategy types (APEX_RSI, Trend Following, Mean Reversion, etc.)
+- **Portfolio optimization** - Risk-adjusted capital allocation
+- **Regime switching** - Automatic strategy selection based on market conditions
+- **Correlation analysis** - Diversification scoring and monitoring
+
+**Features:**
+- Dynamic capital allocation
+- Strategy correlation matrix
+- Regime-based weighting
+- Diversification scoring (0-100)
+- Performance attribution
+
+**Quick Start:**
+```python
+from bot.strategy_portfolio_manager import get_portfolio_manager
+
+portfolio = get_portfolio_manager(total_capital=100000.0)
+allocation = portfolio.optimize_allocation()
+```
+
+**Complete Guide:** [STRATEGY_PORTFOLIO.md](STRATEGY_PORTFOLIO.md)
+
+---
+
 ## 🎯 **NEW: Execution Intelligence Layer - GOD MODE** (January 28, 2026)
 
 **The missing 5-7% that separates elite systems from legendary systems.**
