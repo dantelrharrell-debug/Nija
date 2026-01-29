@@ -1529,13 +1529,22 @@ logger.info(
 
 ## Related Documentation
 
+**Platform Architecture Documents (This PR):**
 - [API_ROUTES.md](./API_ROUTES.md) - Complete API specification
 - [DASHBOARD_DESIGN.md](./DASHBOARD_DESIGN.md) - UI/UX design
 - [SUBSCRIPTION_SYSTEM.md](./SUBSCRIPTION_SYSTEM.md) - Billing & tiers
 - [SCALING_BLUEPRINT.md](./SCALING_BLUEPRINT.md) - Scaling strategy
-- [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) - Database design
+
+**Existing Documentation:**
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - Layered architecture overview
 - [SECURITY.md](./SECURITY.md) - Security best practices
 - [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) - Deployment instructions
+- [MULTI_USER_PLATFORM_ARCHITECTURE.md](./MULTI_USER_PLATFORM_ARCHITECTURE.md) - Multi-user design
+
+**Planned Documentation:**
+- DATABASE_SCHEMA.md - Detailed database schema (TODO)
+- MONITORING_GUIDE.md - Observability setup (TODO)
+- PERFORMANCE_TUNING.md - Optimization guide (TODO)
 
 ---
 
