@@ -34,16 +34,16 @@ def show_balances_table():
     print("=" * 80)
     print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
-    
+
     # CRITICAL FIX: Connect users from config before displaying balances
     # This ensures user accounts are loaded and visible
     print("\n🔄 Loading user accounts from configuration...")
     multi_account_broker_manager.connect_users_from_config()
     print("")
-    
+
     # Get all balances
     balances = multi_account_broker_manager.get_all_balances()
-    
+
     # Display master account
     print("\n🔷 MASTER ACCOUNT (Nija System)")
     print("-" * 80)
@@ -57,21 +57,21 @@ def show_balances_table():
         print(f"   {'TOTAL':15} {format_currency(master_total):>15}")
     else:
         print("   No master brokers connected")
-    
+
     # Display user accounts
     print("\n🔷 USER ACCOUNTS")
     print("-" * 80)
     user_balances = balances.get('users', {})
-    
+
     if user_balances:
         # Calculate totals
         grand_total = 0.0
         user_count = len(user_balances)
-        
+
         for user_id, brokers in user_balances.items():
             print(f"\n   👤 User: {user_id}")
             print("   " + "-" * 76)
-            
+
             user_total = 0.0
             if brokers:
                 for broker, balance in brokers.items():
@@ -82,9 +82,9 @@ def show_balances_table():
                 print(f"      {'SUBTOTAL':13} {format_currency(user_total):>15}")
             else:
                 print("      No brokers connected")
-            
+
             grand_total += user_total
-        
+
         # Summary
         print("\n" + "=" * 80)
         print("SUMMARY")
@@ -98,7 +98,7 @@ def show_balances_table():
     else:
         print("   No user accounts found")
         print("=" * 80)
-    
+
     print()
 
 
@@ -107,25 +107,25 @@ def show_balances_json():
     # CRITICAL FIX: Connect users from config before displaying balances
     # This ensures user accounts are loaded and visible
     multi_account_broker_manager.connect_users_from_config()
-    
+
     balances = multi_account_broker_manager.get_all_balances()
-    
+
     # Add metadata
     output = {
         'timestamp': datetime.now().isoformat(),
         'balances': balances
     }
-    
+
     # Calculate totals
     master_total = sum(balances.get('master', {}).values())
     user_totals = {}
     grand_total = 0.0
-    
+
     for user_id, brokers in balances.get('users', {}).items():
         user_total = sum(brokers.values())
         user_totals[user_id] = user_total
         grand_total += user_total
-    
+
     output['summary'] = {
         'master_total': master_total,
         'user_totals': user_totals,
@@ -133,7 +133,7 @@ def show_balances_json():
         'user_count': len(user_totals),
         'average_per_user': grand_total / len(user_totals) if user_totals else 0
     }
-    
+
     print(json.dumps(output, indent=2))
 
 
@@ -147,9 +147,9 @@ def main():
         action='store_true',
         help='Output as JSON instead of formatted table'
     )
-    
+
     args = parser.parse_args()
-    
+
     try:
         if args.json:
             show_balances_json()

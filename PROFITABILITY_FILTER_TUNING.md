@@ -31,7 +31,7 @@
 
 ### Expected Impact
 
-**Before**: 26 out of 30 markets filtered (87% rejection)  
+**Before**: 26 out of 30 markets filtered (87% rejection)
 **After**: Should see **3-5x more trading opportunities**
 
 ## Technical Details
@@ -56,12 +56,12 @@
 
 ## Safety Measures Maintained
 
-✅ **Stop losses**: Still mandatory on all trades  
-✅ **Position limits**: Max 8 positions still enforced  
-✅ **Risk per trade**: Still calculated based on account size  
-✅ **Trailing stops**: Still active for profit protection  
-✅ **News blocking**: Still enabled (placeholder)  
-✅ **New candle timing**: Still blocks first 5 seconds  
+✅ **Stop losses**: Still mandatory on all trades
+✅ **Position limits**: Max 8 positions still enforced
+✅ **Risk per trade**: Still calculated based on account size
+✅ **Trailing stops**: Still active for profit protection
+✅ **News blocking**: Still enabled (placeholder)
+✅ **New candle timing**: Still blocks first 5 seconds
 
 ## Monitoring Recommendations
 
@@ -123,7 +123,7 @@ Low vol threshold: 0.15
 
 ---
 
-**Date**: 2026-01-26  
-**Author**: GitHub Copilot  
-**Issue**: "Still not profitable trades on kraken or coinbase why"  
+**Date**: 2026-01-26
+**Author**: GitHub Copilot
+**Issue**: "Still not profitable trades on kraken or coinbase why"
 **Status**: Filter relaxation complete, awaiting deployment

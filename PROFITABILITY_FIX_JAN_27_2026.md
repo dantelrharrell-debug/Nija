@@ -131,7 +131,7 @@ COINBASE_MAX_HOLD_MINUTES = 60     # Give time for profit (60 min)
 ```python
 def get_account_balance(self, verbose: bool = True) -> Dict[str, float]:
     """Get Kraken account balance with proper error handling.
-    
+
     Args:
         verbose: If True, log balance info. If False, suppress verbose logging.
     """
@@ -332,9 +332,9 @@ def get_account_balance(self, verbose: bool = True) -> Dict[str, float]:
 
 ---
 
-**Last Updated:** January 27, 2026  
-**Status:** ✅ PROFITABILITY FIXES IMPLEMENTED  
-**Priority:** CRITICAL - Deploy immediately  
+**Last Updated:** January 27, 2026
+**Status:** ✅ PROFITABILITY FIXES IMPLEMENTED
+**Priority:** CRITICAL - Deploy immediately
 **Expected Impact:** Transform from NET LOSSES to NET PROFITS
 
 ---

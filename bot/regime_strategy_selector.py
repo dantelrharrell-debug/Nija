@@ -83,20 +83,20 @@ class StrategySelectionResult:
 class RegimeBasedStrategySelector:
     """
     Regime-based strategy selection system
-    
+
     Detects market regime and automatically selects the optimal
     trading strategy for current conditions.
     """
-    
+
     def __init__(self, config: Dict = None):
         """
         Initialize Regime-Based Strategy Selector
-        
+
         Args:
             config: Optional configuration dictionary
         """
         self.config = config or {}
-        
+
         # Regime detection thresholds
         self.thresholds = {
             'strong_trend_adx': self.config.get('strong_trend_adx', 30),
@@ -105,7 +105,7 @@ class RegimeBasedStrategySelector:
             'low_volatility_atr_pct': self.config.get('low_volatility_atr_pct', 1.0),
             'consolidation_bb_width_pct': self.config.get('consolidation_bb_width_pct', 2.0),
         }
-        
+
         # Strategy to regime mapping
         self.regime_strategy_map = {
             MarketRegimeType.STRONG_TREND: TradingStrategy.TREND,
@@ -115,15 +115,15 @@ class RegimeBasedStrategySelector:
             MarketRegimeType.VOLATILITY_EXPANSION: TradingStrategy.BREAKOUT,
             MarketRegimeType.HIGH_VOLATILITY: TradingStrategy.MEAN_REVERSION,  # Counter-trend in chaos
         }
-        
+
         # Strategy parameters templates
         self.strategy_templates = self._initialize_strategy_templates()
-        
+
         # Historical regime tracking
         self.regime_history: List[RegimeDetection] = []
         self.current_regime: Optional[MarketRegimeType] = None
         self.current_strategy: Optional[TradingStrategy] = None
-        
+
         logger.info("=" * 70)
         logger.info("🎯 Regime-Based Strategy Selector Initialized")
         logger.info("=" * 70)
@@ -135,7 +135,7 @@ class RegimeBasedStrategySelector:
         for regime, strategy in self.regime_strategy_map.items():
             logger.info(f"  {regime.value}: {strategy.value.upper()}")
         logger.info("=" * 70)
-    
+
     def _initialize_strategy_templates(self) -> Dict[TradingStrategy, StrategyParameters]:
         """Initialize strategy parameter templates"""
         return {
@@ -163,7 +163,7 @@ class RegimeBasedStrategySelector:
                 },
                 description="Trend following strategy for strong directional markets"
             ),
-            
+
             TradingStrategy.MEAN_REVERSION: StrategyParameters(
                 strategy=TradingStrategy.MEAN_REVERSION,
                 entry_conditions={
@@ -188,7 +188,7 @@ class RegimeBasedStrategySelector:
                 },
                 description="Mean reversion strategy for range-bound markets"
             ),
-            
+
             TradingStrategy.BREAKOUT: StrategyParameters(
                 strategy=TradingStrategy.BREAKOUT,
                 entry_conditions={
@@ -212,7 +212,7 @@ class RegimeBasedStrategySelector:
                 },
                 description="Breakout strategy for volatility expansion from consolidation"
             ),
-            
+
             TradingStrategy.MOMENTUM: StrategyParameters(
                 strategy=TradingStrategy.MOMENTUM,
                 entry_conditions={
@@ -237,7 +237,7 @@ class RegimeBasedStrategySelector:
                 description="Momentum continuation strategy for moderate trends"
             ),
         }
-    
+
     def detect_regime(
         self,
         df: pd.DataFrame,
@@ -245,39 +245,39 @@ class RegimeBasedStrategySelector:
     ) -> RegimeDetection:
         """
         Detect current market regime based on multiple factors
-        
+
         Args:
             df: Price DataFrame with OHLCV data
             indicators: Dictionary of calculated indicators
-            
+
         Returns:
             RegimeDetection with regime and optimal strategy
         """
         # Extract key metrics
         current_price = float(df['close'].iloc[-1])
-        
+
         # ADX (trend strength)
         adx = float(indicators.get('adx', pd.Series([0])).iloc[-1])
-        
+
         # ATR (volatility)
         atr = float(indicators.get('atr', pd.Series([0])).iloc[-1])
         atr_pct = (atr / current_price * 100) if current_price > 0 else 0
-        
+
         # Bollinger Bands (range)
         bb_upper = float(indicators.get('bb_upper', pd.Series([current_price])).iloc[-1])
         bb_lower = float(indicators.get('bb_lower', pd.Series([current_price])).iloc[-1])
         bb_width_pct = ((bb_upper - bb_lower) / current_price * 100) if current_price > 0 else 0
-        
+
         # Price range (last 20 periods)
         if len(df) >= 20:
             price_range = df['close'].iloc[-20:].max() - df['close'].iloc[-20:].min()
             price_range_pct = (price_range / df['close'].iloc[-20:].mean() * 100)
         else:
             price_range_pct = 0
-        
+
         # RSI (momentum)
         rsi = float(indicators.get('rsi', pd.Series([50])).iloc[-1])
-        
+
         # Volume
         if 'volume' in df.columns and len(df) >= 10:
             current_volume = float(df['volume'].iloc[-1])
@@ -285,7 +285,7 @@ class RegimeBasedStrategySelector:
             volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
         else:
             volume_ratio = 1.0
-        
+
         # Collect metrics
         metrics = {
             'adx': adx,
@@ -295,13 +295,13 @@ class RegimeBasedStrategySelector:
             'rsi': rsi,
             'volume_ratio': volume_ratio,
         }
-        
+
         # Regime classification logic
         regime, confidence, reasoning = self._classify_regime(metrics)
-        
+
         # Get optimal strategy for regime
         optimal_strategy = self.regime_strategy_map.get(regime, TradingStrategy.NONE)
-        
+
         detection = RegimeDetection(
             regime=regime,
             optimal_strategy=optimal_strategy,
@@ -309,16 +309,16 @@ class RegimeBasedStrategySelector:
             metrics=metrics,
             reasoning=reasoning
         )
-        
+
         # Update tracking
         self.regime_history.append(detection)
         self.current_regime = regime
         self.current_strategy = optimal_strategy
-        
+
         # Keep only last 100 detections
         if len(self.regime_history) > 100:
             self.regime_history = self.regime_history[-100:]
-        
+
         logger.info("=" * 70)
         logger.info("🎯 REGIME DETECTION")
         logger.info("=" * 70)
@@ -332,13 +332,13 @@ class RegimeBasedStrategySelector:
         logger.info("")
         logger.info(f"Reasoning: {reasoning}")
         logger.info("=" * 70)
-        
+
         return detection
-    
+
     def _classify_regime(self, metrics: Dict[str, float]) -> Tuple[MarketRegimeType, float, str]:
         """
         Classify market regime based on metrics
-        
+
         Returns:
             Tuple of (regime, confidence, reasoning)
         """
@@ -347,45 +347,45 @@ class RegimeBasedStrategySelector:
         bb_width_pct = metrics['bb_width_pct']
         price_range_pct = metrics['price_range_pct']
         volume_ratio = metrics['volume_ratio']
-        
+
         # Strong Trend: High ADX, reasonable volatility
         if adx >= self.thresholds['strong_trend_adx']:
             confidence = min(1.0, (adx - 30) / 20 + 0.7)  # 0.7-1.0
             reasoning = f"Strong trend (ADX={adx:.1f} > {self.thresholds['strong_trend_adx']})"
             return MarketRegimeType.STRONG_TREND, confidence, reasoning
-        
+
         # Volatility Expansion: Breaking out with high volume
-        if (atr_pct > self.thresholds['high_volatility_atr_pct'] and 
-            volume_ratio > 1.5 and 
+        if (atr_pct > self.thresholds['high_volatility_atr_pct'] and
+            volume_ratio > 1.5 and
             bb_width_pct > 3.0):
             confidence = 0.75
             reasoning = f"Volatility expansion (ATR={atr_pct:.2f}%, Volume={volume_ratio:.2f}x)"
             return MarketRegimeType.VOLATILITY_EXPANSION, confidence, reasoning
-        
+
         # High Volatility: Chaotic, high ATR
         if atr_pct > self.thresholds['high_volatility_atr_pct']:
             confidence = 0.70
             reasoning = f"High volatility (ATR={atr_pct:.2f}% > {self.thresholds['high_volatility_atr_pct']}%)"
             return MarketRegimeType.HIGH_VOLATILITY, confidence, reasoning
-        
+
         # Consolidation: Low volatility, tight range
-        if (atr_pct < self.thresholds['low_volatility_atr_pct'] and 
+        if (atr_pct < self.thresholds['low_volatility_atr_pct'] and
             bb_width_pct < self.thresholds['consolidation_bb_width_pct']):
             confidence = 0.75
             reasoning = f"Consolidation (ATR={atr_pct:.2f}%, BB Width={bb_width_pct:.2f}%)"
             return MarketRegimeType.CONSOLIDATION, confidence, reasoning
-        
+
         # Weak Trend: Moderate ADX
         if adx >= self.thresholds['weak_trend_adx']:
             confidence = 0.65
             reasoning = f"Weak trend (ADX={adx:.1f}, {self.thresholds['weak_trend_adx']}-{self.thresholds['strong_trend_adx']})"
             return MarketRegimeType.WEAK_TREND, confidence, reasoning
-        
+
         # Ranging: Low ADX, moderate volatility
         confidence = 0.60
         reasoning = f"Ranging market (ADX={adx:.1f} < {self.thresholds['weak_trend_adx']})"
         return MarketRegimeType.RANGING, confidence, reasoning
-    
+
     def select_strategy(
         self,
         df: pd.DataFrame,
@@ -394,24 +394,24 @@ class RegimeBasedStrategySelector:
     ) -> StrategySelectionResult:
         """
         Detect regime and select optimal strategy
-        
+
         Args:
             df: Price DataFrame
             indicators: Indicator dictionary
             force_detection: Force new regime detection
-            
+
         Returns:
             StrategySelectionResult with selected strategy and parameters
         """
         # Detect regime
         detection = self.detect_regime(df, indicators)
-        
+
         # Get selected strategy
         selected_strategy = detection.optimal_strategy
-        
+
         # Get strategy parameters
         strategy_params = self.strategy_templates.get(selected_strategy)
-        
+
         # Calculate alternative strategies (with confidence scores)
         alternatives = []
         for strategy in TradingStrategy:
@@ -419,13 +419,13 @@ class RegimeBasedStrategySelector:
                 # Simple scoring: 100% for primary, lower for others
                 score = 0.3  # Base alternative score
                 alternatives.append((strategy, score))
-        
+
         # Sort alternatives by score
         alternatives.sort(key=lambda x: x[1], reverse=True)
-        
+
         # Generate summary
         summary = self._generate_summary(detection, selected_strategy, strategy_params)
-        
+
         result = StrategySelectionResult(
             regime_detection=detection,
             selected_strategy=selected_strategy,
@@ -433,11 +433,11 @@ class RegimeBasedStrategySelector:
             alternative_strategies=alternatives,
             summary=summary
         )
-        
+
         logger.info(summary)
-        
+
         return result
-    
+
     def _generate_summary(
         self,
         detection: RegimeDetection,
@@ -454,7 +454,7 @@ class RegimeBasedStrategySelector:
             "",
             f"Reasoning: {detection.reasoning}",
         ]
-        
+
         if params:
             lines.append("")
             lines.append(f"Strategy Description:")
@@ -467,26 +467,26 @@ class RegimeBasedStrategySelector:
             lines.append("Risk Management:")
             for key, value in params.risk_management.items():
                 lines.append(f"  {key}: {value}")
-        
+
         return "\n".join(lines)
-    
+
     def get_regime_stats(self) -> Dict:
         """Get statistics about regime history"""
         if not self.regime_history:
             return {}
-        
+
         regime_counts = {}
         strategy_counts = {}
-        
+
         for detection in self.regime_history:
             regime = detection.regime.value
             strategy = detection.optimal_strategy.value
-            
+
             regime_counts[regime] = regime_counts.get(regime, 0) + 1
             strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
-        
+
         total = len(self.regime_history)
-        
+
         return {
             'total_detections': total,
             'current_regime': self.current_regime.value if self.current_regime else 'none',
@@ -499,10 +499,10 @@ class RegimeBasedStrategySelector:
 def create_regime_strategy_selector(config: Dict = None) -> RegimeBasedStrategySelector:
     """
     Factory function to create RegimeBasedStrategySelector instance
-    
+
     Args:
         config: Optional configuration
-        
+
     Returns:
         RegimeBasedStrategySelector instance
     """
@@ -512,12 +512,12 @@ def create_regime_strategy_selector(config: Dict = None) -> RegimeBasedStrategyS
 # Example usage
 if __name__ == "__main__":
     import logging
-    
+
     logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
-    
+
     # Create selector
     selector = create_regime_strategy_selector()
-    
+
     # Mock data - trending market
     dates = pd.date_range('2024-01-01', periods=100, freq='1H')
     trending_df = pd.DataFrame({
@@ -527,7 +527,7 @@ if __name__ == "__main__":
         'low': np.cumsum(np.random.randn(100) * 0.5) + 98,
         'volume': np.random.randint(1000, 5000, 100),
     })
-    
+
     trending_indicators = {
         'adx': pd.Series([35.0] * 100),  # Strong trend
         'atr': pd.Series([1.5] * 100),
@@ -535,14 +535,14 @@ if __name__ == "__main__":
         'bb_lower': pd.Series([98.0] * 100),
         'rsi': pd.Series([60.0] * 100),
     }
-    
+
     print("\n" + "=" * 70)
     print("SCENARIO 1: Trending Market")
     print("=" * 70)
-    
+
     result1 = selector.select_strategy(trending_df, trending_indicators)
     print(result1.summary)
-    
+
     # Mock data - ranging market
     ranging_indicators = {
         'adx': pd.Series([15.0] * 100),  # Low ADX
@@ -551,14 +551,14 @@ if __name__ == "__main__":
         'bb_lower': pd.Series([99.0] * 100),
         'rsi': pd.Series([50.0] * 100),
     }
-    
+
     print("\n" + "=" * 70)
     print("SCENARIO 2: Ranging Market")
     print("=" * 70)
-    
+
     result2 = selector.select_strategy(trending_df, ranging_indicators)
     print(result2.summary)
-    
+
     # Get stats
     stats = selector.get_regime_stats()
     print("\nRegime Statistics:")

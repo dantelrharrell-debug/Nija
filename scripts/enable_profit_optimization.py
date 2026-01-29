@@ -24,9 +24,9 @@ def check_optimization_modules():
     """Check if profit optimization modules are available."""
     print("🔍 Checking for profit optimization modules...")
     print("=" * 70)
-    
+
     modules_found = {}
-    
+
     # Check for profit optimization config
     try:
         import profit_optimization_config
@@ -35,7 +35,7 @@ def check_optimization_modules():
     except ImportError:
         modules_found['profit_optimization_config'] = False
         print("❌ profit_optimization_config.py - NOT FOUND")
-    
+
     # Check for enhanced scoring
     try:
         import enhanced_entry_scoring
@@ -44,7 +44,7 @@ def check_optimization_modules():
     except ImportError:
         modules_found['enhanced_entry_scoring'] = False
         print("❌ enhanced_entry_scoring.py - NOT FOUND (optional)")
-    
+
     # Check for regime detection
     try:
         import market_regime_detector
@@ -53,7 +53,7 @@ def check_optimization_modules():
     except ImportError:
         modules_found['market_regime_detector'] = False
         print("❌ market_regime_detector.py - NOT FOUND (optional)")
-    
+
     # Check for broker fee optimizer
     try:
         import broker_fee_optimizer
@@ -62,22 +62,22 @@ def check_optimization_modules():
     except ImportError:
         modules_found['broker_fee_optimizer'] = False
         print("❌ broker_fee_optimizer.py - NOT FOUND (optional)")
-    
+
     print("=" * 70)
-    
+
     # Summary
     total = len(modules_found)
     found = sum(modules_found.values())
-    
+
     print(f"\n📊 Summary: {found}/{total} modules available")
-    
+
     if modules_found['profit_optimization_config']:
         print("✅ Core profit optimization: READY")
     else:
         print("❌ Core profit optimization: NOT AVAILABLE")
         print("   → Profit optimization config is required")
         return False
-    
+
     if modules_found['enhanced_entry_scoring'] and modules_found['market_regime_detector']:
         print("✅ Advanced features: READY (enhanced scoring + regime detection)")
     elif modules_found['enhanced_entry_scoring'] or modules_found['market_regime_detector']:
@@ -86,7 +86,7 @@ def check_optimization_modules():
     else:
         print("ℹ️  Advanced features: USING DEFAULTS")
         print("   → Core profit optimization will still work")
-    
+
     return modules_found['profit_optimization_config']
 
 
@@ -94,7 +94,7 @@ def show_optimization_features():
     """Show what features will be enabled."""
     print("\n🚀 Profit Optimization Features")
     print("=" * 70)
-    
+
     features = [
         ("Enhanced Entry Scoring", "0-100 weighted system vs basic 1-5 scoring"),
         ("Market Regime Detection", "Adaptive parameters based on market conditions"),
@@ -103,7 +103,7 @@ def show_optimization_features():
         ("Multi-Exchange Trading", "Coinbase + Kraken for 2x opportunities"),
         ("Dynamic Position Sizing", "2-10% per position (was 20%, enables more positions)"),
     ]
-    
+
     for name, desc in features:
         print(f"✅ {name}")
         print(f"   {desc}")
@@ -114,31 +114,31 @@ def setup_env_file():
     """Set up optimized .env file."""
     print("📝 Setting up .env file...")
     print("=" * 70)
-    
+
     env_template = ".env.profit_optimized"
     env_file = ".env"
     env_backup = ".env.backup"
-    
+
     # Check if template exists
     if not os.path.exists(env_template):
         print(f"❌ Template file not found: {env_template}")
         print("   Please ensure .env.profit_optimized exists in the repository root.")
         return False
-    
+
     # Backup existing .env if it exists
     if os.path.exists(env_file):
         print(f"ℹ️  Existing .env file found")
         response = input("   Do you want to backup and replace it? (yes/no): ").strip().lower()
-        
+
         if response not in ['yes', 'y']:
             print("ℹ️  Keeping existing .env file")
             print("   To enable optimizations, manually copy settings from .env.profit_optimized")
             return False
-        
+
         # Create backup
         shutil.copy(env_file, env_backup)
         print(f"✅ Backed up existing .env to {env_backup}")
-    
+
     # Copy template
     shutil.copy(env_template, env_file)
     print(f"✅ Created new .env from template")
@@ -150,7 +150,7 @@ def setup_env_file():
     print("   - KRAKEN_MASTER_API_KEY (optional but recommended)")
     print("   - KRAKEN_MASTER_API_SECRET (optional but recommended)")
     print()
-    
+
     return True
 
 
@@ -161,7 +161,7 @@ def main():
     print("NIJA PROFIT OPTIMIZATION - QUICK START")
     print("=" * 70)
     print()
-    
+
     # Step 1: Check modules
     if not check_optimization_modules():
         print()
@@ -169,14 +169,14 @@ def main():
         print("   Core modules are missing. Please ensure you have the latest code.")
         print("   Run: git pull origin main")
         sys.exit(1)
-    
+
     # Step 2: Show features
     show_optimization_features()
-    
+
     # Step 3: Setup .env
     print("=" * 70)
     setup_env_file()
-    
+
     # Final instructions
     print()
     print("=" * 70)

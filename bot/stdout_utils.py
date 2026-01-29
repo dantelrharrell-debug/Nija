@@ -17,19 +17,19 @@ from contextlib import contextmanager
 def suppress_pykrakenapi_prints():
     """
     Context manager to suppress pykrakenapi's print() statements.
-    
+
     The pykrakenapi library prints retry attempts to stdout instead of using
     logging. This creates log pollution that cannot be controlled via log levels.
-    
+
     Example messages that are suppressed:
         attempt: 463 | ['EQuery:Unknown asset pair']
         attempt: 464 | ['EQuery:Unknown asset pair']
         ...
-    
+
     Usage:
         with suppress_pykrakenapi_prints():
             result = kraken_api.query_private('Balance')
-    
+
     Returns:
         Context manager that suppresses stdout during execution
     """

@@ -106,11 +106,11 @@ gmig = GMIGEngine()
 def daily_macro_check():
     """Run daily at market open"""
     report = gmig.run_full_analysis()
-    
+
     # Log to file or database
     with open('gmig_daily_log.txt', 'a') as f:
         f.write(f"{report['timestamp']}: {report['summary']}\n")
-    
+
     # Send alert if crisis warning
     if report['crisis_assessment']['alert_level'] in ['orange', 'red']:
         send_alert(f"⚠️ GMIG Alert: {report['summary']['key_recommendation']}")
@@ -131,12 +131,12 @@ def monitor_crisis():
     """Monitor for crisis signals every 5 minutes"""
     while True:
         crisis_check = gmig.run_crisis_check()
-        
+
         if crisis_check['action_required']:
             print(f"🚨 ALERT: {crisis_check['alert_level']}")
             print(f"Crisis Probability: {crisis_check['crisis_probability']:.1%}")
             # Take defensive action
-            
+
         time.sleep(300)  # 5 minutes
 
 # Run in background

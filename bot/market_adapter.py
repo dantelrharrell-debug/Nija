@@ -24,7 +24,7 @@ class MarketType(Enum):
 class MarketParameters:
     """Market-specific trading parameters"""
     market_type: MarketType
-    
+
     # Stop-Loss & Take-Profit
     sl_min: float
     sl_max: float
@@ -32,20 +32,20 @@ class MarketParameters:
     tp2: float
     tp3_min: float
     tp3_max: float
-    
+
     # Position Sizing
     position_min: float
     position_max: float
-    
+
     # Trailing
     use_ema_trail: bool
     use_percentage_trail: bool
     percentage_trail_threshold: float
-    
+
     # Limits
     max_daily_trades: int
     max_daily_loss: float  # as percentage
-    
+
     # Options-specific
     min_delta: float = 0.0
     max_bid_ask_spread: float = 0.0
@@ -54,7 +54,7 @@ class MarketParameters:
 
 class MarketAdapter:
     """Auto-detect and configure market-specific parameters"""
-    
+
     def __init__(self):
         self.market_configs = {
             MarketType.CRYPTO: MarketParameters(
@@ -73,7 +73,7 @@ class MarketAdapter:
                 max_daily_trades=20,  # More trades allowed
                 max_daily_loss=0.025  # 2.5%
             ),
-            
+
             MarketType.STOCKS: MarketParameters(
                 market_type=MarketType.STOCKS,
                 sl_min=0.0015,  # 0.15%
@@ -90,7 +90,7 @@ class MarketAdapter:
                 max_daily_trades=10,
                 max_daily_loss=0.025  # 2.5%
             ),
-            
+
             MarketType.FUTURES: MarketParameters(
                 market_type=MarketType.FUTURES,
                 sl_min=0.0015,  # 0.15% (ES)
@@ -107,7 +107,7 @@ class MarketAdapter:
                 max_daily_trades=7,
                 max_daily_loss=0.025  # 2.5%
             ),
-            
+
             MarketType.OPTIONS: MarketParameters(
                 market_type=MarketType.OPTIONS,
                 sl_min=0.10,    # 10% of premium
@@ -130,11 +130,11 @@ class MarketAdapter:
                 max_iv_rank=50.0
             )
         }
-    
+
     def detect_market_type(self, symbol: str) -> MarketType:
         """
         Auto-detect market type from symbol
-        
+
         Examples:
         - BTC-USD, ETH-USD, FORTH-USDC → CRYPTO
         - AAPL, TSLA, SPY → STOCKS
@@ -142,35 +142,35 @@ class MarketAdapter:
         - AAPL250117C00150000 → OPTIONS
         """
         symbol = symbol.upper()
-        
+
         # Crypto patterns - check for crypto pairs first
         if '-USD' in symbol or '-USDC' in symbol or '-USDT' in symbol:
             return MarketType.CRYPTO
-        
+
         if any(crypto in symbol for crypto in ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA']):
             return MarketType.CRYPTO
-        
+
         # Futures patterns
         futures_symbols = ['ES', 'NQ', 'YM', 'RTY', 'GC', 'SI', 'CL', 'NG', 'ZB', 'ZN']
         if any(symbol.startswith(fut) for fut in futures_symbols):
             return MarketType.FUTURES
-        
+
         # Options pattern (contains strike/expiry)
         if len(symbol) > 10 and any(c in symbol for c in ['C', 'P']) and any(c.isdigit() for c in symbol):
             return MarketType.OPTIONS
-        
+
         # Default to stocks
         return MarketType.STOCKS
-    
+
     def get_parameters(self, symbol: str) -> MarketParameters:
         """Get market-specific parameters for symbol"""
         market_type = self.detect_market_type(symbol)
         return self.market_configs[market_type]
-    
+
     def adjust_stop_loss(self, symbol: str, entry_price: float, volatility: float) -> float:
         """Calculate market-adjusted stop-loss"""
         params = self.get_parameters(symbol)
-        
+
         # For futures, could implement tick-based logic here
         if params.market_type == MarketType.FUTURES:
             # Example: ES tick = 0.25, NQ tick = 0.25, GC tick = 0.10
@@ -184,16 +184,16 @@ class MarketAdapter:
                 sl_pct = params.sl_min + (volatility * 10)
         else:
             sl_pct = params.sl_min + (volatility * 10)
-        
+
         # Clamp to market limits
         sl_pct = max(params.sl_min, min(sl_pct, params.sl_max))
-        
+
         return entry_price * (1 - sl_pct)
-    
+
     def get_position_size(self, symbol: str, signal_score: int, account_balance: float) -> float:
         """Calculate market-adjusted position size - AGGRESSIVE: 3-15% of account, MIN: $0.01"""
         params = self.get_parameters(symbol)
-        
+
         # AGGRESSIVE Score-based allocation: 3-15% range (50% more than before)
         if signal_score <= 1:
             allocation_pct = 0.03  # 3% for score 1 (increased from 2%)
@@ -207,22 +207,22 @@ class MarketAdapter:
             allocation_pct = 0.15  # Maximum 15% for A+ setups (increased from 10%)
         else:
             allocation_pct = 0.03  # Default minimum
-        
+
         position_size = account_balance * allocation_pct
-        
+
         # COINBASE MINIMUM ENFORCEMENT:
         # - Target 3-15% of account balance (AGGRESSIVE)
         # - Coinbase Advanced Trade minimum: $5.00 per order
         # - Never exceed 15% of account
         min_size = max(5.00, account_balance * 0.03)  # Greater of $5.00 or 3% (Coinbase minimum)
         max_size = account_balance * 0.15
-        
+
         return max(min_size, min(position_size, max_size))
-    
+
     def validate_options_entry(self, options_data: dict) -> Tuple[bool, str]:
         """
         Validate options contract meets NIJA filters
-        
+
         Required data:
         - delta: float
         - bid_ask_spread: float (percentage)
@@ -230,49 +230,49 @@ class MarketAdapter:
         - iv_rank: float
         """
         params = self.market_configs[MarketType.OPTIONS]
-        
+
         # Check delta
         if options_data.get('delta', 0) < params.min_delta:
             return False, f"Delta too low: {options_data.get('delta')} < {params.min_delta}"
-        
+
         # Check bid/ask spread
         spread = options_data.get('bid_ask_spread', 1.0)
         if spread > params.max_bid_ask_spread:
             return False, f"Bid/ask spread too wide: {spread*100:.1f}%"
-        
+
         # Check volume
         if options_data.get('volume', 0) < params.min_volume:
             return False, f"Volume too low: {options_data.get('volume')} < {params.min_volume}"
-        
+
         # Check IV rank
         if options_data.get('iv_rank', 100) > params.max_iv_rank:
             return False, f"IV Rank too high: {options_data.get('iv_rank')} > {params.max_iv_rank}"
-        
+
         return True, "Options filters passed"
-    
+
     def supports_shorting(self, symbol: str, broker: str = None) -> bool:
         """
         Check if market supports shorting.
-        
+
         DEPRECATED (Jan 2026): This method is being replaced by exchange_capabilities.py
         which provides more accurate broker + symbol-specific capability checking.
-        
+
         Migration Timeline:
         - Jan 2026: New exchange_capabilities.py module introduced
         - Feb 2026: All call sites should migrate to using can_short(broker, symbol)
         - Mar 2026: This method will be removed
-        
+
         Migration Instructions:
         Instead of:
             market_adapter.supports_shorting(symbol)
         Use:
             from exchange_capabilities import can_short
             can_short(broker_name, symbol)
-        
+
         Args:
             symbol: Trading symbol
             broker: Optional broker name for exchange-specific checking
-            
+
         Returns:
             True if shorting is supported
         """
@@ -284,10 +284,10 @@ class MarketAdapter:
             except ImportError:
                 # Fallback to legacy logic if exchange_capabilities not available
                 logger.warning("exchange_capabilities module not available, using legacy logic")
-        
+
         # Legacy logic (less accurate, doesn't consider exchange differences)
         market_type = self.detect_market_type(symbol)
-        
+
         # Crypto (Coinbase spot) typically doesn't support shorting
         # Stocks and Futures do
         # Options use PUTs instead

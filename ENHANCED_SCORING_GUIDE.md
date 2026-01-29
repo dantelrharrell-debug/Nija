@@ -115,7 +115,7 @@ config = {
     # Enhanced scoring thresholds
     'min_score_threshold': 60,           # Minimum score to enter (default: 60)
     'excellent_score_threshold': 80,     # Excellent setup threshold (default: 80)
-    
+
     # Regime detection thresholds
     'trending_adx_min': 25,              # Minimum ADX for trending (default: 25)
     'ranging_adx_max': 20,               # Maximum ADX for ranging (default: 20)

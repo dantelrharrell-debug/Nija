@@ -242,28 +242,28 @@ auto_engine = get_autonomous_engine(
 def execute_trade(symbol, expected_return, volatility):
     # Get available balance
     balance = get_account_balance()
-    
+
     # Calculate optimal position size
     position_size = auto_engine.get_optimal_position_size(
         available_balance=balance,
         expected_return=expected_return,
         volatility=volatility
     )
-    
+
     # Execute trade
     trade_result = place_order(symbol, position_size)
-    
+
     # Record result
     if trade_result['pnl'] > 0:
         capital_engine.record_profit(trade_result['pnl'])
     else:
         capital_engine.record_loss(trade_result['pnl'])
-    
+
     # Check if trading should halt
     if capital_engine.should_halt_trading():
         print("⚠️ Trading halted due to drawdown")
         return False
-    
+
     return True
 ```
 

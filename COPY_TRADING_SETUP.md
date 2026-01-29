@@ -230,7 +230,7 @@ User accounts are configured in JSON files:
 - Users receive BUY signals
 - Example: Master buys $100 BTC → User buys $5 BTC (proportional)
 
-**Exit Signals (SELL)** 
+**Exit Signals (SELL)**
 - Master takes profit or hits stop-loss
 - Users receive SELL signals
 - Example: Master sells 0.001 BTC → User sells 0.00005 BTC (proportional)
@@ -356,7 +356,7 @@ def calculate_user_position_size(
 ) -> Dict:
     """
     Calculate scaled position size for user account.
-    
+
     Default strategy: Proportional scaling
     Custom strategies can be implemented here.
     """

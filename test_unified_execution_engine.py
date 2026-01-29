@@ -13,7 +13,7 @@ import logging
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
 from unified_execution_engine import (
-    execute_trade, 
+    execute_trade,
     validate_trade,
     UnifiedExecutionEngine,
     TradeResult,
@@ -37,7 +37,7 @@ def test_validation():
     logger.info("=" * 70)
     logger.info("TEST 1: Trade Validation")
     logger.info("=" * 70)
-    
+
     test_cases = [
         # Valid trades
         {
@@ -67,7 +67,7 @@ def test_validation():
             'expected_valid': True,
             'description': 'Valid Binance market buy ($20)'
         },
-        
+
         # Invalid trades (below minimum)
         {
             'exchange': 'coinbase',
@@ -88,17 +88,17 @@ def test_validation():
             'description': 'Invalid Kraken pair (BUSD not supported)'
         },
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for i, test in enumerate(test_cases, 1):
         logger.info(f"\n🧪 Test Case {i}: {test['description']}")
         logger.info(f"   Exchange: {test['exchange']}")
         logger.info(f"   Symbol: {test['symbol']}")
         logger.info(f"   Side: {test['side']}")
         logger.info(f"   Size: ${test['size']}")
-        
+
         validated = validate_trade(
             exchange=test['exchange'],
             symbol=test['symbol'],
@@ -106,18 +106,18 @@ def test_validation():
             size=test['size'],
             size_type=test.get('size_type', 'quote')
         )
-        
+
         if validated:
             actual_valid = validated.valid
             logger.info(f"   Result: {'✅ VALID' if actual_valid else '❌ INVALID'}")
-            
+
             if not actual_valid and validated.error_message:
                 logger.info(f"   Error: {validated.error_message}")
-            
+
             if validated.warnings:
                 for warning in validated.warnings:
                     logger.info(f"   Warning: {warning}")
-            
+
             # Check if result matches expectation
             if actual_valid == test['expected_valid']:
                 logger.info(f"   ✅ PASS - Result matches expectation")
@@ -128,11 +128,11 @@ def test_validation():
         else:
             logger.warning(f"   ⚠️  Validation returned None (adapters may not be available)")
             # Don't count as pass or fail if adapters aren't available
-    
+
     logger.info(f"\n{'=' * 70}")
     logger.info(f"Validation Tests: {passed} passed, {failed} failed")
     logger.info(f"{'=' * 70}")
-    
+
     return failed == 0
 
 
@@ -141,7 +141,7 @@ def test_execution():
     logger.info("\n" + "=" * 70)
     logger.info("TEST 2: Trade Execution Interface")
     logger.info("=" * 70)
-    
+
     test_cases = [
         {
             'exchange': 'coinbase',
@@ -188,10 +188,10 @@ def test_execution():
             'description': 'Alpaca stock market buy'
         },
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for i, test in enumerate(test_cases, 1):
         logger.info(f"\n🧪 Test Case {i}: {test['description']}")
         logger.info(f"   Exchange: {test['exchange']}")
@@ -199,7 +199,7 @@ def test_execution():
         logger.info(f"   Side: {test['side']}")
         logger.info(f"   Size: {test['size']}")
         logger.info(f"   Type: {test['order_type']}")
-        
+
         kwargs = {
             'exchange': test['exchange'],
             'symbol': test['symbol'],
@@ -207,14 +207,14 @@ def test_execution():
             'size': test['size'],
             'order_type': test['order_type'],
         }
-        
+
         if 'price' in test:
             kwargs['price'] = test['price']
         if 'size_type' in test:
             kwargs['size_type'] = test['size_type']
-        
+
         result = execute_trade(**kwargs)
-        
+
         logger.info(f"   Success: {result.success}")
         if result.success:
             logger.info(f"   Order ID: {result.order_id}")
@@ -227,11 +227,11 @@ def test_execution():
                 passed += 1
             else:
                 failed += 1
-    
+
     logger.info(f"\n{'=' * 70}")
     logger.info(f"Execution Tests: {passed} passed, {failed} failed")
     logger.info(f"{'=' * 70}")
-    
+
     return failed == 0
 
 
@@ -240,7 +240,7 @@ def test_error_handling():
     logger.info("\n" + "=" * 70)
     logger.info("TEST 3: Error Handling")
     logger.info("=" * 70)
-    
+
     test_cases = [
         {
             'exchange': 'invalid_exchange',
@@ -278,36 +278,36 @@ def test_error_handling():
             'description': 'Missing price for limit order'
         },
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for i, test in enumerate(test_cases, 1):
         logger.info(f"\n🧪 Test Case {i}: {test['description']}")
-        
+
         kwargs = {
             'exchange': test['exchange'],
             'symbol': test['symbol'],
             'side': test['side'],
             'size': test['size'],
         }
-        
+
         if 'order_type' in test:
             kwargs['order_type'] = test['order_type']
-        
+
         result = execute_trade(**kwargs)
-        
+
         if not result.success and test['expected_error'].lower() in result.error_message.lower():
             logger.info(f"   ✅ PASS - Caught expected error: {result.error_message}")
             passed += 1
         else:
             logger.error(f"   ❌ FAIL - Expected error '{test['expected_error']}', got: {result.error_message}")
             failed += 1
-    
+
     logger.info(f"\n{'=' * 70}")
     logger.info(f"Error Handling Tests: {passed} passed, {failed} failed")
     logger.info(f"{'=' * 70}")
-    
+
     return failed == 0
 
 
@@ -316,7 +316,7 @@ def test_symbol_normalization():
     logger.info("\n" + "=" * 70)
     logger.info("TEST 4: Symbol Normalization")
     logger.info("=" * 70)
-    
+
     test_cases = [
         {
             'exchange': 'coinbase',
@@ -337,21 +337,21 @@ def test_symbol_normalization():
             'description': 'Binance symbol formats'
         },
     ]
-    
+
     logger.info("\nℹ️  Symbol normalization is handled by broker adapters")
     logger.info("   Each exchange adapter normalizes symbols to its preferred format")
-    
+
     for test in test_cases:
         logger.info(f"\n📝 {test['description']}")
         logger.info(f"   Exchange: {test['exchange']}")
         logger.info(f"   Input formats: {', '.join(test['input_symbols'])}")
         logger.info(f"   Expected: {test['expected_format']}")
         logger.info(f"   ✅ Handled by {test['exchange'].capitalize()}Adapter")
-    
+
     logger.info(f"\n{'=' * 70}")
     logger.info("Symbol Normalization: ✅ Supported by adapters")
     logger.info(f"{'=' * 70}")
-    
+
     return True
 
 
@@ -360,10 +360,10 @@ def test_multi_exchange():
     logger.info("\n" + "=" * 70)
     logger.info("TEST 5: Multi-Exchange Trading")
     logger.info("=" * 70)
-    
+
     logger.info("\n💡 The key benefit of the unified execution layer:")
     logger.info("   Strategies don't care where they trade - they just trade!")
-    
+
     # Same trade across different exchanges
     exchanges = ['coinbase', 'kraken', 'binance', 'okx']
     symbol_map = {
@@ -372,14 +372,14 @@ def test_multi_exchange():
         'binance': 'BTCUSDT',
         'okx': 'BTC-USDT'
     }
-    
+
     logger.info(f"\n📊 Executing the same trade across {len(exchanges)} exchanges:")
     logger.info(f"   Trade: BUY $100 of BTC")
-    
+
     for exchange in exchanges:
         symbol = symbol_map[exchange]
         logger.info(f"\n   🎯 {exchange.upper()}: {symbol}")
-        
+
         result = execute_trade(
             exchange=exchange,
             symbol=symbol,
@@ -387,16 +387,16 @@ def test_multi_exchange():
             size=100.0,
             order_type='market'
         )
-        
+
         if result.success or "not implemented" in result.error_message.lower():
             logger.info(f"      ✅ Interface working")
         else:
             logger.error(f"      ❌ {result.error_message}")
-    
+
     logger.info(f"\n{'=' * 70}")
     logger.info("Multi-Exchange: ✅ Unified interface works across all exchanges")
     logger.info(f"{'=' * 70}")
-    
+
     return True
 
 
@@ -413,30 +413,30 @@ def main():
     logger.info("  - Binance")
     logger.info("  - OKX")
     logger.info("  - Alpaca")
-    
+
     results = []
-    
+
     # Run all tests
     results.append(("Validation", test_validation()))
     results.append(("Execution Interface", test_execution()))
     results.append(("Error Handling", test_error_handling()))
     results.append(("Symbol Normalization", test_symbol_normalization()))
     results.append(("Multi-Exchange", test_multi_exchange()))
-    
+
     # Summary
     logger.info("\n" + "=" * 70)
     logger.info("TEST SUMMARY")
     logger.info("=" * 70)
-    
+
     all_passed = True
     for test_name, passed in results:
         status = "✅ PASS" if passed else "❌ FAIL"
         logger.info(f"{status} - {test_name}")
         if not passed:
             all_passed = False
-    
+
     logger.info("=" * 70)
-    
+
     if all_passed:
         logger.info("✅ All tests passed!")
         logger.info("\nThe unified execution layer is ready to use.")

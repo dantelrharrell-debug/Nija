@@ -63,7 +63,7 @@ MARKET_PARAMETERS = {
         },
         "max_daily_trades": 15
     },
-    
+
     "STOCKS": {
         "description": "Stocks are slower, lower volatility",
         "stop_loss": "0.15-0.30%",
@@ -83,7 +83,7 @@ MARKET_PARAMETERS = {
         },
         "max_daily_trades": 10
     },
-    
+
     "FUTURES": {
         "description": "Futures move violently - throttle risk",
         "stop_loss": {
@@ -106,7 +106,7 @@ MARKET_PARAMETERS = {
         },
         "max_daily_trades": 7
     },
-    
+
     "OPTIONS": {
         "description": "Options require combo filters to avoid fake moves",
         "entry_filters": {
@@ -211,7 +211,7 @@ POSITION_SIZING = {
     "minimum": "2% of account equity",
     "maximum": "10% of account equity",
     "default": "3-7% depending on signal strength",
-    
+
     "signal_based_allocation": {
         "score_5": {
             "range": "8-10%",

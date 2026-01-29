@@ -1,7 +1,7 @@
 # NIJA Scaling Blueprint - Infrastructure & Growth Strategy
 
-**Version:** 2.0  
-**Last Updated:** January 29, 2026  
+**Version:** 2.0
+**Last Updated:** January 29, 2026
 **Target Scale:** 10,000+ concurrent users, 99.9% uptime
 
 ---
@@ -367,18 +367,18 @@ def cache(ttl=300):
         def wrapper(*args, **kwargs):
             # Generate cache key
             cache_key = f"{func.__name__}:{pickle.dumps((args, kwargs))}"
-            
+
             # Try to get from cache
             cached = redis_client.get(cache_key)
             if cached:
                 return pickle.loads(cached)
-            
+
             # Execute function
             result = func(*args, **kwargs)
-            
+
             # Store in cache
             redis_client.setex(cache_key, ttl, pickle.dumps(result))
-            
+
             return result
         return wrapper
     return decorator
@@ -403,7 +403,7 @@ def invalidate_user_cache(user_id):
         f"get_user_performance:{user_id}*",
         f"get_user_stats:{user_id}*"
     ]
-    
+
     for pattern in patterns:
         keys = redis_client.keys(pattern)
         if keys:
@@ -414,10 +414,10 @@ def invalidate_user_cache(user_id):
 def close_position(user_id, position_id):
     # Close position
     broker.close_position(position_id)
-    
+
     # Invalidate cache
     invalidate_user_cache(user_id)
-    
+
     return {"success": True}
 ```
 
@@ -438,7 +438,7 @@ Upstream: api_gateway
   - api-1.nija.com:8000
   - api-2.nija.com:8000
   - api-3.nija.com:8000
-  
+
 Health Check:
   - Endpoint: /health
   - Interval: 10 seconds
@@ -448,7 +448,7 @@ Health Check:
 Upstream: websocket
   - ws-1.nija.com:8004
   - ws-2.nija.com:8004
-  
+
 Sticky Sessions: IP hash (WebSocket)
 ```
 
@@ -471,10 +471,10 @@ upstream websocket_servers {
 server {
     listen 443 ssl http2;
     server_name api.nija.com;
-    
+
     ssl_certificate /etc/nginx/ssl/nija.com.crt;
     ssl_certificate_key /etc/nginx/ssl/nija.com.key;
-    
+
     # API Gateway
     location /api/ {
         proxy_pass http://api_gateway;
@@ -482,13 +482,13 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # Timeouts
         proxy_connect_timeout 10s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
     }
-    
+
     # WebSocket
     location /ws/ {
         proxy_pass http://websocket_servers;
@@ -496,7 +496,7 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
-        
+
         # Timeouts
         proxy_connect_timeout 7d;
         proxy_send_timeout 7d;
@@ -700,10 +700,10 @@ import msgpack
 def send_position_update(position):
     # JSON: ~500 bytes
     # json_data = json.dumps(position)
-    
+
     # MessagePack: ~300 bytes (40% smaller)
     msgpack_data = msgpack.packb(position)
-    
+
     websocket.send(msgpack_data, binary=True)
 
 # Batch updates
@@ -930,6 +930,6 @@ Cost Metrics:
 
 ---
 
-**Version:** 2.0  
-**Last Updated:** January 29, 2026  
+**Version:** 2.0
+**Last Updated:** January 29, 2026
 **Maintained By:** NIJA Infrastructure Team

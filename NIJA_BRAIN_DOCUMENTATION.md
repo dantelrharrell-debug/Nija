@@ -5,7 +5,7 @@
 NIJA Brain is the central intelligence system that orchestrates all trading decisions through four integrated components:
 
 1. **Multi-Strategy Orchestration** 🧠 - The Brain
-2. **Execution Intelligence** 💰 - The Money Layer  
+2. **Execution Intelligence** 💰 - The Money Layer
 3. **Self-Learning Engine** 📚 - Continuous Improvement
 4. **Investor Metrics** 📊 - Institutional Analytics
 

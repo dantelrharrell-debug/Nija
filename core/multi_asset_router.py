@@ -62,12 +62,12 @@ class AssetAllocation:
     equity_pct: float = 0.0
     derivatives_pct: float = 0.0
     cash_pct: float = 0.0
-    
+
     def validate(self) -> bool:
         """Ensure allocations sum to 100%."""
         total = self.crypto_pct + self.equity_pct + self.derivatives_pct + self.cash_pct
         return abs(total - 100.0) < 0.01  # Allow for floating point errors
-    
+
     def to_dict(self) -> Dict[str, float]:
         """Convert to dictionary."""
         return {
@@ -87,12 +87,12 @@ class MarketConditions:
     equity_momentum: float    # -100 to +100
     liquidity_score: float    # 0-100 (higher = more liquid)
     regime: MarketRegime
-    
+
     @classmethod
     def get_current(cls) -> 'MarketConditions':
         """
         Fetch current market conditions from data sources.
-        
+
         TODO: Implement real market data fetching
         For now, returns default conditions.
         """
@@ -111,7 +111,7 @@ class MultiAssetRouter:
     Core routing engine that allocates capital across asset classes
     based on market conditions, risk parameters, and tier settings.
     """
-    
+
     def __init__(
         self,
         user_tier: str = "SAVER",
@@ -120,7 +120,7 @@ class MultiAssetRouter:
     ):
         """
         Initialize multi-asset router.
-        
+
         Args:
             user_tier: User's subscription tier (STARTER, SAVER, INVESTOR, etc.)
             total_capital: Total available capital across all asset classes
@@ -129,7 +129,7 @@ class MultiAssetRouter:
         self.user_tier = user_tier
         self.total_capital = total_capital
         self.risk_tolerance = risk_tolerance
-        
+
         # Default allocation (100% crypto for backward compatibility)
         self.default_allocation = AssetAllocation(
             crypto_pct=100.0,
@@ -137,49 +137,49 @@ class MultiAssetRouter:
             derivatives_pct=0.0,
             cash_pct=0.0
         )
-        
+
         logger.info(f"Initialized MultiAssetRouter: tier={user_tier}, capital=${total_capital:.2f}")
-    
+
     def route_capital(
         self,
         market_conditions: Optional[MarketConditions] = None
     ) -> AssetAllocation:
         """
         Determine optimal capital allocation across asset classes.
-        
+
         This is the core intelligence that decides:
         - High crypto volatility → Shift capital → Crypto scalping
         - Low crypto volatility → Shift → Stock momentum
         - Risk-off macro → Shift → ETFs / cash protection
         - High liquidity → Futures → leverage
-        
+
         Args:
             market_conditions: Current market state (if None, will fetch)
-            
+
         Returns:
             AssetAllocation with percentage splits
         """
         if market_conditions is None:
             market_conditions = MarketConditions.get_current()
-        
+
         # Get regime-based allocation
         allocation = self._get_regime_allocation(market_conditions)
-        
+
         # Apply tier-specific constraints
         allocation = self._apply_tier_constraints(allocation)
-        
+
         # Validate and normalize
         if not allocation.validate():
             logger.warning(f"Invalid allocation {allocation.to_dict()}, using default")
             allocation = self.default_allocation
-        
+
         logger.info(f"Capital allocation: {allocation.to_dict()}")
         return allocation
-    
+
     def _get_regime_allocation(self, conditions: MarketConditions) -> AssetAllocation:
         """
         Determine allocation based on market regime.
-        
+
         Routing Logic:
         - TRENDING_UP (crypto): 80% crypto, 20% equity
         - TRENDING_DOWN: 40% crypto, 40% equity shorts, 20% cash
@@ -189,7 +189,7 @@ class MultiAssetRouter:
         - RANGING: 50% crypto, 50% equity
         """
         regime = conditions.regime
-        
+
         if regime == MarketRegime.TRENDING_UP:
             # Strong uptrend - favor crypto
             return AssetAllocation(
@@ -198,7 +198,7 @@ class MultiAssetRouter:
                 derivatives_pct=0.0,
                 cash_pct=0.0
             )
-        
+
         elif regime == MarketRegime.HIGH_VOLATILITY:
             # High volatility - crypto scalping dominates
             if conditions.crypto_volatility > 70:
@@ -215,7 +215,7 @@ class MultiAssetRouter:
                     derivatives_pct=0.0,
                     cash_pct=0.0
                 )
-        
+
         elif regime == MarketRegime.LOW_VOLATILITY:
             # Low volatility - shift to stock momentum
             return AssetAllocation(
@@ -224,7 +224,7 @@ class MultiAssetRouter:
                 derivatives_pct=0.0,
                 cash_pct=0.0
             )
-        
+
         elif regime == MarketRegime.RISK_OFF:
             # Risk-off - capital preservation
             return AssetAllocation(
@@ -233,7 +233,7 @@ class MultiAssetRouter:
                 derivatives_pct=0.0,
                 cash_pct=50.0
             )
-        
+
         elif regime == MarketRegime.RANGING:
             # Sideways market - balanced approach
             return AssetAllocation(
@@ -242,7 +242,7 @@ class MultiAssetRouter:
                 derivatives_pct=0.0,
                 cash_pct=0.0
             )
-        
+
         else:
             # Default: trending_down or unknown
             return AssetAllocation(
@@ -251,11 +251,11 @@ class MultiAssetRouter:
                 derivatives_pct=0.0,
                 cash_pct=20.0
             )
-    
+
     def _apply_tier_constraints(self, allocation: AssetAllocation) -> AssetAllocation:
         """
         Apply tier-specific constraints to allocation.
-        
+
         Tier Constraints:
         - STARTER: Crypto only (no multi-asset)
         - SAVER: Crypto only (no multi-asset)
@@ -265,7 +265,7 @@ class MultiAssetRouter:
         - BALLER: Custom AI (all asset classes + derivatives)
         """
         tier = self.user_tier.upper()
-        
+
         # STARTER and SAVER: Crypto only
         if tier in ["STARTER", "SAVER"]:
             return AssetAllocation(
@@ -274,7 +274,7 @@ class MultiAssetRouter:
                 derivatives_pct=0.0,
                 cash_pct=0.0
             )
-        
+
         # INVESTOR: Crypto + Equity (no derivatives)
         elif tier == "INVESTOR":
             total_active = allocation.crypto_pct + allocation.equity_pct
@@ -283,10 +283,10 @@ class MultiAssetRouter:
                 if allocation.derivatives_pct > 0:
                     crypto_ratio = allocation.crypto_pct / total_active if total_active > 0 else 0.5
                     equity_ratio = allocation.equity_pct / total_active if total_active > 0 else 0.5
-                    
+
                     new_crypto = allocation.crypto_pct + (allocation.derivatives_pct * crypto_ratio)
                     new_equity = allocation.equity_pct + (allocation.derivatives_pct * equity_ratio)
-                    
+
                     return AssetAllocation(
                         crypto_pct=new_crypto,
                         equity_pct=new_equity,
@@ -294,7 +294,7 @@ class MultiAssetRouter:
                         cash_pct=allocation.cash_pct
                     )
             return allocation
-        
+
         # INCOME and LIVABLE: All asset classes except derivatives
         elif tier in ["INCOME", "LIVABLE"]:
             # Redistribute derivatives to crypto/equity
@@ -303,10 +303,10 @@ class MultiAssetRouter:
                 if total_active > 0:
                     crypto_ratio = allocation.crypto_pct / total_active
                     equity_ratio = allocation.equity_pct / total_active
-                    
+
                     new_crypto = allocation.crypto_pct + (allocation.derivatives_pct * crypto_ratio)
                     new_equity = allocation.equity_pct + (allocation.derivatives_pct * equity_ratio)
-                    
+
                     return AssetAllocation(
                         crypto_pct=new_crypto,
                         equity_pct=new_equity,
@@ -314,28 +314,28 @@ class MultiAssetRouter:
                         cash_pct=allocation.cash_pct
                     )
             return allocation
-        
+
         # BALLER: Full access to all asset classes
         elif tier == "BALLER":
             return allocation
-        
+
         # Unknown tier: raise error instead of silently defaulting
         else:
             raise ValueError(
                 f"Unknown tier '{tier}'. Valid tiers: STARTER, SAVER, INVESTOR, "
                 f"INCOME, LIVABLE, BALLER"
             )
-    
+
     def get_capital_by_asset_class(
         self,
         allocation: AssetAllocation
     ) -> Dict[AssetClass, float]:
         """
         Convert percentage allocation to dollar amounts.
-        
+
         Args:
             allocation: Percentage allocation across assets
-            
+
         Returns:
             Dictionary mapping AssetClass to dollar amount
         """
@@ -345,7 +345,7 @@ class MultiAssetRouter:
             AssetClass.DERIVATIVES: self.total_capital * (allocation.derivatives_pct / 100.0),
             AssetClass.CASH: self.total_capital * (allocation.cash_pct / 100.0)
         }
-    
+
     def should_trade_asset_class(
         self,
         asset_class: AssetClass,
@@ -353,11 +353,11 @@ class MultiAssetRouter:
     ) -> bool:
         """
         Determine if a specific asset class should be traded.
-        
+
         Args:
             asset_class: Asset class to check
             allocation: Current allocation
-            
+
         Returns:
             True if asset class has non-zero allocation
         """

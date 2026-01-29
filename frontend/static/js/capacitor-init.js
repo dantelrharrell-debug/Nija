@@ -1,6 +1,6 @@
 /**
  * Capacitor Initialization and Native Features
- * 
+ *
  * This file handles:
  * - Capacitor plugin initialization
  * - Status bar configuration

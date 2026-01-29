@@ -357,7 +357,7 @@ The question **"Did all users make the same trade or just the master?"** can now
 ```
 📊 COPY TRADE EXECUTION SUMMARY
    ✅ Successfully Copied: 2
-   
+
    ✅ USERS WHO RECEIVED THIS TRADE:
       • daivon_frazier: $15.00 quote
       • tania_gilbert: $20.00 quote
@@ -371,7 +371,7 @@ Or:
 📊 COPY TRADE EXECUTION SUMMARY
    ✅ Successfully Copied: 0
    ❌ Failed/Blocked: 2
-   
+
    ⚠️  USERS WHO DID NOT RECEIVE THIS TRADE:
       • daivon_frazier: Balance too low
       • tania_gilbert: Balance too low

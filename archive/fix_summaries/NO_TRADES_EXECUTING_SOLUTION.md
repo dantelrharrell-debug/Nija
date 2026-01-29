@@ -109,7 +109,7 @@ logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} balance=${balance
 2026-01-24 XX:XX:XX | INFO |       ✅ KRAKEN: Eligible ($61.09 >= $10.00 min)
 2026-01-24 XX:XX:XX | INFO |    ✅ CONDITION PASSED: KRAKEN available for entry
 2026-01-24 XX:XX:XX | INFO |    💰 KRAKEN balance updated: $61.09 (total capital: $61.09)
-2026-01-24 XX:XX:XX | INFO | 
+2026-01-24 XX:XX:XX | INFO |
 2026-01-24 XX:XX:XX | INFO | ═══════════════════════════════════════════════════════════
 2026-01-24 XX:XX:XX | INFO | 🟢 RESULT: CONDITIONS PASSED FOR KRAKEN
 2026-01-24 XX:XX:XX | INFO | ═══════════════════════════════════════════════════════════

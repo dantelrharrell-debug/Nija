@@ -7,7 +7,7 @@ It creates all necessary tables and initial data.
 
 Usage:
     python init_database.py [--drop-all]
-    
+
 Options:
     --drop-all    Drop all existing tables before recreating (DESTRUCTIVE)
 """
@@ -59,15 +59,15 @@ def create_all_tables():
 def create_demo_user():
     """Create a demo user for testing"""
     session = get_session()
-    
+
     try:
         # Check if demo user exists
         existing_user = session.query(User).filter_by(email='demo@nija.ai').first()
-        
+
         if existing_user:
             logger.info("Demo user already exists")
             return
-        
+
         # Create demo user
         demo_user = User(
             user_id='user_demo',
@@ -77,7 +77,7 @@ def create_demo_user():
             enabled=True
         )
         session.add(demo_user)
-        
+
         # Create permissions for demo user
         demo_permissions = UserPermission(
             user_id='user_demo',
@@ -88,10 +88,10 @@ def create_demo_user():
             enabled=True
         )
         session.add(demo_permissions)
-        
+
         session.commit()
         logger.info("✅ Demo user created: demo@nija.ai / demo123")
-        
+
     except Exception as e:
         session.rollback()
         logger.error(f"Failed to create demo user: {e}")
@@ -104,24 +104,24 @@ def verify_database():
     """Verify database setup"""
     logger.info("Verifying database setup...")
     session = get_session()
-    
+
     try:
         # Count tables
         from sqlalchemy import inspect
         engine = get_engine()
         inspector = inspect(engine)
         tables = inspector.get_table_names()
-        
+
         logger.info(f"✅ Found {len(tables)} tables:")
         for table in sorted(tables):
             logger.info(f"   - {table}")
-        
+
         # Count users
         user_count = session.query(User).count()
         logger.info(f"✅ Total users: {user_count}")
-        
+
         return True
-        
+
     except Exception as e:
         logger.error(f"Database verification failed: {e}")
         return False
@@ -143,40 +143,40 @@ def main():
         help='Create demo user for testing'
     )
     args = parser.parse_args()
-    
+
     logger.info("=" * 60)
     logger.info("🚀 NIJA Database Initialization")
     logger.info("=" * 60)
-    
+
     # Get database URL (without displaying password)
     db_url = get_database_url()
     safe_url = db_url.split('@')[1] if '@' in db_url else db_url
     logger.info(f"Database: {safe_url}")
-    
+
     try:
         # Initialize database connection
         logger.info("Initializing database connection...")
         init_database(pool_size=5, max_overflow=10)
-        
+
         # Test connection
         if not test_connection():
             logger.error("❌ Database connection failed")
             return 1
-        
+
         # Drop all tables if requested
         if args.drop_all:
             if input("Are you sure you want to drop all tables? (yes/no): ").lower() != 'yes':
                 logger.info("Aborted")
                 return 0
             drop_all_tables()
-        
+
         # Create all tables
         create_all_tables()
-        
+
         # Create demo user if requested
         if args.demo_user:
             create_demo_user()
-        
+
         # Verify database
         if verify_database():
             logger.info("=" * 60)
@@ -186,13 +186,13 @@ def main():
         else:
             logger.error("❌ Database verification failed")
             return 1
-            
+
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
         import traceback
         traceback.print_exc()
         return 1
-        
+
     finally:
         close_database()
 

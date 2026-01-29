@@ -687,7 +687,7 @@ socket.on('trade:executed', (data) => {
     title: 'Trade Executed',
     body: `${data.side} ${data.pair} for $${data.size}`
   });
-  
+
   // Update activity feed
   dispatch(addActivity(data));
 });
@@ -935,7 +935,7 @@ jobs:
       - run: npm install
       - run: npm test
       - run: npm run lint
-  
+
   build-ios:
     runs-on: macos-latest
     steps:
@@ -948,7 +948,7 @@ jobs:
         with:
           name: ios-app
           path: ios/build/NIJA.ipa
-  
+
   build-android:
     runs-on: ubuntu-latest
     steps:
@@ -963,7 +963,7 @@ jobs:
         with:
           name: android-app
           path: android/app/build/outputs/apk/release/app-release.apk
-  
+
   deploy-testflight:
     needs: build-ios
     if: github.ref == 'refs/heads/main'
@@ -973,7 +973,7 @@ jobs:
         with:
           name: ios-app
       - run: fastlane ios beta
-  
+
   deploy-play-store:
     needs: build-android
     if: github.ref == 'refs/heads/main'
@@ -1016,7 +1016,7 @@ jobs:
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: January 27, 2026  
-**Status**: ✅ Ready for Implementation  
+**Document Version**: 1.0
+**Last Updated**: January 27, 2026
+**Status**: ✅ Ready for Implementation
 **Owner**: Mobile Team

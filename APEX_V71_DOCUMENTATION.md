@@ -205,11 +205,11 @@ from broker_manager import BaseBroker, BrokerType
 class MyBroker(BaseBroker):
     def __init__(self):
         super().__init__(BrokerType.MY_BROKER)
-    
+
     def connect(self):
         # Implementation
         pass
-    
+
     # ... implement other methods
 ```
 
@@ -325,11 +325,11 @@ apex_strategy = NIJAApexStrategyV71(broker_client=your_broker)
 # In trading loop
 for symbol in trading_pairs:
     df = get_candles(symbol)
-    
+
     # Option 1: Use v7.1 exclusively
     analysis = apex_strategy.analyze_market(df, symbol, balance)
     apex_strategy.execute_action(analysis, symbol)
-    
+
     # Option 2: Use v7.1 as confirmation
     # Run both old and new strategy, only trade on agreement
 ```
@@ -366,6 +366,6 @@ Same as NIJA project (MIT License)
 
 ---
 
-**Version**: 7.1  
-**Last Updated**: December 2025  
+**Version**: 7.1
+**Last Updated**: December 2025
 **Author**: NIJA Trading Systems

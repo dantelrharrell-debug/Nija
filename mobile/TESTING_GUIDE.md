@@ -62,7 +62,7 @@ npm install
    ```
 
 2. **Configure Mobile App:**
-   
+
    Edit `capacitor.config.json` for development:
    ```json
    {

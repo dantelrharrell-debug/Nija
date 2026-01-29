@@ -65,12 +65,12 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
    - API: `KRAKEN_MASTER_API_KEY` + `KRAKEN_MASTER_API_SECRET`
    - Balance: $60.59 (cached) / $60.53 (actual)
    - Status: ✅ CONNECTED & TRADING
-   
+
 2. **Daivon Frazier (KRAKEN)**
    - API: `KRAKEN_USER_DAIVON_API_KEY` + `KRAKEN_USER_DAIVON_API_SECRET`
    - Balance: $84.58
    - Status: ✅ CONNECTED & COPY TRADING
-   
+
 3. **Tania Gilbert (KRAKEN)**
    - API: `KRAKEN_USER_TANIA_API_KEY` + `KRAKEN_USER_TANIA_API_SECRET`
    - Balance: $65.87
@@ -164,11 +164,11 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
    # Master account
    KRAKEN_MASTER_API_KEY=<your-master-key>
    KRAKEN_MASTER_API_SECRET=<your-master-secret>
-   
+
    # User accounts
    KRAKEN_USER_DAIVON_API_KEY=<daivon-key>
    KRAKEN_USER_DAIVON_API_SECRET=<daivon-secret>
-   
+
    KRAKEN_USER_TANIA_API_KEY=<tania-key>
    KRAKEN_USER_TANIA_API_SECRET=<tania-secret>
    ```
@@ -238,7 +238,7 @@ The logs mention "user 1st trade was for a loss" - this is normal for the follow
 - **Copy Trade Lag**: Microseconds between master and user execution
 - **Fee Impact**: Small accounts feel exchange fees more acutely
 
-**Mitigation**: 
+**Mitigation**:
 - ✅ System learns from each trade
 - ✅ Profit-taking now VERIFIED working for users
 - ✅ Risk caps prevent catastrophic losses

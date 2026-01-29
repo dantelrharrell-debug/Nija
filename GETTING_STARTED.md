@@ -168,10 +168,10 @@ User accounts in `config/users/*.json` files are **disabled by default** (`"enab
    ```
 
 3. **Enable the user in config file:**
-   
+
    Edit `config/users/retail_kraken.json` and find the Daivon Frazier user object.
    Change `"enabled"` from `false` to `true`:
-   
+
    **Before:**
    ```json
    {
@@ -183,7 +183,7 @@ User accounts in `config/users/*.json` files are **disabled by default** (`"enab
      "description": "Retail user - Kraken crypto account (disabled - set to true after adding credentials)"
    }
    ```
-   
+
    **After:**
    ```json
    {

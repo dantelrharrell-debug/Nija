@@ -1,7 +1,7 @@
 # NIJA Platform Architecture - Complete System Design
 
-**Version:** 2.0  
-**Last Updated:** January 29, 2026  
+**Version:** 2.0
+**Last Updated:** January 29, 2026
 **Status:** ✅ Production-Ready Architecture
 
 ---
@@ -934,15 +934,15 @@ async def stripe_webhook(request: Request):
         sig_header=request.headers.get('stripe-signature'),
         secret=os.getenv('STRIPE_WEBHOOK_SECRET')
     )
-    
+
     if event['type'] == 'invoice.payment_succeeded':
         # Activate subscription
         sub_engine.activate_subscription(event['data']['object'])
-    
+
     elif event['type'] == 'invoice.payment_failed':
         # Suspend account
         sub_engine.suspend_subscription(event['data']['object'])
-    
+
     return {'status': 'success'}
 ```
 
@@ -1198,14 +1198,14 @@ app.state.limiter = limiter
 async def get_balance(request: Request):
     # Check user tier
     tier = get_user_tier(request)
-    
+
     if tier == "pro":
         # 100/minute for Pro
         pass
     elif tier == "enterprise":
         # 500/minute for Enterprise
         pass
-    
+
     return {"balance": 10000.0}
 ```
 
@@ -1402,21 +1402,21 @@ groups:
           severity: warning
         annotations:
           summary: "High error rate detected"
-          
+
       # API latency
       - alert: HighLatency
         expr: histogram_quantile(0.95, app_request_duration_seconds) > 0.5
         for: 5m
         labels:
           severity: warning
-          
+
       # Database connections
       - alert: DatabaseConnectionsHigh
         expr: db_connections > 80
         for: 5m
         labels:
           severity: critical
-          
+
       # Trading stopped
       - alert: TradingStopped
         expr: rate(trades_executed_total[15m]) == 0
@@ -1548,7 +1548,7 @@ logger.info(
 
 ---
 
-**Version:** 2.0  
-**Last Updated:** January 29, 2026  
-**Status:** ✅ Production-Ready Architecture  
+**Version:** 2.0
+**Last Updated:** January 29, 2026
+**Status:** ✅ Production-Ready Architecture
 **Maintained By:** NIJA Engineering Team

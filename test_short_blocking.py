@@ -29,28 +29,28 @@ def test_kraken_spot():
     print("\n" + "="*70)
     print("TEST 1: Kraken Spot Markets (Should Block SHORT)")
     print("="*70)
-    
+
     test_cases = [
         ('kraken', 'BTC-USD', False),
         ('kraken', 'ETH-USD', False),
         ('kraken', 'SOL-USD', False),
         ('kraken', 'DOGE-USD', False),
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for broker, symbol, expected in test_cases:
         result = can_short(broker, symbol)
         status = "✅ PASS" if result == expected else "❌ FAIL"
-        
+
         if result == expected:
             passed += 1
         else:
             failed += 1
-        
+
         print(f"{status} | {broker:10} | {symbol:15} | Expected: {str(expected):5} | Got: {str(result):5}")
-    
+
     print(f"\nResults: {passed} passed, {failed} failed")
     return failed == 0
 
@@ -60,28 +60,28 @@ def test_kraken_futures():
     print("\n" + "="*70)
     print("TEST 2: Kraken Futures/Perpetuals (Should Allow SHORT)")
     print("="*70)
-    
+
     test_cases = [
         ('kraken', 'BTC-PERP', True),
         ('kraken', 'ETH-PERP', True),
         ('kraken', 'BTCUSD-PERP', True),
         ('kraken', 'BTC-FUTURE', True),
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for broker, symbol, expected in test_cases:
         result = can_short(broker, symbol)
         status = "✅ PASS" if result == expected else "❌ FAIL"
-        
+
         if result == expected:
             passed += 1
         else:
             failed += 1
-        
+
         print(f"{status} | {broker:10} | {symbol:15} | Expected: {str(expected):5} | Got: {str(result):5}")
-    
+
     print(f"\nResults: {passed} passed, {failed} failed")
     return failed == 0
 
@@ -91,27 +91,27 @@ def test_coinbase():
     print("\n" + "="*70)
     print("TEST 3: Coinbase Markets (Should Block SHORT)")
     print("="*70)
-    
+
     test_cases = [
         ('coinbase', 'BTC-USD', False),
         ('coinbase', 'ETH-USD', False),
         ('coinbase', 'SOL-USD', False),
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for broker, symbol, expected in test_cases:
         result = can_short(broker, symbol)
         status = "✅ PASS" if result == expected else "❌ FAIL"
-        
+
         if result == expected:
             passed += 1
         else:
             failed += 1
-        
+
         print(f"{status} | {broker:10} | {symbol:15} | Expected: {str(expected):5} | Got: {str(result):5}")
-    
+
     print(f"\nResults: {passed} passed, {failed} failed")
     return failed == 0
 
@@ -121,28 +121,28 @@ def test_binance():
     print("\n" + "="*70)
     print("TEST 4: Binance Markets (Spot NO, Futures YES)")
     print("="*70)
-    
+
     test_cases = [
         ('binance', 'BTC-USDT', False),  # Spot
         ('binance', 'ETH-USDT', False),  # Spot
         ('binance', 'BTCUSDT-PERP', True),  # Perpetual
         ('binance', 'ETHUSDT-PERP', True),  # Perpetual
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for broker, symbol, expected in test_cases:
         result = can_short(broker, symbol)
         status = "✅ PASS" if result == expected else "❌ FAIL"
-        
+
         if result == expected:
             passed += 1
         else:
             failed += 1
-        
+
         print(f"{status} | {broker:10} | {symbol:15} | Expected: {str(expected):5} | Got: {str(result):5}")
-    
+
     print(f"\nResults: {passed} passed, {failed} failed")
     return failed == 0
 
@@ -152,27 +152,27 @@ def test_alpaca():
     print("\n" + "="*70)
     print("TEST 5: Alpaca Stocks (Should Allow SHORT)")
     print("="*70)
-    
+
     test_cases = [
         ('alpaca', 'AAPL', True),
         ('alpaca', 'TSLA', True),
         ('alpaca', 'SPY', True),
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for broker, symbol, expected in test_cases:
         result = can_short(broker, symbol)
         status = "✅ PASS" if result == expected else "❌ FAIL"
-        
+
         if result == expected:
             passed += 1
         else:
             failed += 1
-        
+
         print(f"{status} | {broker:10} | {symbol:15} | Expected: {str(expected):5} | Got: {str(result):5}")
-    
+
     print(f"\nResults: {passed} passed, {failed} failed")
     return failed == 0
 
@@ -182,7 +182,7 @@ def test_capability_summaries():
     print("\n" + "="*70)
     print("EXCHANGE CAPABILITY SUMMARIES")
     print("="*70)
-    
+
     for broker in ['kraken', 'coinbase', 'binance']:
         print(EXCHANGE_CAPABILITIES.get_summary(broker))
 
@@ -191,21 +191,21 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("TESTING SHORT ENTRY BLOCKING")
     print("="*70)
-    
+
     all_passed = True
-    
+
     all_passed &= test_kraken_spot()
     all_passed &= test_kraken_futures()
     all_passed &= test_coinbase()
     all_passed &= test_binance()
     all_passed &= test_alpaca()
-    
+
     test_capability_summaries()
-    
+
     print("\n" + "="*70)
     print("FINAL RESULT")
     print("="*70)
-    
+
     if all_passed:
         print("✅ ALL TESTS PASSED")
         sys.exit(0)

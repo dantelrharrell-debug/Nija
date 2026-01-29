@@ -45,7 +45,7 @@ class CompoundingConfig:
     min_profit_to_compound: float = 10.0  # Minimum profit to trigger compounding
     max_position_size_multiplier: float = 2.0  # Max position size vs base capital
     enable_milestone_locking: bool = True  # Lock in gains at milestones
-    
+
 
 @dataclass
 class CapitalSnapshot:
@@ -57,7 +57,7 @@ class CapitalSnapshot:
     reinvested_profits: float  # Profits reinvested in trading
     total_profit: float  # All-time profit
     compound_multiplier: float  # Current capital / base capital
-    
+
     @property
     def roi_percentage(self) -> float:
         """Return on Investment percentage"""
@@ -79,26 +79,26 @@ class CompoundingMetrics:
     daily_growth_rate: float = 0.0
     win_rate: float = 0.0
     profit_factor: float = 0.0
-    
-    def calculate_cagr(self, base_capital: float, current_capital: float, 
+
+    def calculate_cagr(self, base_capital: float, current_capital: float,
                       days_active: int) -> float:
         """
         Calculate Compound Annual Growth Rate
-        
+
         Formula: CAGR = ((Ending Value / Beginning Value) ^ (365/Days)) - 1
         """
         if base_capital == 0 or days_active == 0:
             return 0.0
-        
+
         if current_capital <= 0:
             return -100.0  # Total loss
-        
+
         growth_multiplier = current_capital / base_capital
         years = days_active / 365.0
-        
+
         if years <= 0:
             return 0.0
-        
+
         cagr = (growth_multiplier ** (1 / years)) - 1
         return cagr * 100  # Return as percentage
 
@@ -106,7 +106,7 @@ class CompoundingMetrics:
 class ProfitCompoundingEngine:
     """
     Manages profit compounding and capital growth
-    
+
     Responsibilities:
     1. Track base capital vs. profit separately
     2. Apply compounding strategy to profits
@@ -114,42 +114,42 @@ class ProfitCompoundingEngine:
     4. Optimize position sizing based on growth
     5. Protect capital during drawdowns
     """
-    
+
     # Data persistence
     DATA_DIR = Path(__file__).parent.parent / "data"
     COMPOUNDING_FILE = DATA_DIR / "compounding_state.json"
-    
-    def __init__(self, base_capital: float, 
+
+    def __init__(self, base_capital: float,
                  config: Optional[CompoundingConfig] = None):
         """
         Initialize Profit Compounding Engine
-        
+
         Args:
             base_capital: Starting capital amount
             config: Compounding configuration (optional)
         """
         self.config = config or CompoundingConfig()
-        
+
         # Capital tracking
         self.base_capital = base_capital
         self.total_capital = base_capital
         self.profit_reserve = 0.0  # Preserved profits
         self.reinvested_profits = 0.0  # Profits reinvested
-        
+
         # Performance tracking
         self.metrics = CompoundingMetrics()
         self.start_date = datetime.now()
-        
+
         # History tracking
         self.snapshots: List[CapitalSnapshot] = []
-        
+
         # Ensure data directory exists
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        
+
         # Load existing state or initialize
         if not self._load_state():
             self._save_snapshot("initialization")
-        
+
         logger.info("=" * 70)
         logger.info("💰 Profit Compounding Engine Initialized")
         logger.info("=" * 70)
@@ -158,32 +158,32 @@ class ProfitCompoundingEngine:
         logger.info(f"Reinvest: {self.config.reinvest_percentage*100:.0f}%")
         logger.info(f"Preserve: {self.config.preserve_percentage*100:.0f}%")
         logger.info("=" * 70)
-    
+
     def _load_state(self) -> bool:
         """Load state from persistent storage"""
         if not self.COMPOUNDING_FILE.exists():
             return False
-        
+
         try:
             with open(self.COMPOUNDING_FILE, 'r') as f:
                 data = json.load(f)
-            
+
             self.base_capital = data['base_capital']
             self.total_capital = data['total_capital']
             self.profit_reserve = data['profit_reserve']
             self.reinvested_profits = data['reinvested_profits']
             self.start_date = datetime.fromisoformat(data['start_date'])
-            
+
             # Load metrics
             metrics_data = data.get('metrics', {})
             self.metrics = CompoundingMetrics(**metrics_data)
-            
+
             logger.info(f"✅ Loaded compounding state from {self.COMPOUNDING_FILE}")
             return True
         except Exception as e:
             logger.warning(f"Failed to load compounding state: {e}")
             return False
-    
+
     def _save_state(self):
         """Save state to persistent storage"""
         try:
@@ -207,14 +207,14 @@ class ProfitCompoundingEngine:
                     'profit_factor': self.metrics.profit_factor,
                 }
             }
-            
+
             with open(self.COMPOUNDING_FILE, 'w') as f:
                 json.dump(data, f, indent=2)
-            
+
             logger.debug("💾 Compounding state saved")
         except Exception as e:
             logger.error(f"Failed to save compounding state: {e}")
-    
+
     def _save_snapshot(self, event: str):
         """Save a capital snapshot"""
         snapshot = CapitalSnapshot(
@@ -226,46 +226,46 @@ class ProfitCompoundingEngine:
             total_profit=self.total_capital - self.base_capital,
             compound_multiplier=self.total_capital / self.base_capital if self.base_capital > 0 else 1.0
         )
-        
+
         self.snapshots.append(snapshot)
-        
+
         # Keep only last 1000 snapshots to prevent unbounded growth
         if len(self.snapshots) > 1000:
             self.snapshots = self.snapshots[-1000:]
-        
+
         logger.debug(f"📸 Capital snapshot saved: {event}")
-    
+
     def record_trade(self, profit: float, fees: float, is_win: bool):
         """
         Record a completed trade and update metrics
-        
+
         Args:
             profit: Gross profit from trade (before fees)
             fees: Fees paid for trade
             is_win: True if trade was profitable
         """
         net_profit = profit - fees
-        
+
         # Update metrics
         self.metrics.total_trades += 1
         if is_win:
             self.metrics.winning_trades += 1
-        
+
         self.metrics.total_profit += profit
         self.metrics.total_fees += fees
         self.metrics.net_profit += net_profit
-        
+
         # Calculate win rate
         if self.metrics.total_trades > 0:
             self.metrics.win_rate = (self.metrics.winning_trades / self.metrics.total_trades) * 100
-        
+
         # Update total capital
         self.total_capital += net_profit
-        
+
         # Apply compounding strategy if profit threshold met
         if net_profit >= self.config.min_profit_to_compound:
             self._compound_profit(net_profit)
-        
+
         # Update CAGR
         days_active = (datetime.now() - self.start_date).days
         self.metrics.days_active = max(1, days_active)  # Minimum 1 day
@@ -274,86 +274,86 @@ class ProfitCompoundingEngine:
             self.total_capital,
             self.metrics.days_active
         )
-        
+
         # Calculate daily growth rate
         if self.metrics.days_active > 0:
             total_growth = (self.total_capital / self.base_capital) - 1
             self.metrics.daily_growth_rate = (total_growth / self.metrics.days_active) * 100
-        
+
         self._save_state()
-        
+
         logger.info(f"📊 Trade Recorded: P/L=${net_profit:.2f}, Win={is_win}")
         logger.info(f"   Total Capital: ${self.total_capital:.2f} ({self.get_roi_percentage():.2f}% ROI)")
-    
+
     def _compound_profit(self, net_profit: float):
         """
         Apply compounding strategy to profit
-        
+
         Args:
             net_profit: Net profit to compound
         """
         # Calculate amounts based on strategy
         reinvest_amount = net_profit * self.config.reinvest_percentage
         preserve_amount = net_profit * self.config.preserve_percentage
-        
+
         # Update tracking
         self.reinvested_profits += reinvest_amount
         self.profit_reserve += preserve_amount
-        
+
         logger.info(f"💰 Compounding Profit: ${net_profit:.2f}")
         logger.info(f"   Reinvested: ${reinvest_amount:.2f} ({self.config.reinvest_percentage*100:.0f}%)")
         logger.info(f"   Preserved: ${preserve_amount:.2f} ({self.config.preserve_percentage*100:.0f}%)")
         logger.info(f"   Total Reinvested: ${self.reinvested_profits:.2f}")
         logger.info(f"   Total Preserved: ${self.profit_reserve:.2f}")
-        
+
         self._save_snapshot("profit_compounded")
-    
+
     def get_tradeable_capital(self) -> float:
         """
         Get capital available for trading (base + reinvested profits)
-        
+
         Returns:
             Tradeable capital in USD
         """
         return self.base_capital + self.reinvested_profits
-    
+
     def get_roi_percentage(self) -> float:
         """Get return on investment percentage"""
         if self.base_capital == 0:
             return 0.0
         total_profit = self.total_capital - self.base_capital
         return (total_profit / self.base_capital) * 100
-    
+
     def get_compound_multiplier(self) -> float:
         """Get capital growth multiplier (current / base)"""
         if self.base_capital == 0:
             return 1.0
         return self.total_capital / self.base_capital
-    
-    def get_optimal_position_size(self, base_position_pct: float, 
+
+    def get_optimal_position_size(self, base_position_pct: float,
                                   available_balance: float) -> float:
         """
         Calculate optimal position size with compounding adjustment
-        
+
         Args:
             base_position_pct: Base position size as % (e.g., 0.05 for 5%)
             available_balance: Current available balance
-            
+
         Returns:
             Optimal position size in USD
         """
         # Calculate base position
         base_position = available_balance * base_position_pct
-        
+
         # Apply compound multiplier (but cap at max)
         multiplier = min(self.get_compound_multiplier(), self.config.max_position_size_multiplier)
-        
+
         # Adjusted position size
         adjusted_position = base_position * multiplier
-        
+
         # Never exceed available balance
         return min(adjusted_position, available_balance)
-    
+
     def get_compounding_report(self) -> str:
         """Generate detailed compounding report"""
         report = [
@@ -364,7 +364,7 @@ class ProfitCompoundingEngine:
             f"Days Active: {self.metrics.days_active}",
             ""
         ]
-        
+
         # Capital breakdown
         total_profit = self.total_capital - self.base_capital
         report.extend([
@@ -380,7 +380,7 @@ class ProfitCompoundingEngine:
             f"  Compound Multiplier:  {self.get_compound_multiplier():>12.2f}x",
             ""
         ])
-        
+
         # Trading metrics
         report.extend([
             "📊 TRADING PERFORMANCE",
@@ -393,7 +393,7 @@ class ProfitCompoundingEngine:
             f"  Net Profit:           ${self.metrics.net_profit:>12,.2f}",
             ""
         ])
-        
+
         # Growth metrics
         report.extend([
             "📈 COMPOUND GROWTH METRICS",
@@ -403,7 +403,7 @@ class ProfitCompoundingEngine:
             f"  Capital Velocity:     ${self.metrics.net_profit / max(1, self.metrics.days_active):>12.2f}/day",
             ""
         ])
-        
+
         # Compounding strategy
         report.extend([
             "⚙️  COMPOUNDING STRATEGY",
@@ -414,7 +414,7 @@ class ProfitCompoundingEngine:
             f"  Max Position Multiplier: {self.config.max_position_size_multiplier:>12.1f}x",
             ""
         ])
-        
+
         # Projections (if positive growth)
         if self.metrics.cagr > 0 and self.metrics.days_active >= 7:
             # Project 30, 90, 365 days forward
@@ -422,24 +422,24 @@ class ProfitCompoundingEngine:
                 future_capital = self.total_capital * ((1 + self.metrics.cagr/100) ** (days/365))
                 future_profit = future_capital - self.base_capital
                 report.append(f"  Projected {days:3d} days:  ${future_capital:>12,.2f} (+${future_profit:>10,.2f})")
-        
+
         report.append("=" * 90 + "\n")
-        
+
         return "\n".join(report)
-    
+
     def update_balance(self, new_balance: float):
         """
         Update total capital with new balance
-        
+
         Args:
             new_balance: New total balance
         """
         old_balance = self.total_capital
         self.total_capital = new_balance
-        
+
         # Recalculate profit components
         total_profit = new_balance - self.base_capital
-        
+
         logger.debug(f"💰 Balance updated: ${old_balance:.2f} → ${new_balance:.2f}")
         self._save_state()
 
@@ -448,16 +448,16 @@ def get_compounding_engine(base_capital: float,
                           strategy: str = "moderate") -> ProfitCompoundingEngine:
     """
     Get or create profit compounding engine instance
-    
+
     Args:
         base_capital: Starting capital
         strategy: Compounding strategy (conservative/moderate/aggressive/full_compound)
-        
+
     Returns:
         ProfitCompoundingEngine instance
     """
     strategy_enum = CompoundingStrategy(strategy.lower())
-    
+
     # Create config based on strategy
     if strategy_enum == CompoundingStrategy.CONSERVATIVE:
         config = CompoundingConfig(
@@ -483,7 +483,7 @@ def get_compounding_engine(base_capital: float,
             reinvest_percentage=1.00,
             preserve_percentage=0.00
         )
-    
+
     return ProfitCompoundingEngine(base_capital, config)
 
 
@@ -493,28 +493,28 @@ if __name__ == "__main__":
         level=logging.INFO,
         format='%(levelname)s - %(message)s'
     )
-    
+
     # Create engine with $1000 base capital
     engine = get_compounding_engine(1000.0, "moderate")
-    
+
     # Simulate some trades
     print("\nSimulating trades...\n")
-    
+
     # Winning trade: $50 profit, $2 fees
     engine.record_trade(profit=50.0, fees=2.0, is_win=True)
-    
+
     # Winning trade: $30 profit, $1.5 fees
     engine.record_trade(profit=30.0, fees=1.5, is_win=True)
-    
+
     # Losing trade: -$20 loss, $1 fees
     engine.record_trade(profit=-20.0, fees=1.0, is_win=False)
-    
+
     # Big winner: $100 profit, $3 fees
     engine.record_trade(profit=100.0, fees=3.0, is_win=True)
-    
+
     # Print report
     print(engine.get_compounding_report())
-    
+
     # Test position sizing
     print("\nPosition Sizing Examples:")
     print(f"5% of ${engine.get_tradeable_capital():.2f} = ${engine.get_optimal_position_size(0.05, engine.get_tradeable_capital()):.2f}")

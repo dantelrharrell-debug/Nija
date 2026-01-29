@@ -29,13 +29,13 @@ _CORE_ACCESS_VERIFIED = False
 def verify_core_access(module_name: str) -> bool:
     """
     Verify that calling module has permission to access core layer.
-    
+
     Args:
         module_name: Name of the module requesting access
-    
+
     Returns:
         bool: True if access is allowed
-    
+
     Raises:
         PermissionError: If unauthorized access is attempted
     """
@@ -46,11 +46,11 @@ def verify_core_access(module_name: str) -> bool:
         'bot.',  # Legacy compatibility
         '__main__',
     ]
-    
+
     for prefix in allowed_prefixes:
         if module_name.startswith(prefix) or module_name == prefix:
             return True
-    
+
     # Deny all other access
     raise PermissionError(
         f"Unauthorized access to core layer from module: {module_name}. "

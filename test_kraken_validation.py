@@ -20,7 +20,7 @@ def test_tier_detection():
     print("\n" + "="*60)
     print("TEST 1: Tier Detection")
     print("="*60)
-    
+
     test_cases = [
         (5, "Below minimum"),
         (10, TradingTier.SAVER),
@@ -35,7 +35,7 @@ def test_tier_detection():
         (5000, TradingTier.BALLER),
         (10000, TradingTier.BALLER),
     ]
-    
+
     for balance, expected in test_cases:
         tier = get_tier_from_balance(balance)
         status = "✅" if tier == expected or (balance < 10 and expected == "Below minimum") else "❌"
@@ -47,7 +47,7 @@ def test_tier_validation():
     print("\n" + "="*60)
     print("TEST 2: Tier Trade Size Validation")
     print("="*60)
-    
+
     test_cases = [
         # (balance, trade_size, should_pass)
         # Test minimum trade sizes per tier
@@ -65,11 +65,11 @@ def test_tier_validation():
         (5000, 50.0, True), # BALLER: $50 is 1% of $5000 (within limits)
         (5000, 500.0, False),# BALLER: $500 is 10% of $5000 (exceeds 2% max risk)
     ]
-    
+
     for balance, trade_size, should_pass in test_cases:
         tier = get_tier_from_balance(balance)
         is_valid, reason = validate_trade_size(trade_size, tier, balance)
-        
+
         status = "✅" if is_valid == should_pass else "❌"
         result = "PASS" if is_valid else "FAIL"
         print(f"{status} [{tier.value:>8}] ${balance:>6.2f} balance, ${trade_size:>5.2f} trade → {result}")
@@ -82,10 +82,10 @@ def test_broker_adapter_validation():
     print("\n" + "="*60)
     print("TEST 3: Broker Adapter Validation")
     print("="*60)
-    
+
     # Test Kraken adapter
     kraken_adapter = BrokerAdapterFactory.create_adapter("kraken")
-    
+
     test_cases = [
         # (symbol, side, size_usd, should_pass, reason)
         ("BTC-USD", "buy", 5.0, False, "Below Kraken $10 min"),
@@ -95,7 +95,7 @@ def test_broker_adapter_validation():
         ("SOL-USDT", "buy", 20.0, True, "Valid USDT pair"),
         ("XRP-BUSD", "buy", 10.0, False, "Kraken doesn't support BUSD"),
     ]
-    
+
     for symbol, side, size_usd, should_pass, description in test_cases:
         intent_type = OrderIntent.BUY if side == "buy" else OrderIntent.SELL
         intent = TradeIntent(
@@ -107,11 +107,11 @@ def test_broker_adapter_validation():
             force_execute=False,
             reason="Test"
         )
-        
+
         validated = kraken_adapter.validate_and_adjust(intent)
         status = "✅" if validated.valid == should_pass else "❌"
         result = "PASS" if validated.valid else "FAIL"
-        
+
         print(f"{status} {symbol:>10} {side:>4} ${size_usd:>5.2f} → {result}")
         print(f"     {description}")
         if not validated.valid and validated.error_message:
@@ -126,9 +126,9 @@ def test_symbol_conversion():
     print("\n" + "="*60)
     print("TEST 4: Symbol Conversion")
     print("="*60)
-    
+
     adapter = BrokerAdapterFactory.create_adapter("kraken")
-    
+
     test_cases = [
         ("BTC-USD", "BTC/USD"),
         ("ETH/USDT", "ETH/USDT"),
@@ -136,7 +136,7 @@ def test_symbol_conversion():
         ("XRP.USD", "XRP/USD"),
         ("ADAUSD", "ADA/USD"),  # No separator case
     ]
-    
+
     for input_symbol, expected_output in test_cases:
         normalized = adapter.normalize_symbol(input_symbol)
         status = "✅" if normalized == expected_output else "⚠️"
@@ -148,13 +148,13 @@ def main():
     print("\n" + "="*60)
     print("NIJA KRAKEN VALIDATION & TIER ENFORCEMENT TESTS")
     print("="*60)
-    
+
     try:
         test_tier_detection()
         test_tier_validation()
         test_broker_adapter_validation()
         test_symbol_conversion()
-        
+
         print("\n" + "="*60)
         print("✅ ALL TESTS COMPLETED")
         print("="*60)
@@ -165,13 +165,13 @@ def main():
         print("  2. Start with a small test trade ($10-$20)")
         print("  3. Check logs for validation messages")
         print("  4. Verify trade in Kraken UI")
-        
+
     except Exception as e:
         print(f"\n❌ TEST FAILED: {e}")
         import traceback
         traceback.print_exc()
         return 1
-    
+
     return 0
 
 
