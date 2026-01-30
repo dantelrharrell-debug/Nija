@@ -243,6 +243,10 @@ class CommandCenterMetrics:
                     'slippage_usd': slippage,
                     'slippage_bps': (slippage / size) * 10000 if size > 0 else 0
                 })
+            
+            # Auto-save state after trades (every 10 trades to avoid excessive I/O)
+            if len(self.trades) % 10 == 0:
+                self._save_state()
     
     def record_signal(self, success: bool):
         """
@@ -301,10 +305,19 @@ class CommandCenterMetrics:
         Calculate risk heat (0-100 scale).
         
         Risk heat considers:
-        - Current drawdown
-        - Position concentration
-        - Leverage
-        - Recent losses
+        - Current drawdown (weighted 2x - primary risk indicator)
+        - Position concentration (weighted 0.5x - secondary risk indicator)
+        
+        Formula: min(100, (current_dd_pct * 2) + (concentration * 0.5))
+        - A 25% drawdown alone yields 50 points (MODERATE risk)
+        - 100% position concentration adds 50 points
+        - Combined, both maxed would exceed 100 (capped at 100)
+        
+        Risk Levels:
+        - LOW (0-25): Safe trading conditions
+        - MODERATE (25-50): Normal risk levels
+        - HIGH (50-75): Elevated risk, caution advised
+        - CRITICAL (75-100): Dangerous levels, reduce exposure
         
         Returns:
             Dictionary with risk heat metrics
@@ -359,10 +372,20 @@ class CommandCenterMetrics:
         Calculate trade quality score (0-100 scale).
         
         Trade quality considers:
-        - Win rate
-        - Profit factor
-        - Win/loss ratio
-        - Consistency
+        - Win rate (weighted 40%, scaled 1.5x)
+          * 66.7% win rate = perfect 100 score component
+        - Profit factor (weighted 40%, scaled 30x)
+          * 3.33 profit factor = perfect 100 score component
+        - Win/loss ratio (weighted 20%, scaled 40x)
+          * 2.5 win/loss ratio = perfect 100 score component
+        
+        Grading Scale:
+        - A+ (95-100): Exceptional trading
+        - A  (90-94):  Excellent trading
+        - B  (80-89):  Good trading
+        - C  (70-79):  Average trading
+        - D  (60-69):  Below average trading
+        - F  (<60):    Poor trading
         
         Returns:
             Dictionary with trade quality metrics
@@ -521,9 +544,21 @@ class CommandCenterMetrics:
         Calculate strategy efficiency (0-100 scale).
         
         Efficiency considers:
-        - Trade frequency
-        - Win rate
-        - Capital utilization
+        - Trade frequency (30% weight, scaled 10x)
+          * 10 trades/day = optimal activity level = 100 score component
+        - Win rate (50% weight, direct)
+          * Higher win rate directly improves efficiency
+        - Capital utilization (20% weight, direct %)
+          * Percentage of capital actively deployed in trades
+        
+        Formula: min(100, (
+            min(100, trades_per_day * 10) * 0.3 +
+            win_rate * 0.5 +
+            min(100, capital_utilization) * 0.2
+        ))
+        
+        Note: The 10 trades/day target may need adjustment based on
+        trading strategy (day trading vs swing trading vs position trading).
         
         Returns:
             Dictionary with strategy efficiency metrics
@@ -575,6 +610,8 @@ class CommandCenterMetrics:
         """
         Calculate capital growth velocity (annualized growth rate).
         
+        Uses compound growth formula for accurate annualization.
+        
         Returns:
             Dictionary with growth velocity metrics
         """
@@ -596,15 +633,21 @@ class CommandCenterMetrics:
         days_elapsed = (last_time - first_time).days
         days_elapsed = max(1, days_elapsed)
         
-        # Daily growth rate
+        # Total return
         total_return = ((last_equity - first_equity) / first_equity) if first_equity > 0 else 0
+        
+        # Daily growth rate (simple)
         daily_rate = (total_return / days_elapsed) * 100
         
         # Monthly growth rate (30 days)
         monthly_rate = daily_rate * 30
         
-        # Annualized growth rate (365 days)
-        annualized_rate = daily_rate * 365
+        # Annualized growth rate using compound formula
+        # Formula: ((final/initial)^(365/days) - 1) * 100
+        if first_equity > 0 and last_equity > 0:
+            annualized_rate = ((last_equity / first_equity) ** (365 / days_elapsed) - 1) * 100
+        else:
+            annualized_rate = 0.0
         
         return {
             'growth_velocity': annualized_rate,
@@ -738,22 +781,42 @@ class CommandCenterMetrics:
                 with open(self.data_file, 'r') as f:
                     state = json.load(f)
                 
-                self.initial_capital = state.get('initial_capital', self.initial_capital)
-                self.current_equity = state.get('current_equity', self.current_equity)
-                self.equity_peak = state.get('equity_peak', self.equity_peak)
-                self.winning_trades = state.get('winning_trades', 0)
-                self.losing_trades = state.get('losing_trades', 0)
-                self.total_profit = state.get('total_profit', 0.0)
-                self.total_loss = state.get('total_loss', 0.0)
-                self.total_fees = state.get('total_fees', 0.0)
-                self.signals_total = state.get('signals_total', 0)
-                self.signals_successful = state.get('signals_successful', 0)
-                self.signals_failed = state.get('signals_failed', 0)
-                self.equity_history = deque(state.get('equity_history', []), maxlen=self.lookback_days * 24)
-                self.trades = state.get('trades', [])
-                self.slippage_data = state.get('slippage_data', [])
+                # Validate and load with defaults
+                self.initial_capital = max(0.0, state.get('initial_capital', self.initial_capital))
+                self.current_equity = max(0.0, state.get('current_equity', self.current_equity))
+                self.equity_peak = max(0.0, state.get('equity_peak', self.equity_peak))
+                
+                # Ensure peak >= current
+                if self.equity_peak < self.current_equity:
+                    self.equity_peak = self.current_equity
+                
+                # Load counts with validation
+                self.winning_trades = max(0, state.get('winning_trades', 0))
+                self.losing_trades = max(0, state.get('losing_trades', 0))
+                self.total_profit = max(0.0, state.get('total_profit', 0.0))
+                self.total_loss = max(0.0, state.get('total_loss', 0.0))
+                self.total_fees = max(0.0, state.get('total_fees', 0.0))
+                self.signals_total = max(0, state.get('signals_total', 0))
+                self.signals_successful = max(0, state.get('signals_successful', 0))
+                self.signals_failed = max(0, state.get('signals_failed', 0))
+                
+                # Load history with validation
+                equity_history = state.get('equity_history', [])
+                if isinstance(equity_history, list):
+                    self.equity_history = deque(equity_history, maxlen=self.lookback_days * 24)
+                
+                trades = state.get('trades', [])
+                if isinstance(trades, list):
+                    self.trades = trades
+                
+                slippage_data = state.get('slippage_data', [])
+                if isinstance(slippage_data, list):
+                    self.slippage_data = slippage_data
                 
                 logger.info("✅ Loaded Command Center state from disk")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Command Center state (corrupted JSON): {e}")
+            logger.warning("Starting with fresh state")
         except Exception as e:
             logger.warning(f"Could not load Command Center state: {e}")
 
