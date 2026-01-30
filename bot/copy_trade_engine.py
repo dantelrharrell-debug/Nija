@@ -71,13 +71,15 @@ class CopyTradeEngine:
     - Observe mode: Tracks balances, positions, P&L but does NOT execute trades
     """
 
-    def __init__(self, multi_account_manager=None, observe_only=False):
+    def __init__(self, multi_account_manager=None, observe_only=False, max_slippage_pct=2.0, balance_buffer_pct=1.0):
         """
         Initialize the copy trade engine.
 
         Args:
             multi_account_manager: MultiAccountBrokerManager instance (uses global if None)
             observe_only: If True, track signals but don't execute trades (observe mode)
+            max_slippage_pct: Maximum allowed price slippage % from master entry (default: 2.0%)
+            balance_buffer_pct: Additional balance buffer % for fees (default: 1.0%)
         """
         self.multi_account_manager = multi_account_manager or multi_account_broker_manager
         self.signal_emitter = get_signal_emitter()
@@ -88,6 +90,10 @@ class CopyTradeEngine:
         self._total_signals_observed = 0  # Track signals in observe mode
         self._lock = threading.Lock()
         self.observe_only = observe_only
+        
+        # Follower safeguard configuration
+        self.max_slippage_pct = max_slippage_pct
+        self.balance_buffer_pct = balance_buffer_pct
 
         # P2: Initialize trade ledger for copy trade map visibility
         try:
@@ -605,43 +611,58 @@ class CopyTradeEngine:
             # These safeguards protect individual followers without affecting master
             # Each follower executes independently with their own validation
             
-            # 1. SLIPPAGE PROTECTION: Validate price hasn't moved too much from master entry
+            # Get current price for validation (used by multiple checks below)
+            current_price = None
             if signal.price and hasattr(user_broker, 'get_last_price'):
                 try:
                     current_price = user_broker.get_last_price(normalized_symbol)
-                    if current_price and current_price > 0:
-                        price_change_pct = abs((current_price - signal.price) / signal.price) * 100
-                        max_slippage_pct = 2.0  # Maximum allowed price movement (configurable)
-                        
-                        if price_change_pct > max_slippage_pct:
-                            error_msg = f"Price moved {price_change_pct:.2f}% (limit: {max_slippage_pct}%), master: ${signal.price:.6f}, current: ${current_price:.6f}"
-                            logger.warning(f"      ⚠️  Slippage protection: {error_msg}")
-                            logger.warning(f"      Skipping trade to protect follower from excessive slippage")
-                            return CopyTradeResult(
-                                user_id=user_id,
-                                success=False,
-                                order_id=None,
-                                error_message=error_msg,
-                                size=user_size_rounded,
-                                size_type=signal.size_type
-                            )
-                        else:
-                            logger.info(f"      ✅ Slippage check passed: {price_change_pct:.2f}% (limit: {max_slippage_pct}%)")
+                except Exception as e:
+                    logger.debug(f"      Could not fetch current price: {e}")
+            
+            # Use current price if available, otherwise fall back to signal price
+            validation_price = current_price if current_price and current_price > 0 else signal.price
+            
+            # 1. SLIPPAGE PROTECTION: Validate price hasn't moved too much from master entry
+            if signal.price and current_price and current_price > 0:
+                try:
+                    price_change_pct = abs((current_price - signal.price) / signal.price) * 100
+                    
+                    if price_change_pct > self.max_slippage_pct:
+                        error_msg = f"Price moved {price_change_pct:.2f}% (limit: {self.max_slippage_pct}%), master: ${signal.price:.6f}, current: ${current_price:.6f}"
+                        logger.warning(f"      ⚠️  Slippage protection: {error_msg}")
+                        logger.warning(f"      Skipping trade to protect follower from excessive slippage")
+                        return CopyTradeResult(
+                            user_id=user_id,
+                            success=False,
+                            order_id=None,
+                            error_message=error_msg,
+                            size=user_size_rounded,
+                            size_type=signal.size_type
+                        )
+                    else:
+                        logger.info(f"      ✅ Slippage check passed: {price_change_pct:.2f}% (limit: {self.max_slippage_pct}%)")
                 except Exception as e:
                     logger.debug(f"      Could not validate slippage: {e}")
-                    # Fail-safe: Continue with trade (some brokers may not support get_last_price)
+                    # Fail-safe: Continue with trade
             
             # 2. BALANCE SUFFICIENCY: Ensure user has enough free balance for the order
-            if signal.side.lower() == 'buy':
-                try:
-                    free_balance = balance_data.get('available_balance', user_balance)
-                    required_balance = user_size_rounded if signal.size_type == 'quote' else user_size_rounded * (current_price if 'current_price' in locals() else signal.price)
+            try:
+                free_balance = balance_data.get('available_balance', user_balance)
+                
+                if signal.side.lower() == 'buy':
+                    # BUY orders: Need quote currency (USD)
+                    if signal.size_type == 'quote':
+                        required_balance = user_size_rounded
+                    else:
+                        # If size is in base currency, calculate USD value
+                        required_balance = user_size_rounded * validation_price
                     
-                    # Add 1% buffer for fees and price movement
-                    required_with_buffer = required_balance * 1.01
+                    # Add buffer for fees and price movement
+                    buffer_multiplier = 1 + (self.balance_buffer_pct / 100)
+                    required_with_buffer = required_balance * buffer_multiplier
                     
                     if free_balance < required_with_buffer:
-                        error_msg = f"Insufficient balance: ${free_balance:.2f} available, ${required_with_buffer:.2f} required (includes 1% buffer)"
+                        error_msg = f"Insufficient balance: ${free_balance:.2f} available, ${required_with_buffer:.2f} required (includes {self.balance_buffer_pct}% buffer)"
                         logger.warning(f"      ⚠️  Balance check failed: {error_msg}")
                         return CopyTradeResult(
                             user_id=user_id,
@@ -653,9 +674,22 @@ class CopyTradeEngine:
                         )
                     else:
                         logger.info(f"      ✅ Balance check passed: ${free_balance:.2f} available, ${required_with_buffer:.2f} required")
-                except Exception as e:
-                    logger.debug(f"      Could not validate balance sufficiency: {e}")
-                    # Fail-safe: Continue with trade (broker's execute_order will catch insufficient balance)
+                
+                elif signal.side.lower() == 'sell':
+                    # SELL orders: Need base currency (e.g., BTC)
+                    # Note: For SELL, we check if user has sufficient base currency to sell
+                    # The exact validation depends on whether we're selling all or partial position
+                    # Broker's execute_order will perform final validation of holdings
+                    if signal.size_type == 'base':
+                        # Size is already in base currency - broker will validate holdings
+                        logger.debug(f"      SELL order validation: Broker will verify {user_size_rounded} {normalized_symbol} holdings")
+                    else:
+                        # Size is in quote currency - broker will convert and validate
+                        logger.debug(f"      SELL order validation: Broker will verify holdings for ${user_size_rounded} sell")
+                    
+            except Exception as e:
+                logger.debug(f"      Could not validate balance sufficiency: {e}")
+                # Fail-safe: Continue with trade (broker's execute_order will catch insufficient balance)
             
             # 3. MINIMUM ORDER SIZE: Validate against exchange-specific minimums
             # This is additional to the dust threshold check above
@@ -679,8 +713,8 @@ class CopyTradeEngine:
                     logger.debug(f"      Could not validate min order size: {e}")
                     # Fail-safe: Continue with trade (broker's execute_order will catch min size violations)
             
-            # All follower safeguards passed - proceed with trade execution
-            logger.info(f"      📤 Placing {signal.side.upper()} order (follower executes independently)...")
+            # All follower safeguards passed - proceed with order execution
+            logger.info(f"      📤 Placing {signal.side.upper()} order...")
 
             order_result = user_broker.execute_order(
                 symbol=normalized_symbol,  # Use normalized symbol
