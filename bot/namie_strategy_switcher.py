@@ -366,15 +366,15 @@ class NAMIEStrategySwitcher:
         pnl_usd = size_usd * pnl_pct - commission
         is_win = pnl_usd > 0
         
-        # Get or create performance tracker
-        perf_key = (strategy, regime)
-        if perf_key not in self.performance_by_strategy_regime:
-            self.performance_by_strategy_regime[perf_key] = StrategyPerformance(
+        # Get or create performance tracker (key = strategy + regime combination)
+        strategy_regime_key = (strategy, regime)
+        if strategy_regime_key not in self.performance_by_strategy_regime:
+            self.performance_by_strategy_regime[strategy_regime_key] = StrategyPerformance(
                 strategy=strategy,
                 regime=regime
             )
         
-        perf = self.performance_by_strategy_regime[perf_key]
+        perf = self.performance_by_strategy_regime[strategy_regime_key]
         
         # Update metrics
         perf.total_trades += 1
@@ -387,11 +387,21 @@ class NAMIEStrategySwitcher:
         perf.total_commission += commission
         
         # Track drawdown
+        # Initialize peak equity to first trade if not set
+        if perf.peak_equity == 0.0 and pnl_usd != 0:
+            perf.peak_equity = max(0.0, pnl_usd)
+        
+        # Update peak equity if we hit a new high
         if perf.total_pnl > perf.peak_equity:
             perf.peak_equity = perf.total_pnl
         
-        perf.current_drawdown = (perf.peak_equity - perf.total_pnl) / perf.peak_equity \
-                                if perf.peak_equity > 0 else 0.0
+        # Calculate current drawdown
+        # Only calculate if we have a positive peak (otherwise drawdown is meaningless)
+        if perf.peak_equity > 0:
+            perf.current_drawdown = (perf.peak_equity - perf.total_pnl) / perf.peak_equity
+        else:
+            # If peak is 0 or negative, set drawdown to 0 (no meaningful drawdown)
+            perf.current_drawdown = 0.0
         
         if perf.current_drawdown > perf.max_drawdown:
             perf.max_drawdown = perf.current_drawdown
