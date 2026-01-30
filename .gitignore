@@ -48,6 +48,14 @@ security-reports/
 chaos-results/
 all-reports/
 all-chaos-results/
+
+# KPI Dashboard data directories
+bot/data/kpi/
+bot/data/performance/
+bot/data/risk_alarms/
+data/kpi/
+data/performance/
+data/risk_alarms/
 reports/
 *.sha256
 *-report.json
