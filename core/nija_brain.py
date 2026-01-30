@@ -46,6 +46,7 @@ class NIJABrain:
         self.execution_intelligence = None
         self.learning_engine = None
         self.metrics_engine = None
+        self.auto_optimizer = None
 
         self._initialize_components()
 
@@ -86,6 +87,16 @@ class NIJABrain:
             logger.info("✅ Investor Metrics Engine online")
         except Exception as e:
             logger.error(f"Failed to initialize metrics engine: {e}")
+
+        try:
+            from bot.auto_optimization_engine import get_auto_optimizer
+            self.auto_optimizer = get_auto_optimizer(
+                state_dir=self.config.get('optimization_state_dir', './data/optimization'),
+                config=self.config.get('auto_optimization')
+            )
+            logger.info("✅ Auto-Optimization Engine online")
+        except Exception as e:
+            logger.error(f"Failed to initialize auto-optimization engine: {e}")
 
     def analyze_opportunity(self, symbol: str, df: pd.DataFrame,
                           indicators: Dict, broker_name: str = "coinbase") -> Dict[str, Any]:
@@ -214,6 +225,16 @@ class NIJABrain:
         Args:
             trade_data: Complete trade information
         """
+        # Record with auto-optimizer
+        if self.auto_optimizer:
+            try:
+                self.auto_optimizer.record_trade_result(
+                    strategy_name=trade_data.get('strategy_id', 'unknown'),
+                    trade_result=trade_data
+                )
+            except Exception as e:
+                logger.error(f"Error recording trade with auto-optimizer: {e}")
+
         # Record with learning engine
         if self.learning_engine:
             try:
@@ -287,7 +308,8 @@ class NIJABrain:
                 'orchestrator': self.orchestrator is not None,
                 'execution_intelligence': self.execution_intelligence is not None,
                 'learning_engine': self.learning_engine is not None,
-                'metrics_engine': self.metrics_engine is not None
+                'metrics_engine': self.metrics_engine is not None,
+                'auto_optimizer': self.auto_optimizer is not None
             }
         }
 
@@ -310,6 +332,10 @@ class NIJABrain:
         if self.metrics_engine:
             report['investor_metrics'] = self.metrics_engine.generate_investor_report()
 
+        # Auto-optimization status
+        if self.auto_optimizer:
+            report['auto_optimization'] = self.auto_optimizer.get_status()
+
         return report
 
     def perform_daily_review(self):
@@ -328,6 +354,13 @@ class NIJABrain:
                 logger.info(f"💡 {len(suggestions)} optimization suggestions available")
                 for sugg in suggestions:
                     logger.info(f"   - {sugg['parameter']}: {sugg['reason']}")
+
+        # Check auto-optimization status
+        if self.auto_optimizer:
+            optimizer_status = self.auto_optimizer.get_status()
+            logger.info(f"🤖 Auto-Optimizer: {optimizer_status['state']} - Score: {optimizer_status['current_performance_score']:.2f}")
+            if optimizer_status.get('current_cycle'):
+                logger.info(f"   Active optimization cycle: {optimizer_status['current_cycle']}")
 
         logger.info("✅ Daily review complete")
 
