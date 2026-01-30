@@ -324,13 +324,29 @@ class CopyTradeEngine:
         # Get all user accounts for this broker
         user_brokers = self.multi_account_manager.user_brokers
 
+        # MASTER-ONLY GUARD: Check if master is trading without any followers
         if not user_brokers:
             logger.warning("=" * 70)
-            logger.warning("⚠️  NO USER ACCOUNTS CONFIGURED")
+            logger.warning("🔒 MASTER-ONLY MODE ACTIVE")
             logger.warning("=" * 70)
+            logger.warning("   ⚠️  NO FOLLOWERS ATTACHED")
             logger.warning("   No user accounts are configured to receive copy trades")
-            logger.warning("   Only MASTER account will trade")
-            logger.warning("   💡 To enable copy trading, add user accounts in config/users/")
+            logger.warning("")
+            logger.warning("   📊 CURRENT STATUS:")
+            logger.warning(f"      Master Broker: {signal.broker.upper()}")
+            logger.warning(f"      Master Signal: {signal.side.upper()} {signal.symbol}")
+            logger.warning(f"      Follower Count: 0")
+            logger.warning("")
+            logger.warning("   ⚡ MASTER-ONLY GUARD:")
+            logger.warning("      ✓ Master account will execute trade independently")
+            logger.warning("      ✓ No copy trades will be distributed")
+            logger.warning("      ✓ Master profits are not shared with followers")
+            logger.warning("")
+            logger.warning("   💡 TO ACTIVATE COPY TRADING:")
+            logger.warning("      1. Add user accounts in config/users/")
+            logger.warning("      2. Configure user brokers with API credentials")
+            logger.warning("      3. Set COPY_TRADING_MODE=MASTER_FOLLOW for users")
+            logger.warning("      4. Ensure users have PRO_MODE=true")
             logger.warning("=" * 70)
             return results
 
