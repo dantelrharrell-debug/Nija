@@ -352,4 +352,6 @@ if __name__ == '__main__':
     print("\n" + "="*70)
     print("\n🚀 Starting server on http://localhost:5000\n")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # NOTE: debug=True is for development/testing only
+    # In production, set debug=False for security
+    app.run(host='0.0.0.0', port=5000, debug=False)
