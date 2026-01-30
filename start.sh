@@ -24,17 +24,17 @@ $PY --version 2>&1
 # Ensure Python version output is flushed
 sleep 0.05
 
-# Test Coinbase module
-$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')" 2>&1 || {
-    echo "❌ Coinbase REST client not available - check requirements.txt installation"
-    exit 1
+# Test Coinbase module (OPTIONAL - Coinbase is disabled, Jan 30, 2026)
+# Keeping this check for now in case user needs to re-enable Coinbase
+$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available (currently disabled)')" 2>&1 || {
+    echo "⚠️  Coinbase REST client not available (this is OK - Coinbase is disabled)"
 }
 
 # Ensure output is flushed
 sleep 0.05
 
-# Test Kraken module
-# CRITICAL: If Kraken Master credentials are set, SDK MUST be installed
+# Test Kraken module (REQUIRED - Kraken is PRIMARY broker)
+# CRITICAL: Kraken Master credentials MUST be set
 if [ -n "${KRAKEN_MASTER_API_KEY}" ] && [ -n "${KRAKEN_MASTER_API_SECRET}" ]; then
     $PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" 2>&1 || {
         echo ""
@@ -56,8 +56,23 @@ if [ -n "${KRAKEN_MASTER_API_KEY}" ] && [ -n "${KRAKEN_MASTER_API_SECRET}" ]; th
         exit 1
     }
 else
-    # Kraken credentials not set - SDK is optional
-    $PY -c "import krakenex; import pykrakenapi; print('✅ Kraken SDK (krakenex + pykrakenapi) available')" 2>/dev/null || echo "⚠️  Kraken SDK not installed (optional - no Kraken credentials configured)"
+    # CRITICAL: Kraken credentials are REQUIRED since Coinbase is disabled
+    echo ""
+    echo "❌ CRITICAL: Kraken Master credentials are REQUIRED"
+    echo ""
+    echo "Kraken is the primary broker (Coinbase is disabled)."
+    echo "You MUST configure Kraken credentials to use this bot."
+    echo ""
+    echo "🔧 SOLUTION:"
+    echo "   1. Get API credentials from https://www.kraken.com/u/security/api"
+    echo "   2. Set environment variables:"
+    echo "      export KRAKEN_MASTER_API_KEY='<your-api-key>'"
+    echo "      export KRAKEN_MASTER_API_SECRET='<your-api-secret>'"
+    echo "   3. Restart the bot"
+    echo ""
+    echo "📖 See .env.example for detailed setup instructions"
+    echo ""
+    exit 1
 fi
 
 # Ensure all Python test output is flushed before continuing
@@ -98,20 +113,21 @@ echo ""
 echo "🔍 EXCHANGE CREDENTIAL STATUS:"
 echo "   ────────────────────────────────────────────────────────"
 
-# Coinbase
-echo "   📊 COINBASE (Master):"
-if [ -n "${COINBASE_API_KEY}" ] && [ -n "${COINBASE_API_SECRET}" ]; then
-    echo "      ✅ Configured (Key: ${#COINBASE_API_KEY} chars, Secret: ${#COINBASE_API_SECRET} chars)"
-else
-    echo "      ❌ Not configured"
-fi
-
-# Kraken - Master
-echo "   📊 KRAKEN (Master):"
+# Kraken - Master (PRIMARY BROKER)
+echo "   📊 KRAKEN (Master) - PRIMARY BROKER:"
 if [ -n "${KRAKEN_MASTER_API_KEY}" ] && [ -n "${KRAKEN_MASTER_API_SECRET}" ]; then
     echo "      ✅ Configured (Key: ${#KRAKEN_MASTER_API_KEY} chars, Secret: ${#KRAKEN_MASTER_API_SECRET} chars)"
 else
-    echo "      ❌ Not configured"
+    echo "      ❌ Not configured (REQUIRED)"
+fi
+
+# Coinbase (DISABLED)
+echo "   📊 COINBASE (Master) - DISABLED:"
+if [ -n "${COINBASE_API_KEY}" ] && [ -n "${COINBASE_API_SECRET}" ]; then
+    echo "      ⚠️  Configured but DISABLED (Key: ${#COINBASE_API_KEY} chars, Secret: ${#COINBASE_API_SECRET} chars)"
+    echo "      ℹ️  Coinbase connection is disabled in trading_strategy.py"
+else
+    echo "      ❌ Not configured (Coinbase is disabled)"
 fi
 
 # Kraken - User #1 (Daivon)
@@ -169,16 +185,20 @@ echo "   MIN_CASH_TO_BUY=${MIN_CASH_TO_BUY:-5.0}"
 echo "   MINIMUM_TRADING_BALANCE=${MINIMUM_TRADING_BALANCE:-25.0}"
 echo ""
 
-# Require credentials for LIVE mode; do NOT fall back to PAPER_MODE
-if [ -z "${COINBASE_API_KEY}" ] || [ -z "${COINBASE_API_SECRET}" ]; then
+# Coinbase credentials are now OPTIONAL (Coinbase disabled Jan 30, 2026)
+# The bot will run with Kraken only
+if [ -z "${KRAKEN_MASTER_API_KEY}" ] || [ -z "${KRAKEN_MASTER_API_SECRET}" ]; then
     echo ""
-    echo "⚠️  MISSING COINBASE CREDENTIALS — LIVE MODE REQUIRES API KEY + SECRET"
+    echo "⚠️  MISSING KRAKEN CREDENTIALS — LIVE MODE REQUIRES API KEY + SECRET"
     echo ""
+    echo "Kraken is the primary broker (Coinbase is disabled)."
     echo "Set these environment variables, then re-run:"
-    echo "   export COINBASE_API_KEY='organizations/...'"
-    echo "   export COINBASE_API_SECRET='-----BEGIN PRIVATE KEY-----\n...'"
+    echo "   export KRAKEN_MASTER_API_KEY='<your-api-key>'"
+    echo "   export KRAKEN_MASTER_API_SECRET='<your-api-secret>'"
     echo ""
     echo "Alternatively, place them in .env (now auto-loaded on start)."
+    echo ""
+    echo "📖 See .env.example for detailed setup instructions"
     echo ""
     exit 1
 fi
