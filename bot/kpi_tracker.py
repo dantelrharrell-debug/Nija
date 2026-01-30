@@ -140,7 +140,10 @@ class KPITracker:
                     self.trade_history = data.get('trade_history', [])
                     self.daily_returns = data.get('daily_returns', [])
                     self.equity_curve = data.get('equity_curve', [])
-                    self.strategy_performance = data.get('strategy_performance', {})
+                    # Convert loaded dict back to defaultdict
+                    loaded_perf = data.get('strategy_performance', {})
+                    for strategy, perf in loaded_perf.items():
+                        self.strategy_performance[strategy] = perf
                     logger.info(f"📊 Loaded {len(self.snapshots)} KPI snapshots")
         except Exception as e:
             logger.warning(f"Could not load KPI data: {e}")
