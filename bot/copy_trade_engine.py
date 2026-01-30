@@ -71,7 +71,7 @@ class CopyTradeEngine:
     - Observe mode: Tracks balances, positions, P&L but does NOT execute trades
     """
 
-    def __init__(self, multi_account_manager=None, observe_only=False, max_slippage_pct=2.0, balance_buffer_pct=1.0):
+    def __init__(self, multi_account_manager=None, observe_only=False, max_slippage_pct=2.0, balance_buffer_pct=1.0, dry_run_mode=False):
         """
         Initialize the copy trade engine.
 
@@ -80,6 +80,7 @@ class CopyTradeEngine:
             observe_only: If True, track signals but don't execute trades (observe mode)
             max_slippage_pct: Maximum allowed price slippage % from master entry (default: 2.0%)
             balance_buffer_pct: Additional balance buffer % for fees (default: 1.0%)
+            dry_run_mode: If True, simulate follower trades without execution (demo mode)
         """
         self.multi_account_manager = multi_account_manager or multi_account_broker_manager
         self.signal_emitter = get_signal_emitter()
@@ -90,10 +91,16 @@ class CopyTradeEngine:
         self._total_signals_observed = 0  # Track signals in observe mode
         self._lock = threading.Lock()
         self.observe_only = observe_only
+        self.dry_run_mode = dry_run_mode  # NEW: Dry-run follower mode
         
         # Follower safeguard configuration
         self.max_slippage_pct = max_slippage_pct
         self.balance_buffer_pct = balance_buffer_pct
+        
+        # Dry-run follower tracking
+        self._dry_run_followers: Dict[str, Dict] = {}  # follower_id -> {balance, trades, pnl}
+        if dry_run_mode:
+            self._initialize_dry_run_followers()
 
         # P2: Initialize trade ledger for copy trade map visibility
         try:
@@ -847,36 +854,151 @@ class CopyTradeEngine:
                 stats['total_failures'] = self._total_copy_failures
 
             return stats
+    
+    def _initialize_dry_run_followers(self):
+        """Initialize demo follower accounts for dry-run mode."""
+        # Create demo followers with different balance levels
+        demo_followers = {
+            'demo_micro': {'balance': 10.0, 'description': 'Micro Account ($10)'},
+            'demo_small': {'balance': 100.0, 'description': 'Small Account ($100)'},
+            'demo_medium': {'balance': 1000.0, 'description': 'Medium Account ($1000)'},
+        }
+        
+        for follower_id, config in demo_followers.items():
+            self._dry_run_followers[follower_id] = {
+                'balance': config['balance'],
+                'initial_balance': config['balance'],
+                'description': config['description'],
+                'trades': [],
+                'total_pnl': 0.0,
+                'open_positions': []
+            }
+        
+        logger.info("=" * 70)
+        logger.info("🎭 DRY-RUN MODE: Demo Followers Initialized")
+        logger.info("=" * 70)
+        for follower_id, data in self._dry_run_followers.items():
+            logger.info(f"   {follower_id}: {data['description']} - ${data['balance']:.2f}")
+        logger.info("=" * 70)
+    
+    def simulate_dry_run_trade(self, signal: TradeSignal):
+        """
+        Simulate follower trades without real execution (demo mode).
+        
+        Args:
+            signal: Master trade signal
+        """
+        if not self.dry_run_mode:
+            return
+        
+        logger.info("=" * 70)
+        logger.info("🎭 DRY-RUN: Simulating Follower Trades")
+        logger.info("=" * 70)
+        logger.info(f"   Master Signal: {signal.side.upper()} {signal.symbol}")
+        logger.info(f"   Master Size: ${signal.size:.2f}")
+        logger.info(f"   Master Balance: ${signal.master_balance:.2f}")
+        logger.info("")
+        
+        for follower_id, follower_data in self._dry_run_followers.items():
+            # Calculate scaled size
+            scale_factor = follower_data['balance'] / signal.master_balance
+            follower_size = signal.size * scale_factor
+            
+            # Check if meets minimum ($1)
+            if follower_size < 1.0:
+                logger.info(f"   ⏭️  {follower_id}: SKIPPED (${follower_size:.2f} below $1 minimum)")
+                continue
+            
+            # Simulate trade
+            trade_record = {
+                'signal_id': signal.order_id,
+                'symbol': signal.symbol,
+                'side': signal.side,
+                'size': follower_size,
+                'entry_price': signal.price,
+                'timestamp': signal.timestamp,
+                'status': 'simulated'
+            }
+            
+            follower_data['trades'].append(trade_record)
+            
+            logger.info(f"   ✅ {follower_id}:")
+            logger.info(f"      Balance: ${follower_data['balance']:.2f}")
+            logger.info(f"      Trade Size: ${follower_size:.2f}")
+            logger.info(f"      Scale: {scale_factor:.4f} ({scale_factor*100:.2f}%)")
+        
+        logger.info("=" * 70)
+    
+    def get_dry_run_summary(self) -> Dict:
+        """Get summary of dry-run follower performance."""
+        if not self.dry_run_mode:
+            return {}
+        
+        summary = {}
+        for follower_id, data in self._dry_run_followers.items():
+            summary[follower_id] = {
+                'initial_balance': data['initial_balance'],
+                'current_balance': data['balance'],
+                'total_trades': len(data['trades']),
+                'total_pnl': data['total_pnl'],
+                'pnl_pct': (data['total_pnl'] / data['initial_balance'] * 100) if data['initial_balance'] > 0 else 0.0,
+                'description': data['description']
+            }
+        
+        return summary
+    
+    def print_dry_run_summary(self):
+        """Print formatted dry-run summary."""
+        if not self.dry_run_mode:
+            logger.warning("Not in dry-run mode")
+            return
+        
+        summary = self.get_dry_run_summary()
+        
+        print("\n" + "=" * 70)
+        print("🎭 DRY-RUN FOLLOWER SUMMARY")
+        print("=" * 70)
+        
+        for follower_id, stats in summary.items():
+            print(f"\n   {follower_id.upper()} - {stats['description']}")
+            print(f"      Initial Balance: ${stats['initial_balance']:.2f}")
+            print(f"      Current Balance: ${stats['current_balance']:.2f}")
+            print(f"      Total Trades: {stats['total_trades']}")
+            print(f"      Total PnL: ${stats['total_pnl']:.2f} ({stats['pnl_pct']:+.2f}%)")
+        
+        print("\n" + "=" * 70)
 
 
 # Global singleton instance
 _copy_engine: Optional[CopyTradeEngine] = None
 
 
-def get_copy_engine(observe_only: bool = False) -> CopyTradeEngine:
+def get_copy_engine(observe_only: bool = False, dry_run_mode: bool = False) -> CopyTradeEngine:
     """
     Get the global copy trade engine instance (singleton pattern).
 
     Args:
         observe_only: If True, engine runs in observe mode (no trades executed)
+        dry_run_mode: If True, simulates follower trades for demo purposes
 
     Returns:
         Global CopyTradeEngine instance
     """
     global _copy_engine
     if _copy_engine is None:
-        _copy_engine = CopyTradeEngine(observe_only=observe_only)
+        _copy_engine = CopyTradeEngine(observe_only=observe_only, dry_run_mode=dry_run_mode)
     return _copy_engine
 
 
-def start_copy_engine(observe_only: bool = False):
+def start_copy_engine(observe_only: bool = False, dry_run_mode: bool = False):
     """
     Start the global copy trade engine.
 
     Args:
         observe_only: If True, engine runs in observe mode (no trades executed)
+        dry_run_mode: If True, simulates follower trades for demo purposes
     """
-    engine = get_copy_engine(observe_only=observe_only)
+    engine = get_copy_engine(observe_only=observe_only, dry_run_mode=dry_run_mode)
     engine.start()
 
 
