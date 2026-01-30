@@ -358,6 +358,75 @@ class NIJAApexStrategyV71:
             'confidence': confidence
         }
 
+    def _check_kraken_confidence(self, broker_name: str, validation: Dict) -> Optional[Dict]:
+        """
+        Check Kraken-specific confidence threshold.
+        
+        Args:
+            broker_name: Name of the broker
+            validation: Validation result from _validate_trade_quality
+            
+        Returns:
+            None if check passes, or dict with 'action' and 'reason' if check fails
+        """
+        if broker_name == 'kraken':
+            confidence = validation.get('confidence', 0.0)
+            if confidence < self.kraken_min_confidence:
+                logger.info(f"   ⏭️  Kraken safety: Confidence {confidence:.2f} below minimum {self.kraken_min_confidence:.2f}")
+                return {
+                    'action': 'hold',
+                    'reason': f'Kraken safety check: Confidence {confidence:.2f} < {self.kraken_min_confidence:.2f} minimum'
+                }
+        return None
+
+    def _log_first_trade_sanity_check(self, symbol: str, direction: str, current_price: float,
+                                      position_size: float, account_balance: float, broker_name: str,
+                                      score: float, validation: Dict, adx: float,
+                                      eligibility: Dict, trend: str, reason: str) -> None:
+        """
+        Log comprehensive first trade sanity check details.
+        
+        Args:
+            symbol: Trading symbol
+            direction: Trade direction ('LONG' or 'SHORT')
+            current_price: Current entry price
+            position_size: Calculated position size
+            account_balance: Account balance
+            broker_name: Broker name
+            score: Entry score
+            validation: Validation result
+            adx: ADX value
+            eligibility: Eligibility check result
+            trend: Market trend
+            reason: Entry reason
+        """
+        if not self.first_trade_attempted:
+            logger.info("=" * 80)
+            logger.info("🔔 FIRST TRADE SANITY CHECK - Review before execution")
+            logger.info("=" * 80)
+            logger.info(f"Symbol: {symbol}")
+            logger.info(f"Direction: {direction}")
+            logger.info(f"Entry Price: ${current_price:.4f}")
+            logger.info(f"Position Size: ${position_size:.2f}")
+            logger.info(f"Account Balance: ${account_balance:.2f}")
+            logger.info(f"Broker: {broker_name.upper()}")
+            logger.info("-" * 80)
+            logger.info(f"Signal Quality:")
+            logger.info(f"  - Entry Score: {score:.1f}/5 (legacy)")
+            logger.info(f"  - Confidence: {validation.get('confidence', 0.0):.2f}")
+            logger.info(f"  - ADX: {adx:.1f}")
+            logger.info("-" * 80)
+            logger.info(f"Eligibility Checks:")
+            for check_name, check_data in eligibility['checks'].items():
+                status = "✅" if check_data.get('valid', True) else "❌"
+                logger.info(f"  {status} {check_name}: {check_data}")
+            logger.info("-" * 80)
+            logger.info(f"Risk Management:")
+            logger.info(f"  - Trend: {trend}")
+            logger.info(f"  - Reason: {reason}")
+            logger.info("=" * 80)
+            self.first_trade_attempted = True
+
     def verify_trade_eligibility(self, symbol: str, df: pd.DataFrame, indicators: Dict, 
                                  side: str, position_size: float, bid_price: float = None, 
                                  ask_price: float = None) -> Dict:
@@ -392,27 +461,35 @@ class NIJAApexStrategyV71:
         rsi = scalar(indicators.get('rsi', pd.Series([50])).iloc[-1])
         atr = scalar(indicators.get('atr', pd.Series([0])).iloc[-1])
         
+        # Configurable thresholds (can be overridden via config in future)
+        general_rsi_min = 30
+        general_rsi_max = 70
+        general_min_atr_pct = 0.5  # 0.5% minimum volatility
+        general_max_spread_pct = 0.15  # 0.15% maximum spread
+        
         # 1. RSI Range Check
-        # Ensure RSI is in appropriate range for the trade direction
+        # NOTE: We use the same RSI range for both long and short to avoid extreme conditions
+        # This prevents trading when RSI is in extreme overbought (>70) or oversold (<30) zones
+        # Rationale: Extreme RSI often leads to reversals, making entries risky regardless of direction
         if side == 'long':
-            # For longs, prefer RSI between 30-70 (avoid extreme overbought)
-            rsi_min, rsi_max = 30, 70
+            # For longs, avoid extreme RSI conditions (both overbought and oversold)
+            rsi_min, rsi_max = general_rsi_min, general_rsi_max
             rsi_valid = rsi_min <= rsi <= rsi_max
             checks['rsi'] = {'value': rsi, 'range': f'{rsi_min}-{rsi_max}', 'valid': rsi_valid}
             if not rsi_valid:
-                failures.append(f'RSI {rsi:.1f} outside LONG range {rsi_min}-{rsi_max}')
+                failures.append(f'RSI {rsi:.1f} outside safe range {rsi_min}-{rsi_max} (avoiding extremes)')
         else:  # short
-            # For shorts, prefer RSI between 30-70 (avoid extreme oversold)
-            rsi_min, rsi_max = 30, 70
+            # For shorts, also avoid extreme RSI conditions (both overbought and oversold)
+            rsi_min, rsi_max = general_rsi_min, general_rsi_max
             rsi_valid = rsi_min <= rsi <= rsi_max
             checks['rsi'] = {'value': rsi, 'range': f'{rsi_min}-{rsi_max}', 'valid': rsi_valid}
             if not rsi_valid:
-                failures.append(f'RSI {rsi:.1f} outside SHORT range {rsi_min}-{rsi_max}')
+                failures.append(f'RSI {rsi:.1f} outside safe range {rsi_min}-{rsi_max} (avoiding extremes)')
         
         # 2. Volatility (ATR) Check
         # Ensure sufficient volatility for profitable trading
         atr_pct = (atr / current_price) * 100 if current_price > 0 else 0
-        min_atr_pct = 0.5  # 0.5% minimum volatility
+        min_atr_pct = general_min_atr_pct
         atr_valid = atr_pct >= min_atr_pct
         checks['volatility'] = {'atr_pct': atr_pct, 'min_required': min_atr_pct, 'valid': atr_valid}
         if not atr_valid:
@@ -423,7 +500,7 @@ class NIJAApexStrategyV71:
             mid_price = (bid_price + ask_price) / 2
             spread_absolute = ask_price - bid_price
             spread_pct = (spread_absolute / mid_price) * 100 if mid_price > 0 else 0
-            max_spread_pct = 0.15  # 0.15% maximum spread
+            max_spread_pct = general_max_spread_pct
             spread_valid = spread_pct <= max_spread_pct
             checks['spread'] = {
                 'spread_pct': spread_pct, 
@@ -1230,7 +1307,6 @@ class NIJAApexStrategyV71:
                     risk_score = self._get_risk_score(score, metadata)
 
                     # Get broker context for intelligent minimum position adjustments
-                    broker_name = self._get_broker_name()
                     broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
 
                     # Extract regime confidence for GOD MODE+ adaptive risk (if available)
@@ -1279,43 +1355,16 @@ class NIJAApexStrategyV71:
                         }
                     
                     # Apply Kraken-specific confidence threshold if on Kraken
-                    if broker_name == 'kraken':
-                        confidence = validation.get('confidence', 0.0)
-                        if confidence < self.kraken_min_confidence:
-                            logger.info(f"   ⏭️  Kraken safety: Confidence {confidence:.2f} below minimum {self.kraken_min_confidence:.2f}")
-                            return {
-                                'action': 'hold',
-                                'reason': f'Kraken safety check: Confidence {confidence:.2f} < {self.kraken_min_confidence:.2f} minimum'
-                            }
+                    kraken_check = self._check_kraken_confidence(broker_name, validation)
+                    if kraken_check:
+                        return kraken_check
                     
                     # 🔔 FIRST TRADE SANITY CHECK (Jan 30, 2026)
                     # Log comprehensive details before attempting first trade
-                    if not self.first_trade_attempted:
-                        logger.info("=" * 80)
-                        logger.info("🔔 FIRST TRADE SANITY CHECK - Review before execution")
-                        logger.info("=" * 80)
-                        logger.info(f"Symbol: {symbol}")
-                        logger.info(f"Direction: LONG")
-                        logger.info(f"Entry Price: ${current_price:.4f}")
-                        logger.info(f"Position Size: ${position_size:.2f}")
-                        logger.info(f"Account Balance: ${account_balance:.2f}")
-                        logger.info(f"Broker: {broker_name.upper()}")
-                        logger.info("-" * 80)
-                        logger.info(f"Signal Quality:")
-                        logger.info(f"  - Entry Score: {score:.1f}/5 (legacy)")
-                        logger.info(f"  - Confidence: {validation.get('confidence', 0.0):.2f}")
-                        logger.info(f"  - ADX: {adx:.1f}")
-                        logger.info("-" * 80)
-                        logger.info(f"Eligibility Checks:")
-                        for check_name, check_data in eligibility['checks'].items():
-                            status = "✅" if check_data.get('valid', True) else "❌"
-                            logger.info(f"  {status} {check_name}: {check_data}")
-                        logger.info("-" * 80)
-                        logger.info(f"Risk Management:")
-                        logger.info(f"  - Trend: {trend}")
-                        logger.info(f"  - Reason: {reason}")
-                        logger.info("=" * 80)
-                        self.first_trade_attempted = True
+                    self._log_first_trade_sanity_check(
+                        symbol, 'LONG', current_price, position_size, account_balance,
+                        broker_name, score, validation, adx, eligibility, trend, reason
+                    )
 
                     # Calculate stop loss and take profit
                     swing_low = self.risk_manager.find_swing_low(df, lookback=10)
@@ -1400,7 +1449,6 @@ class NIJAApexStrategyV71:
                     risk_score = self._get_risk_score(score, metadata)
 
                     # Get broker context for intelligent minimum position adjustments
-                    broker_name = self._get_broker_name()
                     broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
 
                     # Extract regime confidence for GOD MODE+ adaptive risk (if available)
@@ -1449,43 +1497,16 @@ class NIJAApexStrategyV71:
                         }
                     
                     # Apply Kraken-specific confidence threshold if on Kraken
-                    if broker_name == 'kraken':
-                        confidence = validation.get('confidence', 0.0)
-                        if confidence < self.kraken_min_confidence:
-                            logger.info(f"   ⏭️  Kraken safety: Confidence {confidence:.2f} below minimum {self.kraken_min_confidence:.2f}")
-                            return {
-                                'action': 'hold',
-                                'reason': f'Kraken safety check: Confidence {confidence:.2f} < {self.kraken_min_confidence:.2f} minimum'
-                            }
+                    kraken_check = self._check_kraken_confidence(broker_name, validation)
+                    if kraken_check:
+                        return kraken_check
                     
                     # 🔔 FIRST TRADE SANITY CHECK (Jan 30, 2026)
                     # Log comprehensive details before attempting first trade
-                    if not self.first_trade_attempted:
-                        logger.info("=" * 80)
-                        logger.info("🔔 FIRST TRADE SANITY CHECK - Review before execution")
-                        logger.info("=" * 80)
-                        logger.info(f"Symbol: {symbol}")
-                        logger.info(f"Direction: SHORT")
-                        logger.info(f"Entry Price: ${current_price:.4f}")
-                        logger.info(f"Position Size: ${position_size:.2f}")
-                        logger.info(f"Account Balance: ${account_balance:.2f}")
-                        logger.info(f"Broker: {broker_name.upper()}")
-                        logger.info("-" * 80)
-                        logger.info(f"Signal Quality:")
-                        logger.info(f"  - Entry Score: {score:.1f}/5 (legacy)")
-                        logger.info(f"  - Confidence: {validation.get('confidence', 0.0):.2f}")
-                        logger.info(f"  - ADX: {adx:.1f}")
-                        logger.info("-" * 80)
-                        logger.info(f"Eligibility Checks:")
-                        for check_name, check_data in eligibility['checks'].items():
-                            status = "✅" if check_data.get('valid', True) else "❌"
-                            logger.info(f"  {status} {check_name}: {check_data}")
-                        logger.info("-" * 80)
-                        logger.info(f"Risk Management:")
-                        logger.info(f"  - Trend: {trend}")
-                        logger.info(f"  - Reason: {reason}")
-                        logger.info("=" * 80)
-                        self.first_trade_attempted = True
+                    self._log_first_trade_sanity_check(
+                        symbol, 'SHORT', current_price, position_size, account_balance,
+                        broker_name, score, validation, adx, eligibility, trend, reason
+                    )
 
                     # Calculate stop loss and take profit
                     swing_high = self.risk_manager.find_swing_high(df, lookback=10)
