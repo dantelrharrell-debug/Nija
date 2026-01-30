@@ -1124,6 +1124,11 @@ class CoinbaseBroker(BaseBroker):
 
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API with retry logic"""
+        # Coinbase is disabled
+        logging.warning("🚫 Coinbase integration is disabled")
+        logging.info("   Coinbase broker connection skipped")
+        return False
+        
         try:
             from coinbase.rest import RESTClient
             import os
