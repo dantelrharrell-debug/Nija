@@ -109,6 +109,9 @@ class TestKalmanFilter(unittest.TestCase):
     
     def test_noise_filtering(self):
         """Test noise filtering"""
+        # Set random seed for reproducibility
+        np.random.seed(42)
+        
         # Create noisy signal
         true_value = 100.0
         measurements = [true_value + np.random.normal(0, 10) for _ in range(100)]
@@ -121,7 +124,6 @@ class TestKalmanFilter(unittest.TestCase):
         filtered_error = abs(filtered[-1] - true_value)
         
         # Filtered error should be less than average measurement error
-        # (Not guaranteed on every run due to randomness, but highly likely)
         self.assertLess(filtered_error, avg_measurement_error * 1.5)
 
 
@@ -393,6 +395,5 @@ def run_tests():
 
 
 if __name__ == '__main__':
-    import sys
     success = run_tests()
     sys.exit(0 if success else 1)

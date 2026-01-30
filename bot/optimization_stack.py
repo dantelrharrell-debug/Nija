@@ -455,14 +455,8 @@ class OptimizationStack:
         # Check regime for emergency adjustments
         if OptimizationLayer.EMERGENCY in self.active_layers:
             regime = self.regime_switcher.detect_regime(market_data)
-            regime_params = self.regime_switcher.get_regime_parameters(regime)
-            
-            # Adjust parameters based on regime
-            for key, multiplier in regime_params.items():
-                if 'multiplier' in key:
-                    base_key = key.replace('_multiplier', '')
-                    if base_key in params:
-                        params[base_key] *= multiplier
+            # Note: Regime parameters are for position size, stops, and targets
+            # RSI parameters are not adjusted by regime - they're optimized by Bayesian layer
         
         return params
     
@@ -497,10 +491,18 @@ class OptimizationStack:
             multiplier = regime_params.get('position_size_multiplier', 1.0)
             adjusted_size *= multiplier
         
-        # Track performance gain
+        # Track performance gain (position size reduction in volatile markets is beneficial)
         if adjusted_size != base_size:
-            gain_pct = ((adjusted_size - base_size) / base_size) * 100
-            self.metrics.volatility_adaptive_gain += gain_pct * 0.1  # Smooth update
+            size_change_pct = ((adjusted_size - base_size) / base_size) * 100
+            volatility = market_data.get('volatility', 1.0)
+            
+            # In high volatility, reducing size is good; in low volatility, increasing is good
+            if volatility > 1.5 and adjusted_size < base_size:
+                # Protective size reduction in volatile market = positive
+                self.metrics.volatility_adaptive_gain += abs(size_change_pct) * 0.05
+            elif volatility < 0.8 and adjusted_size > base_size:
+                # Size increase in calm market = positive
+                self.metrics.volatility_adaptive_gain += abs(size_change_pct) * 0.05
         
         return adjusted_size
     

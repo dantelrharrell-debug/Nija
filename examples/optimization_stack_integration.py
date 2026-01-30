@@ -199,13 +199,13 @@ class OptimizedTradingStrategy:
             exit_price: Exit price
             reason: Exit reason
         """
-        # Calculate P&L
+        # Calculate P&L (percentage-based for simplicity)
         if trade['side'] == 'buy':
-            pnl = (exit_price - trade['entry_price']) * (trade['size'] / trade['entry_price'])
+            pnl_pct = ((exit_price - trade['entry_price']) / trade['entry_price']) * 100
         else:
-            pnl = (trade['entry_price'] - exit_price) * (trade['size'] / trade['entry_price'])
+            pnl_pct = ((trade['entry_price'] - exit_price) / trade['entry_price']) * 100
         
-        pnl_pct = (pnl / trade['size']) * 100
+        pnl = (pnl_pct / 100) * trade['size']
         
         # Update statistics
         self.total_pnl += pnl
@@ -225,7 +225,7 @@ class OptimizedTradingStrategy:
         if self.optimization_stack.bayesian_optimizer and OptimizationLayer.FAST in self.optimization_stack.active_layers:
             # Use P&L percentage as performance metric
             self.optimization_stack.bayesian_optimizer.update(
-                parameters=trade['optimized_params'],
+                parameters=trade.get('optimized_params', {}),
                 performance=pnl_pct
             )
     
