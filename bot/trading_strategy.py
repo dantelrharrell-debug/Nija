@@ -302,7 +302,13 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
 # With $5+ positions, trades have better chance of profitability after fees
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
-MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
+# Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '8')
+try:
+    MAX_POSITIONS_ALLOWED = int(_max_positions_env)
+except ValueError:
+    MAX_POSITIONS_ALLOWED = 8  # Default fallback
+logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED}")
 
 # OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
 # MIN_TRADE_USD = max(2.00, balance * 0.15)
@@ -3550,6 +3556,21 @@ class TradingStrategy:
                             if symbol in DISABLED_PAIRS:
                                 logger.debug(f"   ⛔ SKIPPING {symbol}: Blacklisted pair (spread > profit edge)")
                                 continue
+
+                            # WHITELIST CHECK - Only trade whitelisted symbols if whitelist is enabled
+                            # Import whitelist config if available
+                            try:
+                                from bot.master_only_config import is_whitelisted_symbol, WHITELISTED_ASSETS
+                                # Check if whitelist mode is enabled via environment variable
+                                whitelist_enabled = os.getenv('ENABLE_SYMBOL_WHITELIST', 'false').lower() in ('true', '1', 'yes')
+                                if whitelist_enabled:
+                                    broker_name = self._get_broker_name(active_broker)
+                                    if not is_whitelisted_symbol(symbol, broker_name):
+                                        logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in whitelist (only trading {', '.join(WHITELISTED_ASSETS)})")
+                                        continue
+                            except ImportError:
+                                # Whitelist config not available, continue normal operation
+                                pass
 
                             # CRITICAL: Add delay BEFORE fetching candles to prevent rate limiting
                             # This is in addition to the delay after processing (line ~1201)
