@@ -189,6 +189,17 @@ class NIJAApexStrategyV71:
 
         # Track current regime for logging
         self.current_regime = None
+        
+        # Kraken-specific tuning parameters (Jan 30, 2026)
+        # These can be adjusted via environment variables for safe tuning
+        # Default values are conservative to prevent over-aggressive trading
+        self.kraken_min_rsi = float(os.getenv('KRAKEN_MIN_RSI', '35'))  # More conservative than general (30)
+        self.kraken_max_rsi = float(os.getenv('KRAKEN_MAX_RSI', '65'))  # More conservative than general (70)
+        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.65'))  # Higher than general (0.60)
+        self.kraken_min_atr_pct = float(os.getenv('KRAKEN_MIN_ATR_PCT', '0.6'))  # Higher than general (0.5%)
+        
+        # Track first trade for sanity check logging
+        self.first_trade_attempted = False
 
         logger.info("=" * 70)
         logger.info("NIJA Apex Strategy v7.1 - HIGH WIN-RATE OPTIMIZED")
@@ -345,6 +356,127 @@ class NIJAApexStrategyV71:
             'valid': True,
             'reason': 'Trade quality validated',
             'confidence': confidence
+        }
+
+    def verify_trade_eligibility(self, symbol: str, df: pd.DataFrame, indicators: Dict, 
+                                 side: str, position_size: float, bid_price: float = None, 
+                                 ask_price: float = None) -> Dict:
+        """
+        Comprehensive trade eligibility verification combining RSI, volatility, and spread checks.
+        
+        This is a unified pre-trade validation that ensures all critical conditions are met:
+        - RSI is in acceptable range for the trade direction
+        - Volatility (ATR) is sufficient for profitable trading
+        - Spread is acceptable (if bid/ask prices provided)
+        
+        Args:
+            symbol: Trading pair symbol
+            df: Price DataFrame
+            indicators: Dictionary of calculated indicators
+            side: Trade direction ('long' or 'short')
+            position_size: Position size in USD
+            bid_price: Current bid price (optional)
+            ask_price: Current ask price (optional)
+            
+        Returns:
+            Dictionary with:
+                - 'eligible': bool - whether trade meets all requirements
+                - 'reason': str - detailed reason
+                - 'checks': dict - detailed check results
+        """
+        checks = {}
+        failures = []
+        
+        # Get current values
+        current_price = df['close'].iloc[-1]
+        rsi = scalar(indicators.get('rsi', pd.Series([50])).iloc[-1])
+        atr = scalar(indicators.get('atr', pd.Series([0])).iloc[-1])
+        
+        # 1. RSI Range Check
+        # Ensure RSI is in appropriate range for the trade direction
+        if side == 'long':
+            # For longs, prefer RSI between 30-70 (avoid extreme overbought)
+            rsi_min, rsi_max = 30, 70
+            rsi_valid = rsi_min <= rsi <= rsi_max
+            checks['rsi'] = {'value': rsi, 'range': f'{rsi_min}-{rsi_max}', 'valid': rsi_valid}
+            if not rsi_valid:
+                failures.append(f'RSI {rsi:.1f} outside LONG range {rsi_min}-{rsi_max}')
+        else:  # short
+            # For shorts, prefer RSI between 30-70 (avoid extreme oversold)
+            rsi_min, rsi_max = 30, 70
+            rsi_valid = rsi_min <= rsi <= rsi_max
+            checks['rsi'] = {'value': rsi, 'range': f'{rsi_min}-{rsi_max}', 'valid': rsi_valid}
+            if not rsi_valid:
+                failures.append(f'RSI {rsi:.1f} outside SHORT range {rsi_min}-{rsi_max}')
+        
+        # 2. Volatility (ATR) Check
+        # Ensure sufficient volatility for profitable trading
+        atr_pct = (atr / current_price) * 100 if current_price > 0 else 0
+        min_atr_pct = 0.5  # 0.5% minimum volatility
+        atr_valid = atr_pct >= min_atr_pct
+        checks['volatility'] = {'atr_pct': atr_pct, 'min_required': min_atr_pct, 'valid': atr_valid}
+        if not atr_valid:
+            failures.append(f'Volatility too low: ATR {atr_pct:.2f}% < {min_atr_pct}% minimum')
+        
+        # 3. Spread Check (if bid/ask prices provided)
+        if bid_price is not None and ask_price is not None and bid_price > 0 and ask_price > 0:
+            mid_price = (bid_price + ask_price) / 2
+            spread_absolute = ask_price - bid_price
+            spread_pct = (spread_absolute / mid_price) * 100 if mid_price > 0 else 0
+            max_spread_pct = 0.15  # 0.15% maximum spread
+            spread_valid = spread_pct <= max_spread_pct
+            checks['spread'] = {
+                'spread_pct': spread_pct, 
+                'max_allowed': max_spread_pct, 
+                'valid': spread_valid,
+                'bid': bid_price,
+                'ask': ask_price
+            }
+            if not spread_valid:
+                failures.append(f'Spread too wide: {spread_pct:.3f}% > {max_spread_pct}% maximum')
+        else:
+            checks['spread'] = {'valid': True, 'note': 'Bid/ask prices not provided, skipping spread check'}
+        
+        # 4. Broker-specific checks (Kraken safety)
+        broker_name = self._get_broker_name()
+        if broker_name == 'kraken':
+            # Apply stricter Kraken-specific thresholds from configuration
+            kraken_min_rsi = self.kraken_min_rsi
+            kraken_max_rsi = self.kraken_max_rsi
+            kraken_rsi_valid = kraken_min_rsi <= rsi <= kraken_max_rsi
+            checks['kraken_rsi_safety'] = {
+                'value': rsi, 
+                'safe_range': f'{kraken_min_rsi}-{kraken_max_rsi}', 
+                'valid': kraken_rsi_valid
+            }
+            if not kraken_rsi_valid:
+                failures.append(f'Kraken safety: RSI {rsi:.1f} outside safe range {kraken_min_rsi}-{kraken_max_rsi}')
+            
+            # Apply stricter ATR requirement for Kraken
+            kraken_min_atr = self.kraken_min_atr_pct
+            kraken_atr_valid = atr_pct >= kraken_min_atr
+            checks['kraken_atr_safety'] = {
+                'atr_pct': atr_pct,
+                'min_required': kraken_min_atr,
+                'valid': kraken_atr_valid
+            }
+            if not kraken_atr_valid:
+                failures.append(f'Kraken safety: ATR {atr_pct:.2f}% below {kraken_min_atr}% minimum')
+        
+        # Determine eligibility
+        eligible = len(failures) == 0
+        
+        if eligible:
+            reason = f"✅ Trade eligible: RSI={rsi:.1f}, ATR={atr_pct:.2f}%"
+            if 'spread' in checks and 'spread_pct' in checks['spread']:
+                reason += f", Spread={checks['spread']['spread_pct']:.3f}%"
+        else:
+            reason = f"❌ Trade not eligible: {'; '.join(failures)}"
+        
+        return {
+            'eligible': eligible,
+            'reason': reason,
+            'checks': checks
         }
 
     def check_market_filter(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, str, str]:
@@ -1132,6 +1264,58 @@ class NIJAApexStrategyV71:
                             'action': 'hold',
                             'reason': validation['reason']
                         }
+                    
+                    # ✅ COMPREHENSIVE TRADE ELIGIBILITY CHECK (Jan 30, 2026)
+                    # Verify RSI, volatility (ATR), and spread conditions before entering trade
+                    # This unified check prevents marginal trades and enforces quality standards
+                    eligibility = self.verify_trade_eligibility(
+                        symbol, df, indicators, 'long', position_size
+                    )
+                    if not eligibility['eligible']:
+                        logger.info(f"   ⏭️  Trade eligibility check failed: {eligibility['reason']}")
+                        return {
+                            'action': 'hold',
+                            'reason': eligibility['reason']
+                        }
+                    
+                    # Apply Kraken-specific confidence threshold if on Kraken
+                    if broker_name == 'kraken':
+                        confidence = validation.get('confidence', 0.0)
+                        if confidence < self.kraken_min_confidence:
+                            logger.info(f"   ⏭️  Kraken safety: Confidence {confidence:.2f} below minimum {self.kraken_min_confidence:.2f}")
+                            return {
+                                'action': 'hold',
+                                'reason': f'Kraken safety check: Confidence {confidence:.2f} < {self.kraken_min_confidence:.2f} minimum'
+                            }
+                    
+                    # 🔔 FIRST TRADE SANITY CHECK (Jan 30, 2026)
+                    # Log comprehensive details before attempting first trade
+                    if not self.first_trade_attempted:
+                        logger.info("=" * 80)
+                        logger.info("🔔 FIRST TRADE SANITY CHECK - Review before execution")
+                        logger.info("=" * 80)
+                        logger.info(f"Symbol: {symbol}")
+                        logger.info(f"Direction: LONG")
+                        logger.info(f"Entry Price: ${current_price:.4f}")
+                        logger.info(f"Position Size: ${position_size:.2f}")
+                        logger.info(f"Account Balance: ${account_balance:.2f}")
+                        logger.info(f"Broker: {broker_name.upper()}")
+                        logger.info("-" * 80)
+                        logger.info(f"Signal Quality:")
+                        logger.info(f"  - Entry Score: {score:.1f}/5 (legacy)")
+                        logger.info(f"  - Confidence: {validation.get('confidence', 0.0):.2f}")
+                        logger.info(f"  - ADX: {adx:.1f}")
+                        logger.info("-" * 80)
+                        logger.info(f"Eligibility Checks:")
+                        for check_name, check_data in eligibility['checks'].items():
+                            status = "✅" if check_data.get('valid', True) else "❌"
+                            logger.info(f"  {status} {check_name}: {check_data}")
+                        logger.info("-" * 80)
+                        logger.info(f"Risk Management:")
+                        logger.info(f"  - Trend: {trend}")
+                        logger.info(f"  - Reason: {reason}")
+                        logger.info("=" * 80)
+                        self.first_trade_attempted = True
 
                     # Calculate stop loss and take profit
                     swing_low = self.risk_manager.find_swing_low(df, lookback=10)
@@ -1250,6 +1434,58 @@ class NIJAApexStrategyV71:
                             'action': 'hold',
                             'reason': validation['reason']
                         }
+                    
+                    # ✅ COMPREHENSIVE TRADE ELIGIBILITY CHECK (Jan 30, 2026)
+                    # Verify RSI, volatility (ATR), and spread conditions before entering trade
+                    # This unified check prevents marginal trades and enforces quality standards
+                    eligibility = self.verify_trade_eligibility(
+                        symbol, df, indicators, 'short', position_size
+                    )
+                    if not eligibility['eligible']:
+                        logger.info(f"   ⏭️  Trade eligibility check failed: {eligibility['reason']}")
+                        return {
+                            'action': 'hold',
+                            'reason': eligibility['reason']
+                        }
+                    
+                    # Apply Kraken-specific confidence threshold if on Kraken
+                    if broker_name == 'kraken':
+                        confidence = validation.get('confidence', 0.0)
+                        if confidence < self.kraken_min_confidence:
+                            logger.info(f"   ⏭️  Kraken safety: Confidence {confidence:.2f} below minimum {self.kraken_min_confidence:.2f}")
+                            return {
+                                'action': 'hold',
+                                'reason': f'Kraken safety check: Confidence {confidence:.2f} < {self.kraken_min_confidence:.2f} minimum'
+                            }
+                    
+                    # 🔔 FIRST TRADE SANITY CHECK (Jan 30, 2026)
+                    # Log comprehensive details before attempting first trade
+                    if not self.first_trade_attempted:
+                        logger.info("=" * 80)
+                        logger.info("🔔 FIRST TRADE SANITY CHECK - Review before execution")
+                        logger.info("=" * 80)
+                        logger.info(f"Symbol: {symbol}")
+                        logger.info(f"Direction: SHORT")
+                        logger.info(f"Entry Price: ${current_price:.4f}")
+                        logger.info(f"Position Size: ${position_size:.2f}")
+                        logger.info(f"Account Balance: ${account_balance:.2f}")
+                        logger.info(f"Broker: {broker_name.upper()}")
+                        logger.info("-" * 80)
+                        logger.info(f"Signal Quality:")
+                        logger.info(f"  - Entry Score: {score:.1f}/5 (legacy)")
+                        logger.info(f"  - Confidence: {validation.get('confidence', 0.0):.2f}")
+                        logger.info(f"  - ADX: {adx:.1f}")
+                        logger.info("-" * 80)
+                        logger.info(f"Eligibility Checks:")
+                        for check_name, check_data in eligibility['checks'].items():
+                            status = "✅" if check_data.get('valid', True) else "❌"
+                            logger.info(f"  {status} {check_name}: {check_data}")
+                        logger.info("-" * 80)
+                        logger.info(f"Risk Management:")
+                        logger.info(f"  - Trend: {trend}")
+                        logger.info(f"  - Reason: {reason}")
+                        logger.info("=" * 80)
+                        self.first_trade_attempted = True
 
                     # Calculate stop loss and take profit
                     swing_high = self.risk_manager.find_swing_high(df, lookback=10)
