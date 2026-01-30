@@ -68,6 +68,11 @@ class BrokerStrategySelector:
         """
         broker_type_lower = broker_type.lower() if broker_type else 'default'
 
+        # Coinbase is disabled - return None explicitly
+        if broker_type_lower == "coinbase":
+            logger.warning(f"Coinbase broker is disabled")
+            return None
+
         # Get config for broker
         config = self.configs.get(broker_type_lower, self.configs.get('default'))
 

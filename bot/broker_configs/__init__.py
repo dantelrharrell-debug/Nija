@@ -61,6 +61,11 @@ def get_broker_config(broker_type: str):
     """
     broker_type_lower = broker_type.lower()
 
+    # Coinbase is disabled - return None explicitly
+    if broker_type_lower == "coinbase":
+        logger.warning(f"Coinbase broker is disabled")
+        return None
+    
     # Coinbase is disabled
     # if broker_type_lower == "coinbase" and CoinbaseConfig:
     #     return CoinbaseConfig()
