@@ -149,3 +149,8 @@ redis==5.0.1
 
 # Stripe payment processing (for SaaS monetization)
 stripe==7.11.0
+
+# Machine Learning for AI Trade Quality Filter (Path 1)
+scikit-learn==1.3.2
+xgboost==2.0.3
+joblib==1.3.2
