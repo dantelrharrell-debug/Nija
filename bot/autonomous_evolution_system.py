@@ -31,18 +31,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 
-from bot.genetic_strategy_factory import (
+from genetic_strategy_factory import (
     GeneticStrategyFactory,
     StrategyDNA,
     StrategyComponentType
 )
-from bot.market_regime_classification_ai import (
+from market_regime_classification_ai import (
     MarketRegimeClassificationAI,
     MarketRegimeType,
     StrategyType as RegimeStrategyType,
     RegimeClassification
 )
-from bot.capital_allocation_brain import (
+from capital_allocation_brain import (
     CapitalAllocationBrain,
     AllocationMethod,
     AllocationPlan
@@ -491,8 +491,9 @@ class AutonomousEvolutionSystem:
             capital_improvement = 0.0
         
         # Get genetic evolution improvement (from fitness scores)
-        if self.genetic_factory.best_genome:
-            fitness = self.genetic_factory.best_genome.fitness_score
+        best_strategies = self.genetic_factory.get_best_strategies(n=1)
+        if best_strategies:
+            fitness = best_strategies[0].fitness_score
             evolution_improvement = max(0, (fitness - 0.5) * 0.3)  # Rough estimate
         else:
             evolution_improvement = 0.0
