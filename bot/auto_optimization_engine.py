@@ -341,8 +341,9 @@ class AutoOptimizationEngine:
         # Calculate performance score
         self.current_metrics.calculate_performance_score()
         
-        # Add to history
-        self.metrics_history.append(self.current_metrics)
+        # Add copy to history (not reference)
+        from copy import deepcopy
+        self.metrics_history.append(deepcopy(self.current_metrics))
     
     def _check_optimization_triggers(self) -> None:
         """Check if optimization should be triggered"""
@@ -605,6 +606,9 @@ class AutoOptimizationEngine:
         )
         self.current_cycle.status = "completed" if success else "failed"
         
+        # Save status before clearing
+        cycle_status = self.current_cycle.status
+        
         # Add to history
         self.optimization_cycles.append(self.current_cycle)
         
@@ -615,7 +619,7 @@ class AutoOptimizationEngine:
         self.state = OptimizationState.MONITORING
         self.current_cycle = None
         
-        logger.info(f"📝 Optimization cycle finalized: {self.current_cycle.status if self.current_cycle else 'unknown'}")
+        logger.info(f"📝 Optimization cycle finalized: {cycle_status}")
     
     def get_status(self) -> Dict[str, Any]:
         """
@@ -656,19 +660,31 @@ class AutoOptimizationEngine:
         state_file = os.path.join(self.state_dir, "optimization_state.json")
         
         try:
+            # Helper to serialize dataclasses with datetime fields
+            def serialize_obj(obj):
+                """Serialize object to JSON-compatible dict"""
+                if obj is None:
+                    return None
+                obj_dict = asdict(obj)
+                # Convert datetime objects to ISO format strings
+                for key, value in obj_dict.items():
+                    if isinstance(value, datetime):
+                        obj_dict[key] = value.isoformat()
+                return obj_dict
+            
             state = {
-                'current_metrics': asdict(self.current_metrics),
-                'baseline_metrics': asdict(self.baseline_metrics) if self.baseline_metrics else None,
+                'current_metrics': serialize_obj(self.current_metrics),
+                'baseline_metrics': serialize_obj(self.baseline_metrics),
                 'active_parameters': {
-                    name: asdict(param) 
+                    name: serialize_obj(param) 
                     for name, param in self.active_parameters.items()
                 },
-                'optimization_cycles': [asdict(cycle) for cycle in self.optimization_cycles[-10:]],  # Last 10
+                'optimization_cycles': [serialize_obj(cycle) for cycle in self.optimization_cycles[-10:]],  # Up to last 10
                 'last_updated': datetime.now().isoformat()
             }
             
             with open(state_file, 'w') as f:
-                json.dump(state, f, indent=2, default=str)
+                json.dump(state, f, indent=2)
             
             logger.debug(f"State saved to {state_file}")
         except Exception as e:
@@ -687,9 +703,23 @@ class AutoOptimizationEngine:
             with open(state_file, 'r') as f:
                 state = json.load(f)
             
+            # Helper to deserialize datetime fields
+            def parse_datetime(dt_str):
+                """Parse ISO format datetime string"""
+                if dt_str is None:
+                    return None
+                if isinstance(dt_str, str):
+                    from dateutil import parser
+                    return parser.isoparse(dt_str)
+                return dt_str
+            
             # Restore baseline metrics
             if state.get('baseline_metrics'):
-                self.baseline_metrics = OptimizationMetrics(**state['baseline_metrics'])
+                metrics_data = state['baseline_metrics']
+                # Parse datetime field if present
+                if 'timestamp' in metrics_data and isinstance(metrics_data['timestamp'], str):
+                    metrics_data['timestamp'] = parse_datetime(metrics_data['timestamp'])
+                self.baseline_metrics = OptimizationMetrics(**metrics_data)
             
             logger.info(f"State loaded from {state_file}")
             logger.info(f"   Last updated: {state.get('last_updated')}")

@@ -1,0 +1,59 @@
+{
+  "current_metrics": {
+    "timestamp": "2026-01-30 07:18:41.674733",
+    "total_trades": 100,
+    "win_rate": 0.59,
+    "profit_factor": 2.575365679509013,
+    "sharpe_ratio": 0.39280074430302436,
+    "sortino_ratio": 1.9218508533543552,
+    "max_drawdown": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "volatility": 0.02432878038862354,
+    "var_95": 0.0,
+    "risk_adjusted_return": 0.0,
+    "avg_trade_duration_minutes": 0.0,
+    "capital_efficiency": 0.0,
+    "trades_per_day": 0.0,
+    "performance_score": 45.42374464548829
+  },
+  "baseline_metrics": null,
+  "active_parameters": {},
+  "optimization_cycles": [
+    {
+      "cycle_id": "opt_20260130_071841",
+      "start_time": "2026-01-30 07:18:41.692296",
+      "end_time": "2026-01-30 07:18:41.692453",
+      "trigger_reason": "example_demo",
+      "baseline_metrics": {
+        "timestamp": "2026-01-30 07:18:41.674733",
+        "total_trades": 100,
+        "win_rate": 0.59,
+        "profit_factor": 2.575365679509013,
+        "sharpe_ratio": 0.39280074430302436,
+        "sortino_ratio": 1.9218508533543552,
+        "max_drawdown": 0.0,
+        "avg_win": 0.0,
+        "avg_loss": 0.0,
+        "volatility": 0.02432878038862354,
+        "var_95": 0.0,
+        "risk_adjusted_return": 0.0,
+        "avg_trade_duration_minutes": 0.0,
+        "capital_efficiency": 0.0,
+        "trades_per_day": 0.0,
+        "performance_score": 45.42374464548829
+      },
+      "baseline_parameter_id": "unknown",
+      "candidates_tested": 0,
+      "best_candidate_id": "",
+      "best_candidate_score": 0.0,
+      "improvement_pct": 0.0,
+      "was_deployed": false,
+      "deployment_time": null,
+      "duration_minutes": 2.6166666666666665e-06,
+      "status": "failed",
+      "notes": ""
+    }
+  ],
+  "last_updated": "2026-01-30T07:18:41.692538"
+}
