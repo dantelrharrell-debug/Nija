@@ -200,6 +200,34 @@ CLEAR_ENTRY_BLOCKS = True  # Clear entry blocks on startup
 FLUSH_CACHED_BALANCES = True  # Flush cached balances on startup
 
 # ============================================================================
+# ADVANCED OPTIMIZATION SYSTEM (Jan 30, 2026)
+# ============================================================================
+
+# Enable advanced trading optimizations
+ENABLE_ADVANCED_OPTIMIZER = True  # Master switch for optimization system
+
+# Signal Scoring & Ranking
+ENABLE_SIGNAL_SCORING = True  # Optimize and rank entry signals
+MIN_SIGNAL_SCORE = 60.0  # Minimum score to trade (0-100)
+MIN_SIGNAL_CONFIDENCE = 0.60  # Minimum confidence (0-1)
+
+# Dynamic Volatility-Based Sizing
+ENABLE_VOLATILITY_SIZING = True  # Adjust sizes based on volatility
+VOLATILITY_LOOKBACK = 14  # Periods for ATR calculation
+MAX_VOLATILITY_ADJUSTMENT = 0.50  # Max size reduction (50%)
+
+# Adaptive Drawdown Control
+ENABLE_DRAWDOWN_PROTECTION = True  # Protect capital during drawdowns
+DRAWDOWN_CAUTION_THRESHOLD = 5.0  # % drawdown to start reducing
+DRAWDOWN_HALT_THRESHOLD = 20.0  # % drawdown to halt trading
+
+# Smart Compounding Logic
+ENABLE_PROFIT_COMPOUNDING = True  # Automatically compound profits
+COMPOUNDING_STRATEGY = "aggressive"  # conservative/moderate/aggressive
+PROFIT_REINVEST_PCT = 90.0  # % of profits to reinvest (90% for micro capital)
+MIN_PROFIT_TO_COMPOUND = 5.0  # Minimum profit to trigger compounding
+
+# ============================================================================
 # COMPLETE CONFIGURATION DICTIONARY
 # ============================================================================
 
@@ -269,6 +297,22 @@ MICRO_CAPITAL_CONFIG = {
     'reset_strategy_state': RESET_STRATEGY_STATE,
     'clear_entry_blocks': CLEAR_ENTRY_BLOCKS,
     'flush_cached_balances': FLUSH_CACHED_BALANCES,
+    
+    # Advanced Optimization System (Jan 30, 2026)
+    'enable_advanced_optimizer': ENABLE_ADVANCED_OPTIMIZER,
+    'enable_signal_scoring': ENABLE_SIGNAL_SCORING,
+    'min_signal_score': MIN_SIGNAL_SCORE,
+    'min_signal_confidence': MIN_SIGNAL_CONFIDENCE,
+    'enable_volatility_sizing': ENABLE_VOLATILITY_SIZING,
+    'volatility_lookback': VOLATILITY_LOOKBACK,
+    'max_volatility_adjustment': MAX_VOLATILITY_ADJUSTMENT,
+    'enable_drawdown_protection': ENABLE_DRAWDOWN_PROTECTION,
+    'drawdown_caution_threshold': DRAWDOWN_CAUTION_THRESHOLD,
+    'drawdown_halt_threshold': DRAWDOWN_HALT_THRESHOLD,
+    'enable_profit_compounding': ENABLE_PROFIT_COMPOUNDING,
+    'compounding_strategy': COMPOUNDING_STRATEGY,
+    'profit_reinvest_pct': PROFIT_REINVEST_PCT,
+    'min_profit_to_compound': MIN_PROFIT_TO_COMPOUND,
 }
 
 # ============================================================================
