@@ -97,6 +97,18 @@ except ImportError:
     except ImportError as e:
         logger.debug(f"Note: Could not load restriction blacklist: {e}")
 
+# Load whitelist configuration for MASTER_ONLY mode (optional)
+try:
+    from bot.master_only_config import is_whitelisted_symbol, WHITELISTED_ASSETS
+    WHITELIST_ENABLED = os.getenv('ENABLE_SYMBOL_WHITELIST', 'false').lower() in ('true', '1', 'yes')
+    if WHITELIST_ENABLED:
+        logger.info(f"✅ Symbol whitelist ENABLED: {', '.join(WHITELISTED_ASSETS)}")
+    else:
+        logger.debug("Symbol whitelist available but not enabled (set ENABLE_SYMBOL_WHITELIST=true to enable)")
+except ImportError:
+    WHITELIST_ENABLED = False
+    logger.debug("Note: Symbol whitelist not available (master_only_config not found)")
+
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
@@ -302,7 +314,13 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
 # With $5+ positions, trades have better chance of profitability after fees
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
-MAX_POSITIONS_ALLOWED = 8  # Maximum concurrent positions (including protected/micro positions)
+# Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '8')
+try:
+    MAX_POSITIONS_ALLOWED = int(_max_positions_env)
+except ValueError:
+    MAX_POSITIONS_ALLOWED = 8  # Default fallback
+logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED}")
 
 # OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
 # MIN_TRADE_USD = max(2.00, balance * 0.15)
@@ -3550,6 +3568,13 @@ class TradingStrategy:
                             if symbol in DISABLED_PAIRS:
                                 logger.debug(f"   ⛔ SKIPPING {symbol}: Blacklisted pair (spread > profit edge)")
                                 continue
+
+                            # WHITELIST CHECK - Only trade whitelisted symbols if whitelist is enabled
+                            if WHITELIST_ENABLED:
+                                broker_name = self._get_broker_name(active_broker)
+                                if not is_whitelisted_symbol(symbol, broker_name):
+                                    logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in whitelist (only trading {', '.join(WHITELISTED_ASSETS)})")
+                                    continue
 
                             # CRITICAL: Add delay BEFORE fetching candles to prevent rate limiting
                             # This is in addition to the delay after processing (line ~1201)
