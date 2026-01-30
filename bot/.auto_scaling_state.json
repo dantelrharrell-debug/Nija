@@ -1,0 +1,37 @@
+{
+  "current_tier": "ADVANCED",
+  "last_equity": 750.0,
+  "last_upgrade_time": "2026-01-30T06:11:19.821367",
+  "upgrade_history": [
+    {
+      "from_tier": null,
+      "to_tier": "STARTER",
+      "equity": 15,
+      "timestamp": "2026-01-30T06:11:19.819093"
+    },
+    {
+      "from_tier": "STARTER",
+      "to_tier": "GROWTH",
+      "equity": 250,
+      "timestamp": "2026-01-30T06:11:19.819624"
+    },
+    {
+      "from_tier": "GROWTH",
+      "to_tier": "ADVANCED",
+      "equity": 500,
+      "timestamp": "2026-01-30T06:11:19.819956"
+    },
+    {
+      "from_tier": "ADVANCED",
+      "to_tier": "ELITE",
+      "equity": 1000,
+      "timestamp": "2026-01-30T06:11:19.820706"
+    },
+    {
+      "from_tier": "ELITE",
+      "to_tier": "ADVANCED",
+      "equity": 750.0,
+      "timestamp": "2026-01-30T06:11:19.821373"
+    }
+  ]
+}
