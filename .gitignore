@@ -14,6 +14,7 @@ venv/
 !.env.livable_tier          # Allow LIVABLE tier template
 !.env.baller_tier           # Allow BALLER tier template
 !.env.small_account_preset  # Allow small account preset
+!.env.micro_capital         # Allow micro capital mode template
 !.env.example               # Allow example template
 !.env.copy_trading_example  # Allow copy trading example
 .venv/
