@@ -56,6 +56,16 @@ try:
 except ImportError:
     logger.warning("Hard controls module not available")
     get_hard_controls = None
+
+# Import Command Center API
+try:
+    from command_center_api import register_command_center_routes
+except ImportError:
+    try:
+        from bot.command_center_api import register_command_center_routes
+    except ImportError:
+        logger.warning("Command Center API not available")
+        register_command_center_routes = None
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 10  # 10 seconds
 
@@ -110,6 +120,12 @@ def users_dashboard():
 def trades_dashboard():
     """Trades ledger dashboard page"""
     return render_template('trades_dashboard.html')
+
+
+@app.route('/command-center')
+def command_center_dashboard():
+    """Command Center dashboard page with live metrics"""
+    return render_template('command_center.html')
 
 
 @app.route('/api/status')
@@ -1991,10 +2007,17 @@ if __name__ == "__main__":
     # Ensure data directory exists
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Register Command Center routes
+    if register_command_center_routes:
+        register_command_center_routes(app)
+        logger.info("✅ Command Center routes registered")
+    else:
+        logger.warning("⚠️ Command Center routes not available")
+
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")
     print("👥 Users Dashboard: http://localhost:5001/users")
-    print("🔄 Auto-refresh every 5 seconds")
+    print("⚡ Command Center: http://localhost:5001/command-center")
     print(f"🔄 Auto-refresh every {AUTO_REFRESH_INTERVAL} seconds")
     print("\nPress Ctrl+C to stop\n")
 
