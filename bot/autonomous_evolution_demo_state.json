@@ -1,0 +1,135 @@
+{
+  "state": "monitoring",
+  "enabled": true,
+  "cycle_number": 1,
+  "last_evolution": "2026-01-30T07:48:37.395418",
+  "last_regime_check": "2026-01-30T07:48:37.401320",
+  "last_rebalance": "2026-01-30T07:48:37.399718",
+  "genetic": {
+    "population_size": 20,
+    "generation": 1,
+    "best_strategies": 10,
+    "hall_of_fame": 0,
+    "patterns_discovered": 7
+  },
+  "regime": {
+    "current_regime": "volatility_explosion",
+    "current_confidence": 0.34615384615384615,
+    "active_strategy": "trend_following",
+    "strategy_switches": 0,
+    "regime_distribution": {
+      "volatility_explosion": 2
+    },
+    "avg_confidence_by_regime": {
+      "volatility_explosion": 0.34615384615384615
+    },
+    "performance_by_regime": {
+      "volatility_explosion": {
+        "strategy": "trend_following",
+        "trades": 6,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.3642516971707153,
+        "total_pnl": 4138.126629419921,
+        "roi_improvement": 0.0
+      }
+    },
+    "total_classifications": 2
+  },
+  "capital": {
+    "total_capital": 10000.0,
+    "allocated_capital": 9000.0,
+    "reserve_capital": 1000.0,
+    "method": "sharpe_weighted",
+    "num_targets": 6,
+    "allocations": {
+      "gen0_strat0_20260130_074837": 1610.2371096830036,
+      "gen0_strat1_20260130_074837": 997.866492340203,
+      "gen0_strat2_20260130_074837": 2183.708384702553,
+      "gen0_strat3_20260130_074837": 1124.706270818497,
+      "gen0_strat4_20260130_074837": 2052.024285473525,
+      "gen1_mut_20260130_074837": 1031.4574569822182
+    },
+    "allocation_pcts": {
+      "gen0_strat0_20260130_074837": 0.16102371096830037,
+      "gen0_strat1_20260130_074837": 0.0997866492340203,
+      "gen0_strat2_20260130_074837": 0.2183708384702553,
+      "gen0_strat3_20260130_074837": 0.1124706270818497,
+      "gen0_strat4_20260130_074837": 0.20520242854735252,
+      "gen1_mut_20260130_074837": 0.10314574569822182
+    },
+    "expected_metrics": {
+      "return": 0.0032902773962600017,
+      "volatility": 0.0775933426566976,
+      "sharpe": 0.042404119781479684,
+      "diversification": 0.9696626303025393
+    },
+    "last_rebalance": "2026-01-30T07:48:37.399714",
+    "rebalancing_needed": false
+  },
+  "deployed_strategies": {
+    "gen0_strat0_20260130_074837": {
+      "fitness": 0.29569059160072014,
+      "generation": 0,
+      "trades": 30,
+      "win_rate": 0.4488099547238902
+    },
+    "gen0_strat1_20260130_074837": {
+      "fitness": 0.27579221966251555,
+      "generation": 0,
+      "trades": 30,
+      "win_rate": 0.40231849247933016
+    },
+    "gen0_strat2_20260130_074837": {
+      "fitness": 0.4063773557742596,
+      "generation": 0,
+      "trades": 30,
+      "win_rate": 0.5300608477870156
+    },
+    "gen0_strat3_20260130_074837": {
+      "fitness": 0.0,
+      "generation": 0,
+      "trades": 0,
+      "win_rate": 0.0
+    },
+    "gen0_strat4_20260130_074837": {
+      "fitness": 0.0,
+      "generation": 0,
+      "trades": 0,
+      "win_rate": 0.0
+    },
+    "gen1_mut_20260130_074837": {
+      "fitness": 0.6485375290594175,
+      "generation": 1,
+      "trades": 70,
+      "win_rate": 0.6284093110354227
+    }
+  },
+  "recent_cycles": [
+    {
+      "cycle": 1,
+      "timestamp": "2026-01-30T07:48:37.391548",
+      "evolution": {
+        "created": 20,
+        "culled": 0,
+        "best_fitness": 0.6485375290594175,
+        "avg_fitness": 0.2775849973009839
+      },
+      "regime": {
+        "regime": null,
+        "confidence": 0.0,
+        "switches": 0
+      },
+      "allocation": {
+        "changes": 0,
+        "sharpe": 0.0,
+        "diversification": 0.0
+      },
+      "performance": {
+        "pnl": 0.0,
+        "win_rate": 0.0,
+        "roi_improvement": 0.0
+      },
+      "duration": 0.003903
+    }
+  ]
+}
