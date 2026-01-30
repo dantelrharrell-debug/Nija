@@ -1,0 +1,24 @@
+{
+  "current_metrics": {
+    "timestamp": "2026-01-30T07:23:59.335492",
+    "total_trades": 25,
+    "win_rate": 0.64,
+    "profit_factor": 4.444444444444445,
+    "sharpe_ratio": 0.7380952380952381,
+    "sortino_ratio": 0.0,
+    "max_drawdown": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "volatility": 0.013439999999999999,
+    "var_95": 0.0,
+    "risk_adjusted_return": 0.0,
+    "avg_trade_duration_minutes": 0.0,
+    "capital_efficiency": 0.0,
+    "trades_per_day": 0.0,
+    "performance_score": 52.22857142857143
+  },
+  "baseline_metrics": null,
+  "active_parameters": {},
+  "optimization_cycles": [],
+  "last_updated": "2026-01-30T07:23:59.347539"
+}
