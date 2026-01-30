@@ -583,8 +583,88 @@ class CopyTradeEngine:
                         size_type=signal.size_type
                     )
 
-            # Place order on user's exchange
-            logger.info(f"      📤 Placing {signal.side.upper()} order...")
+            # ========================================
+            # FOLLOWER-SIDE SAFEGUARDS
+            # ========================================
+            # These safeguards protect individual followers without affecting master
+            # Each follower executes independently with their own validation
+            
+            # 1. SLIPPAGE PROTECTION: Validate price hasn't moved too much from master entry
+            if signal.price and hasattr(user_broker, 'get_last_price'):
+                try:
+                    current_price = user_broker.get_last_price(normalized_symbol)
+                    if current_price and current_price > 0:
+                        price_change_pct = abs((current_price - signal.price) / signal.price) * 100
+                        max_slippage_pct = 2.0  # Maximum allowed price movement (configurable)
+                        
+                        if price_change_pct > max_slippage_pct:
+                            error_msg = f"Price moved {price_change_pct:.2f}% (limit: {max_slippage_pct}%), master: ${signal.price:.6f}, current: ${current_price:.6f}"
+                            logger.warning(f"      ⚠️  Slippage protection: {error_msg}")
+                            logger.warning(f"      Skipping trade to protect follower from excessive slippage")
+                            return CopyTradeResult(
+                                user_id=user_id,
+                                success=False,
+                                order_id=None,
+                                error_message=error_msg,
+                                size=user_size_rounded,
+                                size_type=signal.size_type
+                            )
+                        else:
+                            logger.info(f"      ✅ Slippage check passed: {price_change_pct:.2f}% (limit: {max_slippage_pct}%)")
+                except Exception as e:
+                    logger.debug(f"      Could not validate slippage: {e}")
+                    # Fail-safe: Continue with trade (some brokers may not support get_last_price)
+            
+            # 2. BALANCE SUFFICIENCY: Ensure user has enough free balance for the order
+            if signal.side.lower() == 'buy':
+                try:
+                    free_balance = balance_data.get('available_balance', user_balance)
+                    required_balance = user_size_rounded if signal.size_type == 'quote' else user_size_rounded * (current_price if 'current_price' in locals() else signal.price)
+                    
+                    # Add 1% buffer for fees and price movement
+                    required_with_buffer = required_balance * 1.01
+                    
+                    if free_balance < required_with_buffer:
+                        error_msg = f"Insufficient balance: ${free_balance:.2f} available, ${required_with_buffer:.2f} required (includes 1% buffer)"
+                        logger.warning(f"      ⚠️  Balance check failed: {error_msg}")
+                        return CopyTradeResult(
+                            user_id=user_id,
+                            success=False,
+                            order_id=None,
+                            error_message=error_msg,
+                            size=user_size_rounded,
+                            size_type=signal.size_type
+                        )
+                    else:
+                        logger.info(f"      ✅ Balance check passed: ${free_balance:.2f} available, ${required_with_buffer:.2f} required")
+                except Exception as e:
+                    logger.debug(f"      Could not validate balance sufficiency: {e}")
+                    # Fail-safe: Continue with trade (broker's execute_order will catch insufficient balance)
+            
+            # 3. MINIMUM ORDER SIZE: Validate against exchange-specific minimums
+            # This is additional to the dust threshold check above
+            if hasattr(user_broker, 'get_min_order_size'):
+                try:
+                    min_order_size = user_broker.get_min_order_size(normalized_symbol, signal.size_type)
+                    if min_order_size and user_size_rounded < min_order_size:
+                        error_msg = f"Order size {user_size_rounded} below exchange minimum {min_order_size} ({signal.size_type})"
+                        logger.warning(f"      ⚠️  Min order size check failed: {error_msg}")
+                        return CopyTradeResult(
+                            user_id=user_id,
+                            success=False,
+                            order_id=None,
+                            error_message=error_msg,
+                            size=user_size_rounded,
+                            size_type=signal.size_type
+                        )
+                    elif min_order_size:
+                        logger.info(f"      ✅ Min order size check passed: {user_size_rounded} >= {min_order_size}")
+                except Exception as e:
+                    logger.debug(f"      Could not validate min order size: {e}")
+                    # Fail-safe: Continue with trade (broker's execute_order will catch min size violations)
+            
+            # All follower safeguards passed - proceed with trade execution
+            logger.info(f"      📤 Placing {signal.side.upper()} order (follower executes independently)...")
 
             order_result = user_broker.execute_order(
                 symbol=normalized_symbol,  # Use normalized symbol
