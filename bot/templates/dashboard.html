@@ -67,29 +67,6 @@
             font-size: 13px;
         }
         .trade-row:last-child { border-bottom: none; }
-        .activity-event {
-            padding: 10px;
-            border-bottom: 1px solid #2f3336;
-            font-size: 13px;
-        }
-        .activity-event:last-child { border-bottom: none; }
-        .activity-timestamp {
-            font-size: 11px;
-            color: #71767b;
-            margin-bottom: 4px;
-        }
-        .activity-message {
-            margin-bottom: 4px;
-        }
-        .activity-details {
-            font-size: 11px;
-            color: #71767b;
-            margin-left: 16px;
-        }
-        .event-SUCCESS { border-left: 3px solid #00ba7c; padding-left: 8px; }
-        .event-INFO { border-left: 3px solid #1d9bf0; padding-left: 8px; }
-        .event-WARNING { border-left: 3px solid #ffd400; padding-left: 8px; }
-        .event-ERROR { border-left: 3px solid #f91880; padding-left: 8px; }
         .refresh-indicator {
             position: fixed;
             top: 20px;
@@ -112,17 +89,6 @@
         <div class="header">
             <h1>🤖 NIJA Trading Bot</h1>
             <div class="subtitle">Real-time monitoring dashboard</div>
-            <div style="margin-top: 15px;">
-                <a href="/command-center" class="btn" style="padding: 8px 16px; background: linear-gradient(135deg, #1d4ed8 0%, #7c3aed 100%); color: white; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600; margin-right: 10px;">
-                    ⚡ Command Center
-                </a>
-                <a href="/trades" class="btn" style="padding: 8px 16px; background: #1d9bf0; color: white; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">
-                    📊 View Trade Ledger
-                </a>
-                <a href="/users" class="btn" style="padding: 8px 16px; background: #2f3336; color: white; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600; margin-left: 10px;">
-                    👥 User Dashboard
-                </a>
-            </div>
         </div>
 
         <div class="refresh-indicator">
@@ -191,29 +157,11 @@
             <h2>📈 Recent Trades</h2>
             <div id="trades-container" class="loading">Loading trades...</div>
         </div>
-
-        <!-- Activity Feed -->
-        <div class="card" style="margin-top: 20px;">
-            <h2>📋 Activity Feed - Decision Truth</h2>
-            <div style="margin-bottom: 10px; font-size: 13px; color: #71767b;">
-                Shows ALL signals, rejections, filters, and trading decisions
-            </div>
-            <div id="activity-container" class="loading">Loading activity...</div>
-        </div>
-
-        <!-- Live Position Mirror -->
-        <div class="card" style="margin-top: 20px;">
-            <h2>🔄 Live Position Mirror</h2>
-            <div style="margin-bottom: 10px; font-size: 13px; color: #71767b;">
-                Real-time positions (updates even when broker UI lags)
-            </div>
-            <div id="positions-container" class="loading">Loading positions...</div>
-        </div>
     </div>
 
     <script>
-        // Auto-refresh every 5 seconds
-        const REFRESH_INTERVAL = 5000;
+        // Auto-refresh every ${AUTO_REFRESH_INTERVAL} seconds
+        const REFRESH_INTERVAL = 10000;  // milliseconds
         let lastUpdate = Date.now();
 
         async function fetchData(endpoint) {
@@ -330,112 +278,16 @@
             `;
         }
 
-        function updateActivity(activity) {
-            const container = document.getElementById('activity-container');
-            if (!activity || activity.events.length === 0) {
-                container.innerHTML = '<div style="padding: 20px; text-align: center; color: #71767b;">No recent activity</div>';
-                return;
-            }
-
-            container.innerHTML = activity.events.slice(0, 50).map(event => `
-                <div class="activity-event event-${event.level}">
-                    <div class="activity-timestamp">${new Date(event.timestamp).toLocaleString()}</div>
-                    <div class="activity-message">${event.message}</div>
-                    ${Object.keys(event.details).length > 0 ? `
-                        <div class="activity-details">
-                            ${formatActivityDetails(event.details)}
-                        </div>
-                    ` : ''}
-                </div>
-            `).join('');
-        }
-
-        function updatePositions(positions) {
-            const container = document.getElementById('positions-container');
-            if (!positions || positions.positions.length === 0) {
-                container.innerHTML = '<div style="padding: 20px; text-align: center; color: #71767b;">No open positions</div>';
-                return;
-            }
-
-            container.innerHTML = `
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Symbol</th>
-                            <th>Broker</th>
-                            <th>Side</th>
-                            <th>Entry</th>
-                            <th>Current</th>
-                            <th>Size</th>
-                            <th>P&L</th>
-                            <th>Hold Time</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${positions.positions.map(pos => `
-                            <tr>
-                                <td>${pos.symbol}</td>
-                                <td>${pos.broker}</td>
-                                <td class="${pos.side === 'long' ? 'positive' : 'negative'}">
-                                    ${pos.side.toUpperCase()}
-                                </td>
-                                <td>${formatCurrency(pos.entry_price)}</td>
-                                <td>${formatCurrency(pos.current_price)}</td>
-                                <td>${formatCurrency(pos.position_size)}</td>
-                                <td class="${pos.unrealized_pnl >= 0 ? 'positive' : 'negative'}">
-                                    ${formatCurrency(pos.unrealized_pnl)} (${pos.unrealized_pnl_pct.toFixed(2)}%)
-                                </td>
-                                <td>${pos.hold_time_minutes}m</td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-                <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #2f3336; font-size: 13px;">
-                    <strong>Summary:</strong> ${positions.count} position(s) |
-                    Total Unrealized P&L: <span class="${positions.positions.reduce((sum, p) => sum + p.unrealized_pnl, 0) >= 0 ? 'positive' : 'negative'}">
-                        ${formatCurrency(positions.positions.reduce((sum, p) => sum + p.unrealized_pnl, 0))}
-                    </span>
-                </div>
-            `;
-        }
-
-        function formatActivityDetails(details) {
-            // Format key details for display
-            const relevantKeys = ['rejection_reason', 'filter_reason', 'reason', 'ai_score', 'confidence',
-                                 'position_size', 'pnl', 'fees', 'tier'];
-            const items = [];
-
-            for (const key of relevantKeys) {
-                if (details[key] !== undefined) {
-                    let value = details[key];
-                    if (typeof value === 'number' && key.includes('score')) {
-                        value = value.toFixed(2);
-                    } else if (typeof value === 'number' && key.includes('confidence')) {
-                        value = (value * 100).toFixed(1) + '%';
-                    } else if (typeof value === 'number' && (key.includes('size') || key.includes('pnl') || key.includes('fees'))) {
-                        value = '$' + value.toFixed(2);
-                    }
-                    items.push(`${key.replace('_', ' ')}: ${value}`);
-                }
-            }
-
-            return items.join(' | ');
-        }
-
         async function refreshAll() {
-            const [status, alerts, trades, activity, positions] = await Promise.all([
+            const [status, alerts, trades] = await Promise.all([
                 fetchData('status'),
                 fetchData('alerts'),
-                fetchData('trades'),
-                fetchData('activity/recent?limit=50'),
-                fetchData('positions/live')
+                fetchData('trades')
             ]);
 
             updateStatus(status);
             updateAlerts(alerts);
             updateTrades(trades);
-            updateActivity(activity);
-            updatePositions(positions);
 
             lastUpdate = Date.now();
             document.getElementById('refresh-status').textContent =
