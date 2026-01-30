@@ -96,7 +96,13 @@ class KPITracker:
         Args:
             data_dir: Directory to store KPI data
             initial_capital: Starting capital amount
+            
+        Raises:
+            ValueError: If initial_capital is zero or negative
         """
+        if initial_capital <= 0:
+            raise ValueError("initial_capital must be positive")
+        
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
@@ -347,9 +353,11 @@ class KPITracker:
         for equity in self.equity_curve:
             if equity > peak:
                 peak = equity
-            dd = (peak - equity) / peak * 100
-            if dd > max_dd:
-                max_dd = dd
+            # Protect against division by zero
+            if peak > 0:
+                dd = (peak - equity) / peak * 100
+                if dd > max_dd:
+                    max_dd = dd
         
         return max_dd
     

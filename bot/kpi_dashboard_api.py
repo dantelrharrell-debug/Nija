@@ -66,7 +66,7 @@ def create_kpi_dashboard_api(app: Flask = None) -> Flask:
             logger.error(f"Error getting KPI summary: {e}")
             return jsonify({
                 'success': False,
-                'error': str(e)
+                'error': 'Internal server error'
             }), 500
     
     @app.route('/api/v1/kpi/trends', methods=['GET'])
@@ -74,17 +74,29 @@ def create_kpi_dashboard_api(app: Flask = None) -> Flask:
         """Get KPI trends over time"""
         try:
             days = int(request.args.get('days', 30))
+            # Validate days parameter
+            if days < 1 or days > 365:
+                return jsonify({
+                    'success': False,
+                    'error': 'Days parameter must be between 1 and 365'
+                }), 400
+            
             trends = kpi_tracker.get_kpi_trends(days=days)
             return jsonify({
                 'success': True,
                 'data': trends,
                 'timestamp': datetime.now().isoformat()
             })
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid days parameter - must be an integer'
+            }), 400
         except Exception as e:
             logger.error(f"Error getting KPI trends: {e}")
             return jsonify({
                 'success': False,
-                'error': str(e)
+                'error': 'Internal server error'
             }), 500
     
     @app.route('/api/v1/kpi/export', methods=['POST'])

@@ -36,6 +36,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Constants
+TRADING_FEE_RATE = 0.001  # 0.1% trading fee
+EXAMPLE_BTC_PRICE = 45000.0  # Simplified BTC price for examples
+
 
 class TradingBotWithKPI:
     """
@@ -140,7 +144,7 @@ class TradingBotWithKPI:
             profit_pct = (entry_price - exit_price) / entry_price
         
         profit = position_size * entry_price * profit_pct
-        fees = position_size * entry_price * 0.001  # 0.1% fee
+        fees = position_size * entry_price * TRADING_FEE_RATE
         net_profit = profit - fees
         is_win = net_profit > 0
         
@@ -245,14 +249,14 @@ class TradingBotWithKPI:
             
             # Determine position size based on balance
             position_size_pct = random.uniform(0.02, 0.05)  # 2-5% of balance
-            position_size = (self.current_balance * position_size_pct) / 45000  # Rough BTC price
+            position_size = (self.current_balance * position_size_pct) / EXAMPLE_BTC_PRICE
             
             # Execute trade
             self.execute_trade(
                 symbol=symbol,
                 strategy=strategy,
                 direction=direction,
-                entry_price=45000.0,  # Simplified
+                entry_price=EXAMPLE_BTC_PRICE,
                 position_size=position_size
             )
             
