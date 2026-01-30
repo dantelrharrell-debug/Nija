@@ -11,7 +11,7 @@ Configuration for micro capital accounts ($15-$500) with:
 
 Optimized for:
 - Small capital fast-frequency trading
-- Pro-Level position sizing (22% max per position)
+- Pro-Level position sizing (25% max per position for micro capital)
 - Higher position count (5 concurrent positions)
 - Tight risk management (0.7% risk per trade)
 - Gradual scaling with account growth
