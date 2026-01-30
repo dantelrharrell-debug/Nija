@@ -3,21 +3,23 @@ NIJA Micro Capital Mode Configuration
 ======================================
 
 Configuration for micro capital accounts ($15-$500) with:
-- Ultra-conservative risk management
+- Optimized for small capital fast-frequency trading (Pro-Level)
 - Dynamic position scaling based on equity
 - Multi-broker support (Coinbase + Kraken)
 - Advanced signal filtering and AI trade validation
 - Automatic feature enablement as capital grows
 
-Perfect for:
-- Starting accounts under $500
-- Conservative capital preservation
+Optimized for:
+- Small capital fast-frequency trading
+- Pro-Level position sizing (22% max per position)
+- Higher position count (5 concurrent positions)
+- Tight risk management (0.7% risk per trade)
 - Gradual scaling with account growth
-- Professional risk management at all levels
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 2.0
 Date: January 30, 2026
+Updated: Pro-Level Optimization for small capital fast-frequency
 """
 
 import os
@@ -57,11 +59,21 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # POSITION MANAGEMENT
 # ============================================================================
 
-MAX_POSITIONS = 2  # Maximum concurrent positions (scales with equity)
+# Pro-Level Optimization (Jan 30, 2026):
+# - MAX_POSITIONS = 4: Balanced diversification for small capital
+# - MAX_POSITION_PCT = 25%: Larger individual positions for small capital efficiency
+# - RISK_PER_TRADE = 0.9%: Balanced risk control per trade
+#
+# NOTE: While MAX_POSITIONS × MAX_POSITION_PCT = 100% theoretical maximum,
+# the risk_manager.py enforces max_total_exposure = 60% as a safeguard.
+# This configuration is optimized for fast-frequency trading where not all
+# positions will be at maximum size simultaneously.
+
+MAX_POSITIONS = 4  # Maximum concurrent positions (UPDATED Jan 30, 2026 for fast-frequency trading)
 
 # Position sizing as percentage of capital
-MAX_POSITION_PCT = 18.0  # Maximum 18% of capital per position
-RISK_PER_TRADE = 3.0  # Risk 3% per trade (scales with equity)
+MAX_POSITION_PCT = 25.0  # Maximum 25% of capital per position (OPTIMIZED for small capital fast-frequency)
+RISK_PER_TRADE = 0.9  # Risk 0.9% per trade (OPTIMIZED for Pro-Level performance)
 
 # ============================================================================
 # RISK MANAGEMENT
@@ -188,6 +200,34 @@ CLEAR_ENTRY_BLOCKS = True  # Clear entry blocks on startup
 FLUSH_CACHED_BALANCES = True  # Flush cached balances on startup
 
 # ============================================================================
+# ADVANCED OPTIMIZATION SYSTEM (Jan 30, 2026)
+# ============================================================================
+
+# Enable advanced trading optimizations
+ENABLE_ADVANCED_OPTIMIZER = True  # Master switch for optimization system
+
+# Signal Scoring & Ranking
+ENABLE_SIGNAL_SCORING = True  # Optimize and rank entry signals
+MIN_SIGNAL_SCORE = 60.0  # Minimum score to trade (0-100)
+MIN_SIGNAL_CONFIDENCE = 0.60  # Minimum confidence (0-1)
+
+# Dynamic Volatility-Based Sizing
+ENABLE_VOLATILITY_SIZING = True  # Adjust sizes based on volatility
+VOLATILITY_LOOKBACK = 14  # Periods for ATR calculation
+MAX_VOLATILITY_ADJUSTMENT = 0.50  # Max size reduction (50%)
+
+# Adaptive Drawdown Control
+ENABLE_DRAWDOWN_PROTECTION = True  # Protect capital during drawdowns
+DRAWDOWN_CAUTION_THRESHOLD = 5.0  # % drawdown to start reducing
+DRAWDOWN_HALT_THRESHOLD = 20.0  # % drawdown to halt trading
+
+# Smart Compounding Logic
+ENABLE_PROFIT_COMPOUNDING = True  # Automatically compound profits
+COMPOUNDING_STRATEGY = "aggressive"  # conservative/moderate/aggressive
+PROFIT_REINVEST_PCT = 90.0  # % of profits to reinvest (90% for micro capital)
+MIN_PROFIT_TO_COMPOUND = 5.0  # Minimum profit to trigger compounding
+
+# ============================================================================
 # COMPLETE CONFIGURATION DICTIONARY
 # ============================================================================
 
@@ -257,6 +297,22 @@ MICRO_CAPITAL_CONFIG = {
     'reset_strategy_state': RESET_STRATEGY_STATE,
     'clear_entry_blocks': CLEAR_ENTRY_BLOCKS,
     'flush_cached_balances': FLUSH_CACHED_BALANCES,
+    
+    # Advanced Optimization System (Jan 30, 2026)
+    'enable_advanced_optimizer': ENABLE_ADVANCED_OPTIMIZER,
+    'enable_signal_scoring': ENABLE_SIGNAL_SCORING,
+    'min_signal_score': MIN_SIGNAL_SCORE,
+    'min_signal_confidence': MIN_SIGNAL_CONFIDENCE,
+    'enable_volatility_sizing': ENABLE_VOLATILITY_SIZING,
+    'volatility_lookback': VOLATILITY_LOOKBACK,
+    'max_volatility_adjustment': MAX_VOLATILITY_ADJUSTMENT,
+    'enable_drawdown_protection': ENABLE_DRAWDOWN_PROTECTION,
+    'drawdown_caution_threshold': DRAWDOWN_CAUTION_THRESHOLD,
+    'drawdown_halt_threshold': DRAWDOWN_HALT_THRESHOLD,
+    'enable_profit_compounding': ENABLE_PROFIT_COMPOUNDING,
+    'compounding_strategy': COMPOUNDING_STRATEGY,
+    'profit_reinvest_pct': PROFIT_REINVEST_PCT,
+    'min_profit_to_compound': MIN_PROFIT_TO_COMPOUND,
 }
 
 # ============================================================================
