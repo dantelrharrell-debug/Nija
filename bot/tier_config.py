@@ -369,7 +369,7 @@ def get_tier_from_balance(balance: float, override_tier: str = None, is_master: 
         else:
             try:
                 forced_tier = TradingTier[env_tier]
-                logger.info(f"🎯 Tier override active: Using {env_tier} tier (balance: ${balance:.2f})")
+                logger.info(f"🎯 Tier override: Using {env_tier} tier (balance: ${balance:.2f})")
                 logger.info(f"   Note: Balance-based tier would be {get_tier_from_balance_internal(balance).value}")
                 return forced_tier
             except KeyError:
