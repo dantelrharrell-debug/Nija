@@ -188,7 +188,7 @@ def test_position_config():
     else:
         print(f"   ✅ Min trade size: ${MIN_TRADE_SIZE_USD}")
     
-    if LEVERAGE_ENABLED != False:
+    if LEVERAGE_ENABLED:
         print(f"   ❌ Leverage should be disabled, got {LEVERAGE_ENABLED}")
         all_passed = False
     else:

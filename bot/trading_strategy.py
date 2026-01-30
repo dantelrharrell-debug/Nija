@@ -97,6 +97,18 @@ except ImportError:
     except ImportError as e:
         logger.debug(f"Note: Could not load restriction blacklist: {e}")
 
+# Load whitelist configuration for MASTER_ONLY mode (optional)
+try:
+    from bot.master_only_config import is_whitelisted_symbol, WHITELISTED_ASSETS
+    WHITELIST_ENABLED = os.getenv('ENABLE_SYMBOL_WHITELIST', 'false').lower() in ('true', '1', 'yes')
+    if WHITELIST_ENABLED:
+        logger.info(f"✅ Symbol whitelist ENABLED: {', '.join(WHITELISTED_ASSETS)}")
+    else:
+        logger.debug("Symbol whitelist available but not enabled (set ENABLE_SYMBOL_WHITELIST=true to enable)")
+except ImportError:
+    WHITELIST_ENABLED = False
+    logger.debug("Note: Symbol whitelist not available (master_only_config not found)")
+
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
 
@@ -3558,19 +3570,11 @@ class TradingStrategy:
                                 continue
 
                             # WHITELIST CHECK - Only trade whitelisted symbols if whitelist is enabled
-                            # Import whitelist config if available
-                            try:
-                                from bot.master_only_config import is_whitelisted_symbol, WHITELISTED_ASSETS
-                                # Check if whitelist mode is enabled via environment variable
-                                whitelist_enabled = os.getenv('ENABLE_SYMBOL_WHITELIST', 'false').lower() in ('true', '1', 'yes')
-                                if whitelist_enabled:
-                                    broker_name = self._get_broker_name(active_broker)
-                                    if not is_whitelisted_symbol(symbol, broker_name):
-                                        logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in whitelist (only trading {', '.join(WHITELISTED_ASSETS)})")
-                                        continue
-                            except ImportError:
-                                # Whitelist config not available, continue normal operation
-                                pass
+                            if WHITELIST_ENABLED:
+                                broker_name = self._get_broker_name(active_broker)
+                                if not is_whitelisted_symbol(symbol, broker_name):
+                                    logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in whitelist (only trading {', '.join(WHITELISTED_ASSETS)})")
+                                    continue
 
                             # CRITICAL: Add delay BEFORE fetching candles to prevent rate limiting
                             # This is in addition to the delay after processing (line ~1201)
