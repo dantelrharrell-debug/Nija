@@ -3,21 +3,23 @@ NIJA Micro Capital Mode Configuration
 ======================================
 
 Configuration for micro capital accounts ($15-$500) with:
-- Ultra-conservative risk management
+- Optimized for small capital fast-frequency trading (Pro-Level)
 - Dynamic position scaling based on equity
 - Multi-broker support (Coinbase + Kraken)
 - Advanced signal filtering and AI trade validation
 - Automatic feature enablement as capital grows
 
-Perfect for:
-- Starting accounts under $500
-- Conservative capital preservation
+Optimized for:
+- Small capital fast-frequency trading
+- Pro-Level position sizing (22% max per position)
+- Higher position count (5 concurrent positions)
+- Tight risk management (0.7% risk per trade)
 - Gradual scaling with account growth
-- Professional risk management at all levels
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 2.0
 Date: January 30, 2026
+Updated: Pro-Level Optimization for small capital fast-frequency
 """
 
 import os
@@ -56,6 +58,16 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # ============================================================================
 # POSITION MANAGEMENT
 # ============================================================================
+
+# Pro-Level Optimization (Jan 30, 2026):
+# - MAX_POSITIONS = 5: Allows diversification across multiple opportunities
+# - MAX_POSITION_PCT = 22%: Larger individual positions for small capital efficiency
+# - RISK_PER_TRADE = 0.7%: Tight risk control per trade
+#
+# NOTE: While MAX_POSITIONS × MAX_POSITION_PCT = 110% theoretical maximum,
+# the risk_manager.py enforces max_total_exposure = 60% as a safeguard.
+# This configuration is optimized for fast-frequency trading where not all
+# positions will be at maximum size simultaneously.
 
 MAX_POSITIONS = 5  # Maximum concurrent positions (UPDATED Jan 30, 2026 for fast-frequency trading)
 
