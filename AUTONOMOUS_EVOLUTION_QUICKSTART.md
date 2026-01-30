@@ -69,6 +69,7 @@ From the example run:
   Current regime: volatility_explosion
   Confidence: 34.62%
   Active strategy: defensive
+  (7 total regimes detected)
 
 💰 CAPITAL ALLOCATION:
   Total capital: $10,000.00
@@ -94,7 +95,7 @@ From the example run:
 - Discovers alpha patterns
 
 ### Market Regime Classification
-- Detects 6+ market regimes
+- Detects 7 market regimes
 - Auto-switches strategies
 - Tracks performance per regime
 - +15-30% ROI improvement

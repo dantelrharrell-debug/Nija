@@ -4,13 +4,14 @@ NIJA Market Regime Classification AI
 
 Advanced AI-powered market regime classifier with auto-strategy switching.
 
-Detects 6+ market regimes with high accuracy:
+Detects 7 market regimes with high accuracy:
 1. STRONG_TREND - Directional momentum, high ADX
 2. WEAK_TREND - Developing trend
 3. RANGING/CHOP - Sideways consolidation
 4. EXPANSION - Breakout/volatility expansion
 5. MEAN_REVERSION - Pullback/reversal setup
 6. VOLATILITY_EXPLOSION - Crisis/panic mode
+7. CONSOLIDATION - Low volatility compression
 
 Features:
 - Multi-dimensional classification (not just ADX)

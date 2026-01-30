@@ -68,13 +68,15 @@ class StrategyGene:
         
         mutated = copy.deepcopy(self)
         
-        # Mutate parameters
+        # Mutate parameters with bounds checking
         for key, value in mutated.parameters.items():
             if isinstance(value, (int, float)) and random.random() < 0.3:
                 if isinstance(value, int):
-                    mutated.parameters[key] = value + random.randint(-5, 5)
+                    change = random.randint(-5, 5)
+                    mutated.parameters[key] = max(1, value + change)  # Ensure positive
                 else:
-                    mutated.parameters[key] = value * random.uniform(0.8, 1.2)
+                    change_factor = random.uniform(0.8, 1.2)
+                    mutated.parameters[key] = max(0.001, value * change_factor)  # Ensure positive
         
         return mutated
 
@@ -380,10 +382,13 @@ class GeneticStrategyFactory:
         # Mutate indicator genes
         mutated.indicator_genes = [gene.mutate() for gene in mutated.indicator_genes]
         
-        # Occasionally add/remove genes
+        # Occasionally add/remove genes (10% chance)
         if random.random() < 0.1:
             mutation_type = random.choice(list(MutationType))
             logger.debug(f"🧬 Applying {mutation_type.value} to {mutated.strategy_id}")
+            # Note: Advanced mutation types (logic swap, condition add/remove) 
+            # require strategy execution engine integration and are reserved 
+            # for future enhancement. Currently only parameter mutations are applied.
         
         return mutated
     
@@ -487,7 +492,10 @@ class GeneticStrategyFactory:
         """
         alive_strategies = [s for s in self.population if s.is_alive]
         if not alive_strategies:
-            raise ValueError("No alive strategies for tournament selection")
+            # Fallback: reseed population if all strategies are dead
+            logger.warning("⚠️  All strategies culled - reseeding population")
+            self.create_initial_population()
+            alive_strategies = [s for s in self.population if s.is_alive]
         
         tournament = random.sample(
             alive_strategies,

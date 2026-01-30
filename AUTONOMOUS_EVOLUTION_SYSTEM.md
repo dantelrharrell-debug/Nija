@@ -144,7 +144,7 @@ Identifies common patterns in successful strategies:
 
 ### What It Does
 
-AI classifier that detects 6+ market regimes and auto-switches strategies:
+AI classifier that detects 7 market regimes and auto-switches strategies:
 
 **Regimes Detected:**
 1. **STRONG_TREND** - ADX > 30, clear directional movement

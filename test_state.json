@@ -3,7 +3,7 @@
   "enabled": true,
   "cycle_number": 0,
   "last_evolution": null,
-  "last_regime_check": "2026-01-30T07:50:08.307562",
+  "last_regime_check": "2026-01-30T07:53:08.010156",
   "last_rebalance": null,
   "genetic": {
     "population_size": 10,
@@ -42,18 +42,18 @@
     "method": "equal_weight",
     "num_targets": 5,
     "allocations": {
-      "gen0_strat0_20260130_075008": 1800.0,
-      "gen0_strat1_20260130_075008": 1800.0,
-      "gen0_strat2_20260130_075008": 1800.0,
-      "gen0_strat3_20260130_075008": 1800.0,
-      "gen0_strat4_20260130_075008": 1800.0
+      "gen0_strat0_20260130_075308": 1800.0,
+      "gen0_strat1_20260130_075308": 1800.0,
+      "gen0_strat2_20260130_075308": 1800.0,
+      "gen0_strat3_20260130_075308": 1800.0,
+      "gen0_strat4_20260130_075308": 1800.0
     },
     "allocation_pcts": {
-      "gen0_strat0_20260130_075008": 0.18,
-      "gen0_strat1_20260130_075008": 0.18,
-      "gen0_strat2_20260130_075008": 0.18,
-      "gen0_strat3_20260130_075008": 0.18,
-      "gen0_strat4_20260130_075008": 0.18
+      "gen0_strat0_20260130_075308": 0.18,
+      "gen0_strat1_20260130_075308": 0.18,
+      "gen0_strat2_20260130_075308": 0.18,
+      "gen0_strat3_20260130_075308": 0.18,
+      "gen0_strat4_20260130_075308": 0.18
     },
     "expected_metrics": {
       "return": 0.0,
@@ -61,35 +61,35 @@
       "sharpe": 0.0,
       "diversification": 0.9999999999999999
     },
-    "last_rebalance": "2026-01-30T07:50:08.306111",
+    "last_rebalance": "2026-01-30T07:53:08.008788",
     "rebalancing_needed": false
   },
   "deployed_strategies": {
-    "gen0_strat0_20260130_075008": {
+    "gen0_strat0_20260130_075308": {
       "fitness": 0.5000000000000001,
       "generation": 0,
       "trades": 30,
       "win_rate": 0.55
     },
-    "gen0_strat1_20260130_075008": {
+    "gen0_strat1_20260130_075308": {
       "fitness": 0.5000000000000001,
       "generation": 0,
       "trades": 30,
       "win_rate": 0.55
     },
-    "gen0_strat2_20260130_075008": {
+    "gen0_strat2_20260130_075308": {
       "fitness": 0.0,
       "generation": 0,
       "trades": 0,
       "win_rate": 0.0
     },
-    "gen0_strat3_20260130_075008": {
+    "gen0_strat3_20260130_075308": {
       "fitness": 0.0,
       "generation": 0,
       "trades": 0,
       "win_rate": 0.0
     },
-    "gen0_strat4_20260130_075008": {
+    "gen0_strat4_20260130_075308": {
       "fitness": 0.0,
       "generation": 0,
       "trades": 0,
