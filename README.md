@@ -61,6 +61,93 @@ else:
 
 ---
 
+## 🛡️ **NEW: Live Validation Framework** (January 30, 2026)
+
+**Production-Ready Validation System for Safe Live Trading**
+
+The Live Validation Framework provides comprehensive, multi-layered validation to ensure safe, reliable live trading operations with real capital.
+
+### ✅ Key Features
+
+**Pre-Trade Validation:**
+- Price data integrity (NaN, infinite, negative checks)
+- Price freshness validation (staleness detection)
+- Spread validation (bid-ask spread checks)
+- Order size validation (minimum profitability)
+- Position limit enforcement
+- Double-execution prevention (idempotency)
+
+**Order Execution Validation:**
+- Order confirmation verification
+- Timeout detection
+- Fill price validation
+- Slippage monitoring
+
+**Post-Trade Validation:**
+- Position reconciliation with broker
+- P&L calculation validation
+- Position state machine enforcement
+- Fee verification
+
+**Real-Time Risk Monitoring:**
+- Daily loss limits (circuit breaker)
+- Maximum drawdown protection
+- Position count limits
+- Leverage monitoring
+- Margin requirement validation
+
+### 🚀 Quick Start
+
+```python
+from bot.live_validation_framework import get_validation_framework
+from bot.validation_models import ValidationContext
+
+# Initialize framework
+framework = get_validation_framework(
+    max_daily_loss_pct=5.0,
+    max_drawdown_pct=15.0,
+    enable_validation=True
+)
+
+# Create validation context
+ctx = ValidationContext(
+    symbol="BTC-USD",
+    side="buy",
+    size=0.001,
+    price=50000.0,
+    broker="coinbase"
+)
+
+# Validate before trading
+results = framework.validate_pre_trade(
+    ctx=ctx,
+    current_price=50000.0,
+    account_balance=10000.0,
+    open_positions=2
+)
+
+# Check for blocking issues
+if framework.has_blocking_results(results):
+    print("❌ Trade blocked by validation")
+    for result in framework.get_blocking_results(results):
+        print(f"  - {result.message}")
+else:
+    print("✅ Validation passed - safe to trade")
+```
+
+**Documentation:**
+- **Complete Guide:** [LIVE_VALIDATION_FRAMEWORK.md](LIVE_VALIDATION_FRAMEWORK.md)
+- **Example Integration:** [examples/live_validation_integration.py](examples/live_validation_integration.py)
+
+**Safety Guarantees:**
+- 🚫 No trades on stale price data
+- 🚫 No duplicate orders (idempotency)
+- 🚫 No violations of risk limits
+- 🚫 No trades below minimum profitability
+- 🔴 Automatic circuit breakers on excessive losses
+
+---
+
 ## 🚀 **NEW: Multi-Strategy Fund Engine** (January 29, 2026)
 
 **NIJA has evolved into a complete multi-strategy fund infrastructure.**
