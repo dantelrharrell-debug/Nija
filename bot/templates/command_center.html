@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NIJA Command Center</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #e7e9ea;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #1d4ed8 0%, #7c3aed 100%);
+            padding: 30px 40px;
+            border-radius: 16px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: pulse 4s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.6; }
+        }
+        
+        .header h1 {
+            font-size: 42px;
+            margin-bottom: 10px;
+            font-weight: 800;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .header .subtitle {
+            opacity: 0.95;
+            font-size: 16px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .refresh-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(22, 24, 28, 0.95);
+            padding: 12px 20px;
+            border-radius: 24px;
+            font-size: 13px;
+            border: 1px solid #2f3336;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 1000;
+            backdrop-filter: blur(10px);
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+        
+        .metric-card {
+            background: linear-gradient(135deg, rgba(29, 155, 240, 0.05) 0%, rgba(124, 58, 237, 0.05) 100%);
+            border: 1px solid rgba(47, 51, 54, 0.8);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            backdrop-filter: blur(10px);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .metric-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(29, 155, 240, 0.2);
+        }
+        
+        .metric-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid rgba(29, 155, 240, 0.2);
+        }
+        
+        .metric-icon {
+            font-size: 32px;
+            margin-right: 12px;
+        }
+        
+        .metric-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1d9bf0;
+        }
+        
+        .metric-main {
+            margin-bottom: 16px;
+        }
+        
+        .metric-value {
+            font-size: 48px;
+            font-weight: 800;
+            line-height: 1;
+            margin-bottom: 8px;
+        }
+        
+        .metric-label {
+            font-size: 13px;
+            color: #71767b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        
+        .metric-change {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .metric-details {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(47, 51, 54, 0.5);
+        }
+        
+        .detail-item {
+            font-size: 13px;
+        }
+        
+        .detail-label {
+            color: #71767b;
+            margin-bottom: 4px;
+        }
+        
+        .detail-value {
+            font-size: 18px;
+            font-weight: 700;
+        }
+        
+        .positive { color: #00ba7c; }
+        .negative { color: #f91880; }
+        .neutral { color: #ffd400; }
+        .info { color: #1d9bf0; }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .badge-LOW { background: rgba(0, 186, 124, 0.2); color: #00ba7c; }
+        .badge-MODERATE { background: rgba(255, 212, 0, 0.2); color: #ffd400; }
+        .badge-HIGH { background: rgba(249, 24, 128, 0.2); color: #f91880; }
+        .badge-CRITICAL { background: rgba(249, 24, 128, 0.3); color: #ff1744; }
+        
+        .grade-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 16px;
+            font-size: 24px;
+            font-weight: 900;
+            margin-left: 12px;
+        }
+        
+        .grade-A { background: rgba(0, 186, 124, 0.2); color: #00ba7c; }
+        .grade-B { background: rgba(29, 155, 240, 0.2); color: #1d9bf0; }
+        .grade-C { background: rgba(255, 212, 0, 0.2); color: #ffd400; }
+        .grade-D { background: rgba(255, 140, 0, 0.2); color: #ff8c00; }
+        .grade-F { background: rgba(249, 24, 128, 0.2); color: #f91880; }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(47, 51, 54, 0.5);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #1d9bf0 0%, #7c3aed 100%);
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+        
+        .chart-container {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, rgba(29, 155, 240, 0.05) 0%, rgba(124, 58, 237, 0.05) 100%);
+            border: 1px solid rgba(47, 51, 54, 0.8);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #71767b;
+            font-size: 16px;
+        }
+        
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s steps(3, end) infinite;
+        }
+        
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        
+        canvas {
+            max-width: 100%;
+            height: 300px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>⚡ NIJA COMMAND CENTER</h1>
+            <div class="subtitle">Live Performance Dashboard - Real-time Metrics & Analytics</div>
+        </div>
+        
+        <div class="refresh-indicator">
+            <span id="refresh-status">⟳ Auto-refresh: ON</span>
+        </div>
+        
+        <!-- Metrics Grid -->
+        <div class="grid">
+            <!-- 1. Equity Curve -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <div class="metric-icon">📈</div>
+                    <div class="metric-title">Equity Curve</div>
+                </div>
+                <div class="metric-main">
+                    <div class="metric-label">Current Equity</div>
+                    <div class="metric-value" id="equity-value">$0.00</div>
+                    <div class="metric-change" id="equity-change">+$0.00 (0%)</div>
+                </div>
+                <div class="metric-details">
+                    <div class="detail-item">
+                        <div class="detail-label">Peak</div>
+                        <div class="detail-value" id="equity-peak">$0.00</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">24h Change</div>
+                        <div class="detail-value" id="equity-24h">+0%</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 2. Risk Heat -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <div class="metric-icon">🔥</div>
+                    <div class="metric-title">Risk Heat</div>
+                </div>
+                <div class="metric-main">
+                    <div class="metric-label">Risk Level</div>
+                    <div class="metric-value">
+                        <span id="risk-score">0</span>
+                        <span class="status-badge" id="risk-badge">LOW</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="risk-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="metric-details">
+                    <div class="detail-item">
+                        <div class="detail-label">Max Drawdown</div>
+                        <div class="detail-value negative" id="max-drawdown">0%</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Current DD</div>
+                        <div class="detail-value negative" id="current-drawdown">0%</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Concentration</div>
+                        <div class="detail-value" id="concentration">0%</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 3. Trade Quality Score -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <div class="metric-icon">⭐</div>
+                    <div class="metric-title">Trade Quality Score</div>
+                </div>
+                <div class="metric-main">
+                    <div class="metric-label">Quality Score</div>
+                    <div class="metric-value">
+                        <span id="quality-score">0</span>
+                        <span class="grade-badge" id="quality-grade">C</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="quality-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="metric-details">
+                    <div class="detail-item">
+                        <div class="detail-label">Win Rate</div>
+                        <div class="detail-value positive" id="win-rate">0%</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Profit Factor</div>
+                        <div class="detail-value" id="profit-factor">0.0</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 4. Signal Accuracy -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <div class="metric-icon">🎯</div>
+                    <div class="metric-title">Signal Accuracy</div>
+                </div>
+                <div class="metric-main">
+                    <div class="metric-label">Accuracy Rate</div>
+                    <div class="metric-value" id="signal-accuracy">0%</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="accuracy-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="metric-details">
+                    <div class="detail-item">
+                        <div class="detail-label">Total Signals</div>
+                        <div class="detail-value" id="signals-total">0</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Successful</div>
+                        <div class="detail-value positive" id="signals-success">0</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Failed</div>
+                        <div class="detail-value negative" id="signals-failed">0</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">False Positive</div>
+                        <div class="detail-value negative" id="false-positive">0%</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 5. Slippage -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <div class="metric-icon">💨</div>
+                    <div class="metric-title">Slippage</div>
+                </div>
+                <div class="metric-main">
+                    <div class="metric-label">Average Slippage</div>
+                    <div class="metric-value" id="slippage-bps">0 bps</div>
+                    <div class="metric-change negative" id="slippage-usd">$0.00 avg</div>
+                </div>
+                <div class="metric-details">
+                    <div class="detail-item">
+                        <div class="detail-label">Total Cost</div>
+                        <div class="detail-value negative" id="slippage-total">$0.00</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Impact on Profit</div>
+                        <div class="detail-value negative" id="slippage-impact">0%</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 6. Fee Impact -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <div class="metric-icon">💰</div>
+                    <div class="metric-title">Fee Impact</div>
+                </div>
+                <div class="metric-main">
+                    <div class="metric-label">Total Fees</div>
+                    <div class="metric-value negative" id="total-fees">$0.00</div>
+                    <div class="metric-change" id="fee-efficiency">Efficiency: 100</div>
+                </div>
+                <div class="metric-details">
+                    <div class="detail-item">
+                        <div class="detail-label">% of Profit</div>
+                        <div class="detail-value negative" id="fees-pct">0%</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Avg per Trade</div>
+                        <div class="detail-value" id="avg-fee">$0.00</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 7. Strategy Efficiency -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <div class="metric-icon">⚙️</div>
+                    <div class="metric-title">Strategy Efficiency</div>
+                </div>
+                <div class="metric-main">
+                    <div class="metric-label">Efficiency Score</div>
+                    <div class="metric-value" id="efficiency-score">0</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="efficiency-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="metric-details">
+                    <div class="detail-item">
+                        <div class="detail-label">Trades/Day</div>
+                        <div class="detail-value" id="trades-per-day">0.0</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Capital Use</div>
+                        <div class="detail-value" id="capital-use">0%</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 8. Capital Growth Velocity -->
+            <div class="metric-card">
+                <div class="metric-header">
+                    <div class="metric-icon">🚀</div>
+                    <div class="metric-title">Capital Growth Velocity</div>
+                </div>
+                <div class="metric-main">
+                    <div class="metric-label">Annualized Growth Rate</div>
+                    <div class="metric-value" id="growth-velocity">0%</div>
+                    <div class="metric-change" id="growth-change">Daily: 0%</div>
+                </div>
+                <div class="metric-details">
+                    <div class="detail-item">
+                        <div class="detail-label">Daily Rate</div>
+                        <div class="detail-value" id="daily-growth">0%</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Monthly Rate</div>
+                        <div class="detail-value" id="monthly-growth">0%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Equity Curve Chart -->
+        <div class="chart-container">
+            <div class="metric-header">
+                <div class="metric-icon">📊</div>
+                <div class="metric-title">Equity Curve (24h)</div>
+            </div>
+            <canvas id="equity-chart"></canvas>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script>
+        const REFRESH_INTERVAL = 5000; // 5 seconds
+        let equityChart = null;
+        
+        function formatCurrency(value) {
+            return new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(value);
+        }
+        
+        function formatPercent(value) {
+            return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+        }
+        
+        async function fetchMetrics() {
+            try {
+                const response = await fetch('/api/command-center/metrics');
+                const result = await response.json();
+                return result.success ? result.data : null;
+            } catch (error) {
+                console.error('Error fetching metrics:', error);
+                return null;
+            }
+        }
+        
+        async function fetchEquityCurve() {
+            try {
+                const response = await fetch('/api/command-center/equity-curve?hours=24');
+                const result = await response.json();
+                return result.success ? result.data : null;
+            } catch (error) {
+                console.error('Error fetching equity curve:', error);
+                return null;
+            }
+        }
+        
+        function updateMetrics(data) {
+            if (!data) return;
+            
+            // 1. Equity Curve
+            document.getElementById('equity-value').textContent = formatCurrency(data.equity);
+            document.getElementById('equity-peak').textContent = formatCurrency(data.equity_peak);
+            document.getElementById('equity-24h').textContent = formatPercent(data.equity_change_pct_24h);
+            
+            const equityChange = document.getElementById('equity-change');
+            equityChange.textContent = `${formatCurrency(data.equity_change_24h)} (${formatPercent(data.equity_change_pct_24h)})`;
+            equityChange.className = `metric-change ${data.equity_change_24h >= 0 ? 'positive' : 'negative'}`;
+            
+            // 2. Risk Heat
+            document.getElementById('risk-score').textContent = Math.round(data.risk_heat);
+            const riskBadge = document.getElementById('risk-badge');
+            riskBadge.textContent = data.risk_level;
+            riskBadge.className = `status-badge badge-${data.risk_level}`;
+            document.getElementById('risk-progress').style.width = `${data.risk_heat}%`;
+            document.getElementById('max-drawdown').textContent = formatPercent(-Math.abs(data.max_drawdown_pct));
+            document.getElementById('current-drawdown').textContent = formatPercent(-Math.abs(data.current_drawdown_pct));
+            document.getElementById('concentration').textContent = formatPercent(data.position_concentration);
+            
+            // 3. Trade Quality
+            document.getElementById('quality-score').textContent = Math.round(data.trade_quality_score);
+            const qualityGrade = document.getElementById('quality-grade');
+            qualityGrade.textContent = data.trade_quality_grade;
+            qualityGrade.className = `grade-badge grade-${data.trade_quality_grade.charAt(0)}`;
+            document.getElementById('quality-progress').style.width = `${data.trade_quality_score}%`;
+            document.getElementById('win-rate').textContent = formatPercent(data.win_rate);
+            document.getElementById('profit-factor').textContent = data.profit_factor.toFixed(2);
+            
+            // 4. Signal Accuracy
+            document.getElementById('signal-accuracy').textContent = formatPercent(data.signal_accuracy);
+            document.getElementById('accuracy-progress').style.width = `${data.signal_accuracy}%`;
+            document.getElementById('signals-total').textContent = data.signals_total;
+            document.getElementById('signals-success').textContent = data.signals_successful;
+            document.getElementById('signals-failed').textContent = data.signals_failed;
+            document.getElementById('false-positive').textContent = formatPercent(data.false_positive_rate);
+            
+            // 5. Slippage
+            document.getElementById('slippage-bps').textContent = `${data.avg_slippage_bps.toFixed(1)} bps`;
+            document.getElementById('slippage-usd').textContent = `${formatCurrency(data.avg_slippage_usd)} avg`;
+            document.getElementById('slippage-total').textContent = formatCurrency(data.total_slippage_cost);
+            document.getElementById('slippage-impact').textContent = formatPercent(data.slippage_impact_pct);
+            
+            // 6. Fee Impact
+            document.getElementById('total-fees').textContent = formatCurrency(data.total_fees);
+            document.getElementById('fees-pct').textContent = formatPercent(data.fees_pct_of_profit);
+            document.getElementById('avg-fee').textContent = formatCurrency(data.avg_fee_per_trade);
+            document.getElementById('fee-efficiency').textContent = `Efficiency: ${Math.round(data.fee_efficiency_score)}`;
+            
+            // 7. Strategy Efficiency
+            document.getElementById('efficiency-score').textContent = Math.round(data.strategy_efficiency);
+            document.getElementById('efficiency-progress').style.width = `${data.strategy_efficiency}%`;
+            document.getElementById('trades-per-day').textContent = data.trades_per_day.toFixed(1);
+            document.getElementById('capital-use').textContent = formatPercent(data.capital_utilization);
+            
+            // 8. Growth Velocity
+            const growthVel = document.getElementById('growth-velocity');
+            growthVel.textContent = formatPercent(data.growth_velocity);
+            growthVel.className = `metric-value ${data.growth_velocity >= 0 ? 'positive' : 'negative'}`;
+            document.getElementById('growth-change').textContent = `Daily: ${formatPercent(data.daily_growth_rate)}`;
+            document.getElementById('daily-growth').textContent = formatPercent(data.daily_growth_rate);
+            document.getElementById('monthly-growth').textContent = formatPercent(data.monthly_growth_rate);
+        }
+        
+        function updateEquityChart(data) {
+            if (!data || !data.history || data.history.length === 0) return;
+            
+            const timestamps = data.history.map(d => new Date(d.timestamp).toLocaleTimeString());
+            const equityValues = data.history.map(d => d.equity);
+            
+            if (equityChart) {
+                equityChart.data.labels = timestamps;
+                equityChart.data.datasets[0].data = equityValues;
+                equityChart.update();
+            } else {
+                const ctx = document.getElementById('equity-chart').getContext('2d');
+                equityChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: timestamps,
+                        datasets: [{
+                            label: 'Equity',
+                            data: equityValues,
+                            borderColor: '#1d9bf0',
+                            backgroundColor: 'rgba(29, 155, 240, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 0,
+                            pointHoverRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                backgroundColor: 'rgba(22, 24, 28, 0.95)',
+                                titleColor: '#e7e9ea',
+                                bodyColor: '#e7e9ea',
+                                borderColor: '#1d9bf0',
+                                borderWidth: 1,
+                                callbacks: {
+                                    label: function(context) {
+                                        return 'Equity: ' + formatCurrency(context.parsed.y);
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                grid: {
+                                    color: 'rgba(47, 51, 54, 0.3)'
+                                },
+                                ticks: {
+                                    color: '#71767b',
+                                    maxTicksLimit: 12
+                                }
+                            },
+                            y: {
+                                grid: {
+                                    color: 'rgba(47, 51, 54, 0.3)'
+                                },
+                                ticks: {
+                                    color: '#71767b',
+                                    callback: function(value) {
+                                        return formatCurrency(value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        
+        async function refreshAll() {
+            const [metrics, equityCurve] = await Promise.all([
+                fetchMetrics(),
+                fetchEquityCurve()
+            ]);
+            
+            updateMetrics(metrics);
+            updateEquityChart(equityCurve);
+            
+            document.getElementById('refresh-status').textContent = 
+                `⟳ Last update: ${new Date().toLocaleTimeString()}`;
+        }
+        
+        // Initial load
+        refreshAll();
+        
+        // Auto-refresh
+        setInterval(refreshAll, REFRESH_INTERVAL);
+    </script>
+</body>
+</html>
