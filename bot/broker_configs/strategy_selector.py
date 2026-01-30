@@ -18,7 +18,8 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger("nija.strategy_selector")
 
 try:
-    from .coinbase_config import COINBASE_CONFIG, CoinbaseConfig
+    # Coinbase is disabled
+    # from .coinbase_config import COINBASE_CONFIG, CoinbaseConfig
     from .kraken_config import KRAKEN_CONFIG, KrakenConfig
     from .default_config import DEFAULT_CONFIG, DefaultConfig
 except ImportError:
@@ -44,7 +45,7 @@ class BrokerStrategySelector:
     def __init__(self):
         """Initialize strategy selector"""
         self.configs = {
-            'coinbase': COINBASE_CONFIG,
+            # 'coinbase': COINBASE_CONFIG,  # Disabled
             'kraken': KRAKEN_CONFIG,
             'default': DEFAULT_CONFIG
         }
@@ -62,6 +63,11 @@ class BrokerStrategySelector:
             Broker configuration object
         """
         broker_type_lower = broker_type.lower() if broker_type else 'default'
+
+        # Coinbase is disabled - return None explicitly
+        if broker_type_lower == "coinbase":
+            logger.warning("Coinbase broker is disabled")
+            return None
 
         # Get config for broker
         config = self.configs.get(broker_type_lower, self.configs.get('default'))
