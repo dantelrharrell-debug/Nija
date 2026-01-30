@@ -422,16 +422,17 @@ class CapitalCompoundingCurvesDesigner:
         self.total_profit += profit
         self.total_fees += fees
         
-        # Update Kelly parameters
-        self.win_rate = self.winning_trades / self.total_trades
+        # Update Kelly parameters (guard against division by zero)
+        if self.total_trades > 0:
+            self.win_rate = self.winning_trades / self.total_trades
         
         # Update average win/loss (exponential moving average)
         alpha = 0.1
         if is_win and profit > 0:
-            r_multiple = profit / (self.base_capital * 0.01)  # Assuming 1% risk
+            r_multiple = profit / (self.base_capital * 0.01) if self.base_capital > 0 else profit  # Assuming 1% risk
             self.avg_win = (1 - alpha) * self.avg_win + alpha * r_multiple
         elif not is_win and profit < 0:
-            r_multiple = abs(profit) / (self.base_capital * 0.01)
+            r_multiple = abs(profit) / (self.base_capital * 0.01) if self.base_capital > 0 else abs(profit)
             self.avg_loss = (1 - alpha) * self.avg_loss + alpha * r_multiple
     
     def get_current_parameters(self) -> Dict:

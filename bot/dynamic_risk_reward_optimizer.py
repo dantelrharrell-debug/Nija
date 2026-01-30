@@ -130,6 +130,17 @@ class DynamicRiskRewardOptimizer:
         Returns:
             Dictionary with stop-loss and profit target levels
         """
+        # Validate inputs
+        if atr <= 0:
+            logger.error("❌ Invalid ATR - must be positive")
+            return {
+                'entry_price': entry_price,
+                'error': 'invalid_atr_non_positive',
+                'stop_loss': entry_price,
+                'profit_target': entry_price,
+                'risk_reward_ratio': 0,
+            }
+        
         # Use provided win rate or default
         if win_rate is not None:
             self.win_rate = win_rate

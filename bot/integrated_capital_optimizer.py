@@ -78,12 +78,12 @@ class CapitalOptimizationConfig:
     """Master configuration for capital optimization"""
     # Position sizing
     position_sizing_method: str = "hybrid"  # hybrid/kelly/volatility/equity_curve
-    base_risk_pct: float = 0.02  # 2% base risk
+    base_risk_pct: float = 0.025  # 2.5% base risk per position (20% / 8 positions)
     enable_kelly: bool = True
     
     # Risk-reward
     risk_reward_mode: str = "optimal"  # optimal/conservative/balanced/aggressive
-    target_risk_reward: float = 3.0  # Target 1:3 R:R
+    target_risk_reward: float = 3.5  # Target 1:3.5 R:R (balanced)
     enable_trailing_stops: bool = True
     
     # Compounding
@@ -98,6 +98,12 @@ class CapitalOptimizationConfig:
     # Profit compounding
     compounding_strategy: str = "moderate"  # conservative/moderate/aggressive
     reinvest_pct: float = 0.75  # 75% reinvestment
+    
+    # Best Practice Production Settings
+    min_balance_required: float = 75.00  # Minimum account balance
+    min_trade_size: float = 10.00  # Minimum trade size
+    position_risk: float = 0.20  # 20% base position risk
+    max_positions: int = 8  # Maximum concurrent positions
 
 
 class IntegratedCapitalOptimizer:
@@ -384,8 +390,18 @@ class IntegratedCapitalOptimizer:
     
     def _can_trade(self) -> Tuple[bool, str]:
         """Check if trading is allowed"""
+        # Check minimum balance requirement
+        if self.current_capital < self.config.min_balance_required:
+            return (
+                False,
+                f"Balance ${self.current_capital:.2f} below minimum "
+                f"${self.config.min_balance_required:.2f}"
+            )
+        
+        # Check drawdown protection
         if self.drawdown_protection:
             return self.drawdown_protection.can_trade()
+        
         return (True, "Trading allowed")
     
     def _get_available_capital(self) -> float:

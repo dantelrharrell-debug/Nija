@@ -135,6 +135,16 @@ class OptimizedPositionSizer:
         Returns:
             Dictionary with position sizing details
         """
+        # Validate inputs
+        if account_balance <= 0:
+            logger.error("❌ Invalid account balance - must be positive")
+            return {
+                'method': self.config.method.value,
+                'position_size': 0,
+                'shares': 0,
+                'error': 'invalid_account_balance_non_positive'
+            }
+        
         # Initialize result
         result = {
             'method': self.config.method.value,
@@ -146,8 +156,8 @@ class OptimizedPositionSizer:
         # Calculate risk per share
         risk_per_share = abs(entry_price - stop_loss_price)
         if risk_per_share == 0:
-            logger.error("❌ Risk per share is zero - cannot size position")
-            return {**result, 'position_size': 0, 'shares': 0, 'error': 'zero_risk'}
+            logger.error("❌ Risk per share is zero - cannot size position (entry and stop are equal)")
+            return {**result, 'position_size': 0, 'shares': 0, 'error': 'invalid_risk_zero_distance'}
         
         # Calculate risk-reward ratio if profit target provided
         risk_reward_ratio = None
@@ -446,8 +456,9 @@ class OptimizedPositionSizer:
             alpha = 0.1
             self.avg_loss = (1 - alpha) * self.avg_loss + alpha * abs(profit_pct)
         
-        # Update win rate
-        self.win_rate = self.winning_trades / self.total_trades
+        # Update win rate (guard against division by zero)
+        if self.total_trades > 0:
+            self.win_rate = self.winning_trades / self.total_trades
         
         logger.debug(
             f"📊 Performance Updated: Win Rate={self.win_rate*100:.1f}%, "
