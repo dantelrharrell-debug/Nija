@@ -1893,6 +1893,60 @@ NIJA requires v2 API access to detect balances in retail/consumer Coinbase accou
 - API credentials from Coinbase
 - Docker (for deployment)
 
+### Trading Mode Presets
+
+NIJA offers several pre-configured trading mode presets for different strategies:
+
+#### 1. **MASTER_ONLY Mode** - A+ Setups (BTC/ETH/SOL Focus)
+
+Perfect for focused, independent trading with top-tier assets only.
+
+**Features:**
+- ✅ Trade independently (no copy trading)
+- ✅ Only BTC-USD, ETH-USD, SOL-USD (blocks all altcoins)
+- ✅ A+ setup criteria (min entry score 8/10)
+- ✅ 3-5% risk per trade (aggressive growth)
+- ✅ Max 2 concurrent positions (quality focus)
+- ✅ No leverage
+- 📈 Growth path: $74 → $100 → $150 → $250 → $500
+
+**Quick Start:**
+```bash
+cp .env.master_only .env
+# Edit .env with your API credentials
+./start.sh
+```
+
+**Documentation:** [MASTER_ONLY_GUIDE.md](MASTER_ONLY_GUIDE.md)
+
+#### 2. **Copy Trading Mode** - Mirror Master Trades
+
+Follow a master account's trades with proportional position sizing.
+
+**Quick Start:**
+```bash
+cp .env.copy_trading_example .env
+# Edit .env with your API credentials
+./start.sh
+```
+
+**Documentation:** [COPY_TRADING_SETUP.md](COPY_TRADING_SETUP.md)
+
+#### 3. **Small Account Mode** - $50-$250 Accounts
+
+Optimized for smaller account sizes with conservative risk.
+
+**Quick Start:**
+```bash
+cp .env.small_account_preset .env
+# Edit .env with your API credentials
+./start.sh
+```
+
+**Documentation:** [SMALL_ACCOUNT_QUICKSTART.md](SMALL_ACCOUNT_QUICKSTART.md)
+
+---
+
 ### Funding Requirements
 
 **Minimum Balance**: $2.00 (allows bot to start)
