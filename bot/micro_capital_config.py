@@ -60,20 +60,20 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # ============================================================================
 
 # Pro-Level Optimization (Jan 30, 2026):
-# - MAX_POSITIONS = 5: Allows diversification across multiple opportunities
-# - MAX_POSITION_PCT = 22%: Larger individual positions for small capital efficiency
-# - RISK_PER_TRADE = 0.7%: Tight risk control per trade
+# - MAX_POSITIONS = 4: Balanced diversification for small capital
+# - MAX_POSITION_PCT = 25%: Larger individual positions for small capital efficiency
+# - RISK_PER_TRADE = 0.9%: Balanced risk control per trade
 #
-# NOTE: While MAX_POSITIONS × MAX_POSITION_PCT = 110% theoretical maximum,
+# NOTE: While MAX_POSITIONS × MAX_POSITION_PCT = 100% theoretical maximum,
 # the risk_manager.py enforces max_total_exposure = 60% as a safeguard.
 # This configuration is optimized for fast-frequency trading where not all
 # positions will be at maximum size simultaneously.
 
-MAX_POSITIONS = 5  # Maximum concurrent positions (UPDATED Jan 30, 2026 for fast-frequency trading)
+MAX_POSITIONS = 4  # Maximum concurrent positions (UPDATED Jan 30, 2026 for fast-frequency trading)
 
 # Position sizing as percentage of capital
-MAX_POSITION_PCT = 22.0  # Maximum 22% of capital per position (OPTIMIZED for small capital fast-frequency)
-RISK_PER_TRADE = 0.7  # Risk 0.7% per trade (OPTIMIZED for Pro-Level performance)
+MAX_POSITION_PCT = 25.0  # Maximum 25% of capital per position (OPTIMIZED for small capital fast-frequency)
+RISK_PER_TRADE = 0.9  # Risk 0.9% per trade (OPTIMIZED for Pro-Level performance)
 
 # ============================================================================
 # RISK MANAGEMENT

@@ -89,7 +89,7 @@ class AdaptiveRiskManager:
     - EXCHANGE-SPECIFIC PROFILES (OPTIONAL - uses exchange risk profiles if available)
     """
 
-    def __init__(self, min_position_pct=0.02, max_position_pct=0.22,
+    def __init__(self, min_position_pct=0.02, max_position_pct=0.25,
                  max_total_exposure=0.60, use_exchange_profiles=False,
                  pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None,
                  max_portfolio_volatility=0.04):
@@ -99,7 +99,7 @@ class AdaptiveRiskManager:
 
         Args:
             min_position_pct: Minimum position size as % of account (default 2% - conservative for weak trends)
-            max_position_pct: Maximum position size as % of account (default 22% - OPTIMIZED for small capital fast-frequency)
+            max_position_pct: Maximum position size as % of account (default 25% - OPTIMIZED for small capital fast-frequency)
             max_total_exposure: Maximum total exposure across all positions (default 60% - OPTIMIZED for safety)
             use_exchange_profiles: If True, uses exchange-specific risk profiles (default False)
             pro_mode: If True, enables PRO MODE with position rotation (default False)
