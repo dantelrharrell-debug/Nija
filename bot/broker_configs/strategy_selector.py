@@ -66,7 +66,7 @@ class BrokerStrategySelector:
 
         # Coinbase is disabled - return None explicitly
         if broker_type_lower == "coinbase":
-            logger.warning(f"Coinbase broker is disabled")
+            logger.warning("Coinbase broker is disabled")
             return None
 
         # Get config for broker

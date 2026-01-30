@@ -60,7 +60,7 @@ def get_broker_config(broker_type: str):
 
     # Coinbase is disabled - return None explicitly
     if broker_type_lower == "coinbase":
-        logger.warning(f"Coinbase broker is disabled")
+        logger.warning("Coinbase broker is disabled")
         return None
     
     if broker_type_lower == "kraken" and KrakenConfig:
@@ -82,7 +82,7 @@ def get_broker_config(broker_type: str):
 __all__ = [
     'BrokerConfigType',
     'get_broker_config',
-    'CoinbaseConfig',
+    # 'CoinbaseConfig',  # Disabled
     'KrakenConfig',
     'BinanceConfig',
     'OKXConfig',
