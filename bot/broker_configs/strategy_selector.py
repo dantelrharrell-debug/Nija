@@ -31,10 +31,6 @@ except ImportError:
     KrakenConfig = None
     DefaultConfig = None
 
-# Set Coinbase configs to None since it's disabled
-COINBASE_CONFIG = None
-CoinbaseConfig = None
-
 
 class BrokerStrategySelector:
     """

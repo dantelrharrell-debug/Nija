@@ -35,9 +35,6 @@ except ImportError:
     AlpacaConfig = None
     DefaultConfig = None
 
-# Set CoinbaseConfig to None since it's disabled
-CoinbaseConfig = None
-
 
 class BrokerConfigType(Enum):
     """Supported broker configurations"""
@@ -66,9 +63,6 @@ def get_broker_config(broker_type: str):
         logger.warning(f"Coinbase broker is disabled")
         return None
     
-    # Coinbase is disabled
-    # if broker_type_lower == "coinbase" and CoinbaseConfig:
-    #     return CoinbaseConfig()
     if broker_type_lower == "kraken" and KrakenConfig:
         return KrakenConfig()
     elif broker_type_lower == "binance" and BinanceConfig:
