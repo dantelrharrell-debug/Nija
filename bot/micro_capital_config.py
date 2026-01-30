@@ -57,11 +57,11 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # POSITION MANAGEMENT
 # ============================================================================
 
-MAX_POSITIONS = 2  # Maximum concurrent positions (scales with equity)
+MAX_POSITIONS = 5  # Maximum concurrent positions (UPDATED Jan 30, 2026 for fast-frequency trading)
 
 # Position sizing as percentage of capital
-MAX_POSITION_PCT = 18.0  # Maximum 18% of capital per position
-RISK_PER_TRADE = 3.0  # Risk 3% per trade (scales with equity)
+MAX_POSITION_PCT = 22.0  # Maximum 22% of capital per position (OPTIMIZED for small capital fast-frequency)
+RISK_PER_TRADE = 0.7  # Risk 0.7% per trade (OPTIMIZED for Pro-Level performance)
 
 # ============================================================================
 # RISK MANAGEMENT

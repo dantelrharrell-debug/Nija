@@ -3692,9 +3692,13 @@ class TradingStrategy:
                                     logger.debug(f"   ⚠️ Quality check error for {symbol}: {quality_err}")
 
                             # Analyze for entry
-                            # PRO MODE: Use total capital instead of just free balance
-                            sizing_balance = total_capital if self.pro_mode_enabled else account_balance
-                            analysis = self.apex.analyze_market(df, symbol, sizing_balance)
+                            # CRITICAL: Use broker-specific balance for position sizing
+                            # PRO MODE: Include broker's position values (total capital)
+                            # STANDARD MODE: Use only broker's free balance
+                            # NOTE: Both account_balance and total_capital are broker-specific at this point
+                            # (updated at lines 3418 and 3440 from selected entry broker)
+                            broker_balance = total_capital if self.pro_mode_enabled else account_balance
+                            analysis = self.apex.analyze_market(df, symbol, broker_balance)
                             action = analysis.get('action', 'hold')
                             reason = analysis.get('reason', '')
 
