@@ -801,7 +801,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=6,
-        order=11,
+        order=13,
         prerequisites=["tb_002"],
         content=(
             "Moving Averages (MA) smooth out price data to identify trends over time.\n\n"
@@ -877,7 +877,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=7,
-        order=12,
+        order=14,
         prerequisites=["tb_003"],
         content=(
             "Candlestick charts visualize price action showing open, high, low, and close.\n\n"
@@ -955,7 +955,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=5,
-        order=13,
+        order=15,
         prerequisites=["tb_004"],
         content=(
             "Volume measures how much of an asset is traded over a specific period.\n\n"
@@ -1035,7 +1035,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=6,
-        order=14,
+        order=16,
         prerequisites=["tb_005"],
         content=(
             "Trend lines and channels help identify trend direction and potential reversal points.\n\n"
@@ -1114,7 +1114,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=6,
-        order=15,
+        order=17,
         prerequisites=["tb_006"],
         content=(
             "Support and resistance are key price levels where supply and demand create barriers.\n\n"
@@ -1204,7 +1204,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.ADVANCED,
         lesson_type=LessonType.TEXT,
         duration_minutes=7,
-        order=16,
+        order=18,
         prerequisites=["tb_007"],
         content=(
             "MACD (Moving Average Convergence Divergence) identifies trend changes and momentum.\n\n"
@@ -1285,7 +1285,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.ADVANCED,
         lesson_type=LessonType.TEXT,
         duration_minutes=6,
-        order=17,
+        order=19,
         prerequisites=["tb_008"],
         content=(
             "Fibonacci retracements identify potential support/resistance levels during pullbacks.\n\n"
@@ -1367,7 +1367,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=5,
-        order=18,
+        order=20,
         prerequisites=["tb_009"],
         content=(
             "Different timeframes provide different perspectives on market behavior.\n\n"
@@ -1463,7 +1463,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.BEGINNER,
         lesson_type=LessonType.TEXT,
         duration_minutes=4,
-        order=20,
+        order=11,
         prerequisites=["tb_002"],
         content=(
             "This is the most important lesson in trading.\n\n"
@@ -1510,7 +1510,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=5,
-        order=21,
+        order=12,
         prerequisites=["rm_001"],
         content=(
             "Position sizing determines how much capital to allocate to each trade.\n\n"
@@ -1612,7 +1612,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=6,
-        order=19,
+        order=21,
         prerequisites=["rm_002"],
         content=(
             "Stop-losses are your safety net, limiting losses on individual trades.\n\n"
@@ -1724,7 +1724,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=7,
-        order=20,
+        order=22,
         prerequisites=["rm_003"],
         content=(
             "Knowing when to take profits is as important as limiting losses.\n\n"
