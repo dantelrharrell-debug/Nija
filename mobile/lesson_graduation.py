@@ -101,35 +101,44 @@ GRADUATION_REQUIREMENTS = {
         "minimum_score": 70,  # 70% minimum on quizzes
         "required_categories": [LessonCategory.GETTING_STARTED],
         "minimum_points": 100,
-        "description": "Complete all Getting Started lessons",
+        "description": "Complete all Getting Started lessons (8 lessons, ~30 min)",
+        "enables": "Basic platform access, paper trading, guided setup",
     },
     GraduationTier.INTERMEDIATE: {
         "required_lessons": [
+            # All Beginner lessons
             "gs_001", "gs_002", "gs_003", "gs_004", "gs_005", "gs_006", "gs_007", "gs_008",
-            "tb_001", "tb_002",
+            # First 5 Trading Basics lessons
+            "tb_001", "tb_002", "tb_003", "tb_004", "tb_005",
         ],
         "minimum_score": 75,
-        "required_categories": [LessonCategory.GETTING_STARTED, LessonCategory.TRADING_BASICS],
+        "required_categories": [LessonCategory.GETTING_STARTED],
         "minimum_points": 300,
-        "description": "Complete Getting Started and Trading Basics",
+        "description": "Complete Getting Started and first 5 Trading Basics (13 lessons, ~1 hr)",
+        "enables": "Full live trading access, basic strategy customization",
     },
     GraduationTier.ADVANCED: {
-        "required_lessons": None,  # All required lessons must be completed
-        "minimum_score": 80,
-        "required_categories": [
-            LessonCategory.GETTING_STARTED,
-            LessonCategory.TRADING_BASICS,
-            LessonCategory.RISK_MANAGEMENT,
+        "required_lessons": [
+            # All Beginner lessons
+            "gs_001", "gs_002", "gs_003", "gs_004", "gs_005", "gs_006", "gs_007", "gs_008",
+            # All 10 Trading Basics lessons
+            "tb_001", "tb_002", "tb_003", "tb_004", "tb_005", "tb_006", "tb_007", "tb_008", "tb_009", "tb_010",
+            # All current Risk Management lessons
+            "rm_001", "rm_002", "rm_003", "rm_004",
         ],
+        "minimum_score": 80,
+        "required_categories": [LessonCategory.GETTING_STARTED, LessonCategory.TRADING_BASICS, LessonCategory.RISK_MANAGEMENT],
         "minimum_points": 600,
-        "description": "Complete all core educational content",
+        "description": "Complete all current core curriculum (20 lessons, ~2 hrs)",
+        "enables": "Advanced strategies, portfolio optimization, copy trading provider",
     },
     GraduationTier.EXPERT: {
-        "required_lessons": None,  # All lessons
+        "required_lessons": None,  # All lessons when expanded to 40
         "minimum_score": 85,
         "required_categories": None,  # All categories
         "minimum_points": 1000,
-        "description": "Complete all lessons with high scores",
+        "description": "Complete all lessons with high scores (40 lessons, ~4 hrs) - Future",
+        "enables": "Strategy creation, API access, priority support",
     },
     GraduationTier.CERTIFIED: {
         "required_lessons": None,  # All lessons
@@ -137,7 +146,8 @@ GRADUATION_REQUIREMENTS = {
         "required_categories": None,  # All categories
         "minimum_points": 1200,
         "additional_requirements": ["final_assessment"],
-        "description": "Complete all lessons and pass final certification exam",
+        "description": "Complete all lessons and pass final certification exam - Future",
+        "enables": "Certified trader badge, teaching access, revenue sharing",
     },
 }
 
