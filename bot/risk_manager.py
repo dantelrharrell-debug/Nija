@@ -64,9 +64,8 @@ try:
     logger.info("✅ Tier configuration loaded - TIER-AWARE RISK MANAGEMENT ACTIVE")
 except ImportError:
     TIER_AWARE_MODE = False
-    log_tier_floors = None
-    emit_tier_floor_metrics = None
-    assert_expected_tier_floors = None
+    # Set all tier-related functions to None as fallback
+    log_tier_floors = emit_tier_floor_metrics = assert_expected_tier_floors = None
     logger.warning("⚠️ Tier config not found - tier enforcement disabled")
 
 # Import small account constants from fee_aware_config

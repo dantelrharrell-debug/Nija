@@ -185,6 +185,70 @@ During position sizing, tier floor enforcement is logged:
 
 This allows easy debugging and verification that tier floors are being respected.
 
+## Enhanced Visibility Features (Added Jan 31, 2026)
+
+Three additional features were added to improve tier floor visibility and production safety:
+
+### 1. Metrics Emission
+
+**Function**: `emit_tier_floor_metrics()` in `tier_config.py`
+
+Emits 21 tier floor metrics to monitoring systems (Prometheus, StatsD, Datadog, etc.):
+- Floor percentages (e.g., `nija_tier_floor_investor_pct: 22.0`)
+- Capital minimums (e.g., `nija_tier_floor_investor_capital_min: 250.0`)
+- Max positions (e.g., `nija_tier_floor_investor_max_positions: 3.0`)
+
+Called once at startup during Risk Manager initialization.
+
+**Use Case**: Monitor tier configuration in production, alert on unexpected changes.
+
+### 2. Production Assertions
+
+**Function**: `assert_expected_tier_floors()` in `tier_config.py`
+
+Validates tier floors match expected values at startup:
+```python
+expected_floors = {
+    'INVESTOR': 22.0,  # CRITICAL: Recent fix from 20% to 22% (Jan 30, 2026)
+    # ... other tiers
+}
+```
+
+- Only runs when `ENVIRONMENT=production`
+- Raises `AssertionError` if validation fails
+- Provides clear error messages for debugging
+
+**Use Case**: Fail-fast validation that INVESTOR tier is correctly set to 22% before trading starts.
+
+### 3. Dashboard API
+
+**Endpoint**: `GET /api/command-center/tier-floors`
+
+**Function**: `get_tier_floors_for_api()` in `tier_config.py`
+
+Returns JSON with complete tier floor data:
+```json
+{
+  "success": true,
+  "data": {
+    "tiers": [
+      {
+        "name": "INVESTOR",
+        "capital_range": "$250-$1000",
+        "floor_pct": 22.0,
+        "max_positions": 3,
+        "notes": "Tier floor fix implemented Jan 30, 2026 (20% → 22%)"
+      }
+    ],
+    "generated_at": "2026-01-31T00:08:53.954145",
+    "last_modified": "2026-01-30",
+    "version": "1.1"
+  }
+}
+```
+
+**Use Case**: Display tier configuration in dashboard UI, allow operators to verify settings.
+
 ## Related Documentation
 
 - [TIER_AND_RISK_CONFIG_GUIDE.md](TIER_AND_RISK_CONFIG_GUIDE.md) - Tier configuration guide
@@ -194,5 +258,7 @@ This allows easy debugging and verification that tier floors are being respected
 ---
 
 **Implemented by**: GitHub Copilot  
-**Date**: January 30, 2026 (tier floor enforcement), January 31, 2026 (startup logging)  
+**Dates**: 
+- January 30, 2026: Tier floor enforcement
+- January 31, 2026: Startup logging, metrics emission, assertions, dashboard API
 **PR**: copilot/respect-tier-floor-22-percent

@@ -1162,7 +1162,7 @@ def assert_expected_tier_floors() -> None:
         'MICRO_MASTER': 40.0,
         'STARTER': 30.0,
         'SAVER': 25.0,
-        'INVESTOR': 22.0,  # CRITICAL: Recent fix from 20% to 22%
+        'INVESTOR': 22.0,  # CRITICAL: Recent fix from 20% to 22% (Jan 30, 2026)
         'INCOME': 15.0,
         'LIVABLE': 10.0,
         'BALLER': 5.0,
@@ -1257,7 +1257,8 @@ def get_tier_floors_for_api() -> Dict[str, Any]:
     
     return {
         'tiers': tiers,
-        'updated': datetime.now().isoformat(),
+        'generated_at': datetime.now().isoformat(),  # When this response was created
+        'last_modified': '2026-01-30',  # When tier config was last updated
         'version': '1.1',  # Version tracking
         'explanation': (
             'Tier floors ensure position sizes don\'t fall below tier-appropriate levels, '
