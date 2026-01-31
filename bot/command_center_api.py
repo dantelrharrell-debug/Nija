@@ -271,6 +271,47 @@ def get_growth_velocity():
         }), 500
 
 
+@command_center_bp.route('/tier-floors', methods=['GET'])
+def get_tier_floors():
+    """
+    Get tier floor configuration for dashboard display.
+    
+    Returns tier floor information including:
+    - All tier names and capital ranges
+    - Floor percentages (position size minimums)
+    - Maximum positions per tier
+    - Minimum trade sizes
+    - Special notes (e.g., INVESTOR tier 22% fix)
+    
+    This endpoint provides visibility into tier floor enforcement,
+    particularly useful for verifying the INVESTOR tier 22% floor fix.
+    
+    Returns:
+        JSON with complete tier floor configuration
+    """
+    try:
+        # Import here to avoid circular dependency
+        try:
+            from tier_config import get_tier_floors_for_api
+        except ImportError:
+            from bot.tier_config import get_tier_floors_for_api
+        
+        tier_data = get_tier_floors_for_api()
+        
+        return jsonify({
+            'success': True,
+            'data': tier_data,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error getting tier floors: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to retrieve tier floor configuration'
+        }), 500
+
+
 @command_center_bp.route('/health', methods=['GET'])
 def health_check():
     """
