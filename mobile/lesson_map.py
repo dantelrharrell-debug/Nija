@@ -251,7 +251,33 @@ def create_lesson_map() -> List[Lesson]:
             "Global access from anywhere",
             "Automated trading helps manage 24/7 markets"
         ],
-        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["trading_risk"]
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["trading_risk"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What makes cryptocurrency markets different from stock markets?",
+                options=[
+                    "They only operate on weekdays",
+                    "They operate 24/7 without closing",
+                    "They have no volatility",
+                    "They are only accessible to banks"
+                ],
+                correct_answer_index=1,
+                explanation="Unlike stock markets that close on weekends and holidays, crypto markets operate continuously 24/7.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What does high volatility in crypto markets mean?",
+                options=[
+                    "Prices stay stable",
+                    "Prices can move significantly in short periods",
+                    "No trading is allowed",
+                    "Only small trades are possible"
+                ],
+                correct_answer_index=1,
+                explanation="High volatility means prices can change dramatically in short time periods, creating both opportunities and risks.",
+                points=10
+            )
+        ]
     ))
     
     lessons.append(Lesson(
@@ -294,7 +320,33 @@ def create_lesson_map() -> List[Lesson]:
             "NIJA encrypts and securely stores your keys",
             "Each exchange has its own API key setup process"
         ],
-        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"]
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What permissions should your API keys have for NIJA?",
+                options=[
+                    "WITHDRAWAL and TRADING",
+                    "Only TRADING permissions",
+                    "Only WITHDRAWAL permissions",
+                    "Full account access"
+                ],
+                correct_answer_index=1,
+                explanation="For security, API keys should only have TRADING permissions. Never enable WITHDRAWAL permissions.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What should you do with your API keys?",
+                options=[
+                    "Share them with friends",
+                    "Post them on social media",
+                    "Store them securely and never share",
+                    "Write them down and leave visible"
+                ],
+                correct_answer_index=2,
+                explanation="API keys should be stored securely and never shared with anyone to protect your account.",
+                points=10
+            )
+        ]
     ))
     
     lessons.append(Lesson(
@@ -341,6 +393,32 @@ def create_lesson_map() -> List[Lesson]:
             "Monitor active positions and P&L",
             "Control trading with simple toggles",
             "Quick access to detailed information"
+        ],
+        quiz_questions=[
+            QuizQuestion(
+                question="What does P&L stand for in trading?",
+                options=[
+                    "Price and Loss",
+                    "Profit and Loss",
+                    "Portfolio and Leverage",
+                    "Positions and Limits"
+                ],
+                correct_answer_index=1,
+                explanation="P&L stands for Profit and Loss, showing how much you've gained or lost on your trades.",
+                points=10
+            ),
+            QuizQuestion(
+                question="Where can you stop trading immediately on the dashboard?",
+                options=[
+                    "In the settings menu only",
+                    "Through customer support",
+                    "Using the emergency stop button",
+                    "You cannot stop trading once started"
+                ],
+                correct_answer_index=2,
+                explanation="The dashboard has an emergency stop button for immediately halting all trading activities.",
+                points=10
+            )
         ]
     ))
     
@@ -387,7 +465,33 @@ def create_lesson_map() -> List[Lesson]:
             "Only use capital you can afford to lose",
             "Start small and scale gradually"
         ],
-        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["trading_risk"]
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["trading_risk"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What should you do before starting live trading?",
+                options=[
+                    "Skip the checklist and start immediately",
+                    "Complete the entire trading start checklist",
+                    "Only connect your API keys",
+                    "Deposit all your savings"
+                ],
+                correct_answer_index=1,
+                explanation="Always complete the full trading start checklist to ensure safe and proper setup before trading.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What is the recommended approach when starting to trade?",
+                options=[
+                    "Use maximum position sizes immediately",
+                    "Start with minimum sizes and scale gradually",
+                    "Trade without monitoring",
+                    "Ignore risk settings"
+                ],
+                correct_answer_index=1,
+                explanation="Start with minimum position sizes, monitor closely, and gradually increase as you gain confidence.",
+                points=10
+            )
+        ]
     ))
     
     lessons.append(Lesson(
@@ -429,6 +533,32 @@ def create_lesson_map() -> List[Lesson]:
             "Discord community offers fastest help",
             "Emergency stop button always accessible",
             "Documentation and tutorials available 24/7"
+        ],
+        quiz_questions=[
+            QuizQuestion(
+                question="What is the fastest way to get help?",
+                options=[
+                    "Wait for email response",
+                    "Join the Discord community",
+                    "Call customer service",
+                    "Send a letter"
+                ],
+                correct_answer_index=1,
+                explanation="The Discord community provides the fastest response times for getting help.",
+                points=10
+            ),
+            QuizQuestion(
+                question="If you need to stop trading immediately, what should you do first?",
+                options=[
+                    "Wait to contact support",
+                    "Tap the STOP button in the dashboard",
+                    "Uninstall the app",
+                    "Ignore it and hope for the best"
+                ],
+                correct_answer_index=1,
+                explanation="Use the STOP button in the dashboard for immediate trading halt, then contact support if needed.",
+                points=10
+            )
         ]
     ))
     
@@ -471,7 +601,33 @@ def create_lesson_map() -> List[Lesson]:
             "Account for all costs in profitability calculations",
             "Higher volume typically means lower fees"
         ],
-        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"]
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What types of fees should you consider when calculating profitability?",
+                options=[
+                    "Only NIJA platform fees",
+                    "Only exchange trading fees",
+                    "Exchange fees, NIJA fees, spread, and slippage",
+                    "No fees apply to automated trading"
+                ],
+                correct_answer_index=2,
+                explanation="True profitability requires accounting for all costs: exchange fees, platform fees, spread, slippage, and network fees.",
+                points=10
+            ),
+            QuizQuestion(
+                question="How does NIJA pricing work?",
+                options=[
+                    "Flat monthly fee only",
+                    "Subscription OR profit share, whichever you choose",
+                    "Both subscription AND profit share required",
+                    "Completely free with no fees"
+                ],
+                correct_answer_index=1,
+                explanation="NIJA offers flexible pricing: you can choose either a subscription fee OR profit share, not both.",
+                points=10
+            )
+        ]
     ))
     
     # ========================================
@@ -531,6 +687,30 @@ def create_lesson_map() -> List[Lesson]:
                 correct_answer_index=1,
                 explanation="An uptrend is characterized by consecutive higher highs and higher lows.",
                 points=10
+            ),
+            QuizQuestion(
+                question="What is a support level in technical analysis?",
+                options=[
+                    "A price level where selling pressure increases",
+                    "A price level where buying pressure increases",
+                    "The highest price ever reached",
+                    "The current market price"
+                ],
+                correct_answer_index=1,
+                explanation="Support is a price level where buying pressure typically increases, preventing further price decline.",
+                points=10
+            ),
+            QuizQuestion(
+                question="Why does NIJA use multiple technical indicators?",
+                options=[
+                    "To make trading more complicated",
+                    "To make more reliable trading decisions",
+                    "Because one indicator is not enough data",
+                    "To slow down trading speed"
+                ],
+                correct_answer_index=1,
+                explanation="Using multiple indicators together provides more reliable signals and reduces false positives.",
+                points=10
             )
         ]
     ))
@@ -586,11 +766,688 @@ def create_lesson_map() -> List[Lesson]:
                 correct_answer_index=1,
                 explanation="RSI below 30 suggests oversold conditions, which may lead to a bounce, but it's not a guarantee.",
                 points=10
+            ),
+            QuizQuestion(
+                question="Why does NIJA use both RSI_9 and RSI_14?",
+                options=[
+                    "To make trading slower",
+                    "To reduce false signals and increase reliability",
+                    "Because one RSI doesn't work",
+                    "To confuse the market"
+                ],
+                correct_answer_index=1,
+                explanation="Using two RSI periods (9 and 14) reduces false signals. When both agree, the signal is more reliable.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What RSI range is considered the neutral zone?",
+                options=[
+                    "0-30",
+                    "70-100",
+                    "Around 50",
+                    "Above 100"
+                ],
+                correct_answer_index=2,
+                explanation="RSI around 50 is considered neutral, neither overbought nor oversold.",
+                points=10
             )
         ]
     ))
     
-    # Add more lessons for other categories...
+    lessons.append(Lesson(
+        lesson_id="tb_003",
+        title="Moving Averages Explained",
+        category=LessonCategory.TRADING_BASICS,
+        difficulty=LessonDifficulty.INTERMEDIATE,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=6,
+        order=13,
+        prerequisites=["tb_002"],
+        content=(
+            "Moving Averages (MA) smooth out price data to identify trends over time.\n\n"
+            "**What is a Moving Average?**\n"
+            "A moving average calculates the average price over a specific period, then 'moves' "
+            "forward by dropping the oldest price and adding the newest.\n\n"
+            "**Common Types:**\n\n"
+            "📊 **Simple Moving Average (SMA)**\n"
+            "• Equally weights all prices in the period\n"
+            "• Example: 50-day SMA = average of last 50 days\n"
+            "• Slower to react to price changes\n\n"
+            "📈 **Exponential Moving Average (EMA)**\n"
+            "• Gives more weight to recent prices\n"
+            "• Reacts faster to price changes\n"
+            "• Preferred for short-term trading\n\n"
+            "**Popular Periods:**\n"
+            "• 9 EMA: Very short-term\n"
+            "• 21 EMA: Short-term trend\n"
+            "• 50 SMA: Medium-term trend\n"
+            "• 200 SMA: Long-term trend\n\n"
+            "**Trading Signals:**\n\n"
+            "✅ **Bullish Signals:**\n"
+            "• Price crosses above MA\n"
+            "• Fast MA crosses above slow MA (golden cross)\n"
+            "• Price bounces off MA as support\n\n"
+            "❌ **Bearish Signals:**\n"
+            "• Price crosses below MA\n"
+            "• Fast MA crosses below slow MA (death cross)\n"
+            "• MA acts as resistance\n\n"
+            "**NIJA's Use:**\n"
+            "NIJA monitors multiple moving averages to confirm trend direction and "
+            "filter out trades against the prevailing trend."
+        ),
+        key_points=[
+            "Moving averages smooth price data to show trends",
+            "EMA reacts faster than SMA to price changes",
+            "Crossovers generate buy/sell signals",
+            "NIJA uses multiple MAs for trend confirmation"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What is the main difference between SMA and EMA?",
+                options=[
+                    "SMA is faster than EMA",
+                    "EMA gives more weight to recent prices",
+                    "SMA doesn't work for crypto",
+                    "There is no difference"
+                ],
+                correct_answer_index=1,
+                explanation="EMA (Exponential Moving Average) gives more weight to recent prices, making it more responsive to current price action.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What is a 'golden cross'?",
+                options=[
+                    "When price hits a new high",
+                    "When a fast MA crosses above a slow MA",
+                    "When RSI crosses 70",
+                    "When volume increases"
+                ],
+                correct_answer_index=1,
+                explanation="A golden cross occurs when a faster MA crosses above a slower MA, signaling potential uptrend.",
+                points=10
+            )
+        ]
+    ))
+    
+    lessons.append(Lesson(
+        lesson_id="tb_004",
+        title="Candlestick Patterns Basics",
+        category=LessonCategory.TRADING_BASICS,
+        difficulty=LessonDifficulty.INTERMEDIATE,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=7,
+        order=14,
+        prerequisites=["tb_003"],
+        content=(
+            "Candlestick charts visualize price action showing open, high, low, and close.\n\n"
+            "**Anatomy of a Candlestick:**\n\n"
+            "🕯️ **Body**: Rectangle showing open and close\n"
+            "• Green/White: Close higher than open (bullish)\n"
+            "• Red/Black: Close lower than open (bearish)\n\n"
+            "📏 **Wicks/Shadows**: Lines above and below body\n"
+            "• Upper wick: High of the period\n"
+            "• Lower wick: Low of the period\n\n"
+            "**Single Candle Patterns:**\n\n"
+            "🔨 **Hammer** (Bullish)\n"
+            "• Small body at top\n"
+            "• Long lower wick\n"
+            "• Suggests buying pressure after decline\n\n"
+            "⭐ **Doji** (Indecision)\n"
+            "• Open equals close (tiny body)\n"
+            "• Signals market indecision\n"
+            "• Often precedes reversals\n\n"
+            "💹 **Engulfing** (Reversal)\n"
+            "• Bullish: Large green candle engulfs previous red\n"
+            "• Bearish: Large red candle engulfs previous green\n\n"
+            "**Multi-Candle Patterns:**\n\n"
+            "⭐ **Morning Star** (Bullish)\n"
+            "• Three candles: large red, small body, large green\n"
+            "• Signals end of downtrend\n\n"
+            "🌙 **Evening Star** (Bearish)\n"
+            "• Three candles: large green, small body, large red\n"
+            "• Signals end of uptrend\n\n"
+            "**Important Notes:**\n"
+            "• Patterns are more reliable with high volume\n"
+            "• Context matters - consider the trend\n"
+            "• Confirm with other indicators\n"
+            "• Not all patterns play out as expected"
+        ),
+        key_points=[
+            "Candlesticks show open, high, low, close in one visual",
+            "Body color indicates bullish (green) or bearish (red)",
+            "Patterns suggest potential reversals or continuations",
+            "Always confirm patterns with volume and other indicators"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What does a green/white candlestick indicate?",
+                options=[
+                    "Price closed lower than it opened",
+                    "Price closed higher than it opened",
+                    "No trading occurred",
+                    "Market is closed"
+                ],
+                correct_answer_index=1,
+                explanation="A green/white candle means the closing price was higher than the opening price (bullish).",
+                points=10
+            ),
+            QuizQuestion(
+                question="What does a Doji candlestick pattern indicate?",
+                options=[
+                    "Strong uptrend",
+                    "Strong downtrend",
+                    "Market indecision",
+                    "No volatility"
+                ],
+                correct_answer_index=2,
+                explanation="A Doji has a very small body (open ≈ close), indicating market indecision and potential reversal.",
+                points=10
+            )
+        ]
+    ))
+    
+    lessons.append(Lesson(
+        lesson_id="tb_005",
+        title="Volume Analysis",
+        category=LessonCategory.TRADING_BASICS,
+        difficulty=LessonDifficulty.INTERMEDIATE,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=5,
+        order=15,
+        prerequisites=["tb_004"],
+        content=(
+            "Volume measures how much of an asset is traded over a specific period.\n\n"
+            "**What Volume Tells You:**\n"
+            "Volume represents market participation and conviction behind price moves.\n\n"
+            "📊 **High Volume**\n"
+            "• Indicates strong interest and conviction\n"
+            "• Validates price movements\n"
+            "• Suggests sustainability of trends\n\n"
+            "📉 **Low Volume**\n"
+            "• Indicates weak participation\n"
+            "• Price moves may be unreliable\n"
+            "• Trends may lack conviction\n\n"
+            "**Volume and Price Relationship:**\n\n"
+            "✅ **Healthy Patterns:**\n"
+            "• Rising prices + rising volume = strong uptrend\n"
+            "• Falling prices + rising volume = strong downtrend\n"
+            "• Breakouts with high volume = likely to sustain\n\n"
+            "⚠️ **Warning Signs:**\n"
+            "• Rising prices + falling volume = weak uptrend\n"
+            "• Falling prices + falling volume = weak downtrend\n"
+            "• Breakout with low volume = likely false breakout\n\n"
+            "**Volume Indicators:**\n\n"
+            "📈 **Volume Bars**\n"
+            "• Shown at bottom of charts\n"
+            "• Height represents amount traded\n"
+            "• Compare current to average\n\n"
+            "📊 **OBV (On-Balance Volume)**\n"
+            "• Cumulative volume indicator\n"
+            "• Adds volume on up days, subtracts on down days\n"
+            "• Confirms trend strength\n\n"
+            "**NIJA's Approach:**\n"
+            "NIJA filters out low-volume markets and considers volume "
+            "when validating trading signals for better reliability."
+        ),
+        key_points=[
+            "Volume indicates market participation and conviction",
+            "High volume validates price movements",
+            "Volume divergence can signal trend weakness",
+            "NIJA uses volume to filter and validate signals"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What does high volume during a price increase indicate?",
+                options=[
+                    "Weak trend that may reverse",
+                    "Strong trend with conviction",
+                    "Market manipulation",
+                    "Trend is about to end"
+                ],
+                correct_answer_index=1,
+                explanation="High volume during price increases indicates strong participation and conviction, validating the uptrend.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What is a warning sign in volume analysis?",
+                options=[
+                    "Rising prices with rising volume",
+                    "Rising prices with falling volume",
+                    "High volume breakouts",
+                    "Volume matching price direction"
+                ],
+                correct_answer_index=1,
+                explanation="Rising prices with falling volume suggests weakening conviction and potential trend exhaustion.",
+                points=10
+            )
+        ]
+    ))
+    
+    # Continue with more Trading Basics lessons...
+    
+    lessons.append(Lesson(
+        lesson_id="tb_006",
+        title="Trend Lines and Channels",
+        category=LessonCategory.TRADING_BASICS,
+        difficulty=LessonDifficulty.INTERMEDIATE,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=6,
+        order=16,
+        prerequisites=["tb_005"],
+        content=(
+            "Trend lines and channels help identify trend direction and potential reversal points.\n\n"
+            "**Drawing Trend Lines:**\n\n"
+            "📈 **Uptrend Line**\n"
+            "• Connect two or more higher lows\n"
+            "• Line should slope upward\n"
+            "• Acts as support during uptrends\n\n"
+            "📉 **Downtrend Line**\n"
+            "• Connect two or more lower highs\n"
+            "• Line should slope downward\n"
+            "• Acts as resistance during downtrends\n\n"
+            "**Validation:**\n"
+            "• Need at least 2 points to draw\n"
+            "• 3+ touches increase reliability\n"
+            "• More touches = stronger trend line\n"
+            "• Break of trend line may signal reversal\n\n"
+            "**Trend Channels:**\n\n"
+            "📊 **Channel Construction**\n"
+            "• Draw trend line along lows (support)\n"
+            "• Draw parallel line along highs (resistance)\n"
+            "• Price typically bounces between these lines\n\n"
+            "**Trading Strategies:**\n\n"
+            "✅ **Channel Trading:**\n"
+            "• Buy near lower channel line (support)\n"
+            "• Sell near upper channel line (resistance)\n"
+            "• Exit if price breaks channel\n\n"
+            "⚡ **Breakout Trading:**\n"
+            "• Strong volume breakout above resistance = buy signal\n"
+            "• Strong volume breakdown below support = sell signal\n\n"
+            "**Common Mistakes:**\n"
+            "• Forcing trend lines to fit\n"
+            "• Using only 2 points without confirmation\n"
+            "• Ignoring volume on breakouts\n"
+            "• Not adjusting as new price data appears"
+        ),
+        key_points=[
+            "Trend lines connect swing highs or lows",
+            "Channels show price boundaries in a trend",
+            "More touches = stronger and more reliable",
+            "Breakouts with volume signal potential new trends"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="How do you draw an uptrend line?",
+                options=[
+                    "Connect lower highs",
+                    "Connect higher lows",
+                    "Draw a horizontal line",
+                    "Connect random points"
+                ],
+                correct_answer_index=1,
+                explanation="An uptrend line is drawn by connecting two or more higher lows, acting as support.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What makes a trend line more reliable?",
+                options=[
+                    "Using only 2 points",
+                    "Having 3 or more touches",
+                    "Making it horizontal",
+                    "Drawing it very steep"
+                ],
+                correct_answer_index=1,
+                explanation="A trend line becomes more reliable with 3 or more touches, validating its significance.",
+                points=10
+            )
+        ]
+    ))
+    
+    lessons.append(Lesson(
+        lesson_id="tb_007",
+        title="Support and Resistance Levels",
+        category=LessonCategory.TRADING_BASICS,
+        difficulty=LessonDifficulty.INTERMEDIATE,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=6,
+        order=17,
+        prerequisites=["tb_006"],
+        content=(
+            "Support and resistance are key price levels where supply and demand create barriers.\n\n"
+            "**Support Levels:**\n\n"
+            "🛡️ **What is Support?**\n"
+            "• Price level where buying pressure exceeds selling\n"
+            "• Acts as a 'floor' preventing further decline\n"
+            "• Where demand is strong enough to halt downward movement\n\n"
+            "**Why Support Forms:**\n"
+            "• Traders remember previous lows\n"
+            "• Buyers see opportunity at lower prices\n"
+            "• Psychological price levels (round numbers)\n\n"
+            "**Resistance Levels:**\n\n"
+            "🚧 **What is Resistance?**\n"
+            "• Price level where selling pressure exceeds buying\n"
+            "• Acts as a 'ceiling' preventing further rise\n"
+            "• Where supply is strong enough to halt upward movement\n\n"
+            "**Why Resistance Forms:**\n"
+            "• Traders remember previous highs\n"
+            "• Sellers take profits at higher prices\n"
+            "• Psychological barriers\n\n"
+            "**Role Reversal:**\n\n"
+            "💱 **Key Concept:**\n"
+            "• Broken support becomes resistance\n"
+            "• Broken resistance becomes support\n"
+            "• This flip confirms the level's significance\n\n"
+            "**Identifying Strong Levels:**\n\n"
+            "✅ **Strong S/R Characteristics:**\n"
+            "• Multiple touches (3+)\n"
+            "• Long time periods\n"
+            "• High volume at the level\n"
+            "• Round psychological numbers ($50, $100, etc.)\n"
+            "• Historical significance\n\n"
+            "**Trading Strategies:**\n\n"
+            "📈 **Buy at Support:**\n"
+            "• Price approaches support\n"
+            "• Look for reversal signals\n"
+            "• Stop-loss below support\n\n"
+            "📉 **Sell at Resistance:**\n"
+            "• Price approaches resistance\n"
+            "• Look for rejection signals\n"
+            "• Stop-loss above resistance\n\n"
+            "⚡ **Breakout Trading:**\n"
+            "• Strong close above resistance = buy\n"
+            "• Strong close below support = sell\n"
+            "• Requires volume confirmation"
+        ),
+        key_points=[
+            "Support acts as floor, resistance as ceiling",
+            "Broken levels often flip roles",
+            "Multiple touches increase level strength",
+            "Volume confirms breakouts through S/R"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What happens when a resistance level is broken?",
+                options=[
+                    "It disappears completely",
+                    "It often becomes a support level",
+                    "Price must fall immediately",
+                    "Nothing changes"
+                ],
+                correct_answer_index=1,
+                explanation="When resistance is broken, it often becomes a support level - this role reversal confirms its significance.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What makes a support/resistance level more reliable?",
+                options=[
+                    "Only one touch",
+                    "Multiple touches and high volume",
+                    "Random price action",
+                    "Short time periods"
+                ],
+                correct_answer_index=1,
+                explanation="Multiple touches, long time periods, and high volume make support/resistance levels more reliable.",
+                points=10
+            )
+        ]
+    ))
+    
+    lessons.append(Lesson(
+        lesson_id="tb_008",
+        title="MACD Indicator",
+        category=LessonCategory.TRADING_BASICS,
+        difficulty=LessonDifficulty.ADVANCED,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=7,
+        order=18,
+        prerequisites=["tb_007"],
+        content=(
+            "MACD (Moving Average Convergence Divergence) identifies trend changes and momentum.\n\n"
+            "**MACD Components:**\n\n"
+            "📊 **Three Elements:**\n\n"
+            "1. **MACD Line** (Fast)\n"
+            "   • 12-period EMA minus 26-period EMA\n"
+            "   • Shows momentum direction\n\n"
+            "2. **Signal Line** (Slow)\n"
+            "   • 9-period EMA of MACD line\n"
+            "   • Provides crossover signals\n\n"
+            "3. **Histogram**\n"
+            "   • Difference between MACD and Signal lines\n"
+            "   • Visual representation of momentum\n\n"
+            "**Reading MACD:**\n\n"
+            "✅ **Bullish Signals:**\n"
+            "• MACD crosses above signal line (buy)\n"
+            "• MACD crosses above zero line (uptrend confirmation)\n"
+            "• Histogram expanding upward (increasing momentum)\n"
+            "• Bullish divergence (price makes lower low, MACD doesn't)\n\n"
+            "❌ **Bearish Signals:**\n"
+            "• MACD crosses below signal line (sell)\n"
+            "• MACD crosses below zero line (downtrend confirmation)\n"
+            "• Histogram expanding downward (decreasing momentum)\n"
+            "• Bearish divergence (price makes higher high, MACD doesn't)\n\n"
+            "**Divergence:**\n\n"
+            "🔍 **Powerful Signal:**\n"
+            "• Price and MACD moving in opposite directions\n"
+            "• Signals potential trend reversal\n"
+            "• Bullish divergence: Price falls but MACD rises\n"
+            "• Bearish divergence: Price rises but MACD falls\n\n"
+            "**Best Practices:**\n\n"
+            "• Works best in trending markets\n"
+            "• Less reliable in sideways/choppy markets\n"
+            "• Combine with other indicators\n"
+            "• Wait for crossover confirmation\n"
+            "• Use histogram for momentum strength"
+        ),
+        key_points=[
+            "MACD shows momentum and trend changes",
+            "Crossovers generate buy/sell signals",
+            "Divergence signals potential reversals",
+            "Most effective in trending markets"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What does it mean when MACD crosses above the signal line?",
+                options=[
+                    "Bearish signal to sell",
+                    "Bullish signal to buy",
+                    "Market is closed",
+                    "No trading signal"
+                ],
+                correct_answer_index=1,
+                explanation="When MACD crosses above the signal line, it's a bullish signal indicating potential buying opportunity.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What is bullish divergence?",
+                options=[
+                    "Price and MACD both rising",
+                    "Price makes lower low but MACD doesn't",
+                    "Price and MACD both falling",
+                    "MACD crosses zero line"
+                ],
+                correct_answer_index=1,
+                explanation="Bullish divergence occurs when price makes a lower low but MACD doesn't, signaling potential upward reversal.",
+                points=10
+            )
+        ]
+    ))
+    
+    lessons.append(Lesson(
+        lesson_id="tb_009",
+        title="Fibonacci Retracements",
+        category=LessonCategory.TRADING_BASICS,
+        difficulty=LessonDifficulty.ADVANCED,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=6,
+        order=19,
+        prerequisites=["tb_008"],
+        content=(
+            "Fibonacci retracements identify potential support/resistance levels during pullbacks.\n\n"
+            "**What are Fibonacci Levels?**\n\n"
+            "Based on the Fibonacci sequence found in nature:\n"
+            "• 23.6%, 38.2%, 50%, 61.8%, 78.6%\n"
+            "• These percentages represent potential retracement levels\n\n"
+            "**How to Use:**\n\n"
+            "📊 **In Uptrend:**\n"
+            "1. Identify swing low to swing high\n"
+            "2. Draw Fibonacci from low to high\n"
+            "3. Price may retrace to Fib levels before continuing up\n"
+            "4. Common entry points: 38.2%, 50%, 61.8%\n\n"
+            "📉 **In Downtrend:**\n"
+            "1. Identify swing high to swing low\n"
+            "2. Draw Fibonacci from high to low\n"
+            "3. Price may retrace to Fib levels before continuing down\n"
+            "4. Common resistance: 38.2%, 50%, 61.8%\n\n"
+            "**Key Levels:**\n\n"
+            "🎯 **Most Important:**\n"
+            "• **38.2%**: Shallow retracement\n"
+            "• **50.0%**: Mid-point, psychologically significant\n"
+            "• **61.8%**: Golden ratio, strongest level\n\n"
+            "**Trading Strategy:**\n\n"
+            "✅ **Buying Opportunities:**\n"
+            "• Uptrend retraces to Fib level\n"
+            "• Look for reversal signals at level\n"
+            "• Stop-loss below next Fib level\n"
+            "• Target previous high or extension\n\n"
+            "**Fibonacci Extensions:**\n"
+            "• Project where price may go beyond previous high/low\n"
+            "• Common targets: 127.2%, 161.8%, 261.8%\n"
+            "• Used for profit targets\n\n"
+            "**Important Notes:**\n"
+            "• Not predictive, but probabilistic\n"
+            "• Works best with other confirmations\n"
+            "• May need to redraw as new swings form\n"
+            "• Levels are zones, not exact prices"
+        ),
+        key_points=[
+            "Fibonacci levels identify potential pullback areas",
+            "61.8% (golden ratio) is most significant",
+            "Use with other indicators for confirmation",
+            "Extensions project profit targets beyond swings"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What is the most significant Fibonacci retracement level?",
+                options=[
+                    "23.6%",
+                    "50.0%",
+                    "61.8% (golden ratio)",
+                    "100%"
+                ],
+                correct_answer_index=2,
+                explanation="61.8%, known as the golden ratio, is considered the most significant Fibonacci level.",
+                points=10
+            ),
+            QuizQuestion(
+                question="How are Fibonacci retracements used in trading?",
+                options=[
+                    "To guarantee profit levels",
+                    "To identify potential support/resistance during pullbacks",
+                    "To predict exact future prices",
+                    "To replace all other indicators"
+                ],
+                correct_answer_index=1,
+                explanation="Fibonacci retracements help identify potential support/resistance zones during price pullbacks in a trend.",
+                points=10
+            )
+        ]
+    ))
+    
+    lessons.append(Lesson(
+        lesson_id="tb_010",
+        title="Chart Timeframes",
+        category=LessonCategory.TRADING_BASICS,
+        difficulty=LessonDifficulty.INTERMEDIATE,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=5,
+        order=20,
+        prerequisites=["tb_009"],
+        content=(
+            "Different timeframes provide different perspectives on market behavior.\n\n"
+            "**Common Timeframes:**\n\n"
+            "⚡ **Short-term (1m - 15m)**\n"
+            "• Best for: Day trading, scalping\n"
+            "• Shows: Intraday price action\n"
+            "• Noise level: High\n"
+            "• Stress level: High\n\n"
+            "📊 **Medium-term (1h - 4h)**\n"
+            "• Best for: Swing trading\n"
+            "• Shows: Intraday trends\n"
+            "• Noise level: Moderate\n"
+            "• Stress level: Moderate\n\n"
+            "📈 **Long-term (1D - 1W)**\n"
+            "• Best for: Position trading, investing\n"
+            "• Shows: Major trends\n"
+            "• Noise level: Low\n"
+            "• Stress level: Low\n\n"
+            "**Multiple Timeframe Analysis:**\n\n"
+            "🔍 **Top-down Approach:**\n"
+            "1. **Higher timeframe**: Identify overall trend (Daily/Weekly)\n"
+            "2. **Medium timeframe**: Find entry opportunities (4H/1H)\n"
+            "3. **Lower timeframe**: Fine-tune entry timing (15m/5m)\n\n"
+            "**Alignment is Key:**\n"
+            "• Trade in direction of higher timeframe trend\n"
+            "• Use lower timeframes for entry precision\n"
+            "• Conflicting timeframes = avoid or wait\n\n"
+            "**Timeframe Selection:**\n\n"
+            "✅ **Choose Based On:**\n"
+            "• Your trading style (day, swing, position)\n"
+            "• Available time to monitor\n"
+            "• Risk tolerance\n"
+            "• Capital size\n\n"
+            "**NIJA's Approach:**\n\n"
+            "NIJA analyzes multiple timeframes simultaneously:\n"
+            "• Primary: 4H for trend direction\n"
+            "• Entry: 1H for signal timing\n"
+            "• Confirmation: 15m for execution\n"
+            "• This multi-timeframe approach reduces false signals\n\n"
+            "**Common Mistakes:**\n"
+            "• Trading against higher timeframe trend\n"
+            "• Switching timeframes randomly\n"
+            "• Using too short timeframe (more noise)\n"
+            "• Ignoring timeframe alignment"
+        ),
+        key_points=[
+            "Different timeframes show different market perspectives",
+            "Higher timeframes have less noise and show major trends",
+            "Use multiple timeframes: higher for trend, lower for entry",
+            "Trade in direction of higher timeframe trend"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        quiz_questions=[
+            QuizQuestion(
+                question="What is the benefit of using multiple timeframe analysis?",
+                options=[
+                    "It makes trading more complicated",
+                    "It provides different perspectives and reduces false signals",
+                    "It's only for professional traders",
+                    "It's not recommended"
+                ],
+                correct_answer_index=1,
+                explanation="Multiple timeframe analysis provides different perspectives and helps reduce false signals by confirming trends.",
+                points=10
+            ),
+            QuizQuestion(
+                question="Which timeframe typically has the most noise?",
+                options=[
+                    "Monthly charts",
+                    "Daily charts",
+                    "1-minute charts",
+                    "Weekly charts"
+                ],
+                correct_answer_index=2,
+                explanation="Shorter timeframes like 1-minute charts have the most noise and random price fluctuations.",
+                points=10
+            )
+        ]
+    ))
     # (Continuing with tb_003 through tb_010 for Trading Basics)
     # (Then rm_001 through rm_010 for Risk Management)
     # (Then pf_001 through pf_008 for Platform Features)
@@ -606,7 +1463,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.BEGINNER,
         lesson_type=LessonType.TEXT,
         duration_minutes=4,
-        order=20,
+        order=11,
         prerequisites=["tb_002"],
         content=(
             "This is the most important lesson in trading.\n\n"
@@ -653,7 +1510,7 @@ def create_lesson_map() -> List[Lesson]:
         difficulty=LessonDifficulty.INTERMEDIATE,
         lesson_type=LessonType.TEXT,
         duration_minutes=5,
-        order=21,
+        order=12,
         prerequisites=["rm_001"],
         content=(
             "Position sizing determines how much capital to allocate to each trade.\n\n"
@@ -744,9 +1601,242 @@ def create_lesson_map() -> List[Lesson]:
         is_required=True
     ))
     
+    # ========================================
+    # CATEGORY 3: RISK MANAGEMENT (continued)
+    # ========================================
+    
+    lessons.append(Lesson(
+        lesson_id="rm_003",
+        title="Stop-Loss Strategies",
+        category=LessonCategory.RISK_MANAGEMENT,
+        difficulty=LessonDifficulty.INTERMEDIATE,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=6,
+        order=21,
+        prerequisites=["rm_002"],
+        content=(
+            "Stop-losses are your safety net, limiting losses on individual trades.\n\n"
+            "**What is a Stop-Loss?**\n"
+            "An order that automatically closes your position when price reaches a specified level,\n"
+            "preventing further losses.\n\n"
+            "**Why Stop-Losses are Critical:**\n\n"
+            "🛡️ **Protection:**\n"
+            "• Limits maximum loss on each trade\n"
+            "• Prevents emotional decision-making\n"
+            "• Allows you to walk away from screens\n"
+            "• Protects against sudden market crashes\n\n"
+            "❌ **Without Stop-Loss:**\n"
+            "• Single trade can wipe out account\n"
+            "• Hope/fear clouds judgment\n"
+            "• Small loss becomes catastrophic\n"
+            "• No sleep due to constant monitoring\n\n"
+            "**Types of Stop-Losses:**\n\n"
+            "1. **Fixed Percentage**\n"
+            "   • Set % below entry (e.g., 2%)\n"
+            "   • Simple and consistent\n"
+            "   • Doesn't account for volatility\n\n"
+            "2. **ATR-Based (Average True Range)**\n"
+            "   • Adjusts for market volatility\n"
+            "   • Wider stops in volatile markets\n"
+            "   • Prevents premature stop-outs\n\n"
+            "3. **Technical Levels**\n"
+            "   • Below support in long trades\n"
+            "   • Above resistance in short trades\n"
+            "   • Based on market structure\n\n"
+            "4. **Trailing Stop**\n"
+            "   • Moves up with profitable trades\n"
+            "   • Locks in profits as price rises\n"
+            "   • Never moves against you\n\n"
+            "**NIJA's Stop-Loss Approach:**\n\n"
+            "🎯 **Intelligent Stops:**\n"
+            "• ATR-based for volatility adjustment\n"
+            "• Minimum 1.5% to avoid noise\n"
+            "• Maximum 3% to limit risk\n"
+            "• Automatically trails on profitable trades\n"
+            "• Tightens as profit targets approach\n\n"
+            "**Common Mistakes:**\n\n"
+            "❌ **Don't Do This:**\n"
+            "• Trading without stop-losses\n"
+            "• Moving stop-loss further away when losing\n"
+            "• Setting stops too tight (get stopped by noise)\n"
+            "• Removing stops \"just this once\"\n"
+            "• Setting stops at obvious levels everyone else uses\n\n"
+            "**Best Practices:**\n\n"
+            "✅ **Do This:**\n"
+            "• Set stop-loss BEFORE entering trade\n"
+            "• Never move stop-loss further from entry\n"
+            "• Only trail stops in profit direction\n"
+            "• Accept losses when stopped out\n"
+            "• Calculate position size based on stop distance"
+        ),
+        key_points=[
+            "Stop-losses are mandatory for every trade",
+            "Set stops before entering, never move them against you",
+            "ATR-based stops adjust for market volatility",
+            "Trailing stops lock in profits as trade moves favorably"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["trading_risk"],
+        is_required=True,
+        quiz_questions=[
+            QuizQuestion(
+                question="When should you set a stop-loss?",
+                options=[
+                    "After the trade starts losing",
+                    "Before entering the trade",
+                    "Only if the market is volatile",
+                    "Stop-losses are optional"
+                ],
+                correct_answer_index=1,
+                explanation="Always set stop-losses BEFORE entering a trade to define your risk upfront.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What is a trailing stop-loss?",
+                options=[
+                    "A stop that never moves",
+                    "A stop that moves with profitable trades to lock in gains",
+                    "A stop below market price",
+                    "A stop for losing trades only"
+                ],
+                correct_answer_index=1,
+                explanation="A trailing stop moves up with profitable trades to lock in gains while protecting against reversals.",
+                points=10
+            ),
+            QuizQuestion(
+                question="Is it okay to move your stop-loss further away when losing?",
+                options=[
+                    "Yes, to give the trade more room",
+                    "No, never move stops against your position",
+                    "Only on weekends",
+                    "Yes, if you're confident"
+                ],
+                correct_answer_index=1,
+                explanation="Never move stop-losses further away when losing - this violates risk management and can lead to catastrophic losses.",
+                points=10
+            )
+        ]
+    ))
+    
+    lessons.append(Lesson(
+        lesson_id="rm_004",
+        title="Take-Profit Targets and Risk-Reward Ratios",
+        category=LessonCategory.RISK_MANAGEMENT,
+        difficulty=LessonDifficulty.INTERMEDIATE,
+        lesson_type=LessonType.TEXT,
+        duration_minutes=7,
+        order=22,
+        prerequisites=["rm_003"],
+        content=(
+            "Knowing when to take profits is as important as limiting losses.\n\n"
+            "**What is a Take-Profit Target?**\n"
+            "A predefined price level where you exit a profitable trade,\n"
+            "securing your gains before potential reversal.\n\n"
+            "**Risk-Reward Ratio (R:R):**\n\n"
+            "📊 **The Math:**\n"
+            "• R:R = Potential Profit ÷ Potential Loss\n"
+            "• Example: Risk $100 to make $300 = 3:1 R:R\n\n"
+            "**Minimum Acceptable R:R:**\n"
+            "• 1:1 = Break even with 50% win rate\n"
+            "• 2:1 = Profitable with 33%+ win rate\n"
+            "• 3:1 = Profitable with 25%+ win rate ⭐ Recommended\n\n"
+            "**Why 3:1 Matters:**\n\n"
+            "Example with 40% win rate:\n"
+            "• 10 trades: 4 wins, 6 losses\n"
+            "• Each loss: -$100 × 6 = -$600\n"
+            "• Each win: +$300 × 4 = +$1,200\n"
+            "• Net profit: +$600 💰\n\n"
+            "**Setting Profit Targets:**\n\n"
+            "1. **Technical Levels**\n"
+            "   • Previous high/low\n"
+            "   • Support/resistance zones\n"
+            "   • Round psychological numbers\n\n"
+            "2. **Fibonacci Extensions**\n"
+            "   • 127.2%, 161.8%, 261.8%\n"
+            "   • Projected from swing points\n\n"
+            "3. **Fixed R:R Multiple**\n"
+            "   • If risk is $100, target $300 (3:1)\n"
+            "   • Simple and consistent\n\n"
+            "4. **ATR Multiples**\n"
+            "   • 2-3× ATR from entry\n"
+            "   • Adapts to volatility\n\n"
+            "**Partial Profit Taking:**\n\n"
+            "🎯 **Scaling Out Strategy:**\n"
+            "• Take 50% profit at 2:1 R:R\n"
+            "• Trail stop on remaining 50%\n"
+            "• Reduces pressure, locks gains\n"
+            "• Lets winners run further\n\n"
+            "**NIJA's Approach:**\n\n"
+            "🎲 **Intelligent Targets:**\n"
+            "• Minimum 2:1 R:R required to enter\n"
+            "• Primary target: 3:1 R:R\n"
+            "• Partial profit at 2:1 (50% of position)\n"
+            "• Trail remaining position for extended gains\n"
+            "• Adjusts targets based on volatility and trend strength\n\n"
+            "**Common Mistakes:**\n\n"
+            "❌ **Don't:**\n"
+            "• Take profits too early from fear\n"
+            "• Let winners turn into losers\n"
+            "• Accept trades with R:R below 2:1\n"
+            "• Move targets further away when close\n"
+            "• Exit profitable trades without plan\n\n"
+            "✅ **Do:**\n"
+            "• Define target before entering\n"
+            "• Stick to your plan\n"
+            "• Use trailing stops to maximize winners\n"
+            "• Track actual R:R performance\n"
+            "• Only take trades with favorable R:R"
+        ),
+        key_points=[
+            "Risk-reward ratio determines long-term profitability",
+            "Minimum 2:1 R:R, aim for 3:1 or better",
+            "Define profit targets before entering trades",
+            "Partial profit-taking reduces risk while letting winners run"
+        ],
+        compliance_disclaimer=COMPLIANCE_DISCLAIMERS["educational_only"],
+        is_required=True,
+        quiz_questions=[
+            QuizQuestion(
+                question="What does a 3:1 risk-reward ratio mean?",
+                options=[
+                    "Risk $3 to make $1",
+                    "Risk $1 to make $3",
+                    "Win 3 out of 1 trades",
+                    "Trade 3 times per day"
+                ],
+                correct_answer_index=1,
+                explanation="A 3:1 R:R means risking $1 to potentially make $3 - you aim to make 3× what you risk.",
+                points=10
+            ),
+            QuizQuestion(
+                question="With a 3:1 R:R, what win rate do you need to be profitable?",
+                options=[
+                    "90%",
+                    "50%",
+                    "25% or higher",
+                    "10%"
+                ],
+                correct_answer_index=2,
+                explanation="With 3:1 R:R, you only need to win 25%+ of trades to be profitable due to larger wins.",
+                points=10
+            ),
+            QuizQuestion(
+                question="What is a good partial profit strategy?",
+                options=[
+                    "Take all profit at first sign of gain",
+                    "Never take profits",
+                    "Take 50% profit at 2:1, trail stop on rest",
+                    "Wait until stop-loss is hit"
+                ],
+                correct_answer_index=2,
+                explanation="Taking 50% profit at 2:1 R:R locks in gains while trailing the remainder lets winners run further.",
+                points=10
+            )
+        ]
+    ))
+    
     # Continue with more lessons across all categories to reach 40 total
-    # For this implementation, we have 13 lessons defined above
-    # In a full implementation, you would add 27 more lessons to reach 40
+    # For this implementation, we have 20 lessons defined above
+    # In a full implementation, you would add 20 more lessons to reach 40
     
     return sorted(lessons, key=lambda x: x.order)
 
