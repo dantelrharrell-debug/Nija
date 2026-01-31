@@ -53,11 +53,19 @@ except ImportError:
 
 # Import tier configuration for tier-aware risk management
 try:
-    from tier_config import get_tier_from_balance, get_tier_config
+    from tier_config import (
+        get_tier_from_balance, 
+        get_tier_config, 
+        log_tier_floors,
+        emit_tier_floor_metrics,
+        assert_expected_tier_floors
+    )
     TIER_AWARE_MODE = True
     logger.info("✅ Tier configuration loaded - TIER-AWARE RISK MANAGEMENT ACTIVE")
 except ImportError:
     TIER_AWARE_MODE = False
+    # Set all tier-related functions to None as fallback
+    log_tier_floors = emit_tier_floor_metrics = assert_expected_tier_floors = None
     logger.warning("⚠️ Tier config not found - tier enforcement disabled")
 
 # Import small account constants from fee_aware_config
@@ -161,6 +169,29 @@ class AdaptiveRiskManager:
             logger.info(f"   Max trades/day: {MAX_TRADES_PER_DAY}")
         else:
             logger.info(f"Adaptive Risk Manager initialized: {min_position_pct*100}%-{max_position_pct*100}% position sizing")
+        
+        # Log tier floor configuration at startup for visibility
+        if TIER_AWARE_MODE and log_tier_floors is not None:
+            log_tier_floors()
+            
+            # Assert expected tier floors in production
+            if assert_expected_tier_floors is not None:
+                try:
+                    assert_expected_tier_floors()
+                except AssertionError as e:
+                    # Re-raise assertion errors in production
+                    raise
+                except Exception as e:
+                    logger.warning(f"⚠️ Tier floor assertion check failed: {e}")
+            
+            # Emit metrics once at startup
+            if emit_tier_floor_metrics is not None:
+                try:
+                    metrics = emit_tier_floor_metrics()
+                    # Log metrics for visibility (in production, these would go to monitoring system)
+                    logger.debug(f"Tier floor metrics: {len(metrics)} gauges emitted")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to emit tier floor metrics: {e}")
 
     def record_trade(self, outcome: str, pnl: float, hold_time_minutes: int) -> None:
         """
@@ -621,25 +652,67 @@ class AdaptiveRiskManager:
                     breakdown['tier'] = tier.value
                 else:
                     # Regular user OR tier-locked PRO MODE: Apply tier limits
-                    # Get tier's max risk percentage (second element of risk_per_trade_pct tuple)
-                    tier_max_risk_pct = tier_config.risk_per_trade_pct[1] / 100.0  # Convert from percentage to decimal
+                    # IMPORTANT: Use MASTER_FUNDING_RULES max_trade_size_pct for tier floor
+                    # This ensures LOW_CAPITAL and other adjustments don't reduce below tier minimum
+                    try:
+                        from tier_config import MASTER_FUNDING_RULES, get_master_funding_tier
+                        # Get funding tier based on balance
+                        funding_tier_name = get_master_funding_tier(sizing_base) if sizing_base >= 25.0 else 'MICRO_MASTER'
+                        if funding_tier_name and funding_tier_name in MASTER_FUNDING_RULES:
+                            funding_rules = MASTER_FUNDING_RULES[funding_tier_name]
+                            tier_max_risk_pct = funding_rules.max_trade_size_pct / 100.0  # Convert from percentage to decimal
+                        else:
+                            # Fallback to legacy tier config if funding rules not available
+                            tier_max_risk_pct = tier_config.risk_per_trade_pct[1] / 100.0
+                    except (ImportError, AttributeError, KeyError) as e:
+                        # Fallback to legacy tier config
+                        tier_max_risk_pct = tier_config.risk_per_trade_pct[1] / 100.0
+                        logger.debug(f"Using legacy tier config for max risk: {e}")
 
-                    # Use the more restrictive of tier max or configured max
-                    tier_max_pct = min(self.max_position_pct, tier_max_risk_pct)
+                    # IMPORTANT FIX (Jan 30, 2026): For INVESTOR tier and above, the tier_max_risk_pct
+                    # represents the tier's position sizing floor. Fee-aware or LOW_CAPITAL adjustments
+                    # should NOT reduce below this tier-defined floor.
+                    # 
+                    # Example: INVESTOR tier has 22% max_trade_size_pct
+                    # - If configured max_position_pct is 30%, use 30% (higher is OK)
+                    # - If fee-aware or quality multipliers try to reduce below 22%, enforce 22% floor
+                    # 
+                    # This ensures:
+                    # - Investor tier maintains 22% minimum position size
+                    # - LOW_CAPITAL mode can't undercut tier floor
+                    # - Kraken $10 minimum order requirements are met
+                    # - Risk doesn't explode from too-small positions
+                    
+                    # Store tier floor for enforcement after all adjustments
+                    tier_floor_pct = tier_max_risk_pct
+                    
+                    # For ceiling, use the configured max (not restricted by tier)
+                    # This allows upward adjustments beyond tier minimum
+                    tier_max_pct = self.max_position_pct
 
                     breakdown['tier'] = tier.value
                     breakdown['tier_max_risk_pct'] = tier_max_risk_pct
+                    breakdown['tier_floor_pct'] = tier_floor_pct
 
-                    if self.tier_lock:
-                        logger.debug(f"🔒 TIER_LOCK: {tier.value} tier restricts to {tier_max_risk_pct*100:.1f}%")
-                    elif tier_max_risk_pct < self.max_position_pct:
-                        logger.debug(f"📊 Tier-aware limit: {tier.value} tier restricts to {tier_max_risk_pct*100:.1f}% (configured max: {self.max_position_pct*100:.1f}%)")
+                    logger.debug(f"📊 Tier {tier.value}: floor={tier_floor_pct*100:.1f}%, ceiling={tier_max_pct*100:.1f}%")
             except Exception as e:
                 logger.warning(f"⚠️ Tier-aware sizing failed, using configured max: {e}")
                 tier_max_pct = self.max_position_pct
 
         # Clamp to min/max (tier-aware)
+        # First apply the ceiling (max)
         final_pct = max(self.min_position_pct, min(final_pct, tier_max_pct))
+        
+        # CRITICAL FIX (Jan 30, 2026): Enforce tier floor to prevent LOW_CAPITAL or fee-aware
+        # adjustments from reducing below tier-defined maximum position size.
+        # For example, INVESTOR tier has 22% max, which should be the FLOOR for that tier.
+        # This ensures Kraken min order is satisfied and risk doesn't explode.
+        if TIER_AWARE_MODE and 'tier_floor_pct' in breakdown and not breakdown.get('is_master', False):
+            tier_floor = breakdown['tier_floor_pct']
+            if final_pct < tier_floor:
+                logger.info(f"🛡️ TIER FLOOR ENFORCEMENT: Raising {final_pct*100:.1f}% → {tier_floor*100:.1f}% (tier minimum)")
+                final_pct = tier_floor
+                breakdown['tier_floor_enforced'] = True
 
         # OPTIMIZED: Check total exposure limit with safety buffer
         # Previous limit (80%) was too high, allowing overexposure
