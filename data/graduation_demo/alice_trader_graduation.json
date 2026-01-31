@@ -1,0 +1,24 @@
+{
+  "user_id": "alice_trader",
+  "level": "restricted_live",
+  "created_at": "2026-01-31T03:10:36.633780",
+  "last_updated": "2026-01-31T03:10:36.634183",
+  "total_trades": 60,
+  "win_rate": 0.6,
+  "sharpe_ratio": 1.5,
+  "max_drawdown": 0.1,
+  "profit_factor": 1.8,
+  "avg_risk_reward": 2.0,
+  "paper_graduation_date": "2026-01-31T03:10:36.634174",
+  "restricted_start_date": "2026-01-31T03:10:36.634181",
+  "full_live_date": null,
+  "criteria_met": {
+    "min_trades": true,
+    "win_rate": true,
+    "sharpe_ratio": true,
+    "max_drawdown": true,
+    "profit_factor": true,
+    "risk_reward": true,
+    "trading_days": true
+  }
+}
