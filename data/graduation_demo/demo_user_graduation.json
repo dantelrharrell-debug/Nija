@@ -1,0 +1,24 @@
+{
+  "user_id": "demo_user",
+  "level": "paper",
+  "created_at": "2026-01-31T03:10:36.636649",
+  "last_updated": "2026-01-31T03:10:36.636662",
+  "total_trades": 25,
+  "win_rate": 0.48,
+  "sharpe_ratio": 0.8,
+  "max_drawdown": 0.18,
+  "profit_factor": 1.1,
+  "avg_risk_reward": 1.2,
+  "paper_graduation_date": null,
+  "restricted_start_date": null,
+  "full_live_date": null,
+  "criteria_met": {
+    "min_trades": false,
+    "win_rate": false,
+    "sharpe_ratio": false,
+    "max_drawdown": false,
+    "profit_factor": false,
+    "risk_reward": false,
+    "trading_days": true
+  }
+}

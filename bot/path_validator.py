@@ -45,6 +45,9 @@ def sanitize_filename(filename: str) -> str:
 
     # Remove any path separators to prevent directory traversal
     filename = filename.replace('/', '_').replace('\\', '_')
+    
+    # Remove parent directory references (../ and ..\) - SECURITY CRITICAL
+    filename = filename.replace('..', '')
 
     # Remove null bytes
     filename = filename.replace('\0', '')
