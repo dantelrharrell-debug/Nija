@@ -53,12 +53,20 @@ except ImportError:
 
 # Import tier configuration for tier-aware risk management
 try:
-    from tier_config import get_tier_from_balance, get_tier_config, log_tier_floors
+    from tier_config import (
+        get_tier_from_balance, 
+        get_tier_config, 
+        log_tier_floors,
+        emit_tier_floor_metrics,
+        assert_expected_tier_floors
+    )
     TIER_AWARE_MODE = True
     logger.info("✅ Tier configuration loaded - TIER-AWARE RISK MANAGEMENT ACTIVE")
 except ImportError:
     TIER_AWARE_MODE = False
     log_tier_floors = None
+    emit_tier_floor_metrics = None
+    assert_expected_tier_floors = None
     logger.warning("⚠️ Tier config not found - tier enforcement disabled")
 
 # Import small account constants from fee_aware_config
@@ -166,6 +174,25 @@ class AdaptiveRiskManager:
         # Log tier floor configuration at startup for visibility
         if TIER_AWARE_MODE and log_tier_floors is not None:
             log_tier_floors()
+            
+            # Assert expected tier floors in production
+            if assert_expected_tier_floors is not None:
+                try:
+                    assert_expected_tier_floors()
+                except AssertionError as e:
+                    # Re-raise assertion errors in production
+                    raise
+                except Exception as e:
+                    logger.warning(f"⚠️ Tier floor assertion check failed: {e}")
+            
+            # Emit metrics once at startup
+            if emit_tier_floor_metrics is not None:
+                try:
+                    metrics = emit_tier_floor_metrics()
+                    # Log metrics for visibility (in production, these would go to monitoring system)
+                    logger.debug(f"Tier floor metrics: {len(metrics)} gauges emitted")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to emit tier floor metrics: {e}")
 
     def record_trade(self, outcome: str, pnl: float, hold_time_minutes: int) -> None:
         """

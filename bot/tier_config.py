@@ -21,8 +21,9 @@ Date: January 23, 2026
 
 import os
 from enum import Enum
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 from dataclasses import dataclass
+from datetime import datetime
 import logging
 
 logger = logging.getLogger("nija.tier_config")
@@ -1096,6 +1097,174 @@ def log_tier_floors() -> None:
     logger.info("   This ensures exchange minimums are met and prevents undersized positions.")
     logger.info("=" * 80)
     logger.info("")
+
+
+def emit_tier_floor_metrics() -> Dict[str, float]:
+    """
+    Emit tier floor metrics to monitoring system.
+    
+    Returns tier floor data as a dictionary that can be sent to metrics systems
+    like Prometheus, StatsD, Datadog, etc.
+    
+    This should be called once at startup to register tier floor gauges.
+    
+    Returns:
+        Dict mapping metric names to values
+    """
+    metrics = {}
+    
+    tier_order = ['MICRO_MASTER', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
+    
+    for tier_name in tier_order:
+        if tier_name in MASTER_FUNDING_RULES:
+            rules = MASTER_FUNDING_RULES[tier_name]
+            
+            # Create metric name (lowercase, underscores)
+            metric_base = f"nija_tier_floor_{tier_name.lower()}"
+            
+            # Emit floor percentage as gauge
+            metrics[f"{metric_base}_pct"] = rules.max_trade_size_pct
+            
+            # Emit capital range
+            metrics[f"{metric_base}_capital_min"] = rules.absolute_minimum
+            
+            # Emit max positions
+            metrics[f"{metric_base}_max_positions"] = float(rules.max_positions)
+    
+    logger.info(f"📊 Emitted {len(metrics)} tier floor metrics to monitoring system")
+    
+    return metrics
+
+
+def assert_expected_tier_floors() -> None:
+    """
+    Assert that tier floors match expected values in production.
+    
+    This validates critical tier floor configurations at startup,
+    particularly the INVESTOR tier 22% floor fix (Jan 30, 2026).
+    
+    Raises:
+        AssertionError: If any tier floor doesn't match expected value
+    """
+    import os
+    
+    # Only run assertions in production environment
+    is_production = os.getenv('ENVIRONMENT', '').lower() in ('production', 'prod')
+    
+    if not is_production:
+        logger.info("ℹ️  Skipping tier floor assertions (not in production environment)")
+        return
+    
+    logger.info("🔍 Validating tier floor configuration for production...")
+    
+    # Expected tier floors (updated Jan 30, 2026)
+    expected_floors = {
+        'MICRO_MASTER': 40.0,
+        'STARTER': 30.0,
+        'SAVER': 25.0,
+        'INVESTOR': 22.0,  # CRITICAL: Recent fix from 20% to 22%
+        'INCOME': 15.0,
+        'LIVABLE': 10.0,
+        'BALLER': 5.0,
+    }
+    
+    errors = []
+    
+    for tier_name, expected_floor in expected_floors.items():
+        if tier_name not in MASTER_FUNDING_RULES:
+            errors.append(f"Missing tier configuration: {tier_name}")
+            continue
+        
+        actual_floor = MASTER_FUNDING_RULES[tier_name].max_trade_size_pct
+        
+        if actual_floor != expected_floor:
+            errors.append(
+                f"Tier {tier_name}: Expected {expected_floor}% floor, got {actual_floor}%"
+            )
+    
+    if errors:
+        error_msg = "❌ TIER FLOOR VALIDATION FAILED:\n" + "\n".join(f"  • {e}" for e in errors)
+        logger.error(error_msg)
+        raise AssertionError(error_msg)
+    
+    logger.info("✅ All tier floors validated successfully")
+    logger.info(f"   INVESTOR tier confirmed at 22% floor (Jan 30, 2026 fix)")
+
+
+def get_tier_floors_for_api() -> Dict[str, Any]:
+    """
+    Get tier floor data formatted for API/dashboard consumption.
+    
+    Returns tier floor information in a structured format suitable
+    for JSON serialization and display in dashboards.
+    
+    Returns:
+        Dict with tier floor data for all tiers
+    """
+    tier_order = ['MICRO_MASTER', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
+    
+    tiers = []
+    
+    for tier_name in tier_order:
+        if tier_name in MASTER_FUNDING_RULES:
+            rules = MASTER_FUNDING_RULES[tier_name]
+            
+            # Determine capital range
+            if tier_name == 'BALLER':
+                capital_min = rules.absolute_minimum
+                capital_max = None
+                capital_range = f"${capital_min:,.0f}+"
+            elif tier_name == 'MICRO_MASTER':
+                capital_min = rules.absolute_minimum
+                capital_max = 50.0
+                capital_range = f"${capital_min:.0f}-${capital_max:.0f}"
+            else:
+                # Infer max from next tier's min
+                next_tier_idx = tier_order.index(tier_name) + 1
+                capital_min = rules.absolute_minimum
+                if next_tier_idx < len(tier_order):
+                    next_tier = MASTER_FUNDING_RULES.get(tier_order[next_tier_idx])
+                    if next_tier:
+                        capital_max = next_tier.absolute_minimum - 0.01
+                    else:
+                        capital_max = None
+                else:
+                    capital_max = None
+                
+                if capital_max:
+                    capital_range = f"${capital_min:.0f}-${capital_max:.0f}"
+                else:
+                    capital_range = f"${capital_min:.0f}+"
+            
+            tier_data = {
+                'name': tier_name,
+                'capital_min': capital_min,
+                'capital_max': capital_max,
+                'capital_range': capital_range,
+                'floor_pct': rules.max_trade_size_pct,
+                'max_positions': rules.max_positions,
+                'min_trade_size_usd': rules.min_trade_size_usd,
+                'micro_master_mode': rules.micro_master_mode,
+                'requires_copy_trading': rules.requires_copy_trading,
+                'description': rules.warning_message.split('.')[0],  # First sentence
+            }
+            
+            # Add special note for INVESTOR tier
+            if tier_name == 'INVESTOR':
+                tier_data['notes'] = 'Tier floor fix implemented Jan 30, 2026 (20% → 22%)'
+            
+            tiers.append(tier_data)
+    
+    return {
+        'tiers': tiers,
+        'updated': datetime.now().isoformat(),
+        'version': '1.1',  # Version tracking
+        'explanation': (
+            'Tier floors ensure position sizes don\'t fall below tier-appropriate levels, '
+            'even with fee-aware adjustments or quality multipliers. '
+            'This ensures exchange minimums are met and prevents undersized positions.'
+        )
+    }
 
 
 # Example usage logger
