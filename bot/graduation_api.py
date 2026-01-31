@@ -26,7 +26,7 @@ from typing import Dict
 import logging
 
 from bot.paper_trading_graduation import PaperTradingGraduationSystem
-from bot.path_validator import sanitize_filename
+from bot.safe_path_resolver import SafePathResolver
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,8 @@ def get_graduation_system(user_id: str) -> PaperTradingGraduationSystem:
     Get graduation system for authenticated user.
     
     Security:
-        - user_id is sanitized in PaperTradingGraduationSystem.__init__
-        - Additional validation here for defense in depth
+        - user_id is sanitized using SafePathResolver
+        - Runtime security metrics are tracked automatically
     
     Args:
         user_id: User identifier (will be sanitized)
@@ -48,11 +48,9 @@ def get_graduation_system(user_id: str) -> PaperTradingGraduationSystem:
     Returns:
         PaperTradingGraduationSystem instance
     """
-    # SECURITY: Sanitize user_id before creating system
-    # This is defense in depth - PaperTradingGraduationSystem also sanitizes
-    safe_user_id = sanitize_filename(user_id)
-    
-    return PaperTradingGraduationSystem(safe_user_id)
+    # SECURITY: SafePathResolver handles sanitization and tracks metrics
+    # No need to sanitize here - PaperTradingGraduationSystem uses SafePathResolver internally
+    return PaperTradingGraduationSystem(user_id)
 
 
 @graduation_api.route('/status', methods=['GET'])
@@ -392,3 +390,53 @@ def health_check():
         'service': 'graduation_api',
         'status': 'healthy'
     }), 200
+
+
+@graduation_api.route('/security-metrics', methods=['GET'])
+def get_security_metrics():
+    """
+    Get runtime security metrics.
+    
+    Returns security metrics from SafePathResolver including:
+        - Total validations performed
+        - Blocked attacks
+        - Attack breakdown by type
+        - Security score
+        
+    Returns:
+        JSON with security metrics
+    """
+    try:
+        resolver = SafePathResolver.get_instance()
+        metrics = resolver.get_metrics()
+        
+        return jsonify({
+            'success': True,
+            'data': metrics
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting security metrics: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error'
+        }), 500
+
+
+@graduation_api.route('/security-badge', methods=['GET'])
+def get_security_badge():
+    """
+    Get security badge for monitoring/CI.
+    
+    Returns:
+        Text security badge with current status
+    """
+    try:
+        resolver = SafePathResolver.get_instance()
+        badge = resolver.get_security_badge()
+        
+        return badge, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+        
+    except Exception as e:
+        logger.error(f"Error getting security badge: {e}", exc_info=True)
+        return "Error generating security badge", 500

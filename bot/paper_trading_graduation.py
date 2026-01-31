@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 from dataclasses import dataclass, asdict
 
-from bot.path_validator import PathValidator, sanitize_filename
+from bot.safe_path_resolver import SafePathResolver
 
 logger = logging.getLogger(__name__)
 
@@ -110,28 +110,27 @@ class PaperTradingGraduationSystem:
             data_dir: Base directory for graduation data storage
             
         Security:
-            - user_id is sanitized using sanitize_filename() to prevent path traversal
+            - user_id is sanitized using SafePathResolver to prevent path traversal
             - All file paths are constructed using secure methods
+            - Runtime security metrics are tracked
         """
+        # SECURITY: Use SafePathResolver for all path operations
+        resolver = SafePathResolver.get_instance()
+        
         # SECURITY: Sanitize user_id to prevent path traversal attacks
         # This prevents attacks like user_id="../../../etc/passwd"
-        self.user_id = sanitize_filename(user_id)
+        self.user_id = resolver.sanitize_filename(user_id)
         
         # Validate and create secure base directory
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
-        # SECURITY: Construct file path securely using sanitized user_id
-        # The filename is already sanitized, but we double-check the final path
+        # SECURITY: Construct file path securely using SafePathResolver
         safe_filename = f"{self.user_id}_graduation.json"
-        self.user_file = self.data_dir / safe_filename
-        
-        # Verify the file path is within our data directory
-        try:
-            self.user_file.resolve().relative_to(self.data_dir.resolve())
-        except ValueError:
-            logger.error(f"Security violation: file path outside data dir for user {user_id}")
-            raise ValueError("Invalid user_id: security validation failed")
+        self.user_file = resolver.resolve_safe_file_path(
+            base_dir=str(self.data_dir),
+            filename=safe_filename
+        )
         
         self.progress = self._load_progress()
     

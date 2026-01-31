@@ -1,0 +1,26 @@
+{
+  "total_validations": 10,
+  "successful_validations": 10,
+  "blocked_attacks": 0,
+  "sanitizations_performed": 6,
+  "attack_breakdown": {
+    "path_traversal": 3,
+    "absolute_path": 2,
+    "null_byte": 0,
+    "special_chars": 1
+  },
+  "timestamps": {
+    "first_validation": "2026-01-31T03:14:01.519717",
+    "last_validation": "2026-01-31T03:14:01.520527",
+    "last_attack": null
+  },
+  "recent_attacks": [
+    "2026-01-31T03:14:01.520028: path_traversal - ../../../etc/passwd",
+    "2026-01-31T03:14:01.520141: absolute_path - /etc/shadow",
+    "2026-01-31T03:14:01.520243: windows_drive - C:\\Windows\\System32",
+    "2026-01-31T03:14:01.520339: path_traversal - user\u0000/../../../etc",
+    "2026-01-31T03:14:01.520435: special_chars - user<>:|?*test",
+    "2026-01-31T03:14:01.520527: path_traversal - ../../sensitive/../data"
+  ],
+  "security_score": 100
+}
