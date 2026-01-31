@@ -140,7 +140,43 @@ This implementation ensures:
 
 ## Monitoring and Logging
 
-The implementation includes comprehensive logging:
+### Startup Logging (Added Jan 31, 2026)
+
+The system now logs all tier floors at startup for immediate visibility:
+
+```
+================================================================================
+                    TIER FLOOR CONFIGURATION
+================================================================================
+
+📊 Tier Floors (Position Size Minimums):
+   These floors ensure position sizes don't fall below tier-appropriate levels,
+   even with fee-aware adjustments or quality multipliers.
+
+   MICRO_MASTER $25-$50             40.0% floor
+   STARTER      $50-$100            30.0% floor
+   SAVER        $100-$250           25.0% floor
+   INVESTOR     $250-$1000          22.0% floor ← Tier floor fix (Jan 30, 2026)
+   INCOME       $1000-$5000         15.0% floor
+   LIVABLE      $5000-$25000        10.0% floor
+   BALLER       $25,000+             5.0% floor
+
+ℹ️  Tier floors prevent LOW_CAPITAL mode and quality multipliers from
+   reducing position sizes below tier-appropriate minimums.
+   This ensures exchange minimums are met and prevents undersized positions.
+================================================================================
+```
+
+This startup logging:
+- Appears when `AdaptiveRiskManager` is initialized
+- Shows all tier floors in one place for easy verification
+- Highlights the INVESTOR tier 22% fix
+- Explains the purpose of tier floors
+- Helps operators quickly verify correct configuration
+
+### Runtime Logging
+
+During position sizing, tier floor enforcement is logged:
 
 ```
 📊 Tier INVESTOR: floor=22.0%, ceiling=30.0%
@@ -158,5 +194,5 @@ This allows easy debugging and verification that tier floors are being respected
 ---
 
 **Implemented by**: GitHub Copilot  
-**Date**: January 30, 2026  
+**Date**: January 30, 2026 (tier floor enforcement), January 31, 2026 (startup logging)  
 **PR**: copilot/respect-tier-floor-22-percent
