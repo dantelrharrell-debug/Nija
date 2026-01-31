@@ -1036,6 +1036,68 @@ def is_micro_master(balance: float) -> bool:
     return tier == 'MICRO_MASTER' if tier else False
 
 
+def log_tier_floors() -> None:
+    """
+    Log all tier floor configurations at startup for visibility.
+    
+    This helps verify that tier floor enforcement is configured correctly,
+    especially after the INVESTOR tier 22% floor fix (Jan 30, 2026).
+    
+    Called during risk manager initialization to provide startup diagnostics.
+    """
+    logger.info("=" * 80)
+    logger.info("                    TIER FLOOR CONFIGURATION")
+    logger.info("=" * 80)
+    logger.info("")
+    logger.info("📊 Tier Floors (Position Size Minimums):")
+    logger.info("   These floors ensure position sizes don't fall below tier-appropriate levels,")
+    logger.info("   even with fee-aware adjustments or quality multipliers.")
+    logger.info("")
+    
+    # Define tier order for display
+    tier_order = ['MICRO_MASTER', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
+    
+    for tier_name in tier_order:
+        if tier_name in MASTER_FUNDING_RULES:
+            rules = MASTER_FUNDING_RULES[tier_name]
+            
+            # Format capital range
+            capital_min = rules.absolute_minimum
+            if tier_name == 'BALLER':
+                capital_range = f"${capital_min:,.0f}+"
+            elif tier_name == 'MICRO_MASTER':
+                capital_range = f"${capital_min:.0f}-$50"
+            else:
+                # Infer max from next tier's min
+                next_tier_idx = tier_order.index(tier_name) + 1
+                if next_tier_idx < len(tier_order):
+                    next_tier = MASTER_FUNDING_RULES.get(tier_order[next_tier_idx])
+                    if next_tier:
+                        capital_max = next_tier.absolute_minimum - 0.01
+                        capital_range = f"${capital_min:.0f}-${capital_max:.0f}"
+                    else:
+                        capital_range = f"${capital_min:.0f}+"
+                else:
+                    capital_range = f"${capital_min:.0f}+"
+            
+            # Highlight INVESTOR tier (recent fix)
+            highlight = " ← Tier floor fix (Jan 30, 2026)" if tier_name == 'INVESTOR' else ""
+            
+            # Format tier name with padding
+            tier_display = f"{tier_name:12}"
+            capital_display = f"{capital_range:18}"
+            floor_display = f"{rules.max_trade_size_pct:5.1f}% floor"
+            
+            logger.info(f"   {tier_display} {capital_display} {floor_display}{highlight}")
+    
+    logger.info("")
+    logger.info("ℹ️  Tier floors prevent LOW_CAPITAL mode and quality multipliers from")
+    logger.info("   reducing position sizes below tier-appropriate minimums.")
+    logger.info("   This ensures exchange minimums are met and prevents undersized positions.")
+    logger.info("=" * 80)
+    logger.info("")
+
+
 # Example usage logger
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

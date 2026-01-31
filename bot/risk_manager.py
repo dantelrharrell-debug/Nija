@@ -53,11 +53,12 @@ except ImportError:
 
 # Import tier configuration for tier-aware risk management
 try:
-    from tier_config import get_tier_from_balance, get_tier_config
+    from tier_config import get_tier_from_balance, get_tier_config, log_tier_floors
     TIER_AWARE_MODE = True
     logger.info("✅ Tier configuration loaded - TIER-AWARE RISK MANAGEMENT ACTIVE")
 except ImportError:
     TIER_AWARE_MODE = False
+    log_tier_floors = None
     logger.warning("⚠️ Tier config not found - tier enforcement disabled")
 
 # Import small account constants from fee_aware_config
@@ -161,6 +162,10 @@ class AdaptiveRiskManager:
             logger.info(f"   Max trades/day: {MAX_TRADES_PER_DAY}")
         else:
             logger.info(f"Adaptive Risk Manager initialized: {min_position_pct*100}%-{max_position_pct*100}% position sizing")
+        
+        # Log tier floor configuration at startup for visibility
+        if TIER_AWARE_MODE and log_tier_floors is not None:
+            log_tier_floors()
 
     def record_trade(self, outcome: str, pnl: float, hold_time_minutes: int) -> None:
         """
