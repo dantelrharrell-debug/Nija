@@ -1,0 +1,26 @@
+{
+  "user_id": "test_user_123",
+  "trading_mode": "paper",
+  "status": "in_progress",
+  "paper_trading_start_date": "2026-01-31T02:15:45.857507",
+  "days_in_paper_trading": 0,
+  "total_paper_trades": 25,
+  "winning_trades": 15,
+  "losing_trades": 10,
+  "win_rate": 60.0,
+  "total_pnl": 350.0,
+  "max_drawdown": 12.5,
+  "average_position_size": 50.0,
+  "risk_score": 75.0,
+  "criteria_met": [
+    "trade_volume",
+    "win_rate",
+    "risk_management",
+    "drawdown_control"
+  ],
+  "criteria_not_met": [
+    "time_requirement"
+  ],
+  "graduation_date": null,
+  "live_trading_enabled_date": null
+}
