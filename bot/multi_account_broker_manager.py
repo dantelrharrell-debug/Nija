@@ -3,7 +3,7 @@ NIJA Multi-Account Broker Manager
 ==================================
 
 Manages separate trading accounts for:
-- MASTER account: Nija system trading account
+- PLATFORM account: Nija system trading account
 - USER accounts: Individual user/investor accounts
 
 Each account trades independently with its own:
@@ -67,8 +67,8 @@ class MultiAccountBrokerManager:
 
     def __init__(self):
         """Initialize multi-account broker manager."""
-        # Master account brokers
-        self.master_brokers: Dict[BrokerType, BaseBroker] = {}
+        # Platform account brokers
+        self.platform_brokers: Dict[BrokerType, BaseBroker] = {}
 
         # User account brokers - structure: {user_id: {BrokerType: BaseBroker}}
         self.user_brokers: Dict[str, Dict[BrokerType, BaseBroker]] = {}
@@ -113,7 +113,7 @@ class MultiAccountBrokerManager:
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
 
-    def add_master_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
+    def add_platform_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
         Add a broker for the master (Nija system) account.
 
@@ -129,7 +129,7 @@ class MultiAccountBrokerManager:
             if broker_type == BrokerType.COINBASE:
                 broker = CoinbaseBroker()
             elif broker_type == BrokerType.KRAKEN:
-                broker = KrakenBroker(account_type=AccountType.MASTER)
+                broker = KrakenBroker(account_type=AccountType.PLATFORM)
             elif broker_type == BrokerType.OKX:
                 broker = OKXBroker()
             elif broker_type == BrokerType.ALPACA:
@@ -140,8 +140,8 @@ class MultiAccountBrokerManager:
 
             # Connect the broker
             if broker.connect():
-                self.master_brokers[broker_type] = broker
-                logger.info(f"✅ Master broker added: {broker_type.value}")
+                self.platform_brokers[broker_type] = broker
+                logger.info(f"✅ Platform broker added: {broker_type.value}")
                 return broker
             else:
                 logger.warning(f"⚠️  Failed to connect master broker: {broker_type.value}")
@@ -196,7 +196,7 @@ class MultiAccountBrokerManager:
             logger.error(f"❌ Error adding user broker {broker_type.value} for {user_id}: {e}")
             return None
 
-    def get_master_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
+    def get_platform_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
         Get a master account broker.
 
@@ -206,7 +206,7 @@ class MultiAccountBrokerManager:
         Returns:
             BaseBroker instance or None if not found
         """
-        return self.master_brokers.get(broker_type)
+        return self.platform_brokers.get(broker_type)
 
     def get_user_broker(self, user_id: str, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
@@ -222,7 +222,7 @@ class MultiAccountBrokerManager:
         user_brokers = self.user_brokers.get(user_id, {})
         return user_brokers.get(broker_type)
 
-    def is_master_connected(self, broker_type: BrokerType) -> bool:
+    def is_platform_connected(self, broker_type: BrokerType) -> bool:
         """
         Check if a master account is connected for a given broker type.
 
@@ -232,7 +232,7 @@ class MultiAccountBrokerManager:
         Returns:
             bool: True if master is connected, False otherwise
         """
-        return broker_type in self.master_brokers and self.master_brokers[broker_type].connected
+        return broker_type in self.platform_brokers and self.platform_brokers[broker_type].connected
 
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
         """
@@ -276,8 +276,8 @@ class MultiAccountBrokerManager:
         Solution: Cache balances per trading cycle, add 1-1.2s delay between calls
 
         Args:
-            account_type: 'master' or 'user'
-            account_id: Account identifier (e.g., 'master', 'tania_gilbert')
+            account_type: 'platform' or 'user'
+            account_id: Account identifier (e.g., 'platform', 'tania_gilbert')
             broker_type: Type of broker
             broker: Broker instance
 
@@ -329,7 +329,7 @@ class MultiAccountBrokerManager:
         self._balance_cache.clear()
         logger.debug("Balance cache cleared for new trading cycle")
 
-    def get_master_balance(self, broker_type: Optional[BrokerType] = None) -> float:
+    def get_platform_balance(self, broker_type: Optional[BrokerType] = None) -> float:
         """
         Get master account balance.
 
@@ -340,22 +340,22 @@ class MultiAccountBrokerManager:
             Balance in USD
         """
         if broker_type:
-            broker = self.master_brokers.get(broker_type)
+            broker = self.platform_brokers.get(broker_type)
             if not broker:
                 return 0.0
 
             # CRITICAL FIX (Jan 19, 2026): Use cached balance for Kraken to prevent repeated API calls
             if broker_type == BrokerType.KRAKEN:
-                return self._get_cached_balance('master', 'master', broker_type, broker)
+                return self._get_cached_balance('platform', 'platform', broker_type, broker)
 
             return broker.get_account_balance()
 
         # Total across all master brokers
         total = 0.0
-        for broker_type, broker in self.master_brokers.items():
+        for broker_type, broker in self.platform_brokers.items():
             if broker.connected:
                 if broker_type == BrokerType.KRAKEN:
-                    total += self._get_cached_balance('master', 'master', broker_type, broker)
+                    total += self._get_cached_balance('platform', 'platform', broker_type, broker)
                 else:
                     total += broker.get_account_balance()
         return total
@@ -475,19 +475,19 @@ class MultiAccountBrokerManager:
 
         Returns:
             dict with structure: {
-                'master': {broker_type: balance, ...},
+                'platform': {broker_type: balance, ...},
                 'users': {user_id: {broker_type: balance, ...}, ...}
             }
         """
         result = {
-            'master': {},
+            'platform': {},
             'users': {}
         }
 
-        # Master balances
-        for broker_type, broker in self.master_brokers.items():
+        # Platform balances
+        for broker_type, broker in self.platform_brokers.items():
             if broker.connected:
-                result['master'][broker_type.value] = broker.get_account_balance()
+                result['platform'][broker_type.value] = broker.get_account_balance()
 
         # User balances - include ALL users from metadata with ALL their brokers
         # CRITICAL FIX: Use metadata as source of truth for which users/brokers should exist
@@ -553,7 +553,7 @@ class MultiAccountBrokerManager:
 
         Returns:
             dict with structure: {
-                'master': {broker_type: {'balance': float, 'connected': bool}, ...},
+                'platform': {broker_type: {'balance': float, 'connected': bool}, ...},
                 'users': {
                     user_id: {
                         broker_type: {
@@ -568,13 +568,13 @@ class MultiAccountBrokerManager:
             }
         """
         result = {
-            'master': {},
+            'platform': {},
             'users': {}
         }
 
-        # Master balances with status
-        for broker_type, broker in self.master_brokers.items():
-            result['master'][broker_type.value] = {
+        # Platform balances with status
+        for broker_type, broker in self.platform_brokers.items():
+            result['platform'][broker_type.value] = {
                 'balance': broker.get_account_balance() if broker.connected else 0.0,
                 'connected': broker.connected
             }
@@ -622,19 +622,19 @@ class MultiAccountBrokerManager:
         lines.append("NIJA MULTI-ACCOUNT STATUS REPORT")
         lines.append("=" * 70)
 
-        # Master account
-        lines.append("\n🔷 MASTER ACCOUNT (Nija System)")
+        # Platform account
+        lines.append("\n🔷 PLATFORM ACCOUNT (Nija System)")
         lines.append("-" * 70)
-        if self.master_brokers:
-            master_total = 0.0
-            for broker_type, broker in self.master_brokers.items():
+        if self.platform_brokers:
+            platform_total = 0.0
+            for broker_type, broker in self.platform_brokers.items():
                 if broker.connected:
                     balance = broker.get_account_balance()
-                    master_total += balance
+                    platform_total += balance
                     lines.append(f"   {broker_type.value.upper()}: ${balance:,.2f}")
                 else:
                     lines.append(f"   {broker_type.value.upper()}: Not connected")
-            lines.append(f"   TOTAL MASTER: ${master_total:,.2f}")
+            lines.append(f"   TOTAL PLATFORM: ${platform_total:,.2f}")
         else:
             lines.append("   No master brokers configured")
 
@@ -749,7 +749,7 @@ class MultiAccountBrokerManager:
         logger.info("=" * 70)
         logger.info("👤 CONNECTING USERS FROM CONFIG FILES")
         logger.info("=" * 70)
-        logger.info("ℹ️  Users are SECONDARY accounts - Master accounts have priority")
+        logger.info("ℹ️  Users are SECONDARY accounts - Platform accounts have priority")
         logger.info("=" * 70)
 
         connected_users = {}
@@ -781,21 +781,21 @@ class MultiAccountBrokerManager:
                 logger.info(f"✅ KRAKEN USER ALREADY ACTIVE: {user.name} ({user.user_id})")
                 logger.info("=" * 70)
                 continue
-            # Check if Master account is connected for this broker type
-            # IMPORTANT: Master accounts should connect first and be primary
-            # User accounts are SECONDARY and should not connect if Master isn't connected
-            master_connected = self.is_master_connected(broker_type)
+            # Check if Platform account is connected for this broker type
+            # IMPORTANT: Platform accounts should connect first and be primary
+            # User accounts are SECONDARY and should not connect if Platform isn't connected
+            platform_connected = self.is_platform_connected(broker_type)
 
-            if not master_connected:
+            if not platform_connected:
                 # CRITICAL FIX (Jan 17, 2026): ENFORCE connection order for Kraken copy trading
                 # For Kraken, user accounts MUST NOT connect without master (prevents nonce conflicts & broken copy trading)
                 # For other brokers, allow connection with warning (user may want standalone trading)
                 #
-                    logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Master account!")
+                    logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Platform account!")
                     logger.warning(f"   User: {user.name} ({user.user_id})")
-                    logger.warning(f"   Master {broker_type.value.upper()} account is NOT connected")
-                    logger.warning("   🔧 RECOMMENDATION: Configure Master account credentials first")
-                    logger.warning(f"      Master should be PRIMARY, users should be SECONDARY")
+                    logger.warning(f"   Platform {broker_type.value.upper()} account is NOT connected")
+                    logger.warning("   🔧 RECOMMENDATION: Configure Platform account credentials first")
+                    logger.warning(f"      Platform should be PRIMARY, users should be SECONDARY")
                     logger.warning("=" * 70)
                     # Allow connection to proceed for non-Kraken brokers - user may want standalone trading
                     # But log the warning so they know this is not the ideal setup
@@ -810,10 +810,10 @@ class MultiAccountBrokerManager:
                     time.sleep(delay)
 
             logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
-            if master_connected:
-                logger.info(f"   ✅ Master {broker_type.value.upper()} is connected (correct priority)")
+            if platform_connected:
+                logger.info(f"   ✅ Platform {broker_type.value.upper()} is connected (correct priority)")
             else:
-                logger.info(f"   ⚠️  Master {broker_type.value.upper()} is NOT connected (user will be primary)")
+                logger.info(f"   ⚠️  Platform {broker_type.value.upper()} is NOT connected (user will be primary)")
             # Flush to ensure this message appears before connection attempt logs
             # CRITICAL FIX: Must flush the root 'nija' logger's handlers, not the child logger's
             # Child loggers (like 'nija.multi_account', 'nija.broker') propagate to parent but
@@ -916,13 +916,13 @@ class MultiAccountBrokerManager:
         logger.info("=" * 70)
         logger.info("📊 ACCOUNT HIERARCHY REPORT")
         logger.info("=" * 70)
-        logger.info("🎯 MASTER accounts are PRIMARY - User accounts are SECONDARY")
+        logger.info("🎯 PLATFORM accounts are PRIMARY - User accounts are SECONDARY")
         logger.info("=" * 70)
 
-        # Show Master broker status
-        logger.info("🔷 MASTER ACCOUNTS (Primary Trading Accounts):")
-        if self.master_brokers:
-            for broker_type, broker in self.master_brokers.items():
+        # Show Platform broker status
+        logger.info("🔷 PLATFORM ACCOUNTS (Primary Trading Accounts):")
+        if self.platform_brokers:
+            for broker_type, broker in self.platform_brokers.items():
                 status = "✅ CONNECTED" if broker.connected else "❌ NOT CONNECTED"
                 logger.info(f"   • {broker_type.value.upper()}: {status}")
         else:
@@ -962,8 +962,8 @@ class MultiAccountBrokerManager:
                 # Safely convert brokerage string to BrokerType enum
                 # connected_users keys are lowercase broker names from broker_type.value
                 broker_type = BrokerType[brokerage.upper()]
-                master_connected = self.is_master_connected(broker_type)
-                if not master_connected and user_ids:
+                platform_connected = self.is_platform_connected(broker_type)
+                if not platform_connected and user_ids:
                     users_without_master.append(brokerage.upper())
             except KeyError:
                 # Invalid broker type - this shouldn't happen, but handle gracefully
@@ -973,55 +973,55 @@ class MultiAccountBrokerManager:
         if users_without_master:
             # Display warning header only when there are actual warnings
             logger.info("⚠️  ACCOUNT PRIORITY WARNINGS:")
-            logger.warning(f"   ⚠️  User accounts trading WITHOUT Master account on: {', '.join(users_without_master)}")
-            logger.warning(f"   🔧 RECOMMENDATION: Configure Master credentials for {', '.join(users_without_master)}")
-            logger.warning(f"      Master should always be PRIMARY, users should be SECONDARY")
+            logger.warning(f"   ⚠️  User accounts trading WITHOUT Platform account on: {', '.join(users_without_master)}")
+            logger.warning(f"   🔧 RECOMMENDATION: Configure Platform credentials for {', '.join(users_without_master)}")
+            logger.warning(f"      Platform should always be PRIMARY, users should be SECONDARY")
             logger.warning("")
             logger.warning("   📋 HOW TO FIX:")
             for broker in users_without_master:
                 logger.warning(f"")
-                logger.warning(f"   For {broker} Master account:")
+                logger.warning(f"   For {broker} Platform account:")
                 logger.warning(f"   1. Get API credentials from the {broker} website")
                 if broker == "KRAKEN":
                     logger.warning(f"      URL: https://www.kraken.com/u/security/api")
                     logger.warning(f"   2. Set these environment variables:")
-                    logger.warning(f"      KRAKEN_MASTER_API_KEY=<your-api-key>")
-                    logger.warning(f"      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+                    logger.warning(f"      KRAKEN_PLATFORM_API_KEY=<your-api-key>")
+                    logger.warning(f"      KRAKEN_PLATFORM_API_SECRET=<your-api-secret>")
                 elif broker == "ALPACA":
                     logger.warning(f"      URL: https://alpaca.markets/")
-                    logger.warning(f"   2. Set these environment variables (Master account):")
+                    logger.warning(f"   2. Set these environment variables (Platform account):")
                     logger.warning(f"      ALPACA_API_KEY=<your-api-key>")
                     logger.warning(f"      ALPACA_API_SECRET=<your-api-secret>")
                     logger.warning(f"      ALPACA_PAPER=true  # Set to false for live trading")
                 elif broker == "COINBASE":
                     logger.warning(f"      URL: https://portal.cdp.coinbase.com/")
-                    logger.warning(f"   2. Set these environment variables (Master account):")
+                    logger.warning(f"   2. Set these environment variables (Platform account):")
                     logger.warning(f"      COINBASE_API_KEY=<your-api-key>")
                     logger.warning(f"      COINBASE_API_SECRET=<your-api-secret>")
                 elif broker == "OKX":
                     logger.warning(f"      URL: https://www.okx.com/account/my-api")
-                    logger.warning(f"   2. Set these environment variables (Master account):")
+                    logger.warning(f"   2. Set these environment variables (Platform account):")
                     logger.warning(f"      OKX_API_KEY=<your-api-key>")
                     logger.warning(f"      OKX_API_SECRET=<your-api-secret>")
                     logger.warning(f"      OKX_PASSPHRASE=<your-passphrase>")
                 elif broker == "BINANCE":
                     logger.warning(f"      URL: https://www.binance.com/en/my/settings/api-management")
-                    logger.warning(f"   2. Set these environment variables (Master account):")
+                    logger.warning(f"   2. Set these environment variables (Platform account):")
                     logger.warning(f"      BINANCE_API_KEY=<your-api-key>")
                     logger.warning(f"      BINANCE_API_SECRET=<your-api-secret>")
                 else:
                     # Fallback for unknown brokers - use MASTER prefix pattern
                     logger.warning(f"   2. Set environment variables:")
-                    logger.warning(f"      {broker}_MASTER_API_KEY=<your-api-key>")
-                    logger.warning(f"      {broker}_MASTER_API_SECRET=<your-api-secret>")
+                    logger.warning(f"      {broker}_PLATFORM_API_KEY=<your-api-key>")
+                    logger.warning(f"      {broker}_PLATFORM_API_SECRET=<your-api-secret>")
                 logger.warning(f"   3. Restart the bot")
             logger.warning("")
-            logger.warning("   💡 TIP: Once Master accounts are connected, the warning will disappear")
+            logger.warning("   💡 TIP: Once Platform accounts are connected, the warning will disappear")
             logger.warning("=" * 70)
         else:
             # Display positive status when there are no warnings
             logger.info("✅ ACCOUNT HIERARCHY STATUS:")
-            logger.info("   ✅ All user accounts have corresponding Master accounts (correct hierarchy)")
+            logger.info("   ✅ All user accounts have corresponding Platform accounts (correct hierarchy)")
 
         logger.info("=" * 70)
 
@@ -1032,7 +1032,7 @@ class MultiAccountBrokerManager:
         Audit and log all user accounts with broker status.
 
         This function displays:
-        - MASTER-linked users
+        - PLATFORM-linked users
         - Any account with status=="ACTIVE" (enabled=True)
         - Shows connection status for each broker
 

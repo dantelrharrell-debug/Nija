@@ -1,5 +1,5 @@
 """
-NIJA MASTER_ONLY Configuration
+NIJA PLATFORM_ONLY Configuration
 A+ Setups Only - Focus on BTC, ETH, SOL
 
 This configuration is for traders who want to:
@@ -227,7 +227,7 @@ def get_next_milestone(current_balance: float) -> Optional[Dict]:
 
 def get_env_config() -> Dict[str, str]:
     """
-    Get environment variable configuration for MASTER_ONLY mode.
+    Get environment variable configuration for PLATFORM_ONLY mode.
     
     Returns:
         Dict of environment variable names and values
@@ -246,7 +246,7 @@ def get_env_config() -> Dict[str, str]:
 # ============================================================================
 
 USAGE_INSTRUCTIONS = """
-MASTER_ONLY Mode - A+ Setups Configuration
+PLATFORM_ONLY Mode - A+ Setups Configuration
 
 To activate this configuration:
 
@@ -277,7 +277,7 @@ To activate this configuration:
    - No leverage
 
 For questions or support, see documentation at:
-- MASTER_ONLY_GUIDE.md
+- PLATFORM_ONLY_GUIDE.md
 - RISK_PROFILES_GUIDE.md
 """
 

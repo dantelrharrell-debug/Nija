@@ -7,7 +7,7 @@
 
 ### 1. Success State Documentation ✅
 Created comprehensive documentation of the verified working state where:
-- Master account trading successfully on Kraken
+- Platform account trading successfully on Kraken
 - 2 user accounts copying trades with 100% success rate
 - Full profit-taking working for master + all users
 - Proper risk management (10% max per trade)
@@ -113,7 +113,7 @@ Comprehensive recovery procedures with:
 ✅ **Nonce Management**: 5s startup delay, collision prevention
 
 ### Architecture
-✅ **Master Account**: Executes real trades, emits signals
+✅ **Platform Account**: Executes real trades, emits signals
 ✅ **Copy Engine**: Listens for signals, replicates to users
 ✅ **Risk Manager**: Caps position sizes, enforces limits
 ✅ **Broker Adapters**: Kraken + Coinbase fully integrated

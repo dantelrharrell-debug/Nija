@@ -35,8 +35,8 @@ class TradeSignal:
     size: float  # Position size in base currency or quote currency
     size_type: str  # "base" (crypto amount) or "quote" (USD amount)
     timestamp: float  # Unix timestamp when trade was executed
-    order_id: str  # Master account order ID for tracking
-    master_balance: float  # Master account balance at time of trade (for position sizing)
+    order_id: str  # Platform account order ID for tracking
+    platform_balance: float  # Platform account balance at time of trade (for position sizing)
     master_trade_id: str = None  # P2: Master trade ID for copy tracking (optional, generated if not provided)
     order_status: str = "FILLED"  # P1: Order status (FILLED, PARTIALLY_FILLED, etc.)
 
@@ -95,14 +95,14 @@ class TradeSignalEmitter:
                     logger.info("=" * 70)
                     logger.info(f"📡 MASTER {trade_type} SIGNAL SENT (NOT EXECUTED)")
                     logger.info("=" * 70)
-                    logger.info(f"   Master Account: Signal generated for copy trading")
+                    logger.info(f"   Platform Account: Signal generated for copy trading")
                     logger.info(f"   Broker: {signal.broker}")
                     logger.info(f"   Symbol: {signal.symbol}")
                     logger.info(f"   Side: {signal.side.upper()}")
                     logger.info(f"   Size: {signal.size} ({signal.size_type})")
                     logger.info(f"   Price: ${signal.price:.2f}")
                     logger.info(f"   Order ID: {signal.order_id}")
-                    logger.info(f"   Master Balance: ${signal.master_balance:.2f}")
+                    logger.info(f"   Platform Balance: ${signal.platform_balance:.2f}")
                     if is_exit:
                         logger.info(f"   ✅ PROFIT-TAKING: This exit signal will be copied to all users")
                         logger.info(f"   📤 Users will take profit simultaneously with master")
@@ -188,7 +188,7 @@ def emit_trade_signal(
     size: float,
     size_type: str,
     order_id: str,
-    master_balance: float,
+    platform_balance: float,
     master_trade_id: str = None,
     order_status: str = "FILLED"
 ) -> bool:
@@ -205,7 +205,7 @@ def emit_trade_signal(
         size: Position size
         size_type: "base" (crypto amount) or "quote" (USD amount)
         order_id: Order ID from the exchange
-        master_balance: Current master account balance
+        platform_balance: Current master account balance
         master_trade_id: Master trade ID for copy tracking (auto-generated if None)
         order_status: Order fill status (default: "FILLED")
 
@@ -221,7 +221,7 @@ def emit_trade_signal(
         ...     size=500.0,
         ...     size_type="quote",
         ...     order_id="abc-123-def",
-        ...     master_balance=10000.0,
+        ...     platform_balance=10000.0,
         ...     order_status="FILLED"
         ... )
     """
@@ -246,7 +246,7 @@ def emit_trade_signal(
         size_type=size_type,
         timestamp=time.time(),
         order_id=order_id,
-        master_balance=master_balance,
+        platform_balance=platform_balance,
         master_trade_id=master_trade_id,
         order_status=order_status
     )

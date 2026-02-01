@@ -115,7 +115,7 @@ class LiveTrackerIntegration:
         take_profit: Optional[float] = None,
         commission: float = 0.0,
         broker: str = "coinbase",
-        account_id: str = "master",
+        account_id: str = "platform",
         entry_score: Optional[float] = None,
         slippage: Optional[float] = None
     ):
@@ -310,7 +310,7 @@ INTEGRATION_EXAMPLE = """
 from bot.live_tracker_integration import create_live_tracker_integration
 
 # 2. Add to ExecutionEngine.__init__():
-def __init__(self, broker_client, user_id="master", ...):
+def __init__(self, broker_client, user_id="platform", ...):
     # ... existing initialization ...
 
     # Initialize live tracker integration

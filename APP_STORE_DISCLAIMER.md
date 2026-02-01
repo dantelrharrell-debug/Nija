@@ -19,7 +19,7 @@ INDEPENDENT TRADING MODEL:
 NIJA does NOT copy trades between accounts. Each connected account trades 
 independently using the same NIJA trading algorithm. All accounts analyze 
 markets independently and make their own trading decisions. There is NO 
-master account that controls other accounts, and NO trade signal copying 
+platform account that controls other accounts, and NO trade signal copying 
 occurs between accounts.
 
 SUBSTANTIAL RISK OF LOSS:
@@ -206,7 +206,7 @@ b) Each account makes its own trading decisions based on the same algorithm
 c) Each account executes trades at its own timing
 d) Position sizes are calculated independently based on each account's balance
 e) No account has control over or influence on other accounts
-f) There is no "master account" or "follower account" structure
+f) There is no "platform account" or "follower account" structure
 g) Trade signals are NOT transmitted between accounts
 h) The timing and exact trades may differ between accounts due to:
    - Network latency
@@ -282,7 +282,7 @@ IMPORTANT FOR APP REVIEW:
 
 1. INDEPENDENT TRADING MODEL:
    This app does NOT copy trades between accounts. Each account trades 
-   independently using the same algorithm. There is no "master account" 
+   independently using the same algorithm. There is no "platform account" 
    or signal distribution.
 
 2. USER API CREDENTIALS:

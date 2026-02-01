@@ -82,7 +82,7 @@ def test_can_trade():
 
         controls = get_hard_controls()
         # Use a representative test user ID (matching typical user_id format in the system)
-        test_user_id = os.getenv("TEST_USER_ID", "master")
+        test_user_id = os.getenv("TEST_USER_ID", "platform")
 
         can_trade, error_msg = controls.can_trade(test_user_id)
 

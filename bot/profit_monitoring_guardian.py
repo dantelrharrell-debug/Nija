@@ -271,7 +271,7 @@ class MultiAccountProfitMonitor:
 
     Tracks profit-taking for:
     - Individual accounts
-    - Master accounts
+    - Platform accounts
     - Copy trading followers
     - Multi-account setups
     """

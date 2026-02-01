@@ -74,24 +74,24 @@ Below $100:
 
 ## Configuration
 
-### Master Account (ALWAYS BALLER Tier)
+### Platform Account (ALWAYS BALLER Tier)
 
-**⚠️ CRITICAL: The master account is ALWAYS BALLER tier regardless of balance.**
+**⚠️ CRITICAL: The platform account is ALWAYS BALLER tier regardless of balance.**
 
 To enable this, set in your `.env` file:
 
 ```bash
-# Master account - always BALLER tier
-MASTER_ACCOUNT_TIER=BALLER
+# Platform account - always BALLER tier
+PLATFORM_ACCOUNT_TIER=BALLER
 ```
 
-**Benefits for Master Account:**
+**Benefits for Platform Account:**
 - ✅ Best risk management parameters (1-2% max risk per tier guidelines)
 - ✅ Highest trade size range ($100-$1,000 per tier)
 - ✅ Maximum positions allowed (8 concurrent positions)
 - ✅ 15% max trade size cap still applies globally
 
-**Example: Master account with $62.49 balance:**
+**Example: Platform account with $62.49 balance:**
 - Tier: BALLER (forced, not STARTER)
 - Max trade size: $9.37 (15% cap applies)
 - Tier guidelines: 1-2% risk
@@ -106,8 +106,8 @@ By default, user accounts automatically detect their tier based on balance:
 
 ```bash
 # .env file for user accounts
-# Leave MASTER_ACCOUNT_TIER empty or commented out for auto-detection
-# MASTER_ACCOUNT_TIER=
+# Leave PLATFORM_ACCOUNT_TIER empty or commented out for auto-detection
+# PLATFORM_ACCOUNT_TIER=
 ```
 
 **Example:**
@@ -121,11 +121,11 @@ To force a specific tier for a user account:
 
 ```bash
 # .env file
-MASTER_ACCOUNT_TIER=INVESTOR
+PLATFORM_ACCOUNT_TIER=INVESTOR
 ```
 
 **Valid values:**
-- `BALLER` or `MASTER` - Forces BALLER tier (recommended for master account)
+- `BALLER` or `MASTER` - Forces BALLER tier (recommended for platform account)
 - `STARTER`
 - `SAVER`
 - `INVESTOR`
@@ -138,7 +138,7 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 ```bash
 # .env file
-MASTER_ACCOUNT_TIER=INVESTOR
+PLATFORM_ACCOUNT_TIER=INVESTOR
 ```
 
 **Benefits:**
@@ -154,14 +154,14 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 ## Examples
 
-### Example 1: Master Account with BALLER Tier (Required)
+### Example 1: Platform Account with BALLER Tier (Required)
 
 ```bash
 # .env file
-MASTER_ACCOUNT_TIER=BALLER
+PLATFORM_ACCOUNT_TIER=BALLER
 ```
 
-**Account:** $62.49 (Master Account)
+**Account:** $62.49 (Platform Account)
 
 **Tier:** BALLER (forced, always)
 
@@ -172,17 +172,17 @@ MASTER_ACCOUNT_TIER=BALLER
 - **Actual max trade:** $9.37 (15% of $62.49 - global cap applies)
 
 **Important Notes:**
-- ✅ Master account ALWAYS uses BALLER tier
+- ✅ Platform account ALWAYS uses BALLER tier
 - ✅ Best risk management parameters
 - ⚠️ 15% cap ($9.37) is below BALLER tier minimum ($100)
 - Smaller trades will execute up to the 15% cap
-- This is the REQUIRED configuration for master account
+- This is the REQUIRED configuration for platform account
 
 ### Example 2: User Account with Auto-Detection (STARTER)
 
 ```bash
 # .env file for user account
-# Leave MASTER_ACCOUNT_TIER empty or commented out
+# Leave PLATFORM_ACCOUNT_TIER empty or commented out
 ```
 
 **Account:** $62.49 (User Account)
@@ -203,7 +203,7 @@ MASTER_ACCOUNT_TIER=BALLER
 
 ```bash
 # .env file
-MASTER_ACCOUNT_TIER=INVESTOR
+PLATFORM_ACCOUNT_TIER=INVESTOR
 ```
 
 **Account:** $62.49
@@ -228,7 +228,7 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 ```bash
 # .env file (no override for user account)
-# MASTER_ACCOUNT_TIER=
+# PLATFORM_ACCOUNT_TIER=
 ```
 
 **Account:** $500
@@ -247,11 +247,11 @@ MASTER_ACCOUNT_TIER=INVESTOR
 
 ## Recommendations
 
-### For Master Account
+### For Platform Account
 
 **Required: Always use BALLER tier**
 ```bash
-MASTER_ACCOUNT_TIER=BALLER
+PLATFORM_ACCOUNT_TIER=BALLER
 ```
 - ✅ Best risk management parameters
 - ✅ Enforced by design - master is always BALLER
@@ -261,7 +261,7 @@ MASTER_ACCOUNT_TIER=BALLER
 
 **Option 1: Use Auto-Detection (STARTER tier) - Recommended**
 ```bash
-# Leave MASTER_ACCOUNT_TIER commented out
+# Leave PLATFORM_ACCOUNT_TIER commented out
 ```
 - ✅ Allows trading with small balances
 - ✅ Trades as small as $10 are permitted
@@ -281,7 +281,7 @@ MASTER_ACCOUNT_TIER=BALLER
 
 **Recommended:** Use auto-detection (SAVER tier)
 ```bash
-# Leave MASTER_ACCOUNT_TIER commented out for user accounts
+# Leave PLATFORM_ACCOUNT_TIER commented out for user accounts
 ```
 - Balanced risk management (7-10%)
 - Trade sizes $15-$40
@@ -371,7 +371,7 @@ This will validate:
 The new configuration provides:
 
 1. **Better Risk Management:** 15% max trade size (down from 20%)
-2. **Tier Flexibility:** Manual override available via `MASTER_ACCOUNT_TIER`
+2. **Tier Flexibility:** Manual override available via `PLATFORM_ACCOUNT_TIER`
 3. **Small Account Support:** Can force conservative tiers on small balances
 4. **Automatic Scaling:** Tiers auto-upgrade as balance grows
 

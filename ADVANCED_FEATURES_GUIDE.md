@@ -404,7 +404,7 @@ user_capital_isolation_engine.pause_container("user123")
 
 **File**: `bot/copy_trade_engine.py` (already exists)
 
-The copy trading engine is already implemented in NIJA. It replicates master account trades to follower accounts with:
+The copy trading engine is already implemented in NIJA. It replicates platform account trades to follower accounts with:
 - Automatic position sizing
 - Risk normalization
 - Master→follower replication

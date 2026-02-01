@@ -39,7 +39,7 @@ copy_from_master: true
 | `api_key` | Yes | Your API key from the exchange | - |
 | `api_secret` | Yes | Your API secret from the exchange | - |
 | `enabled` | Yes | Enable/disable this user (`true`/`false`) | `true` |
-| `copy_from_master` | Yes | Copy trades from master account | `true` |
+| `copy_from_master` | Yes | Copy trades from platform account | `true` |
 | `risk_multiplier` | No | Risk adjustment multiplier | `1.0` |
 
 ## Security
@@ -80,7 +80,7 @@ api_key: your_api_key
 api_secret: your_api_secret
 enabled: true
 copy_from_master: true
-risk_multiplier: 0.5  # Take half the risk of master account
+risk_multiplier: 0.5  # Take half the risk of platform account
 ```
 
 ### Example 3: Disabled User

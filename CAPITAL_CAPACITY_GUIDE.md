@@ -56,7 +56,7 @@ python calculate_capital_capacity.py --balance 10000 --positions 2000 --reserve-
 
 ### All Accounts Analysis
 
-Calculate for master account + all user accounts:
+Calculate for platform account + all user accounts:
 
 ```bash
 # Display all accounts from portfolio manager
@@ -123,7 +123,7 @@ CAPITAL CAPACITY ANALYSIS - Account
 NIJA ALL ACCOUNTS CAPITAL CAPACITY CALCULATOR
 ================================================================================
 
-🎯 Master Account (Master)
+🎯 Platform Account (Master)
 ──────────────────────────────────────────────────────────────────────────────
   Total Equity:        $   24,600.00
   Available Cash:      $   20,000.00
@@ -196,7 +196,7 @@ breakdown = master.get_capital_breakdown(
     min_reserve_pct=0.10
 )
 
-print(f"Master Account:")
+print(f"Platform Account:")
 print(f"  Total Equity: ${breakdown['total_equity']:.2f}")
 print(f"  Deployable: ${breakdown['deployable_capital']:.2f}")
 print(f"  Max Position: ${breakdown['max_position_size']:.2f}")
@@ -287,7 +287,7 @@ The capital capacity calculations are integrated into:
 
 4. **User Account Management**
    - Each user has independent capacity calculation
-   - Master account controls overall strategy
+   - Platform account controls overall strategy
 
 ## Troubleshooting
 

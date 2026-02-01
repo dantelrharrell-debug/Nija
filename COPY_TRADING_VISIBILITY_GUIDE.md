@@ -43,7 +43,7 @@ USER ACCOUNTS CONFIGURED:
 ```
 
 **This tells you:**
-- ✅ Whether master account meets requirements
+- ✅ Whether platform account meets requirements
 - ✅ How many user accounts are configured
 - ✅ Which specific users will receive copy trades
 
@@ -178,13 +178,13 @@ If no user accounts are set up:
 
 ### 7. Master Offline
 
-If the master account is disconnected:
+If the platform account is disconnected:
 
 ```
 ======================================================================
 ⚠️  KRAKEN MASTER OFFLINE
 ======================================================================
-   Master account is not connected - cannot copy trades
+   Platform account is not connected - cannot copy trades
    Only MASTER will trade when reconnected
 
    ℹ️  Users can still trade independently if configured

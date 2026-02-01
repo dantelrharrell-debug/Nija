@@ -67,7 +67,7 @@ copy_from_master: true
 - **api_key** (required): User's API key from the exchange
 - **api_secret** (required): User's API secret from the exchange
 - **enabled** (required): Whether this account is active (`true` or `false`)
-- **copy_from_master** (required): Whether to copy trades from master account
+- **copy_from_master** (required): Whether to copy trades from platform account
 - **risk_multiplier** (optional): Risk multiplier (default: 1.0)
 
 **Example YAML Configuration:**

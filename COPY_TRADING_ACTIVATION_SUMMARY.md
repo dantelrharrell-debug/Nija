@@ -183,7 +183,7 @@ When the bot starts with copy trading enabled, users will see:
    📋 Mode: MASTER_FOLLOW (mirror master trades)
    📊 Allocation: Proportional (auto-scaled by balance)
    ✅ Copy trade engine started in ACTIVE MODE
-   📡 Users will receive and execute copy trades from master accounts
+   📡 Users will receive and execute copy trades from platform accounts
    💰 User position sizes will be scaled based on account balance ratios
 ```
 
@@ -286,11 +286,11 @@ Format: `{BROKER}_USER_{FIRSTNAME}_API_KEY`
 - Extract `{FIRSTNAME}` from `user_id` (part before underscore, uppercase)
 - Example: `user_id: "daivon_frazier"` → `KRAKEN_USER_DAIVON_*`
 
-### 4. Master Account Credentials
-Master account credentials must be set:
+### 4. Platform Account Credentials
+Platform account credentials must be set:
 ```bash
-KRAKEN_MASTER_API_KEY=master_api_key_here
-KRAKEN_MASTER_API_SECRET=master_api_secret_here
+KRAKEN_PLATFORM_API_KEY=master_api_key_here
+KRAKEN_PLATFORM_API_SECRET=master_api_secret_here
 ```
 
 ### 5. Account Funding

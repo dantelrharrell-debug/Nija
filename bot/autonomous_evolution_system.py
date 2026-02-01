@@ -123,7 +123,7 @@ class EvolutionCycle:
 
 class AutonomousEvolutionSystem:
     """
-    Autonomous Evolution System - Master Orchestrator
+    Autonomous Evolution System - Platform Orchestrator
     
     Coordinates all three major systems:
     1. Genetic Strategy Evolution

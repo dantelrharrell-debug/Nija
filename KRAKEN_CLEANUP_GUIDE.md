@@ -29,8 +29,8 @@ You must have Kraken API credentials set as environment variables:
 
 ```bash
 # Option 1: Master credentials (preferred)
-export KRAKEN_MASTER_API_KEY="your-api-key"
-export KRAKEN_MASTER_API_SECRET="your-api-secret"
+export KRAKEN_PLATFORM_API_KEY="your-api-key"
+export KRAKEN_PLATFORM_API_SECRET="your-api-secret"
 
 # Option 2: Legacy credentials (fallback)
 export KRAKEN_API_KEY="your-api-key"

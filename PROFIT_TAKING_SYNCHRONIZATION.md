@@ -8,7 +8,7 @@ This document details how NIJA's copy trading system ensures **all users take pr
 
 **Every master trade is copied to users - both entries (BUY) and exits (SELL).**
 
-When the master account executes ANY order, a trade signal is emitted and copied to all user accounts with proportional position sizing.
+When the platform account executes ANY order, a trade signal is emitted and copied to all user accounts with proportional position sizing.
 
 ## Signal Emission Architecture
 
@@ -31,7 +31,7 @@ Master executes SELL → emit_trade_signal(side="sell") → Copy Engine → User
 **Location:** `bot/broker_manager.py` lines 3321-3363 (Coinbase) and 6655-6740 (Kraken)
 
 ```python
-# COPY TRADING: Emit trade signal for master account trades
+# COPY TRADING: Emit trade signal for platform account trades
 if self.account_type == AccountType.MASTER:
     from trade_signal_emitter import emit_trade_signal
 
@@ -217,7 +217,7 @@ strategy.check_position_age(...)
 ```
 ✅ Emits signal (direct call to place_market_order)
 
-**All exit paths** route through `place_market_order()`, which emits signals for master accounts.
+**All exit paths** route through `place_market_order()`, which emits signals for platform accounts.
 
 ## Monitoring Profit-Taking
 
@@ -226,7 +226,7 @@ strategy.check_position_age(...)
 **Master Side:**
 ```
 📡 MASTER TRADE SIGNAL SENT (NOT EXECUTED)
-   Master Account: Signal generated for copy trading
+   Platform Account: Signal generated for copy trading
    Broker: coinbase
    Symbol: BTC-USD
    Side: SELL
@@ -290,7 +290,7 @@ python bot/test_copy_trading_profit_taking.py
    ```
 
 **Common Causes:**
-- Master account type not set to MASTER
+- Platform account type not set to MASTER
 - Copy engine not started
 - User broker disconnected
 - Insufficient user balance for sell order

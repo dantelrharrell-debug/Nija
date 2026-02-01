@@ -1,6 +1,6 @@
 # NIJA Trading Logic Analysis
 **Date:** January 28, 2026
-**Issue:** Master account losing money while user accounts making money
+**Issue:** Platform account losing money while user accounts making money
 
 ## Executive Summary
 
@@ -129,7 +129,7 @@ Total: 4 passed, 0 failed, 1 skipped
    - Higher targets for high-fee brokers (Coinbase)
    - Lower targets for low-fee brokers (Kraken)
 
-3. **Master Account Optimization**
+3. **Platform Account Optimization**
    - Reduce scan frequency to match user execution rate
    - Implement pre-filtering to avoid impossible trades
    - Add fee-aware trade quality scoring
@@ -143,7 +143,7 @@ Total: 4 passed, 0 failed, 1 skipped
 
 To confirm the root cause:
 
-1. **Check master broker:**
+1. **Check platform broker:**
    ```bash
    grep "broker.*master" bot/trading_strategy.py
    ```

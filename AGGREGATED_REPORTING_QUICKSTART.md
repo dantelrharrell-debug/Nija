@@ -26,7 +26,7 @@ This PR adds comprehensive **read-only aggregation and reporting** capabilities 
 
 3. You'll see:
    - Portfolio balance and P&L
-   - Master account performance
+   - Platform account performance
    - All users' combined performance
    - Individual user breakdown table
    - Auto-refreshes every 30 seconds
@@ -55,7 +55,7 @@ curl http://localhost:5001/api/aggregated/traceability?hours=24&limit=50
 ## What Each Endpoint Shows
 
 ### `/api/aggregated/summary`
-- Master account: balance, P&L, win rate, trades
+- Platform account: balance, P&L, win rate, trades
 - Users aggregate: total balance, combined P&L, win rate
 - Portfolio totals: total balance, total P&L, ROI %
 - Individual user list with stats

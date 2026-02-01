@@ -41,7 +41,7 @@ class GlobalKrakenNonceManager:
     """
     Singleton nonce manager for Kraken API with nanosecond precision.
 
-    This class ensures that ALL Kraken API calls (across MASTER + ALL USERS)
+    This class ensures that ALL Kraken API calls (across PLATFORM + ALL USERS)
     use ONE global monotonic nonce source with nanosecond precision.
 
     Features:

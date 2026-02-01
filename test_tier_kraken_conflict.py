@@ -162,13 +162,13 @@ def test_valid_trade_still_works():
         return False
 
 
-def test_master_account_not_subject_to_tiers():
-    """Test that master accounts are NOT subject to tier limits."""
+def test_platform_account_not_subject_to_tiers():
+    """Test that platform accounts are NOT subject to tier limits."""
     print("\n" + "="*70)
-    print("TEST: Master Account NOT Subject to Tier Limits")
+    print("TEST: Platform Account NOT Subject to Tier Limits")
     print("="*70)
 
-    # Scenario: Master account with small balance (same as conflict scenario)
+    # Scenario: Platform account with small balance (same as conflict scenario)
     balance = 58.78
     requested_trade = 10.58
     kraken_min = 10.00
@@ -179,13 +179,13 @@ def test_master_account_not_subject_to_tiers():
     print(f"  ├─ Requested trade: ${requested_trade:.2f}")
     print(f"  └─ Kraken minimum: ${kraken_min:.2f}")
 
-    # Master accounts always get BALLER tier
+    # Platform accounts always get BALLER tier
     tier = get_tier_from_balance(balance, is_master=True)
     config = get_tier_config(tier)
 
     print(f"\n📊 Tier Assignment:")
     print(f"  ├─ Tier: {tier.value}")
-    print(f"  └─ Note: Master accounts ALWAYS get BALLER tier")
+    print(f"  └─ Note: Platform accounts ALWAYS get BALLER tier")
 
     # Test auto_resize_trade with is_master=True
     resized_size, resize_reason = auto_resize_trade(
@@ -201,23 +201,23 @@ def test_master_account_not_subject_to_tiers():
     print(f"  ├─ Resized to: ${resized_size:.2f}")
     print(f"  └─ Reason: {resize_reason}")
 
-    # Master accounts have flexible limits
+    # Platform accounts have flexible limits
     # Even if resized, they should be allowed to bump up to Kraken minimum
-    print(f"\n✅ MASTER ACCOUNT BEHAVIOR:")
-    print(f"  ├─ Master accounts are NOT subject to tier limits")
+    print(f"\n✅ PLATFORM ACCOUNT BEHAVIOR:")
+    print(f"  ├─ Platform accounts are NOT subject to tier limits")
     print(f"  ├─ Always assigned BALLER tier (regardless of balance)")
     print(f"  └─ Can bump up to Kraken minimum even if tier-resized")
 
     # For master account, even if resized below Kraken min, should be allowed
-    # because master accounts are exempt from tier restrictions
+    # because platform accounts are exempt from tier restrictions
     if tier == TradingTier.BALLER:
         print(f"\n✅ TEST PASSED:")
-        print(f"  ├─ Master account correctly assigned BALLER tier")
+        print(f"  ├─ Platform account correctly assigned BALLER tier")
         print(f"  └─ Master can trade (not blocked by tier limits)")
         return True
     else:
         print(f"\n❌ TEST FAILED:")
-        print(f"  └─ Master account should be BALLER tier, got {tier.value}")
+        print(f"  └─ Platform account should be BALLER tier, got {tier.value}")
         return False
 
 
@@ -248,9 +248,9 @@ if __name__ == "__main__":
         traceback.print_exc()
         results.append(("USER: Valid Trade", False))
 
-    # Test 3: Master account exemption (should NOT be blocked by tier limits)
+    # Test 3: Platform account exemption (should NOT be blocked by tier limits)
     try:
-        result3 = test_master_account_not_subject_to_tiers()
+        result3 = test_platform_account_not_subject_to_tiers()
         results.append(("MASTER: Not Subject to Tiers", result3))
     except Exception as e:
         print(f"\n❌ Test failed with error: {e}")

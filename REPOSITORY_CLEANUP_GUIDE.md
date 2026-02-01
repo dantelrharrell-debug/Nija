@@ -143,7 +143,7 @@ USER_BALANCE_GUIDE.md              # Balance tracking
 ### Reference Documentation
 ```
 PRO_MODE_README.md                 # Pro mode features
-MICRO_MASTER_GUIDE.md              # Micro accounts
+MICRO_PLATFORM_GUIDE.md              # Micro accounts
 BROKER_AWARE_ENTRY_GATING.md       # Entry logic
 AGGREGATED_REPORTING.md            # Reporting features
 AGGREGATED_REPORTING_QUICKSTART.md # Quick start

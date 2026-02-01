@@ -36,7 +36,7 @@ Total Fees: $2.34
 
 ### Current Account Balances (from logs)
 
-**Kraken Master Account:**
+**Kraken Platform Account:**
 ```
 Available USD: $55.74
 Available USDT: $0.00

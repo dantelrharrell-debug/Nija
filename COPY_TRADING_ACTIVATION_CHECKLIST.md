@@ -39,7 +39,7 @@ When you start the bot, look for these log messages:
    📋 Mode: MASTER_FOLLOW (mirror master trades)
    📊 Allocation: Proportional (auto-scaled by balance)
    ✅ Copy trade engine started in ACTIVE MODE
-   📡 Users will receive and execute copy trades from master accounts
+   📡 Users will receive and execute copy trades from platform accounts
    💰 User position sizes will be scaled based on account balance ratios
 ```
 
@@ -138,7 +138,7 @@ ALPACA_USER_{FIRSTNAME}_PAPER=true
 
 ## Step 5: Watch for Copy Trade Execution
 
-When the master account executes a trade, you should see logs like:
+When the platform account executes a trade, you should see logs like:
 
 ```
 🔔 RECEIVED MASTER ENTRY SIGNAL
@@ -230,7 +230,7 @@ Users should see their trades in their exchange accounts:
 
 **Solution:**
 1. Verify master API credentials in `.env` file
-2. Check: `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET`
+2. Check: `KRAKEN_PLATFORM_API_KEY` and `KRAKEN_PLATFORM_API_SECRET`
 3. Ensure master credentials have correct permissions
 4. Restart the bot to reconnect
 

@@ -147,8 +147,8 @@ def setup_env_file():
     print("   Required:")
     print("   - COINBASE_API_KEY")
     print("   - COINBASE_API_SECRET")
-    print("   - KRAKEN_MASTER_API_KEY (optional but recommended)")
-    print("   - KRAKEN_MASTER_API_SECRET (optional but recommended)")
+    print("   - KRAKEN_PLATFORM_API_KEY (optional but recommended)")
+    print("   - KRAKEN_PLATFORM_API_SECRET (optional but recommended)")
     print()
 
     return True

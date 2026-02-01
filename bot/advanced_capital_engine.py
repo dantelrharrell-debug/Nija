@@ -1,5 +1,5 @@
 """
-NIJA Advanced Capital Engine - Master Integration
+NIJA Advanced Capital Engine - Platform Integration
 =================================================
 
 Integrates all advanced portfolio management features into a single,
@@ -96,7 +96,7 @@ class CapitalEngineResult:
 
 class AdvancedCapitalEngine:
     """
-    Advanced Capital Engine - Master Integration
+    Advanced Capital Engine - Platform Integration
 
     Orchestrates all portfolio management systems for optimal
     capital deployment and risk management.

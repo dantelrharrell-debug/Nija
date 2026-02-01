@@ -14,8 +14,8 @@ NIJA **GUARANTEES** profit-taking works on **ALL account types**, in **BOTH dire
 ### Supported Account Types
 
 1. **Individual Accounts** - Single standalone trading accounts
-2. **Master Accounts** - Accounts that generate signals for copy trading
-3. **Follower Accounts** - Accounts that copy master account trades
+2. **Platform Accounts** - Accounts that generate signals for copy trading
+3. **Follower Accounts** - Accounts that copy platform account trades
 4. **Multi-Account Setups** - Multiple accounts trading independently or via copy trading
 
 ---
@@ -45,8 +45,8 @@ TRADING_MODE=individual  # Default mode
 COINBASE_API_KEY=your_key
 COINBASE_API_SECRET=your_secret
 # or
-KRAKEN_MASTER_API_KEY=your_key
-KRAKEN_MASTER_API_SECRET=your_secret
+KRAKEN_PLATFORM_API_KEY=your_key
+KRAKEN_PLATFORM_API_SECRET=your_secret
 ```
 
 **Example:**
@@ -61,7 +61,7 @@ Individual Account on Coinbase:
 
 ---
 
-### 2. Master Accounts
+### 2. Platform Accounts
 
 **Description:** Accounts that trade and emit signals for followers to copy.
 
@@ -83,9 +83,9 @@ Individual Account on Coinbase:
 COPY_TRADING_MODE=MASTER
 MASTER_ACCOUNT_ID=master_trader_001
 
-# Master broker credentials
-KRAKEN_MASTER_API_KEY=your_master_key
-KRAKEN_MASTER_API_SECRET=your_master_secret
+# Platform broker credentials
+KRAKEN_PLATFORM_API_KEY=your_master_key
+KRAKEN_PLATFORM_API_SECRET=your_master_secret
 ```
 
 **Signal Flow:**
@@ -101,7 +101,7 @@ KRAKEN_MASTER_API_SECRET=your_master_secret
 
 **Example:**
 ```
-Master Account on Kraken:
+Platform Account on Kraken:
 - Account ID: master_001
 - Balance: $10,000
 - Tier: LIVABLE
@@ -114,7 +114,7 @@ Master Account on Kraken:
 
 ### 3. Follower Accounts (Copy Trading)
 
-**Description:** Accounts that automatically copy master account trades.
+**Description:** Accounts that automatically copy platform account trades.
 
 **Characteristics:**
 - Replicates master trades with position sizing scaled to account balance
@@ -141,7 +141,7 @@ COINBASE_API_SECRET=your_follower_secret
 
 **Copy Trading Flow:**
 ```
-Master Account (Kraken):          Follower Account (Coinbase):
+Platform Account (Kraken):          Follower Account (Coinbase):
 ---------------------             -------------------------
 Entry: $10,000 → BTC-USD          Entry: $500 → BTC-USD
 Position: $1,000 (10%)            Position: $50 (10% scaled)
@@ -182,7 +182,7 @@ Follower Account:
 
 **Profit-Taking:**
 - ✅ Each account has independent profit-taking logic
-- ✅ Master accounts take profit independently
+- ✅ Platform accounts take profit independently
 - ✅ Follower accounts copy master's profit-taking
 - ✅ Independent accounts use autonomous strategy
 - ✅ All accounts monitored simultaneously
@@ -193,8 +193,8 @@ Follower Account:
 MULTI_ACCOUNT_MODE=true
 
 # Master Kraken
-KRAKEN_MASTER_API_KEY=master_kraken_key
-KRAKEN_MASTER_API_SECRET=master_kraken_secret
+KRAKEN_PLATFORM_API_KEY=master_kraken_key
+KRAKEN_PLATFORM_API_SECRET=master_kraken_secret
 
 # Master Coinbase
 COINBASE_MASTER_API_KEY=master_coinbase_key
@@ -254,9 +254,9 @@ Multi-Account Configuration:
 - TP2: 0.7% gross → 0.34% NET
 - TP3: 0.5% gross → 0.14% NET
 
-### Master Accounts
+### Platform Accounts
 
-**Same as individual** - master accounts use identical profit targets.
+**Same as individual** - platform accounts use identical profit targets.
 
 ### Follower Accounts
 
@@ -281,8 +281,8 @@ MIN_PROFIT_TARGET=1.5  # 1.5% minimum for Coinbase follower
 ```bash
 # .env
 TRADING_TIER=INVESTOR
-KRAKEN_MASTER_API_KEY=your_key
-KRAKEN_MASTER_API_SECRET=your_secret
+KRAKEN_PLATFORM_API_KEY=your_key
+KRAKEN_PLATFORM_API_SECRET=your_secret
 LIVE_MODE=true
 ```
 
@@ -298,8 +298,8 @@ LIVE_MODE=true
 # .env for Master
 COPY_TRADING_MODE=MASTER
 MASTER_ACCOUNT_ID=master_001
-KRAKEN_MASTER_API_KEY=master_key
-KRAKEN_MASTER_API_SECRET=master_secret
+KRAKEN_PLATFORM_API_KEY=master_key
+KRAKEN_PLATFORM_API_SECRET=master_secret
 TRADING_TIER=LIVABLE
 
 # .env for Follower 1
@@ -339,8 +339,8 @@ TRADING_TIER=INCOME
 MULTI_ACCOUNT_MODE=true
 MULTI_BROKER_INDEPENDENT=true
 
-KRAKEN_MASTER_API_KEY=account1_key
-KRAKEN_MASTER_API_SECRET=account1_secret
+KRAKEN_PLATFORM_API_KEY=account1_key
+KRAKEN_PLATFORM_API_SECRET=account1_secret
 
 COINBASE_API_KEY=account2_key
 COINBASE_API_SECRET=account2_secret
@@ -367,7 +367,7 @@ OKX_MASTER_API_SECRET=account3_secret
 - ✅ Long + Short (broker dependent)
 - ✅ All tiers supported
 
-### Master Accounts
+### Platform Accounts
 - ✅ Profit-taking ALWAYS enabled
 - ✅ Emits signals for followers on exits
 - ✅ Works independently even without followers
@@ -402,7 +402,7 @@ OKX_MASTER_API_SECRET=account3_secret
    Broker: Kraken
 ```
 
-**Master Account:**
+**Platform Account:**
 ```
 🎯 TAKE PROFIT TP2 HIT: ETH-USD at $2,575 (PnL: +3.0%)
    Account: MASTER_master_001
@@ -444,7 +444,7 @@ Use this to verify profit-taking works on all your accounts:
 - [ ] Position exits executed successfully
 - [ ] Net profit calculated correctly for broker fees
 
-### Master Accounts
+### Platform Accounts
 - [ ] Bot logs show "MASTER account mode" at startup
 - [ ] Trade signals emitted for entries
 - [ ] Trade signals emitted for profit-taking exits
@@ -453,7 +453,7 @@ Use this to verify profit-taking works on all your accounts:
 
 ### Follower Accounts
 - [ ] Bot logs show "FOLLOWER mode" at startup
-- [ ] Master account ID shown in logs
+- [ ] Platform account ID shown in logs
 - [ ] Copy signals received and executed
 - [ ] Position sizing scaled correctly
 - [ ] Exits copied when master takes profit

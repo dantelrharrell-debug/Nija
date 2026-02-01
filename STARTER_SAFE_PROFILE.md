@@ -10,9 +10,9 @@ This simple message protects:
 - ✅ Your support inbox (no "why isn't it trading?" tickets)
 - ✅ Your users' money (fees won't destroy tiny accounts)
 
-## Master Account Tiers (Updated Jan 23, 2026)
+## Platform Account Tiers (Updated Jan 23, 2026)
 
-NIJA now enforces **hard minimum funding rules** for master accounts to prevent lockouts and ensure reliable operation.
+NIJA now enforces **hard minimum funding rules** for platform accounts to prevent lockouts and ensure reliable operation.
 
 ### Master Funding Tiers
 
@@ -20,13 +20,13 @@ NIJA now enforces **hard minimum funding rules** for master accounts to prevent 
 |------|---------------|--------------|-------------|
 | **MICRO_MASTER** | $25-$49 | $25 | Ultra-minimal, Coinbase only, learning mode |
 | **STARTER** | $50-$99 | $50 | Entry level, copy trading recommended |
-| **SAVER** | $100-$249 | $100 | Minimum viable master account |
+| **SAVER** | $100-$249 | $100 | Minimum viable platform account |
 | **INVESTOR** | $250-$999 | $250 | Multi-position support, rotation enabled |
-| **INCOME** | $1,000-$4,999 | $1,000 | Professional-grade master |
+| **INCOME** | $1,000-$4,999 | $1,000 | Professional-grade platform |
 | **LIVABLE** | $5,000-$24,999 | $5,000 | Pro-style scaling |
-| **BALLER** | $25,000+ | $25,000 | Institutional-quality master |
+| **BALLER** | $25,000+ | $25,000 | Institutional-quality platform |
 
-**NEW:** See **MICRO_MASTER_GUIDE.md** for detailed instructions on operating with $25-$50 capital.
+**NEW:** See **MICRO_PLATFORM_GUIDE.md** for detailed instructions on operating with $25-$50 capital.
 
 ## Why $100 Minimum for Regular Users?
 
@@ -68,7 +68,7 @@ This is NIJA's **GOLD STANDARD** configuration for new users starting with $100.
 | **STOP_LOSS_PRIMARY** | 1.0% | Tight risk control |
 | **TIME_EXIT** | 15 minutes | Quick exits to minimize exposure |
 | **BROKER_PRIORITY** | KRAKEN | Lower fees than Coinbase |
-| **COPY_MODE** | STRICT | Safe mirroring of master trades |
+| **COPY_MODE** | STRICT | Safe mirroring of platform trades |
 | **PRO_MODE** | true | Enabled but invisible to users |
 | **TIER_LOCK** | SAVER | Retail gets PRO logic with tier-capped risk |
 
@@ -118,7 +118,7 @@ Why?
 
 ## Copy Trading Scaling
 
-When users copy trade from a master account:
+When users copy trade from a platform account:
 
 ```
 User Position = Master Position × (User Balance / Master Balance)

@@ -12,7 +12,7 @@ This directory contains the complete educational curriculum for the NIJA Financi
 
 ### Core Files
 
-1. **`master_curriculum.json`**
+1. **`platform_curriculum.json`**
    - Complete curriculum specification in JSON format
    - Includes all lesson metadata, tier definitions, learning paths
    - Single source of truth for the educational system
@@ -221,7 +221,7 @@ The curriculum serves critical purposes:
 ### Implementing the Curriculum
 
 **Backend:**
-- Import `master_curriculum.json` into database
+- Import `platform_curriculum.json` into database
 - Implement tier checking logic (see `mobile/lesson_graduation.py`)
 - Create REST API endpoints (see `docs/LESSON_SYSTEM_TECHNICAL_SPEC.md`)
 - Enforce prerequisite chains
@@ -236,7 +236,7 @@ The curriculum serves critical purposes:
 **Key Files:**
 - `mobile/lesson_map.py` - Lesson content and data structures
 - `mobile/lesson_graduation.py` - Tier logic and scoring
-- `curriculum/master_curriculum.json` - Centralized curriculum spec
+- `curriculum/platform_curriculum.json` - Centralized curriculum spec
 - `curriculum/TIER_ALIGNMENT.md` - Detailed tier documentation
 
 ---

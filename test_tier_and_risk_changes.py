@@ -3,7 +3,7 @@
 Test script for tier override and risk manager changes.
 
 Tests:
-1. Tier override functionality (MASTER_ACCOUNT_TIER env var)
+1. Tier override functionality (PLATFORM_ACCOUNT_TIER env var)
 2. Risk manager max_position_pct is 15%
 3. Trade size calculations respect 15% limit
 """
@@ -38,7 +38,7 @@ def test_tier_override():
     print("  ✅ Correctly assigned STARTER tier for user account")
 
     # Test master account (should ALWAYS be BALLER)
-    print(f"\n📊 Master account (balance: ${balance:.2f}):")
+    print(f"\n📊 Platform account (balance: ${balance:.2f}):")
     tier_master = get_tier_from_balance(balance, is_master=True)
     config_master = get_tier_config(tier_master)
     print(f"  ├─ Tier: {tier_master.value}")
@@ -46,11 +46,11 @@ def test_tier_override():
     print(f"  └─ Trade size: ${config_master.trade_size_min:.2f}-${config_master.trade_size_max:.2f}")
 
     assert tier_master == TradingTier.BALLER, f"Expected BALLER for master, got {tier_master.value}"
-    print("  ✅ Master account correctly forced to BALLER tier")
+    print("  ✅ Platform account correctly forced to BALLER tier")
 
     # Test with BALLER override via env var
     print(f"\n📊 With BALLER override via env var (balance: ${balance:.2f}):")
-    os.environ['MASTER_ACCOUNT_TIER'] = 'BALLER'
+    os.environ['PLATFORM_ACCOUNT_TIER'] = 'BALLER'
     tier_override = get_tier_from_balance(balance)
     config_override = get_tier_config(tier_override)
     print(f"  ├─ Tier: {tier_override.value}")
@@ -61,7 +61,7 @@ def test_tier_override():
     print("  ✅ Successfully overridden to BALLER tier")
 
     # Clean up - safely remove env var
-    os.environ.pop('MASTER_ACCOUNT_TIER', None)
+    os.environ.pop('PLATFORM_ACCOUNT_TIER', None)
 
     return True
 
@@ -135,7 +135,7 @@ def test_trade_size_calculations():
 def test_investor_tier_benefits():
     """Show the benefits of BALLER tier for master account."""
     print("\n" + "="*70)
-    print("TEST 4: Master Account BALLER Tier Benefits")
+    print("TEST 4: Platform Account BALLER Tier Benefits")
     print("="*70)
 
     balance = 62.49
@@ -164,7 +164,7 @@ def test_investor_tier_benefits():
     print(f"  • 15% global cap limits trades to ${max_with_15_pct:.2f}")
     print(f"  • BALLER tier minimum is ${baller_config.trade_size_min:.2f}")
     print(f"  • Actual trades will be limited by 15% cap (${max_with_15_pct:.2f})")
-    print(f"  • Master account still gets best risk parameters (1-2% tier guidelines)")
+    print(f"  • Platform account still gets best risk parameters (1-2% tier guidelines)")
     print(f"  ✅ This is the REQUIRED configuration for master account")
 
     return True
@@ -176,14 +176,14 @@ def main():
     print("TESTING: Tier Override and Risk Manager Changes")
     print("="*70)
     print("\nRequirements:")
-    print("  1. Master account ALWAYS at BALLER tier (never lower)")
+    print("  1. Platform account ALWAYS at BALLER tier (never lower)")
     print("  2. Reduce max trade size to ≤15% of balance")
 
     tests = [
         ("Tier Override & Master BALLER", test_tier_override),
         ("Risk Manager Max Position", test_risk_manager_max_position),
         ("Trade Size Calculations", test_trade_size_calculations),
-        ("Master Account BALLER Benefits", test_investor_tier_benefits),
+        ("Platform Account BALLER Benefits", test_investor_tier_benefits),
     ]
 
     results = []
@@ -217,8 +217,8 @@ def main():
         print("\n✅ All tests passed!")
         print("\n📝 Configuration instructions:")
         print("  For MASTER account, add to .env file:")
-        print("  MASTER_ACCOUNT_TIER=BALLER")
-        print("\n  ⚠️  CRITICAL: Master account is ALWAYS BALLER tier")
+        print("  PLATFORM_ACCOUNT_TIER=BALLER")
+        print("\n  ⚠️  CRITICAL: Platform account is ALWAYS BALLER tier")
         print("  • Best risk management parameters (1-2% tier guidelines)")
         print("  • 15% max trade size cap still applies globally")
         print("  • For $62.49 balance: max trade = $9.37 (15% cap)")

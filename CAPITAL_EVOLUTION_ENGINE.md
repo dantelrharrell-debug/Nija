@@ -59,7 +59,7 @@ The scaling stage. Your capital is now sufficient to support multiple positions 
 **Copy Trading Benefits:**
 - Mirror trades to unlimited user accounts
 - Proportional position sizing per account
-- Single master account controls all
+- Single platform account controls all
 - Automatic trade replication
 
 ---

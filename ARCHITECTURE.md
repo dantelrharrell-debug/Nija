@@ -298,7 +298,7 @@ controls.record_trade_loss("user123", loss_usd=25.0)
 **❌ WRONG (Dangerous)**:
 ```python
 # DO NOT DO THIS!
-COINBASE_API_KEY = "my_master_key"  # Exposed in code
+COINBASE_API_KEY = "my_platform_key"  # Exposed in code
 ```
 
 **✅ CORRECT (Secure)**:
@@ -364,7 +364,7 @@ is_locked = controls.is_strategy_locked()  # Always returns True
 ### Legacy (Single-User) Setup
 
 ```python
-# Old way - single master API key
+# Old way - single platform API key
 from bot.broker_manager import BrokerManager
 
 broker = BrokerManager()

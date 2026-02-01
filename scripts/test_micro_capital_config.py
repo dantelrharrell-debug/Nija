@@ -202,7 +202,7 @@ def test_parameter_values():
     
     checks = [
         (MICRO_CAPITAL_CONFIG['micro_capital_mode'] == True, "MICRO_CAPITAL_MODE should be True"),
-        (MICRO_CAPITAL_CONFIG['mode'] == "MASTER_ONLY", "MODE should be MASTER_ONLY"),
+        (MICRO_CAPITAL_CONFIG['mode'] == "PLATFORM_ONLY", "MODE should be PLATFORM_ONLY"),
         (MICRO_CAPITAL_CONFIG['primary_broker'] == "COINBASE", "PRIMARY_BROKER should be COINBASE"),
         (MICRO_CAPITAL_CONFIG['secondary_broker'] == "KRAKEN", "SECONDARY_BROKER should be KRAKEN"),
         (MICRO_CAPITAL_CONFIG['live_trading'] == True, "LIVE_TRADING should be True"),

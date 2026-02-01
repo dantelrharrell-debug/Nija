@@ -11,7 +11,7 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
 ## ✅ VERIFIED SUCCESS METRICS
 
 ### Trading Activity Summary (Cycle #4)
-- **Master Account Balance**: $60.53 USD (Kraken)
+- **Platform Account Balance**: $60.53 USD (Kraken)
 - **User #1 (Daivon Frazier) Balance**: $84.58 USD (Kraken)
 - **User #2 (Tania Gilbert) Balance**: $65.87 USD (Kraken)
 - **Total Capital Under Management**: $210.98 USD
@@ -62,7 +62,7 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
 
 ### Active Accounts
 1. **Master (KRAKEN)**
-   - API: `KRAKEN_MASTER_API_KEY` + `KRAKEN_MASTER_API_SECRET`
+   - API: `KRAKEN_PLATFORM_API_KEY` + `KRAKEN_PLATFORM_API_SECRET`
    - Balance: $60.59 (cached) / $60.53 (actual)
    - Status: ✅ CONNECTED & TRADING
 
@@ -161,9 +161,9 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
 
 1. **Verify API Credentials Are Set**:
    ```bash
-   # Master account
-   KRAKEN_MASTER_API_KEY=<your-master-key>
-   KRAKEN_MASTER_API_SECRET=<your-master-secret>
+   # Platform account
+   KRAKEN_PLATFORM_API_KEY=<your-master-key>
+   KRAKEN_PLATFORM_API_SECRET=<your-master-secret>
 
    # User accounts
    KRAKEN_USER_DAIVON_API_KEY=<daivon-key>
@@ -193,7 +193,7 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
 
 ### Expected Startup Logs
 ```
-✅ Using KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET for master account
+✅ Using KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET for platform account
 ⏳ Waiting 5.0s before Kraken connection test (prevents nonce collisions)...
 ✅ Startup delay complete, testing Kraken connection...
 Testing Kraken connection (MASTER)...

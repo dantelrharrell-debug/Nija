@@ -1,4 +1,4 @@
-# Terminology Migration: Master Account → Platform Account
+# Terminology Migration: Platform Account → Platform Account
 
 ## Purpose
 Eliminate regulatory-sensitive terminology and replace with safe, compliant language.
@@ -9,8 +9,8 @@ Eliminate regulatory-sensitive terminology and replace with safe, compliant lang
 
 | OLD TERM (Prohibited) | NEW TERM (Required) | Context |
 |----------------------|---------------------|---------|
-| Master Account | Platform Account | System-operated account for platform operations |
-| Master Broker | Platform Broker | Broker connection for platform account |
+| Platform Account | Platform Account | System-operated account for platform operations |
+| Platform Broker | Platform Broker | Broker connection for platform account |
 | Master Balance | Platform Balance | Balance of platform account |
 | Master Trade | Platform Trade | Trade executed by platform account |
 | Master Requirements | Platform Requirements | Requirements for platform account setup |
@@ -104,9 +104,9 @@ find . -type f \( -name "*.py" -o -name "*.js" -o -name "*.jsx" -o -name "*.ts" 
 
 # Documentation files  
 find . -type f -name "*.md" \
-  -exec sed -i 's/master account/platform account/gi' {} \;
-  -exec sed -i 's/Master Account/Platform Account/g' {} \;
-  -exec sed -i 's/MASTER ACCOUNT/PLATFORM ACCOUNT/g' {} \;
+  -exec sed -i 's/platform account/platform account/gi' {} \;
+  -exec sed -i 's/Platform Account/Platform Account/g' {} \;
+  -exec sed -i 's/PLATFORM ACCOUNT/PLATFORM ACCOUNT/g' {} \;
 
 # Config files
 find . -type f \( -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name ".env*" \) \
@@ -115,7 +115,7 @@ find . -type f \( -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name ".e
 
 # Commit changes
 git add .
-git commit -m "Migrate terminology: master account → platform account"
+git commit -m "Migrate terminology: platform account → platform account"
 ```
 
 ## Environment Variable Migration
@@ -124,15 +124,15 @@ git commit -m "Migrate terminology: master account → platform account"
 
 ```bash
 # Authentication
-KRAKEN_MASTER_API_KEY → KRAKEN_PLATFORM_API_KEY
-KRAKEN_MASTER_API_SECRET → KRAKEN_PLATFORM_API_SECRET
+KRAKEN_PLATFORM_API_KEY → KRAKEN_PLATFORM_API_KEY
+KRAKEN_PLATFORM_API_SECRET → KRAKEN_PLATFORM_API_SECRET
 COINBASE_MASTER_API_KEY → COINBASE_PLATFORM_API_KEY
 COINBASE_MASTER_API_SECRET → COINBASE_PLATFORM_API_SECRET
 
 # Configuration
 MASTER_BROKER → PLATFORM_BROKER
 MASTER_CONNECTED → PLATFORM_CONNECTED
-MASTER_ONLY → PLATFORM_ONLY
+PLATFORM_ONLY → PLATFORM_ONLY
 
 # Deprecated (Remove)
 COPY_TRADING_MODE=MASTER_FOLLOW → COPY_TRADING_MODE=INDEPENDENT
@@ -152,10 +152,10 @@ def get_platform_api_key():
     
     # Fallback to old name with deprecation warning
     if not api_key:
-        api_key = os.getenv('KRAKEN_MASTER_API_KEY')
+        api_key = os.getenv('KRAKEN_PLATFORM_API_KEY')
         if api_key:
             logger.warning(
-                "⚠️  KRAKEN_MASTER_API_KEY is deprecated. "
+                "⚠️  KRAKEN_PLATFORM_API_KEY is deprecated. "
                 "Please use KRAKEN_PLATFORM_API_KEY instead."
             )
     
@@ -187,7 +187,7 @@ Hi [User],
 
 We're updating NIJA's terminology to better reflect how the system works:
 
-OLD: "Master Account" 
+OLD: "Platform Account" 
 NEW: "Platform Account"
 
 What this means:
@@ -198,7 +198,7 @@ What this means:
 
 Action Required:
 If you have custom scripts or configs, update these environment variables:
-• KRAKEN_MASTER_API_KEY → KRAKEN_PLATFORM_API_KEY
+• KRAKEN_PLATFORM_API_KEY → KRAKEN_PLATFORM_API_KEY
 • MASTER_BROKER → PLATFORM_BROKER
 
 The old names will work temporarily but will be removed in 30 days.
@@ -214,7 +214,7 @@ NIJA Team
 🔔 Terminology Update
 
 We've updated terminology throughout NIJA:
-• "Master Account" → "Platform Account"
+• "Platform Account" → "Platform Account"
 • Reflects independent trading model
 • No functionality changes
 
@@ -305,7 +305,7 @@ grep -ri "MASTER_" --exclude-dir=.git --exclude="*.md" .
 ## Success Criteria
 
 ✅ Migration is successful when:
-1. No code references "master account" (except deprecated docs)
+1. No code references "platform account" (except deprecated docs)
 2. All environment variables use "PLATFORM_" prefix
 3. All logs show "platform account" terminology
 4. All UI shows "platform account" terminology

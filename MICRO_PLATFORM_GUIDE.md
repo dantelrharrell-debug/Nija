@@ -1,19 +1,19 @@
-# NIJA Micro-Master Guide ($25-$50 Master Accounts)
+# NIJA Micro-Master Guide ($25-$50 Platform Accounts)
 
 ## Overview
 
-This guide explains how to operate a NIJA master account with **$25-$50 capital** (Micro-Master mode).
+This guide explains how to operate a NIJA platform account with **$25-$50 capital** (Micro-Master mode).
 
 ### Who Is This For?
 
-- **Learning**: Want to understand master account operations with minimal risk
+- **Learning**: Want to understand platform account operations with minimal risk
 - **Testing**: Testing copy trading strategies before scaling up
 - **Budget-Conscious**: Limited capital but want to provide copy trading signals
 - **Upgrade Path**: Planning to grow capital to higher tiers
 
 ### Critical Reality Check
 
-⚠️ **At $25-$50, you are operating at the ABSOLUTE MINIMUM for master accounts.**
+⚠️ **At $25-$50, you are operating at the ABSOLUTE MINIMUM for platform accounts.**
 
 **What This Means:**
 - Fees consume 1-2% of every trade (significant impact on profitability)
@@ -23,7 +23,7 @@ This guide explains how to operate a NIJA master account with **$25-$50 capital*
 - NOT recommended for long-term independent trading
 
 **Recommended Path:** Save profits and upgrade to:
-- **$100+ (SAVER tier)** - Minimum viable master account
+- **$100+ (SAVER tier)** - Minimum viable platform account
 - **$250+ (INVESTOR tier)** - Full multi-position support
 - **$1,000+ (INCOME tier)** - NIJA operates as designed
 
@@ -39,9 +39,9 @@ This guide explains how to operate a NIJA master account with **$25-$50 capital*
 | **STARTER** | $50-$99 | Learning mode, copy trading recommended | $50 |
 | **SAVER** | $100-$249 | Minimum viable master, single position | $100 |
 | **INVESTOR** | $250-$999 | Multi-position support, rotation enabled | $250 |
-| **INCOME** | $1,000-$4,999 | Professional-grade master | $1,000 |
+| **INCOME** | $1,000-$4,999 | Professional-grade platform | $1,000 |
 | **LIVABLE** | $5,000-$24,999 | Pro-style scaling | $5,000 |
-| **BALLER** | $25,000+ | Institutional-quality master | $25,000 |
+| **BALLER** | $25,000+ | Institutional-quality platform | $25,000 |
 
 ### MICRO_MASTER Operational Constraints
 
@@ -129,7 +129,7 @@ tail -f logs/nija.log
 - ✅ "Max Positions: 1"
 
 **Red Flags:**
-- ❌ "Kraken master broker detected" (should use Coinbase only)
+- ❌ "Kraken platform broker detected" (should use Coinbase only)
 - ❌ "Trade size below exchange minimum" (increase MIN_CASH_TO_BUY)
 - ❌ "Insufficient balance" (need to deposit more)
 
@@ -325,7 +325,7 @@ Once you reach $100:
 ```bash
 # Update .env
 INITIAL_CAPITAL=100
-MASTER_ACCOUNT_TIER=SAVER
+PLATFORM_ACCOUNT_TIER=SAVER
 MICRO_MASTER_MODE=false  # Disable micro mode
 MIN_CASH_TO_BUY=10.00  # Kraken compatible now
 ```

@@ -83,12 +83,12 @@ def list_users():
 
         # From hard controls
         for user_id in hard_controls.user_kill_switches.keys():
-            if user_id != 'master' or include_master:
+            if user_id != 'platform' or include_master:
                 user_ids.add(user_id)
 
         # From risk manager
         for user_id in risk_manager._user_states.keys():
-            if user_id != 'master' or include_master:
+            if user_id != 'platform' or include_master:
                 user_ids.add(user_id)
 
         # Build user list
@@ -109,7 +109,7 @@ def list_users():
                 'total_trades': stats.get('completed_trades', 0),
                 'balance': risk_state.balance,
                 'circuit_breaker': risk_state.circuit_breaker_triggered,
-                'is_master': user_id == 'master'
+                'is_master': user_id == 'platform'
             })
 
         return jsonify({
@@ -162,9 +162,9 @@ def get_user_pnl(user_id: str):
 
 
 @app.route('/api/master/pnl', methods=['GET'])
-def get_master_pnl():
+def get_platform_pnl():
     """Get detailed PnL dashboard for the master account."""
-    return get_user_pnl('master')
+    return get_user_pnl('platform')
 
 
 @app.route('/api/user/<user_id>/risk', methods=['GET'])
@@ -548,7 +548,7 @@ def get_aggregated_summary():
     Get aggregated read-only summary of master + all users.
 
     Returns:
-        - Master account performance
+        - Platform account performance
         - Combined user performance
         - Total portfolio metrics
         - System-wide statistics
@@ -560,13 +560,13 @@ def get_aggregated_summary():
         trade_ledger = get_trade_ledger_db()
 
         # Get master stats
-        master_stats = pnl_tracker.get_stats('master', force_refresh=True)
-        master_risk_state = risk_manager.get_state('master')
+        platform_stats = pnl_tracker.get_stats('platform', force_refresh=True)
+        platform_risk_state = risk_manager.get_state('platform')
 
         # Get all user stats (excluding master)
         all_user_ids = set()
         for user_id in risk_manager._user_states.keys():
-            if user_id != 'master':
+            if user_id != 'platform':
                 all_user_ids.add(user_id)
 
         # Aggregate user metrics
@@ -607,23 +607,23 @@ def get_aggregated_summary():
 
         # Get open positions count
         open_positions = trade_ledger.get_open_positions()
-        master_open_positions = [p for p in open_positions if p.get('user_id') == 'master']
-        user_open_positions = [p for p in open_positions if p.get('user_id') != 'master']
+        master_open_positions = [p for p in open_positions if p.get('user_id') == 'platform']
+        user_open_positions = [p for p in open_positions if p.get('user_id') != 'platform']
 
         # Portfolio totals
-        portfolio_balance = master_risk_state.balance + total_user_balance
-        portfolio_pnl = master_stats.get('total_pnl', 0.0) + total_user_pnl
+        portfolio_balance = platform_risk_state.balance + total_user_balance
+        portfolio_pnl = platform_stats.get('total_pnl', 0.0) + total_user_pnl
 
         return jsonify({
             'timestamp': datetime.now().isoformat(),
-            'master_account': {
-                'balance': master_risk_state.balance,
-                'total_pnl': master_stats.get('total_pnl', 0.0),
-                'daily_pnl': master_stats.get('daily_pnl', 0.0),
-                'win_rate': master_stats.get('win_rate', 0.0),
-                'total_trades': master_stats.get('completed_trades', 0),
-                'winning_trades': master_stats.get('winning_trades', 0),
-                'losing_trades': master_stats.get('losing_trades', 0),
+            'platform_account': {
+                'balance': platform_risk_state.balance,
+                'total_pnl': platform_stats.get('total_pnl', 0.0),
+                'daily_pnl': platform_stats.get('daily_pnl', 0.0),
+                'win_rate': platform_stats.get('win_rate', 0.0),
+                'total_trades': platform_stats.get('completed_trades', 0),
+                'winning_trades': platform_stats.get('winning_trades', 0),
+                'losing_trades': platform_stats.get('losing_trades', 0),
                 'open_positions': len(master_open_positions)
             },
             'users_aggregate': {
@@ -640,7 +640,7 @@ def get_aggregated_summary():
             'portfolio_totals': {
                 'total_balance': portfolio_balance,
                 'total_pnl': portfolio_pnl,
-                'total_trades': master_stats.get('completed_trades', 0) + total_user_trades,
+                'total_trades': platform_stats.get('completed_trades', 0) + total_user_trades,
                 'total_open_positions': len(open_positions),
                 'pnl_return_pct': (portfolio_pnl / portfolio_balance * 100) if portfolio_balance > 0 else 0.0
             },
@@ -665,13 +665,13 @@ def get_aggregated_performance():
         days = int(request.args.get('days', 7))
 
         # Get master performance
-        master_stats = pnl_tracker.get_stats('master', force_refresh=True)
-        master_daily = pnl_tracker.get_daily_breakdown('master', days=days)
+        platform_stats = pnl_tracker.get_stats('platform', force_refresh=True)
+        master_daily = pnl_tracker.get_daily_breakdown('platform', days=days)
 
         # Get all user IDs
         all_user_ids = set()
         for user_id in pnl_tracker._user_pnl.keys():
-            if user_id != 'master':
+            if user_id != 'platform':
                 all_user_ids.add(user_id)
 
         # Aggregate daily performance across all users
@@ -710,7 +710,7 @@ def get_aggregated_performance():
             'timestamp': datetime.now().isoformat(),
             'period_days': days,
             'master_performance': {
-                'stats': master_stats,
+                'stats': platform_stats,
                 'daily_breakdown': [
                     {
                         'date': day.date,
@@ -750,8 +750,8 @@ def get_aggregated_positions():
         all_positions = trade_ledger.get_open_positions()
 
         # Separate master and user positions
-        master_positions = [p for p in all_positions if p.get('user_id') == 'master']
-        user_positions = [p for p in all_positions if p.get('user_id') != 'master']
+        master_positions = [p for p in all_positions if p.get('user_id') == 'platform']
+        user_positions = [p for p in all_positions if p.get('user_id') != 'platform']
 
         # Aggregate by symbol
         symbol_aggregate = {}
@@ -767,7 +767,7 @@ def get_aggregated_positions():
                 }
 
             symbol_aggregate[symbol]['total_positions'] += 1
-            if position.get('user_id') == 'master':
+            if position.get('user_id') == 'platform':
                 symbol_aggregate[symbol]['master_positions'] += 1
             else:
                 symbol_aggregate[symbol]['user_positions'] += 1
@@ -827,12 +827,12 @@ def get_aggregated_statistics():
         risk_manager = get_user_risk_manager()
 
         # Get master statistics
-        master_stats = trade_ledger.get_statistics(user_id='master')
+        platform_stats = trade_ledger.get_statistics(user_id='platform')
 
         # Get all user statistics combined
         all_user_ids = set()
         for user_id in risk_manager._user_states.keys():
-            if user_id != 'master':
+            if user_id != 'platform':
                 all_user_ids.add(user_id)
 
         # Aggregate user statistics
@@ -855,13 +855,13 @@ def get_aggregated_statistics():
         users_win_rate = (users_winning_trades / users_total_trades * 100) if users_total_trades > 0 else 0.0
 
         # System totals
-        system_total_trades = master_stats.get('total_trades', 0) + users_total_trades
-        system_total_pnl = master_stats.get('total_pnl', 0.0) + users_total_pnl
-        system_total_fees = master_stats.get('total_fees', 0.0) + users_total_fees
+        system_total_trades = platform_stats.get('total_trades', 0) + users_total_trades
+        system_total_pnl = platform_stats.get('total_pnl', 0.0) + users_total_pnl
+        system_total_fees = platform_stats.get('total_fees', 0.0) + users_total_fees
 
         return jsonify({
             'timestamp': datetime.now().isoformat(),
-            'master_statistics': master_stats,
+            'master_statistics': platform_stats,
             'users_statistics': {
                 'total_trades': users_total_trades,
                 'total_volume': users_total_volume,
@@ -906,7 +906,7 @@ def get_trade_traceability():
 
         # Get recent master trades
         master_trades = trade_ledger.get_trade_history(
-            user_id='master',
+            user_id='platform',
             limit=limit
         )
 
@@ -925,7 +925,7 @@ def get_trade_traceability():
             all_symbol_trades = trade_ledger.get_trade_history(symbol=symbol, limit=100)
 
             for trade in all_symbol_trades:
-                if trade['user_id'] == 'master':
+                if trade['user_id'] == 'platform':
                     continue
 
                 trade_time = datetime.fromisoformat(trade['entry_time'])

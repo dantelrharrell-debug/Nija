@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Test script for MASTER_ONLY configuration
+Test script for PLATFORM_ONLY configuration
 Validates that all configuration settings are working correctly
 
 Usage:
-    python3 test_master_only_config.py
+    python3 test_platform_only_config.py
 """
 
 import os
@@ -14,14 +14,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
 def test_whitelist_import():
-    """Test that master_only_config can be imported"""
+    """Test that platform_only_config can be imported"""
     print("=" * 70)
-    print("TEST 1: Import master_only_config module")
+    print("TEST 1: Import platform_only_config module")
     print("=" * 70)
     
     try:
         # Import directly without the bot. prefix since we already added to path
-        import master_only_config
+        import platform_only_config
         
         # Verify key attributes exist
         required_attrs = [
@@ -38,14 +38,14 @@ def test_whitelist_import():
         ]
         
         for attr in required_attrs:
-            if not hasattr(master_only_config, attr):
+            if not hasattr(platform_only_config, attr):
                 print(f"❌ FAILED: Missing attribute: {attr}\n")
                 return False
         
-        print("✅ PASSED: master_only_config imported successfully\n")
+        print("✅ PASSED: platform_only_config imported successfully\n")
         return True
     except ImportError as e:
-        print(f"❌ FAILED: Could not import master_only_config: {e}\n")
+        print(f"❌ FAILED: Could not import platform_only_config: {e}\n")
         return False
     except Exception as e:
         print(f"❌ FAILED: Unexpected error: {e}\n")
@@ -58,9 +58,9 @@ def test_whitelist_symbols():
     print("TEST 2: Whitelist Symbol Checking")
     print("=" * 70)
     
-    import master_only_config
+    import platform_only_config
     
-    print(f"\nWhitelisted assets: {master_only_config.WHITELISTED_ASSETS}")
+    print(f"\nWhitelisted assets: {platform_only_config.WHITELISTED_ASSETS}")
     
     # Test Coinbase symbols
     print("\n📊 Testing Coinbase symbols:")
@@ -75,7 +75,7 @@ def test_whitelist_symbols():
     
     all_passed = True
     for symbol, expected in test_cases_coinbase:
-        result = master_only_config.is_whitelisted_symbol(symbol, "coinbase")
+        result = platform_only_config.is_whitelisted_symbol(symbol, "coinbase")
         status = "✅" if result == expected else "❌"
         print(f"   {status} {symbol}: {result} (expected {expected})")
         if result != expected:
@@ -92,7 +92,7 @@ def test_whitelist_symbols():
     ]
     
     for symbol, expected in test_cases_kraken:
-        result = master_only_config.is_whitelisted_symbol(symbol, "kraken")
+        result = platform_only_config.is_whitelisted_symbol(symbol, "kraken")
         status = "✅" if result == expected else "❌"
         print(f"   {status} {symbol}: {result} (expected {expected})")
         if result != expected:
@@ -112,8 +112,8 @@ def test_risk_config():
     print("TEST 3: Risk Configuration Values")
     print("=" * 70)
     
-    import master_only_config
-    from master_only_config import (
+    import platform_only_config
+    from platform_only_config import (
         RISK_PER_TRADE_MIN_PCT,
         RISK_PER_TRADE_MAX_PCT,
         DEFAULT_RISK_PER_TRADE_PCT,
@@ -162,8 +162,8 @@ def test_position_config():
     print("TEST 4: Position Management Configuration")
     print("=" * 70)
     
-    import master_only_config
-    from master_only_config import (
+    import platform_only_config
+    from platform_only_config import (
         MAX_POSITIONS,
         MIN_TRADE_SIZE_USD,
         LEVERAGE_ENABLED,
@@ -208,8 +208,8 @@ def test_growth_path():
     print("TEST 5: Growth Path Configuration")
     print("=" * 70)
     
-    import master_only_config
-    from master_only_config import GROWTH_PATH, get_next_milestone
+    import platform_only_config
+    from platform_only_config import GROWTH_PATH, get_next_milestone
     
     print(f"\n📈 Growth Path:")
     for key, value in GROWTH_PATH.items():
@@ -254,8 +254,8 @@ def test_a_plus_criteria():
     print("TEST 6: A+ Setup Criteria Configuration")
     print("=" * 70)
     
-    import master_only_config
-    from master_only_config import A_PLUS_CRITERIA, MIN_ENTRY_SCORE
+    import platform_only_config
+    from platform_only_config import A_PLUS_CRITERIA, MIN_ENTRY_SCORE
     
     print(f"\n⭐ A+ Setup Criteria:")
     print(f"   Min entry score: {MIN_ENTRY_SCORE}/10")
@@ -285,8 +285,8 @@ def test_env_config():
     print("TEST 7: Environment Variable Generation")
     print("=" * 70)
     
-    import master_only_config
-    from master_only_config import get_env_config
+    import platform_only_config
+    from platform_only_config import get_env_config
     
     env_config = get_env_config()
     
@@ -320,7 +320,7 @@ def main():
     """Run all tests"""
     print("\n")
     print("=" * 70)
-    print("MASTER_ONLY CONFIGURATION TEST SUITE")
+    print("PLATFORM_ONLY CONFIGURATION TEST SUITE")
     print("=" * 70)
     print("\n")
     
@@ -354,7 +354,7 @@ def main():
     print("=" * 70)
     
     if passed == total:
-        print("\n🎉 ALL TESTS PASSED! MASTER_ONLY configuration is working correctly.\n")
+        print("\n🎉 ALL TESTS PASSED! PLATFORM_ONLY configuration is working correctly.\n")
         return 0
     else:
         print(f"\n⚠️  {total - passed} test(s) failed. Please review the output above.\n")

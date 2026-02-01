@@ -44,7 +44,7 @@
 - Clear error messages if Kraken credentials are missing
 
 #### Credential Validation (Lines 173-188)
-- **Changed:** Now requires `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET`
+- **Changed:** Now requires `KRAKEN_PLATFORM_API_KEY` and `KRAKEN_PLATFORM_API_SECRET`
 - **Removed:** Requirement for `COINBASE_API_KEY` and `COINBASE_API_SECRET`
 - Bot will **exit with error** if Kraken credentials are not configured
 
@@ -84,8 +84,8 @@
 
 ### ⚠️ What's Required
 - **Must have Kraken credentials** configured:
-  - `KRAKEN_MASTER_API_KEY`
-  - `KRAKEN_MASTER_API_SECRET`
+  - `KRAKEN_PLATFORM_API_KEY`
+  - `KRAKEN_PLATFORM_API_SECRET`
 - Bot will **not start** without Kraken credentials
 - Coinbase credentials are **ignored** even if present
 
@@ -108,7 +108,7 @@ When the bot starts, you should see:
 ### 2. Verify Kraken Connection Only
 The broker connection summary should show:
 ```
-✅ MASTER ACCOUNT BROKERS: Kraken
+✅ PLATFORM ACCOUNT BROKERS: Kraken
 ```
 (No Coinbase in the list)
 
@@ -131,7 +131,7 @@ The startup script should display:
 ### Step 1: Uncomment Code in `bot/trading_strategy.py`
 Around line 637, uncomment the Coinbase connection block:
 ```python
-# Try to connect Coinbase - MASTER ACCOUNT
+# Try to connect Coinbase - PLATFORM ACCOUNT
 logger.info("📊 Attempting to connect Coinbase Advanced Trade (MASTER)...")
 try:
     coinbase = CoinbaseBroker()

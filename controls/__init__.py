@@ -106,8 +106,8 @@ class HardControls:
         Dynamically loads users from configuration files.
         """
         # Enable master account
-        self.user_kill_switches['master'] = KillSwitchStatus.ACTIVE
-        logger.info("✅ Master account trading ENABLED")
+        self.user_kill_switches['platform'] = KillSwitchStatus.ACTIVE
+        logger.info("✅ Platform account trading ENABLED")
 
         # Dynamically load and enable all configured user accounts
         try:

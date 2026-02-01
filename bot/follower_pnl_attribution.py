@@ -78,8 +78,8 @@ class FollowerPnLMetrics:
     unrealized_pnl: float
     
     # Comparison to master
-    master_total_pnl: float
-    master_total_pnl_pct: float
+    platform_total_pnl: float
+    platform_total_pnl_pct: float
     copy_efficiency: float  # Follower PnL% / Master PnL%
     
     # Performance metrics
@@ -316,15 +316,15 @@ class FollowerPnLAttribution:
         total_pnl_pct = (realized_pnl / total_invested * 100) if total_invested > 0 else 0.0
         
         # Calculate master comparison
-        master_total_pnl = 0.0
-        master_total_pnl_pct = 0.0
+        platform_total_pnl = 0.0
+        platform_total_pnl_pct = 0.0
         for trade in trades:
             if trade.master_trade_id in self.master_trades:
                 master_trade = self.master_trades[trade.master_trade_id]
                 if master_trade.master_pnl is not None:
-                    master_total_pnl += master_trade.master_pnl
+                    platform_total_pnl += master_trade.master_pnl
         
-        copy_efficiency = (total_pnl_pct / master_total_pnl_pct * 100) if master_total_pnl_pct != 0 else 100.0
+        copy_efficiency = (total_pnl_pct / platform_total_pnl_pct * 100) if platform_total_pnl_pct != 0 else 100.0
         
         # Calculate win rate
         closed_trades = [t for t in trades if t.status == 'closed' and t.pnl is not None]
@@ -352,8 +352,8 @@ class FollowerPnLAttribution:
             total_pnl_pct=total_pnl_pct,
             realized_pnl=realized_pnl,
             unrealized_pnl=unrealized_pnl,
-            master_total_pnl=master_total_pnl,
-            master_total_pnl_pct=master_total_pnl_pct,
+            platform_total_pnl=platform_total_pnl,
+            platform_total_pnl_pct=platform_total_pnl_pct,
             copy_efficiency=copy_efficiency,
             win_rate=win_rate,
             avg_slippage_pct=avg_slippage_pct,

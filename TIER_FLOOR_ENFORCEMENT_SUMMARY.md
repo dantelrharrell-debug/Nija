@@ -135,7 +135,7 @@ This implementation ensures:
 
 - Existing configurations continue to work
 - Only affects tiers where calculated position would be below tier floor
-- Master accounts are exempted from tier floors (as before)
+- Platform accounts are exempted from tier floors (as before)
 - Tier-locked accounts properly enforce tier floors
 
 ## Monitoring and Logging

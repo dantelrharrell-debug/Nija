@@ -1,6 +1,6 @@
 # NIJA Getting Started Guide
 
-This guide will help you get NIJA up and running quickly, whether you want to trade with just the master account or enable multi-user trading.
+This guide will help you get NIJA up and running quickly, whether you want to trade with just the platform account or enable multi-user trading.
 
 ## Table of Contents
 - [Prerequisites](#prerequisites)
@@ -43,7 +43,7 @@ python3 setup_env.py
 
 This creates a `.env` file from the template with placeholder values.
 
-### Step 3: Configure Coinbase (Master Account)
+### Step 3: Configure Coinbase (Platform Account)
 
 1. **Get API credentials from Coinbase:**
    - Go to https://www.coinbase.com/
@@ -72,18 +72,18 @@ python3 bot.py
 
 You should see:
 ```
-✅ MASTER ACCOUNT: TRADING (Broker: coinbase)
+✅ PLATFORM ACCOUNT: TRADING (Broker: coinbase)
 ❌ USER #1 (Daivon Frazier): NOT TRADING (Connection failed or not configured)
 ❌ USER #2 (Tania Gilbert): NOT TRADING (Connection failed or not configured)
 ```
 
-**This is normal!** User accounts are optional. NIJA will trade with the master account.
+**This is normal!** User accounts are optional. NIJA will trade with the platform account.
 
 ---
 
-## Adding Kraken Master Account (Optional)
+## Adding Kraken Platform Account (Optional)
 
-Want to expand your trading to Kraken? You can enable Kraken for the master account to trade on multiple exchanges simultaneously.
+Want to expand your trading to Kraken? You can enable Kraken for the platform account to trade on multiple exchanges simultaneously.
 
 ### Quick Setup for Kraken Master
 
@@ -110,8 +110,8 @@ For the fastest setup, check out:
 
 2. **Add to `.env` file (local) OR Railway/Render (production):**
    ```bash
-   KRAKEN_MASTER_API_KEY=your-master-api-key
-   KRAKEN_MASTER_API_SECRET=your-master-private-key
+   KRAKEN_PLATFORM_API_KEY=your-master-api-key
+   KRAKEN_PLATFORM_API_SECRET=your-master-private-key
    ```
 
 3. **Restart NIJA**
@@ -140,7 +140,7 @@ If you see:
 ⚪ No user accounts configured
 ```
 
-This is **normal and expected** when user accounts are disabled in the configuration files. User accounts are completely optional - NIJA works perfectly with just the master account.
+This is **normal and expected** when user accounts are disabled in the configuration files. User accounts are completely optional - NIJA works perfectly with just the platform account.
 
 User accounts in `config/users/*.json` files are **disabled by default** (`"enabled": false`) and should only be enabled after:
 1. You have API credentials for that user
@@ -228,7 +228,7 @@ python3 kraken_deployment_verify.py
 
 Expected output when all accounts are configured:
 ```
-✅ Master Account: READY to trade on Kraken
+✅ Platform Account: READY to trade on Kraken
 ✅ User #1 (Daivon Frazier): READY to trade on Kraken
 ✅ User #2 (Tania Gilbert): READY to trade on Kraken
 ```
@@ -246,7 +246,7 @@ Expected output when all accounts are configured:
 2. Add them to `.env` file
 3. Restart NIJA
 
-**To ignore:** If you don't need user accounts, you can safely ignore these messages. NIJA will trade with the master account only.
+**To ignore:** If you don't need user accounts, you can safely ignore these messages. NIJA will trade with the platform account only.
 
 ### "Invalid nonce" errors
 
@@ -334,14 +334,14 @@ Once NIJA is running:
 ## Summary
 
 **Minimum setup for trading:**
-- ✅ Coinbase master account credentials
+- ✅ Coinbase platform account credentials
 - ✅ Run `python3 bot.py`
 
 **Optional user accounts:**
 - Add Kraken credentials for User #1 and/or User #2
 - Each user trades independently with their own balance
 
-**The "NOT TRADING" messages are normal** if you haven't configured those accounts. NIJA will work fine with just the master account!
+**The "NOT TRADING" messages are normal** if you haven't configured those accounts. NIJA will work fine with just the platform account!
 
 ---
 

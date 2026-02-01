@@ -477,14 +477,14 @@ def main():
         print("🔍 DRY RUN MODE: No actual trades will be executed\n")
 
     # Check for API credentials
-    api_key = os.getenv('KRAKEN_API_KEY') or os.getenv('KRAKEN_MASTER_API_KEY')
-    api_secret = os.getenv('KRAKEN_API_SECRET') or os.getenv('KRAKEN_MASTER_API_SECRET')
+    api_key = os.getenv('KRAKEN_API_KEY') or os.getenv('KRAKEN_PLATFORM_API_KEY')
+    api_secret = os.getenv('KRAKEN_API_SECRET') or os.getenv('KRAKEN_PLATFORM_API_SECRET')
 
     if not api_key or not api_secret:
         print("❌ ERROR: Kraken API credentials not found")
         print("\nPlease set environment variables:")
-        print("  - KRAKEN_API_KEY or KRAKEN_MASTER_API_KEY")
-        print("  - KRAKEN_API_SECRET or KRAKEN_MASTER_API_SECRET")
+        print("  - KRAKEN_API_KEY or KRAKEN_PLATFORM_API_KEY")
+        print("  - KRAKEN_API_SECRET or KRAKEN_PLATFORM_API_SECRET")
         sys.exit(1)
 
     # Initialize Kraken adapter

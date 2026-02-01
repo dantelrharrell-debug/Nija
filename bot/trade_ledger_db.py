@@ -71,7 +71,7 @@ class TradeLedgerDB:
                 CREATE TABLE IF NOT EXISTS trade_ledger (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT NOT NULL,
-                    user_id TEXT DEFAULT 'master',
+                    user_id TEXT DEFAULT 'platform',
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
                     action TEXT NOT NULL,
@@ -96,7 +96,7 @@ class TradeLedgerDB:
                 CREATE TABLE IF NOT EXISTS open_positions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     position_id TEXT UNIQUE NOT NULL,
-                    user_id TEXT DEFAULT 'master',
+                    user_id TEXT DEFAULT 'platform',
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
                     entry_price REAL NOT NULL,
@@ -119,7 +119,7 @@ class TradeLedgerDB:
                 CREATE TABLE IF NOT EXISTS completed_trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     position_id TEXT UNIQUE NOT NULL,
-                    user_id TEXT DEFAULT 'master',
+                    user_id TEXT DEFAULT 'platform',
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
                     entry_price REAL NOT NULL,
@@ -146,7 +146,7 @@ class TradeLedgerDB:
                 CREATE TABLE IF NOT EXISTS copy_trade_map (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     master_trade_id TEXT NOT NULL,
-                    master_user_id TEXT DEFAULT 'master',
+                    master_user_id TEXT DEFAULT 'platform',
                     master_symbol TEXT NOT NULL,
                     master_side TEXT NOT NULL,
                     master_order_id TEXT,
@@ -256,7 +256,7 @@ class TradeLedgerDB:
     def record_buy(self, symbol: str, price: float, quantity: float,
                    size_usd: float, fee: float = 0.0,
                    order_id: str = None, position_id: str = None,
-                   user_id: str = 'master', notes: str = None,
+                   user_id: str = 'platform', notes: str = None,
                    master_trade_id: str = None) -> int:
         """
         Record a BUY transaction in the ledger
@@ -269,7 +269,7 @@ class TradeLedgerDB:
             fee: Transaction fee (default: 0.0)
             order_id: Broker order ID (optional)
             position_id: Position identifier (optional)
-            user_id: User account ID (default: 'master')
+            user_id: User account ID (default: 'platform')
             notes: Additional notes (optional)
             master_trade_id: Reference to master trade for copy trading visibility (optional)
 
@@ -306,7 +306,7 @@ class TradeLedgerDB:
     def record_sell(self, symbol: str, price: float, quantity: float,
                     size_usd: float, fee: float = 0.0,
                     order_id: str = None, position_id: str = None,
-                    user_id: str = 'master', notes: str = None,
+                    user_id: str = 'platform', notes: str = None,
                     master_trade_id: str = None) -> int:
         """
         Record a SELL transaction in the ledger
@@ -319,7 +319,7 @@ class TradeLedgerDB:
             fee: Transaction fee (default: 0.0)
             order_id: Broker order ID (optional)
             position_id: Position identifier (optional)
-            user_id: User account ID (default: 'master')
+            user_id: User account ID (default: 'platform')
             notes: Additional notes (optional)
             master_trade_id: Reference to master trade for copy trading visibility (optional)
 
@@ -357,7 +357,7 @@ class TradeLedgerDB:
                      entry_price: float, quantity: float, size_usd: float,
                      stop_loss: float = None, take_profit_1: float = None,
                      take_profit_2: float = None, take_profit_3: float = None,
-                     entry_fee: float = 0.0, user_id: str = 'master',
+                     entry_fee: float = 0.0, user_id: str = 'platform',
                      notes: str = None) -> bool:
         """
         Record a new open position
@@ -708,7 +708,7 @@ class TradeLedgerDB:
 
     def record_copy_trade(self, master_trade_id: str, master_symbol: str,
                          master_side: str, master_order_id: str = None,
-                         master_user_id: str = 'master',
+                         master_user_id: str = 'platform',
                          user_id: str = None, user_status: str = None,
                          user_order_id: str = None, user_error: str = None,
                          user_size: float = None) -> int:
@@ -720,7 +720,7 @@ class TradeLedgerDB:
             master_symbol: Trading symbol
             master_side: 'buy' or 'sell'
             master_order_id: Master order ID
-            master_user_id: Master user ID (default: 'master')
+            master_user_id: Master user ID (default: 'platform')
             user_id: User account ID
             user_status: Execution status ('filled', 'skipped', 'failed')
             user_order_id: User's order ID (if filled)

@@ -2,7 +2,7 @@
 
 ## Overview
 
-NIJA provides a comprehensive **read-only aggregation and reporting system** designed for stakeholders, investors, and administrators to monitor the overall performance of the master account and all user accounts in one unified view.
+NIJA provides a comprehensive **read-only aggregation and reporting system** designed for stakeholders, investors, and administrators to monitor the overall performance of the platform account and all user accounts in one unified view.
 
 This system addresses three critical needs:
 1. **Unified Aggregation View** - Combining master + all users performance
@@ -19,7 +19,7 @@ This system addresses three critical needs:
 
 A beautiful, auto-refreshing dashboard showing:
 - **Portfolio Overview**: Total balance, P&L, trades across master + all users
-- **Master Account Performance**: Dedicated section for master trading stats
+- **Platform Account Performance**: Dedicated section for master trading stats
 - **Users Aggregate**: Combined performance of all copy-trading users
 - **Individual User Breakdown**: Table showing each user's performance
 - **Real-time Updates**: Auto-refresh every 30 seconds
@@ -41,7 +41,7 @@ All aggregation endpoints are **read-only** (GET requests only) and provide JSON
 
 **Endpoint**: `GET /api/aggregated/summary`
 
-**Description**: Combined overview of master account + all users
+**Description**: Combined overview of platform account + all users
 
 **Response Structure**:
 ```json

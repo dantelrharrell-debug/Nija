@@ -590,17 +590,17 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.info("Kraken broker adapter initialized with explicit credentials")
         else:
             # Load from environment variables
-            # Prioritize KRAKEN_MASTER_API_KEY, fallback to legacy KRAKEN_API_KEY
-            master_key = os.getenv("KRAKEN_MASTER_API_KEY", "").strip()
-            master_secret = os.getenv("KRAKEN_MASTER_API_SECRET", "").strip()
+            # Prioritize KRAKEN_PLATFORM_API_KEY, fallback to legacy KRAKEN_API_KEY
+            platform_key = os.getenv("KRAKEN_PLATFORM_API_KEY", "").strip()
+            platform_secret = os.getenv("KRAKEN_PLATFORM_API_SECRET", "").strip()
             legacy_key = os.getenv("KRAKEN_API_KEY", "").strip()
             legacy_secret = os.getenv("KRAKEN_API_SECRET", "").strip()
 
             # Use master credentials if both are available, otherwise try legacy
-            if master_key and master_secret:
-                self.api_key = master_key
-                self.api_secret = master_secret
-                logger.info("Kraken broker adapter initialized with KRAKEN_MASTER_API_KEY")
+            if platform_key and platform_secret:
+                self.api_key = platform_key
+                self.api_secret = platform_secret
+                logger.info("Kraken broker adapter initialized with KRAKEN_PLATFORM_API_KEY")
             elif legacy_key and legacy_secret:
                 self.api_key = legacy_key
                 self.api_secret = legacy_secret

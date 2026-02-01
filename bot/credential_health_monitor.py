@@ -88,8 +88,8 @@ class CredentialHealthMonitor:
                 'COINBASE_API_SECRET'
             },
             'master_kraken': {
-                'KRAKEN_MASTER_API_KEY',
-                'KRAKEN_MASTER_API_SECRET'
+                'KRAKEN_PLATFORM_API_KEY',
+                'KRAKEN_PLATFORM_API_SECRET'
             },
             'master_alpaca': {
                 'ALPACA_API_KEY',
