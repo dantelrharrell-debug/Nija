@@ -89,10 +89,9 @@ class MultiAccountBrokerManager:
         # Structure: {(user_id, broker_type): BaseBroker}
         self._all_user_brokers: Dict[Tuple[str, BrokerType], BaseBroker] = {}
 
-        # CRITICAL FIX (Jan 18, 2026): Track if Kraken copy trading system is active
         # When True, skip Kraken user initialization in connect_users_from_config()
         # to prevent duplicate user creation (copy trading creates its own clients)
-        self.kraken_copy_trading_active = False
+        # Copy trading removed
 
         # CRITICAL FIX (Jan 19, 2026): Balance cache to prevent repeated Kraken API calls
         # Structure: {(account_type, account_id, broker_type): (balance, timestamp)}
@@ -102,7 +101,6 @@ class MultiAccountBrokerManager:
         self._last_kraken_balance_call: float = 0.0
 
         # User metadata storage for audit and reporting
-        # Structure: {user_id: {'name': str, 'enabled': bool, 'copy_from_master': bool, 'brokers': {BrokerType: bool}}}
         self._user_metadata: Dict[str, Dict] = {}
 
         # FIX #3: Initialize portfolio manager for user portfolio states
@@ -779,15 +777,11 @@ class MultiAccountBrokerManager:
                 logger.warning(f"⚠️  Error mapping broker type for {user.name}: {e}")
                 continue
 
-            # CRITICAL FIX (Jan 18, 2026): Skip Kraken users if copy trading system is active
-            # The copy trading system creates its own KrakenClient instances for users
             # Attempting to create KrakenBroker instances here would duplicate connections
             # and cause nonce conflicts / connection errors
             if broker_type == BrokerType.KRAKEN and self.kraken_copy_trading_active:
                 logger.info("=" * 70)
                 logger.info(f"✅ KRAKEN USER ALREADY ACTIVE: {user.name} ({user.user_id})")
-                logger.info("   ℹ️  User already active in copy trading system (expected behavior)")
-                logger.info("   Users managed by Kraken copy trading system — skipping global user init")
                 logger.info("=" * 70)
                 continue
 
@@ -875,7 +869,6 @@ class MultiAccountBrokerManager:
                 # Update user properties (may change between calls)
                 self._user_metadata[user.user_id]['name'] = user.name
                 self._user_metadata[user.user_id]['enabled'] = user.enabled
-                self._user_metadata[user.user_id]['copy_from_master'] = getattr(user, 'copy_from_master', True)
 
                 if broker and broker.connected:
                     # Successfully connected
@@ -923,7 +916,6 @@ class MultiAccountBrokerManager:
                     self._user_metadata[user.user_id] = {
                         'name': user.name,
                         'enabled': user.enabled,
-                        'copy_from_master': getattr(user, 'copy_from_master', True),
                         'brokers': {}
                     }
                 # Update metadata with disconnected status
@@ -1064,7 +1056,6 @@ class MultiAccountBrokerManager:
         Audit and log all user accounts with broker status.
 
         This function displays:
-        - COPY_TRADING users (copy_from_master=True)
         - MASTER-linked users
         - Any account with status=="ACTIVE" (enabled=True)
         - Shows connection status for each broker
@@ -1087,7 +1078,6 @@ class MultiAccountBrokerManager:
         for user_id, user_meta in self._user_metadata.items():
             user_name = user_meta.get('name', user_id)
             is_enabled = user_meta.get('enabled', True)
-            copy_from_master = user_meta.get('copy_from_master', True)
             brokers_status = user_meta.get('brokers', {})
 
             # Skip disabled users
@@ -1095,7 +1085,6 @@ class MultiAccountBrokerManager:
                 continue
 
             # Determine trading mode
-            trading_mode = "Copy Trading" if copy_from_master else "Independent"
 
             # Get actual broker connections from user_brokers
             user_broker_dict = self.user_brokers.get(user_id, {})

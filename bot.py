@@ -481,43 +481,16 @@ def main():
             logger.warning("   ⚠️  Multi-account manager not available - cannot confirm balances")
         logger.info("=" * 70)
 
-        # Start copy trade engine in ACTIVE MODE for user accounts
-        # ACTIVE MODE means:
-        # - Track balances and positions
-        # - Log all P&L
-        # - See what signals are being copied
-        # - EXECUTE TRADES when master account trades
-        #
-        # COPY TRADING MODE configuration:
-        # - MASTER_FOLLOW: Users mirror all master trades (default)
-        # - INDEPENDENT: Users trade independently (no copy trading)
-        copy_trading_mode = os.getenv('COPY_TRADING_MODE', 'MASTER_FOLLOW').upper()
-
-        if copy_trading_mode == 'MASTER_FOLLOW':
-            logger.info("🔄 Starting copy trade engine in MASTER_FOLLOW MODE...")
-            logger.info("   📋 Mode: MASTER_FOLLOW (mirror master trades)")
-            logger.info("   📊 Allocation: Proportional (auto-scaled by balance)")
-            try:
-                from bot.copy_trade_engine import start_copy_engine
-                from bot.copy_trading_requirements import log_copy_trading_status
-
-                # Log copy trading requirements status before starting engine
-                if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
-                    log_copy_trading_status(strategy.multi_account_manager)
-
-                start_copy_engine(observe_only=False)  # CRITICAL: observe_only=False enables auto-trading
-                logger.info("   ✅ Copy trade engine started in ACTIVE MODE")
-                logger.info("   📡 Users will receive and execute copy trades from master accounts")
-                logger.info("   💰 User position sizes will be scaled based on account balance ratios")
-            except Exception as e:
-                logger.error(f"   ❌ Failed to start copy trade engine: {e}")
-                logger.error("   ⚠️  User accounts will NOT receive copy trades!")
-                import traceback
-                logger.error(traceback.format_exc())
-        else:
-            logger.info("🔄 Copy trading mode: INDEPENDENT")
-            logger.info("   ℹ️  Users will trade independently (copy trading disabled)")
-            logger.info("   ℹ️  Set COPY_TRADING_MODE=MASTER_FOLLOW to enable copy trading")
+        # Independent trading mode - all accounts trade using same logic
+        logger.info("=" * 70)
+        logger.info("🔄 INDEPENDENT TRADING MODE ENABLED")
+        logger.info("=" * 70)
+        logger.info("   ✅ Each account trades independently")
+        logger.info("   ✅ Same NIJA strategy logic for all accounts")
+        logger.info("   ✅ Same risk management rules for all accounts")
+        logger.info("   ✅ Position sizing scaled by account balance")
+        logger.info("   ℹ️  No trade copying or mirroring between accounts")
+        logger.info("=" * 70)
 
         # Log clear trading readiness status
         logger.info("=" * 70)

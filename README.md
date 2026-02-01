@@ -731,7 +731,7 @@ python analyze_profitability.py --export-csv
 
 | Tier | Capital | Risk/Trade | Trade Size | Max Positions | Goal |
 |------|---------|------------|------------|---------------|------|
-| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | Entry level learning (copy trading recommended) |
+| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | Entry level learning (independent trading) |
 | **SAVER** | $100–$249 | 10% | $10-$40 | 1 | Absolute minimum where fees/minimums/risk coexist ✅ |
 | **INVESTOR** | $250–$999 | 5-7% | $20-$75 | 3 | Allows multi-position rotation without risk blocks |
 | **INCOME** ⭐ | $1k–$4.9k | 3-5% | $30-$150 | 5 | First tier where NIJA trades as designed |
@@ -769,7 +769,7 @@ cp .env.baller_tier .env     # BALLER tier ($25k+)
 **Key Notes:**
 - **$100 MINIMUM** for optimal live trading - below this, fees dominate and exchanges may reject orders ⚠️
 - **SAVER** ($100-$249) is the recommended starting tier ✅
-- **STARTER** ($50-$99) is entry level with copy trading recommended
+- **STARTER** ($50-$99) is entry level with independent trading
 - **INCOME** ($1k-$4.9k) is where **NIJA trades as designed** ⭐
 - **PRO MODE** is enabled by default on all tiers (invisible to users)
 - Start conservative and upgrade as capital and experience grow
@@ -870,40 +870,45 @@ PRO_MODE_MIN_RESERVE_PCT=0.15
 
 ---
 
-## 🔄 **COPY TRADING - Mirror Master Trades (ENABLED BY DEFAULT)**
+## 🔄 **INDEPENDENT TRADING - All Accounts Trade Using Same Logic**
 
-**✅ Copy trading is now active by default in all environment templates!**
+**✅ All accounts trade independently using the same NIJA strategy!**
 
-Full copy trading automatically mirrors master account trades to user accounts with proportional position sizing:
+NIJA uses an independent trading model where each account (master + users) trades independently using the same trading logic, parameters, and risk rules:
 
-- ✅ **Automatic Trade Mirroring** - Users copy all master trades instantly
-- ✅ **Proportional Sizing** - Positions scaled by account balance ratio
-- ✅ **Small Account Support** - Works with accounts as low as $15
-- ✅ **Safety Built-in** - Risk management applies to all accounts
-- ✅ **Pre-Configured** - Enabled in all `.env` templates
+- ✅ **Same Strategy** - All accounts use identical NIJA trading logic
+- ✅ **Same Parameters** - All accounts apply same entry/exit rules
+- ✅ **Same Risk Rules** - All accounts use same risk management
+- ✅ **Scaled Sizing** - Positions sized by individual account balance
+- ✅ **No Copying** - Accounts do NOT copy trades from each other
 
 **Quick Start:**
 1. Copy any `.env` template (e.g., `.env.example` or `.env.small_account_preset`)
-2. Add your API credentials
-3. Start the bot - copy trading is automatically active!
+2. Add your API credentials for master and user accounts
+3. Start the bot - all accounts trade independently!
 
 **Optional Settings (Small Accounts $15-$50):**
 ```bash
-# These are optional - copy trading works with defaults
+# These are optional - independent trading works with defaults
 PRO_MODE=true                    # Faster entries, smaller targets
 MINIMUM_TRADING_BALANCE=15.0     # Lower minimum balance (default: 25.0)
 MIN_CASH_TO_BUY=5.0              # Lower minimum order (default: 5.50)
 ```
 
-**To Disable Copy Trading:**
+**Configuration:**
 ```bash
-# Only needed if you want users to trade independently
+# Independent trading mode (default)
 COPY_TRADING_MODE=INDEPENDENT
 ```
 
+**⚠️ Deprecation Notice:**
+- `COPY_TRADING_MODE=MASTER_FOLLOW` is deprecated and no longer supported
+- Copy/mirror trading has been eliminated
+- All accounts now trade independently
+
 **Learn More:**
-- 📚 [COPY_TRADING_SETUP.md](COPY_TRADING_SETUP.md) - Complete setup guide
-- 📋 [.env.copy_trading_example](.env.copy_trading_example) - Example configuration
+- 📚 [MULTI_USER_PLATFORM_README.md](MULTI_USER_PLATFORM_README.md) - Multi-account platform guide
+- 📋 [.env.example](.env.example) - Example configuration
 
 ---
 
@@ -1989,7 +1994,7 @@ NIJA offers several pre-configured trading mode presets for different strategies
 Perfect for focused, independent trading with top-tier assets only.
 
 **Features:**
-- ✅ Trade independently (no copy trading)
+- ✅ Trade independently (all accounts use same NIJA logic)
 - ✅ Only BTC-USD, ETH-USD, SOL-USD (blocks all altcoins)
 - ✅ A+ setup criteria (min entry score 8/10)
 - ✅ 3-5% risk per trade (aggressive growth)
@@ -3193,7 +3198,7 @@ cat KRAKEN_NO_TRADES_FIX.md
 **Common Kraken issues:**
 - Missing `PRO_MODE=true` environment variable
 - Missing `LIVE_TRADING=1` environment variable
-- Missing `COPY_TRADING_MODE=MASTER_FOLLOW` environment variable
+- `COPY_TRADING_MODE` should be set to `INDEPENDENT` (MASTER_FOLLOW is deprecated)
 - Kraken API credentials not set (KRAKEN_MASTER_API_KEY, KRAKEN_MASTER_API_SECRET)
 - User balance below $50 minimum
 - See [KRAKEN_NO_TRADES_FIX.md](KRAKEN_NO_TRADES_FIX.md) for complete guide
