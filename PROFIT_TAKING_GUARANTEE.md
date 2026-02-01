@@ -1,5 +1,8 @@
 # NIJA Profit-Taking Guarantee
 
+> **⚠️ NOTE:** This document contains references to a deprecated copy trading feature.  
+> NIJA now uses an independent trading model. See [USER_FAQ.md](USER_FAQ.md) for details.
+
 **Version:** 1.0
 **Date:** January 22, 2026
 **Status:** ✅ ACTIVE
@@ -24,7 +27,7 @@ This is a **hard-coded guarantee** - profit-taking **CANNOT** be disabled throug
 
 ### ✅ All Accounts
 - Works for **individual accounts**
-- Works for **copy trading** (platform and follower accounts)
+- Works for **independent trading** (platform and user accounts)
 - Works for **multi-account** setups
 - Each account monitored independently
 

@@ -18,11 +18,18 @@ on your behalf using algorithmic analysis. This app operates on YOUR exchange
 accounts using YOUR API credentials.
 
 INDEPENDENT TRADING MODEL:
-NIJA does NOT copy trades between accounts. Each connected account trades 
-independently using the same NIJA trading algorithm. All accounts analyze 
-markets independently and make their own trading decisions. There is NO 
-platform account that controls other accounts, and NO trade signal copying 
+NIJA does NOT copy trades between accounts. Each connected account evaluates 
+markets independently using the same NIJA trading algorithm and executes trades 
+based on risk-gated execution. Results may differ per account due to timing 
+variations, account balance differences, and market conditions. There is NO 
+platform account that controls other accounts, and NO trade signal distribution 
 occurs between accounts.
+
+WHY TRADING RESULTS DIFFER BETWEEN ACCOUNTS:
+• Timing variations (network latency, API response times, scan timing)
+• Account-specific factors (balance, existing positions, risk settings)
+• Market conditions at execution time (price, liquidity, slippage)
+• Independent evaluation means independent results
 
 SUBSTANTIAL RISK OF LOSS:
 Trading cryptocurrencies involves substantial risk of loss. You may lose 
@@ -81,10 +88,11 @@ NIJA is an automated trading algorithm that will execute
 cryptocurrency trades on your exchange account(s).
 
 INDEPENDENT TRADING:
-• Each account trades independently using the same algorithm
+• Each account evaluates independently using the same algorithm
 • Accounts do NOT copy trades from each other
-• Each account makes its own trading decisions
-• No master/follower relationship exists
+• Each account makes its own trading decisions via risk-gated execution
+• Results may differ per account due to timing and balance differences
+• No platform account controls or leads other accounts
 
 RISKS:
 • You can lose money, potentially all invested capital
@@ -126,10 +134,10 @@ WHAT WILL HAPPEN:
 ✓ Position sizes will be calculated based on your account balance
 
 INDEPENDENT TRADING:
-✓ This account trades independently
+✓ This account evaluates independently using risk-gated execution
 ✓ This account does NOT copy trades from other accounts
 ✓ This account uses the same NIJA algorithm as all accounts
-✓ Timing and exact trades may differ from other accounts
+✓ Results may differ from other accounts due to timing and balance differences
 
 RISKS:
 ⚠️  You may lose money
@@ -176,15 +184,16 @@ Monitor your account regularly.
 
 ⚠️  IMPORTANT: INDEPENDENT TRADING MODEL
 
-Each connected account trades INDEPENDENTLY using the same 
-NIJA trading algorithm. Accounts do NOT copy trades from 
-each other.
+Each connected account evaluates markets INDEPENDENTLY using the same 
+NIJA trading algorithm via risk-gated execution. Accounts do NOT copy 
+trades from each other.
 
 What this means:
-• Each account analyzes markets independently
-• Each account makes its own trading decisions
-• Timing of trades will vary between accounts
-• Position sizes are based on each account's balance
+• Each account evaluates markets independently in real-time
+• Each account makes its own trading decisions based on risk criteria
+• Results may differ per account due to timing and balance variations
+• Position sizes are calculated based on each account's balance
+• No account controls or leads other accounts
 • No master/follower or signal copying occurs
 
 ═══════════════════════════════════════════════════════════
