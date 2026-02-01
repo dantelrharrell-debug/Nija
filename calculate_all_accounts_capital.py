@@ -4,7 +4,7 @@ NIJA All Accounts Capital Calculator
 ====================================
 
 Calculate and display effective deployable capital and max position size
-for ALL accounts (master account + all user accounts).
+for ALL accounts (platform account + all user accounts).
 
 This provides a comprehensive portfolio-wide view of capital capacity.
 
@@ -105,11 +105,11 @@ def simulate_example_accounts() -> List[tuple]:
     """
     accounts = []
 
-    # Master account - well funded
+    # Platform account - well funded
     master = PortfolioState(available_cash=20000.0, min_reserve_pct=0.10)
     # Example: BTC position with profit (prices are illustrative)
     master.add_position("BTC-USD", 0.1, 45000, 46000)  # $4,600 position
-    accounts.append(("Master Account", "Master", master))
+    accounts.append(("Platform Account", "Master", master))
 
     # User 1 - moderate account
     user1 = UserPortfolioState(
@@ -189,8 +189,8 @@ Examples:
         portfolio_mgr = get_portfolio_manager()
 
         # Get master portfolio
-        if portfolio_mgr.master_portfolio:
-            accounts.append(("Master Account", "Master", portfolio_mgr.master_portfolio))
+        if portfolio_mgr.platform_portfolio:
+            accounts.append(("Platform Account", "Master", portfolio_mgr.platform_portfolio))
         else:
             print("\n⚠️  No master portfolio found. Initialize master portfolio first.")
 

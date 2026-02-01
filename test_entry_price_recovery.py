@@ -27,7 +27,7 @@ def test_get_real_entry_price():
         from broker_manager import CoinbaseBroker, AccountType
 
         logger.info("Initializing CoinbaseBroker...")
-        broker = CoinbaseBroker(account_type=AccountType.MASTER)
+        broker = CoinbaseBroker(account_type=AccountType.PLATFORM)
 
         logger.info("Connecting to Coinbase...")
         if not broker.connect():
@@ -65,7 +65,7 @@ def test_position_tracking_integration():
         logger.info("Testing Position Tracking Integration")
         logger.info("="*60)
 
-        broker = CoinbaseBroker(account_type=AccountType.MASTER)
+        broker = CoinbaseBroker(account_type=AccountType.PLATFORM)
 
         if not broker.connect():
             logger.error("Failed to connect to Coinbase")

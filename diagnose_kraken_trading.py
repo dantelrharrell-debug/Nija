@@ -6,7 +6,7 @@ Kraken Trading Diagnostic Script
 Checks all requirements for Kraken trading to work and provides actionable fixes.
 
 This script checks:
-1. Master account requirements (4 conditions)
+1. Platform account requirements (4 conditions)
 2. User account requirements (5 conditions per user)
 3. Environment variable configuration
 4. Kraken API credentials
@@ -65,10 +65,10 @@ def main():
     warnings = []
 
     # =========================================================================
-    # SECTION 1: MASTER ACCOUNT REQUIREMENTS
+    # SECTION 1: PLATFORM ACCOUNT REQUIREMENTS
     # =========================================================================
     logger.info("=" * 80)
-    logger.info("📋 SECTION 1: MASTER ACCOUNT REQUIREMENTS")
+    logger.info("📋 SECTION 1: PLATFORM ACCOUNT REQUIREMENTS")
     logger.info("=" * 80)
     logger.info("")
     logger.info("Copy trading requires ALL 4 master requirements:")
@@ -86,21 +86,21 @@ def main():
     if not is_valid:
         issues.append("LIVE_TRADING must be '1', 'true', or 'yes'")
 
-    # Requirement 3: KRAKEN_MASTER_API_KEY
-    is_valid, value, msg = check_env_var("KRAKEN_MASTER_API_KEY")
+    # Requirement 3: KRAKEN_PLATFORM_API_KEY
+    is_valid, value, msg = check_env_var("KRAKEN_PLATFORM_API_KEY")
     logger.info(f"   3. {msg}")
     if not is_valid:
-        issues.append("KRAKEN_MASTER_API_KEY is not set")
+        issues.append("KRAKEN_PLATFORM_API_KEY is not set")
     elif value and len(value) < 20:
-        warnings.append("KRAKEN_MASTER_API_KEY looks too short (possible truncation)")
+        warnings.append("KRAKEN_PLATFORM_API_KEY looks too short (possible truncation)")
 
-    # Requirement 4: KRAKEN_MASTER_API_SECRET
-    is_valid, value, msg = check_env_var("KRAKEN_MASTER_API_SECRET")
+    # Requirement 4: KRAKEN_PLATFORM_API_SECRET
+    is_valid, value, msg = check_env_var("KRAKEN_PLATFORM_API_SECRET")
     logger.info(f"   4. {msg}")
     if not is_valid:
-        issues.append("KRAKEN_MASTER_API_SECRET is not set")
+        issues.append("KRAKEN_PLATFORM_API_SECRET is not set")
     elif value and len(value) < 20:
-        warnings.append("KRAKEN_MASTER_API_SECRET looks too short (possible truncation)")
+        warnings.append("KRAKEN_PLATFORM_API_SECRET looks too short (possible truncation)")
 
     logger.info("")
 
@@ -272,11 +272,11 @@ def main():
             logger.info("   • Click 'Save' and restart deployment")
             logger.info("")
 
-        if any("KRAKEN_MASTER" in issue for issue in issues):
+        if any("KRAKEN_PLATFORM" in issue for issue in issues):
             logger.info("4. Configure Kraken Master API credentials")
             logger.info("   In Railway/Render dashboard:")
-            logger.info("   • Add environment variable: KRAKEN_MASTER_API_KEY=<your-key>")
-            logger.info("   • Add environment variable: KRAKEN_MASTER_API_SECRET=<your-secret>")
+            logger.info("   • Add environment variable: KRAKEN_PLATFORM_API_KEY=<your-key>")
+            logger.info("   • Add environment variable: KRAKEN_PLATFORM_API_SECRET=<your-secret>")
             logger.info("   • Get these from: https://www.kraken.com/u/security/api")
             logger.info("   • Required permissions: Query Funds, Create Orders, Cancel Orders")
             logger.info("   • Click 'Save' and restart deployment")

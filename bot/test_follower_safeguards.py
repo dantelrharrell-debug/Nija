@@ -26,10 +26,10 @@ class MockTradeSignal:
     size: float
     size_type: str
     price: float
-    master_balance: float
+    platform_balance: float
     broker: str
     order_id: str
-    master_trade_id: Optional[str] = None
+    platform_trade_id: Optional[str] = None
 
 
 @dataclass
@@ -100,9 +100,9 @@ def test_slippage_protection():
         size=100.0,
         size_type='quote',
         price=100.0,  # Master entered at $100
-        master_balance=10000.0,
+        platform_balance=10000.0,
         broker='coinbase',
-        order_id='master_123'
+        order_id='platform_123'
     )
     
     # Test 1: Current price moved to $103 (3% slippage - should block)
@@ -146,9 +146,9 @@ def test_balance_sufficiency():
         size=1000.0,  # $1000 order
         size_type='quote',
         price=50000.0,
-        master_balance=10000.0,
+        platform_balance=10000.0,
         broker='coinbase',
-        order_id='master_123'
+        order_id='platform_123'
     )
     
     # Test 1: User has $900 available but needs $1000 + 1% buffer = $1010
@@ -202,7 +202,7 @@ def test_min_order_size():
     return True
 
 
-def test_master_unaffected():
+def test_platform_unaffected():
     """Verify master logic is not affected by follower safeguards."""
     print("\n" + "="*70)
     print("TEST 4: Master Logic Unaffected")
@@ -233,16 +233,16 @@ def test_independent_execution():
         size=1000.0,  # Master traded $1000
         size_type='quote',
         price=50000.0,
-        master_balance=10000.0,  # Master has $10k balance
+        platform_balance=10000.0,  # Master has $10k balance
         broker='coinbase',
-        order_id='master_123'
+        order_id='platform_123'
     )
     
     # Follower 1: Has $1000 balance (10% of master)
     print("\n📊 Follower 1: $1000 balance (10% of master)")
     follower1_balance = 1000.0
-    master_balance = 10000.0
-    scale_factor = follower1_balance / master_balance
+    platform_balance = 10000.0
+    scale_factor = follower1_balance / platform_balance
     follower1_size = signal.size * scale_factor
     
     print(f"  Master size: ${signal.size:.2f}")
@@ -252,7 +252,7 @@ def test_independent_execution():
     # Follower 2: Has $500 balance (5% of master)
     print("\n📊 Follower 2: $500 balance (5% of master)")
     follower2_balance = 500.0
-    scale_factor = follower2_balance / master_balance
+    scale_factor = follower2_balance / platform_balance
     follower2_size = signal.size * scale_factor
     
     print(f"  Master size: ${signal.size:.2f}")
@@ -261,7 +261,7 @@ def test_independent_execution():
     
     # Verify they're independent
     print("\n📊 Verifying independence:")
-    print(f"  Master balance: ${master_balance:.2f}")
+    print(f"  Master balance: ${platform_balance:.2f}")
     print(f"  Follower 1 balance: ${follower1_balance:.2f}")
     print(f"  Follower 2 balance: ${follower2_balance:.2f}")
     print(f"  ✅ PASS: Each follower uses own balance (not master's balance)")
@@ -280,7 +280,7 @@ def main():
         ("Slippage Protection", test_slippage_protection),
         ("Balance Sufficiency", test_balance_sufficiency),
         ("Minimum Order Size", test_min_order_size),
-        ("Master Logic Unaffected", test_master_unaffected),
+        ("Platform Logic Unaffected", test_platform_unaffected),
         ("Independent Execution", test_independent_execution),
     ]
     

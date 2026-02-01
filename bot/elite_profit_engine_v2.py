@@ -298,7 +298,7 @@ class EliteProfitEngineV2:
             signal_density=signal_density
         )
 
-    def get_master_report(
+    def get_platform_report(
         self,
         df: pd.DataFrame,
         indicators: Dict
@@ -500,5 +500,5 @@ if __name__ == "__main__":
     print("GENERATING MASTER REPORT")
     print("=" * 100 + "\n")
 
-    master_report = engine.get_master_report(df, indicators)
-    print(master_report)
+    platform_report = engine.get_platform_report(df, indicators)
+    print(platform_report)

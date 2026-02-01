@@ -296,10 +296,10 @@ CopyTradeEngine(
 
 ### Environment Variables:
 ```bash
-# Master account configuration
+# Platform account configuration
 PRO_MODE=true
 LIVE_TRADING=1
-MASTER_ACCOUNT_TIER=BALLER  # Optional tier override
+PLATFORM_ACCOUNT_TIER=BALLER  # Optional tier override
 
 # User/follower configuration
 COPY_TRADING_MODE=MASTER_FOLLOW

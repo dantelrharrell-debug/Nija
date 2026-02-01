@@ -1,4 +1,4 @@
-# NIJA MASTER_ONLY Mode Guide
+# NIJA PLATFORM_ONLY Mode Guide
 ## A+ Setups Only - Focus on BTC, ETH, SOL
 
 **Version:** 1.0  
@@ -9,7 +9,7 @@
 
 ## Overview
 
-MASTER_ONLY mode is designed for traders who want to:
+PLATFORM_ONLY mode is designed for traders who want to:
 
 - ✅ **Trade independently** (no copy trading)
 - ✅ **Focus on top-tier cryptocurrencies** (BTC, ETH, SOL only)
@@ -27,8 +27,8 @@ This mode is perfect for traders who want maximum control and focus on the most 
 ### 1. Copy Configuration File
 
 ```bash
-# Copy the MASTER_ONLY preset to your .env file
-cp .env.master_only .env
+# Copy the PLATFORM_ONLY preset to your .env file
+cp .env.platform_only .env
 ```
 
 ### 2. Add Your API Credentials
@@ -45,8 +45,8 @@ YOUR_PRIVATE_KEY_HERE
 
 **For Kraken:**
 ```bash
-KRAKEN_MASTER_API_KEY=your-api-key
-KRAKEN_MASTER_API_SECRET=your-api-secret
+KRAKEN_PLATFORM_API_KEY=your-api-key
+KRAKEN_PLATFORM_API_SECRET=your-api-secret
 ```
 
 ### 3. Enable Live Trading
@@ -386,7 +386,7 @@ BTC, ETH, and SOL have none of these issues.
 
 ### Q: What if I want to copy trade?
 
-**A:** This is MASTER_ONLY mode (independent trading). If you want copy trading, use a different configuration preset (see `COPY_TRADING_SETUP.md`).
+**A:** This is PLATFORM_ONLY mode (independent trading). If you want copy trading, use a different configuration preset (see `COPY_TRADING_SETUP.md`).
 
 ### Q: Why 3-5% risk per trade?
 
@@ -547,8 +547,8 @@ Each milestone teaches new lessons.
 - `TRADINGVIEW_SETUP.md` - TradingView integration
 
 ### Configuration Files
-- `.env.master_only` - Configuration template
-- `bot/master_only_config.py` - Python configuration
+- `.env.platform_only` - Configuration template
+- `bot/platform_only_config.py` - Python configuration
 - `bot/apex_config.py` - Strategy parameters
 
 ### Community
@@ -560,7 +560,7 @@ Each milestone teaches new lessons.
 
 ## Conclusion
 
-MASTER_ONLY mode is designed for traders who want:
+PLATFORM_ONLY mode is designed for traders who want:
 - **Independence**: No copy trading
 - **Focus**: Only BTC, ETH, SOL
 - **Quality**: A+ setups only

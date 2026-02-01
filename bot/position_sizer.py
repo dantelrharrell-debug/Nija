@@ -2,16 +2,16 @@
 NIJA Position Sizer
 ===================
 
-Calculates appropriate position sizes for user accounts based on master account trades.
+Calculates appropriate position sizes for user accounts based on platform account trades.
 Uses equity-based scaling to ensure users trade proportionally to their account size.
 
 Formula:
-    user_size = master_size * (user_balance / master_balance)
+    user_size = platform_size * (user_balance / platform_balance)
 
 This ensures:
 - Users with smaller accounts take smaller positions (risk management)
 - Users with larger accounts take larger positions (capital efficiency)
-- All users maintain same risk/reward ratio as master account
+- All users maintain same risk/reward ratio as platform account
 """
 
 import logging
@@ -70,8 +70,8 @@ def get_exchange_min_trade_size(exchange: str = 'coinbase') -> float:
 
 
 def calculate_user_position_size(
-    master_size: float,
-    master_balance: float,
+    platform_size: float,
+    platform_balance: float,
     user_balance: float,
     size_type: str = 'quote',
     symbol: str = None,
@@ -81,8 +81,8 @@ def calculate_user_position_size(
     Calculate appropriate position size for a user account.
 
     Args:
-        master_size: Size of the master account's trade
-        master_balance: Total balance of master account
+        platform_size: Size of the platform account's trade
+        platform_balance: Total balance of platform account
         user_balance: Total balance of user account
         size_type: "quote" (USD amount) or "base" (crypto amount)
         symbol: Trading pair symbol (e.g., "BTC-USD") - used for minimum size validation
@@ -94,7 +94,7 @@ def calculate_user_position_size(
             - 'size_type': Same as input size_type
             - 'valid': True if position meets minimum requirements
             - 'reason': Explanation if position is invalid
-            - 'scale_factor': Ratio of user_balance to master_balance
+            - 'scale_factor': Ratio of user_balance to platform_balance
 
     Example:
         Master: $10,000 balance, $500 BTC trade
@@ -103,13 +103,13 @@ def calculate_user_position_size(
     """
     try:
         # Validate inputs
-        if master_balance <= 0:
-            logger.error(f"❌ Invalid master_balance: {master_balance}")
+        if platform_balance <= 0:
+            logger.error(f"❌ Invalid platform_balance: {platform_balance}")
             return {
                 'size': 0,
                 'size_type': size_type,
                 'valid': False,
-                'reason': f'Invalid master balance: {master_balance}',
+                'reason': f'Invalid master balance: {platform_balance}',
                 'scale_factor': 0
             }
 
@@ -123,24 +123,24 @@ def calculate_user_position_size(
                 'scale_factor': 0
             }
 
-        if master_size <= 0:
-            logger.error(f"❌ Invalid master_size: {master_size}")
+        if platform_size <= 0:
+            logger.error(f"❌ Invalid platform_size: {platform_size}")
             return {
                 'size': 0,
                 'size_type': size_type,
                 'valid': False,
-                'reason': f'Invalid master size: {master_size}',
+                'reason': f'Invalid master size: {platform_size}',
                 'scale_factor': 0
             }
 
         # Calculate scale factor (user equity as % of master equity)
-        scale_factor = user_balance / master_balance
+        scale_factor = user_balance / platform_balance
 
         # Calculate scaled position size
-        user_size = master_size * scale_factor
+        user_size = platform_size * scale_factor
 
         logger.info(f"📊 Position Sizing Calculation:")
-        logger.info(f"   Master: ${master_balance:.2f} balance, {master_size} size ({size_type})")
+        logger.info(f"   Master: ${platform_balance:.2f} balance, {platform_size} size ({size_type})")
         logger.info(f"   User: ${user_balance:.2f} balance")
         logger.info(f"   Scale Factor: {scale_factor:.4f} ({scale_factor*100:.2f}%)")
         logger.info(f"   Calculated User Size: {user_size} ({size_type})")

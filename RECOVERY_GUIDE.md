@@ -6,7 +6,7 @@
 ## 🎯 Purpose
 
 This guide provides **step-by-step instructions** to restore NIJA to the verified working state where:
-- ✅ Master account trading successfully on Kraken
+- ✅ Platform account trading successfully on Kraken
 - ✅ 2 user accounts copying master trades
 - ✅ 100% success rate on profit-taking
 - ✅ All risk management and position sizing working correctly
@@ -77,8 +77,8 @@ Just verify environment variables are set correctly:
 
 ```bash
 # Master Kraken credentials
-KRAKEN_MASTER_API_KEY=<your-master-api-key>
-KRAKEN_MASTER_API_SECRET=<your-master-api-secret>
+KRAKEN_PLATFORM_API_KEY=<your-master-api-key>
+KRAKEN_PLATFORM_API_SECRET=<your-master-api-secret>
 
 # User #1 (Daivon Frazier) credentials
 KRAKEN_USER_DAIVON_API_KEY=<daivon-api-key>
@@ -113,7 +113,7 @@ After recovery, verify the system is working correctly:
 Look for these messages within 45-60 seconds of startup:
 
 ```
-✅ Using KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET for master account
+✅ Using KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET for platform account
 ⏳ Waiting 5.0s before Kraken connection test (prevents nonce collisions)...
 ✅ Startup delay complete, testing Kraken connection...
 Testing Kraken connection (MASTER)...
@@ -315,7 +315,7 @@ After completing recovery, verify:
 - [ ] All environment variables configured correctly
 - [ ] Git is on correct branch/commit
 - [ ] Bot starts without errors
-- [ ] Kraken connections established (master + users)
+- [ ] Kraken connections established (platform + users)
 - [ ] Balance snapshot displays all accounts
 - [ ] Copy trade engine started
 - [ ] Trading cycles running
@@ -389,7 +389,7 @@ git checkout copilot/update-readme-for-success-lock
 git pull origin copilot/update-readme-for-success-lock
 
 # 2. Verify environment variables (Railway/Render/Local)
-# - KRAKEN_MASTER_API_KEY + SECRET
+# - KRAKEN_PLATFORM_API_KEY + SECRET
 # - KRAKEN_USER_DAIVON_API_KEY + SECRET
 # - KRAKEN_USER_TANIA_API_KEY + SECRET
 # - COPY_TRADING_MODE=MASTER_FOLLOW
@@ -412,7 +412,7 @@ git pull origin copilot/update-readme-for-success-lock
 
 You'll know recovery is successful when:
 
-1. ✅ **Master Trading**: Kraken master account executing trades
+1. ✅ **Master Trading**: Kraken platform account executing trades
 2. ✅ **User Copy Trading**: 2 users copying master trades (100% success rate)
 3. ✅ **Profit-Taking**: All accounts taking profits on winning trades
 4. ✅ **Risk Management**: 10% max risk caps enforced

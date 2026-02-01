@@ -6,7 +6,7 @@ NIJA Trading Status and Profit Report
 Checks if NIJA is trading for master and user accounts, and calculates profits.
 
 This script:
-1. Checks if master account is connected and trading
+1. Checks if platform account is connected and trading
 2. Checks if user accounts are connected and trading
 3. Calculates total profits for each account
 4. Reports account balances
@@ -70,7 +70,7 @@ def check_master_credentials() -> dict:
         credentials['coinbase'] = True
 
     # Kraken
-    if os.getenv('KRAKEN_MASTER_API_KEY') and os.getenv('KRAKEN_MASTER_API_SECRET'):
+    if os.getenv('KRAKEN_PLATFORM_API_KEY') and os.getenv('KRAKEN_PLATFORM_API_SECRET'):
         credentials['kraken'] = True
 
     # Alpaca
@@ -149,7 +149,7 @@ def check_user_credentials() -> dict:
 
 
 def get_coinbase_balance() -> float:
-    """Get Coinbase balance for master account."""
+    """Get Coinbase balance for platform account."""
     try:
         try:
             from coinbase.rest import RESTClient
@@ -284,7 +284,7 @@ def main():
     load_env_from_file()
 
     # Check master credentials
-    print_section_header("MASTER ACCOUNT (NIJA System)")
+    print_section_header("PLATFORM ACCOUNT (NIJA System)")
     master_creds = check_master_credentials()
 
     print("\n📊 Broker Connections:")
@@ -303,7 +303,7 @@ def main():
 
     # Get Coinbase balance if available
     if master_creds['coinbase']:
-        print("\n💰 Master Account Balance (Coinbase):")
+        print("\n💰 Platform Account Balance (Coinbase):")
         balance = get_coinbase_balance()
         if balance is not None:
             print(f"   Total: ${balance:,.2f} USD")
@@ -396,11 +396,11 @@ def main():
 
     # Master summary
     if master_connected_count > 0:
-        print(f"✅ YES - Master account is configured to trade on {master_connected_count} broker(s):")
+        print(f"✅ YES - Platform account is configured to trade on {master_connected_count} broker(s):")
         for broker in master_trading_brokers:
             print(f"   • {broker}")
     else:
-        print("❌ NO - Master account has no broker credentials configured")
+        print("❌ NO - Platform account has no broker credentials configured")
 
     print()
 

@@ -54,7 +54,7 @@ Error fetching candles: {"message": "too many requests."}
 **Reason**: API credentials not configured
 
 **Evidence**:
-- Environment variables not set: `KRAKEN_MASTER_API_KEY`, `KRAKEN_MASTER_API_SECRET`
+- Environment variables not set: `KRAKEN_PLATFORM_API_KEY`, `KRAKEN_PLATFORM_API_SECRET`
 - Bot logs show: `⚠️  Kraken credentials not configured for MASTER (skipping)`
 - Code gracefully skips Kraken connection when credentials missing
 
@@ -147,8 +147,8 @@ Enabling Kraken will:
 2. Navigate to **Variables** tab
 3. Add these variables:
    ```
-   KRAKEN_MASTER_API_KEY = <your-api-key>
-   KRAKEN_MASTER_API_SECRET = <your-api-secret>
+   KRAKEN_PLATFORM_API_KEY = <your-api-key>
+   KRAKEN_PLATFORM_API_SECRET = <your-api-secret>
    ```
 4. Click "Redeploy" to restart with new credentials
 
@@ -156,8 +156,8 @@ Enabling Kraken will:
 1. Edit `.env` file in project root
 2. Add these lines:
    ```bash
-   KRAKEN_MASTER_API_KEY=<your-api-key>
-   KRAKEN_MASTER_API_SECRET=<your-api-secret>
+   KRAKEN_PLATFORM_API_KEY=<your-api-key>
+   KRAKEN_PLATFORM_API_SECRET=<your-api-secret>
    ```
 3. Restart bot: `./start.sh`
 
@@ -187,7 +187,7 @@ python3 check_kraken_status.py
 
 Expected output:
 ```
-✅ Master account: CONNECTED to Kraken
+✅ Platform account: CONNECTED to Kraken
 Balance: $X.XX USD / $X.XX USDT
 ```
 
@@ -259,7 +259,7 @@ On startup, the bot:
 ### Startup Sequence
 ```
 🌐 MULTI-ACCOUNT TRADING MODE ACTIVATED
-   Master account + User accounts trading independently
+   Platform account + User accounts trading independently
 
 ⏱️  Waiting 45s before connecting to avoid rate limits...
 ✅ Startup delay complete, beginning broker connections...
@@ -409,7 +409,7 @@ On startup, the bot:
 
 **Root Cause**: Missing Kraken API credentials in environment variables
 
-**Solution**: Configure `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET` in Railway/local environment
+**Solution**: Configure `KRAKEN_PLATFORM_API_KEY` and `KRAKEN_PLATFORM_API_SECRET` in Railway/local environment
 
 **Expected Result**: Multi-exchange trading with distributed load, reduced rate limiting, improved resilience
 

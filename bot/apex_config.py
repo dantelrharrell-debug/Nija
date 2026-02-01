@@ -714,7 +714,7 @@ RISK_CONFIG_MASTER = {
     'multi_exchange_coordination': True,
 
     # Profile Metadata
-    'profile_name': 'MASTER',
+    'profile_name': 'PLATFORM',
     'tier_number': 0,  # System tier, not user tier
     'balance_range': None,  # Non-user facing
     'primary_goal': 'System governance',
@@ -731,7 +731,7 @@ def get_active_risk_config():
     Get the active risk configuration based on environment variable or defaults.
 
     Priority:
-    1. RISK_PROFILE environment variable (STARTER, SAVER, INVESTOR, INCOME, LIVABLE, BALLER, MASTER)
+    1. RISK_PROFILE environment variable (STARTER, SAVER, INVESTOR, INCOME, LIVABLE, BALLER, PLATFORM)
     2. AUTO mode - selects based on account balance
     3. Default to INVESTOR if not specified
 
@@ -763,8 +763,8 @@ def get_active_risk_config():
         return RISK_CONFIG_LIVABLE
     elif risk_profile == 'BALLER':
         return RISK_CONFIG_BALLER
-    elif risk_profile == 'MASTER':
-        logger.warning("⚠️ MASTER tier is for system authority only, not user trading")
+    elif risk_profile == 'PLATFORM':
+        logger.warning("⚠️ PLATFORM tier is for system authority only, not user trading")
         return RISK_CONFIG_MASTER
     elif risk_profile == 'AUTO':
         # Auto-select based on account balance (if available)

@@ -83,15 +83,15 @@ class CredentialHealthMonitor:
             dict: {category: {credential_names}}
         """
         creds = {
-            'master_coinbase': {
+            'platform_coinbase': {
                 'COINBASE_API_KEY',
                 'COINBASE_API_SECRET'
             },
-            'master_kraken': {
-                'KRAKEN_MASTER_API_KEY',
-                'KRAKEN_MASTER_API_SECRET'
+            'platform_kraken': {
+                'KRAKEN_PLATFORM_API_KEY',
+                'KRAKEN_PLATFORM_API_SECRET'
             },
-            'master_alpaca': {
+            'platform_alpaca': {
                 'ALPACA_API_KEY',
                 'ALPACA_API_SECRET'
             }

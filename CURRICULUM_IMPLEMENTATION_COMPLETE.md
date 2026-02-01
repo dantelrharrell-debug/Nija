@@ -87,7 +87,7 @@ Successfully completed ALL FOUR tasks to transform NIJA from a simple trading bo
 
 **Files Created:**
 
-#### 1. `curriculum/master_curriculum.json` (9.5KB)
+#### 1. `curriculum/platform_curriculum.json` (9.5KB)
 Centralized curriculum specification including:
 - Complete lesson catalog (23 lessons)
 - 5 graduation tier definitions
@@ -277,7 +277,7 @@ Detailed tier alignment documentation:
    - Included future tier specifications
 
 ### Created Files
-1. **`curriculum/master_curriculum.json`** - Complete curriculum spec
+1. **`curriculum/platform_curriculum.json`** - Complete curriculum spec
 2. **`curriculum/README.md`** - User/developer guide
 3. **`curriculum/TIER_ALIGNMENT.md`** - Technical tier documentation
 
@@ -354,7 +354,7 @@ Users MUST complete these 9 lessons:
 ## Technical Implementation Notes
 
 ### Backend Integration
-- Import `master_curriculum.json` into database
+- Import `platform_curriculum.json` into database
 - Implement tier checking logic from `lesson_graduation.py`
 - Create REST API endpoints per technical spec
 - Enforce prerequisite validation

@@ -513,7 +513,7 @@ python run_30day_paper_trading.py --final-report
 
 **✅ VERIFIED: Kraken Master + Multi-User Copy Trading with Full Profit-Taking**
 
-NIJA has achieved a critical milestone: **Master account and ALL user accounts successfully taking profits on Kraken**. The system executed a BEAM-USD profit-taking trade with 100% success rate across 3 accounts (master + 2 users), with perfect proportional position sizing and risk management.
+NIJA has achieved a critical milestone: **Platform account and ALL user accounts successfully taking profits on Kraken**. The system executed a BEAM-USD profit-taking trade with 100% success rate across 3 accounts (platform + 2 users), with perfect proportional position sizing and risk management.
 
 **Key Achievement**: 2/2 users successfully copied master's profit-taking exit with proper risk caps (10% max) and proportional sizing.
 
@@ -731,7 +731,7 @@ python analyze_profitability.py --export-csv
 
 | Tier | Capital | Risk/Trade | Trade Size | Max Positions | Goal |
 |------|---------|------------|------------|---------------|------|
-| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | Entry level learning (copy trading recommended) |
+| **STARTER** | $50–$99 | 10-15% | $10-$25 | 1 | Entry level learning (independent trading) |
 | **SAVER** | $100–$249 | 10% | $10-$40 | 1 | Absolute minimum where fees/minimums/risk coexist ✅ |
 | **INVESTOR** | $250–$999 | 5-7% | $20-$75 | 3 | Allows multi-position rotation without risk blocks |
 | **INCOME** ⭐ | $1k–$4.9k | 3-5% | $30-$150 | 5 | First tier where NIJA trades as designed |
@@ -769,7 +769,7 @@ cp .env.baller_tier .env     # BALLER tier ($25k+)
 **Key Notes:**
 - **$100 MINIMUM** for optimal live trading - below this, fees dominate and exchanges may reject orders ⚠️
 - **SAVER** ($100-$249) is the recommended starting tier ✅
-- **STARTER** ($50-$99) is entry level with copy trading recommended
+- **STARTER** ($50-$99) is entry level with independent trading
 - **INCOME** ($1k-$4.9k) is where **NIJA trades as designed** ⭐
 - **PRO MODE** is enabled by default on all tiers (invisible to users)
 - Start conservative and upgrade as capital and experience grow
@@ -812,7 +812,7 @@ python calculate_all_accounts_capital.py --simulate
 - ✅ **Portfolio-First Accounting** - Uses total equity, not just cash
 - ✅ **Reserve Protection** - Maintains minimum cash reserves (default 10%)
 - ✅ **Position Size Limits** - Enforces max position % of equity (default 15%)
-- ✅ **Multi-Account Support** - Analyzes master + all user accounts
+- ✅ **Multi-Account Support** - Analyzes platform + all user accounts
 - ✅ **Aggregate Summaries** - Portfolio-wide capacity views
 
 **Learn More:**
@@ -870,40 +870,45 @@ PRO_MODE_MIN_RESERVE_PCT=0.15
 
 ---
 
-## 🔄 **COPY TRADING - Mirror Master Trades (ENABLED BY DEFAULT)**
+## 🔄 **INDEPENDENT TRADING - All Accounts Trade Using Same Logic**
 
-**✅ Copy trading is now active by default in all environment templates!**
+**✅ All accounts trade independently using the same NIJA strategy!**
 
-Full copy trading automatically mirrors master account trades to user accounts with proportional position sizing:
+NIJA uses an independent trading model where each account (platform + users) trades independently using the same trading logic, parameters, and risk rules:
 
-- ✅ **Automatic Trade Mirroring** - Users copy all master trades instantly
-- ✅ **Proportional Sizing** - Positions scaled by account balance ratio
-- ✅ **Small Account Support** - Works with accounts as low as $15
-- ✅ **Safety Built-in** - Risk management applies to all accounts
-- ✅ **Pre-Configured** - Enabled in all `.env` templates
+- ✅ **Same Strategy** - All accounts use identical NIJA trading logic
+- ✅ **Same Parameters** - All accounts apply same entry/exit rules
+- ✅ **Same Risk Rules** - All accounts use same risk management
+- ✅ **Scaled Sizing** - Positions sized by individual account balance
+- ✅ **No Copying** - Accounts do NOT copy trades from each other
 
 **Quick Start:**
 1. Copy any `.env` template (e.g., `.env.example` or `.env.small_account_preset`)
-2. Add your API credentials
-3. Start the bot - copy trading is automatically active!
+2. Add your API credentials for platform and user accounts
+3. Start the bot - all accounts trade independently!
 
 **Optional Settings (Small Accounts $15-$50):**
 ```bash
-# These are optional - copy trading works with defaults
+# These are optional - independent trading works with defaults
 PRO_MODE=true                    # Faster entries, smaller targets
 MINIMUM_TRADING_BALANCE=15.0     # Lower minimum balance (default: 25.0)
 MIN_CASH_TO_BUY=5.0              # Lower minimum order (default: 5.50)
 ```
 
-**To Disable Copy Trading:**
+**Configuration:**
 ```bash
-# Only needed if you want users to trade independently
+# Independent trading mode (default)
 COPY_TRADING_MODE=INDEPENDENT
 ```
 
+**⚠️ Deprecation Notice:**
+- `COPY_TRADING_MODE=MASTER_FOLLOW` is deprecated and no longer supported
+- Copy/mirror trading has been eliminated
+- All accounts now trade independently
+
 **Learn More:**
-- 📚 [COPY_TRADING_SETUP.md](COPY_TRADING_SETUP.md) - Complete setup guide
-- 📋 [.env.copy_trading_example](.env.copy_trading_example) - Example configuration
+- 📚 [MULTI_USER_PLATFORM_README.md](MULTI_USER_PLATFORM_README.md) - Multi-account platform guide
+- 📋 [.env.example](.env.example) - Example configuration
 
 ---
 
@@ -955,7 +960,7 @@ NIJA now automatically:
 | **Copy Trading** | ✅ VERIFIED | 100% success rate (2/2 users) - Jan 25, 2026 |
 | **Profit-Taking** | ✅ VERIFIED | Master + all users taking profits successfully |
 | **SDK Libraries** | ✅ Installed | krakenex + pykrakenapi in requirements.txt |
-| **Multi-Account** | ✅ Active | 3 accounts (master + 2 users) trading live |
+| **Multi-Account** | ✅ Active | 3 accounts (platform + 2 users) trading live |
 
 ### 🚀 Quick Start - Enable Kraken
 
@@ -965,8 +970,8 @@ NIJA now automatically:
 
 **Step 2**: Add to your platform (Railway/Render/Local):
 ```bash
-KRAKEN_MASTER_API_KEY=your-api-key-here
-KRAKEN_MASTER_API_SECRET=your-private-key-here
+KRAKEN_PLATFORM_API_KEY=your-api-key-here
+KRAKEN_PLATFORM_API_SECRET=your-private-key-here
 ```
 
 **Step 3**: Restart and watch Kraken trade automatically!
@@ -1213,7 +1218,7 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
 - **Currently Active**: Coinbase Advanced Trade ✅
 - **Kraken Status**: ❌ **NOT CONFIGURED** - No credentials in environment variables
   - **Credential Status**:
-    - ❌ Master account: `KRAKEN_MASTER_API_KEY` / `KRAKEN_MASTER_API_SECRET` - **NOT SET**
+    - ❌ Platform account: `KRAKEN_PLATFORM_API_KEY` / `KRAKEN_PLATFORM_API_SECRET` - **NOT SET**
     - ❌ User #1 (Daivon): `KRAKEN_USER_DAIVON_API_KEY` / `KRAKEN_USER_DAIVON_API_SECRET` - **NOT SET**
     - ❌ User #2 (Tania): `KRAKEN_USER_TANIA_API_KEY` / `KRAKEN_USER_TANIA_API_SECRET` - **NOT SET**
 
@@ -1541,7 +1546,7 @@ NIJA now supports multiple cryptocurrency exchanges:
    - Status: ✅ **Full implementation complete** - PRIMARY BROKER
    - Features: Spot trading, 200+ pairs
    - **Fees: 0.10% maker / 0.16% taker (0.36% round-trip including spread)** - Excellent for small accounts
-   - Setup: Set `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET` in `.env` (master account credentials)
+   - Setup: Set `KRAKEN_PLATFORM_API_KEY` and `KRAKEN_PLATFORM_API_SECRET` in `.env` (platform account credentials)
    - Get credentials: https://www.kraken.com/u/security/api
    - Quick test: `python test_broker_integrations.py`
    - Note: Requires `krakenex==2.2.2` and `pykrakenapi==0.3.2` (auto-installed via requirements.txt)
@@ -1626,9 +1631,9 @@ pip install krakenex pykrakenapi
 # 2. Get API credentials from https://www.kraken.com/u/security/api
 # Important: Enable "Query Funds", "Create & Modify Orders", and "Query Ledger Entries"
 
-# 3. Add to .env file (master account credentials)
-export KRAKEN_MASTER_API_KEY="your_api_key"
-export KRAKEN_MASTER_API_SECRET="your_private_key"
+# 3. Add to .env file (platform account credentials)
+export KRAKEN_PLATFORM_API_KEY="your_api_key"
+export KRAKEN_PLATFORM_API_SECRET="your_private_key"
 
 # 4. Test connection
 python test_broker_integrations.py
@@ -1984,12 +1989,12 @@ NIJA requires v2 API access to detect balances in retail/consumer Coinbase accou
 
 NIJA offers several pre-configured trading mode presets for different strategies:
 
-#### 1. **MASTER_ONLY Mode** - A+ Setups (BTC/ETH/SOL Focus)
+#### 1. **PLATFORM_ONLY Mode** - A+ Setups (BTC/ETH/SOL Focus)
 
 Perfect for focused, independent trading with top-tier assets only.
 
 **Features:**
-- ✅ Trade independently (no copy trading)
+- ✅ Trade independently (all accounts use same NIJA logic)
 - ✅ Only BTC-USD, ETH-USD, SOL-USD (blocks all altcoins)
 - ✅ A+ setup criteria (min entry score 8/10)
 - ✅ 3-5% risk per trade (aggressive growth)
@@ -1999,16 +2004,16 @@ Perfect for focused, independent trading with top-tier assets only.
 
 **Quick Start:**
 ```bash
-cp .env.master_only .env
+cp .env.platform_only .env
 # Edit .env with your API credentials
 ./start.sh
 ```
 
-**Documentation:** [MASTER_ONLY_GUIDE.md](MASTER_ONLY_GUIDE.md)
+**Documentation:** [PLATFORM_ONLY_GUIDE.md](PLATFORM_ONLY_GUIDE.md)
 
 #### 2. **Copy Trading Mode** - Mirror Master Trades
 
-Follow a master account's trades with proportional position sizing.
+Follow a platform account's trades with proportional position sizing.
 
 **Quick Start:**
 ```bash
@@ -3193,8 +3198,8 @@ cat KRAKEN_NO_TRADES_FIX.md
 **Common Kraken issues:**
 - Missing `PRO_MODE=true` environment variable
 - Missing `LIVE_TRADING=1` environment variable
-- Missing `COPY_TRADING_MODE=MASTER_FOLLOW` environment variable
-- Kraken API credentials not set (KRAKEN_MASTER_API_KEY, KRAKEN_MASTER_API_SECRET)
+- `COPY_TRADING_MODE` should be set to `INDEPENDENT` (MASTER_FOLLOW is deprecated)
+- Kraken API credentials not set (KRAKEN_PLATFORM_API_KEY, KRAKEN_PLATFORM_API_SECRET)
 - User balance below $50 minimum
 - See [KRAKEN_NO_TRADES_FIX.md](KRAKEN_NO_TRADES_FIX.md) for complete guide
 

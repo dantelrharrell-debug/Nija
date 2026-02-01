@@ -42,7 +42,7 @@ import os
 # Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading.
 self.live_capital_verified = self._check_live_capital_verification()
 
-# Enable trading for master account and all user accounts
+# Enable trading for platform account and all user accounts
 self._initialize_trading_accounts()
 
 logger.info("Hard controls initialized")
@@ -93,7 +93,7 @@ def can_trade(self, user_id: str) -> tuple[bool, Optional[str]]:
     Returns:
         (can_trade, error_message)
     """
-    # CRITICAL: Check LIVE CAPITAL VERIFIED first (master kill-switch)
+    # CRITICAL: Check LIVE CAPITAL VERIFIED first (platform kill-switch)
     if not self.live_capital_verified:
         return False, "🔴 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading."
 
@@ -208,7 +208,7 @@ def get_live_capital_status():
     Get LIVE CAPITAL VERIFIED status.
 
     This endpoint returns the current status of the LIVE CAPITAL VERIFIED
-    kill-switch, which is the master safety control that must be enabled
+    kill-switch, which is the platform safety control that must be enabled
     for live trading.
 
     Returns:
@@ -310,7 +310,7 @@ index original..modified
 +        # Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading.
 +        self.live_capital_verified = self._check_live_capital_verification()
 +
-         # Enable trading for master account and all user accounts
+         # Enable trading for platform account and all user accounts
          self._initialize_trading_accounts()
 
 @@ -77,6 +85,18 @@ class HardControls:
@@ -336,7 +336,7 @@ index original..modified
      def can_trade(self, user_id: str) -> tuple[bool, Optional[str]]:
          """Check if user can trade (checks all kill switches)."""
 +
-+        # CRITICAL: Check LIVE CAPITAL VERIFIED first (master kill-switch)
++        # CRITICAL: Check LIVE CAPITAL VERIFIED first (platform kill-switch)
 +        if not self.live_capital_verified:
 +            return False, "🔴 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading."
 +

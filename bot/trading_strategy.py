@@ -65,7 +65,7 @@ except ImportError:
             TRADIER = "tradier"
 
         class AccountType(Enum):
-            MASTER = "master"
+            PLATFORM = "platform"
             USER = "user"
 
         # Also need MINIMUM_TRADING_BALANCE fallback
@@ -97,9 +97,9 @@ except ImportError:
     except ImportError as e:
         logger.debug(f"Note: Could not load restriction blacklist: {e}")
 
-# Load whitelist configuration for MASTER_ONLY mode (optional)
+# Load whitelist configuration for PLATFORM_ONLY mode (optional)
 try:
-    from bot.master_only_config import is_whitelisted_symbol, WHITELISTED_ASSETS
+    from bot.platform_only_config import is_whitelisted_symbol, WHITELISTED_ASSETS
     WHITELIST_ENABLED = os.getenv('ENABLE_SYMBOL_WHITELIST', 'false').lower() in ('true', '1', 'yes')
     if WHITELIST_ENABLED:
         logger.info(f"✅ Symbol whitelist ENABLED: {', '.join(WHITELISTED_ASSETS)}")
@@ -107,7 +107,7 @@ try:
         logger.debug("Symbol whitelist available but not enabled (set ENABLE_SYMBOL_WHITELIST=true to enable)")
 except ImportError:
     WHITELIST_ENABLED = False
-    logger.debug("Note: Symbol whitelist not available (master_only_config not found)")
+    logger.debug("Note: Symbol whitelist not available (platform_only_config not found)")
 
 # Time conversion constants
 MINUTES_PER_HOUR = 60  # Minutes in one hour (used for time-based calculations)
@@ -524,7 +524,7 @@ class TradingStrategy:
             logger.info("=" * 70)
             logger.info("🌐 MULTI-ACCOUNT TRADING MODE ACTIVATED")
             logger.info("=" * 70)
-            logger.info("   Master account + User accounts trading independently")
+            logger.info("   Platform account + User accounts trading independently")
             logger.info("=" * 70)
 
             # Use the global singleton instance to ensure failed connection tracking persists
@@ -544,11 +544,11 @@ class TradingStrategy:
             time.sleep(startup_delay)
             logger.info("✅ Startup delay complete, beginning broker connections...")
 
-            # Try to connect Kraken Pro (PRIMARY BROKER) - MASTER ACCOUNT
-            logger.info("📊 Attempting to connect Kraken Pro (MASTER - PRIMARY)...")
+            # Try to connect Kraken Pro (PRIMARY BROKER) - PLATFORM ACCOUNT
+            logger.info("📊 Attempting to connect Kraken Pro (PLATFORM - PRIMARY)...")
             kraken = None  # Initialize to ensure variable exists for exception handler
             try:
-                kraken = KrakenBroker(account_type=AccountType.MASTER)
+                kraken = KrakenBroker(account_type=AccountType.PLATFORM)
                 connection_successful = kraken.connect()
 
                 # CRITICAL FIX (Jan 17, 2026): Allow Kraken to start even if connection test fails
@@ -558,10 +558,10 @@ class TradingStrategy:
                 if connection_successful:
                     self.broker_manager.add_broker(kraken)
                     # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken
+                    self.multi_account_manager.platform_brokers[BrokerType.KRAKEN] = kraken
                     connected_brokers.append("Kraken")
-                    logger.info("   ✅ Kraken MASTER connected")
-                    logger.info("   ✅ Kraken registered as MASTER broker in multi-account manager")
+                    logger.info("   ✅ Kraken PLATFORM connected")
+                    logger.info("   ✅ Kraken registered as PLATFORM broker in multi-account manager")
 
                     # COPY TRADING INTEGRATION: Initialize and wrap Kraken broker
                     # CRITICAL FIX (Jan 18, 2026): Track if copy trading initialized users
@@ -580,7 +580,7 @@ class TradingStrategy:
                             # Notify multi_account_manager that Kraken users are handled by copy trading
                             self.multi_account_manager.kraken_copy_trading_active = True
                         else:
-                            logger.warning("   ⚠️  Kraken copy trading initialization failed - trades will execute on MASTER only")
+                            logger.warning("   ⚠️  Kraken copy trading initialization failed - trades will execute on PLATFORM only")
                     except ImportError as import_err:
                         logger.warning(f"   ⚠️  Kraken copy trading module not available: {import_err}")
                     except Exception as copy_err:
@@ -607,7 +607,7 @@ class TradingStrategy:
                 else:
                     # Connection test failed, but still register broker for background retry
                     # The trading loop will handle the disconnected state and retry automatically
-                    logger.warning("   ⚠️  Kraken MASTER connection test failed, will retry in background")
+                    logger.warning("   ⚠️  Kraken PLATFORM connection test failed, will retry in background")
                     logger.warning("   📌 Kraken broker initialized - trading loop will attempt reconnection")
                     self._log_broker_independence_message()
 
@@ -619,7 +619,7 @@ class TradingStrategy:
                 # Even if broker initialization throws an exception, register it for retry if possible
                 # This maintains consistent self-healing behavior across all failure types
                 if kraken is not None:
-                    logger.warning(f"   ⚠️  Kraken MASTER initialization error: {e}")
+                    logger.warning(f"   ⚠️  Kraken PLATFORM initialization error: {e}")
                     logger.warning("   📌 Kraken broker will be registered for background retry")
                     self._log_broker_independence_message()
 
@@ -627,7 +627,7 @@ class TradingStrategy:
                     self._register_kraken_for_retry(kraken)
                 else:
                     # Broker object was never created - can't retry
-                    logger.error(f"   ❌ Kraken MASTER initialization failed: {e}")
+                    logger.error(f"   ❌ Kraken PLATFORM initialization failed: {e}")
                     logger.error("   ❌ Kraken will not be available for trading")
                     self._log_broker_independence_message()
 
@@ -639,17 +639,17 @@ class TradingStrategy:
             # Coinbase connection code commented out to prevent any Coinbase API usage
             # Original code preserved below for reference if needed in the future
             #
-            # # Try to connect Coinbase - MASTER ACCOUNT
-            # logger.info("📊 Attempting to connect Coinbase Advanced Trade (MASTER)...")
+            # # Try to connect Coinbase - PLATFORM ACCOUNT
+            # logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)...")
             # try:
             #     coinbase = CoinbaseBroker()
             #     if coinbase.connect():
             #         self.broker_manager.add_broker(coinbase)
             #         # Manually register in multi_account_manager (reuse same instance)
-            #         self.multi_account_manager.master_brokers[BrokerType.COINBASE] = coinbase
+            #         self.multi_account_manager.platform_brokers[BrokerType.COINBASE] = coinbase
             #         connected_brokers.append("Coinbase")
             #         logger.info("   ✅ Coinbase MASTER connected")
-            #         logger.info("   ✅ Coinbase registered as MASTER broker in multi-account manager")
+            #         logger.info("   ✅ Coinbase registered as PLATFORM broker in multi-account manager")
             #     else:
             #         logger.warning("   ⚠️  Coinbase MASTER connection failed")
             # except Exception as e:
@@ -658,61 +658,61 @@ class TradingStrategy:
             logger.info("📊 Coinbase connection DISABLED - Kraken is the exclusive primary broker")
             logger.info("   ℹ️  To re-enable Coinbase, uncomment the connection code in trading_strategy.py")
 
-            # Try to connect OKX - MASTER ACCOUNT
-            logger.info("📊 Attempting to connect OKX (MASTER)...")
+            # Try to connect OKX - PLATFORM ACCOUNT
+            logger.info("📊 Attempting to connect OKX (PLATFORM)...")
             try:
                 okx = OKXBroker()
                 if okx.connect():
                     self.broker_manager.add_broker(okx)
                     # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.master_brokers[BrokerType.OKX] = okx
+                    self.multi_account_manager.platform_brokers[BrokerType.OKX] = okx
                     connected_brokers.append("OKX")
-                    logger.info("   ✅ OKX MASTER connected")
-                    logger.info("   ✅ OKX registered as MASTER broker in multi-account manager")
+                    logger.info("   ✅ OKX PLATFORM connected")
+                    logger.info("   ✅ OKX registered as PLATFORM broker in multi-account manager")
                 else:
-                    logger.warning("   ⚠️  OKX MASTER connection failed")
+                    logger.warning("   ⚠️  OKX PLATFORM connection failed")
             except Exception as e:
-                logger.warning(f"   ⚠️  OKX MASTER error: {e}")
+                logger.warning(f"   ⚠️  OKX PLATFORM error: {e}")
 
             # Add delay between broker connections
             time.sleep(0.5)
 
-            # Try to connect Binance - MASTER ACCOUNT
-            logger.info("📊 Attempting to connect Binance (MASTER)...")
+            # Try to connect Binance - PLATFORM ACCOUNT
+            logger.info("📊 Attempting to connect Binance (PLATFORM)...")
             try:
                 binance = BinanceBroker()
                 if binance.connect():
                     self.broker_manager.add_broker(binance)
                     # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.master_brokers[BrokerType.BINANCE] = binance
+                    self.multi_account_manager.platform_brokers[BrokerType.BINANCE] = binance
                     connected_brokers.append("Binance")
-                    logger.info("   ✅ Binance MASTER connected")
-                    logger.info("   ✅ Binance registered as MASTER broker in multi-account manager")
+                    logger.info("   ✅ Binance PLATFORM connected")
+                    logger.info("   ✅ Binance registered as PLATFORM broker in multi-account manager")
                 else:
-                    logger.warning("   ⚠️  Binance MASTER connection failed")
+                    logger.warning("   ⚠️  Binance PLATFORM connection failed")
             except Exception as e:
-                logger.warning(f"   ⚠️  Binance MASTER error: {e}")
+                logger.warning(f"   ⚠️  Binance PLATFORM error: {e}")
 
             # Add delay between broker connections
             time.sleep(0.5)
 
-            # Try to connect Alpaca (for stocks) - MASTER ACCOUNT
-            logger.info("📊 Attempting to connect Alpaca (MASTER - Paper Trading)...")
+            # Try to connect Alpaca (for stocks) - PLATFORM ACCOUNT
+            logger.info("📊 Attempting to connect Alpaca (PLATFORM - Paper Trading)...")
             try:
                 alpaca = AlpacaBroker()
                 if alpaca.connect():
                     self.broker_manager.add_broker(alpaca)
                     # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.master_brokers[BrokerType.ALPACA] = alpaca
+                    self.multi_account_manager.platform_brokers[BrokerType.ALPACA] = alpaca
                     connected_brokers.append("Alpaca")
-                    logger.info("   ✅ Alpaca MASTER connected")
-                    logger.info("   ✅ Alpaca registered as MASTER broker in multi-account manager")
+                    logger.info("   ✅ Alpaca PLATFORM connected")
+                    logger.info("   ✅ Alpaca registered as PLATFORM broker in multi-account manager")
                 else:
-                    logger.warning("   ⚠️  Alpaca MASTER connection failed")
+                    logger.warning("   ⚠️  Alpaca PLATFORM connection failed")
             except Exception as e:
-                logger.warning(f"   ⚠️  Alpaca MASTER error: {e}")
+                logger.warning(f"   ⚠️  Alpaca PLATFORM error: {e}")
 
-            # Add delay before user account connections to ensure master account
+            # Add delay before user account connections to ensure platform account
             # connection has completed and nonce ranges are separated
             # CRITICAL (Jan 14, 2026): Increased from 2.0s to 5.0s to prevent Kraken nonce conflicts
             # Master Kraken connection may still be using nonces in the current time window.
@@ -738,7 +738,7 @@ class TradingStrategy:
             logger.info("✅ Broker connection phase complete")
             if connected_brokers or user_brokers:
                 if connected_brokers:
-                    logger.info(f"✅ MASTER ACCOUNT BROKERS: {', '.join(connected_brokers)}")
+                    logger.info(f"✅ PLATFORM ACCOUNT BROKERS: {', '.join(connected_brokers)}")
 
                     # Note: Coinbase connection disabled (Jan 30, 2026)
                     # Warning messages removed - Kraken is now the exclusive primary broker
@@ -746,17 +746,17 @@ class TradingStrategy:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
 
                 # FIX #1: Calculate LIVE multi-broker capital
-                # Total Capital = Coinbase (available, if >= min) + Kraken MASTER + Optional user balances
+                # Total Capital = Coinbase (available, if >= min) + Kraken PLATFORM + Optional user balances
 
                 # Get master balance from broker_manager (sums all connected master brokers)
-                master_balance = self.broker_manager.get_total_balance()
+                platform_balance = self.broker_manager.get_total_balance()
 
                 # Break down master balance by broker for transparency
                 coinbase_balance = 0.0
                 kraken_balance = 0.0
                 other_balance = 0.0
 
-                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         try:
                             balance = broker.get_account_balance()
@@ -786,12 +786,12 @@ class TradingStrategy:
                 logger.info("💰 LIVE MULTI-BROKER CAPITAL BREAKDOWN")
                 logger.info("=" * 70)
                 if coinbase_balance > 0:
-                    logger.info(f"   Coinbase MASTER: ${coinbase_balance:,.2f}")
+                    logger.info(f"   Coinbase PLATFORM: ${coinbase_balance:,.2f}")
                 if kraken_balance > 0:
-                    logger.info(f"   Kraken MASTER:   ${kraken_balance:,.2f}")
+                    logger.info(f"   Kraken PLATFORM:   ${kraken_balance:,.2f}")
                 if other_balance > 0:
                     logger.info(f"   Other Brokers:   ${other_balance:,.2f}")
-                logger.info(f"   📊 TOTAL MASTER: ${master_balance:,.2f}")
+                logger.info(f"   📊 TOTAL PLATFORM: ${platform_balance:,.2f}")
                 if user_total_balance > 0:
                     logger.info(f"   👥 USER ACCOUNTS (INDEPENDENT): ${user_total_balance:,.2f}")
                 logger.info("=" * 70)
@@ -799,10 +799,10 @@ class TradingStrategy:
                 # FIX #2: Force capital re-hydration after broker connections
                 # MASTER AUTHORITY RULE: Master capital is always authoritative
                 # Users are followers, not required for startup
-                if master_balance > 0:
+                if platform_balance > 0:
                     # Master is funded - include user balances for total capital
-                    total_capital = master_balance + user_total_balance
-                    logger.info(f"   ✅ Capital calculation: Master (${master_balance:.2f}) + Users (${user_total_balance:.2f})")
+                    total_capital = platform_balance + user_total_balance
+                    logger.info(f"   ✅ Capital calculation: Platform (${platform_balance:.2f}) + Users (${user_total_balance:.2f})")
                 elif user_total_balance > 0:
                     # Master unfunded but users have capital - allow user-only trading
                     total_capital = user_total_balance
@@ -812,7 +812,7 @@ class TradingStrategy:
                     logger.error("=" * 70)
                     logger.error("❌ FATAL: No capital detected from any account")
                     logger.error("=" * 70)
-                    logger.error(f"   Master balance: ${master_balance:.2f}")
+                    logger.error(f"   Master balance: ${platform_balance:.2f}")
                     logger.error(f"   User balance: ${user_total_balance:.2f}")
                     logger.error("")
                     logger.error("   🛑 Bot cannot trade without capital")
@@ -822,7 +822,7 @@ class TradingStrategy:
 
                 # Build list of active exchanges for logging
                 active_exchanges = []
-                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         active_exchanges.append(broker_type.value)
 
@@ -845,7 +845,7 @@ class TradingStrategy:
                 if self.portfolio_manager and total_capital > 0:
                     try:
                         # Initialize/update master portfolio with total capital
-                        self.master_portfolio = self.portfolio_manager.initialize_master_portfolio(total_capital)
+                        self.platform_portfolio = self.portfolio_manager.initialize_platform_portfolio(total_capital)
                         logger.info(f"   ✅ Portfolio State Manager updated with ${total_capital:,.2f}")
                     except Exception as e:
                         logger.warning(f"   ⚠️ Could not update portfolio manager: {e}")
@@ -867,11 +867,11 @@ class TradingStrategy:
                 # Get all balances from multi_account_manager
                 all_balances = self.multi_account_manager.get_all_balances()
 
-                # Master account
-                master_balances = all_balances.get('master', {})
-                master_total = sum(master_balances.values())
-                logger.info(f"   • Master: ${master_total:,.2f}")
-                for broker, balance in master_balances.items():
+                # Platform account
+                platform_balances = all_balances.get('platform', {})
+                platform_total = sum(platform_balances.values())
+                logger.info(f"   • Master: ${platform_total:,.2f}")
+                for broker, balance in platform_balances.items():
                     logger.info(f"      - {broker.upper()}: ${balance:,.2f}")
 
                 # User accounts - specifically Daivon and Tania
@@ -909,7 +909,7 @@ class TradingStrategy:
                 # Show grand total
                 # Note: This should match total_capital (master) + user_total_balance from above
                 # This provides a cross-check of the balance calculations
-                grand_total = master_total + daivon_total + tania_total
+                grand_total = platform_total + daivon_total + tania_total
                 logger.info("")
                 logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
                 logger.info("=" * 70)
@@ -937,10 +937,10 @@ class TradingStrategy:
                 # FIX #1: Select primary master broker with Kraken promotion logic
                 # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
                 # Only call this after all brokers are connected to make an informed decision
-                self.broker_manager.select_primary_master_broker()
+                self.broker_manager.select_primary_platform_broker()
 
                 # Get the primary broker from broker_manager
-                # This is used for master account trading
+                # This is used for platform account trading
                 self.broker = self.broker_manager.get_primary_broker()
                 if self.broker:
                     # Log the primary master broker with explicit reason if it was switched
@@ -948,7 +948,7 @@ class TradingStrategy:
 
                     # Check if any other broker is in exit_only mode (indicates a switch happened)
                     exit_only_brokers = []
-                    for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                    for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                         if broker and broker.connected and broker.exit_only_mode:
                             exit_only_brokers.append(broker_type.value.upper())
 
@@ -968,47 +968,47 @@ class TradingStrategy:
                             logger.warning(f"⚠️ Could not initialize forced stop-loss: {e}")
 
                     # FIX #3: Initialize master portfolio state using SUM of ALL master brokers
-                    # CRITICAL: Master portfolio must use total_master_equity = sum(all master brokers)
+                    # CRITICAL: Master portfolio must use total_platform_equity = sum(all master brokers)
                     # Do NOT just use primary broker's balance - this ignores capital in other brokers
                     if self.portfolio_manager:
                         try:
                             # Calculate total cash/balance across ALL connected master brokers
-                            total_master_cash = 0.0
-                            master_broker_balances = []
+                            total_platform_cash = 0.0
+                            platform_broker_balances = []
 
-                            for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                            for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                                 if broker and broker.connected:
                                     try:
                                         broker_balance = broker.get_account_balance()
-                                        total_master_cash += broker_balance
-                                        master_broker_balances.append(f"{broker_type.value}: ${broker_balance:.2f}")
-                                        logger.info(f"   💰 Master broker {broker_type.value}: ${broker_balance:.2f}")
+                                        total_platform_cash += broker_balance
+                                        platform_broker_balances.append(f"{broker_type.value}: ${broker_balance:.2f}")
+                                        logger.info(f"   💰 Platform broker {broker_type.value}: ${broker_balance:.2f}")
                                     except Exception as broker_err:
                                         logger.warning(f"   ⚠️ Could not get balance from {broker_type.value}: {broker_err}")
 
-                            if total_master_cash > 0:
+                            if total_platform_cash > 0:
                                 # Initialize/update master portfolio with TOTAL cash from all brokers
                                 # Note: portfolio.total_equity will be cash + position values
-                                self.master_portfolio = self.portfolio_manager.initialize_master_portfolio(total_master_cash)
+                                self.platform_portfolio = self.portfolio_manager.initialize_platform_portfolio(total_platform_cash)
                                 logger.info("=" * 70)
-                                logger.info("✅ MASTER PORTFOLIO INITIALIZED")
+                                logger.info("✅ PLATFORM PORTFOLIO INITIALIZED")
                                 logger.info("=" * 70)
-                                for balance_str in master_broker_balances:
+                                for balance_str in platform_broker_balances:
                                     logger.info(f"   {balance_str}")
-                                logger.info(f"   TOTAL MASTER CASH: ${total_master_cash:.2f}")
-                                logger.info(f"   TOTAL MASTER EQUITY: ${self.master_portfolio.total_equity:.2f}")
+                                logger.info(f"   TOTAL PLATFORM CASH: ${total_platform_cash:.2f}")
+                                logger.info(f"   TOTAL PLATFORM EQUITY: ${self.platform_portfolio.total_equity:.2f}")
                                 logger.info("=" * 70)
                             else:
                                 logger.warning("⚠️ No master broker balances available - portfolio not initialized")
-                                self.master_portfolio = None
+                                self.platform_portfolio = None
                         except Exception as e:
                             logger.warning(f"⚠️ Could not initialize master portfolio: {e}")
-                            self.master_portfolio = None
+                            self.platform_portfolio = None
                     else:
-                        self.master_portfolio = None
+                        self.platform_portfolio = None
                 else:
                     logger.warning("⚠️  No primary master broker available")
-                    self.master_portfolio = None
+                    self.platform_portfolio = None
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
                 self.broker = None
@@ -1019,14 +1019,14 @@ class TradingStrategy:
             logger.info("=" * 70)
 
             # Count active trading accounts
-            active_master_count = 1 if self.broker else 0
+            active_platform_count = 1 if self.broker else 0
             active_user_count = 0
 
-            # Master account status
+            # Platform account status
             if self.broker:
-                logger.info(f"✅ MASTER ACCOUNT: TRADING (Broker: {self.broker.broker_type.value.upper()})")
+                logger.info(f"✅ PLATFORM ACCOUNT: TRADING (Broker: {self.broker.broker_type.value.upper()})")
             else:
-                logger.info("❌ MASTER ACCOUNT: NOT TRADING (No broker connected)")
+                logger.info("❌ PLATFORM ACCOUNT: NOT TRADING (No broker connected)")
 
             # User account status - dynamically load from config
             try:
@@ -1038,7 +1038,7 @@ class TradingStrategy:
                     for user in enabled_users:
                         # FIX #1: Check if this is a Kraken user managed by copy trading system
                         is_kraken = user.broker_type.upper() == "KRAKEN"
-                        is_copy_trader = getattr(user, 'copy_from_master', False)
+                        is_copy_trader = getattr(user, 'copy_from_platform', False)
                         kraken_copy_active = getattr(self.multi_account_manager, 'kraken_copy_trading_active', False)
 
                         # If Kraken user is managed by copy trading, show special status and skip re-evaluation
@@ -1090,7 +1090,7 @@ class TradingStrategy:
             logger.info("=" * 70)
 
             # Overall status and recommendations
-            total_active = active_master_count + active_user_count
+            total_active = active_platform_count + active_user_count
             if total_active > 0:
                 logger.info(f"🚀 TRADING ACTIVE: {total_active} account(s) ready")
                 logger.info("")
@@ -1099,8 +1099,8 @@ class TradingStrategy:
                 logger.info("   • Trades will execute automatically when signals are found")
                 logger.info("   • Monitor logs with: tail -f nija.log")
                 logger.info("")
-                if active_master_count == 0:
-                    logger.warning("⚠️  Master account not trading - only user accounts active")
+                if active_platform_count == 0:
+                    logger.warning("⚠️  Platform account not trading - only user accounts active")
                 if active_user_count == 0:
                     logger.info("💡 Tip: Add user accounts to enable multi-user trading")
                     logger.info("   See config/users/ for user configuration")
@@ -1139,12 +1139,12 @@ class TradingStrategy:
                     from broker_failsafes import create_failsafe_for_broker
                     broker_name = self.broker.broker_type.value if hasattr(self.broker, 'broker_type') else 'coinbase'
                     # ✅ REQUIREMENT 1: Use REAL exchange balance ONLY - No fake $100 fallback
-                    if master_balance <= 0:
-                        logger.error(f"❌ Cannot initialize trading: Master balance is ${master_balance:.2f}")
+                    if platform_balance <= 0:
+                        logger.error(f"❌ Cannot initialize trading: Master balance is ${platform_balance:.2f}")
                         logger.error("   Fund your account with real capital to enable trading")
                         self.failsafes = None
                     else:
-                        account_balance = master_balance
+                        account_balance = platform_balance
                         self.failsafes = create_failsafe_for_broker(broker_name, account_balance)
                         logger.info(f"🛡️  Broker failsafes initialized for {broker_name} (Master balance: ${account_balance:,.2f})")
                 except Exception as e:
@@ -1220,7 +1220,7 @@ class TradingStrategy:
         """
         self.failed_brokers[BrokerType.KRAKEN] = kraken_broker
         self.broker_manager.add_broker(kraken_broker)
-        self.multi_account_manager.master_brokers[BrokerType.KRAKEN] = kraken_broker
+        self.multi_account_manager.platform_brokers[BrokerType.KRAKEN] = kraken_broker
         logger.info("   ✅ Kraken registered for background connection retry")
 
     def _get_total_capital_across_all_accounts(self) -> float:
@@ -1240,14 +1240,14 @@ class TradingStrategy:
         total_capital = 0.0
 
         try:
-            # 1. Sum all MASTER broker balances
+            # 1. Sum all PLATFORM broker balances
             if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
-                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         try:
                             balance = broker.get_account_balance()
                             total_capital += balance
-                            logger.debug(f"   Master {broker_type.value}: ${balance:.2f}")
+                            logger.debug(f"   Platform {broker_type.value}: ${balance:.2f}")
                         except Exception as e:
                             logger.warning(f"   ⚠️ Could not fetch {broker_type.value} master balance: {e}")
 
@@ -1807,12 +1807,12 @@ class TradingStrategy:
                       - DISABLES strategy execution (no signal generation)
                       - ONLY manages existing positions (exits, stops, targets)
                       - Users receive signals via CopyTradeEngine, not from strategy
-                      Default False for MASTER accounts (full strategy execution)
+                      Default False for PLATFORM accounts (full strategy execution)
 
         Steps:
         1. Enforce position cap (auto-sell excess if needed)
-        2. [MASTER ONLY] Scan markets for opportunities
-        3. [MASTER ONLY] Execute entry logic / [USER] Execute position exits only
+        2. [PLATFORM ONLY] Scan markets for opportunities
+        3. [PLATFORM ONLY] Execute entry logic / [USER] Execute position exits only
         4. Update trailing stops and take profits
         5. Log cycle summary
         """
@@ -1939,7 +1939,7 @@ class TradingStrategy:
 
             if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
                 # Get positions from all connected master brokers
-                for broker_type, broker in self.multi_account_manager.master_brokers.items():
+                for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         try:
                             broker_positions = broker.get_positions()
@@ -2046,17 +2046,17 @@ class TradingStrategy:
                     logger.warning(f"⚠️ Could not update capital allocator balance: {e}")
 
             # Update portfolio state (if available)
-            if self.portfolio_manager and hasattr(self, 'master_portfolio') and self.master_portfolio:
+            if self.portfolio_manager and hasattr(self, 'platform_portfolio') and self.platform_portfolio:
                 try:
                     # Update portfolio from current broker state
                     self.portfolio_manager.update_portfolio_from_broker(
-                        portfolio=self.master_portfolio,
+                        portfolio=self.platform_portfolio,
                         available_cash=account_balance,
                         positions=current_positions
                     )
 
                     # Log portfolio summary
-                    summary = self.master_portfolio.get_summary()
+                    summary = self.platform_portfolio.get_summary()
                     logger.info(f"📊 Portfolio State (Total Equity Accounting):")
                     logger.info(f"   Available Cash: ${summary['available_cash']:.2f}")
                     logger.info(f"   Position Value: ${summary['total_position_value']:.2f}")
@@ -3242,11 +3242,11 @@ class TradingStrategy:
                 logger.info("   ✅ Mode: USER (copy trading only)")
                 logger.info("   ⏭️  RESULT: Skipping market scan (signals from copy trade engine)")
                 logger.info("   ℹ️  USER accounts NEVER generate independent entry signals")
-                logger.info("   ℹ️  USER accounts ONLY execute copied trades from MASTER")
+                logger.info("   ℹ️  USER accounts ONLY execute copied trades from PLATFORM")
                 logger.info("═" * 80)
                 logger.info("")
             else:
-                logger.info("   ✅ Mode: MASTER (full strategy execution)")
+                logger.info("   ✅ Mode: PLATFORM (full strategy execution)")
                 logger.info(f"   📊 Current positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
                 logger.info(f"   💰 Account balance: ${account_balance:.2f}")
                 logger.info(f"   💵 Minimum to trade: ${MIN_BALANCE_TO_TRADE_USD:.2f}")
@@ -3289,7 +3289,7 @@ class TradingStrategy:
                     # Get all available brokers for selection
                     all_brokers = {}
                     if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
-                        all_brokers = getattr(self.multi_account_manager, 'master_brokers', {})
+                        all_brokers = getattr(self.multi_account_manager, 'platform_brokers', {})
 
                     # Add current active broker if not in multi_account_manager
                     if active_broker and hasattr(active_broker, 'broker_type'):
@@ -3968,7 +3968,7 @@ class TradingStrategy:
                     # EXPLICIT: Log waiting status when no signals found
                     if filter_stats['signals_found'] == 0:
                         logger.info("")
-                        logger.info("   ⏳ WAITING FOR MASTER ENTRY")
+                        logger.info("   ⏳ WAITING FOR PLATFORM ENTRY")
                         logger.info("   → No qualifying signals found in this cycle")
                         logger.info("   → Will continue monitoring markets...")
 

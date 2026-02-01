@@ -180,8 +180,8 @@ All configuration is done via environment variables, not config files in the con
 **Required Variables:**
 - `COINBASE_API_KEY`
 - `COINBASE_API_SECRET`
-- `KRAKEN_MASTER_API_KEY` (if using Kraken)
-- `KRAKEN_MASTER_API_SECRET` (if using Kraken)
+- `KRAKEN_PLATFORM_API_KEY` (if using Kraken)
+- `KRAKEN_PLATFORM_API_SECRET` (if using Kraken)
 
 See `.env.example` for a complete list.
 

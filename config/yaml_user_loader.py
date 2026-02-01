@@ -12,7 +12,7 @@ Each file contains:
   api_key: YOUR_API_KEY
   api_secret: YOUR_API_SECRET
   enabled: true
-  copy_from_master: true
+  copy_from_platform: true
 
 SECURITY NOTE:
 - YAML files with API keys are excluded from git via .gitignore
@@ -40,7 +40,7 @@ class YamlUserConfig:
         api_key: str,
         api_secret: str,
         enabled: bool = True,
-        copy_from_master: bool = True,
+        copy_from_platform: bool = True,
         risk_multiplier: float = 1.0
     ):
         """
@@ -52,7 +52,7 @@ class YamlUserConfig:
             api_key: User's API key
             api_secret: User's API secret
             enabled: Whether this account is active
-            copy_from_master: Whether to copy trades from master
+            copy_from_platform: Whether to copy trades from master
             risk_multiplier: Risk multiplier (default: 1.0)
         """
         self.user_id = user_id
@@ -60,7 +60,7 @@ class YamlUserConfig:
         self.api_key = api_key
         self.api_secret = api_secret
         self.enabled = enabled
-        self.copy_from_master = copy_from_master
+        self.copy_from_platform = copy_from_platform
         self.risk_multiplier = risk_multiplier
 
         # For compatibility with existing code
@@ -85,7 +85,7 @@ class YamlUserConfig:
             api_key=data['api_key'],
             api_secret=data['api_secret'],
             enabled=data.get('enabled', True),
-            copy_from_master=data.get('copy_from_master', True),
+            copy_from_platform=data.get('copy_from_platform', True),
             risk_multiplier=data.get('risk_multiplier', 1.0)
         )
 
@@ -96,7 +96,7 @@ class YamlUserConfig:
             'api_key': self.api_key,
             'api_secret': self.api_secret,
             'enabled': self.enabled,
-            'copy_from_master': self.copy_from_master,
+            'copy_from_platform': self.copy_from_platform,
             'risk_multiplier': self.risk_multiplier
         }
 

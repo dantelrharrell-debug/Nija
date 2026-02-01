@@ -44,17 +44,17 @@ def show_balances_table():
     # Get all balances
     balances = multi_account_broker_manager.get_all_balances()
 
-    # Display master account
-    print("\n🔷 MASTER ACCOUNT (Nija System)")
+    # Display platform account
+    print("\n🔷 PLATFORM ACCOUNT (Nija System)")
     print("-" * 80)
-    master_balances = balances.get('master', {})
-    if master_balances:
-        master_total = 0.0
-        for broker, balance in master_balances.items():
+    platform_balances = balances.get('platform', {})
+    if platform_balances:
+        platform_total = 0.0
+        for broker, balance in platform_balances.items():
             print(f"   {broker.upper():15} {format_currency(balance):>15}")
-            master_total += balance
+            platform_total += balance
         print("-" * 80)
-        print(f"   {'TOTAL':15} {format_currency(master_total):>15}")
+        print(f"   {'TOTAL':15} {format_currency(platform_total):>15}")
     else:
         print("   No master brokers connected")
 
@@ -117,7 +117,7 @@ def show_balances_json():
     }
 
     # Calculate totals
-    master_total = sum(balances.get('master', {}).values())
+    platform_total = sum(balances.get('platform', {}).values())
     user_totals = {}
     grand_total = 0.0
 
@@ -127,7 +127,7 @@ def show_balances_json():
         grand_total += user_total
 
     output['summary'] = {
-        'master_total': master_total,
+        'platform_total': platform_total,
         'user_totals': user_totals,
         'total_user_capital': grand_total,
         'user_count': len(user_totals),

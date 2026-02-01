@@ -317,7 +317,7 @@ class UserPortfolioState(PortfolioState):
     Portfolio state for a user account.
 
     Each user must have their own portfolio state that is independent
-    from the master account and other users.
+    from the platform account and other users.
 
     FIX #3: USER ACCOUNTS MUST HAVE THEIR OWN PORTFOLIO STATE
     """
@@ -340,11 +340,11 @@ class PortfolioStateManager:
 
     def __init__(self):
         """Initialize the portfolio state manager."""
-        self.master_portfolio: Optional[PortfolioState] = None
+        self.platform_portfolio: Optional[PortfolioState] = None
         self.user_portfolios: Dict[str, UserPortfolioState] = {}
         logger.info("PortfolioStateManager initialized")
 
-    def initialize_master_portfolio(self, available_cash: float) -> PortfolioState:
+    def initialize_platform_portfolio(self, available_cash: float) -> PortfolioState:
         """
         Initialize or update master portfolio.
 
@@ -352,20 +352,20 @@ class PortfolioStateManager:
         Only updates cash balance if portfolio already exists.
 
         Args:
-            available_cash: Available cash in master account (should be sum of ALL master brokers)
+            available_cash: Available cash in platform account (should be sum of ALL master brokers)
 
         Returns:
             PortfolioState: Master portfolio state
         """
-        if self.master_portfolio is None:
-            self.master_portfolio = PortfolioState(available_cash=available_cash)
+        if self.platform_portfolio is None:
+            self.platform_portfolio = PortfolioState(available_cash=available_cash)
             logger.info(f"Master portfolio initialized with ${available_cash:.2f}")
         else:
             # Portfolio already exists - only update cash balance, preserve positions
-            old_cash = self.master_portfolio.available_cash
-            self.master_portfolio.update_cash(available_cash)
+            old_cash = self.platform_portfolio.available_cash
+            self.platform_portfolio.update_cash(available_cash)
             logger.debug(f"Master portfolio cash updated: ${old_cash:.2f} → ${available_cash:.2f}")
-        return self.master_portfolio
+        return self.platform_portfolio
 
     def initialize_user_portfolio(self, user_id: str, broker_type: str, available_cash: float) -> UserPortfolioState:
         """
@@ -393,9 +393,9 @@ class PortfolioStateManager:
 
         return self.user_portfolios[portfolio_key]
 
-    def get_master_portfolio(self) -> Optional[PortfolioState]:
+    def get_platform_portfolio(self) -> Optional[PortfolioState]:
         """Get master portfolio state."""
-        return self.master_portfolio
+        return self.platform_portfolio
 
     def get_user_portfolio(self, user_id: str, broker_type: str) -> Optional[UserPortfolioState]:
         """

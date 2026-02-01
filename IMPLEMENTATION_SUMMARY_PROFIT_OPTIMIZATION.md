@@ -208,8 +208,8 @@ python3 scripts/enable_profit_optimization.py
 # Step 2: Edit .env and add API credentials
 # - COINBASE_API_KEY
 # - COINBASE_API_SECRET
-# - KRAKEN_MASTER_API_KEY
-# - KRAKEN_MASTER_API_SECRET
+# - KRAKEN_PLATFORM_API_KEY
+# - KRAKEN_PLATFORM_API_SECRET
 
 # Step 3: Restart NIJA
 ./start.sh

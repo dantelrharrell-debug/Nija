@@ -76,9 +76,9 @@ To complete the setup, you need to configure your API credentials:
    - Get credentials from: https://www.coinbase.com/
    - Set in .env: COINBASE_ORG_ID, COINBASE_JWT_PEM, COINBASE_JWT_KID, COINBASE_JWT_ISSUER
 
-2. **Kraken Master Account (Optional - for Kraken trading)**
+2. **Kraken Platform Account (Optional - for Kraken trading)**
    - Get credentials from: https://www.kraken.com/u/security/api
-   - Set in .env: KRAKEN_MASTER_API_KEY, KRAKEN_MASTER_API_SECRET
+   - Set in .env: KRAKEN_PLATFORM_API_KEY, KRAKEN_PLATFORM_API_SECRET
 
 3. **Kraken User Accounts (Optional - for multi-user trading)**
 

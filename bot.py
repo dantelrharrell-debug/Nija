@@ -221,31 +221,31 @@ def main():
         exchange_status.append("❌ Coinbase")
         logger.warning("⚠️  Coinbase credentials not configured")
 
-    # Check Kraken Master (with enhanced validation)
+    # Check Kraken Platform (with enhanced validation)
     kraken_master_configured = False
-    kraken_master_key_raw = os.getenv("KRAKEN_MASTER_API_KEY", "")
-    kraken_master_secret_raw = os.getenv("KRAKEN_MASTER_API_SECRET", "")
-    kraken_master_key = kraken_master_key_raw.strip()
-    kraken_master_secret = kraken_master_secret_raw.strip()
+    kraken_platform_key_raw = os.getenv("KRAKEN_PLATFORM_API_KEY", "")
+    kraken_platform_secret_raw = os.getenv("KRAKEN_PLATFORM_API_SECRET", "")
+    kraken_platform_key = kraken_platform_key_raw.strip()
+    kraken_platform_secret = kraken_platform_secret_raw.strip()
 
     # Check for whitespace-only credentials (common configuration error)
-    kraken_master_key_malformed = (kraken_master_key_raw != "" and kraken_master_key == "")
-    kraken_master_secret_malformed = (kraken_master_secret_raw != "" and kraken_master_secret == "")
+    kraken_platform_key_malformed = (kraken_platform_key_raw != "" and kraken_platform_key == "")
+    kraken_platform_secret_malformed = (kraken_platform_secret_raw != "" and kraken_platform_secret == "")
 
-    if kraken_master_key_malformed or kraken_master_secret_malformed:
+    if kraken_platform_key_malformed or kraken_platform_secret_malformed:
         exchange_status.append("⚠️ Kraken (Master - MALFORMED)")
         logger.warning("⚠️  Kraken Master credentials ARE SET but CONTAIN ONLY WHITESPACE")
         logger.warning("   This is a common error when copying/pasting credentials!")
-        if kraken_master_key_malformed:
-            logger.warning("   → KRAKEN_MASTER_API_KEY: SET but empty after removing whitespace")
-        if kraken_master_secret_malformed:
-            logger.warning("   → KRAKEN_MASTER_API_SECRET: SET but empty after removing whitespace")
+        if kraken_platform_key_malformed:
+            logger.warning("   → KRAKEN_PLATFORM_API_KEY: SET but empty after removing whitespace")
+        if kraken_platform_secret_malformed:
+            logger.warning("   → KRAKEN_PLATFORM_API_SECRET: SET but empty after removing whitespace")
         logger.warning("")
         logger.warning("   🔧 FIX in Railway/Render dashboard:")
         logger.warning("      1. Check for leading/trailing spaces or newlines in the values")
         logger.warning("      2. Re-paste the credentials without extra whitespace")
         logger.warning("      3. Click 'Save' and restart the deployment")
-    elif kraken_master_key and kraken_master_secret:
+    elif kraken_platform_key and kraken_platform_secret:
         exchanges_configured += 1
         exchange_status.append("✅ Kraken (Master)")
         logger.info("✅ Kraken Master credentials detected")
@@ -254,8 +254,8 @@ def main():
         exchange_status.append("❌ Kraken (Master)")
         logger.warning("⚠️  Kraken Master credentials NOT SET")
         logger.warning("   → Kraken will NOT connect without these environment variables:")
-        logger.warning("      KRAKEN_MASTER_API_KEY")
-        logger.warning("      KRAKEN_MASTER_API_SECRET")
+        logger.warning("      KRAKEN_PLATFORM_API_KEY")
+        logger.warning("      KRAKEN_PLATFORM_API_SECRET")
 
     # Check Kraken User accounts (with enhanced validation)
     kraken_users_configured = 0
@@ -346,8 +346,8 @@ def main():
         logger.info("💡 KRAKEN NOT CONNECTED - To enable Kraken trading:")
         logger.info("")
         logger.info("   📋 REQUIRED ENVIRONMENT VARIABLES:")
-        logger.info("      • KRAKEN_MASTER_API_KEY=<your-api-key>")
-        logger.info("      • KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+        logger.info("      • KRAKEN_PLATFORM_API_KEY=<your-api-key>")
+        logger.info("      • KRAKEN_PLATFORM_API_SECRET=<your-api-secret>")
         logger.info("      • KRAKEN_USER_DAIVON_API_KEY=<user-api-key>  (optional)")
         logger.info("      • KRAKEN_USER_DAIVON_API_SECRET=<user-api-secret>  (optional)")
         logger.info("      • KRAKEN_USER_TANIA_API_KEY=<user-api-key>  (optional)")
@@ -447,9 +447,9 @@ def main():
                 # Get all balances
                 all_balances = manager.get_all_balances()
 
-                # Master account total
-                master_total = sum(all_balances.get('master', {}).values())
-                logger.info(f"   Master: ${master_total:,.2f}")
+                # Platform account total
+                platform_total = sum(all_balances.get('platform', {}).values())
+                logger.info(f"   Master: ${platform_total:,.2f}")
 
                 # User accounts - specifically Daivon and Tania
                 users_balances = all_balances.get('users', {})
@@ -471,7 +471,7 @@ def main():
                 logger.info(f"   Tania: ${tania_total:,.2f}")
 
                 # Show grand total
-                grand_total = master_total + daivon_total + tania_total
+                grand_total = platform_total + daivon_total + tania_total
                 logger.info("")
                 logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
             except Exception as e:
@@ -481,43 +481,16 @@ def main():
             logger.warning("   ⚠️  Multi-account manager not available - cannot confirm balances")
         logger.info("=" * 70)
 
-        # Start copy trade engine in ACTIVE MODE for user accounts
-        # ACTIVE MODE means:
-        # - Track balances and positions
-        # - Log all P&L
-        # - See what signals are being copied
-        # - EXECUTE TRADES when master account trades
-        #
-        # COPY TRADING MODE configuration:
-        # - MASTER_FOLLOW: Users mirror all master trades (default)
-        # - INDEPENDENT: Users trade independently (no copy trading)
-        copy_trading_mode = os.getenv('COPY_TRADING_MODE', 'MASTER_FOLLOW').upper()
-
-        if copy_trading_mode == 'MASTER_FOLLOW':
-            logger.info("🔄 Starting copy trade engine in MASTER_FOLLOW MODE...")
-            logger.info("   📋 Mode: MASTER_FOLLOW (mirror master trades)")
-            logger.info("   📊 Allocation: Proportional (auto-scaled by balance)")
-            try:
-                from bot.copy_trade_engine import start_copy_engine
-                from bot.copy_trading_requirements import log_copy_trading_status
-
-                # Log copy trading requirements status before starting engine
-                if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
-                    log_copy_trading_status(strategy.multi_account_manager)
-
-                start_copy_engine(observe_only=False)  # CRITICAL: observe_only=False enables auto-trading
-                logger.info("   ✅ Copy trade engine started in ACTIVE MODE")
-                logger.info("   📡 Users will receive and execute copy trades from master accounts")
-                logger.info("   💰 User position sizes will be scaled based on account balance ratios")
-            except Exception as e:
-                logger.error(f"   ❌ Failed to start copy trade engine: {e}")
-                logger.error("   ⚠️  User accounts will NOT receive copy trades!")
-                import traceback
-                logger.error(traceback.format_exc())
-        else:
-            logger.info("🔄 Copy trading mode: INDEPENDENT")
-            logger.info("   ℹ️  Users will trade independently (copy trading disabled)")
-            logger.info("   ℹ️  Set COPY_TRADING_MODE=MASTER_FOLLOW to enable copy trading")
+        # Independent trading mode - all accounts trade using same logic
+        logger.info("=" * 70)
+        logger.info("🔄 INDEPENDENT TRADING MODE ENABLED")
+        logger.info("=" * 70)
+        logger.info("   ✅ Each account trades independently")
+        logger.info("   ✅ Same NIJA strategy logic for all accounts")
+        logger.info("   ✅ Same risk management rules for all accounts")
+        logger.info("   ✅ Position sizing scaled by account balance")
+        logger.info("   ℹ️  No trade copying or mirroring between accounts")
+        logger.info("=" * 70)
 
         # Log clear trading readiness status
         logger.info("=" * 70)
@@ -525,13 +498,13 @@ def main():
         logger.info("=" * 70)
 
         # Check which master brokers are connected
-        connected_master_brokers = []
-        failed_master_brokers = []
+        connected_platform_brokers = []
+        failed_platform_brokers = []
 
         if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
-            for broker_type, broker in strategy.multi_account_manager.master_brokers.items():
+            for broker_type, broker in strategy.multi_account_manager.platform_brokers.items():
                 if broker and broker.connected:
-                    connected_master_brokers.append(broker_type.value.upper())
+                    connected_platform_brokers.append(broker_type.value.upper())
 
         # CRITICAL FIX: Check for brokers with credentials configured but failed to connect
         # This catches cases where credentials are set but connection failed due to:
@@ -540,24 +513,24 @@ def main():
         # - Nonce errors (timing issues)
         # - Network errors
         # Check if Kraken was expected but didn't connect
-        if kraken_master_configured and 'KRAKEN' not in connected_master_brokers:
-            failed_master_brokers.append('KRAKEN')
+        if kraken_master_configured and 'KRAKEN' not in connected_platform_brokers:
+            failed_platform_brokers.append('KRAKEN')
 
         # Track if Kraken credentials were not configured at all
         kraken_not_configured = not kraken_master_configured
 
-        if connected_master_brokers:
+        if connected_platform_brokers:
             logger.info("✅ NIJA IS READY TO TRADE!")
             logger.info("")
             logger.info("Active Master Exchanges:")
-            for exchange in connected_master_brokers:
+            for exchange in connected_platform_brokers:
                 logger.info(f"   ✅ {exchange}")
 
             # Show failed brokers if any were expected to connect
-            if failed_master_brokers:
+            if failed_platform_brokers:
                 logger.info("")
                 logger.warning("⚠️  Expected but NOT Connected:")
-                for exchange in failed_master_brokers:
+                for exchange in failed_platform_brokers:
                     logger.warning(f"   ❌ {exchange}")
                     if exchange == 'KRAKEN':
                         # Try to get the specific error from the failed broker instance
@@ -645,15 +618,15 @@ def main():
                 logger.warning("   ℹ️  This is OPTIONAL - only set if you want MASTER Kraken trading")
                 logger.warning("")
                 logger.warning("   To enable MASTER Kraken trading, set in your deployment platform:")
-                logger.warning("      KRAKEN_MASTER_API_KEY=<your-master-api-key>")
-                logger.warning("      KRAKEN_MASTER_API_SECRET=<your-master-api-secret>")
+                logger.warning("      KRAKEN_PLATFORM_API_KEY=<your-master-api-key>")
+                logger.warning("      KRAKEN_PLATFORM_API_SECRET=<your-master-api-secret>")
                 logger.warning("")
                 logger.warning("   📖 Get credentials: https://www.kraken.com/u/security/api")
                 logger.warning("   📖 Setup guide: SOLUTION_MASTER_KRAKEN_NOT_TRADING.md")
                 logger.warning("   🔍 Diagnostic tool: python3 diagnose_master_kraken_live.py")
 
             logger.info("")
-            logger.info(f"📈 Trading will occur on {len(connected_master_brokers)} exchange(s)")
+            logger.info(f"📈 Trading will occur on {len(connected_platform_brokers)} exchange(s)")
             logger.info("💡 Each exchange operates independently")
             logger.info("🛡️  Failures on one exchange won't affect others")
         else:

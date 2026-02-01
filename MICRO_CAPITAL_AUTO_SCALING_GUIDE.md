@@ -43,8 +43,8 @@ All tiers include:
    COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----..."
    
    # Kraken (optional)
-   KRAKEN_MASTER_API_KEY=your-key
-   KRAKEN_MASTER_API_SECRET=your-secret
+   KRAKEN_PLATFORM_API_KEY=your-key
+   KRAKEN_PLATFORM_API_SECRET=your-secret
    ```
 
 3. **Start the bot:**
@@ -87,7 +87,7 @@ print(f"Copy trading: {config['dynamic_config']['copy_trading']}")
 
 ### Operational Settings
 - `MICRO_CAPITAL_MODE`: `True` (enables micro capital optimizations)
-- `MODE`: `MASTER_ONLY` (single account initially, copy trading at $500+)
+- `MODE`: `PLATFORM_ONLY` (single account initially, copy trading at $500+)
 - `PRIMARY_BROKER`: `COINBASE`
 - `SECONDARY_BROKER`: `KRAKEN`
 - `LIVE_TRADING`: `True`
@@ -345,7 +345,7 @@ For issues or questions:
 - `bot/micro_capital_config.py` - Core configuration module
 - `bot/auto_scaling_config.py` - Auto-scaling engine
 - `.env.micro_capital` - Environment template
-- `MICRO_MASTER_GUIDE.md` - Micro capital trading guide
+- `MICRO_PLATFORM_GUIDE.md` - Micro capital trading guide
 
 ## Summary
 

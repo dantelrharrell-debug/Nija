@@ -71,7 +71,7 @@ class TradeLedgerDB:
                 CREATE TABLE IF NOT EXISTS trade_ledger (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT NOT NULL,
-                    user_id TEXT DEFAULT 'master',
+                    user_id TEXT DEFAULT 'platform',
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
                     action TEXT NOT NULL,
@@ -81,22 +81,22 @@ class TradeLedgerDB:
                     fee REAL DEFAULT 0.0,
                     order_id TEXT,
                     position_id TEXT,
-                    master_trade_id TEXT,
+                    platform_trade_id TEXT,
                     notes TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            # CRITICAL FIX (Jan 22, 2026): Ensure master_trade_id column exists in existing databases
+            # CRITICAL FIX (Jan 22, 2026): Ensure platform_trade_id column exists in existing databases
             # This migration is idempotent and safe to run multiple times
-            self._migrate_add_master_trade_id(cursor)
+            self._migrate_add_platform_trade_id(cursor)
 
             # Open positions table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS open_positions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     position_id TEXT UNIQUE NOT NULL,
-                    user_id TEXT DEFAULT 'master',
+                    user_id TEXT DEFAULT 'platform',
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
                     entry_price REAL NOT NULL,
@@ -119,7 +119,7 @@ class TradeLedgerDB:
                 CREATE TABLE IF NOT EXISTS completed_trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     position_id TEXT UNIQUE NOT NULL,
-                    user_id TEXT DEFAULT 'master',
+                    user_id TEXT DEFAULT 'platform',
                     symbol TEXT NOT NULL,
                     side TEXT NOT NULL,
                     entry_price REAL NOT NULL,
@@ -145,8 +145,8 @@ class TradeLedgerDB:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS copy_trade_map (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    master_trade_id TEXT NOT NULL,
-                    master_user_id TEXT DEFAULT 'master',
+                    platform_trade_id TEXT NOT NULL,
+                    platform_user_id TEXT DEFAULT 'platform',
                     master_symbol TEXT NOT NULL,
                     master_side TEXT NOT NULL,
                     master_order_id TEXT,
@@ -175,7 +175,7 @@ class TradeLedgerDB:
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_ledger_master_trade
-                ON trade_ledger(master_trade_id)
+                ON trade_ledger(platform_trade_id)
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_positions_symbol
@@ -199,7 +199,7 @@ class TradeLedgerDB:
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_copy_trade_map_master
-                ON copy_trade_map(master_trade_id)
+                ON copy_trade_map(platform_trade_id)
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_copy_trade_map_user
@@ -208,11 +208,11 @@ class TradeLedgerDB:
 
             logger.info("✅ Database schema initialized")
 
-    def _migrate_add_master_trade_id(self, cursor):
+    def _migrate_add_platform_trade_id(self, cursor):
         """
-        Migration: Add master_trade_id column to trade_ledger table if it doesn't exist.
+        Migration: Add platform_trade_id column to trade_ledger table if it doesn't exist.
 
-        CRITICAL FIX (Jan 22, 2026): Ensure existing databases have master_trade_id column.
+        CRITICAL FIX (Jan 22, 2026): Ensure existing databases have platform_trade_id column.
         This is required for copy trading visibility and trade attribution.
 
         Args:
@@ -223,22 +223,22 @@ class TradeLedgerDB:
             cursor.execute("PRAGMA table_info(trade_ledger)")
             columns = [row[1] for row in cursor.fetchall()]
 
-            if 'master_trade_id' not in columns:
-                logger.info("🔧 Running migration: Adding master_trade_id column to trade_ledger")
+            if 'platform_trade_id' not in columns:
+                logger.info("🔧 Running migration: Adding platform_trade_id column to trade_ledger")
                 cursor.execute("""
                     ALTER TABLE trade_ledger
-                    ADD COLUMN master_trade_id TEXT
+                    ADD COLUMN platform_trade_id TEXT
                 """)
 
                 # Add index for performance
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_ledger_master_trade
-                    ON trade_ledger(master_trade_id)
+                    ON trade_ledger(platform_trade_id)
                 """)
 
-                logger.info("✅ Migration complete: master_trade_id column added")
+                logger.info("✅ Migration complete: platform_trade_id column added")
             else:
-                logger.debug("✓ master_trade_id column already exists")
+                logger.debug("✓ platform_trade_id column already exists")
         except sqlite3.OperationalError as e:
             # Expected error: column already exists from a previous migration
             # This can happen if ALTER TABLE was run but column check failed
@@ -256,8 +256,8 @@ class TradeLedgerDB:
     def record_buy(self, symbol: str, price: float, quantity: float,
                    size_usd: float, fee: float = 0.0,
                    order_id: str = None, position_id: str = None,
-                   user_id: str = 'master', notes: str = None,
-                   master_trade_id: str = None) -> int:
+                   user_id: str = 'platform', notes: str = None,
+                   platform_trade_id: str = None) -> int:
         """
         Record a BUY transaction in the ledger
 
@@ -269,9 +269,9 @@ class TradeLedgerDB:
             fee: Transaction fee (default: 0.0)
             order_id: Broker order ID (optional)
             position_id: Position identifier (optional)
-            user_id: User account ID (default: 'master')
+            user_id: User account ID (default: 'platform')
             notes: Additional notes (optional)
-            master_trade_id: Reference to master trade for copy trading visibility (optional)
+            platform_trade_id: Reference to master trade for copy trading visibility (optional)
 
         Returns:
             int: Transaction ID
@@ -281,7 +281,7 @@ class TradeLedgerDB:
             cursor.execute("""
                 INSERT INTO trade_ledger
                 (timestamp, user_id, symbol, side, action, price, quantity,
-                 size_usd, fee, order_id, position_id, master_trade_id, notes)
+                 size_usd, fee, order_id, position_id, platform_trade_id, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 datetime.now().isoformat(),
@@ -295,7 +295,7 @@ class TradeLedgerDB:
                 fee,
                 order_id,
                 position_id,
-                master_trade_id,
+                platform_trade_id,
                 notes
             ))
 
@@ -306,8 +306,8 @@ class TradeLedgerDB:
     def record_sell(self, symbol: str, price: float, quantity: float,
                     size_usd: float, fee: float = 0.0,
                     order_id: str = None, position_id: str = None,
-                    user_id: str = 'master', notes: str = None,
-                    master_trade_id: str = None) -> int:
+                    user_id: str = 'platform', notes: str = None,
+                    platform_trade_id: str = None) -> int:
         """
         Record a SELL transaction in the ledger
 
@@ -319,9 +319,9 @@ class TradeLedgerDB:
             fee: Transaction fee (default: 0.0)
             order_id: Broker order ID (optional)
             position_id: Position identifier (optional)
-            user_id: User account ID (default: 'master')
+            user_id: User account ID (default: 'platform')
             notes: Additional notes (optional)
-            master_trade_id: Reference to master trade for copy trading visibility (optional)
+            platform_trade_id: Reference to master trade for copy trading visibility (optional)
 
         Returns:
             int: Transaction ID
@@ -331,7 +331,7 @@ class TradeLedgerDB:
             cursor.execute("""
                 INSERT INTO trade_ledger
                 (timestamp, user_id, symbol, side, action, price, quantity,
-                 size_usd, fee, order_id, position_id, master_trade_id, notes)
+                 size_usd, fee, order_id, position_id, platform_trade_id, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 datetime.now().isoformat(),
@@ -345,7 +345,7 @@ class TradeLedgerDB:
                 fee,
                 order_id,
                 position_id,
-                master_trade_id,
+                platform_trade_id,
                 notes
             ))
 
@@ -357,7 +357,7 @@ class TradeLedgerDB:
                      entry_price: float, quantity: float, size_usd: float,
                      stop_loss: float = None, take_profit_1: float = None,
                      take_profit_2: float = None, take_profit_3: float = None,
-                     entry_fee: float = 0.0, user_id: str = 'master',
+                     entry_fee: float = 0.0, user_id: str = 'platform',
                      notes: str = None) -> bool:
         """
         Record a new open position
@@ -706,9 +706,9 @@ class TradeLedgerDB:
 
             return stats
 
-    def record_copy_trade(self, master_trade_id: str, master_symbol: str,
+    def record_copy_trade(self, platform_trade_id: str, master_symbol: str,
                          master_side: str, master_order_id: str = None,
-                         master_user_id: str = 'master',
+                         platform_user_id: str = 'platform',
                          user_id: str = None, user_status: str = None,
                          user_order_id: str = None, user_error: str = None,
                          user_size: float = None) -> int:
@@ -716,11 +716,11 @@ class TradeLedgerDB:
         P2: Record a copy trade execution for visibility
 
         Args:
-            master_trade_id: Master trade identifier
+            platform_trade_id: Master trade identifier
             master_symbol: Trading symbol
             master_side: 'buy' or 'sell'
             master_order_id: Master order ID
-            master_user_id: Master user ID (default: 'master')
+            platform_user_id: Master user ID (default: 'platform')
             user_id: User account ID
             user_status: Execution status ('filled', 'skipped', 'failed')
             user_order_id: User's order ID (if filled)
@@ -734,13 +734,13 @@ class TradeLedgerDB:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO copy_trade_map
-                (master_trade_id, master_user_id, master_symbol, master_side,
+                (platform_trade_id, platform_user_id, master_symbol, master_side,
                  master_order_id, master_timestamp, user_id, user_status,
                  user_order_id, user_error, user_size)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                master_trade_id,
-                master_user_id,
+                platform_trade_id,
+                platform_user_id,
                 master_symbol,
                 master_side,
                 master_order_id,
@@ -753,15 +753,15 @@ class TradeLedgerDB:
             ))
 
             record_id = cursor.lastrowid
-            logger.info(f"📊 Copy trade recorded: {master_trade_id} → {user_id} ({user_status})")
+            logger.info(f"📊 Copy trade recorded: {platform_trade_id} → {user_id} ({user_status})")
             return record_id
 
-    def get_copy_trade_map(self, master_trade_id: str = None) -> List[Dict]:
+    def get_copy_trade_map(self, platform_trade_id: str = None) -> List[Dict]:
         """
         P2: Get copy trade map showing master trade → user executions
 
         Args:
-            master_trade_id: Filter by specific master trade (optional)
+            platform_trade_id: Filter by specific master trade (optional)
 
         Returns:
             List of copy trade execution records
@@ -769,13 +769,13 @@ class TradeLedgerDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            if master_trade_id:
+            if platform_trade_id:
                 query = """
                     SELECT * FROM copy_trade_map
-                    WHERE master_trade_id = ?
+                    WHERE platform_trade_id = ?
                     ORDER BY created_at DESC
                 """
-                cursor.execute(query, (master_trade_id,))
+                cursor.execute(query, (platform_trade_id,))
             else:
                 query = """
                     SELECT * FROM copy_trade_map
@@ -790,12 +790,12 @@ class TradeLedgerDB:
 
             return results
 
-    def get_copy_trade_summary(self, master_trade_id: str) -> Dict:
+    def get_copy_trade_summary(self, platform_trade_id: str) -> Dict:
         """
         P2: Get summary of copy trade execution for a master trade
 
         Args:
-            master_trade_id: Master trade identifier
+            platform_trade_id: Master trade identifier
 
         Returns:
             Dictionary with execution summary
@@ -812,9 +812,9 @@ class TradeLedgerDB:
                     master_symbol,
                     master_side
                 FROM copy_trade_map
-                WHERE master_trade_id = ?
-                GROUP BY master_trade_id
-            """, (master_trade_id,))
+                WHERE platform_trade_id = ?
+                GROUP BY platform_trade_id
+            """, (platform_trade_id,))
 
             row = cursor.fetchone()
             if row:

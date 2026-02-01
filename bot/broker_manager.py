@@ -476,22 +476,22 @@ class BrokerType(Enum):
 
 class AccountType(Enum):
     """
-    Account type for separating master (Nija system) from user accounts.
+    Account type for separating platform (Nija system) from user accounts.
 
-    MASTER: Nija master account that controls the system
+    PLATFORM: Nija platform account that controls the system
     USER: Individual user/investor accounts
     """
-    MASTER = "master"
+    PLATFORM = "platform"
     USER = "user"
 
 
 class BaseBroker(ABC):
     """Base class for all broker integrations"""
 
-    def __init__(self, broker_type: BrokerType, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+    def __init__(self, broker_type: BrokerType, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         self.broker_type = broker_type
-        self.account_type = account_type  # MASTER or USER account
-        self.user_id = user_id  # User identifier for USER accounts (None for MASTER)
+        self.account_type = account_type  # PLATFORM or USER account
+        self.user_id = user_id  # User identifier for USER accounts (None for PLATFORM)
         self.connected = False
         self.credentials_configured = False  # Track if credentials were provided
         self.last_connection_error = None  # Track last connection error for troubleshooting
@@ -899,7 +899,7 @@ class _CoinbaseInvalidProductFilter(logging.Filter):
 class CoinbaseBroker(BaseBroker):
     """Coinbase Advanced Trade broker implementation"""
 
-    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+    def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         """Initialize Coinbase broker"""
         super().__init__(BrokerType.COINBASE, account_type=account_type, user_id=user_id)
         self.client = None
@@ -3246,7 +3246,7 @@ class CoinbaseBroker(BaseBroker):
                 }
 
             # Enhanced trade confirmation logging with account identification
-            account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
+            account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "PLATFORM"
 
             # FIRST LIVE TRADE BANNER (for legal/operational protection)
             global _FIRST_TRADE_EXECUTED
@@ -3402,22 +3402,22 @@ class CoinbaseBroker(BaseBroker):
                 except Exception as track_err:
                     logger.warning(f"   ⚠️ Position tracking failed: {track_err}")
 
-            # COPY TRADING: Emit trade signal for master account trades
-            # This allows user accounts to replicate master trades automatically
+            # COPY TRADING: Emit trade signal for platform account trades
+            # This allows user accounts to replicate platform trades automatically
             try:
-                # Only emit signals for MASTER accounts (not USER accounts)
-                if self.account_type == AccountType.MASTER:
+                # Only emit signals for PLATFORM accounts (not USER accounts)
+                if self.account_type == AccountType.PLATFORM:
                     from trade_signal_emitter import emit_trade_signal
 
                     # Get current balance for position sizing
                     balance_data = self._get_account_balance_detailed()
-                    master_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
+                    platform_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
 
-                    # CRITICAL: Log if master balance fetch failed
-                    if not balance_data or master_balance <= 0:
-                        logger.warning("⚠️  Master balance could not be retrieved for copy trading")
+                    # CRITICAL: Log if platform balance fetch failed
+                    if not balance_data or platform_balance <= 0:
+                        logger.warning("⚠️  Platform balance could not be retrieved for copy trading")
                         logger.warning(f"   Balance data: {balance_data}")
-                        logger.warning("   Position sizing for users may fail without valid master balance")
+                        logger.warning("   Position sizing for users may fail without valid platform balance")
 
                     # Get execution price
                     exec_price = fill_price if (fill_price and fill_price > 0) else self.get_current_price(symbol)
@@ -3429,13 +3429,13 @@ class CoinbaseBroker(BaseBroker):
                     logger.info("=" * 70)
                     logger.info("📡 EMITTING TRADE SIGNAL TO COPY ENGINE")
                     logger.info("=" * 70)
-                    logger.info(f"   Master Account: {self.account_identifier}")
+                    logger.info(f"   Platform Account: {self.account_identifier}")
                     logger.info(f"   Broker: {broker_name.upper()}")
                     logger.info(f"   Symbol: {symbol}")
                     logger.info(f"   Side: {side.upper()}")
                     logger.info(f"   Size: {quantity} ({size_type})")
                     logger.info(f"   Price: ${exec_price:.2f}" if exec_price else "   Price: N/A")
-                    logger.info(f"   Master Balance: ${master_balance:.2f}")
+                    logger.info(f"   Platform Balance: ${platform_balance:.2f}")
                     logger.info("=" * 70)
 
                     # Emit signal
@@ -3457,7 +3457,7 @@ class CoinbaseBroker(BaseBroker):
                         size=quantity,
                         size_type=size_type,
                         order_id=order_dict.get('order_id', client_order_id),
-                        master_balance=master_balance,
+                        platform_balance=platform_balance,
                         order_status=signal_status  # Use actual order status
                     )
 
@@ -4007,17 +4007,17 @@ class AlpacaBroker(BaseBroker):
     - Stock trading (US equities)
     - Crypto trading (select cryptocurrencies)
     - Paper and live trading modes
-    - Multi-account support (master + user accounts)
+    - Multi-account support (platform + user accounts)
 
     Documentation: https://alpaca.markets/docs/
     """
 
-    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+    def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         """
         Initialize Alpaca broker with account type support.
 
         Args:
-            account_type: MASTER for Nija system account, USER for individual user accounts
+            account_type: PLATFORM for Nija system account, USER for individual user accounts
             user_id: User ID for USER account_type (e.g., 'tania_gilbert')
 
         Raises:
@@ -4032,8 +4032,8 @@ class AlpacaBroker(BaseBroker):
         self.api = None
 
         # Set identifier for logging
-        if account_type == AccountType.MASTER:
-            self.account_identifier = "MASTER"
+        if account_type == AccountType.PLATFORM:
+            self.account_identifier = "PLATFORM"
         else:
             self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
 
@@ -4047,7 +4047,7 @@ class AlpacaBroker(BaseBroker):
         Connect to Alpaca API with retry logic.
 
         Uses different credentials based on account_type:
-        - MASTER: ALPACA_API_KEY / ALPACA_API_SECRET / ALPACA_PAPER
+        - PLATFORM: ALPACA_API_KEY / ALPACA_API_SECRET / ALPACA_PAPER
         - USER: ALPACA_USER_{user_id}_API_KEY / ALPACA_USER_{user_id}_API_SECRET / ALPACA_USER_{user_id}_PAPER
 
         Returns:
@@ -4058,11 +4058,11 @@ class AlpacaBroker(BaseBroker):
             import time
 
             # Get credentials based on account type
-            if self.account_type == AccountType.MASTER:
+            if self.account_type == AccountType.PLATFORM:
                 api_key = os.getenv("ALPACA_API_KEY", "").strip()
                 api_secret = os.getenv("ALPACA_API_SECRET", "").strip()
                 paper = os.getenv("ALPACA_PAPER", "true").lower() == "true"
-                cred_label = "MASTER"
+                cred_label = "PLATFORM"
             else:
                 # User account - construct env var name from user_id
                 # Convert user_id to uppercase for env var
@@ -4080,8 +4080,8 @@ class AlpacaBroker(BaseBroker):
                 self.credentials_configured = False
                 # Silently skip - Alpaca is optional
                 logger.info(f"⚠️  Alpaca credentials not configured for {cred_label} (skipping)")
-                if self.account_type == AccountType.MASTER:
-                    logger.info("   To enable Alpaca MASTER trading, set:")
+                if self.account_type == AccountType.PLATFORM:
+                    logger.info("   To enable Alpaca PLATFORM trading, set:")
                     logger.info("      ALPACA_API_KEY=<your-api-key>")
                     logger.info("      ALPACA_API_SECRET=<your-api-secret>")
                     logger.info("      ALPACA_PAPER=true  # or false for live trading")
@@ -4235,7 +4235,7 @@ class AlpacaBroker(BaseBroker):
             order = self.api.submit_order(order_data)
 
             # Enhanced trade confirmation logging with account identification
-            account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "MASTER"
+            account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "PLATFORM"
 
             # FIRST LIVE TRADE BANNER (for legal/operational protection)
             global _FIRST_TRADE_EXECUTED
@@ -4469,7 +4469,7 @@ class BinanceBroker(BaseBroker):
     Documentation: https://python-binance.readthedocs.io/
     """
 
-    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+    def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         super().__init__(BrokerType.BINANCE, account_type=account_type, user_id=user_id)
         self.client = None
 
@@ -4859,20 +4859,20 @@ _data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 # DEPRECATED: Use get_kraken_nonce_file() instead to get account-specific nonce file path
 NONCE_FILE = os.path.join(_data_dir, "kraken_nonce.txt")
 
-# MASTER account identifier constant (Jan 17, 2026)
+# PLATFORM account identifier constant (Jan 17, 2026)
 # Used for nonce file migration and account identification
-MASTER_ACCOUNT_IDENTIFIER = "master"
+PLATFORM_ACCOUNT_IDENTIFIER = "platform"
 
-def get_kraken_nonce_file(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER) -> str:
+def get_kraken_nonce_file(account_identifier: str = PLATFORM_ACCOUNT_IDENTIFIER) -> str:
     """
     Get the nonce file path for a specific Kraken account.
 
     CRITICAL FIX (Jan 17, 2026): Each account needs its own nonce file to prevent collisions.
-    - MASTER account: data/kraken_nonce_master.txt
+    - PLATFORM account: data/kraken_nonce_platform.txt
     - USER accounts: data/kraken_nonce_user_daivon.txt, etc.
 
     Args:
-        account_identifier: Account identifier (e.g., 'master', 'user_daivon_frazier', 'USER:daivon_frazier')
+        account_identifier: Account identifier (e.g., 'platform', 'user_daivon_frazier', 'USER:daivon_frazier')
                            Will be sanitized to safe filename format.
 
     Returns:
@@ -4880,7 +4880,7 @@ def get_kraken_nonce_file(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER) -
     """
     # Sanitize account_identifier for safe filename
     # Convert 'USER:daivon_frazier' -> 'user_daivon_frazier'
-    # Convert 'MASTER' -> 'master'
+    # Convert 'PLATFORM' -> 'platform'
     # Remove any characters that aren't alphanumeric, underscore, or hyphen
     safe_identifier = account_identifier.lower().replace(':', '_').replace(' ', '_')
     # Remove any remaining unsafe characters (keep only alphanumeric, underscore, hyphen)
@@ -4892,7 +4892,7 @@ def get_kraken_nonce_file(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER) -
 
     return os.path.join(_data_dir, f"kraken_nonce_{safe_identifier}.txt")
 
-def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
+def get_kraken_nonce(account_identifier: str = PLATFORM_ACCOUNT_IDENTIFIER):
     """
     Generate Kraken nonce with persistence across restarts.
 
@@ -4901,11 +4901,11 @@ def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
     nonces to milliseconds.
 
     CRITICAL FIX (Jan 17, 2026): Now supports account-specific nonce files to prevent
-    nonce collisions between MASTER and USER accounts.
+    nonce collisions between PLATFORM and USER accounts.
 
     This function:
     1. Loads last nonce from account-specific nonce file (if exists)
-    2. Migrates from legacy nonce file for MASTER account (backward compatibility)
+    2. Migrates from legacy nonce file for PLATFORM account (backward compatibility)
     3. Converts microsecond nonces to milliseconds (backward compatibility)
     4. Generates new nonce = max(current_time_ms, last_nonce + 1)
     5. Persists new nonce to account-specific file
@@ -4917,7 +4917,7 @@ def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
 
     Args:
         account_identifier: Account identifier (default: "master")
-                           Examples: "master", "user_daivon_frazier", "USER:tania_gilbert"
+                           Examples: "platform", "user_daivon_frazier", "USER:tania_gilbert"
 
     Returns:
         int: New nonce (milliseconds since epoch)
@@ -4928,10 +4928,10 @@ def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
 
         last_nonce = 0
 
-        # BACKWARD COMPATIBILITY: Migrate legacy MASTER nonce file
-        # If this is the MASTER account and the new file doesn't exist but the old one does,
+        # BACKWARD COMPATIBILITY: Migrate legacy PLATFORM nonce file
+        # If this is the PLATFORM account and the new file doesn't exist but the old one does,
         # migrate the nonce value from the old file to preserve continuity
-        if account_identifier.lower() == MASTER_ACCOUNT_IDENTIFIER and not os.path.exists(nonce_file):
+        if account_identifier.lower() == PLATFORM_ACCOUNT_IDENTIFIER and not os.path.exists(nonce_file):
             legacy_nonce_file = os.path.join(_data_dir, "kraken_nonce.txt")
             if os.path.exists(legacy_nonce_file):
                 try:
@@ -4939,7 +4939,7 @@ def get_kraken_nonce(account_identifier: str = MASTER_ACCOUNT_IDENTIFIER):
                         content = f.read().strip()
                         if content:
                             last_nonce = int(content)
-                            logging.info(f"📦 Migrated MASTER nonce from legacy file: {last_nonce}")
+                            logging.info(f"📦 Migrated PLATFORM nonce from legacy file: {last_nonce}")
                 except (ValueError, IOError) as e:
                     logging.debug(f"Could not migrate legacy nonce file: {e}")
 
@@ -5010,12 +5010,12 @@ class KrakenBroker(BaseBroker):
     # be resolved by retrying. Thread-safe: uses same lock as _permission_error_details_logged
     _permission_failed_accounts = set()
 
-    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+    def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         """
         Initialize Kraken broker with account type support.
 
         Args:
-            account_type: MASTER for Nija system account, USER for individual user accounts
+            account_type: PLATFORM for Nija system account, USER for individual user accounts
             user_id: User ID for USER account_type (e.g., 'daivon_frazier')
 
         Raises:
@@ -5079,21 +5079,21 @@ class KrakenBroker(BaseBroker):
         # - No large forward offset needed for restart protection
         #
         # Set identifier for logging (must be set BEFORE nonce initialization)
-        if account_type == AccountType.MASTER:
-            self.account_identifier = "MASTER"
+        if account_type == AccountType.PLATFORM:
+            self.account_identifier = "PLATFORM"
         else:
             self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
 
         # CRITICAL FIX (Jan 17, 2026): Each account uses its own nonce file
-        # This prevents nonce collisions between MASTER and USER accounts
-        # - MASTER: data/kraken_nonce_master.txt
+        # This prevents nonce collisions between PLATFORM and USER accounts
+        # - MASTER: data/kraken_nonce_platform.txt
         # - USER accounts: data/kraken_nonce_user_daivon_frazier.txt, etc.
         self._nonce_file = get_kraken_nonce_file(self.account_identifier)
 
         # VERIFICATION: Ensure nonce file path is unique per account (prevent cross-contamination)
         # This assertion protects against regression bugs where nonce files might be shared
-        if account_type == AccountType.MASTER:
-            assert "master" in self._nonce_file.lower(), f"MASTER nonce file must contain 'master': {self._nonce_file}"
+        if account_type == AccountType.PLATFORM:
+            assert "master" in self._nonce_file.lower(), f"PLATFORM nonce file must contain 'master': {self._nonce_file}"
         else:
             # USER accounts: user_id is guaranteed to be non-None (validated above at line 3607-3608)
             assert user_id.lower() in self._nonce_file.lower(), f"USER nonce file must contain user_id '{user_id}': {self._nonce_file}"
@@ -5101,7 +5101,7 @@ class KrakenBroker(BaseBroker):
         logger.debug(f"   Nonce file for {self.account_identifier}: {self._nonce_file}")
 
         # ✅ FIX 3: Timestamp-based Kraken Nonce (Global Nonce Manager)
-        # ONE global nonce source shared across MASTER + ALL USERS
+        # ONE global nonce source shared across PLATFORM + ALL USERS
         #
         # This is the correct solution per FIX 3 requirements:
         # - Uses int(time.time() * 1000) for milliseconds since epoch
@@ -5160,7 +5160,7 @@ class KrakenBroker(BaseBroker):
         # Solution: Serialize all private API calls through a lock
         # - This ensures only ONE Kraken private API call happens at a time per account
         # - Public API calls don't need nonces and are not serialized
-        # - Lock is per-instance, so MASTER and USER accounts can still call in parallel
+        # - Lock is per-instance, so PLATFORM and USER accounts can still call in parallel
         self._api_call_lock = threading.Lock()
 
         # Timestamp of last API call for rate limiting
@@ -5250,13 +5250,13 @@ class KrakenBroker(BaseBroker):
         1. Only ONE private API call happens at a time (prevents nonce collisions)
         2. Category-specific rate limiting (separate budgets for entry/exit/monitoring)
         3. Thread-safe execution using locks
-        4. GLOBAL serialization across MASTER + ALL USERS (Option B)
+        4. GLOBAL serialization across PLATFORM + ALL USERS (Option B)
 
         Problem solved:
         - Multiple threads calling Kraken API simultaneously with same nonce
         - Rapid consecutive calls generating duplicate nonces
         - Race conditions in nonce generation
-        - Nonce collisions between MASTER and USER accounts
+        - Nonce collisions between PLATFORM and USER accounts
         - Different API budgets for entry vs exit vs monitoring operations
 
         Args:
@@ -5279,7 +5279,7 @@ class KrakenBroker(BaseBroker):
             category = get_category_for_method(method) if get_category_for_method else KrakenAPICategory.MONITORING
 
         # Use GLOBAL API lock to serialize calls across ALL accounts (Option B)
-        # This ensures only ONE Kraken API call happens at a time across MASTER + ALL USERS
+        # This ensures only ONE Kraken API call happens at a time across PLATFORM + ALL USERS
         if get_kraken_api_lock is not None:
             global_lock = get_kraken_api_lock()
         else:
@@ -5358,7 +5358,7 @@ class KrakenBroker(BaseBroker):
         Connect to Kraken Pro API with retry logic.
 
         Uses different credentials based on account_type:
-        - MASTER: KRAKEN_MASTER_API_KEY / KRAKEN_MASTER_API_SECRET
+        - MASTER: KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET
         - USER: KRAKEN_USER_{user_id}_API_KEY / KRAKEN_USER_{user_id}_API_SECRET
 
         Returns:
@@ -5378,15 +5378,15 @@ class KrakenBroker(BaseBroker):
 
             # Get credentials based on account type
             # Enhanced credential detection to identify "set but invalid" variables
-            if self.account_type == AccountType.MASTER:
-                key_name = "KRAKEN_MASTER_API_KEY"
-                secret_name = "KRAKEN_MASTER_API_SECRET"
+            if self.account_type == AccountType.PLATFORM:
+                key_name = "KRAKEN_PLATFORM_API_KEY"
+                secret_name = "KRAKEN_PLATFORM_API_SECRET"
                 api_key_raw = os.getenv(key_name, "")
                 api_secret_raw = os.getenv(secret_name, "")
 
                 # Log when master credentials are found
                 if api_key_raw and api_secret_raw:
-                    logger.info("   ✅ Using KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET for master account")
+                    logger.info("   ✅ Using KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET for platform account")
 
                 # Fallback to legacy credentials if master credentials not set
                 # This provides backward compatibility for deployments using KRAKEN_API_KEY
@@ -5395,18 +5395,18 @@ class KrakenBroker(BaseBroker):
                     if legacy_key:
                         api_key_raw = legacy_key
                         key_name = "KRAKEN_API_KEY (legacy)"
-                        logger.info("   Using legacy KRAKEN_API_KEY for master account")
+                        logger.info("   Using legacy KRAKEN_API_KEY for platform account")
 
                 if not api_secret_raw:
                     legacy_secret = os.getenv("KRAKEN_API_SECRET", "")
                     if legacy_secret:
                         api_secret_raw = legacy_secret
                         secret_name = "KRAKEN_API_SECRET (legacy)"
-                        logger.info("   Using legacy KRAKEN_API_SECRET for master account")
+                        logger.info("   Using legacy KRAKEN_API_SECRET for platform account")
 
                 api_key = api_key_raw.strip()
                 api_secret = api_secret_raw.strip()
-                cred_label = "MASTER"
+                cred_label = "PLATFORM"
             else:
                 # User account - construct env var name from user_id
                 # Convert user_id to uppercase for env var
@@ -5465,10 +5465,10 @@ class KrakenBroker(BaseBroker):
                 self.credentials_configured = False
                 # Silently skip - Kraken is optional, no need for scary error messages
                 logger.info(f"⚠️  Kraken credentials not configured for {cred_label} (skipping)")
-                if self.account_type == AccountType.MASTER:
-                    logger.info("   🔧 FIX #1 — To enable Kraken MASTER trading, set:")
-                    logger.info("      KRAKEN_MASTER_API_KEY=<your-api-key>")
-                    logger.info("      KRAKEN_MASTER_API_SECRET=<your-api-secret>")
+                if self.account_type == AccountType.PLATFORM:
+                    logger.info("   🔧 FIX #1 — To enable Kraken PLATFORM trading, set:")
+                    logger.info("      KRAKEN_PLATFORM_API_KEY=<your-api-key>")
+                    logger.info("      KRAKEN_PLATFORM_API_SECRET=<your-api-secret>")
                     logger.info("   OR use legacy credentials:")
                     logger.info("      KRAKEN_API_KEY=<your-api-key>")
                     logger.info("      KRAKEN_API_SECRET=<your-api-secret>")
@@ -5515,7 +5515,7 @@ class KrakenBroker(BaseBroker):
 
             # Override _nonce to use simplified timestamp-based nonce (Railway-safe)
             # This prevents "EAPI:Invalid nonce" errors by using ONE global timestamp source
-            # shared across MASTER + ALL USERS.
+            # shared across PLATFORM + ALL USERS.
             #
             # Benefits:
             # 1. No nonce collisions (timestamps only move forward)
@@ -5530,7 +5530,7 @@ class KrakenBroker(BaseBroker):
                     """
                     Generate nonce using timestamp (Railway-safe).
 
-                    ONE global source for MASTER + ALL USERS.
+                    ONE global source for PLATFORM + ALL USERS.
                     - Millisecond precision (13 digits)
                     - Thread-safe (uses time.time())
                     - No collisions (time only moves forward)
@@ -5763,8 +5763,8 @@ class KrakenBroker(BaseBroker):
                                     logger.error("   ⚠️  API KEY PERMISSION ERROR")
                                     logger.error("   Your Kraken API key does not have the required permissions.")
                                     logger.warning("")
-                                    logger.warning("   🔧 FIX #1 — Ensure you're using KRAKEN MASTER keys")
-                                    logger.warning("      Environment variables: KRAKEN_MASTER_API_KEY / KRAKEN_MASTER_API_SECRET")
+                                    logger.warning("   🔧 FIX #1 — Ensure you're using KRAKEN PLATFORM keys")
+                                    logger.warning("      Environment variables: KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET")
                                     logger.warning("      (Not legacy KRAKEN_API_KEY)")
                                     logger.warning("")
                                     logger.warning("   🔧 FIX #2 — Fix Kraken API permissions (mandatory):")
@@ -6048,8 +6048,8 @@ class KrakenBroker(BaseBroker):
                             logger.error("   ⚠️  API KEY PERMISSION ERROR")
                             logger.error("   Your Kraken API key does not have the required permissions.")
                             logger.warning("")
-                            logger.warning("   🔧 FIX #1 — Ensure you're using KRAKEN MASTER keys")
-                            logger.warning("      Environment variables: KRAKEN_MASTER_API_KEY / KRAKEN_MASTER_API_SECRET")
+                            logger.warning("   🔧 FIX #1 — Ensure you're using KRAKEN PLATFORM keys")
+                            logger.warning("      Environment variables: KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET")
                             logger.warning("      (Not legacy KRAKEN_API_KEY)")
                             logger.warning("")
                             logger.warning("   🔧 FIX #2 — Fix Kraken API permissions (mandatory):")
@@ -6735,9 +6735,9 @@ class KrakenBroker(BaseBroker):
             # This prevents small trades that will be eaten by fees
             # Track if tier auto-resize occurred (used for Kraken minimum enforcement later)
             tier_was_auto_resized = False
-            # Determine if this is a master account (not subject to tier limits)
+            # Determine if this is a platform account (not subject to tier limits)
             # Used in both tier validation and Kraken minimum enforcement
-            is_master_account = (self.account_type == AccountType.MASTER)
+            is_platform_account = (self.account_type == AccountType.PLATFORM)
 
             if side.lower() == 'buy' and get_tier_from_balance and validate_trade_size:
                 try:
@@ -6765,8 +6765,8 @@ class KrakenBroker(BaseBroker):
                             }
 
                         # Determine user's tier based on balance
-                        # Master accounts always get BALLER tier regardless of balance
-                        user_tier = get_tier_from_balance(current_balance, is_master=is_master_account)
+                        # Platform accounts always get BALLER tier regardless of balance
+                        user_tier = get_tier_from_balance(current_balance, is_platform=is_platform_account)
                         tier_config = get_tier_config(user_tier)
 
                         # Calculate order size in USD (quantity is already in USD for buy orders)
@@ -6774,11 +6774,11 @@ class KrakenBroker(BaseBroker):
 
                         # AUTO-RESIZE trade instead of rejecting (smarter approach)
                         # If trade exceeds tier limits, resize to maximum safe size
-                        # NOTE: Master accounts have more flexible limits
+                        # NOTE: Platform accounts have more flexible limits
                         if auto_resize_trade:
                             resized_size, resize_reason = auto_resize_trade(
                                 order_size_usd, user_tier, current_balance,
-                                is_master=is_master_account, exchange='kraken'
+                                is_platform=is_platform_account, exchange='kraken'
                             )
 
                             if resized_size == 0.0:
@@ -6848,7 +6848,7 @@ class KrakenBroker(BaseBroker):
             # ✅ KRAKEN MINIMUM ENFORCEMENT: Check if trade meets Kraken's minimum
             # However, DO NOT bump up trades that were auto-resized down by tier limits
             # This prevents violating tier-based risk management for profit protection
-            # EXCEPTION: Master accounts are NOT subject to tier limits
+            # EXCEPTION: Platform accounts are NOT subject to tier limits
             if side.lower() == 'buy' and size_type == 'quote':
                 # Use Kraken minimum from imported constant
                 kraken_min = KRAKEN_MINIMUM_ORDER_USD or 10.00
@@ -6857,9 +6857,9 @@ class KrakenBroker(BaseBroker):
                     # Check if this trade was auto-resized down due to tier limits
                     # using explicit flag set during tier validation above
                     # CRITICAL: Only enforce tier protection for USER accounts, not MASTER
-                    # Note: is_master_account is defined at line 6691
+                    # Note: is_platform_account is defined at line 6691
 
-                    if tier_was_auto_resized and not is_master_account:
+                    if tier_was_auto_resized and not is_platform_account:
                         # USER account: Trade was resized down by tier limits, and result is below Kraken minimum
                         # REJECT the trade to protect tier-based risk management
                         logging.error(LOG_SEPARATOR)
@@ -6873,7 +6873,7 @@ class KrakenBroker(BaseBroker):
                         logging.error(f"   Kraken minimum: ${kraken_min:.2f}")
                         logging.error(f"   ⚠️  Cannot meet Kraken minimum without violating tier limits")
                         logging.error(f"   💡 Tier limits protect small USER accounts from excessive risk")
-                        logging.error(f"   💡 Master account is not subject to tier limits")
+                        logging.error(f"   💡 Platform account is not subject to tier limits")
                         logging.error(LOG_SEPARATOR)
                         return {
                             "status": "error",
@@ -6885,16 +6885,16 @@ class KrakenBroker(BaseBroker):
                         original_quantity = quantity
                         quantity = kraken_min
 
-                        if is_master_account and tier_was_auto_resized:
-                            # Master account: tier resize occurred but we override for Kraken minimum
+                        if is_platform_account and tier_was_auto_resized:
+                            # Platform account: tier resize occurred but we override for Kraken minimum
                             logging.info(LOG_SEPARATOR)
-                            logging.info("💰 KRAKEN MINIMUM ENFORCEMENT: Trade rounded up (MASTER account)")
+                            logging.info("💰 KRAKEN MINIMUM ENFORCEMENT: Trade rounded up (PLATFORM account)")
                             logging.info(LOG_SEPARATOR)
                             logging.info(f"   Original size: ${original_quantity:.2f}")
                             logging.info(f"   Kraken minimum: ${kraken_min:.2f}")
                             logging.info(f"   Adjusted size: ${quantity:.2f}")
                             logging.info(f"   Reason: Meeting Kraken's ${kraken_min:.2f} minimum order value")
-                            logging.info(f"   🎯 MASTER account: Not subject to tier limits")
+                            logging.info(f"   🎯 PLATFORM account: Not subject to tier limits")
                             logging.info(LOG_SEPARATOR)
                         else:
                             # Normal Kraken minimum bump (not tier-resized)
@@ -7107,16 +7107,16 @@ class KrakenBroker(BaseBroker):
                     for handler in _root_logger.handlers:
                         handler.flush()
 
-                # COPY TRADING: Emit trade signal for master account trades
-                # This allows user accounts to replicate master trades automatically
+                # COPY TRADING: Emit trade signal for platform account trades
+                # This allows user accounts to replicate platform trades automatically
                 try:
-                    # Only emit signals for MASTER accounts (not USER accounts)
-                    if self.account_type == AccountType.MASTER:
+                    # Only emit signals for PLATFORM accounts (not USER accounts)
+                    if self.account_type == AccountType.PLATFORM:
                         from trade_signal_emitter import emit_trade_signal
 
                         # Get current balance for position sizing
                         balance_data = self.get_account_balance_detailed()
-                        master_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
+                        platform_balance = balance_data.get('trading_balance', 0.0) if balance_data else 0.0
 
                         # Get current price for this symbol
                         # For market orders, use a reasonable estimate
@@ -7154,32 +7154,32 @@ class KrakenBroker(BaseBroker):
                             size=quantity,
                             size_type=size_type,
                             order_id=order_id,
-                            master_balance=master_balance
+                            platform_balance=platform_balance
                         )
 
-                        # ENHANCED COPY TRADING: Also trigger direct on_master_trade hook
+                        # ENHANCED COPY TRADING: Also trigger direct on_platform_trade hook
                         # This provides a simplified interface for copy trading implementations
                         try:
-                            from bot.kraken_copy_trading import on_master_trade
+                            from bot.kraken_copy_trading import on_platform_trade
 
                             # Build trade object for hook
                             trade_obj = {
                                 'symbol': symbol,
                                 'side': side,
                                 'size': quantity,
-                                'master_balance': master_balance,
+                                'platform_balance': platform_balance,
                                 'price': exec_price if exec_price else 0.0,
                                 'order_id': order_id,
                                 'broker': broker_name
                             }
 
-                            logger.info("🎯 Triggering on_master_trade hook for direct copy execution")
-                            on_master_trade(trade_obj)
-                            logger.info("✅ on_master_trade hook completed")
+                            logger.info("🎯 Triggering on_platform_trade hook for direct copy execution")
+                            on_platform_trade(trade_obj)
+                            logger.info("✅ on_platform_trade hook completed")
                         except ImportError:
-                            logger.debug("on_master_trade hook not available (expected for non-copy-trading setups)")
+                            logger.debug("on_platform_trade hook not available (expected for non-copy-trading setups)")
                         except Exception as hook_err:
-                            logger.warning(f"⚠️ on_master_trade hook failed: {hook_err}")
+                            logger.warning(f"⚠️ on_platform_trade hook failed: {hook_err}")
                             logger.warning(f"   Copy trading may not execute properly")
 
                         # Confirm signal emission status
@@ -7459,7 +7459,7 @@ class OKXBroker(BaseBroker):
     Python SDK: https://github.com/okx/okx-python-sdk
     """
 
-    def __init__(self, account_type: AccountType = AccountType.MASTER, user_id: Optional[str] = None):
+    def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         super().__init__(BrokerType.OKX, account_type=account_type, user_id=user_id)
         self.client = None
         self.account_api = None
@@ -8028,7 +8028,7 @@ class BrokerManager:
 
     The "primary broker" concept exists only for backward compatibility:
     - Used by legacy single-broker code paths
-    - Used for master account position cap enforcement
+    - Used for platform account position cap enforcement
     - Does NOT control independent broker trading
 
     For multi-broker trading, use IndependentBrokerTrader which:
@@ -8088,7 +8088,7 @@ class BrokerManager:
 
         The primary broker is used only for:
         - Legacy single-broker trading logic
-        - Position cap enforcement (shared across master account)
+        - Position cap enforcement (shared across platform account)
         - Backward compatibility with older code
 
         It does NOT control or affect other brokers' independent trading.
@@ -8117,7 +8117,7 @@ class BrokerManager:
         """
         return self.active_broker
 
-    def select_primary_master_broker(self):
+    def select_primary_platform_broker(self):
         """
         Select the primary master broker with intelligent fallback logic.
 

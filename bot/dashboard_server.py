@@ -252,19 +252,19 @@ def list_users():
         hard_controls = get_hard_controls()
 
         # Check if we should include master
-        include_master = request.args.get('include_master', 'false').lower() == 'true'
+        include_platform = request.args.get('include_platform', 'false').lower() == 'true'
 
         # Get all users from various sources
         user_ids = set()
 
         # From hard controls
         for user_id in hard_controls.user_kill_switches.keys():
-            if user_id != 'master' or include_master:
+            if user_id != 'platform' or include_platform:
                 user_ids.add(user_id)
 
         # From risk manager
         for user_id in risk_manager._user_states.keys():
-            if user_id != 'master' or include_master:
+            if user_id != 'platform' or include_platform:
                 user_ids.add(user_id)
 
         # Build user list
@@ -285,7 +285,7 @@ def list_users():
                 'total_trades': stats.get('completed_trades', 0),
                 'balance': risk_state.balance,
                 'circuit_breaker': risk_state.circuit_breaker_triggered,
-                'is_master': user_id == 'master'
+                'is_master': user_id == 'platform'
             })
 
         return jsonify({
@@ -340,10 +340,10 @@ def get_user_pnl(user_id: str):
         return jsonify({'error': 'Failed to retrieve PnL data'}), 500
 
 
-@app.route('/api/master/pnl', methods=['GET'])
-def get_master_pnl():
-    """Get detailed PnL dashboard for the master account."""
-    return get_user_pnl('master')
+@app.route('/api/platform/pnl', methods=['GET'])
+def get_platform_pnl():
+    """Get detailed PnL dashboard for the platform account."""
+    return get_user_pnl('platform')
 @app.route('/api/users')
 def get_users():
     """
@@ -375,7 +375,7 @@ def get_users():
         # Get data for each user
         for user_config in all_user_configs:
             user_id = user_config.user_id
-            if not user_id or user_id == 'master':
+            if not user_id or user_id == 'platform':
                 continue
 
             # Get balance
@@ -634,7 +634,7 @@ def get_trading_status():
                 # Get user data from configuration files
                 for user_config in all_user_configs:
                     user_id = user_config.user_id
-                    if not user_id or user_id == 'master':
+                    if not user_id or user_id == 'platform':
                         continue
 
                     # Get balance for this user across all brokers
@@ -874,7 +874,7 @@ def human_readable_status():
         <div style="background: #16181c; border: 2px solid #1d9bf0; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
             <div style="font-size: 14px; font-weight: bold; color: #1d9bf0; margin-bottom: 8px;">🔄 Copy Trading Active</div>
             <div style="font-size: 13px; color: #e7e9ea; line-height: 1.6;">
-                All user trades are <strong>automatically copied</strong> from the NIJA master account. Users <strong>cannot initiate their own trades</strong>.
+                All user trades are <strong>automatically copied</strong> from the NIJA platform account. Users <strong>cannot initiate their own trades</strong>.
                 Position sizes are scaled proportionally to each user's account balance.
             </div>
         </div>
@@ -1531,7 +1531,7 @@ def create_users_dashboard_html():
         }
 
         function createUserCard(user) {
-            const isMaster = user.is_master || user.user_id === 'master';
+            const isMaster = user.is_master || user.user_id === 'platform';
             const cardClass = isMaster ? 'user-card master-card' : 'user-card';
 
             return `
@@ -1632,7 +1632,7 @@ def create_users_dashboard_html():
         async function refreshUsers() {
             try {
                 // Fetch users with master included
-                const response = await fetch('/api/users?include_master=true');
+                const response = await fetch('/api/users?include_platform=true');
                 const data = await response.json();
 
                 const container = document.getElementById('users-container');
@@ -1644,8 +1644,8 @@ def create_users_dashboard_html():
 
                 // Sort: master first, then alphabetically
                 const sortedUsers = data.users.sort((a, b) => {
-                    if (a.is_master || a.user_id === 'master') return -1;
-                    if (b.is_master || b.user_id === 'master') return 1;
+                    if (a.is_master || a.user_id === 'platform') return -1;
+                    if (b.is_master || b.user_id === 'platform') return 1;
                     return a.user_id.localeCompare(b.user_id);
                 });
 
@@ -1830,10 +1830,10 @@ def aggregated_report():
 @app.route('/api/aggregated/summary')
 def get_aggregated_summary():
     """
-    Get aggregated read-only summary of master + all users.
+    Get aggregated read-only summary of platform + all users.
 
     Returns:
-        - Master account performance
+        - Platform account performance
         - Combined user performance
         - Total portfolio metrics
         - System-wide statistics
@@ -1845,14 +1845,14 @@ def get_aggregated_summary():
         pnl_tracker = get_user_pnl_tracker()
         risk_manager = get_user_risk_manager()
 
-        # Get master stats
-        master_stats = pnl_tracker.get_stats('master', force_refresh=True)
-        master_risk_state = risk_manager.get_state('master')
+        # Get platform stats
+        platform_stats = pnl_tracker.get_stats('platform', force_refresh=True)
+        platform_risk_state = risk_manager.get_state('platform')
 
-        # Get all user stats (excluding master)
+        # Get all user stats (excluding platform)
         all_user_ids = set()
         for user_id in risk_manager._user_states.keys():
-            if user_id != 'master':
+            if user_id != 'platform':
                 all_user_ids.add(user_id)
 
         # Aggregate user metrics
@@ -1897,19 +1897,19 @@ def get_aggregated_summary():
         aggregate_win_rate = (total_user_wins / total_user_trades * 100) if total_user_trades > 0 else 0.0
 
         # Portfolio totals
-        portfolio_balance = master_risk_state.balance + total_user_balance
-        portfolio_pnl = master_stats.get('total_pnl', 0.0) + total_user_pnl
+        portfolio_balance = platform_risk_state.balance + total_user_balance
+        portfolio_pnl = platform_stats.get('total_pnl', 0.0) + total_user_pnl
 
         return jsonify({
             'timestamp': datetime.now().isoformat(),
-            'master_account': {
-                'balance': master_risk_state.balance,
-                'total_pnl': master_stats.get('total_pnl', 0.0),
-                'daily_pnl': master_stats.get('daily_pnl', 0.0),
-                'win_rate': master_stats.get('win_rate', 0.0),
-                'total_trades': master_stats.get('completed_trades', 0),
-                'winning_trades': master_stats.get('winning_trades', 0),
-                'losing_trades': master_stats.get('losing_trades', 0)
+            'platform_account': {
+                'balance': platform_risk_state.balance,
+                'total_pnl': platform_stats.get('total_pnl', 0.0),
+                'daily_pnl': platform_stats.get('daily_pnl', 0.0),
+                'win_rate': platform_stats.get('win_rate', 0.0),
+                'total_trades': platform_stats.get('completed_trades', 0),
+                'winning_trades': platform_stats.get('winning_trades', 0),
+                'losing_trades': platform_stats.get('losing_trades', 0)
             },
             'users_aggregate': {
                 'total_users': total_users,
@@ -1924,7 +1924,7 @@ def get_aggregated_summary():
             'portfolio_totals': {
                 'total_balance': portfolio_balance,
                 'total_pnl': portfolio_pnl,
-                'total_trades': master_stats.get('completed_trades', 0) + total_user_trades,
+                'total_trades': platform_stats.get('completed_trades', 0) + total_user_trades,
                 'pnl_return_pct': (portfolio_pnl / portfolio_balance * 100) if portfolio_balance > 0 else 0.0
             },
             'user_details': user_summaries

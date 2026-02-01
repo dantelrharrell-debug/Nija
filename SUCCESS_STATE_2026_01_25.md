@@ -4,14 +4,14 @@
 
 ## 📅 Checkpoint Date: 2026-01-25 04:11:15 UTC
 
-This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trading system with full profit-taking functionality for master and all user accounts.
+This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trading system with full profit-taking functionality for platform and all user accounts.
 
 ---
 
 ## ✅ VERIFIED SUCCESS METRICS
 
 ### Trading Activity Summary (Cycle #4)
-- **Master Account Balance**: $60.53 USD (Kraken)
+- **Platform Account Balance**: $60.53 USD (Kraken)
 - **User #1 (Daivon Frazier) Balance**: $84.58 USD (Kraken)
 - **User #2 (Tania Gilbert) Balance**: $65.87 USD (Kraken)
 - **Total Capital Under Management**: $210.98 USD
@@ -62,7 +62,7 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
 
 ### Active Accounts
 1. **Master (KRAKEN)**
-   - API: `KRAKEN_MASTER_API_KEY` + `KRAKEN_MASTER_API_SECRET`
+   - API: `KRAKEN_PLATFORM_API_KEY` + `KRAKEN_PLATFORM_API_SECRET`
    - Balance: $60.59 (cached) / $60.53 (actual)
    - Status: ✅ CONNECTED & TRADING
 
@@ -161,9 +161,9 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
 
 1. **Verify API Credentials Are Set**:
    ```bash
-   # Master account
-   KRAKEN_MASTER_API_KEY=<your-master-key>
-   KRAKEN_MASTER_API_SECRET=<your-master-secret>
+   # Platform account
+   KRAKEN_PLATFORM_API_KEY=<your-master-key>
+   KRAKEN_PLATFORM_API_SECRET=<your-master-secret>
 
    # User accounts
    KRAKEN_USER_DAIVON_API_KEY=<daivon-key>
@@ -193,7 +193,7 @@ This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trad
 
 ### Expected Startup Logs
 ```
-✅ Using KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET for master account
+✅ Using KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET for platform account
 ⏳ Waiting 5.0s before Kraken connection test (prevents nonce collisions)...
 ✅ Startup delay complete, testing Kraken connection...
 Testing Kraken connection (MASTER)...
@@ -235,7 +235,7 @@ Balance: $XX.XX
 The logs mention "user 1st trade was for a loss" - this is normal for the following reasons:
 - **Learning Period**: First trades establish baseline performance
 - **Market Timing**: Entry timing can vary slightly vs ideal
-- **Copy Trade Lag**: Microseconds between master and user execution
+- **Copy Trade Lag**: Microseconds between platform and user execution
 - **Fee Impact**: Small accounts feel exchange fees more acutely
 
 **Mitigation**:
@@ -256,7 +256,7 @@ The logs mention "user 1st trade was for a loss" - this is normal for the follow
 
 ### Immediate (Already Working)
 - ✅ Continue monitoring profit-taking trades
-- ✅ Track win rate across master + users
+- ✅ Track win rate across platform + users
 - ✅ Log all trade outcomes for analysis
 
 ### Short-Term Enhancements

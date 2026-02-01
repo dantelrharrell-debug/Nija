@@ -24,7 +24,7 @@ This is a **hard-coded guarantee** - profit-taking **CANNOT** be disabled throug
 
 ### ✅ All Accounts
 - Works for **individual accounts**
-- Works for **copy trading** (master and follower accounts)
+- Works for **copy trading** (platform and follower accounts)
 - Works for **multi-account** setups
 - Each account monitored independently
 

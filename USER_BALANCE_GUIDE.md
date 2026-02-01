@@ -24,7 +24,7 @@ NIJA USER ACCOUNT BALANCES
 Generated: 2026-01-21 16:00:00
 ================================================================================
 
-🔷 MASTER ACCOUNT (Nija System)
+🔷 PLATFORM ACCOUNT (Nija System)
 --------------------------------------------------------------------------------
    COINBASE             $1,234.56
    KRAKEN               $5,678.90
@@ -66,7 +66,7 @@ python scripts/show_user_balances.py --json
 {
   "timestamp": "2026-01-21T16:00:00.000000",
   "balances": {
-    "master": {
+    "platform": {
       "coinbase": 1234.56,
       "kraken": 5678.90
     },
@@ -81,7 +81,7 @@ python scripts/show_user_balances.py --json
     }
   },
   "summary": {
-    "master_total": 6913.46,
+    "platform_total": 6913.46,
     "user_totals": {
       "alice": 1000.00,
       "bob": 2500.00
@@ -105,7 +105,7 @@ multi_account_broker_manager.log_all_balances()
 
 # Method 2: Get all balances as dictionary
 balances = multi_account_broker_manager.get_all_balances()
-print(f"Master balances: {balances['master']}")
+print(f"Platform balances: {balances['master']}")
 print(f"User balances: {balances['users']}")
 
 # Method 3: Get user balance summary (sorted by total)
@@ -145,7 +145,7 @@ print(f"{user_id}'s {broker_type.value} balance: ${balance:,.2f}")
 Returns dictionary with all balances:
 ```python
 {
-    'master': {'coinbase': 1234.56, 'kraken': 5678.90},
+    'platform': {'coinbase': 1234.56, 'kraken': 5678.90},
     'users': {
         'alice': {'coinbase': 250.00, 'kraken': 750.00},
         'bob': {'kraken': 2500.00}

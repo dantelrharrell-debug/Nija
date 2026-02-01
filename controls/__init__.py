@@ -82,7 +82,7 @@ class HardControls:
         # Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading.
         self.live_capital_verified = self._check_live_capital_verification()
 
-        # Enable trading for master account and all user accounts
+        # Enable trading for platform account and all user accounts
         self._initialize_trading_accounts()
 
         logger.info("Hard controls initialized")
@@ -102,12 +102,12 @@ class HardControls:
     def _initialize_trading_accounts(self):
         """
         Initialize trading accounts with ACTIVE status.
-        Enables trading for master account and all configured user accounts.
+        Enables trading for platform account and all configured user accounts.
         Dynamically loads users from configuration files.
         """
-        # Enable master account
-        self.user_kill_switches['master'] = KillSwitchStatus.ACTIVE
-        logger.info("✅ Master account trading ENABLED")
+        # Enable platform account
+        self.user_kill_switches['platform'] = KillSwitchStatus.ACTIVE
+        logger.info("✅ Platform account trading ENABLED")
 
         # Dynamically load and enable all configured user accounts
         try:
@@ -169,7 +169,7 @@ class HardControls:
     def _log_fallback_to_master(self, reason: str):
         """Log warning message when falling back to master-only mode."""
         logger.warning(f"⚠️  {reason}")
-        logger.warning("   Continuing with master account only")
+        logger.warning("   Continuing with platform account only")
         logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
 
     def validate_position_size(

@@ -360,12 +360,12 @@ def convert_to_kraken(symbol: str) -> Optional[str]:
     return mapper.to_kraken_symbol(symbol)
 
 
-def validate_for_copy_trading(master_symbols: List[str], user_symbols: List[str]) -> List[str]:
+def validate_for_copy_trading(platform_symbols: List[str], user_symbols: List[str]) -> List[str]:
     """
     Get symbols that can be safely copy traded.
 
     Args:
-        master_symbols: Symbols available on master account exchange
+        platform_symbols: Symbols available on platform account exchange
         user_symbols: Symbols available on user account exchange
 
     Returns:
@@ -377,12 +377,12 @@ def validate_for_copy_trading(master_symbols: List[str], user_symbols: List[str]
     kraken_pairs = mapper.get_all_available_pairs()
 
     # Find intersection of all three sets
-    master_set = set(master_symbols)
+    platform_set = set(platform_symbols)
     user_set = set(user_symbols)
     kraken_set = set(kraken_pairs)
 
     # Common pairs across all exchanges
-    common = sorted(list(master_set & user_set & kraken_set))
+    common = sorted(list(platform_set & user_set & kraken_set))
 
     logger.info(f"🎯 Copy trading enabled for {len(common)} common pairs")
     return common

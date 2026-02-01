@@ -31,7 +31,7 @@ logger = logging.getLogger('nija.follower_pnl')
 class FollowerTrade:
     """Individual follower trade record."""
     follower_id: str
-    master_trade_id: str
+    platform_trade_id: str
     symbol: str
     side: str
     entry_price: float
@@ -51,14 +51,14 @@ class FollowerTrade:
 @dataclass
 class MasterTradeReference:
     """Master trade reference for comparison."""
-    master_trade_id: str
+    platform_trade_id: str
     symbol: str
     side: str
     entry_price: float
     exit_price: Optional[float]
     size: float
-    master_pnl: Optional[float] = None
-    master_pnl_pct: Optional[float] = None
+    platform_pnl: Optional[float] = None
+    platform_pnl_pct: Optional[float] = None
 
 
 @dataclass
@@ -78,8 +78,8 @@ class FollowerPnLMetrics:
     unrealized_pnl: float
     
     # Comparison to master
-    master_total_pnl: float
-    master_total_pnl_pct: float
+    platform_total_pnl: float
+    platform_total_pnl_pct: float
     copy_efficiency: float  # Follower PnL% / Master PnL%
     
     # Performance metrics
@@ -115,7 +115,7 @@ class FollowerPnLAttribution:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
         self.follower_trades: Dict[str, List[FollowerTrade]] = {}  # follower_id -> trades
-        self.master_trades: Dict[str, MasterTradeReference] = {}  # master_trade_id -> master trade
+        self.platform_trades: Dict[str, MasterTradeReference] = {}  # platform_trade_id -> master trade
         
         self._load_data()
         
@@ -140,11 +140,11 @@ class FollowerPnLAttribution:
                         ]
             
             # Load master trades
-            master_file = self.data_dir / "master_trades.json"
-            if master_file.exists():
-                with open(master_file, 'r') as f:
+            platform_file = self.data_dir / "platform_trades.json"
+            if platform_file.exists():
+                with open(platform_file, 'r') as f:
                     data = json.load(f)
-                    self.master_trades = {
+                    self.platform_trades = {
                         trade_id: MasterTradeReference(**trade_data)
                         for trade_id, trade_data in data.items()
                     }
@@ -164,19 +164,19 @@ class FollowerPnLAttribution:
                 json.dump(data, f, indent=2)
             
             # Save master trades
-            master_file = self.data_dir / "master_trades.json"
-            with open(master_file, 'w') as f:
+            platform_file = self.data_dir / "platform_trades.json"
+            with open(platform_file, 'w') as f:
                 data = {
                     trade_id: trade.to_dict()
-                    for trade_id, trade in self.master_trades.items()
+                    for trade_id, trade in self.platform_trades.items()
                 }
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving follower PnL data: {e}")
     
-    def record_master_trade(
+    def record_platform_trade(
         self,
-        master_trade_id: str,
+        platform_trade_id: str,
         symbol: str,
         side: str,
         price: float,
@@ -186,14 +186,14 @@ class FollowerPnLAttribution:
         Record a master trade for reference.
         
         Args:
-            master_trade_id: Unique master trade ID
+            platform_trade_id: Unique master trade ID
             symbol: Trading pair
             side: 'buy' or 'sell'
             price: Entry price
             size: Position size
         """
-        self.master_trades[master_trade_id] = MasterTradeReference(
-            master_trade_id=master_trade_id,
+        self.platform_trades[platform_trade_id] = MasterTradeReference(
+            platform_trade_id=platform_trade_id,
             symbol=symbol,
             side=side,
             entry_price=price,
@@ -205,7 +205,7 @@ class FollowerPnLAttribution:
     def record_follower_trade(
         self,
         follower_id: str,
-        master_trade_id: str,
+        platform_trade_id: str,
         symbol: str,
         side: str,
         price: float,
@@ -218,7 +218,7 @@ class FollowerPnLAttribution:
         
         Args:
             follower_id: Follower account ID
-            master_trade_id: Corresponding master trade ID
+            platform_trade_id: Corresponding master trade ID
             symbol: Trading pair
             side: 'buy' or 'sell'
             price: Execution price
@@ -231,7 +231,7 @@ class FollowerPnLAttribution:
         
         trade = FollowerTrade(
             follower_id=follower_id,
-            master_trade_id=master_trade_id,
+            platform_trade_id=platform_trade_id,
             symbol=symbol,
             side=side,
             entry_price=price,
@@ -250,7 +250,7 @@ class FollowerPnLAttribution:
     def update_follower_exit(
         self,
         follower_id: str,
-        master_trade_id: str,
+        platform_trade_id: str,
         exit_price: float
     ):
         """
@@ -258,7 +258,7 @@ class FollowerPnLAttribution:
         
         Args:
             follower_id: Follower account ID
-            master_trade_id: Master trade ID
+            platform_trade_id: Master trade ID
             exit_price: Exit price
         """
         if follower_id not in self.follower_trades:
@@ -267,7 +267,7 @@ class FollowerPnLAttribution:
         
         # Find the trade
         for trade in self.follower_trades[follower_id]:
-            if trade.master_trade_id == master_trade_id and trade.status == 'open':
+            if trade.platform_trade_id == platform_trade_id and trade.status == 'open':
                 trade.exit_price = exit_price
                 trade.status = 'closed'
                 
@@ -316,15 +316,15 @@ class FollowerPnLAttribution:
         total_pnl_pct = (realized_pnl / total_invested * 100) if total_invested > 0 else 0.0
         
         # Calculate master comparison
-        master_total_pnl = 0.0
-        master_total_pnl_pct = 0.0
+        platform_total_pnl = 0.0
+        platform_total_pnl_pct = 0.0
         for trade in trades:
-            if trade.master_trade_id in self.master_trades:
-                master_trade = self.master_trades[trade.master_trade_id]
-                if master_trade.master_pnl is not None:
-                    master_total_pnl += master_trade.master_pnl
+            if trade.platform_trade_id in self.platform_trades:
+                master_trade = self.platform_trades[trade.platform_trade_id]
+                if master_trade.platform_pnl is not None:
+                    platform_total_pnl += master_trade.platform_pnl
         
-        copy_efficiency = (total_pnl_pct / master_total_pnl_pct * 100) if master_total_pnl_pct != 0 else 100.0
+        copy_efficiency = (total_pnl_pct / platform_total_pnl_pct * 100) if platform_total_pnl_pct != 0 else 100.0
         
         # Calculate win rate
         closed_trades = [t for t in trades if t.status == 'closed' and t.pnl is not None]
@@ -352,8 +352,8 @@ class FollowerPnLAttribution:
             total_pnl_pct=total_pnl_pct,
             realized_pnl=realized_pnl,
             unrealized_pnl=unrealized_pnl,
-            master_total_pnl=master_total_pnl,
-            master_total_pnl_pct=master_total_pnl_pct,
+            platform_total_pnl=platform_total_pnl,
+            platform_total_pnl_pct=platform_total_pnl_pct,
             copy_efficiency=copy_efficiency,
             win_rate=win_rate,
             avg_slippage_pct=avg_slippage_pct,

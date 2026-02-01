@@ -57,24 +57,24 @@ class TierConfig:
 
 
 @dataclass
-class MasterFundingRules:
+class PlatformFundingRules:
     """
-    Hard minimum funding requirements for master accounts per tier.
+    Hard minimum funding requirements for platform accounts per tier.
 
-    These rules ensure master accounts have sufficient capital to:
+    These rules ensure platform accounts have sufficient capital to:
     - Execute trades without hitting exchange minimums
     - Maintain position management without lockouts
     - Provide stable signals to copy traders
     - Handle fees and slippage appropriately
 
     Unlike regular tier minimums (which are balance-based), master funding rules
-    define the ABSOLUTE MINIMUM capital a master account needs at each tier to
+    define the ABSOLUTE MINIMUM capital a platform account needs at each tier to
     function safely without locking out users.
     """
     tier: TradingTier
     absolute_minimum: float  # Hard floor - master CANNOT operate below this
     recommended_minimum: float  # Recommended minimum for stable operation
-    micro_master_mode: bool  # If True, enables special micro-master optimizations
+    micro_platform_mode: bool  # If True, enables special micro-platform optimizations
     max_trade_size_pct: float  # Maximum % of balance per trade
     min_trade_size_usd: float  # Minimum trade size in USD
     max_positions: int  # Maximum concurrent positions
@@ -86,7 +86,7 @@ class MasterFundingRules:
         Validate if balance meets minimum funding requirements.
 
         Args:
-            balance: Master account balance
+            balance: Platform account balance
 
         Returns:
             Tuple of (is_valid, message)
@@ -174,139 +174,139 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
 
 
 # ============================================================================
-# MASTER ACCOUNT FUNDING RULES
+# PLATFORM ACCOUNT FUNDING RULES
 # ============================================================================
-# Hard minimum funding requirements for master accounts
-# These ensure master accounts have enough capital to:
+# Hard minimum funding requirements for platform accounts
+# These ensure platform accounts have enough capital to:
 # - Execute meaningful trades
 # - Avoid exchange rejection (e.g., Kraken $10 minimum)
 # - Provide stable copy trading signals
 # - Handle fees without position lockouts
 #
 # Design Philosophy:
-# - MICRO_MASTER ($25-$50): Ultra-safe, single position, copy trading optimized
+# - MICRO_PLATFORM ($25-$50): Ultra-safe, single position, copy trading optimized
 # - STARTER ($50-$99): Learning mode, copy trading recommended
 # - SAVER+ ($100+): Full feature operation
 # ============================================================================
 
-MASTER_FUNDING_RULES: Dict[str, MasterFundingRules] = {
-    # MICRO_MASTER: Special tier for $25-$50 accounts
+PLATFORM_FUNDING_RULES: Dict[str, PlatformFundingRules] = {
+    # MICRO_PLATFORM: Special tier for $25-$50 accounts
     # Optimized for copy trading with minimal capital
-    'MICRO_MASTER': MasterFundingRules(
+    'MICRO_PLATFORM': PlatformFundingRules(
         tier=TradingTier.STARTER,
         absolute_minimum=25.0,  # Absolute floor: $25
         recommended_minimum=50.0,  # Recommended: $50 for safety
-        micro_master_mode=True,  # Enable micro-master optimizations
+        micro_platform_mode=True,  # Enable micro-platform optimizations
         max_trade_size_pct=40.0,  # Max 40% per trade (conservative)
         min_trade_size_usd=5.0,  # Minimum $5 trades (below Kraken min, Coinbase only)
         max_positions=1,  # Single position only
         requires_copy_trading=False,  # Can operate independently with care
         warning_message=(
-            "⚠️ MICRO-MASTER MODE ($25-$50): "
+            "⚠️ MICRO-PLATFORM MODE ($25-$50): "
             "Use Coinbase (not Kraken). Single position only. "
             "Best for copy trading. Fees will impact profitability."
         )
     ),
 
     # STARTER: $50-$99 learning tier
-    'STARTER': MasterFundingRules(
+    'STARTER': PlatformFundingRules(
         tier=TradingTier.STARTER,
         absolute_minimum=50.0,  # Hard minimum: $50
         recommended_minimum=100.0,  # Recommended: $100 for stable operation
-        micro_master_mode=False,
+        micro_platform_mode=False,
         max_trade_size_pct=30.0,  # Max 30% per trade
         min_trade_size_usd=10.0,  # Minimum $10 (Kraken compatible)
         max_positions=1,  # Single position
         requires_copy_trading=True,  # Copy trading highly recommended
         warning_message=(
-            "⚠️ STARTER MASTER ($50-$99): "
+            "⚠️ STARTER PLATFORM ($50-$99): "
             "Below $100 impacts reliability. Copy trading recommended. "
             "Consider upgrading to SAVER tier ($100+)."
         )
     ),
 
     # SAVER: $100-$249 minimum viable master
-    'SAVER': MasterFundingRules(
+    'SAVER': PlatformFundingRules(
         tier=TradingTier.SAVER,
         absolute_minimum=100.0,  # Hard minimum: $100
         recommended_minimum=100.0,  # Same as absolute (this is the floor)
-        micro_master_mode=False,
+        micro_platform_mode=False,
         max_trade_size_pct=25.0,  # Max 25% per trade
         min_trade_size_usd=10.0,  # Minimum $10
         max_positions=1,  # Single position for safety
         requires_copy_trading=False,  # Can operate independently
         warning_message=(
-            "✅ SAVER MASTER ($100-$249): "
-            "Minimum viable master account. Single position trading. "
+            "✅ SAVER PLATFORM ($100-$249): "
+            "Minimum viable platform account. Single position trading. "
             "Suitable for small-scale copy trading."
         )
     ),
 
     # INVESTOR: $250-$999 multi-position master
-    'INVESTOR': MasterFundingRules(
+    'INVESTOR': PlatformFundingRules(
         tier=TradingTier.INVESTOR,
         absolute_minimum=250.0,  # Hard minimum: $250
         recommended_minimum=250.0,
-        micro_master_mode=False,
+        micro_platform_mode=False,
         max_trade_size_pct=22.0,  # Max 22% per trade (tier floor)
         min_trade_size_usd=20.0,  # Minimum $20
         max_positions=3,  # Can handle rotation
         requires_copy_trading=False,
         warning_message=(
-            "✅ INVESTOR MASTER ($250-$999): "
+            "✅ INVESTOR PLATFORM ($250-$999): "
             "Full multi-position support. Rotation enabled. "
             "Stable for copy trading."
         )
     ),
 
     # INCOME: $1,000-$4,999 designed operation
-    'INCOME': MasterFundingRules(
+    'INCOME': PlatformFundingRules(
         tier=TradingTier.INCOME,
         absolute_minimum=1000.0,  # Hard minimum: $1,000
         recommended_minimum=1000.0,
-        micro_master_mode=False,
+        micro_platform_mode=False,
         max_trade_size_pct=15.0,  # Max 15% per trade
         min_trade_size_usd=30.0,  # Minimum $30
         max_positions=5,
         requires_copy_trading=False,
         warning_message=(
-            "✅ INCOME MASTER ($1,000-$4,999): "
+            "✅ INCOME PLATFORM ($1,000-$4,999): "
             "First tier where NIJA operates as designed. "
-            "Professional-grade master account."
+            "Professional-grade platform account."
         )
     ),
 
     # LIVABLE: $5,000-$24,999 pro-style master
-    'LIVABLE': MasterFundingRules(
+    'LIVABLE': PlatformFundingRules(
         tier=TradingTier.LIVABLE,
         absolute_minimum=5000.0,  # Hard minimum: $5,000
         recommended_minimum=5000.0,
-        micro_master_mode=False,
+        micro_platform_mode=False,
         max_trade_size_pct=10.0,  # Max 10% per trade
         min_trade_size_usd=50.0,  # Minimum $50
         max_positions=6,
         requires_copy_trading=False,
         warning_message=(
-            "✅ LIVABLE MASTER ($5,000-$24,999): "
+            "✅ LIVABLE PLATFORM ($5,000-$24,999): "
             "Pro-style scaling and streak logic. "
-            "Institutional-quality master account."
+            "Institutional-quality platform account."
         )
     ),
 
     # BALLER: $25,000+ institutional master
-    'BALLER': MasterFundingRules(
+    'BALLER': PlatformFundingRules(
         tier=TradingTier.BALLER,
         absolute_minimum=25000.0,  # Hard minimum: $25,000
         recommended_minimum=25000.0,
-        micro_master_mode=False,
+        micro_platform_mode=False,
         max_trade_size_pct=5.0,  # Max 5% per trade (very conservative)
         min_trade_size_usd=100.0,  # Minimum $100
         max_positions=8,
         requires_copy_trading=False,
         warning_message=(
-            "✅ BALLER MASTER ($25,000+): "
+            "✅ BALLER PLATFORM ($25,000+): "
             "Capital deployment mode. Institutional behavior. "
-            "Elite-tier master account."
+            "Elite-tier platform account."
         )
     ),
 }
@@ -331,41 +331,41 @@ class StablecoinPolicy(Enum):
 DEFAULT_STABLECOIN_POLICY = StablecoinPolicy.ROUTE_TO_KRAKEN
 
 
-def get_tier_from_balance(balance: float, override_tier: str = None, is_master: bool = False) -> TradingTier:
+def get_tier_from_balance(balance: float, override_tier: str = None, is_platform: bool = False) -> TradingTier:
     """
     Determine trading tier based on account balance.
 
-    IMPORTANT: Master account is ALWAYS BALLER tier regardless of balance.
+    IMPORTANT: Platform account is ALWAYS BALLER tier regardless of balance.
 
-    Can be overridden by setting MASTER_ACCOUNT_TIER environment variable.
+    Can be overridden by setting PLATFORM_ACCOUNT_TIER environment variable.
     This is useful for small accounts that need higher tier risk management.
 
     Args:
         balance: Account balance in USD
         override_tier: Optional tier name to force (e.g., "INVESTOR")
-        is_master: If True, forces BALLER tier (master account always uses BALLER)
+        is_platform: If True, forces BALLER tier (platform account always uses BALLER)
 
     Returns:
         TradingTier enum
     """
-    # CRITICAL: Master account is ALWAYS BALLER tier
-    if is_master:
-        logger.info(f"🎯 Master account: Using BALLER tier (balance: ${balance:.2f})")
-        logger.info(f"   Note: Master account always uses BALLER tier regardless of balance")
+    # CRITICAL: Platform account is ALWAYS BALLER tier
+    if is_platform:
+        logger.info(f"🎯 Platform account: Using BALLER tier (balance: ${balance:.2f})")
+        logger.info(f"   Note: Platform account always uses BALLER tier regardless of balance")
         return TradingTier.BALLER
 
     # Check for environment variable override first
-    env_tier = override_tier or os.getenv('MASTER_ACCOUNT_TIER', '').upper()
+    env_tier = override_tier or os.getenv('PLATFORM_ACCOUNT_TIER', '').upper()
     if env_tier:
         # Special handling: If set to "BALLER" or "MASTER", force BALLER tier
-        if env_tier in ('BALLER', 'MASTER'):
+        if env_tier in ('BALLER', 'PLATFORM'):
             logger.info(f"🎯 Tier override: Using BALLER tier (balance: ${balance:.2f})")
             return TradingTier.BALLER
 
         # Validate tier name before attempting to use it
         valid_tiers = [tier.name for tier in TradingTier]
         if env_tier not in valid_tiers:
-            logger.warning(f"⚠️ Invalid MASTER_ACCOUNT_TIER: {env_tier}. Valid options: {', '.join(valid_tiers)}")
+            logger.warning(f"⚠️ Invalid PLATFORM_ACCOUNT_TIER: {env_tier}. Valid options: {', '.join(valid_tiers)}")
             logger.warning(f"   Using balance-based tier instead.")
         else:
             try:
@@ -426,24 +426,24 @@ def get_tier_config(tier: TradingTier) -> TierConfig:
     return TIER_CONFIGS[tier]
 
 
-def get_max_trade_size(tier: TradingTier, balance: float, is_master: bool = False) -> float:
+def get_max_trade_size(tier: TradingTier, balance: float, is_platform: bool = False) -> float:
     """
     Get maximum trade size for a tier based on balance.
 
-    MASTER ACCOUNT OVERRIDE:
-    Master accounts with BALLER tier get flexible maximums at low balances.
+    PLATFORM ACCOUNT OVERRIDE:
+    Platform accounts with BALLER tier get flexible maximums at low balances.
 
     Args:
         tier: Trading tier
         balance: Account balance
-        is_master: If True, applies master account rules
+        is_platform: If True, applies platform account rules
 
     Returns:
         Maximum trade size in USD
     """
     config = get_tier_config(tier)
 
-    # MASTER BALLER tier with low balance: use dynamic maximums
+    # PLATFORM BALLER tier with low balance: use dynamic maximums
     if is_master and tier == TradingTier.BALLER and balance < 25000.0:
         if balance < 100.0:
             flexible_max = balance * 0.50  # 50% max for very small balances
@@ -456,13 +456,13 @@ def get_max_trade_size(tier: TradingTier, balance: float, is_master: bool = Fals
     return config.trade_size_max
 
 
-def get_min_trade_size(tier: TradingTier, balance: float, is_master: bool = False,
+def get_min_trade_size(tier: TradingTier, balance: float, is_platform: bool = False,
                        exchange: str = 'coinbase') -> float:
     """
     Get minimum trade size for a tier based on balance.
 
-    MASTER ACCOUNT OVERRIDE:
-    Master accounts with BALLER tier get flexible minimums at low balances.
+    PLATFORM ACCOUNT OVERRIDE:
+    Platform accounts with BALLER tier get flexible minimums at low balances.
 
     EXCHANGE-SPECIFIC MINIMUMS:
     - Kraken: $10.50 (accounts for $10 minimum + fees)
@@ -471,7 +471,7 @@ def get_min_trade_size(tier: TradingTier, balance: float, is_master: bool = Fals
     Args:
         tier: Trading tier
         balance: Account balance
-        is_master: If True, applies master account rules
+        is_platform: If True, applies platform account rules
         exchange: Exchange name for minimum validation
 
     Returns:
@@ -483,7 +483,7 @@ def get_min_trade_size(tier: TradingTier, balance: float, is_master: bool = Fals
     from position_sizer import get_exchange_min_trade_size
     exchange_min = get_exchange_min_trade_size(exchange)
 
-    # MASTER BALLER tier with low balance: use dynamic minimums
+    # PLATFORM BALLER tier with low balance: use dynamic minimums
     if is_master and tier == TradingTier.BALLER and balance < 25000.0:
         if balance < 100.0:
             flexible_min = max(balance * 0.15, exchange_min)  # 15% or exchange min
@@ -601,7 +601,7 @@ def get_tier_summary() -> Dict[str, Dict]:
 
 
 def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
-                     is_master: bool = False, exchange: str = 'coinbase') -> Tuple[float, str]:
+                     is_platform: bool = False, exchange: str = 'coinbase') -> Tuple[float, str]:
     """
     Auto-resize trade to fit within tier limits instead of rejecting.
 
@@ -617,7 +617,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
         trade_size: Requested trade size in USD
         tier: Trading tier
         balance: Account balance
-        is_master: If True, applies master account flexibility rules
+        is_platform: If True, applies platform account flexibility rules
         exchange: Exchange name for minimum validation
 
     Returns:
@@ -642,7 +642,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
 
     # Calculate tier-based maximum
     if is_master and tier == TradingTier.BALLER and balance < 25000.0:
-        # Master account with low balance - use flexible max
+        # Platform account with low balance - use flexible max
         max_risk_pct = 50.0 if balance < 100.0 else 25.0
         tier_max = balance * (max_risk_pct / 100.0)
         tier_max = max(tier_max, exchange_min)
@@ -658,7 +658,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
         tier_max = min(tier_max, max_by_risk)
 
     # Calculate tier minimum
-    # MASTER BALLER tier with low balance: use flexible minimums (same logic as get_min_trade_size)
+    # PLATFORM BALLER tier with low balance: use flexible minimums (same logic as get_min_trade_size)
     if is_master and tier == TradingTier.BALLER and balance < 25000.0:
         if balance < 100.0:
             flexible_min = max(balance * 0.15, exchange_min)  # 15% or exchange min
@@ -672,7 +672,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
 
         # Small balance exception - allow lower minimums if max risk < tier min
         max_risk_by_pct = balance * (config.risk_per_trade_pct[1] / 100.0)
-        if max_risk_by_pct < tier_min and not is_master:
+        if max_risk_by_pct < tier_min and not is_platform:
             tier_min = max(exchange_min, max_risk_by_pct)
 
     original_size = trade_size
@@ -692,7 +692,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
 
 
 def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
-                       is_master: bool = False, exchange: str = 'coinbase') -> Tuple[bool, str]:
+                       is_platform: bool = False, exchange: str = 'coinbase') -> Tuple[bool, str]:
     """
     Validate if a trade size is appropriate for the tier.
 
@@ -713,8 +713,8 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
             return error  # Below minimum
         # Use resized_size for trade execution
 
-    MASTER ACCOUNT OVERRIDE:
-    Master accounts using BALLER tier can trade with lower minimums when balance is low.
+    PLATFORM ACCOUNT OVERRIDE:
+    Platform accounts using BALLER tier can trade with lower minimums when balance is low.
     This allows master to maintain full control even with small funded accounts.
 
     EXCHANGE-SPECIFIC MINIMUMS:
@@ -726,7 +726,7 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
         trade_size: Proposed trade size in USD
         tier: Trading tier
         balance: Account balance
-        is_master: If True, applies master account flexibility rules
+        is_platform: If True, applies platform account flexibility rules
         exchange: Exchange name (kraken, coinbase, etc.) for minimum validation
 
     Returns:
@@ -738,10 +738,10 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
     from position_sizer import get_exchange_min_trade_size
     exchange_min = get_exchange_min_trade_size(exchange)
 
-    # MASTER ACCOUNT SPECIAL HANDLING FOR BALLER TIER
-    # If master account with BALLER tier and low balance, use dynamic minimums
+    # PLATFORM ACCOUNT SPECIAL HANDLING FOR BALLER TIER
+    # If platform account with BALLER tier and low balance, use dynamic minimums
     if is_master and tier == TradingTier.BALLER and balance < 25000.0:
-        # For master accounts under $25k, use flexible minimums based on balance
+        # For platform accounts under $25k, use flexible minimums based on balance
         # This keeps master in full control while ensuring safety
 
         # At low balances, allow 15-50% position sizing for master control
@@ -761,7 +761,7 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
         # Ensure we don't exceed tier absolute maximums
         effective_max = min(effective_max, config.trade_size_max)
 
-        logger.info(f"🎯 MASTER BALLER tier with low balance (${balance:.2f})")
+        logger.info(f"🎯 PLATFORM BALLER tier with low balance (${balance:.2f})")
         logger.info(f"   Exchange: {exchange} (min: ${exchange_min:.2f})")
         logger.info(f"   Adjusted limits: ${effective_min:.2f} - ${effective_max:.2f}")
 
@@ -856,27 +856,27 @@ def can_trade_live(balance: float, allow_copy_trading: bool = False) -> Tuple[bo
 
 
 # ============================================================================
-# MASTER ACCOUNT FUNDING VALIDATION
+# PLATFORM ACCOUNT FUNDING VALIDATION
 # ============================================================================
 
-def get_master_funding_tier(balance: float) -> str:
+def get_platform_funding_tier(balance: float) -> str:
     """
     Determine the appropriate master funding tier based on balance.
 
     This is different from regular tier assignment. Master funding tiers
-    determine what operational capabilities the master account has.
+    determine what operational capabilities the platform account has.
 
     Args:
-        balance: Master account balance in USD
+        balance: Platform account balance in USD
 
     Returns:
-        Master funding tier name: 'MICRO_MASTER', 'STARTER', 'SAVER', etc.
+        Master funding tier name: 'MICRO_PLATFORM', 'STARTER', 'SAVER', etc.
     """
     if balance < 25.0:
         logger.error(f"❌ Master balance ${balance:.2f} below absolute minimum $25.00")
         return None
     elif balance < 50.0:
-        return 'MICRO_MASTER'
+        return 'MICRO_PLATFORM'
     elif balance < 100.0:
         return 'STARTER'
     elif balance < 250.0:
@@ -891,39 +891,39 @@ def get_master_funding_tier(balance: float) -> str:
         return 'BALLER'
 
 
-def validate_master_minimum_funding(balance: float, log_warnings: bool = True) -> Tuple[bool, str, Optional[MasterFundingRules]]:
+def validate_platform_minimum_funding(balance: float, log_warnings: bool = True) -> Tuple[bool, str, Optional[PlatformFundingRules]]:
     """
-    Validate if master account meets minimum funding requirements.
+    Validate if platform account meets minimum funding requirements.
 
-    This enforces HARD MINIMUMS for master accounts to prevent:
+    This enforces HARD MINIMUMS for platform accounts to prevent:
     - Exchange order rejections
     - Position lockouts
     - Unreliable copy trading signals
     - Fee-dominated trading
 
     Args:
-        balance: Master account balance in USD
+        balance: Platform account balance in USD
         log_warnings: If True, logs warnings for funding issues
 
     Returns:
         Tuple of (is_valid, message, funding_rules)
         - is_valid: True if balance meets absolute minimum
         - message: Explanation of funding status
-        - funding_rules: MasterFundingRules object for this tier (or None if invalid)
+        - funding_rules: PlatformFundingRules object for this tier (or None if invalid)
     """
     # Get master funding tier
-    funding_tier_name = get_master_funding_tier(balance)
+    funding_tier_name = get_platform_funding_tier(balance)
 
     if funding_tier_name is None:
         msg = f"❌ CRITICAL: Master balance ${balance:.2f} below absolute minimum $25.00. Cannot operate."
         if log_warnings:
             logger.error(msg)
-            logger.error("   Master accounts require at least $25 to function.")
+            logger.error("   Platform accounts require at least $25 to function.")
             logger.error("   Recommended: $50+ for STARTER, $100+ for stable operation")
         return (False, msg, None)
 
     # Get funding rules for this tier
-    funding_rules = MASTER_FUNDING_RULES[funding_tier_name]
+    funding_rules = PLATFORM_FUNDING_RULES[funding_tier_name]
 
     # Validate against funding rules
     is_valid, validation_msg = funding_rules.validate_funding(balance)
@@ -946,8 +946,8 @@ def validate_master_minimum_funding(balance: float, log_warnings: bool = True) -
         logger.info(f"   Max Trade Size: {funding_rules.max_trade_size_pct:.1f}% of balance")
         logger.info(f"   Min Trade Size: ${funding_rules.min_trade_size_usd:.2f}")
         logger.info(f"   Max Positions: {funding_rules.max_positions}")
-        if funding_rules.micro_master_mode:
-            logger.info(f"   🔧 MICRO-MASTER MODE ACTIVE")
+        if funding_rules.micro_platform_mode:
+            logger.info(f"   🔧 MICRO-PLATFORM MODE ACTIVE")
             logger.info(f"      - Use Coinbase only (Kraken $10 min not compatible)")
             logger.info(f"      - Single position enforced")
             logger.info(f"      - Best used for copy trading")
@@ -955,14 +955,14 @@ def validate_master_minimum_funding(balance: float, log_warnings: bool = True) -
     return (is_valid, validation_msg, funding_rules)
 
 
-def get_master_trade_limits(balance: float, exchange: str = 'coinbase') -> Dict:
+def get_platform_trade_limits(balance: float, exchange: str = 'coinbase') -> Dict:
     """
-    Get master account trade limits based on balance and funding tier.
+    Get platform account trade limits based on balance and funding tier.
 
     Returns conservative limits that prevent lockouts and ensure stable operation.
 
     Args:
-        balance: Master account balance in USD
+        balance: Platform account balance in USD
         exchange: Exchange name for minimum validation
 
     Returns:
@@ -971,10 +971,10 @@ def get_master_trade_limits(balance: float, exchange: str = 'coinbase') -> Dict:
             - min_trade_size: Minimum trade size in USD
             - max_trade_size: Maximum trade size in USD
             - max_positions: Maximum concurrent positions
-            - micro_master_mode: Whether micro-master optimizations are active
+            - micro_platform_mode: Whether micro-platform optimizations are active
             - warning_message: Important operational warnings
     """
-    is_valid, msg, funding_rules = validate_master_minimum_funding(balance, log_warnings=False)
+    is_valid, msg, funding_rules = validate_platform_minimum_funding(balance, log_warnings=False)
 
     if not is_valid or funding_rules is None:
         # Return ultra-conservative limits for invalid/below minimum
@@ -983,7 +983,7 @@ def get_master_trade_limits(balance: float, exchange: str = 'coinbase') -> Dict:
             'min_trade_size': 10.0,
             'max_trade_size': 0.0,  # Cannot trade
             'max_positions': 0,
-            'micro_master_mode': False,
+            'micro_platform_mode': False,
             'warning_message': msg,
             'is_valid': False
         }
@@ -1006,18 +1006,18 @@ def get_master_trade_limits(balance: float, exchange: str = 'coinbase') -> Dict:
     # Use the greater of funding rule minimum or exchange minimum
     min_trade_size = max(funding_rules.min_trade_size_usd, exchange_min)
 
-    # For micro-master mode on Kraken, warn about incompatibility
+    # For micro-platform mode on Kraken, warn about incompatibility
     warning = funding_rules.warning_message
-    if funding_rules.micro_master_mode and exchange.lower() == 'kraken':
-        warning += " ⚠️ KRAKEN NOT COMPATIBLE WITH MICRO-MASTER (use Coinbase)."
+    if funding_rules.micro_platform_mode and exchange.lower() == 'kraken':
+        warning += " ⚠️ KRAKEN NOT COMPATIBLE WITH MICRO-PLATFORM (use Coinbase)."
         min_trade_size = 10.50  # Kraken enforces this
 
     return {
-        'tier_name': get_master_funding_tier(balance),
+        'tier_name': get_platform_funding_tier(balance),
         'min_trade_size': min_trade_size,
         'max_trade_size': max_trade_size,
         'max_positions': funding_rules.max_positions,
-        'micro_master_mode': funding_rules.micro_master_mode,
+        'micro_platform_mode': funding_rules.micro_platform_mode,
         'warning_message': warning,
         'is_valid': is_valid
     }
@@ -1025,16 +1025,16 @@ def get_master_trade_limits(balance: float, exchange: str = 'coinbase') -> Dict:
 
 def is_micro_master(balance: float) -> bool:
     """
-    Check if master account is in micro-master mode ($25-$49).
+    Check if platform account is in micro-platform mode ($25-$49).
 
     Args:
-        balance: Master account balance
+        balance: Platform account balance
 
     Returns:
-        True if micro-master mode should be active
+        True if micro-platform mode should be active
     """
-    tier = get_master_funding_tier(balance)
-    return tier == 'MICRO_MASTER' if tier else False
+    tier = get_platform_funding_tier(balance)
+    return tier == 'MICRO_PLATFORM' if tier else False
 
 
 def log_tier_floors() -> None:
@@ -1056,23 +1056,23 @@ def log_tier_floors() -> None:
     logger.info("")
     
     # Define tier order for display
-    tier_order = ['MICRO_MASTER', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
+    tier_order = ['MICRO_PLATFORM', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
     
     for tier_name in tier_order:
-        if tier_name in MASTER_FUNDING_RULES:
-            rules = MASTER_FUNDING_RULES[tier_name]
+        if tier_name in PLATFORM_FUNDING_RULES:
+            rules = PLATFORM_FUNDING_RULES[tier_name]
             
             # Format capital range
             capital_min = rules.absolute_minimum
             if tier_name == 'BALLER':
                 capital_range = f"${capital_min:,.0f}+"
-            elif tier_name == 'MICRO_MASTER':
+            elif tier_name == 'MICRO_PLATFORM':
                 capital_range = f"${capital_min:.0f}-$50"
             else:
                 # Infer max from next tier's min
                 next_tier_idx = tier_order.index(tier_name) + 1
                 if next_tier_idx < len(tier_order):
-                    next_tier = MASTER_FUNDING_RULES.get(tier_order[next_tier_idx])
+                    next_tier = PLATFORM_FUNDING_RULES.get(tier_order[next_tier_idx])
                     if next_tier:
                         capital_max = next_tier.absolute_minimum - 0.01
                         capital_range = f"${capital_min:.0f}-${capital_max:.0f}"
@@ -1113,11 +1113,11 @@ def emit_tier_floor_metrics() -> Dict[str, float]:
     """
     metrics = {}
     
-    tier_order = ['MICRO_MASTER', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
+    tier_order = ['MICRO_PLATFORM', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
     
     for tier_name in tier_order:
-        if tier_name in MASTER_FUNDING_RULES:
-            rules = MASTER_FUNDING_RULES[tier_name]
+        if tier_name in PLATFORM_FUNDING_RULES:
+            rules = PLATFORM_FUNDING_RULES[tier_name]
             
             # Create metric name (lowercase, underscores)
             metric_base = f"nija_tier_floor_{tier_name.lower()}"
@@ -1159,7 +1159,7 @@ def assert_expected_tier_floors() -> None:
     
     # Expected tier floors (updated Jan 30, 2026)
     expected_floors = {
-        'MICRO_MASTER': 40.0,
+        'MICRO_PLATFORM': 40.0,
         'STARTER': 30.0,
         'SAVER': 25.0,
         'INVESTOR': 22.0,  # CRITICAL: Recent fix from 20% to 22% (Jan 30, 2026)
@@ -1171,11 +1171,11 @@ def assert_expected_tier_floors() -> None:
     errors = []
     
     for tier_name, expected_floor in expected_floors.items():
-        if tier_name not in MASTER_FUNDING_RULES:
+        if tier_name not in PLATFORM_FUNDING_RULES:
             errors.append(f"Missing tier configuration: {tier_name}")
             continue
         
-        actual_floor = MASTER_FUNDING_RULES[tier_name].max_trade_size_pct
+        actual_floor = PLATFORM_FUNDING_RULES[tier_name].max_trade_size_pct
         
         if actual_floor != expected_floor:
             errors.append(
@@ -1201,20 +1201,20 @@ def get_tier_floors_for_api() -> Dict[str, Any]:
     Returns:
         Dict with tier floor data for all tiers
     """
-    tier_order = ['MICRO_MASTER', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
+    tier_order = ['MICRO_PLATFORM', 'STARTER', 'SAVER', 'INVESTOR', 'INCOME', 'LIVABLE', 'BALLER']
     
     tiers = []
     
     for tier_name in tier_order:
-        if tier_name in MASTER_FUNDING_RULES:
-            rules = MASTER_FUNDING_RULES[tier_name]
+        if tier_name in PLATFORM_FUNDING_RULES:
+            rules = PLATFORM_FUNDING_RULES[tier_name]
             
             # Determine capital range
             if tier_name == 'BALLER':
                 capital_min = rules.absolute_minimum
                 capital_max = None
                 capital_range = f"${capital_min:,.0f}+"
-            elif tier_name == 'MICRO_MASTER':
+            elif tier_name == 'MICRO_PLATFORM':
                 capital_min = rules.absolute_minimum
                 capital_max = 50.0
                 capital_range = f"${capital_min:.0f}-${capital_max:.0f}"
@@ -1223,7 +1223,7 @@ def get_tier_floors_for_api() -> Dict[str, Any]:
                 next_tier_idx = tier_order.index(tier_name) + 1
                 capital_min = rules.absolute_minimum
                 if next_tier_idx < len(tier_order):
-                    next_tier = MASTER_FUNDING_RULES.get(tier_order[next_tier_idx])
+                    next_tier = PLATFORM_FUNDING_RULES.get(tier_order[next_tier_idx])
                     if next_tier:
                         capital_max = next_tier.absolute_minimum - 0.01
                     else:
@@ -1244,7 +1244,7 @@ def get_tier_floors_for_api() -> Dict[str, Any]:
                 'floor_pct': rules.max_trade_size_pct,
                 'max_positions': rules.max_positions,
                 'min_trade_size_usd': rules.min_trade_size_usd,
-                'micro_master_mode': rules.micro_master_mode,
+                'micro_platform_mode': rules.micro_platform_mode,
                 'requires_copy_trading': rules.requires_copy_trading,
                 'description': rules.warning_message.split('.')[0],  # First sentence
             }
@@ -1300,26 +1300,26 @@ if __name__ == "__main__":
 
     # Test master funding validation
     print("\n\n" + "="*70)
-    print("MASTER ACCOUNT FUNDING VALIDATION TESTS")
+    print("PLATFORM ACCOUNT FUNDING VALIDATION TESTS")
     print("="*70)
 
-    test_master_balances = [20, 30, 55, 95, 120, 300, 1500, 30000]
-    for master_balance in test_master_balances:
+    test_platform_balances = [20, 30, 55, 95, 120, 300, 1500, 30000]
+    for platform_balance in test_platform_balances:
         print(f"\n{'='*70}")
-        print(f"Testing Master Balance: ${master_balance:.2f}")
+        print(f"Testing Platform Balance: ${platform_balance:.2f}")
         print(f"{'='*70}")
 
         # Validate funding
-        is_valid, msg, funding_rules = validate_master_minimum_funding(
-            master_balance,
+        is_valid, msg, funding_rules = validate_platform_minimum_funding(
+            platform_balance,
             log_warnings=True
         )
 
         # Get trade limits
-        limits = get_master_trade_limits(master_balance, exchange='kraken')
+        limits = get_platform_trade_limits(platform_balance, exchange='kraken')
         print(f"\n📊 Trade Limits:")
         print(f"   Min Trade: ${limits['min_trade_size']:.2f}")
         print(f"   Max Trade: ${limits['max_trade_size']:.2f}")
         print(f"   Max Positions: {limits['max_positions']}")
-        print(f"   Micro-Master: {limits['micro_master_mode']}")
+        print(f"   Micro-Master: {limits['micro_platform_mode']}")
         print(f"   Valid: {limits['is_valid']}")

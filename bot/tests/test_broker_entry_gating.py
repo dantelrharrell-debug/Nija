@@ -19,7 +19,7 @@ class MockBroker(BaseBroker):
     """Mock broker for testing"""
 
     def __init__(self, broker_type: BrokerType, balance: float = 100.0, exit_only: bool = False):
-        super().__init__(broker_type, AccountType.MASTER)
+        super().__init__(broker_type, AccountType.PLATFORM)
         self.balance = balance
         self.connected = True
         self.exit_only_mode = exit_only

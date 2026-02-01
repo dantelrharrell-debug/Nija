@@ -22,7 +22,7 @@ broker: KRAKEN
 api_key: YOUR_ACTUAL_API_KEY_FROM_KRAKEN
 api_secret: YOUR_ACTUAL_API_SECRET_FROM_KRAKEN
 enabled: true
-copy_from_master: true
+copy_from_platform: true
 ```
 
 ### 3. Supported Brokers
@@ -39,7 +39,7 @@ copy_from_master: true
 | `api_key` | Yes | Your API key from the exchange | - |
 | `api_secret` | Yes | Your API secret from the exchange | - |
 | `enabled` | Yes | Enable/disable this user (`true`/`false`) | `true` |
-| `copy_from_master` | Yes | Copy trades from master account | `true` |
+| `copy_from_platform` | Yes | Copy trades from platform account | `true` |
 | `risk_multiplier` | No | Risk adjustment multiplier | `1.0` |
 
 ## Security
@@ -69,7 +69,7 @@ broker: KRAKEN
 api_key: XEB37FsbsQ2Wj/bknOy6HPZTFqs25nyU10M2oxF/ja//Yh/r2kSRCAp/
 api_secret: iINPAKFyVe9rTfYCKnauFCpOfqdsm9+lBFxzx2KLFkArjStbjAQ9Rr+FuA5lZgnzpZ85wMwnzKpkO07iHmMLmw==
 enabled: true
-copy_from_master: true
+copy_from_platform: true
 ```
 
 ### Example 2: Conservative Risk User
@@ -79,8 +79,8 @@ broker: KRAKEN
 api_key: your_api_key
 api_secret: your_api_secret
 enabled: true
-copy_from_master: true
-risk_multiplier: 0.5  # Take half the risk of master account
+copy_from_platform: true
+risk_multiplier: 0.5  # Take half the risk of platform account
 ```
 
 ### Example 3: Disabled User
@@ -90,7 +90,7 @@ broker: KRAKEN
 api_key: your_api_key
 api_secret: your_api_secret
 enabled: false  # Temporarily disabled
-copy_from_master: true
+copy_from_platform: true
 ```
 
 ## Loading YAML Configurations
@@ -129,7 +129,7 @@ The YAML loader validates:
 
 ✅ **File exists and is readable**
 ✅ **Valid YAML syntax**
-✅ **Required fields present** (broker, api_key, api_secret, enabled, copy_from_master)
+✅ **Required fields present** (broker, api_key, api_secret, enabled, copy_from_platform)
 ✅ **Non-placeholder credentials** (detects "YOUR_KEY", "YOUR_API_KEY_HERE", etc.)
 ✅ **Non-empty values**
 
@@ -184,7 +184,7 @@ broker: KRAKEN
 api_key: ...
 api_secret: ...
 enabled: true
-copy_from_master: true
+copy_from_platform: true
 ```
 
 **Benefits of YAML:**

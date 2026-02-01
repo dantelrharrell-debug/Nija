@@ -606,7 +606,7 @@ class AdaptiveRiskManager:
 
         # TIER-AWARE RISK MANAGEMENT: Respect tier max risk percentage
         # This ensures position sizes don't exceed tier limits (e.g., STARTER tier = 15% max)
-        # EXCEPTION: Master account should NOT be limited by tier constraints
+        # EXCEPTION: Platform account should NOT be limited by tier constraints
         tier_max_pct = self.max_position_pct  # Default to configured max
 
         if TIER_AWARE_MODE:
@@ -617,9 +617,9 @@ class AdaptiveRiskManager:
                 # - PRO MODE: total_capital (free balance + position values)
                 # - Normal mode: account_balance (which is total equity per v71 strategy)
 
-                # Check if this is the master account via environment variable
+                # Check if this is the platform account via environment variable
                 import os
-                is_master_account = os.getenv('MASTER_ACCOUNT_TIER', '').upper() in ('BALLER', 'MASTER')
+                is_platform_account = os.getenv('PLATFORM_ACCOUNT_TIER', '').upper() in ('BALLER', 'PLATFORM')
 
                 # TIER LOCK: If set, override tier detection with locked tier
                 # This allows PRO MODE with tier-specific risk caps
@@ -633,33 +633,33 @@ class AdaptiveRiskManager:
                             logger.debug(f"🔒 TIER_LOCK active: Using {self.tier_lock} tier (balance: ${sizing_base:.2f})")
                         else:
                             logger.warning(f"⚠️ Invalid TIER_LOCK type: {type(self.tier_lock)}. Falling back to balance-based tier.")
-                            tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                            tier = get_tier_from_balance(sizing_base, is_platform=is_platform_account)
                     except (KeyError, AttributeError) as e:
                         logger.warning(f"⚠️ Invalid TIER_LOCK: {self.tier_lock}. Falling back to balance-based tier. Error: {e}")
-                        tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                        tier = get_tier_from_balance(sizing_base, is_platform=is_platform_account)
                 else:
                     # Standard balance-based tier detection
-                    tier = get_tier_from_balance(sizing_base, is_master=is_master_account)
+                    tier = get_tier_from_balance(sizing_base, is_platform=is_platform_account)
 
                 tier_config = get_tier_config(tier)
 
-                # MASTER ACCOUNT EXCEPTION: Master uses configured max, not tier max
+                # PLATFORM ACCOUNT EXCEPTION: Master uses configured max, not tier max
                 # Master needs flexibility to trade optimally while staying profitable
-                if is_master_account and not self.tier_lock:
-                    logger.info(f"🎯 Master account detected: Using configured max {self.max_position_pct*100:.1f}% (tier: {tier.value})")
+                if is_platform_account and not self.tier_lock:
+                    logger.info(f"🎯 Platform account detected: Using configured max {self.max_position_pct*100:.1f}% (tier: {tier.value})")
                     tier_max_pct = self.max_position_pct  # Keep configured max for master
                     breakdown['is_master'] = True
                     breakdown['tier'] = tier.value
                 else:
                     # Regular user OR tier-locked PRO MODE: Apply tier limits
-                    # IMPORTANT: Use MASTER_FUNDING_RULES max_trade_size_pct for tier floor
+                    # IMPORTANT: Use PLATFORM_FUNDING_RULES max_trade_size_pct for tier floor
                     # This ensures LOW_CAPITAL and other adjustments don't reduce below tier minimum
                     try:
-                        from tier_config import MASTER_FUNDING_RULES, get_master_funding_tier
+                        from tier_config import PLATFORM_FUNDING_RULES, get_platform_funding_tier
                         # Get funding tier based on balance
-                        funding_tier_name = get_master_funding_tier(sizing_base) if sizing_base >= 25.0 else 'MICRO_MASTER'
-                        if funding_tier_name and funding_tier_name in MASTER_FUNDING_RULES:
-                            funding_rules = MASTER_FUNDING_RULES[funding_tier_name]
+                        funding_tier_name = get_platform_funding_tier(sizing_base) if sizing_base >= 25.0 else 'MICRO_PLATFORM'
+                        if funding_tier_name and funding_tier_name in PLATFORM_FUNDING_RULES:
+                            funding_rules = PLATFORM_FUNDING_RULES[funding_tier_name]
                             tier_max_risk_pct = funding_rules.max_trade_size_pct / 100.0  # Convert from percentage to decimal
                         else:
                             # Fallback to legacy tier config if funding rules not available

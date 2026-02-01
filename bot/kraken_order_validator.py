@@ -303,7 +303,7 @@ def verify_per_api_key_execution(api_key: str, account_type: str = "unknown") ->
 
     Args:
         api_key: The API key being used (first 10 chars for logging)
-        account_type: 'MASTER' or 'USER' or account identifier
+        account_type: 'PLATFORM' or 'USER' or account identifier
 
     Returns:
         bool: True if API key is properly set

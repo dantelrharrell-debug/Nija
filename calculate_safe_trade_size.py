@@ -86,14 +86,14 @@ def calculate_fees(trade_size: float, use_limit_order: bool = True) -> Dict[str,
 
 
 def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
-                              use_limit_order: bool = True, is_master: bool = False,
+                              use_limit_order: bool = True, is_platform: bool = False,
                               exchange: str = 'coinbase') -> Dict:
     """
     Calculate the exact safe trade size for a given balance and tier.
 
-    MASTER ACCOUNT MODE:
-    When is_master=True with BALLER tier, applies flexible limits for low balances.
-    This allows master to maintain control even with small funded accounts.
+    PLATFORM ACCOUNT MODE:
+    When is_platform=True with BALLER tier, applies flexible limits for low balances.
+    This allows platform account to maintain control even with small funded accounts.
 
     EXCHANGE-SPECIFIC MINIMUMS:
     - Kraken: $10.50 minimum (accounts for $10 Kraken minimum + fees)
@@ -103,14 +103,14 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
         balance: Account balance in USD
         tier: TradingTier enum (if None, auto-detect from balance)
         use_limit_order: True for limit orders (lower fees)
-        is_master: True if this is the master account (gets BALLER flexibility)
+        is_platform: True if this is the platform account (gets BALLER flexibility)
         exchange: Exchange name (kraken, coinbase, okx, binance, etc.)
 
     Returns:
         Dictionary with complete calculation breakdown
     """
     # Determine actual tier from balance
-    actual_tier = get_tier_from_balance(balance, is_master=is_master)
+    actual_tier = get_tier_from_balance(balance, is_platform=is_platform)
 
     # Use specified tier or actual tier
     if tier is None:
@@ -133,9 +133,9 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
     fee_aware_pct = get_position_size_pct(balance)
     fee_aware_size = balance * fee_aware_pct
 
-    # Tier-based size limits (with master account flexibility and exchange minimums)
-    tier_min = get_min_trade_size(tier, balance, is_master, exchange)
-    tier_max = get_max_trade_size(tier, balance, is_master)
+    # Tier-based size limits (with platform account flexibility and exchange minimums)
+    tier_min = get_min_trade_size(tier, balance, is_platform, exchange)
+    tier_max = get_max_trade_size(tier, balance, is_platform)
 
     # Position sizer minimum (exchange-specific)
     from position_sizer import get_exchange_min_trade_size
@@ -165,8 +165,8 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
     if suggested_size > balance:
         suggested_size = balance
 
-    # Validate against tier (with master account support and exchange)
-    is_valid, validation_reason = validate_trade_size(suggested_size, tier, balance, is_master, exchange)
+    # Validate against tier (with platform account support and exchange)
+    is_valid, validation_reason = validate_trade_size(suggested_size, tier, balance, is_platform, exchange)
 
     # Calculate fees for this trade size
     fees = calculate_fees(suggested_size, use_limit_order)
@@ -186,7 +186,7 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
         'tier': tier.value,
         'actual_tier': actual_tier.value,
         'tier_match': tier == actual_tier,
-        'is_master': is_master,
+        'is_platform': is_platform,
         'exchange': exchange,
 
         # Trade size calculations
@@ -278,8 +278,8 @@ def print_calculation_report(result: Dict) -> None:
     print(f"   Balance: ${result['balance']:.2f}")
     print(f"   Exchange: {result['exchange'].upper()}")
     print(f"   Current Tier: {result['tier']}")
-    if result.get('is_master'):
-        print(f"   Account Type: 🎯 MASTER (Full Control)")
+    if result.get('is_platform'):
+        print(f"   Account Type: 🎯 PLATFORM (Full Control)")
     print(f"   Appropriate Tier: {result['actual_tier']}")
     print(f"   Tier Match: {'✅ YES' if result['tier_match'] else '⚠️  NO (Manual Override)'}")
 
@@ -358,8 +358,8 @@ Examples:
     parser.add_argument('--exchange', type=str, default='coinbase',
                        choices=['kraken', 'coinbase', 'okx', 'binance'],
                        help='Exchange name (default: coinbase). Kraken has $10.50 minimum.')
-    parser.add_argument('--master', action='store_true',
-                       help='Enable master account mode (BALLER tier with flexible limits at low balances)')
+    parser.add_argument('--platform', action='store_true',
+                       help='Enable platform account mode (BALLER tier with flexible limits at low balances)')
     parser.add_argument('--market-order', action='store_true',
                        help='Use market order fees (0.6%%) instead of limit order fees (0.4%%)')
 
@@ -375,7 +375,7 @@ Examples:
         balance=args.balance,
         tier=tier,
         use_limit_order=not args.market_order,
-        is_master=args.master,
+        is_platform=args.platform,
         exchange=args.exchange
     )
 

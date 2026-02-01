@@ -195,7 +195,7 @@ class LiveExecutionTracker:
         stop_loss: float,
         take_profit: Optional[float] = None,
         broker: str = "coinbase",
-        account_id: str = "master",
+        account_id: str = "platform",
         entry_score: Optional[float] = None,
         commission: float = 0.0,
         slippage: Optional[float] = None

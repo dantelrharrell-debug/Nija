@@ -21,8 +21,8 @@ python scripts/clean_kraken.py
 
 Set environment variables:
 ```bash
-export KRAKEN_MASTER_API_KEY="your-key"
-export KRAKEN_MASTER_API_SECRET="your-secret"
+export KRAKEN_PLATFORM_API_KEY="your-key"
+export KRAKEN_PLATFORM_API_SECRET="your-secret"
 ```
 
 API Permissions needed:

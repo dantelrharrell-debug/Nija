@@ -75,7 +75,7 @@ All buy/sell mappings are correct.
 Master-user P&L divergence is caused by:
   1. SHORT signals on non-shorting spot markets
   2. Fee differences between brokers
-  3. Overtrading by master account
+  3. Overtrading by platform account
   4. Execution timing differences
 ```
 
@@ -87,7 +87,7 @@ Master-user P&L divergence is caused by:
    - When broker doesn't support shorting
    - Prevents wasted cycles
 
-2. **Check master broker**
+2. **Check platform broker**
    ```bash
    grep "broker.*master" bot/trading_strategy.py
    ```

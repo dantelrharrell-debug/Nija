@@ -7,9 +7,9 @@
 
 ### 1. Success State Documentation ✅
 Created comprehensive documentation of the verified working state where:
-- Master account trading successfully on Kraken
+- Platform account trading successfully on Kraken
 - 2 user accounts copying trades with 100% success rate
-- Full profit-taking working for master + all users
+- Full profit-taking working for platform + all users
 - Proper risk management (10% max per trade)
 - Proportional position sizing based on account balance
 
@@ -113,7 +113,7 @@ Comprehensive recovery procedures with:
 ✅ **Nonce Management**: 5s startup delay, collision prevention
 
 ### Architecture
-✅ **Master Account**: Executes real trades, emits signals
+✅ **Platform Account**: Executes real trades, emits signals
 ✅ **Copy Engine**: Listens for signals, replicates to users
 ✅ **Risk Manager**: Caps position sizes, enforces limits
 ✅ **Broker Adapters**: Kraken + Coinbase fully integrated
@@ -247,10 +247,10 @@ Post-implementation verification (all passed):
 ## 💬 Communication
 
 ### What to Tell Users
-> "We've successfully verified Kraken copy trading with master + 2 users taking profits together. The system has been fully documented with a recovery guide, and all historical implementation docs have been organized into an archive. You can now confidently restore to this working state at any time using the RECOVERY_GUIDE.md."
+> "We've successfully verified Kraken copy trading with platform + 2 users taking profits together. The system has been fully documented with a recovery guide, and all historical implementation docs have been organized into an archive. You can now confidently restore to this working state at any time using the RECOVERY_GUIDE.md."
 
 ### What to Tell the Team
-> "SUCCESS LOCKED ✅ - Kraken master + multi-user copy trading verified working. Created comprehensive documentation (SUCCESS_STATE, RECOVERY_GUIDE) and cleaned up 30 historical docs into /archive/. Git tag `success-kraken-copy-trading-2026-01-25` marks this checkpoint. All changes committed and pushed."
+> "SUCCESS LOCKED ✅ - Kraken platform + multi-user copy trading verified working. Created comprehensive documentation (SUCCESS_STATE, RECOVERY_GUIDE) and cleaned up 30 historical docs into /archive/. Git tag `success-kraken-copy-trading-2026-01-25` marks this checkpoint. All changes committed and pushed."
 
 ### For Documentation
 > See SUCCESS_STATE_2026_01_25.md for complete details on the verified working configuration, including exact balances, trade examples, and system architecture. RECOVERY_GUIDE.md provides step-by-step restoration procedures.

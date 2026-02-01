@@ -192,7 +192,7 @@ def main():
         print("Master-user P&L divergence is caused by:")
         print("  1. SHORT signals on non-shorting spot markets")
         print("  2. Fee differences between brokers")
-        print("  3. Overtrading by master account")
+        print("  3. Overtrading by platform account")
         print("  4. Execution timing differences")
         print("")
         print("RECOMMENDED FIX:")

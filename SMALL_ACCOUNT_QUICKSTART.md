@@ -4,7 +4,7 @@
 
 The NIJA Safe Small-Account Preset is a **turnkey configuration** designed specifically for accounts between **$20-$100**. This preset provides:
 
-✅ **Full copy trading support** - Mirror master account trades automatically
+✅ **Full copy trading support** - Mirror platform account trades automatically
 ✅ **Minimal API risk** - Conservative position sizing and strict limits
 ✅ **Controlled drawdown** - Multiple circuit breakers and safety features
 ✅ **Fee optimization** - Trades on lowest-fee exchanges (Kraken recommended)
@@ -42,8 +42,8 @@ The NIJA Safe Small-Account Preset is a **turnkey configuration** designed speci
 
 3. Add your Kraken credentials:
    ```env
-   KRAKEN_MASTER_API_KEY=your-api-key-here
-   KRAKEN_MASTER_API_SECRET=your-private-key-here
+   KRAKEN_PLATFORM_API_KEY=your-api-key-here
+   KRAKEN_PLATFORM_API_SECRET=your-private-key-here
    ```
 
 4. Save and close the file
@@ -148,7 +148,7 @@ This prevents over-trading and keeps fees manageable.
 
 ## 🔄 Copy Trading Mode
 
-If you have multiple user accounts that should copy the master account:
+If you have multiple user accounts that should copy the platform account:
 
 ### Setup User Accounts
 
@@ -176,7 +176,7 @@ If you have multiple user accounts that should copy the master account:
 **Automatic Scaling**: User positions are automatically scaled based on the ratio of user balance to master balance.
 
 **Example**:
-- Master account: $100 balance, opens $5 position (5%)
+- Platform account: $100 balance, opens $5 position (5%)
 - User account: $50 balance, opens $2.50 position (5%)
 
 ---

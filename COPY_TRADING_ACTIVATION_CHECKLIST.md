@@ -39,7 +39,7 @@ When you start the bot, look for these log messages:
    📋 Mode: MASTER_FOLLOW (mirror master trades)
    📊 Allocation: Proportional (auto-scaled by balance)
    ✅ Copy trade engine started in ACTIVE MODE
-   📡 Users will receive and execute copy trades from master accounts
+   📡 Users will receive and execute copy trades from platform accounts
    💰 User position sizes will be scaled based on account balance ratios
 ```
 
@@ -72,7 +72,7 @@ File: `config/users/retail_kraken.json`
     "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,              // ✅ Must be true
-    "copy_from_master": true,     // ✅ Must be true
+    "copy_from_platform": true,     // ✅ Must be true
     "disabled_symbols": ["XRP-USD"],
     "description": "Retail user - Kraken crypto account (copy trading enabled)"
   }
@@ -81,7 +81,7 @@ File: `config/users/retail_kraken.json`
 
 **Required Fields:**
 - ✅ `"enabled": true` - User account is active
-- ✅ `"copy_from_master": true` - Copy trading enabled for this user
+- ✅ `"copy_from_platform": true` - Copy trading enabled for this user
 - ✅ `"broker_type": "kraken"` - Matches the broker
 
 ### For Individual User Files:
@@ -94,7 +94,7 @@ Files: `config/users/daivon_frazier.json`, `config/users/tania_gilbert.json`
   "broker": "kraken",
   "role": "user",
   "enabled": true,              // ✅ Must be true
-  "copy_from_master": true,     // ✅ Must be true
+  "copy_from_platform": true,     // ✅ Must be true
   "risk_multiplier": 1.0,
   "disabled_symbols": ["XRP-USD"]
 }
@@ -138,7 +138,7 @@ ALPACA_USER_{FIRSTNAME}_PAPER=true
 
 ## Step 5: Watch for Copy Trade Execution
 
-When the master account executes a trade, you should see logs like:
+When the platform account executes a trade, you should see logs like:
 
 ```
 🔔 RECEIVED MASTER ENTRY SIGNAL
@@ -202,7 +202,7 @@ Users should see their trades in their exchange accounts:
 **Solution:**
 1. Verify user configuration in `config/users/retail_kraken.json`
 2. Check `"broker_type": "kraken"` matches the master's broker
-3. Ensure `"enabled": true` and `"copy_from_master": true`
+3. Ensure `"enabled": true` and `"copy_from_platform": true`
 
 ### Issue 3: User Broker Not Connected
 
@@ -230,7 +230,7 @@ Users should see their trades in their exchange accounts:
 
 **Solution:**
 1. Verify master API credentials in `.env` file
-2. Check: `KRAKEN_MASTER_API_KEY` and `KRAKEN_MASTER_API_SECRET`
+2. Check: `KRAKEN_PLATFORM_API_KEY` and `KRAKEN_PLATFORM_API_SECRET`
 3. Ensure master credentials have correct permissions
 4. Restart the bot to reconnect
 
@@ -240,7 +240,7 @@ Use this quick checklist to verify everything is set up:
 
 - [ ] ✅ `COPY_TRADING_MODE=MASTER_FOLLOW` in `.env` (uncommented)
 - [ ] ✅ User accounts configured in `config/users/` with `enabled: true`
-- [ ] ✅ User accounts have `copy_from_master: true`
+- [ ] ✅ User accounts have `copy_from_platform: true`
 - [ ] ✅ User API credentials added to `.env` file
 - [ ] ✅ Bot shows "MASTER_FOLLOW MODE" in startup logs
 - [ ] ✅ Bot shows "✅ Copy trade engine started in ACTIVE MODE"
