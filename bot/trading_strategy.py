@@ -653,9 +653,9 @@ class TradingStrategy:
             #     else:
             #         logger.warning("   ⚠️  Coinbase MASTER connection failed")
             # except Exception as e:
-            #     logger.warning(f"   ⚠️  Coinbase MASTER error: {e}")
+            #     logger.warning(f"   ⚠️  Coinbase PLATFORM error: {e}")
             
-            logger.info("📊 Coinbase connection DISABLED - Kraken is the exclusive primary broker")
+            logger.info("📊 Coinbase connection DISABLED - Kraken is the active broker")
             logger.info("   ℹ️  To re-enable Coinbase, uncomment the connection code in trading_strategy.py")
 
             # Try to connect OKX - PLATFORM ACCOUNT
@@ -954,9 +954,9 @@ class TradingStrategy:
 
                     if exit_only_brokers and broker_name == "KRAKEN":
                         # Kraken was promoted because another broker is exit-only
-                        logger.info(f"📌 Primary platform broker: {broker_name} ({', '.join(exit_only_brokers)} EXIT-ONLY)")
+                        logger.info(f"📌 Active platform broker: {broker_name} ({', '.join(exit_only_brokers)} EXIT-ONLY)")
                     else:
-                        logger.info(f"📌 Primary platform broker: {broker_name}")
+                        logger.info(f"📌 Active platform broker: {broker_name}")
 
                     # FIX #2: Initialize forced stop-loss with the connected broker
                     if self.forced_stop_loss is None:
@@ -1007,7 +1007,7 @@ class TradingStrategy:
                     else:
                         self.platform_portfolio = None
                 else:
-                    logger.warning("⚠️  No primary platform broker available")
+                    logger.warning("⚠️  No platform broker available")
                     self.platform_portfolio = None
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
@@ -1127,7 +1127,7 @@ class TradingStrategy:
             except Exception as indie_err:
                 logger.warning(f"⚠️  Independent trader initialization failed: {indie_err}")
                 self.independent_trader = None
-                logger.warning("No primary broker available")
+                logger.warning("No platform broker available")
 
             # Initialize position cap enforcer (Maximum 8 positions total across all brokers)
             if self.broker:
@@ -3241,8 +3241,8 @@ class TradingStrategy:
                 # USER MODE: Skip market scanning and entry signal generation entirely
                 logger.info("   ✅ Mode: USER (copy trading only)")
                 logger.info("   ⏭️  RESULT: Skipping market scan (signals from copy trade engine)")
-                logger.info("   ℹ️  USER accounts NEVER generate independent entry signals")
-                logger.info("   ℹ️  USER accounts ONLY execute copied trades from PLATFORM")
+                logger.info("   ℹ️  USER accounts execute copied trades only")
+                logger.info("   ℹ️  USER accounts do not scan markets independently")
                 logger.info("═" * 80)
                 logger.info("")
             else:

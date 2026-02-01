@@ -802,10 +802,10 @@ class IndependentBrokerTrader:
                     # When copy trading is active, Kraken users should ONLY execute copied trades from master
                     # They should NOT run their own independent strategy loops (prevents conflicting signals)
                     if broker_type == BrokerType.KRAKEN:
-                        # Check if Kraken master is connected (indicates copy trading is active)
+                        # Check if Kraken platform is connected (indicates copy trading is active)
                         kraken_platform_connected = self.multi_account_manager.is_platform_connected(BrokerType.KRAKEN)
                         if kraken_platform_connected:
-                            logger.info(f"⏭️  Skipping {broker_name} - Kraken copy trading active (users receive copied trades only)")
+                            logger.info(f"⏭️  Skipping {broker_name} - Kraken copy trading active (user executes copied trades only)")
                             logger.info(f"   ℹ️  {user_id} will execute trades copied from Kraken PLATFORM")
                             logger.info(f"   ℹ️  Independent strategy loop disabled for copy trading mode")
                             continue
@@ -868,7 +868,7 @@ class IndependentBrokerTrader:
             broker_names = ", ".join(sorted(self.broker_threads.keys()))
             logger.info(f"🔷 PLATFORM BROKERS ({platform_count} trading thread{'s' if platform_count != 1 else ''}):")
             for broker_name in sorted(self.broker_threads.keys()):
-                logger.info(f"   • {broker_name.upper()} PLATFORM → Will generate trade signals")
+                logger.info(f"   • {broker_name.upper()} PLATFORM → Trading independently")
         else:
             logger.warning("⚠️  NO PLATFORM BROKER THREADS STARTED")
             logger.warning("   PLATFORM trading will NOT occur")
@@ -880,7 +880,7 @@ class IndependentBrokerTrader:
             for user_id, threads in self.user_broker_threads.items():
                 for broker_name in sorted(threads.keys()):
                     broker_type_name = broker_name.split('_', 1)[1] if '_' in broker_name else broker_name
-                    logger.info(f"   • {user_id.upper()} ({broker_type_name.upper()}) → Will receive copied trades")
+                    logger.info(f"   • {user_id.upper()} ({broker_type_name.upper()}) → Trading independently")
         else:
             logger.info("   ℹ️  No USER broker threads (copy trading via CopyTradeEngine)")
 
@@ -894,11 +894,11 @@ class IndependentBrokerTrader:
         if platform_count > 0:
             logger.info(f"✅ {platform_count} PLATFORM broker{'s' if platform_count != 1 else ''} WILL TRADE")
             logger.info(f"   Trade signals will be generated every 2.5 minutes")
-            logger.info(f"   Users will receive copies via CopyTradeEngine")
+            logger.info(f"   Users will execute copies via CopyTradeEngine")
         else:
             logger.error("❌ NO PLATFORM BROKERS WILL TRADE")
             logger.error("   No trading signals will be generated")
-            logger.error("   User accounts will NOT receive trades (no signals to copy)")
+            logger.error("   User accounts will NOT execute trades (no signals to copy)")
             logger.error("")
             logger.error("   🔧 To fix: Ensure PLATFORM brokers are:")
             logger.error("      1. Connected (credentials valid)")
