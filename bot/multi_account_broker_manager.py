@@ -89,10 +89,6 @@ class MultiAccountBrokerManager:
         # Structure: {(user_id, broker_type): BaseBroker}
         self._all_user_brokers: Dict[Tuple[str, BrokerType], BaseBroker] = {}
 
-        # When True, skip Kraken user initialization in connect_users_from_config()
-        # to prevent duplicate user creation (copy trading creates its own clients)
-        # Copy trading removed
-
         # CRITICAL FIX (Jan 19, 2026): Balance cache to prevent repeated Kraken API calls
         # Structure: {(account_type, account_id, broker_type): (balance, timestamp)}
         # This prevents calling get_account_balance() multiple times per cycle for same user
@@ -101,6 +97,7 @@ class MultiAccountBrokerManager:
         self._last_kraken_balance_call: float = 0.0
 
         # User metadata storage for audit and reporting
+        # Structure: {user_id: {'name': str, 'enabled': bool, 'brokers': {BrokerType: bool}}}
         self._user_metadata: Dict[str, Dict] = {}
 
         # FIX #3: Initialize portfolio manager for user portfolio states
@@ -784,7 +781,6 @@ class MultiAccountBrokerManager:
                 logger.info(f"✅ KRAKEN USER ALREADY ACTIVE: {user.name} ({user.user_id})")
                 logger.info("=" * 70)
                 continue
-
             # Check if Master account is connected for this broker type
             # IMPORTANT: Master accounts should connect first and be primary
             # User accounts are SECONDARY and should not connect if Master isn't connected
@@ -795,26 +791,6 @@ class MultiAccountBrokerManager:
                 # For Kraken, user accounts MUST NOT connect without master (prevents nonce conflicts & broken copy trading)
                 # For other brokers, allow connection with warning (user may want standalone trading)
                 #
-                # FIX (Jan 18, 2026): Allow Kraken users to connect independently if master is not available
-                # This enables standalone user trading while still preferring copy trading when master is connected
-                # Copy trading will still work when master connects later
-                if broker_type == BrokerType.KRAKEN:
-                    logger.warning("=" * 70)
-                    logger.warning(f"⚠️  WARNING: Kraken user connecting WITHOUT Master account")
-                    logger.warning(f"   User: {user.name} ({user.user_id})")
-                    logger.warning(f"   Master Kraken account is NOT connected")
-                    logger.warning("")
-                    logger.warning("   📌 STANDALONE MODE: This user will trade independently")
-                    logger.warning("   📌 Copy trading is DISABLED (master not available)")
-                    logger.warning("")
-                    logger.warning("   💡 RECOMMENDATION for copy trading:")
-                    logger.warning("      1. Set KRAKEN_MASTER_API_KEY and KRAKEN_MASTER_API_SECRET")
-                    logger.warning("      2. Restart the bot to enable copy trading")
-                    logger.warning("      3. Master trades will then copy to user accounts")
-                    logger.warning("=" * 70)
-                    # Allow connection to proceed - user can trade independently
-                else:
-                    logger.warning("=" * 70)
                     logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Master account!")
                     logger.warning(f"   User: {user.name} ({user.user_id})")
                     logger.warning(f"   Master {broker_type.value.upper()} account is NOT connected")
