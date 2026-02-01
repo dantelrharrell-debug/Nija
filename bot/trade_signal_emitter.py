@@ -91,9 +91,9 @@ class TradeSignalEmitter:
                     is_exit = signal.side.lower() == 'sell'
                     trade_type = "EXIT/PROFIT-TAKING" if is_exit else "ENTRY"
 
-                    # ✅ REQUIREMENT #1 & #3: Updated logging for master - "signals sent, not executed"
+                    # ✅ REQUIREMENT #1 & #3: Updated logging for platform - "signals sent, not executed"
                     logger.info("=" * 70)
-                    logger.info(f"📡 MASTER {trade_type} SIGNAL SENT (NOT EXECUTED)")
+                    logger.info(f"📡 PLATFORM {trade_type} SIGNAL SENT (NOT EXECUTED)")
                     logger.info("=" * 70)
                     logger.info(f"   Platform Account: Signal generated for copy trading")
                     logger.info(f"   Broker: {signal.broker}")
@@ -105,7 +105,7 @@ class TradeSignalEmitter:
                     logger.info(f"   Platform Balance: ${signal.platform_balance:.2f}")
                     if is_exit:
                         logger.info(f"   ✅ PROFIT-TAKING: This exit signal will be copied to all users")
-                        logger.info(f"   📤 Users will take profit simultaneously with master")
+                        logger.info(f"   📤 Users will take profit at same time")
                     else:
                         logger.info(f"   ℹ️  This entry signal will be sent to user accounts for execution")
                     logger.info(f"   Total Signals Emitted: {self._total_signals_emitted}")

@@ -694,7 +694,7 @@ class IndependentBrokerTrader:
         funded_users = self.detect_funded_user_brokers()
 
         if not funded and not funded_users:
-            logger.error("❌ No funded brokers detected (master or user). Cannot start trading.")
+            logger.error("❌ No funded brokers detected (platform or user). Cannot start trading.")
             return False
 
         total_threads = 0
@@ -802,16 +802,16 @@ class IndependentBrokerTrader:
                     # When copy trading is active, Kraken users should ONLY execute copied trades from master
                     # They should NOT run their own independent strategy loops (prevents conflicting signals)
                     if broker_type == BrokerType.KRAKEN:
-                        # Check if Kraken master is connected (indicates copy trading is active)
+                        # Check if Kraken platform is connected (indicates copy trading is active)
                         kraken_platform_connected = self.multi_account_manager.is_platform_connected(BrokerType.KRAKEN)
                         if kraken_platform_connected:
-                            logger.info(f"⏭️  Skipping {broker_name} - Kraken copy trading active (users receive copied trades only)")
+                            logger.info(f"⏭️  Skipping {broker_name} - Kraken copy trading active (user executes copied trades only)")
                             logger.info(f"   ℹ️  {user_id} will execute trades copied from Kraken PLATFORM")
                             logger.info(f"   ℹ️  Independent strategy loop disabled for copy trading mode")
                             continue
                         else:
                             logger.info(f"⏭️  Skipping {broker_name} - Kraken PLATFORM offline")
-                            logger.info(f"   ℹ️  Kraken copy trading disabled until MASTER reconnects")
+                            logger.info(f"   ℹ️  Kraken copy trading disabled until PLATFORM reconnects")
                             logger.info(f"   ✅ OTHER BROKERS (Coinbase, etc.) continue trading independently")
                             continue
 
@@ -868,7 +868,7 @@ class IndependentBrokerTrader:
             broker_names = ", ".join(sorted(self.broker_threads.keys()))
             logger.info(f"🔷 PLATFORM BROKERS ({platform_count} trading thread{'s' if platform_count != 1 else ''}):")
             for broker_name in sorted(self.broker_threads.keys()):
-                logger.info(f"   • {broker_name.upper()} MASTER → Will generate trade signals")
+                logger.info(f"   • {broker_name.upper()} PLATFORM → Trading independently")
         else:
             logger.warning("⚠️  NO PLATFORM BROKER THREADS STARTED")
             logger.warning("   PLATFORM trading will NOT occur")
@@ -880,7 +880,7 @@ class IndependentBrokerTrader:
             for user_id, threads in self.user_broker_threads.items():
                 for broker_name in sorted(threads.keys()):
                     broker_type_name = broker_name.split('_', 1)[1] if '_' in broker_name else broker_name
-                    logger.info(f"   • {user_id.upper()} ({broker_type_name.upper()}) → Will receive copied trades")
+                    logger.info(f"   • {user_id.upper()} ({broker_type_name.upper()}) → Trading independently")
         else:
             logger.info("   ℹ️  No USER broker threads (copy trading via CopyTradeEngine)")
 
@@ -889,16 +889,16 @@ class IndependentBrokerTrader:
 
         # CRITICAL: Show explicit PLATFORM trading status
         logger.info("=" * 70)
-        logger.info("🎯 MASTER TRADING STATUS")
+        logger.info("🎯 PLATFORM TRADING STATUS")
         logger.info("=" * 70)
         if platform_count > 0:
             logger.info(f"✅ {platform_count} PLATFORM broker{'s' if platform_count != 1 else ''} WILL TRADE")
             logger.info(f"   Trade signals will be generated every 2.5 minutes")
-            logger.info(f"   Users will receive copies via CopyTradeEngine")
+            logger.info(f"   Users will execute copies via CopyTradeEngine")
         else:
             logger.error("❌ NO PLATFORM BROKERS WILL TRADE")
             logger.error("   No trading signals will be generated")
-            logger.error("   User accounts will NOT receive trades (no signals to copy)")
+            logger.error("   User accounts will NOT execute trades (no signals to copy)")
             logger.error("")
             logger.error("   🔧 To fix: Ensure PLATFORM brokers are:")
             logger.error("      1. Connected (credentials valid)")
@@ -1037,14 +1037,14 @@ class IndependentBrokerTrader:
                                 brokers_with_positions += 1
                                 total_positions += len(positions)
                                 self._log_broker_positions(
-                                    f"🔷 MASTER - {broker_type.value.upper()}",
+                                    f"🔷 PLATFORM - {broker_type.value.upper()}",
                                     balance,
                                     positions
                                 )
                             else:
-                                logger.info(f"⚪ MASTER - {broker_type.value.upper()}: No open positions")
+                                logger.info(f"⚪ PLATFORM - {broker_type.value.upper()}: No open positions")
                     except Exception as e:
-                        logger.warning(f"⚠️  Could not get positions for MASTER {broker_type.value.upper()}: {e}")
+                        logger.warning(f"⚠️  Could not get positions for PLATFORM {broker_type.value.upper()}: {e}")
 
         # Check user brokers
         if self.multi_account_manager and self.multi_account_manager.user_brokers:

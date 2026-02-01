@@ -140,7 +140,7 @@ def calculate_user_position_size(
         user_size = platform_size * scale_factor
 
         logger.info(f"📊 Position Sizing Calculation:")
-        logger.info(f"   Master: ${platform_balance:.2f} balance, {platform_size} size ({size_type})")
+        logger.info(f"   Platform: ${platform_balance:.2f} balance, {platform_size} size ({size_type})")
         logger.info(f"   User: ${user_balance:.2f} balance")
         logger.info(f"   Scale Factor: {scale_factor:.4f} ({scale_factor*100:.2f}%)")
         logger.info(f"   Calculated User Size: {user_size} ({size_type})")

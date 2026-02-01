@@ -303,6 +303,82 @@ grep -ri "MASTER_" --exclude-dir=.git --exclude="*.md" .
 3. **External dependencies** - If third-party libraries use "master" terminology
 4. **Git branch name** - `master` branch (or migrate to `main`)
 
+## Pre-Commit Guard (Regression Prevention)
+
+To prevent accidental reintroduction of hierarchical terminology, a pre-commit hook has been added that checks for prohibited terms in log statements.
+
+### Installation
+
+The pre-commit hook is configured in `.pre-commit-config.yaml`. To enable it:
+
+```bash
+# Install pre-commit (if not already installed)
+pip install pre-commit
+
+# Install the git hooks
+pre-commit install
+
+# Test the hook on all files (optional)
+pre-commit run --all-files
+```
+
+### What It Checks
+
+The hook scans Python files for prohibited patterns in logger statements:
+
+**Prohibited Terms:**
+- ❌ `master` (use `platform` instead)
+- ❌ `controls users/accounts` (use `account group loaded` instead)
+- ❌ `under control/coordination` (use `trading independently` instead)
+- ❌ `primary platform/broker` (use `active broker` instead)
+- ❌ `leads accounts/users`
+- ❌ `generate signal` (use `trading independently` instead)
+- ❌ `receive trade` (use `trading independently` instead)
+- ❌ `simultaneously with`
+
+**Allowed Neutral Phrases:**
+- ✅ `platform account initialized`
+- ✅ `independent account group initialized`
+- ✅ `platform + user accounts trading independently`
+- ✅ `account registered for independent execution`
+- ✅ `account group loaded (no trade copying)`
+- ✅ `active broker`
+- ✅ `trading independently`
+
+### How It Works
+
+1. **Automatic Check**: Runs on every commit before changes are committed
+2. **Smart Filtering**: Skips test files, diagnostic scripts, and archived code
+3. **Clear Feedback**: Shows exactly which terms are prohibited and suggests alternatives
+4. **Fail Fast**: Prevents commit if violations are found
+
+### Bypassing the Hook (Emergency Only)
+
+In rare cases where you need to bypass the check:
+
+```bash
+# Skip all pre-commit hooks (use with caution)
+git commit --no-verify -m "Your message"
+```
+
+⚠️ **Warning**: Only bypass if you're updating test files or have a legitimate reason. The check exists to maintain code quality and prevent regulatory issues.
+
+### Customizing the Check
+
+The hook configuration is in `.pre-commit-hooks/check-terminology.sh`. To add exceptions or modify patterns, edit this file and update the `PROHIBITED_PATTERNS` or `ALLOWED_EXCEPTIONS` arrays.
+
+### Running Manually
+
+To check files without committing:
+
+```bash
+# Check all Python files
+.pre-commit-hooks/check-terminology.sh
+
+# Or use pre-commit directly
+pre-commit run check-terminology --all-files
+```
+
 ## Success Criteria
 
 ✅ Migration is successful when:

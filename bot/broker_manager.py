@@ -8128,10 +8128,10 @@ class BrokerManager:
         2. If current primary has insufficient balance → Promote Kraken to PRIMARY
         3. Coinbase exists ONLY for: Emergency exits, Position closures, Legacy compatibility
 
-        This ensures the master portfolio uses the correct broker for new entries.
+        This ensures the platform portfolio uses the correct broker for new entries.
         """
         if not self.active_broker:
-            logger.warning("⚠️ No primary broker set - cannot select primary master")
+            logger.warning("⚠️ No primary broker set - cannot select primary platform")
             return
 
         current_primary = self.active_broker.broker_type.value.upper()

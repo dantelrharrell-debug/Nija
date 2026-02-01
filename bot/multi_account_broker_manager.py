@@ -135,7 +135,7 @@ class MultiAccountBrokerManager:
             elif broker_type == BrokerType.ALPACA:
                 broker = AlpacaBroker()
             else:
-                logger.warning(f"⚠️  Unsupported broker type for master: {broker_type.value}")
+                logger.warning(f"⚠️  Unsupported broker type for platform: {broker_type.value}")
                 return None
 
             # Connect the broker
@@ -144,11 +144,11 @@ class MultiAccountBrokerManager:
                 logger.info(f"✅ Platform broker added: {broker_type.value}")
                 return broker
             else:
-                logger.warning(f"⚠️  Failed to connect master broker: {broker_type.value}")
+                logger.warning(f"⚠️  Failed to connect platform broker: {broker_type.value}")
                 return None
 
         except Exception as e:
-            logger.error(f"❌ Error adding master broker {broker_type.value}: {e}")
+            logger.error(f"❌ Error adding platform broker {broker_type.value}: {e}")
             return None
 
     def add_user_broker(self, user_id: str, broker_type: BrokerType) -> Optional[BaseBroker]:
@@ -926,7 +926,7 @@ class MultiAccountBrokerManager:
                 status = "✅ CONNECTED" if broker.connected else "❌ NOT CONNECTED"
                 logger.info(f"   • {broker_type.value.upper()}: {status}")
         else:
-            logger.info("   ⚠️  No master brokers connected")
+            logger.info("   ⚠️  No platform brokers connected")
 
         logger.info("")
         logger.info("👤 USER ACCOUNTS (Secondary Trading Accounts):")

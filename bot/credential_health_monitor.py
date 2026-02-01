@@ -124,7 +124,7 @@ class CredentialHealthMonitor:
             logger.debug(f"Could not load user credentials for monitoring: {e}")
 
         # Log how many credential categories were loaded
-        logger.debug(f"Monitoring {len(creds)} credential categories (master + users)")
+        logger.debug(f"Monitoring {len(creds)} credential categories (platform + users)")
 
         return creds
 
