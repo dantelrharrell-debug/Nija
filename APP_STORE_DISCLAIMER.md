@@ -1,5 +1,7 @@
 # App Store Disclaimer Copy
 
+> **📚 User Education:** See [USER_FAQ.md](USER_FAQ.md) for detailed answers to common questions about independent trading, including "Why do my trades differ from others?"
+
 ## Primary Disclaimer (Required on App Listing)
 
 ### Short Version (App Store Subtitle - Max 30 characters)

@@ -1,35 +1,36 @@
-# Terminology Migration: Platform Account → Platform Account
+# Terminology Migration: Independent Trading Model
 
 ## Purpose
-Eliminate regulatory-sensitive terminology and replace with safe, compliant language.
+Align NIJA's terminology with Apple's requirements for transparency and user expectation management. This migration ensures all user-facing language reflects NIJA's independent trading model.
+
+## Key Messaging Principles
+
+**What NIJA Does:**
+- ✅ Each account evaluates independently using the same algorithmic strategy
+- ✅ Risk is managed per account based on specific account factors
+- ✅ Execution happens independently when conditions are met
+- ✅ Results vary naturally due to timing, balance, and market conditions
+
+**What NIJA Does NOT Do:**
+- ❌ Copy trades from one account to another
+- ❌ Synchronize execution across accounts
+- ❌ Distribute signals between accounts
+- ❌ Promise same results for all users
 
 ## Migration Map
 
-### Primary Changes
+### Deprecated Terms to Replace
 
-| OLD TERM (Prohibited) | NEW TERM (Required) | Context |
+| OLD TERM (Remove) | NEW TERM (Use Instead) | Context |
 |----------------------|---------------------|---------|
-| Platform Account | Platform Account | System-operated account for platform operations |
-| Platform Broker | Platform Broker | Broker connection for platform account |
-| Master Balance | Platform Balance | Balance of platform account |
-| Master Trade | Platform Trade | Trade executed by platform account |
-| Master Requirements | Platform Requirements | Requirements for platform account setup |
-| Master User | Platform Operator | Person managing platform account |
-| Master Config | Platform Config | Configuration for platform account |
-| Master API | Platform API | API credentials for platform account |
-| Master-Follow | ~~DEPRECATED~~ | Copy trading mode (eliminated) |
-| Copy Master | ~~DEPRECATED~~ | Copy trading (eliminated) |
-
-### Secondary Changes
-
-| OLD TERM (Prohibited) | NEW TERM (Required) | Context |
-|----------------------|---------------------|---------|
-| User Account | User Account | ✅ Keep as-is |
-| Follower | ~~DEPRECATED~~ | Copy trading role (eliminated) |
-| Slave Account | User Account | If found anywhere (highly unlikely) |
-| Sub-account | User Account | Alternative terminology |
-| Signal Provider | ~~DEPRECATED~~ | Copy trading role (eliminated) |
-| Signal Receiver | ~~DEPRECATED~~ | Copy trading role (eliminated) |
+| Copy trading | Independent trading | Trading model description |
+| Follow trades | Evaluates independently | How accounts operate |
+| Signal distribution | Independent market analysis | How trading decisions are made |
+| Synchronized execution | Risk-gated execution | How trades are executed |
+| Platform account leads | Each account evaluates independently | Account relationship |
+| Same trades | Results may differ per account | Performance expectations |
+| Follower | User account | Account type |
+| Master-Follow mode | Independent mode | Configuration setting |
 
 ## Rationale
 

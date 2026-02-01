@@ -1,5 +1,10 @@
 # Copy Trading Implementation - Complete Summary
 
+> **⚠️ DEPRECATED - January 2026**  
+> This document describes a deprecated copy trading feature that has been removed from NIJA.  
+> NIJA now uses an independent trading model where each account evaluates markets and executes trades independently.  
+> See [USER_FAQ.md](USER_FAQ.md) for information about independent trading.
+
 **Date:** January 30, 2026  
 **PR:** Fix Active Tier Override & Copy Trading Enhancements  
 **Branch:** `copilot/fix-active-tier-override`

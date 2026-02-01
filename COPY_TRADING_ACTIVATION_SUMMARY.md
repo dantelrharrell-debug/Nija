@@ -1,5 +1,10 @@
 # Copy Trading Activation Summary
 
+> **⚠️ DEPRECATED - January 2026**  
+> This document describes a deprecated copy trading feature that has been removed from NIJA.  
+> NIJA now uses an independent trading model where each account evaluates markets and executes trades independently.  
+> See [USER_FAQ.md](USER_FAQ.md) for information about independent trading.
+
 ## ✅ ACTIVATION COMPLETE
 
 Copy trading is now **ENABLED BY DEFAULT** in the NIJA trading bot.
