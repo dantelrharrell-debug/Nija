@@ -607,7 +607,7 @@ def get_aggregated_summary():
 
         # Get open positions count
         open_positions = trade_ledger.get_open_positions()
-        master_open_positions = [p for p in open_positions if p.get('user_id') == 'platform']
+        platform_open_positions = [p for p in open_positions if p.get('user_id') == 'platform']
         user_open_positions = [p for p in open_positions if p.get('user_id') != 'platform']
 
         # Portfolio totals
@@ -624,7 +624,7 @@ def get_aggregated_summary():
                 'total_trades': platform_stats.get('completed_trades', 0),
                 'winning_trades': platform_stats.get('winning_trades', 0),
                 'losing_trades': platform_stats.get('losing_trades', 0),
-                'open_positions': len(master_open_positions)
+                'open_positions': len(platform_open_positions)
             },
             'users_aggregate': {
                 'total_users': total_users,
@@ -905,7 +905,7 @@ def get_trade_traceability():
         limit = int(request.args.get('limit', 50))
 
         # Get recent master trades
-        master_trades = trade_ledger.get_trade_history(
+        platform_trades = trade_ledger.get_trade_history(
             user_id='platform',
             limit=limit
         )
@@ -914,7 +914,7 @@ def get_trade_traceability():
         # (trades with same symbol around the same time)
         traceability_report = []
 
-        for master_trade in master_trades:
+        for master_trade in platform_trades:
             master_time = datetime.fromisoformat(master_trade['entry_time'])
             symbol = master_trade['symbol']
 
@@ -959,15 +959,15 @@ def get_trade_traceability():
             })
 
         # Calculate summary statistics
-        total_master_trades = len(master_trades)
+        total_platform_trades = len(platform_trades)
         total_replications = sum(item['replication_count'] for item in traceability_report)
-        avg_replications_per_signal = total_replications / total_master_trades if total_master_trades > 0 else 0
+        avg_replications_per_signal = total_replications / total_platform_trades if total_platform_trades > 0 else 0
 
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'period_hours': hours,
             'summary': {
-                'master_trades': total_master_trades,
+                'platform_trades': total_platform_trades,
                 'total_user_replications': total_replications,
                 'average_replications_per_signal': avg_replications_per_signal
             },

@@ -57,8 +57,8 @@ class MasterTradeReference:
     entry_price: float
     exit_price: Optional[float]
     size: float
-    master_pnl: Optional[float] = None
-    master_pnl_pct: Optional[float] = None
+    platform_pnl: Optional[float] = None
+    platform_pnl_pct: Optional[float] = None
 
 
 @dataclass
@@ -115,7 +115,7 @@ class FollowerPnLAttribution:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
         self.follower_trades: Dict[str, List[FollowerTrade]] = {}  # follower_id -> trades
-        self.master_trades: Dict[str, MasterTradeReference] = {}  # platform_trade_id -> master trade
+        self.platform_trades: Dict[str, MasterTradeReference] = {}  # platform_trade_id -> master trade
         
         self._load_data()
         
@@ -140,11 +140,11 @@ class FollowerPnLAttribution:
                         ]
             
             # Load master trades
-            master_file = self.data_dir / "master_trades.json"
-            if master_file.exists():
-                with open(master_file, 'r') as f:
+            platform_file = self.data_dir / "platform_trades.json"
+            if platform_file.exists():
+                with open(platform_file, 'r') as f:
                     data = json.load(f)
-                    self.master_trades = {
+                    self.platform_trades = {
                         trade_id: MasterTradeReference(**trade_data)
                         for trade_id, trade_data in data.items()
                     }
@@ -164,17 +164,17 @@ class FollowerPnLAttribution:
                 json.dump(data, f, indent=2)
             
             # Save master trades
-            master_file = self.data_dir / "master_trades.json"
-            with open(master_file, 'w') as f:
+            platform_file = self.data_dir / "platform_trades.json"
+            with open(platform_file, 'w') as f:
                 data = {
                     trade_id: trade.to_dict()
-                    for trade_id, trade in self.master_trades.items()
+                    for trade_id, trade in self.platform_trades.items()
                 }
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving follower PnL data: {e}")
     
-    def record_master_trade(
+    def record_platform_trade(
         self,
         platform_trade_id: str,
         symbol: str,
@@ -192,7 +192,7 @@ class FollowerPnLAttribution:
             price: Entry price
             size: Position size
         """
-        self.master_trades[platform_trade_id] = MasterTradeReference(
+        self.platform_trades[platform_trade_id] = MasterTradeReference(
             platform_trade_id=platform_trade_id,
             symbol=symbol,
             side=side,
@@ -319,10 +319,10 @@ class FollowerPnLAttribution:
         platform_total_pnl = 0.0
         platform_total_pnl_pct = 0.0
         for trade in trades:
-            if trade.platform_trade_id in self.master_trades:
-                master_trade = self.master_trades[trade.platform_trade_id]
-                if master_trade.master_pnl is not None:
-                    platform_total_pnl += master_trade.master_pnl
+            if trade.platform_trade_id in self.platform_trades:
+                master_trade = self.platform_trades[trade.platform_trade_id]
+                if master_trade.platform_pnl is not None:
+                    platform_total_pnl += master_trade.platform_pnl
         
         copy_efficiency = (total_pnl_pct / platform_total_pnl_pct * 100) if platform_total_pnl_pct != 0 else 100.0
         

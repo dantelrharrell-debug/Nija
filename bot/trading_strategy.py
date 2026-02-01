@@ -968,7 +968,7 @@ class TradingStrategy:
                             logger.warning(f"⚠️ Could not initialize forced stop-loss: {e}")
 
                     # FIX #3: Initialize master portfolio state using SUM of ALL master brokers
-                    # CRITICAL: Master portfolio must use total_master_equity = sum(all master brokers)
+                    # CRITICAL: Master portfolio must use total_platform_equity = sum(all master brokers)
                     # Do NOT just use primary broker's balance - this ignores capital in other brokers
                     if self.portfolio_manager:
                         try:
