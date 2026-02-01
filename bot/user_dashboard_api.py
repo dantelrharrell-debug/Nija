@@ -666,7 +666,7 @@ def get_aggregated_performance():
 
         # Get master performance
         platform_stats = pnl_tracker.get_stats('platform', force_refresh=True)
-        master_daily = pnl_tracker.get_daily_breakdown('platform', days=days)
+        platform_daily = pnl_tracker.get_daily_breakdown('platform', days=days)
 
         # Get all user IDs
         all_user_ids = set()
@@ -709,7 +709,7 @@ def get_aggregated_performance():
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'period_days': days,
-            'master_performance': {
+            'platform_performance': {
                 'stats': platform_stats,
                 'daily_breakdown': [
                     {
@@ -720,7 +720,7 @@ def get_aggregated_performance():
                         'winners': day.winners,
                         'losers': day.losers
                     }
-                    for day in master_daily
+                    for day in platform_daily
                 ]
             },
             'users_performance': {
@@ -750,7 +750,7 @@ def get_aggregated_positions():
         all_positions = trade_ledger.get_open_positions()
 
         # Separate master and user positions
-        master_positions = [p for p in all_positions if p.get('user_id') == 'platform']
+        platform_positions = [p for p in all_positions if p.get('user_id') == 'platform']
         user_positions = [p for p in all_positions if p.get('user_id') != 'platform']
 
         # Aggregate by symbol
@@ -760,7 +760,7 @@ def get_aggregated_positions():
             if symbol not in symbol_aggregate:
                 symbol_aggregate[symbol] = {
                     'total_positions': 0,
-                    'master_positions': 0,
+                    'platform_positions': 0,
                     'user_positions': 0,
                     'total_size': 0.0,
                     'total_unrealized_pnl': 0.0
@@ -768,7 +768,7 @@ def get_aggregated_positions():
 
             symbol_aggregate[symbol]['total_positions'] += 1
             if position.get('user_id') == 'platform':
-                symbol_aggregate[symbol]['master_positions'] += 1
+                symbol_aggregate[symbol]['platform_positions'] += 1
             else:
                 symbol_aggregate[symbol]['user_positions'] += 1
 
@@ -794,14 +794,14 @@ def get_aggregated_positions():
             'timestamp': datetime.now().isoformat(),
             'summary': {
                 'total_positions': len(all_positions),
-                'master_positions': len(master_positions),
+                'platform_positions': len(platform_positions),
                 'user_positions': len(user_positions),
                 'unique_symbols': len(symbol_aggregate),
                 'unique_brokers': len(broker_aggregate)
             },
             'by_symbol': symbol_aggregate,
             'by_broker': broker_aggregate,
-            'master_positions_list': master_positions,
+            'platform_positions_list': platform_positions,
             'user_positions_list': user_positions
         })
 
@@ -914,9 +914,9 @@ def get_trade_traceability():
         # (trades with same symbol around the same time)
         traceability_report = []
 
-        for master_trade in platform_trades:
-            master_time = datetime.fromisoformat(master_trade['entry_time'])
-            symbol = master_trade['symbol']
+        for platform_trade in platform_trades:
+            platform_time = datetime.fromisoformat(platform_trade['entry_time'])
+            symbol = platform_trade['symbol']
 
             # Find user trades for same symbol within 5 minutes of master trade
             user_trades_for_symbol = []
@@ -929,7 +929,7 @@ def get_trade_traceability():
                     continue
 
                 trade_time = datetime.fromisoformat(trade['entry_time'])
-                time_diff = abs((trade_time - master_time).total_seconds())
+                time_diff = abs((trade_time - platform_time).total_seconds())
 
                 # If trade is within 5 minutes, consider it a copy trade
                 if time_diff <= 300:  # 5 minutes
@@ -944,14 +944,14 @@ def get_trade_traceability():
                     })
 
             traceability_report.append({
-                'master_trade': {
+                'platform_trade': {
                     'symbol': symbol,
-                    'entry_time': master_trade['entry_time'],
-                    'entry_price': master_trade['entry_price'],
-                    'exit_price': master_trade.get('exit_price'),
-                    'pnl': master_trade.get('pnl', 0.0),
-                    'size': master_trade.get('size', 0.0),
-                    'side': master_trade.get('side', 'UNKNOWN')
+                    'entry_time': platform_trade['entry_time'],
+                    'entry_price': platform_trade['entry_price'],
+                    'exit_price': platform_trade.get('exit_price'),
+                    'pnl': platform_trade.get('pnl', 0.0),
+                    'size': platform_trade.get('size', 0.0),
+                    'side': platform_trade.get('side', 'UNKNOWN')
                 },
                 'user_trades': user_trades_for_symbol,
                 'replication_count': len(user_trades_for_symbol),
