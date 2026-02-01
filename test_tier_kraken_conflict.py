@@ -46,7 +46,7 @@ def test_tier_kraken_conflict():
     print(f"  └─ Kraken minimum: ${kraken_min:.2f}")
 
     # Get tier for this balance
-    tier = get_tier_from_balance(balance, is_master=False)
+    tier = get_tier_from_balance(balance, is_platform=False)
     config = get_tier_config(tier)
 
     print(f"\n📊 Tier Assignment:")
@@ -68,7 +68,7 @@ def test_tier_kraken_conflict():
         requested_trade,
         tier,
         balance,
-        is_master=False,
+        is_platform=False,
         exchange='kraken'
     )
 
@@ -128,7 +128,7 @@ def test_valid_trade_still_works():
     print(f"  ├─ Requested trade: ${requested_trade:.2f}")
     print(f"  └─ Kraken minimum: ${kraken_min:.2f}")
 
-    tier = get_tier_from_balance(balance, is_master=False)
+    tier = get_tier_from_balance(balance, is_platform=False)
     config = get_tier_config(tier)
 
     print(f"\n📊 Tier Assignment:")
@@ -140,7 +140,7 @@ def test_valid_trade_still_works():
         requested_trade,
         tier,
         balance,
-        is_master=False,
+        is_platform=False,
         exchange='kraken'
     )
 
@@ -180,19 +180,19 @@ def test_platform_account_not_subject_to_tiers():
     print(f"  └─ Kraken minimum: ${kraken_min:.2f}")
 
     # Platform accounts always get BALLER tier
-    tier = get_tier_from_balance(balance, is_master=True)
+    tier = get_tier_from_balance(balance, is_platform=True)
     config = get_tier_config(tier)
 
     print(f"\n📊 Tier Assignment:")
     print(f"  ├─ Tier: {tier.value}")
     print(f"  └─ Note: Platform accounts ALWAYS get BALLER tier")
 
-    # Test auto_resize_trade with is_master=True
+    # Test auto_resize_trade with is_platform=True
     resized_size, resize_reason = auto_resize_trade(
         requested_trade,
         tier,
         balance,
-        is_master=True,  # MASTER account
+        is_platform=True,  # MASTER account
         exchange='kraken'
     )
 
@@ -208,7 +208,7 @@ def test_platform_account_not_subject_to_tiers():
     print(f"  ├─ Always assigned BALLER tier (regardless of balance)")
     print(f"  └─ Can bump up to Kraken minimum even if tier-resized")
 
-    # For master account, even if resized below Kraken min, should be allowed
+    # For platform account, even if resized below Kraken min, should be allowed
     # because platform accounts are exempt from tier restrictions
     if tier == TradingTier.BALLER:
         print(f"\n✅ TEST PASSED:")

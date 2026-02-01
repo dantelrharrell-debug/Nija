@@ -5386,7 +5386,7 @@ class KrakenBroker(BaseBroker):
 
                 # Log when master credentials are found
                 if api_key_raw and api_secret_raw:
-                    logger.info("   ✅ Using KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET for master account")
+                    logger.info("   ✅ Using KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET for platform account")
 
                 # Fallback to legacy credentials if master credentials not set
                 # This provides backward compatibility for deployments using KRAKEN_API_KEY
@@ -5395,14 +5395,14 @@ class KrakenBroker(BaseBroker):
                     if legacy_key:
                         api_key_raw = legacy_key
                         key_name = "KRAKEN_API_KEY (legacy)"
-                        logger.info("   Using legacy KRAKEN_API_KEY for master account")
+                        logger.info("   Using legacy KRAKEN_API_KEY for platform account")
 
                 if not api_secret_raw:
                     legacy_secret = os.getenv("KRAKEN_API_SECRET", "")
                     if legacy_secret:
                         api_secret_raw = legacy_secret
                         secret_name = "KRAKEN_API_SECRET (legacy)"
-                        logger.info("   Using legacy KRAKEN_API_SECRET for master account")
+                        logger.info("   Using legacy KRAKEN_API_SECRET for platform account")
 
                 api_key = api_key_raw.strip()
                 api_secret = api_secret_raw.strip()
@@ -6735,7 +6735,7 @@ class KrakenBroker(BaseBroker):
             # This prevents small trades that will be eaten by fees
             # Track if tier auto-resize occurred (used for Kraken minimum enforcement later)
             tier_was_auto_resized = False
-            # Determine if this is a master account (not subject to tier limits)
+            # Determine if this is a platform account (not subject to tier limits)
             # Used in both tier validation and Kraken minimum enforcement
             is_platform_account = (self.account_type == AccountType.PLATFORM)
 
@@ -8028,7 +8028,7 @@ class BrokerManager:
 
     The "primary broker" concept exists only for backward compatibility:
     - Used by legacy single-broker code paths
-    - Used for master account position cap enforcement
+    - Used for platform account position cap enforcement
     - Does NOT control independent broker trading
 
     For multi-broker trading, use IndependentBrokerTrader which:
@@ -8088,7 +8088,7 @@ class BrokerManager:
 
         The primary broker is used only for:
         - Legacy single-broker trading logic
-        - Position cap enforcement (shared across master account)
+        - Position cap enforcement (shared across platform account)
         - Backward compatibility with older code
 
         It does NOT control or affect other brokers' independent trading.

@@ -6,7 +6,7 @@ This PR adds comprehensive **read-only aggregation and reporting** capabilities 
 
 ### Three Key Problems Solved
 
-1. ✅ **Unified Aggregation View** - No way to see master + all users combined
+1. ✅ **Unified Aggregation View** - No way to see platform + all users combined
 2. ✅ **Read-Only Stakeholder Dashboard** - No safe view for non-technical stakeholders
 3. ✅ **Master-to-User Trade Traceability** - No visibility into copy trading effectiveness
 
@@ -66,7 +66,7 @@ curl http://localhost:5001/api/aggregated/traceability?hours=24&limit=50
 - Customizable time period (default 7 days)
 
 ### `/api/aggregated/positions`
-- All open positions across master + users
+- All open positions across platform + users
 - Aggregated by symbol (how many positions per symbol)
 - Aggregated by broker (Coinbase, Kraken, etc.)
 - Separate lists for master vs. user positions
@@ -74,7 +74,7 @@ curl http://localhost:5001/api/aggregated/traceability?hours=24&limit=50
 ### `/api/aggregated/statistics`
 - Master all-time stats (trades, volume, fees, P&L)
 - Users combined stats
-- System totals (master + users)
+- System totals (platform + users)
 
 ### `/api/aggregated/traceability`
 - Shows which master trades were copied by which users

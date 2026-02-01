@@ -640,7 +640,7 @@ class TradingStrategy:
             # Original code preserved below for reference if needed in the future
             #
             # # Try to connect Coinbase - PLATFORM ACCOUNT
-            # logger.info("📊 Attempting to connect Coinbase Advanced Trade (MASTER)...")
+            # logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)...")
             # try:
             #     coinbase = CoinbaseBroker()
             #     if coinbase.connect():
@@ -712,7 +712,7 @@ class TradingStrategy:
             except Exception as e:
                 logger.warning(f"   ⚠️  Alpaca PLATFORM error: {e}")
 
-            # Add delay before user account connections to ensure master account
+            # Add delay before user account connections to ensure platform account
             # connection has completed and nonce ranges are separated
             # CRITICAL (Jan 14, 2026): Increased from 2.0s to 5.0s to prevent Kraken nonce conflicts
             # Master Kraken connection may still be using nonces in the current time window.
@@ -746,7 +746,7 @@ class TradingStrategy:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
 
                 # FIX #1: Calculate LIVE multi-broker capital
-                # Total Capital = Coinbase (available, if >= min) + Kraken MASTER + Optional user balances
+                # Total Capital = Coinbase (available, if >= min) + Kraken PLATFORM + Optional user balances
 
                 # Get master balance from broker_manager (sums all connected master brokers)
                 platform_balance = self.broker_manager.get_total_balance()
@@ -940,7 +940,7 @@ class TradingStrategy:
                 self.broker_manager.select_primary_platform_broker()
 
                 # Get the primary broker from broker_manager
-                # This is used for master account trading
+                # This is used for platform account trading
                 self.broker = self.broker_manager.get_primary_broker()
                 if self.broker:
                     # Log the primary master broker with explicit reason if it was switched
@@ -1038,7 +1038,7 @@ class TradingStrategy:
                     for user in enabled_users:
                         # FIX #1: Check if this is a Kraken user managed by copy trading system
                         is_kraken = user.broker_type.upper() == "KRAKEN"
-                        is_copy_trader = getattr(user, 'copy_from_master', False)
+                        is_copy_trader = getattr(user, 'copy_from_platform', False)
                         kraken_copy_active = getattr(self.multi_account_manager, 'kraken_copy_trading_active', False)
 
                         # If Kraken user is managed by copy trading, show special status and skip re-evaluation
@@ -1240,7 +1240,7 @@ class TradingStrategy:
         total_capital = 0.0
 
         try:
-            # 1. Sum all MASTER broker balances
+            # 1. Sum all PLATFORM broker balances
             if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
                 for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:

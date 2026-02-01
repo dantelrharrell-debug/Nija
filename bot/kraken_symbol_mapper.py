@@ -365,7 +365,7 @@ def validate_for_copy_trading(master_symbols: List[str], user_symbols: List[str]
     Get symbols that can be safely copy traded.
 
     Args:
-        master_symbols: Symbols available on master account exchange
+        master_symbols: Symbols available on platform account exchange
         user_symbols: Symbols available on user account exchange
 
     Returns:

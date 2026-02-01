@@ -315,7 +315,7 @@ After completing recovery, verify:
 - [ ] All environment variables configured correctly
 - [ ] Git is on correct branch/commit
 - [ ] Bot starts without errors
-- [ ] Kraken connections established (master + users)
+- [ ] Kraken connections established (platform + users)
 - [ ] Balance snapshot displays all accounts
 - [ ] Copy trade engine started
 - [ ] Trading cycles running

@@ -175,7 +175,7 @@ ENTRY_REQUIREMENTS = {
 COPY_TRADING = {
     # Enable copy trading by default
     'enabled': True,
-    'mode': 'MASTER_FOLLOW',  # Follow master account
+    'mode': 'MASTER_FOLLOW',  # Follow platform account
 
     # Position scaling
     'allocation_strategy': 'proportional',  # Scale by balance ratio

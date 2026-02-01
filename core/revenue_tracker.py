@@ -206,7 +206,7 @@ class RevenueTracker:
 
     def record_copy_trading_fee(
         self,
-        master_user_id: str,
+        platform_user_id: str,
         follower_user_id: str,
         follower_profit: float
     ) -> Tuple[RevenueEvent, RevenueEvent]:
@@ -219,7 +219,7 @@ class RevenueTracker:
         - 93% to follower
 
         Args:
-            master_user_id: Master trader user ID
+            platform_user_id: Master trader user ID
             follower_user_id: Follower user ID
             follower_profit: Profit made by follower
 
@@ -238,7 +238,7 @@ class RevenueTracker:
             timestamp=datetime.now(),
             description=f"Copy trading platform fee: {self.COPY_TRADING_PLATFORM_FEE_PCT}% of follower profit",
             metadata={
-                "master_user_id": master_user_id,
+                "platform_user_id": platform_user_id,
                 "follower_user_id": follower_user_id,
                 "follower_profit": follower_profit,
                 "fee_pct": self.COPY_TRADING_PLATFORM_FEE_PCT
@@ -249,13 +249,13 @@ class RevenueTracker:
         master_fee = profit_decimal * Decimal(str(self.COPY_TRADING_MASTER_FEE_PCT / 100.0))
 
         master_event = RevenueEvent(
-            user_id=master_user_id,
+            user_id=platform_user_id,
             revenue_type=RevenueType.COPY_TRADING_FEE,
             amount=master_fee,
             timestamp=datetime.now(),
             description=f"Master trader fee: {self.COPY_TRADING_MASTER_FEE_PCT}% of follower profit",
             metadata={
-                "master_user_id": master_user_id,
+                "platform_user_id": platform_user_id,
                 "follower_user_id": follower_user_id,
                 "follower_profit": follower_profit,
                 "fee_pct": self.COPY_TRADING_MASTER_FEE_PCT,

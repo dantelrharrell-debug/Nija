@@ -31,7 +31,7 @@ logger = logging.getLogger('nija.follower_pnl')
 class FollowerTrade:
     """Individual follower trade record."""
     follower_id: str
-    master_trade_id: str
+    platform_trade_id: str
     symbol: str
     side: str
     entry_price: float
@@ -51,7 +51,7 @@ class FollowerTrade:
 @dataclass
 class MasterTradeReference:
     """Master trade reference for comparison."""
-    master_trade_id: str
+    platform_trade_id: str
     symbol: str
     side: str
     entry_price: float
@@ -115,7 +115,7 @@ class FollowerPnLAttribution:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
         self.follower_trades: Dict[str, List[FollowerTrade]] = {}  # follower_id -> trades
-        self.master_trades: Dict[str, MasterTradeReference] = {}  # master_trade_id -> master trade
+        self.master_trades: Dict[str, MasterTradeReference] = {}  # platform_trade_id -> master trade
         
         self._load_data()
         
@@ -176,7 +176,7 @@ class FollowerPnLAttribution:
     
     def record_master_trade(
         self,
-        master_trade_id: str,
+        platform_trade_id: str,
         symbol: str,
         side: str,
         price: float,
@@ -186,14 +186,14 @@ class FollowerPnLAttribution:
         Record a master trade for reference.
         
         Args:
-            master_trade_id: Unique master trade ID
+            platform_trade_id: Unique master trade ID
             symbol: Trading pair
             side: 'buy' or 'sell'
             price: Entry price
             size: Position size
         """
-        self.master_trades[master_trade_id] = MasterTradeReference(
-            master_trade_id=master_trade_id,
+        self.master_trades[platform_trade_id] = MasterTradeReference(
+            platform_trade_id=platform_trade_id,
             symbol=symbol,
             side=side,
             entry_price=price,
@@ -205,7 +205,7 @@ class FollowerPnLAttribution:
     def record_follower_trade(
         self,
         follower_id: str,
-        master_trade_id: str,
+        platform_trade_id: str,
         symbol: str,
         side: str,
         price: float,
@@ -218,7 +218,7 @@ class FollowerPnLAttribution:
         
         Args:
             follower_id: Follower account ID
-            master_trade_id: Corresponding master trade ID
+            platform_trade_id: Corresponding master trade ID
             symbol: Trading pair
             side: 'buy' or 'sell'
             price: Execution price
@@ -231,7 +231,7 @@ class FollowerPnLAttribution:
         
         trade = FollowerTrade(
             follower_id=follower_id,
-            master_trade_id=master_trade_id,
+            platform_trade_id=platform_trade_id,
             symbol=symbol,
             side=side,
             entry_price=price,
@@ -250,7 +250,7 @@ class FollowerPnLAttribution:
     def update_follower_exit(
         self,
         follower_id: str,
-        master_trade_id: str,
+        platform_trade_id: str,
         exit_price: float
     ):
         """
@@ -258,7 +258,7 @@ class FollowerPnLAttribution:
         
         Args:
             follower_id: Follower account ID
-            master_trade_id: Master trade ID
+            platform_trade_id: Master trade ID
             exit_price: Exit price
         """
         if follower_id not in self.follower_trades:
@@ -267,7 +267,7 @@ class FollowerPnLAttribution:
         
         # Find the trade
         for trade in self.follower_trades[follower_id]:
-            if trade.master_trade_id == master_trade_id and trade.status == 'open':
+            if trade.platform_trade_id == platform_trade_id and trade.status == 'open':
                 trade.exit_price = exit_price
                 trade.status = 'closed'
                 
@@ -319,8 +319,8 @@ class FollowerPnLAttribution:
         platform_total_pnl = 0.0
         platform_total_pnl_pct = 0.0
         for trade in trades:
-            if trade.master_trade_id in self.master_trades:
-                master_trade = self.master_trades[trade.master_trade_id]
+            if trade.platform_trade_id in self.master_trades:
+                master_trade = self.master_trades[trade.platform_trade_id]
                 if master_trade.master_pnl is not None:
                     platform_total_pnl += master_trade.master_pnl
         

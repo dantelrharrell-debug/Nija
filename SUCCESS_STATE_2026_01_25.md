@@ -4,7 +4,7 @@
 
 ## 📅 Checkpoint Date: 2026-01-25 04:11:15 UTC
 
-This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trading system with full profit-taking functionality for master and all user accounts.
+This document captures the **VERIFIED WORKING STATE** of NIJA's Kraken copy trading system with full profit-taking functionality for platform and all user accounts.
 
 ---
 
@@ -235,7 +235,7 @@ Balance: $XX.XX
 The logs mention "user 1st trade was for a loss" - this is normal for the following reasons:
 - **Learning Period**: First trades establish baseline performance
 - **Market Timing**: Entry timing can vary slightly vs ideal
-- **Copy Trade Lag**: Microseconds between master and user execution
+- **Copy Trade Lag**: Microseconds between platform and user execution
 - **Fee Impact**: Small accounts feel exchange fees more acutely
 
 **Mitigation**:
@@ -256,7 +256,7 @@ The logs mention "user 1st trade was for a loss" - this is normal for the follow
 
 ### Immediate (Already Working)
 - ✅ Continue monitoring profit-taking trades
-- ✅ Track win rate across master + users
+- ✅ Track win rate across platform + users
 - ✅ Log all trade outcomes for analysis
 
 ### Short-Term Enhancements

@@ -28,7 +28,7 @@ def test_tier_override():
 
     # Test without override (user account)
     print(f"\n📊 User account without override (balance: ${balance:.2f}):")
-    tier_default = get_tier_from_balance(balance, is_master=False)
+    tier_default = get_tier_from_balance(balance, is_platform=False)
     config_default = get_tier_config(tier_default)
     print(f"  ├─ Tier: {tier_default.value}")
     print(f"  ├─ Risk range: {config_default.risk_per_trade_pct[0]:.0f}%-{config_default.risk_per_trade_pct[1]:.0f}%")
@@ -37,9 +37,9 @@ def test_tier_override():
     assert tier_default == TradingTier.STARTER, f"Expected STARTER, got {tier_default.value}"
     print("  ✅ Correctly assigned STARTER tier for user account")
 
-    # Test master account (should ALWAYS be BALLER)
+    # Test platform account (should ALWAYS be BALLER)
     print(f"\n📊 Platform account (balance: ${balance:.2f}):")
-    tier_master = get_tier_from_balance(balance, is_master=True)
+    tier_master = get_tier_from_balance(balance, is_platform=True)
     config_master = get_tier_config(tier_master)
     print(f"  ├─ Tier: {tier_master.value}")
     print(f"  ├─ Risk range: {config_master.risk_per_trade_pct[0]:.0f}%-{config_master.risk_per_trade_pct[1]:.0f}%")
@@ -133,7 +133,7 @@ def test_trade_size_calculations():
 
 
 def test_investor_tier_benefits():
-    """Show the benefits of BALLER tier for master account."""
+    """Show the benefits of BALLER tier for platform account."""
     print("\n" + "="*70)
     print("TEST 4: Platform Account BALLER Tier Benefits")
     print("="*70)
@@ -147,25 +147,25 @@ def test_investor_tier_benefits():
     print(f"  ├─ Trade size: ${starter_config.trade_size_min:.2f}-${starter_config.trade_size_max:.2f}")
     print(f"  └─ Max positions: {starter_config.max_positions}")
 
-    # BALLER tier (master account)
+    # BALLER tier (platform account)
     baller_config = get_tier_config(TradingTier.BALLER)
     print(f"\n📊 BALLER tier (MASTER account, ${balance:.2f}):")
     print(f"  ├─ Risk range: {baller_config.risk_per_trade_pct[0]:.0f}%-{baller_config.risk_per_trade_pct[1]:.0f}%")
     print(f"  ├─ Trade size: ${baller_config.trade_size_min:.2f}-${baller_config.trade_size_max:.2f}")
     print(f"  └─ Max positions: {baller_config.max_positions}")
 
-    print(f"\n📊 Key improvements with BALLER tier (master account):")
+    print(f"\n📊 Key improvements with BALLER tier (platform account):")
     print(f"  ✅ Much lower max risk: {baller_config.risk_per_trade_pct[1]:.0f}% vs {starter_config.risk_per_trade_pct[1]:.0f}%")
     print(f"  ✅ Higher min trade: ${baller_config.trade_size_min:.2f} vs ${starter_config.trade_size_min:.2f}")
     print(f"  ✅ More positions: {baller_config.max_positions} vs {starter_config.max_positions}")
 
-    print(f"\n⚠️  Important for ${balance:.2f} master account balance:")
+    print(f"\n⚠️  Important for ${balance:.2f} platform account balance:")
     max_with_15_pct = balance * 0.15
     print(f"  • 15% global cap limits trades to ${max_with_15_pct:.2f}")
     print(f"  • BALLER tier minimum is ${baller_config.trade_size_min:.2f}")
     print(f"  • Actual trades will be limited by 15% cap (${max_with_15_pct:.2f})")
     print(f"  • Platform account still gets best risk parameters (1-2% tier guidelines)")
-    print(f"  ✅ This is the REQUIRED configuration for master account")
+    print(f"  ✅ This is the REQUIRED configuration for platform account")
 
     return True
 

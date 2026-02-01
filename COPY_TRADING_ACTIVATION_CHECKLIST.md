@@ -72,7 +72,7 @@ File: `config/users/retail_kraken.json`
     "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,              // ✅ Must be true
-    "copy_from_master": true,     // ✅ Must be true
+    "copy_from_platform": true,     // ✅ Must be true
     "disabled_symbols": ["XRP-USD"],
     "description": "Retail user - Kraken crypto account (copy trading enabled)"
   }
@@ -81,7 +81,7 @@ File: `config/users/retail_kraken.json`
 
 **Required Fields:**
 - ✅ `"enabled": true` - User account is active
-- ✅ `"copy_from_master": true` - Copy trading enabled for this user
+- ✅ `"copy_from_platform": true` - Copy trading enabled for this user
 - ✅ `"broker_type": "kraken"` - Matches the broker
 
 ### For Individual User Files:
@@ -94,7 +94,7 @@ Files: `config/users/daivon_frazier.json`, `config/users/tania_gilbert.json`
   "broker": "kraken",
   "role": "user",
   "enabled": true,              // ✅ Must be true
-  "copy_from_master": true,     // ✅ Must be true
+  "copy_from_platform": true,     // ✅ Must be true
   "risk_multiplier": 1.0,
   "disabled_symbols": ["XRP-USD"]
 }
@@ -202,7 +202,7 @@ Users should see their trades in their exchange accounts:
 **Solution:**
 1. Verify user configuration in `config/users/retail_kraken.json`
 2. Check `"broker_type": "kraken"` matches the master's broker
-3. Ensure `"enabled": true` and `"copy_from_master": true`
+3. Ensure `"enabled": true` and `"copy_from_platform": true`
 
 ### Issue 3: User Broker Not Connected
 
@@ -240,7 +240,7 @@ Use this quick checklist to verify everything is set up:
 
 - [ ] ✅ `COPY_TRADING_MODE=MASTER_FOLLOW` in `.env` (uncommented)
 - [ ] ✅ User accounts configured in `config/users/` with `enabled: true`
-- [ ] ✅ User accounts have `copy_from_master: true`
+- [ ] ✅ User accounts have `copy_from_platform: true`
 - [ ] ✅ User API credentials added to `.env` file
 - [ ] ✅ Bot shows "MASTER_FOLLOW MODE" in startup logs
 - [ ] ✅ Bot shows "✅ Copy trade engine started in ACTIVE MODE"

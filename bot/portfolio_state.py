@@ -317,7 +317,7 @@ class UserPortfolioState(PortfolioState):
     Portfolio state for a user account.
 
     Each user must have their own portfolio state that is independent
-    from the master account and other users.
+    from the platform account and other users.
 
     FIX #3: USER ACCOUNTS MUST HAVE THEIR OWN PORTFOLIO STATE
     """
@@ -352,7 +352,7 @@ class PortfolioStateManager:
         Only updates cash balance if portfolio already exists.
 
         Args:
-            available_cash: Available cash in master account (should be sum of ALL master brokers)
+            available_cash: Available cash in platform account (should be sum of ALL master brokers)
 
         Returns:
             PortfolioState: Master portfolio state

@@ -76,19 +76,19 @@ def list_users():
         hard_controls = get_hard_controls()
 
         # Check if we should include master
-        include_master = request.args.get('include_master', 'false').lower() == 'true'
+        include_platform = request.args.get('include_platform', 'false').lower() == 'true'
 
         # Get all users from various sources
         user_ids = set()
 
         # From hard controls
         for user_id in hard_controls.user_kill_switches.keys():
-            if user_id != 'platform' or include_master:
+            if user_id != 'platform' or include_platform:
                 user_ids.add(user_id)
 
         # From risk manager
         for user_id in risk_manager._user_states.keys():
-            if user_id != 'platform' or include_master:
+            if user_id != 'platform' or include_platform:
                 user_ids.add(user_id)
 
         # Build user list
@@ -161,9 +161,9 @@ def get_user_pnl(user_id: str):
         return jsonify({'error': 'Failed to retrieve PnL data'}), 500
 
 
-@app.route('/api/master/pnl', methods=['GET'])
+@app.route('/api/platform/pnl', methods=['GET'])
 def get_platform_pnl():
-    """Get detailed PnL dashboard for the master account."""
+    """Get detailed PnL dashboard for the platform account."""
     return get_user_pnl('platform')
 
 
@@ -545,7 +545,7 @@ def get_trade_statistics():
 @app.route('/api/aggregated/summary', methods=['GET'])
 def get_aggregated_summary():
     """
-    Get aggregated read-only summary of master + all users.
+    Get aggregated read-only summary of platform + all users.
 
     Returns:
         - Platform account performance
@@ -559,11 +559,11 @@ def get_aggregated_summary():
         hard_controls = get_hard_controls()
         trade_ledger = get_trade_ledger_db()
 
-        # Get master stats
+        # Get platform stats
         platform_stats = pnl_tracker.get_stats('platform', force_refresh=True)
         platform_risk_state = risk_manager.get_state('platform')
 
-        # Get all user stats (excluding master)
+        # Get all user stats (excluding platform)
         all_user_ids = set()
         for user_id in risk_manager._user_states.keys():
             if user_id != 'platform':
@@ -736,7 +736,7 @@ def get_aggregated_performance():
 @app.route('/api/aggregated/positions', methods=['GET'])
 def get_aggregated_positions():
     """
-    Get portfolio-wide position summary (master + all users).
+    Get portfolio-wide position summary (platform + all users).
 
     Returns position breakdown by:
         - Account (master vs users)

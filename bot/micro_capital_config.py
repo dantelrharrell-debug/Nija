@@ -35,7 +35,7 @@ logger = logging.getLogger("nija.micro_capital_config")
 MICRO_CAPITAL_MODE = True
 
 # Trading mode configuration
-MODE = "PLATFORM_ONLY"  # Only master account trades (no copy trading initially)
+MODE = "PLATFORM_ONLY"  # Only platform account trades (no copy trading initially)
 
 # Broker configuration (UPDATED Jan 30, 2026: Coinbase disabled)
 PRIMARY_BROKER = "KRAKEN"  # Changed from COINBASE to KRAKEN

@@ -120,7 +120,7 @@ If a user doesn't meet requirements, you'll see:
          1. Ensure PRO_MODE=true
          2. Ensure COPY_TRADING_MODE=MASTER_FOLLOW
          3. Ensure account balance >= $50
-         4. Check user config: copy_from_master=true
+         4. Check user config: copy_from_platform=true
       ==================================================
 ```
 

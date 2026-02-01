@@ -183,7 +183,7 @@ def test_revenue_tracker():
 
     # Record copy trading fee
     platform_event, master_event = tracker.record_copy_trading_fee(
-        master_user_id="master_1",
+        platform_user_id="master_1",
         follower_user_id="follower_1",
         follower_profit=100.0
     )

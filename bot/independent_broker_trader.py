@@ -678,7 +678,7 @@ class IndependentBrokerTrader:
         """
         Start independent trading threads for all funded brokers.
         Each broker operates completely independently.
-        Includes both MASTER brokers and USER brokers.
+        Includes both PLATFORM brokers and USER brokers.
 
         Returns:
             bool: True if at least one trading thread was started, False otherwise
@@ -687,7 +687,7 @@ class IndependentBrokerTrader:
         logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING")
         logger.info("=" * 70)
 
-        # Detect funded MASTER brokers
+        # Detect funded PLATFORM brokers
         funded = self.detect_funded_brokers()
 
         # Detect funded USER brokers
@@ -699,13 +699,13 @@ class IndependentBrokerTrader:
 
         total_threads = 0
 
-        # Start threads for MASTER brokers
+        # Start threads for PLATFORM brokers
         if funded:
             logger.info("")
             logger.info("=" * 70)
             logger.info("🔷 STARTING PLATFORM BROKER TRADING THREADS")
             logger.info("=" * 70)
-            logger.info(f"📊 {len(funded)} MASTER broker(s) ready to trade")
+            logger.info(f"📊 {len(funded)} PLATFORM broker(s) ready to trade")
             logger.info("")
 
             # CRITICAL FIX (Jan 16, 2026): Use multi_account_manager.platform_brokers instead of broker_manager.brokers
@@ -771,19 +771,19 @@ class IndependentBrokerTrader:
                 broker_start_count += 1
                 total_threads += 1
 
-                logger.info(f"   🚀 TRADING THREAD STARTED for {broker_name_upper} (MASTER)")
+                logger.info(f"   🚀 TRADING THREAD STARTED for {broker_name_upper} (PLATFORM)")
                 logger.info(f"   📊 Thread name: Trader-{broker_name}")
                 logger.info(f"   🔄 This thread will:")
                 logger.info(f"      • Scan markets every 2.5 minutes")
-                logger.info(f"      • Execute MASTER trades when signals trigger")
+                logger.info(f"      • Execute PLATFORM trades when signals trigger")
                 logger.info(f"      • Manage existing positions")
                 logger.info("")
         else:
             logger.warning("=" * 70)
             logger.warning("⚠️  NO PLATFORM BROKER THREADS TO START")
             logger.warning("=" * 70)
-            logger.warning("Reason: No funded MASTER brokers detected")
-            logger.warning("MASTER trading will NOT occur until brokers are funded")
+            logger.warning("Reason: No funded PLATFORM brokers detected")
+            logger.warning("PLATFORM trading will NOT occur until brokers are funded")
             logger.warning("=" * 70)
             logger.warning("")
 
@@ -806,11 +806,11 @@ class IndependentBrokerTrader:
                         kraken_platform_connected = self.multi_account_manager.is_platform_connected(BrokerType.KRAKEN)
                         if kraken_platform_connected:
                             logger.info(f"⏭️  Skipping {broker_name} - Kraken copy trading active (users receive copied trades only)")
-                            logger.info(f"   ℹ️  {user_id} will execute trades copied from Kraken MASTER")
+                            logger.info(f"   ℹ️  {user_id} will execute trades copied from Kraken PLATFORM")
                             logger.info(f"   ℹ️  Independent strategy loop disabled for copy trading mode")
                             continue
                         else:
-                            logger.info(f"⏭️  Skipping {broker_name} - Kraken MASTER offline")
+                            logger.info(f"⏭️  Skipping {broker_name} - Kraken PLATFORM offline")
                             logger.info(f"   ℹ️  Kraken copy trading disabled until MASTER reconnects")
                             logger.info(f"   ✅ OTHER BROKERS (Coinbase, etc.) continue trading independently")
                             continue
@@ -871,7 +871,7 @@ class IndependentBrokerTrader:
                 logger.info(f"   • {broker_name.upper()} MASTER → Will generate trade signals")
         else:
             logger.warning("⚠️  NO PLATFORM BROKER THREADS STARTED")
-            logger.warning("   MASTER trading will NOT occur")
+            logger.warning("   PLATFORM trading will NOT occur")
 
         if any(self.user_broker_threads.values()):
             total_user_threads = sum(len(threads) for threads in self.user_broker_threads.values())
@@ -887,12 +887,12 @@ class IndependentBrokerTrader:
         logger.info("=" * 70)
         logger.info("")
 
-        # CRITICAL: Show explicit MASTER trading status
+        # CRITICAL: Show explicit PLATFORM trading status
         logger.info("=" * 70)
         logger.info("🎯 MASTER TRADING STATUS")
         logger.info("=" * 70)
         if platform_count > 0:
-            logger.info(f"✅ {platform_count} MASTER broker{'s' if platform_count != 1 else ''} WILL TRADE")
+            logger.info(f"✅ {platform_count} PLATFORM broker{'s' if platform_count != 1 else ''} WILL TRADE")
             logger.info(f"   Trade signals will be generated every 2.5 minutes")
             logger.info(f"   Users will receive copies via CopyTradeEngine")
         else:
@@ -900,7 +900,7 @@ class IndependentBrokerTrader:
             logger.error("   No trading signals will be generated")
             logger.error("   User accounts will NOT receive trades (no signals to copy)")
             logger.error("")
-            logger.error("   🔧 To fix: Ensure MASTER brokers are:")
+            logger.error("   🔧 To fix: Ensure PLATFORM brokers are:")
             logger.error("      1. Connected (credentials valid)")
             logger.error("      2. Funded (balance >= $0.50)")
             logger.error("      3. Not blocked by errors")
@@ -916,9 +916,9 @@ class IndependentBrokerTrader:
         """
         logger.info("🛑 Stopping all independent trading threads...")
 
-        # Signal all MASTER broker threads to stop
+        # Signal all PLATFORM broker threads to stop
         for broker_name, stop_flag in self.stop_flags.items():
-            logger.info(f"   Signaling {broker_name} (MASTER) to stop...")
+            logger.info(f"   Signaling {broker_name} (PLATFORM) to stop...")
             stop_flag.set()
 
         # Signal all USER broker threads to stop
@@ -929,12 +929,12 @@ class IndependentBrokerTrader:
 
         # Wait for all MASTER threads to finish (with timeout)
         for broker_name, thread in self.broker_threads.items():
-            logger.info(f"   Waiting for {broker_name} (MASTER) thread to finish...")
+            logger.info(f"   Waiting for {broker_name} (PLATFORM) thread to finish...")
             thread.join(timeout=10)
             if thread.is_alive():
-                logger.warning(f"   ⚠️  {broker_name} (MASTER) thread did not stop gracefully")
+                logger.warning(f"   ⚠️  {broker_name} (PLATFORM) thread did not stop gracefully")
             else:
-                logger.info(f"   ✅ {broker_name} (MASTER) thread stopped")
+                logger.info(f"   ✅ {broker_name} (PLATFORM) thread stopped")
 
         # Wait for all USER threads to finish (with timeout)
         for user_id, user_threads in self.user_broker_threads.items():

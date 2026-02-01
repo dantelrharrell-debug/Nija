@@ -617,7 +617,7 @@ class AdaptiveRiskManager:
                 # - PRO MODE: total_capital (free balance + position values)
                 # - Normal mode: account_balance (which is total equity per v71 strategy)
 
-                # Check if this is the master account via environment variable
+                # Check if this is the platform account via environment variable
                 import os
                 is_platform_account = os.getenv('PLATFORM_ACCOUNT_TIER', '').upper() in ('BALLER', 'PLATFORM')
 

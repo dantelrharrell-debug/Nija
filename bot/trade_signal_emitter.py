@@ -24,7 +24,7 @@ logger = logging.getLogger('nija.signals')
 @dataclass
 class TradeSignal:
     """
-    Represents a trade signal emitted by the master account.
+    Represents a trade signal emitted by the platform account.
 
     This signal contains all information needed to replicate a trade to user accounts.
     """
@@ -37,7 +37,7 @@ class TradeSignal:
     timestamp: float  # Unix timestamp when trade was executed
     order_id: str  # Platform account order ID for tracking
     platform_balance: float  # Platform account balance at time of trade (for position sizing)
-    master_trade_id: str = None  # P2: Master trade ID for copy tracking (optional, generated if not provided)
+    platform_trade_id: str = None  # P2: Master trade ID for copy tracking (optional, generated if not provided)
     order_status: str = "FILLED"  # P1: Order status (FILLED, PARTIALLY_FILLED, etc.)
 
     def to_dict(self) -> Dict:
@@ -47,7 +47,7 @@ class TradeSignal:
 
 class TradeSignalEmitter:
     """
-    Thread-safe signal emitter for master account trades.
+    Thread-safe signal emitter for platform account trades.
 
     Manages a queue of trade signals that are consumed by the copy trade engine.
     """
@@ -189,7 +189,7 @@ def emit_trade_signal(
     size_type: str,
     order_id: str,
     platform_balance: float,
-    master_trade_id: str = None,
+    platform_trade_id: str = None,
     order_status: str = "FILLED"
 ) -> bool:
     """
@@ -205,8 +205,8 @@ def emit_trade_signal(
         size: Position size
         size_type: "base" (crypto amount) or "quote" (USD amount)
         order_id: Order ID from the exchange
-        platform_balance: Current master account balance
-        master_trade_id: Master trade ID for copy tracking (auto-generated if None)
+        platform_balance: Current platform account balance
+        platform_trade_id: Master trade ID for copy tracking (auto-generated if None)
         order_status: Order fill status (default: "FILLED")
 
     Returns:
@@ -233,9 +233,9 @@ def emit_trade_signal(
         logger.warning(f"   Copy trading requires confirmed filled orders, not pending/approved signals")
         return False
 
-    # P2: Generate master_trade_id if not provided
-    if not master_trade_id:
-        master_trade_id = f"{broker}_{symbol}_{order_id}_{int(time.time())}"
+    # P2: Generate platform_trade_id if not provided
+    if not platform_trade_id:
+        platform_trade_id = f"{broker}_{symbol}_{order_id}_{int(time.time())}"
 
     signal = TradeSignal(
         broker=broker,
@@ -247,7 +247,7 @@ def emit_trade_signal(
         timestamp=time.time(),
         order_id=order_id,
         platform_balance=platform_balance,
-        master_trade_id=master_trade_id,
+        platform_trade_id=platform_trade_id,
         order_status=order_status
     )
 

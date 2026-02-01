@@ -94,7 +94,7 @@ COPY_TRADING*.md
   "broker": "kraken",
   "role": "user",
   "enabled": true,              ✅
-  "copy_from_master": true,     ✅
+  "copy_from_platform": true,     ✅
   "risk_multiplier": 1.0,
   "disabled_symbols": ["XRP-USD"]
 }
@@ -107,7 +107,7 @@ COPY_TRADING*.md
   "broker": "kraken",
   "role": "user",
   "enabled": true,              ✅
-  "copy_from_master": true,     ✅
+  "copy_from_platform": true,     ✅
   "risk_multiplier": 1.0,
   "disabled_symbols": ["XRP-USD"]
 }
@@ -115,7 +115,7 @@ COPY_TRADING*.md
 
 Both users are properly configured with:
 - ✅ `enabled: true` - Account is active
-- ✅ `copy_from_master: true` - Copy trading enabled
+- ✅ `copy_from_platform: true` - Copy trading enabled
 - ✅ `broker: "kraken"` - Correct broker type
 
 ### Code Infrastructure (Already Implemented)
@@ -267,7 +267,7 @@ For copy trading to work, users need:
 ### 2. User Account Configuration
 - ✅ User JSON file in `config/users/` with:
   - `enabled: true`
-  - `copy_from_master: true`
+  - `copy_from_platform: true`
   - `broker: "kraken"` (or their exchange)
 
 ### 3. API Credentials

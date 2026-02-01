@@ -133,7 +133,7 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
     fee_aware_pct = get_position_size_pct(balance)
     fee_aware_size = balance * fee_aware_pct
 
-    # Tier-based size limits (with master account flexibility and exchange minimums)
+    # Tier-based size limits (with platform account flexibility and exchange minimums)
     tier_min = get_min_trade_size(tier, balance, is_platform, exchange)
     tier_max = get_max_trade_size(tier, balance, is_platform)
 
@@ -165,7 +165,7 @@ def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
     if suggested_size > balance:
         suggested_size = balance
 
-    # Validate against tier (with master account support and exchange)
+    # Validate against tier (with platform account support and exchange)
     is_valid, validation_reason = validate_trade_size(suggested_size, tier, balance, is_platform, exchange)
 
     # Calculate fees for this trade size

@@ -252,19 +252,19 @@ def list_users():
         hard_controls = get_hard_controls()
 
         # Check if we should include master
-        include_master = request.args.get('include_master', 'false').lower() == 'true'
+        include_platform = request.args.get('include_platform', 'false').lower() == 'true'
 
         # Get all users from various sources
         user_ids = set()
 
         # From hard controls
         for user_id in hard_controls.user_kill_switches.keys():
-            if user_id != 'platform' or include_master:
+            if user_id != 'platform' or include_platform:
                 user_ids.add(user_id)
 
         # From risk manager
         for user_id in risk_manager._user_states.keys():
-            if user_id != 'platform' or include_master:
+            if user_id != 'platform' or include_platform:
                 user_ids.add(user_id)
 
         # Build user list
@@ -340,9 +340,9 @@ def get_user_pnl(user_id: str):
         return jsonify({'error': 'Failed to retrieve PnL data'}), 500
 
 
-@app.route('/api/master/pnl', methods=['GET'])
+@app.route('/api/platform/pnl', methods=['GET'])
 def get_platform_pnl():
-    """Get detailed PnL dashboard for the master account."""
+    """Get detailed PnL dashboard for the platform account."""
     return get_user_pnl('platform')
 @app.route('/api/users')
 def get_users():
@@ -874,7 +874,7 @@ def human_readable_status():
         <div style="background: #16181c; border: 2px solid #1d9bf0; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
             <div style="font-size: 14px; font-weight: bold; color: #1d9bf0; margin-bottom: 8px;">🔄 Copy Trading Active</div>
             <div style="font-size: 13px; color: #e7e9ea; line-height: 1.6;">
-                All user trades are <strong>automatically copied</strong> from the NIJA master account. Users <strong>cannot initiate their own trades</strong>.
+                All user trades are <strong>automatically copied</strong> from the NIJA platform account. Users <strong>cannot initiate their own trades</strong>.
                 Position sizes are scaled proportionally to each user's account balance.
             </div>
         </div>
@@ -1632,7 +1632,7 @@ def create_users_dashboard_html():
         async function refreshUsers() {
             try {
                 // Fetch users with master included
-                const response = await fetch('/api/users?include_master=true');
+                const response = await fetch('/api/users?include_platform=true');
                 const data = await response.json();
 
                 const container = document.getElementById('users-container');
@@ -1830,7 +1830,7 @@ def aggregated_report():
 @app.route('/api/aggregated/summary')
 def get_aggregated_summary():
     """
-    Get aggregated read-only summary of master + all users.
+    Get aggregated read-only summary of platform + all users.
 
     Returns:
         - Platform account performance
@@ -1845,11 +1845,11 @@ def get_aggregated_summary():
         pnl_tracker = get_user_pnl_tracker()
         risk_manager = get_user_risk_manager()
 
-        # Get master stats
+        # Get platform stats
         platform_stats = pnl_tracker.get_stats('platform', force_refresh=True)
         platform_risk_state = risk_manager.get_state('platform')
 
-        # Get all user stats (excluding master)
+        # Get all user stats (excluding platform)
         all_user_ids = set()
         for user_id in risk_manager._user_states.keys():
             if user_id != 'platform':

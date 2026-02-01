@@ -16,7 +16,7 @@ Each file contains a single user configuration with format:
   "broker": "kraken",
   "role": "user",
   "enabled": true,
-  "copy_from_master": true,
+  "copy_from_platform": true,
   "risk_multiplier": 1.0
 }
 """
@@ -42,7 +42,7 @@ class IndividualUserConfig:
         broker: str,
         role: str = "user",
         enabled: bool = True,
-        copy_from_master: bool = True,
+        copy_from_platform: bool = True,
         risk_multiplier: float = 1.0
     ):
         """
@@ -54,7 +54,7 @@ class IndividualUserConfig:
             broker: Brokerage type (e.g., 'kraken', 'alpaca', 'coinbase')
             role: User role (default: 'user')
             enabled: Whether this account is active
-            copy_from_master: Whether to copy trades from master
+            copy_from_platform: Whether to copy trades from master
             risk_multiplier: Risk multiplier (default: 1.0)
         """
         self.user_id = user_id
@@ -62,7 +62,7 @@ class IndividualUserConfig:
         self.broker = broker
         self.role = role
         self.enabled = enabled
-        self.copy_from_master = copy_from_master
+        self.copy_from_platform = copy_from_platform
         self.risk_multiplier = risk_multiplier
 
         # For compatibility with existing code
@@ -83,7 +83,7 @@ class IndividualUserConfig:
             broker=data['broker'],
             role=data.get('role', 'user'),
             enabled=data.get('enabled', True),
-            copy_from_master=data.get('copy_from_master', True),
+            copy_from_platform=data.get('copy_from_platform', True),
             risk_multiplier=data.get('risk_multiplier', 1.0)
         )
 
@@ -94,7 +94,7 @@ class IndividualUserConfig:
             'broker': self.broker,
             'role': self.role,
             'enabled': self.enabled,
-            'copy_from_master': self.copy_from_master,
+            'copy_from_platform': self.copy_from_platform,
             'risk_multiplier': self.risk_multiplier
         }
 

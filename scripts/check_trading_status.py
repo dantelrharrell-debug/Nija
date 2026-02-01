@@ -6,7 +6,7 @@ NIJA Trading Status and Profit Report
 Checks if NIJA is trading for master and user accounts, and calculates profits.
 
 This script:
-1. Checks if master account is connected and trading
+1. Checks if platform account is connected and trading
 2. Checks if user accounts are connected and trading
 3. Calculates total profits for each account
 4. Reports account balances
@@ -149,7 +149,7 @@ def check_user_credentials() -> dict:
 
 
 def get_coinbase_balance() -> float:
-    """Get Coinbase balance for master account."""
+    """Get Coinbase balance for platform account."""
     try:
         try:
             from coinbase.rest import RESTClient

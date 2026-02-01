@@ -1001,7 +1001,7 @@ See [SCALING_BLUEPRINT.md](./SCALING_BLUEPRINT.md) for detailed scaling strategy
 - **Sharding**: Shard by user_id for large datasets
 
 #### Redis
-- **Cluster Mode**: 3 master + 3 replica nodes
+- **Cluster Mode**: 3 platform + 3 replica nodes
 - **Persistence**: AOF (Append-Only File)
 - **Eviction Policy**: allkeys-lru
 

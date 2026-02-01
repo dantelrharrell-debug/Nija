@@ -513,7 +513,7 @@ python run_30day_paper_trading.py --final-report
 
 **✅ VERIFIED: Kraken Master + Multi-User Copy Trading with Full Profit-Taking**
 
-NIJA has achieved a critical milestone: **Platform account and ALL user accounts successfully taking profits on Kraken**. The system executed a BEAM-USD profit-taking trade with 100% success rate across 3 accounts (master + 2 users), with perfect proportional position sizing and risk management.
+NIJA has achieved a critical milestone: **Platform account and ALL user accounts successfully taking profits on Kraken**. The system executed a BEAM-USD profit-taking trade with 100% success rate across 3 accounts (platform + 2 users), with perfect proportional position sizing and risk management.
 
 **Key Achievement**: 2/2 users successfully copied master's profit-taking exit with proper risk caps (10% max) and proportional sizing.
 
@@ -812,7 +812,7 @@ python calculate_all_accounts_capital.py --simulate
 - ✅ **Portfolio-First Accounting** - Uses total equity, not just cash
 - ✅ **Reserve Protection** - Maintains minimum cash reserves (default 10%)
 - ✅ **Position Size Limits** - Enforces max position % of equity (default 15%)
-- ✅ **Multi-Account Support** - Analyzes master + all user accounts
+- ✅ **Multi-Account Support** - Analyzes platform + all user accounts
 - ✅ **Aggregate Summaries** - Portfolio-wide capacity views
 
 **Learn More:**
@@ -874,7 +874,7 @@ PRO_MODE_MIN_RESERVE_PCT=0.15
 
 **✅ All accounts trade independently using the same NIJA strategy!**
 
-NIJA uses an independent trading model where each account (master + users) trades independently using the same trading logic, parameters, and risk rules:
+NIJA uses an independent trading model where each account (platform + users) trades independently using the same trading logic, parameters, and risk rules:
 
 - ✅ **Same Strategy** - All accounts use identical NIJA trading logic
 - ✅ **Same Parameters** - All accounts apply same entry/exit rules
@@ -884,7 +884,7 @@ NIJA uses an independent trading model where each account (master + users) trade
 
 **Quick Start:**
 1. Copy any `.env` template (e.g., `.env.example` or `.env.small_account_preset`)
-2. Add your API credentials for master and user accounts
+2. Add your API credentials for platform and user accounts
 3. Start the bot - all accounts trade independently!
 
 **Optional Settings (Small Accounts $15-$50):**
@@ -960,7 +960,7 @@ NIJA now automatically:
 | **Copy Trading** | ✅ VERIFIED | 100% success rate (2/2 users) - Jan 25, 2026 |
 | **Profit-Taking** | ✅ VERIFIED | Master + all users taking profits successfully |
 | **SDK Libraries** | ✅ Installed | krakenex + pykrakenapi in requirements.txt |
-| **Multi-Account** | ✅ Active | 3 accounts (master + 2 users) trading live |
+| **Multi-Account** | ✅ Active | 3 accounts (platform + 2 users) trading live |
 
 ### 🚀 Quick Start - Enable Kraken
 

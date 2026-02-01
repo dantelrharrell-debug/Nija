@@ -4,7 +4,7 @@ NIJA All Accounts Capital Calculator
 ====================================
 
 Calculate and display effective deployable capital and max position size
-for ALL accounts (master account + all user accounts).
+for ALL accounts (platform account + all user accounts).
 
 This provides a comprehensive portfolio-wide view of capital capacity.
 

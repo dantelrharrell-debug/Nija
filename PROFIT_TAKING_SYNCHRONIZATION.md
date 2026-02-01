@@ -179,7 +179,7 @@ Exit (Profit-Taking):
   User:   Sells $10 BTC position (proportional)
 
 Result:
-  Both master and user exit 10% of their balance
+  Both platform and user exit 10% of their balance
   Profit % is identical for both accounts
 ```
 
@@ -326,7 +326,7 @@ grep "COPY TRADE RESULTS" nija.log -A 5
 
 ## Summary
 
-✅ **Profit-taking IS synchronized** between master and users
+✅ **Profit-taking IS synchronized** between platform and users
 ✅ **SELL orders emit signals** just like BUY orders
 ✅ **Copy engine processes SELL** identically to BUY
 ✅ **All exit methods** (stop-loss, trailing, time-based) emit signals

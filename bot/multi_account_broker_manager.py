@@ -198,7 +198,7 @@ class MultiAccountBrokerManager:
 
     def get_platform_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
-        Get a master account broker.
+        Get a platform account broker.
 
         Args:
             broker_type: Type of broker to get
@@ -224,7 +224,7 @@ class MultiAccountBrokerManager:
 
     def is_platform_connected(self, broker_type: BrokerType) -> bool:
         """
-        Check if a master account is connected for a given broker type.
+        Check if a platform account is connected for a given broker type.
 
         Args:
             broker_type: Type of broker to check
@@ -331,7 +331,7 @@ class MultiAccountBrokerManager:
 
     def get_platform_balance(self, broker_type: Optional[BrokerType] = None) -> float:
         """
-        Get master account balance.
+        Get platform account balance.
 
         Args:
             broker_type: Specific broker or None for total across all brokers

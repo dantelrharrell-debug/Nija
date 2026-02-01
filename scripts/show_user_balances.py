@@ -44,7 +44,7 @@ def show_balances_table():
     # Get all balances
     balances = multi_account_broker_manager.get_all_balances()
 
-    # Display master account
+    # Display platform account
     print("\n🔷 PLATFORM ACCOUNT (Nija System)")
     print("-" * 80)
     platform_balances = balances.get('platform', {})
