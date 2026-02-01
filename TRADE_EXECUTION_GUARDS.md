@@ -1,8 +1,11 @@
 # Trade Execution Guards - Implementation Guide
 
+> **⚠️ NOTE:** This document contains references to a deprecated copy trading feature.  
+> NIJA now uses an independent trading model. See [USER_FAQ.md](USER_FAQ.md) for details.
+
 ## Overview
 
-This document describes the P0/P1/P2 guard system implemented to prevent fake positions and improve copy trading reliability.
+This document describes the P0/P1/P2 guard system implemented to prevent fake positions and improve trade execution reliability.
 
 **Core Principle**: *The execution broker decides reality, not the strategy engine.*
 

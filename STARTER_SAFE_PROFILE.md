@@ -1,4 +1,7 @@
-# NIJA "Starter-Safe" Copy Trading Profile
+# NIJA "Starter-Safe" Independent Trading Profile
+
+> **⚠️ NOTE:** This document contains references to a deprecated copy trading feature.  
+> NIJA now uses an independent trading model. See [USER_FAQ.md](USER_FAQ.md) for details.
 
 ## Public-Facing Message
 
@@ -68,7 +71,7 @@ This is NIJA's **GOLD STANDARD** configuration for new users starting with $100.
 | **STOP_LOSS_PRIMARY** | 1.0% | Tight risk control |
 | **TIME_EXIT** | 15 minutes | Quick exits to minimize exposure |
 | **BROKER_PRIORITY** | KRAKEN | Lower fees than Coinbase |
-| **COPY_MODE** | STRICT | Safe mirroring of platform trades |
+| **TRADING_MODE** | INDEPENDENT | Independent market evaluation per account |
 | **PRO_MODE** | true | Enabled but invisible to users |
 | **TIER_LOCK** | SAVER | Retail gets PRO logic with tier-capped risk |
 
@@ -99,7 +102,7 @@ Users get sophisticated execution without the risk of over-leveraging their smal
 
 | NIJA Tier | Capital Min | Why This Number |
 |-----------|-------------|-----------------|
-| **STARTER** | $50 | ❌ DEPRECATED - Copy trading only, NOT for live |
+| **STARTER** | $50 | ❌ DEPRECATED - Limited functionality |
 | **SAVER** | $100 | ✅ Absolute minimum where fees/minimums/risk coexist |
 | **INVESTOR** | $250 | Allows multi-position rotation without risk blocks |
 | **INCOME** | $1,000 | First tier where NIJA trades as designed |
@@ -116,12 +119,12 @@ Why?
 3. **Tier enforcement blocks entries** - System designed for $100+
 4. **Users think bot is broken** - It's not, it's protecting them
 
-## Copy Trading Scaling
+## Independent Trading Position Sizing
 
-When users copy trade from a platform account:
+Each account calculates position sizes independently based on:
 
 ```
-User Position = Master Position × (User Balance / Master Balance)
+Account Position = Account Balance × Risk Percentage × Tier Limits
 ```
 
 Example:
@@ -193,7 +196,7 @@ Restart the bot after tier changes.
 
 1. **Start at $100** - Don't go below
 2. **Use Kraken** - Lower fees than Coinbase for small accounts
-3. **Enable copy trading** - Learn from experienced traders
+3. **Use independent trading** - Each account evaluates markets independently
 4. **Monitor performance** - Track your first 20 trades
 5. **Compound profits** - Let winning trades build your balance
 6. **Upgrade tiers** - Move up as capital grows

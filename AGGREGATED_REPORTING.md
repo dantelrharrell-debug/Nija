@@ -1,5 +1,8 @@
 # NIJA Aggregated Reporting & Stakeholder Dashboard
 
+> **⚠️ NOTE:** This document contains references to a deprecated copy trading feature.  
+> NIJA now uses an independent trading model. See [USER_FAQ.md](USER_FAQ.md) for details.
+
 ## Overview
 
 NIJA provides a comprehensive **read-only aggregation and reporting system** designed for stakeholders, investors, and administrators to monitor the overall performance of the platform account and all user accounts in one unified view.
@@ -7,7 +10,7 @@ NIJA provides a comprehensive **read-only aggregation and reporting system** des
 This system addresses three critical needs:
 1. **Unified Aggregation View** - Combining platform + all users performance
 2. **Read-Only Stakeholder Dashboard** - Safe visibility without modification ability
-3. **Master-to-User Trade Traceability** - Understanding copy trading performance
+3. **Platform-to-User Trade Traceability** - Understanding independent trading performance
 
 ---
 
