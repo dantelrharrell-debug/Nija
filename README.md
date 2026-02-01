@@ -880,7 +880,7 @@ NIJA uses an independent trading model where each account (platform + users) tra
 - ✅ **Same Parameters** - All accounts apply same entry/exit rules
 - ✅ **Same Risk Rules** - All accounts use same risk management
 - ✅ **Scaled Sizing** - Positions sized by individual account balance
-- ✅ **No Copying** - Accounts do NOT copy trades from each other
+- ✅ **Independent Evaluation** - Each account evaluates independently, results may differ per account
 
 **Quick Start:**
 1. Copy any `.env` template (e.g., `.env.example` or `.env.small_account_preset`)
@@ -901,10 +901,10 @@ MIN_CASH_TO_BUY=5.0              # Lower minimum order (default: 5.50)
 COPY_TRADING_MODE=INDEPENDENT
 ```
 
-**⚠️ Deprecation Notice:**
+**⚠️ Important Notice:**
 - `COPY_TRADING_MODE=MASTER_FOLLOW` is deprecated and no longer supported
-- Copy/mirror trading has been eliminated
-- All accounts now trade independently
+- All accounts now trade independently using risk-gated execution
+- Results may differ per account based on timing, balance, and market conditions
 
 **Learn More:**
 - 📚 [MULTI_USER_PLATFORM_README.md](MULTI_USER_PLATFORM_README.md) - Multi-account platform guide

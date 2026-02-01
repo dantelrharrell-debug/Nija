@@ -1,5 +1,10 @@
 # Copy Trading Visibility Enhancement
 
+> **⚠️ DEPRECATED - January 2026**  
+> This document describes a deprecated copy trading feature that has been removed from NIJA.  
+> NIJA now uses an independent trading model where each account evaluates markets and executes trades independently.  
+> See [USER_FAQ.md](USER_FAQ.md) for information about independent trading.
+
 ## Problem Statement
 
 When reviewing trading bot logs, it was unclear whether copy trading was working as expected. The original question was: **"Did all users make the same trade or just the master?"**

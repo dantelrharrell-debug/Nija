@@ -1,5 +1,10 @@
 # Copy Trading Activation Checklist
 
+> **⚠️ DEPRECATED - January 2026**  
+> This document describes a deprecated copy trading feature that has been removed from NIJA.  
+> NIJA now uses an independent trading model where each account evaluates markets and executes trades independently.  
+> See [USER_FAQ.md](USER_FAQ.md) for information about independent trading.
+
 ## ✅ Quick Verification: Is Copy Trading Active?
 
 Use this checklist to verify that copy trading is active and working correctly.

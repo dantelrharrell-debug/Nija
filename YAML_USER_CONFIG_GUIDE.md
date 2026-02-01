@@ -39,7 +39,7 @@ copy_from_platform: true
 | `api_key` | Yes | Your API key from the exchange | - |
 | `api_secret` | Yes | Your API secret from the exchange | - |
 | `enabled` | Yes | Enable/disable this user (`true`/`false`) | `true` |
-| `copy_from_platform` | Yes | Copy trades from platform account | `true` |
+| `independent_trading` | Yes | Account trades independently | `true` |
 | `risk_multiplier` | No | Risk adjustment multiplier | `1.0` |
 
 ## Security

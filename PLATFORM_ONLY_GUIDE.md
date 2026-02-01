@@ -384,9 +384,9 @@ BTC, ETH, and SOL have none of these issues.
 
 **A:** **NO.** This configuration explicitly disables leverage. For small accounts, leverage is extremely dangerous and can wipe out your capital quickly.
 
-### Q: What if I want to copy trade?
+### Q: How does independent trading differ from other modes?
 
-**A:** This is PLATFORM_ONLY mode (independent trading). If you want copy trading, use a different configuration preset (see `COPY_TRADING_SETUP.md`).
+**A:** PLATFORM_ONLY mode means your account evaluates markets independently using the NIJA algorithm. Each account makes its own trading decisions based on risk-gated execution. Results may differ per account due to timing, balance, and market conditions.
 
 ### Q: Why 3-5% risk per trade?
 

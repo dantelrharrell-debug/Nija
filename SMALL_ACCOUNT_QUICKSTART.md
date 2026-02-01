@@ -4,7 +4,7 @@
 
 The NIJA Safe Small-Account Preset is a **turnkey configuration** designed specifically for accounts between **$20-$100**. This preset provides:
 
-✅ **Full copy trading support** - Mirror platform account trades automatically
+✅ **Independent trading support** - Each account evaluates markets independently
 ✅ **Minimal API risk** - Conservative position sizing and strict limits
 ✅ **Controlled drawdown** - Multiple circuit breakers and safety features
 ✅ **Fee optimization** - Trades on lowest-fee exchanges (Kraken recommended)
