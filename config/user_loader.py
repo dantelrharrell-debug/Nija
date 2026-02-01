@@ -134,7 +134,7 @@ class UserConfigLoader:
         logger.info("=" * 70)
         logger.info("📂 LOADING USER/INVESTOR CONFIGURATIONS")
         logger.info("=" * 70)
-        logger.info("🎯 MASTER controls all retail users and investors")
+        logger.info("🎯 PLATFORM coordinates all retail users and investors")
         logger.info("=" * 70)
 
         # Account types and brokerages
@@ -172,7 +172,7 @@ class UserConfigLoader:
                     total_loaded += len(users)
 
         logger.info("=" * 70)
-        logger.info(f"✅ Loaded {total_loaded} total account(s) under MASTER control")
+        logger.info(f"✅ Loaded {total_loaded} total account(s) under PLATFORM coordination")
 
         # Log summary by account type
         for account_type in account_types:

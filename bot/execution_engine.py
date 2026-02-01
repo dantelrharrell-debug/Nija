@@ -649,9 +649,9 @@ class ExecutionEngine:
                 # Calculate executed_cost: filled_price * filled_volume + fees
                 executed_cost = (final_entry_price * filled_volume) + entry_fee
 
-                # Log master trade verification data
+                # Log platform trade verification data
                 logger.info(LOG_SEPARATOR)
-                logger.info("✅ MASTER TRADE VERIFICATION")
+                logger.info("✅ PLATFORM TRADE VERIFICATION")
                 logger.info(LOG_SEPARATOR)
                 logger.info(f"   Kraken Order ID: {order_id}")
                 logger.info(f"   Fill Time: {fill_time}")

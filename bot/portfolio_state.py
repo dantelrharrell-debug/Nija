@@ -355,16 +355,16 @@ class PortfolioStateManager:
             available_cash: Available cash in platform account (should be sum of ALL master brokers)
 
         Returns:
-            PortfolioState: Master portfolio state
+            PortfolioState: Platform portfolio state
         """
         if self.platform_portfolio is None:
             self.platform_portfolio = PortfolioState(available_cash=available_cash)
-            logger.info(f"Master portfolio initialized with ${available_cash:.2f}")
+            logger.info(f"Platform portfolio initialized with ${available_cash:.2f}")
         else:
             # Portfolio already exists - only update cash balance, preserve positions
             old_cash = self.platform_portfolio.available_cash
             self.platform_portfolio.update_cash(available_cash)
-            logger.debug(f"Master portfolio cash updated: ${old_cash:.2f} → ${available_cash:.2f}")
+            logger.debug(f"Platform portfolio cash updated: ${old_cash:.2f} → ${available_cash:.2f}")
         return self.platform_portfolio
 
     def initialize_user_portfolio(self, user_id: str, broker_type: str, available_cash: float) -> UserPortfolioState:

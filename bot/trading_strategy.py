@@ -808,11 +808,11 @@ class TradingStrategy:
                     total_capital = user_total_balance
                     logger.info(f"   ✅ Capital calculation: User-only trading (${user_total_balance:.2f})")
                 else:
-                    # No capital from master or users - cannot trade
+                    # No capital from platform or users - cannot trade
                     logger.error("=" * 70)
                     logger.error("❌ FATAL: No capital detected from any account")
                     logger.error("=" * 70)
-                    logger.error(f"   Master balance: ${platform_balance:.2f}")
+                    logger.error(f"   Platform balance: ${platform_balance:.2f}")
                     logger.error(f"   User balance: ${user_total_balance:.2f}")
                     logger.error("")
                     logger.error("   🛑 Bot cannot trade without capital")
@@ -870,7 +870,7 @@ class TradingStrategy:
                 # Platform account
                 platform_balances = all_balances.get('platform', {})
                 platform_total = sum(platform_balances.values())
-                logger.info(f"   • Master: ${platform_total:,.2f}")
+                logger.info(f"   • Platform: ${platform_total:,.2f}")
                 for broker, balance in platform_balances.items():
                     logger.info(f"      - {broker.upper()}: ${balance:,.2f}")
 
@@ -954,16 +954,16 @@ class TradingStrategy:
 
                     if exit_only_brokers and broker_name == "KRAKEN":
                         # Kraken was promoted because another broker is exit-only
-                        logger.info(f"📌 Primary master broker: {broker_name} ({', '.join(exit_only_brokers)} EXIT-ONLY)")
+                        logger.info(f"📌 Primary platform broker: {broker_name} ({', '.join(exit_only_brokers)} EXIT-ONLY)")
                     else:
-                        logger.info(f"📌 Primary master broker: {broker_name}")
+                        logger.info(f"📌 Primary platform broker: {broker_name}")
 
                     # FIX #2: Initialize forced stop-loss with the connected broker
                     if self.forced_stop_loss is None:
                         try:
                             from forced_stop_loss import create_forced_stop_loss
                             self.forced_stop_loss = create_forced_stop_loss(self.broker)
-                            logger.info("✅ Forced stop-loss executor initialized with master broker")
+                            logger.info("✅ Forced stop-loss executor initialized with platform broker")
                         except Exception as e:
                             logger.warning(f"⚠️ Could not initialize forced stop-loss: {e}")
 
@@ -999,15 +999,15 @@ class TradingStrategy:
                                 logger.info(f"   TOTAL PLATFORM EQUITY: ${self.platform_portfolio.total_equity:.2f}")
                                 logger.info("=" * 70)
                             else:
-                                logger.warning("⚠️ No master broker balances available - portfolio not initialized")
+                                logger.warning("⚠️ No platform broker balances available - portfolio not initialized")
                                 self.platform_portfolio = None
                         except Exception as e:
-                            logger.warning(f"⚠️ Could not initialize master portfolio: {e}")
+                            logger.warning(f"⚠️ Could not initialize platform portfolio: {e}")
                             self.platform_portfolio = None
                     else:
                         self.platform_portfolio = None
                 else:
-                    logger.warning("⚠️  No primary master broker available")
+                    logger.warning("⚠️  No primary platform broker available")
                     self.platform_portfolio = None
             else:
                 logger.error("❌ NO BROKERS CONNECTED - Running in monitor mode")
@@ -1140,13 +1140,13 @@ class TradingStrategy:
                     broker_name = self.broker.broker_type.value if hasattr(self.broker, 'broker_type') else 'coinbase'
                     # ✅ REQUIREMENT 1: Use REAL exchange balance ONLY - No fake $100 fallback
                     if platform_balance <= 0:
-                        logger.error(f"❌ Cannot initialize trading: Master balance is ${platform_balance:.2f}")
+                        logger.error(f"❌ Cannot initialize trading: Platform balance is ${platform_balance:.2f}")
                         logger.error("   Fund your account with real capital to enable trading")
                         self.failsafes = None
                     else:
                         account_balance = platform_balance
                         self.failsafes = create_failsafe_for_broker(broker_name, account_balance)
-                        logger.info(f"🛡️  Broker failsafes initialized for {broker_name} (Master balance: ${account_balance:,.2f})")
+                        logger.info(f"🛡️  Broker failsafes initialized for {broker_name} (Platform balance: ${account_balance:,.2f})")
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to initialize broker failsafes: {e}")
                     self.failsafes = None
@@ -1249,7 +1249,7 @@ class TradingStrategy:
                             total_capital += balance
                             logger.debug(f"   Platform {broker_type.value}: ${balance:.2f}")
                         except Exception as e:
-                            logger.warning(f"   ⚠️ Could not fetch {broker_type.value} master balance: {e}")
+                            logger.warning(f"   ⚠️ Could not fetch {broker_type.value} platform balance: {e}")
 
                 # 2. Sum all USER broker balances
                 if self.multi_account_manager.user_brokers:

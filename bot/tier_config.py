@@ -870,10 +870,10 @@ def get_platform_funding_tier(balance: float) -> str:
         balance: Platform account balance in USD
 
     Returns:
-        Master funding tier name: 'MICRO_PLATFORM', 'STARTER', 'SAVER', etc.
+        Platform funding tier name: 'MICRO_PLATFORM', 'STARTER', 'SAVER', etc.
     """
     if balance < 25.0:
-        logger.error(f"❌ Master balance ${balance:.2f} below absolute minimum $25.00")
+        logger.error(f"❌ Platform balance ${balance:.2f} below absolute minimum $25.00")
         return None
     elif balance < 50.0:
         return 'MICRO_PLATFORM'
@@ -942,7 +942,7 @@ def validate_platform_minimum_funding(balance: float, log_warnings: bool = True)
             logger.info(f"   {funding_rules.warning_message}")
 
         # Log operational constraints
-        logger.info(f"📋 Master Operational Limits ({funding_tier_name}):")
+        logger.info(f"📋 Platform Operational Limits ({funding_tier_name}):")
         logger.info(f"   Max Trade Size: {funding_rules.max_trade_size_pct:.1f}% of balance")
         logger.info(f"   Min Trade Size: ${funding_rules.min_trade_size_usd:.2f}")
         logger.info(f"   Max Positions: {funding_rules.max_positions}")

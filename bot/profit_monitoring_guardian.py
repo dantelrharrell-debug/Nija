@@ -280,7 +280,7 @@ class MultiAccountProfitMonitor:
         """Initialize multi-account profit monitor"""
         self.account_profit_stats = {}  # account_id -> {checks, profits, account_type}
         logger.info("✅ Multi-Account Profit Monitor initialized")
-        logger.info("   Supports: Individual, Master, Followers, Multi-Account")
+        logger.info("   Supports: Individual, Platform, Users, Multi-Account")
 
     def record_profit_check(self, account_id: str, account_type: str = "individual"):
         """Record a profit check for an account"""

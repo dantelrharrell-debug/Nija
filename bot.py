@@ -146,7 +146,7 @@ def _log_kraken_connection_error_header(error_msg):
     """
     logger.error("")
     logger.error(f"      {ERROR_SEPARATOR}")
-    logger.error(f"      🚨 KRAKEN MASTER CREDENTIALS ARE SET BUT CONNECTION FAILED")
+    logger.error(f"      🚨 KRAKEN PLATFORM CREDENTIALS ARE SET BUT CONNECTION FAILED")
     logger.error(f"      {ERROR_SEPARATOR}")
     if error_msg:
         logger.error(f"      ❌ Error: {error_msg}")
@@ -233,8 +233,8 @@ def main():
     kraken_platform_secret_malformed = (kraken_platform_secret_raw != "" and kraken_platform_secret == "")
 
     if kraken_platform_key_malformed or kraken_platform_secret_malformed:
-        exchange_status.append("⚠️ Kraken (Master - MALFORMED)")
-        logger.warning("⚠️  Kraken Master credentials ARE SET but CONTAIN ONLY WHITESPACE")
+        exchange_status.append("⚠️ Kraken (Platform - MALFORMED)")
+        logger.warning("⚠️  Kraken Platform credentials ARE SET but CONTAIN ONLY WHITESPACE")
         logger.warning("   This is a common error when copying/pasting credentials!")
         if kraken_platform_key_malformed:
             logger.warning("   → KRAKEN_PLATFORM_API_KEY: SET but empty after removing whitespace")
@@ -247,12 +247,12 @@ def main():
         logger.warning("      3. Click 'Save' and restart the deployment")
     elif kraken_platform_key and kraken_platform_secret:
         exchanges_configured += 1
-        exchange_status.append("✅ Kraken (Master)")
-        logger.info("✅ Kraken Master credentials detected")
+        exchange_status.append("✅ Kraken (Platform)")
+        logger.info("✅ Kraken Platform credentials detected")
         kraken_master_configured = True
     else:
-        exchange_status.append("❌ Kraken (Master)")
-        logger.warning("⚠️  Kraken Master credentials NOT SET")
+        exchange_status.append("❌ Kraken (Platform)")
+        logger.warning("⚠️  Kraken Platform credentials NOT SET")
         logger.warning("   → Kraken will NOT connect without these environment variables:")
         logger.warning("      KRAKEN_PLATFORM_API_KEY")
         logger.warning("      KRAKEN_PLATFORM_API_SECRET")
@@ -449,7 +449,7 @@ def main():
 
                 # Platform account total
                 platform_total = sum(all_balances.get('platform', {}).values())
-                logger.info(f"   Master: ${platform_total:,.2f}")
+                logger.info(f"   Platform: ${platform_total:,.2f}")
 
                 # User accounts - specifically Daivon and Tania
                 users_balances = all_balances.get('users', {})
@@ -522,7 +522,7 @@ def main():
         if connected_platform_brokers:
             logger.info("✅ NIJA IS READY TO TRADE!")
             logger.info("")
-            logger.info("Active Master Exchanges:")
+            logger.info("Active Platform Exchanges:")
             for exchange in connected_platform_brokers:
                 logger.info(f"   ✅ {exchange}")
 
@@ -610,16 +610,16 @@ def main():
                             logger.error(f"      {ERROR_SEPARATOR}")
                             logger.error("")
 
-            # Show warning if Kraken Master credentials are not configured
+            # Show warning if Kraken Platform credentials are not configured
             if kraken_not_configured:
                 logger.info("")
-                logger.warning("💡 MASTER KRAKEN NOT CONFIGURED")
-                logger.warning("   ⚠️  Kraken Master credentials are not set")
-                logger.warning("   ℹ️  This is OPTIONAL - only set if you want MASTER Kraken trading")
+                logger.warning("💡 PLATFORM KRAKEN NOT CONFIGURED")
+                logger.warning("   ⚠️  Kraken Platform credentials are not set")
+                logger.warning("   ℹ️  This is OPTIONAL - only set if you want PLATFORM Kraken trading")
                 logger.warning("")
-                logger.warning("   To enable MASTER Kraken trading, set in your deployment platform:")
-                logger.warning("      KRAKEN_PLATFORM_API_KEY=<your-master-api-key>")
-                logger.warning("      KRAKEN_PLATFORM_API_SECRET=<your-master-api-secret>")
+                logger.warning("   To enable PLATFORM Kraken trading, set in your deployment platform:")
+                logger.warning("      KRAKEN_PLATFORM_API_KEY=<your-platform-api-key>")
+                logger.warning("      KRAKEN_PLATFORM_API_SECRET=<your-platform-api-secret>")
                 logger.warning("")
                 logger.warning("   📖 Get credentials: https://www.kraken.com/u/security/api")
                 logger.warning("   📖 Setup guide: SOLUTION_MASTER_KRAKEN_NOT_TRADING.md")
@@ -630,12 +630,12 @@ def main():
             logger.info("💡 Each exchange operates independently")
             logger.info("🛡️  Failures on one exchange won't affect others")
         else:
-            logger.warning("⚠️  NO MASTER EXCHANGES CONNECTED")
+            logger.warning("⚠️  NO PLATFORM EXCHANGES CONNECTED")
             logger.warning("Bot is running in MONITOR MODE (no trades will execute)")
             logger.warning("")
             logger.warning("To enable trading:")
             logger.warning("   1. Run: python3 validate_all_env_vars.py")
-            logger.warning("   2. Configure at least one master exchange")
+            logger.warning("   2. Configure at least one platform exchange")
             logger.warning("   3. Restart the bot")
 
         logger.info("=" * 70)
