@@ -148,6 +148,20 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      - id: check-terminology
+        name: Check for prohibited hierarchical terminology
+        entry: .pre-commit-hooks/check-terminology.sh
+        language: system
+        pass_filenames: false
+        files: \.py$
+        exclude: |
+          (?x)^(
+            test_.*\.py$|
+            diagnose_.*\.py$|
+            archive/.*
+          )
+        stages: [pre-commit]
+
 # Configuration for CI (run all hooks on all files)
 ci:
   autofix_prs: false
