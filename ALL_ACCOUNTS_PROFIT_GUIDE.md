@@ -14,9 +14,9 @@ NIJA **GUARANTEES** profit-taking works on **ALL account types**, in **BOTH dire
 ### Supported Account Types
 
 1. **Individual Accounts** - Single standalone trading accounts
-2. **Platform Accounts** - Accounts that generate signals for copy trading
-3. **Follower Accounts** - Accounts that copy platform account trades
-4. **Multi-Account Setups** - Multiple accounts trading independently or via copy trading
+2. **Platform Accounts** - Accounts used for platform operations
+3. **User Accounts** - User-controlled accounts trading independently
+4. **Multi-Account Setups** - Multiple accounts trading independently
 
 ---
 
@@ -112,21 +112,22 @@ Platform Account on Kraken:
 
 ---
 
-### 3. Follower Accounts (Copy Trading)
+### 3. User Accounts (Independent Trading)
 
-**Description:** Accounts that automatically copy platform account trades.
+**Description:** User-controlled accounts that trade independently using the NIJA algorithm.
 
 **Characteristics:**
-- Replicates master trades with position sizing scaled to account balance
-- Follows BOTH entries AND exits (including profit-taking)
-- Can trade independently if master is offline
-- Works across different brokers than master
+- Evaluates markets independently in real-time
+- Makes trading decisions based on risk-gated execution
+- Position sizing scaled to account balance
+- Can use different brokers
+- Results may differ based on timing and market conditions
 
 **Profit-Taking:**
-- ✅ Copies master's profit-taking exits automatically
-- ✅ Position sizing scaled to follower's account balance
-- ✅ Can use different broker than master (cross-broker copy trading)
-- ✅ Fee-aware scaling based on follower's broker
+- ✅ Independent profit-taking based on algorithm analysis
+- ✅ Position sizing scaled to account balance
+- ✅ Works across all supported brokers
+- ✅ Fee-aware execution based on broker
 
 **Configuration:**
 ```bash

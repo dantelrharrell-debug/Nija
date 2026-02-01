@@ -355,11 +355,10 @@ We welcome contributions! Please follow these guidelines:
 - [ ] Multiple language support
 
 ### Version 2.0 (Future)
-- [ ] Copy trading features
-- [ ] Social trading (follow other traders)
 - [ ] Advanced analytics dashboard
 - [ ] Custom strategy builder
 - [ ] Telegram bot integration
+- [ ] Multi-strategy portfolio management
 
 ## Support
 

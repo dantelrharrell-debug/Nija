@@ -59,7 +59,7 @@ broker: KRAKEN
 api_key: YOUR_API_KEY_HERE
 api_secret: YOUR_API_SECRET_HERE
 enabled: true
-copy_from_platform: true
+independent_trading: true
 ```
 
 **YAML Configuration Fields:**
@@ -67,7 +67,7 @@ copy_from_platform: true
 - **api_key** (required): User's API key from the exchange
 - **api_secret** (required): User's API secret from the exchange
 - **enabled** (required): Whether this account is active (`true` or `false`)
-- **copy_from_platform** (required): Whether to copy trades from platform account
+- **independent_trading** (required): Whether account trades independently (always `true`)
 - **risk_multiplier** (optional): Risk multiplier (default: 1.0)
 
 **Example YAML Configuration:**

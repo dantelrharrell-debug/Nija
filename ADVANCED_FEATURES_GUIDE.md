@@ -400,23 +400,15 @@ user_capital_isolation_engine.pause_container("user123")
 
 ---
 
-### 2.3 Copy Trading Engine
+### 2.3 Independent Multi-Account Trading
 
-**File**: `bot/copy_trade_engine.py` (already exists)
+**Note**: NIJA uses an independent trading model where each account evaluates markets and executes trades independently. This ensures:
+- Transparent execution without account hierarchy
+- Risk-gated execution per account
+- Results that may differ per account based on timing and balance
+- Compliance with financial regulations
 
-The copy trading engine is already implemented in NIJA. It replicates platform account trades to follower accounts with:
-- Automatic position sizing
-- Risk normalization
-- Master→follower replication
-- Performance tracking
-
-**Usage**:
-```python
-from bot.copy_trade_engine import CopyTradeEngine
-
-engine = CopyTradeEngine()
-engine.start()  # Starts background thread
-```
+Each account runs the same algorithm but makes independent trading decisions.
 
 ---
 
