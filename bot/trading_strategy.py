@@ -447,6 +447,32 @@ class TradingStrategy:
         """Initialize production strategy with multi-broker support."""
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
 
+        # Last Evaluated Trade Tracking (for UI panel)
+        self.last_evaluated_trade = {
+            'timestamp': None,
+            'symbol': None,
+            'signal': None,
+            'action': None,  # 'executed', 'vetoed', 'evaluated'
+            'veto_reasons': [],
+            'entry_price': None,
+            'position_size': None,
+            'broker': None,
+            'confidence': None,
+            'rsi_9': None,
+            'rsi_14': None
+        }
+
+        # Dry-run simulator toggle (for App Store reviewers)
+        self.dry_run_mode = os.getenv('DRY_RUN_MODE', 'false').lower() in ('true', '1', 'yes')
+        if self.dry_run_mode:
+            logger.info("=" * 70)
+            logger.info("🎭 DRY-RUN SIMULATOR MODE ACTIVE")
+            logger.info("=" * 70)
+            logger.info("   FOR APP STORE REVIEW ONLY")
+            logger.info("   All trades are simulated - NO REAL ORDERS PLACED")
+            logger.info("   Broker API calls return mock data")
+            logger.info("=" * 70)
+
         # FIX #1: Initialize portfolio state manager for total equity tracking
         try:
             from portfolio_state import get_portfolio_manager
@@ -1503,6 +1529,60 @@ class TradingStrategy:
             logger.error(f"❌ HEARTBEAT FATAL ERROR: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    def get_last_evaluated_trade(self) -> dict:
+        """
+        Get the last evaluated trade for UI display.
+        
+        Returns:
+            dict: Last evaluated trade information including:
+                - timestamp: When the trade was evaluated
+                - symbol: Trading pair
+                - signal: 'BUY' or 'SELL'
+                - action: 'executed', 'vetoed', or 'evaluated'
+                - veto_reasons: List of veto reasons if blocked
+                - entry_price: Proposed entry price
+                - position_size: Proposed position size in USD
+                - broker: Broker name
+                - confidence: Signal confidence (0.0-1.0)
+                - rsi_9: RSI 9-period value
+                - rsi_14: RSI 14-period value
+        """
+        return self.last_evaluated_trade.copy()
+
+    def _update_last_evaluated_trade(self, symbol: str, signal: str, action: str,
+                                     veto_reasons: list = None, entry_price: float = None,
+                                     position_size: float = None, broker: str = None,
+                                     confidence: float = None, rsi_9: float = None,
+                                     rsi_14: float = None):
+        """
+        Update the last evaluated trade information.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD')
+            signal: 'BUY' or 'SELL'
+            action: 'executed', 'vetoed', or 'evaluated'
+            veto_reasons: List of reasons if trade was vetoed
+            entry_price: Proposed entry price
+            position_size: Proposed position size in USD
+            broker: Broker name (e.g., 'KRAKEN')
+            confidence: Signal confidence (0.0-1.0)
+            rsi_9: RSI 9-period value
+            rsi_14: RSI 14-period value
+        """
+        self.last_evaluated_trade = {
+            'timestamp': datetime.now().isoformat(),
+            'symbol': symbol,
+            'signal': signal,
+            'action': action,
+            'veto_reasons': veto_reasons or [],
+            'entry_price': entry_price,
+            'position_size': position_size,
+            'broker': broker,
+            'confidence': confidence,
+            'rsi_9': rsi_9,
+            'rsi_14': rsi_14
+        }
 
     def _init_advanced_features(self, total_capital: float = 0.0):
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
