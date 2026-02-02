@@ -148,6 +148,77 @@ else:
 
 ---
 
+## ❤️ **NEW: Heartbeat Trading & Trust Layer** (February 2, 2026)
+
+**Deployment Verification & Transparent Trade Decision Logging**
+
+NIJA now includes features to verify deployment health and provide complete transparency on trading decisions.
+
+### 🔍 Heartbeat Trading
+
+Execute tiny test trades to verify exchange connectivity:
+
+- **Deployment Verification**: Confirm 1 trade executes after deploying to Railway/Render
+- **API Credential Validation**: Verify keys work and have correct permissions  
+- **Health Monitoring**: Periodic connectivity checks
+
+**Quick Setup:**
+```bash
+# Enable for deployment verification
+HEARTBEAT_TRADE=true
+HEARTBEAT_TRADE_SIZE=5.50  # Minimum viable trade
+HEARTBEAT_TRADE_INTERVAL=600  # 10 minutes
+
+# After confirming 1 trade executes, disable:
+HEARTBEAT_TRADE=false
+```
+
+**What Happens:**
+```
+❤️  HEARTBEAT TRADE ENABLED: $5.50 every 600s
+...
+❤️  HEARTBEAT TRADE EXECUTION
+   Symbol: BTC-USD
+   Size: $5.50
+   Broker: KRAKEN
+   ✅ Heartbeat trade #1 EXECUTED
+   Order ID: ABC123
+```
+
+### 🚫 Trade Veto Logging
+
+Explicit logging of why trades were NOT executed:
+
+```
+🚫 TRADE VETO: KRAKEN balance $8.50 < $10.00 minimum
+🚫 TRADE VETO: KRAKEN not connected
+🚫 TRADE VETO: KRAKEN in EXIT-ONLY mode
+```
+
+**Benefits:**
+- Know exactly why bot isn't trading
+- Debug configuration issues quickly
+- Build trust through transparency
+
+### 📊 User Status Banner
+
+Real-time account status display:
+
+```
+======================================================================
+📊 USER STATUS BANNER
+======================================================================
+   💰 KRAKEN Balance: $127.50
+   📈 Active Positions: 3
+   ✅ Trading Status: ACTIVE
+   ❤️  Heartbeat: Last trade 245s ago (1 total)
+======================================================================
+```
+
+**Complete Guide:** [HEARTBEAT_TRADING_GUIDE.md](HEARTBEAT_TRADING_GUIDE.md)
+
+---
+
 ## 🚀 **NEW: Multi-Strategy Fund Engine** (January 29, 2026)
 
 **NIJA has evolved into a complete multi-strategy fund infrastructure.**
