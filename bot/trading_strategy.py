@@ -382,6 +382,23 @@ BROKER_MIN_BALANCE = {
     BrokerType.BINANCE: 10.0,   # Lower minimum for Binance
 }
 
+# ============================================================================
+# HEARTBEAT TRADE CONFIGURATION
+# ============================================================================
+# Heartbeat trades are tiny test trades executed periodically to verify:
+# - Exchange connectivity is working
+# - Order execution is functioning
+# - API credentials are valid
+# Useful for verification after deployment or to monitor exchange health
+HEARTBEAT_TRADE_ENABLED = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
+HEARTBEAT_TRADE_SIZE_USD = float(os.getenv('HEARTBEAT_TRADE_SIZE', '5.50'))  # Minimum viable trade size
+HEARTBEAT_TRADE_INTERVAL_SECONDS = int(os.getenv('HEARTBEAT_TRADE_INTERVAL', '600'))  # 10 minutes default
+
+if HEARTBEAT_TRADE_ENABLED:
+    logger.info(f"❤️  HEARTBEAT TRADE ENABLED: ${HEARTBEAT_TRADE_SIZE_USD:.2f} every {HEARTBEAT_TRADE_INTERVAL_SECONDS}s")
+else:
+    logger.debug("Heartbeat trade disabled (set HEARTBEAT_TRADE=true to enable)")
+
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
     """
     Execute a function with a timeout. Returns (result, error).
@@ -447,6 +464,32 @@ class TradingStrategy:
         """Initialize production strategy with multi-broker support."""
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
 
+        # Last Evaluated Trade Tracking (for UI panel)
+        self.last_evaluated_trade = {
+            'timestamp': None,
+            'symbol': None,
+            'signal': None,
+            'action': None,  # 'executed', 'vetoed', 'evaluated'
+            'veto_reasons': [],
+            'entry_price': None,
+            'position_size': None,
+            'broker': None,
+            'confidence': None,
+            'rsi_9': None,
+            'rsi_14': None
+        }
+
+        # Dry-run simulator toggle (for App Store reviewers)
+        self.dry_run_mode = os.getenv('DRY_RUN_MODE', 'false').lower() in ('true', '1', 'yes')
+        if self.dry_run_mode:
+            logger.info("=" * 70)
+            logger.info("🎭 DRY-RUN SIMULATOR MODE ACTIVE")
+            logger.info("=" * 70)
+            logger.info("   FOR APP STORE REVIEW ONLY")
+            logger.info("   All trades are simulated - NO REAL ORDERS PLACED")
+            logger.info("   Broker API calls return mock data")
+            logger.info("=" * 70)
+
         # FIX #1: Initialize portfolio state manager for total equity tracking
         try:
             from portfolio_state import get_portfolio_manager
@@ -490,6 +533,14 @@ class TradingStrategy:
         # Candle data cache (prevents duplicate API calls for same market/timeframe)
         self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
         self.CANDLE_CACHE_TTL = 150      # Cache candles for 2.5 minutes (one cycle)
+
+        # Heartbeat trade state tracking (for deployment verification and health checks)
+        self.heartbeat_last_trade_time = 0  # Last heartbeat trade timestamp
+        self.heartbeat_trade_count = 0  # Total heartbeat trades executed
+        
+        # Trade veto tracking for trust layer (log why trades were not executed)
+        self.veto_count_session = 0  # Count of vetoed trades this session
+        self.last_veto_reason = None  # Last veto reason for display in status banner
 
         # Initialize advanced trading features placeholder
         # NOTE: Advanced modules will be initialized AFTER first live balance fetch
@@ -1115,6 +1166,34 @@ class TradingStrategy:
 
             logger.info("=" * 70)
 
+            # ============================================================================
+            # 🧠 TRUST LAYER - USER STATUS BANNER
+            # ============================================================================
+            self._display_user_status_banner()
+
+            # ============================================================================
+            # 🔍 HEARTBEAT TRADE - Verification Mode
+            # ============================================================================
+            # Execute a single tiny test trade if HEARTBEAT_TRADE=true
+            # This verifies API credentials, trading logic, and order execution
+            if os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes'):
+                logger.info("=" * 70)
+                logger.info("💓 HEARTBEAT TRADE MODE ACTIVATED")
+                logger.info("=" * 70)
+                logger.info("   This mode will execute ONE tiny test trade")
+                logger.info("   Purpose: Verify connectivity and trading functionality")
+                logger.info("   Action: Bot will auto-disable after heartbeat completes")
+                logger.info("=" * 70)
+                self._execute_heartbeat_trade()
+                logger.info("=" * 70)
+                logger.info("✅ HEARTBEAT TRADE COMPLETE - BOT SHUTTING DOWN")
+                logger.info("=" * 70)
+                logger.info("   IMPORTANT: Set HEARTBEAT_TRADE=false before restart")
+                logger.info("   This prevents heartbeat from executing again")
+                logger.info("=" * 70)
+                import sys
+                sys.exit(0)  # Graceful shutdown after heartbeat
+
             # Initialize independent broker trader for multi-broker support
             try:
                 from independent_broker_trader import IndependentBrokerTrader
@@ -1276,6 +1355,259 @@ class TradingStrategy:
             total_capital = 0.0
 
         return total_capital
+
+    def _display_user_status_banner(self):
+        """
+        Display a user status banner with trading capabilities and account information.
+        
+        This Trust Layer feature provides transparent visibility into:
+        - Connected brokers and balances
+        - Trading modes (LIVE vs PAPER)
+        - Safety settings (LIVE_CAPITAL_VERIFIED, PRO_MODE)
+        - Account tier information
+        """
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("🧠 TRUST LAYER - USER STATUS BANNER")
+        logger.info("=" * 70)
+        
+        # Safety settings
+        live_capital_verified = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower() in ('true', '1', 'yes')
+        pro_mode_enabled = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
+        heartbeat_enabled = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
+        
+        logger.info("📋 SAFETY SETTINGS:")
+        logger.info(f"   • LIVE_CAPITAL_VERIFIED: {'✅ TRUE' if live_capital_verified else '❌ FALSE'}")
+        logger.info(f"   • PRO_MODE: {'✅ ENABLED' if pro_mode_enabled else '❌ DISABLED'}")
+        logger.info(f"   • HEARTBEAT_TRADE: {'✅ ENABLED' if heartbeat_enabled else '❌ DISABLED'}")
+        
+        # Platform account status
+        logger.info("")
+        logger.info("📊 PLATFORM ACCOUNT:")
+        if self.broker:
+            broker_name = self.broker.broker_type.value.upper()
+            try:
+                balance = self.broker.get_account_balance()
+                logger.info(f"   • Broker: {broker_name}")
+                logger.info(f"   • Balance: ${balance:,.2f}")
+                logger.info(f"   • Status: ✅ CONNECTED")
+            except Exception as e:
+                logger.info(f"   • Broker: {broker_name}")
+                logger.info(f"   • Status: ⚠️  CONNECTION ERROR - {str(e)}")
+        else:
+            logger.info("   • Status: ❌ NO BROKER CONNECTED")
+        
+        # User accounts status
+        logger.info("")
+        logger.info("👥 USER ACCOUNTS:")
+        if hasattr(self, 'multi_account_manager') and self.multi_account_manager.user_brokers:
+            user_count = 0
+            for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
+                for broker_type, broker in user_broker_dict.items():
+                    user_count += 1
+                    try:
+                        if broker.connected:
+                            balance = broker.get_account_balance()
+                            logger.info(f"   • {user_id} ({broker_type.value.upper()}): ${balance:,.2f} - ✅ CONNECTED")
+                        else:
+                            logger.info(f"   • {user_id} ({broker_type.value.upper()}): ❌ NOT CONNECTED")
+                    except Exception as e:
+                        logger.info(f"   • {user_id} ({broker_type.value.upper()}): ⚠️  ERROR - {str(e)}")
+            if user_count == 0:
+                logger.info("   • No user accounts configured")
+        else:
+            logger.info("   • No user accounts configured")
+        
+        logger.info("=" * 70)
+        logger.info("")
+
+    def _execute_heartbeat_trade(self):
+        """
+        Execute a single tiny test trade to verify connectivity and functionality.
+        
+        This heartbeat trade:
+        - Verifies API credentials are valid
+        - Tests order placement and execution
+        - Validates trading logic flow
+        - Uses minimal position size (typically $5-10)
+        
+        After execution, the bot will auto-disable to prevent further trading.
+        User must set HEARTBEAT_TRADE=false before restarting for normal operation.
+        """
+        try:
+            if not self.broker:
+                logger.error("❌ HEARTBEAT FAILED: No broker connected")
+                return
+            
+            logger.info("💓 Executing heartbeat trade verification...")
+            logger.info("")
+            
+            # Get account balance
+            try:
+                balance = self.broker.get_account_balance()
+                logger.info(f"   • Account balance: ${balance:,.2f}")
+            except Exception as e:
+                logger.error(f"   ❌ Failed to get balance: {e}")
+                return
+            
+            # Verify sufficient balance
+            if balance < 10.0:
+                logger.error(f"   ❌ Insufficient balance for heartbeat (need $10+, have ${balance:.2f})")
+                return
+            
+            # Get available markets
+            try:
+                markets = self.broker.get_available_markets()
+                if not markets:
+                    logger.error("   ❌ No markets available")
+                    return
+                
+                # Select a liquid market for heartbeat (prefer BTC or ETH)
+                selected_market = None
+                for symbol in ['BTC-USD', 'BTCUSD', 'ETH-USD', 'ETHUSD']:
+                    if symbol in markets:
+                        selected_market = symbol
+                        break
+                
+                # Fallback to first available market
+                if not selected_market and markets:
+                    selected_market = markets[0]
+                
+                if not selected_market:
+                    logger.error("   ❌ No suitable market found for heartbeat")
+                    return
+                
+                logger.info(f"   • Selected market: {selected_market}")
+                
+            except Exception as e:
+                logger.error(f"   ❌ Failed to get markets: {e}")
+                return
+            
+            # Calculate heartbeat position size (use minimum $5-10)
+            position_size_usd = min(10.0, balance * 0.02)  # 2% of balance, max $10
+            logger.info(f"   • Position size: ${position_size_usd:.2f}")
+            
+            # Execute heartbeat buy order
+            logger.info("")
+            logger.info("   📍 PLACING HEARTBEAT BUY ORDER...")
+            try:
+                order_result = self.broker.place_market_order(
+                    selected_market,
+                    'buy',
+                    position_size_usd,
+                    size_type='quote'  # Order in USD
+                )
+                
+                if order_result and order_result.get('status') not in ['error', 'unfilled']:
+                    logger.info(f"   ✅ Heartbeat buy order placed successfully")
+                    logger.info(f"      Order ID: {order_result.get('order_id', 'N/A')}")
+                    logger.info(f"      Symbol: {selected_market}")
+                    logger.info(f"      Size: ${position_size_usd:.2f}")
+                    
+                    # Wait a moment for order to fill
+                    logger.info("")
+                    logger.info("   ⏳ Waiting 5 seconds for order to fill...")
+                    time.sleep(5)
+                    
+                    # Immediately exit the position
+                    logger.info("")
+                    logger.info("   📍 CLOSING HEARTBEAT POSITION...")
+                    try:
+                        positions = self.broker.get_positions()
+                        for pos in positions:
+                            if pos.get('symbol') == selected_market:
+                                quantity = pos.get('quantity', 0)
+                                if quantity > 0:
+                                    sell_result = self.broker.place_market_order(
+                                        selected_market,
+                                        'sell',
+                                        quantity,
+                                        size_type='base'  # Order in base currency
+                                    )
+                                    if sell_result and sell_result.get('status') not in ['error', 'unfilled']:
+                                        logger.info(f"   ✅ Heartbeat position closed successfully")
+                                        logger.info("")
+                                        logger.info("💓 HEARTBEAT TRADE VERIFICATION: ✅ SUCCESS")
+                                    else:
+                                        logger.warning(f"   ⚠️  Heartbeat sell failed: {sell_result.get('error', 'Unknown error')}")
+                                    break
+                        else:
+                            logger.warning("   ⚠️  No position found to close (may have been filled partially)")
+                            logger.info("")
+                            logger.info("💓 HEARTBEAT TRADE VERIFICATION: ⚠️  PARTIAL SUCCESS")
+                    except Exception as e:
+                        logger.error(f"   ❌ Failed to close heartbeat position: {e}")
+                        logger.info("")
+                        logger.info("💓 HEARTBEAT TRADE VERIFICATION: ⚠️  PARTIAL SUCCESS")
+                else:
+                    error_msg = order_result.get('error', 'Unknown error') if order_result else 'Order failed'
+                    logger.error(f"   ❌ Heartbeat buy order failed: {error_msg}")
+                    logger.info("")
+                    logger.info("💓 HEARTBEAT TRADE VERIFICATION: ❌ FAILED")
+                    
+            except Exception as e:
+                logger.error(f"   ❌ Exception during heartbeat trade: {e}")
+                logger.info("")
+                logger.info("💓 HEARTBEAT TRADE VERIFICATION: ❌ FAILED")
+                
+        except Exception as e:
+            logger.error(f"❌ HEARTBEAT FATAL ERROR: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def get_last_evaluated_trade(self) -> dict:
+        """
+        Get the last evaluated trade for UI display.
+        
+        Returns:
+            dict: Last evaluated trade information including:
+                - timestamp: When the trade was evaluated
+                - symbol: Trading pair
+                - signal: 'BUY' or 'SELL'
+                - action: 'executed', 'vetoed', or 'evaluated'
+                - veto_reasons: List of veto reasons if blocked
+                - entry_price: Proposed entry price
+                - position_size: Proposed position size in USD
+                - broker: Broker name
+                - confidence: Signal confidence (0.0-1.0)
+                - rsi_9: RSI 9-period value
+                - rsi_14: RSI 14-period value
+        """
+        return self.last_evaluated_trade.copy()
+
+    def _update_last_evaluated_trade(self, symbol: str, signal: str, action: str,
+                                     veto_reasons: list = None, entry_price: float = None,
+                                     position_size: float = None, broker: str = None,
+                                     confidence: float = None, rsi_9: float = None,
+                                     rsi_14: float = None):
+        """
+        Update the last evaluated trade information.
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC-USD')
+            signal: 'BUY' or 'SELL'
+            action: 'executed', 'vetoed', or 'evaluated'
+            veto_reasons: List of reasons if trade was vetoed
+            entry_price: Proposed entry price
+            position_size: Proposed position size in USD
+            broker: Broker name (e.g., 'KRAKEN')
+            confidence: Signal confidence (0.0-1.0)
+            rsi_9: RSI 9-period value
+            rsi_14: RSI 14-period value
+        """
+        self.last_evaluated_trade = {
+            'timestamp': datetime.now().isoformat(),
+            'symbol': symbol,
+            'signal': signal,
+            'action': action,
+            'veto_reasons': veto_reasons or [],
+            'entry_price': entry_price,
+            'position_size': position_size,
+            'broker': broker,
+            'confidence': confidence,
+            'rsi_9': rsi_9,
+            'rsi_14': rsi_14
+        }
 
     def _init_advanced_features(self, total_capital: float = 0.0):
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
@@ -1520,18 +1852,30 @@ class TradingStrategy:
             tuple: (is_eligible: bool, reason: str)
         """
         if not broker:
-            return False, "Broker not available"
+            veto_reason = "Broker not available"
+            logger.info(f"🚫 TRADE VETO: {veto_reason}")
+            self.veto_count_session += 1
+            self.last_veto_reason = veto_reason
+            return False, veto_reason
 
         broker_name = self._get_broker_name(broker)
 
         if not broker.connected:
+            veto_reason = f"{broker_name.upper()} not connected"
+            logger.info(f"🚫 TRADE VETO: {veto_reason}")
             logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} not connected")
-            return False, f"{broker_name.upper()} not connected"
+            self.veto_count_session += 1
+            self.last_veto_reason = veto_reason
+            return False, veto_reason
 
         # Check if broker is in EXIT_ONLY mode
         if hasattr(broker, 'exit_only_mode') and broker.exit_only_mode:
+            veto_reason = f"{broker_name.upper()} in EXIT-ONLY mode"
+            logger.info(f"🚫 TRADE VETO: {veto_reason}")
             logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} in EXIT_ONLY mode")
-            return False, f"{broker_name.upper()} in EXIT-ONLY mode"
+            self.veto_count_session += 1
+            self.last_veto_reason = veto_reason
+            return False, veto_reason
 
         # Check if account balance meets minimum threshold
         # CRITICAL FIX (Jan 28, 2026): Use timeout to prevent hanging on slow balance fetches
@@ -1592,9 +1936,17 @@ class TradingStrategy:
                         if cached_balance >= min_balance:
                             return True, f"Eligible (cached ${cached_balance:.2f} >= ${min_balance:.2f} min)"
                         else:
-                            return False, f"{broker_name.upper()} cached balance ${cached_balance:.2f} < ${min_balance:.2f} minimum"
+                            veto_reason = f"{broker_name.upper()} cached balance ${cached_balance:.2f} < ${min_balance:.2f} minimum"
+                            logger.info(f"🚫 TRADE VETO: {veto_reason}")
+                            self.veto_count_session += 1
+                            self.last_veto_reason = veto_reason
+                            return False, veto_reason
 
-                return False, f"{broker_name.upper()} balance fetch failed: timeout or error"
+                veto_reason = f"{broker_name.upper()} balance fetch failed: timeout or error"
+                logger.info(f"🚫 TRADE VETO: {veto_reason}")
+                self.veto_count_session += 1
+                self.last_veto_reason = veto_reason
+                return False, veto_reason
 
             balance = balance_result[0] if balance_result[0] is not None else 0.0
             broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
@@ -1603,12 +1955,20 @@ class TradingStrategy:
             logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} balance=${balance:.2f}, min=${min_balance:.2f}")
 
             if balance < min_balance:
-                return False, f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+                veto_reason = f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+                logger.info(f"🚫 TRADE VETO: {veto_reason}")
+                self.veto_count_session += 1
+                self.last_veto_reason = veto_reason
+                return False, veto_reason
 
             return True, f"Eligible (${balance:.2f} >= ${min_balance:.2f} min)"
         except Exception as e:
+            veto_reason = f"{broker_name.upper()} balance check failed: {e}"
             logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance check exception: {e}")
-            return False, f"{broker_name.upper()} balance check failed: {e}"
+            logger.info(f"🚫 TRADE VETO: {veto_reason}")
+            self.veto_count_session += 1
+            self.last_veto_reason = veto_reason
+            return False, veto_reason
 
     def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
         """
@@ -1794,6 +2154,188 @@ class TradingStrategy:
             description
         )
 
+    def _display_user_status_banner(self, broker=None):
+        """
+        Display user status banner with trading status and account info.
+        
+        Shows:
+        - Current capital/balance
+        - Active positions count
+        - Trading status (active/vetoed)
+        - Last veto reason (if any)
+        - Heartbeat status (if enabled)
+        
+        Args:
+            broker: Optional broker instance to get current status from
+        """
+        logger.info("=" * 70)
+        logger.info("📊 USER STATUS BANNER")
+        logger.info("=" * 70)
+        
+        # Display capital information
+        try:
+            if broker and broker.connected:
+                balance = broker.get_account_balance()
+                broker_name = self._get_broker_name(broker)
+                logger.info(f"   💰 {broker_name.upper()} Balance: ${balance:,.2f}")
+                
+                # Get active positions count
+                try:
+                    positions = broker.get_positions()
+                    active_count = len(positions) if positions else 0
+                    logger.info(f"   📈 Active Positions: {active_count}")
+                except Exception as e:
+                    logger.debug(f"   Could not get positions: {e}")
+            else:
+                logger.info("   ⚠️  No broker connected")
+        except Exception as e:
+            logger.debug(f"   Could not get balance: {e}")
+        
+        # Display trading status
+        if self.last_veto_reason:
+            logger.info(f"   🚫 Trading Status: VETOED")
+            logger.info(f"   📋 Last Veto Reason: {self.last_veto_reason}")
+            logger.info(f"   📊 Vetoed Trades (Session): {self.veto_count_session}")
+        else:
+            logger.info(f"   ✅ Trading Status: ACTIVE")
+        
+        # Display heartbeat status if enabled
+        if HEARTBEAT_TRADE_ENABLED:
+            if self.heartbeat_last_trade_time > 0:
+                time_since_heartbeat = int(time.time() - self.heartbeat_last_trade_time)
+                logger.info(f"   ❤️  Heartbeat: Last trade {time_since_heartbeat}s ago ({self.heartbeat_trade_count} total)")
+            else:
+                logger.info(f"   ❤️  Heartbeat: ENABLED (awaiting first trade)")
+        
+        logger.info("=" * 70)
+    
+    def _execute_heartbeat_trade(self, broker=None):
+        """
+        Execute a tiny heartbeat trade to verify exchange connectivity.
+        
+        Heartbeat trades are minimal size ($5.50) test trades that:
+        - Verify API credentials are working
+        - Confirm order execution is functional
+        - Monitor exchange connectivity health
+        
+        Only executes if:
+        - HEARTBEAT_TRADE_ENABLED is true
+        - Sufficient time has passed since last heartbeat (HEARTBEAT_TRADE_INTERVAL_SECONDS)
+        - Broker is connected and has sufficient balance
+        
+        Args:
+            broker: Broker instance to execute heartbeat trade on
+            
+        Returns:
+            bool: True if heartbeat trade was executed, False otherwise
+        """
+        if not HEARTBEAT_TRADE_ENABLED:
+            return False
+        
+        current_time = time.time()
+        
+        # Check if enough time has passed since last heartbeat
+        if self.heartbeat_last_trade_time > 0:
+            time_since_last = current_time - self.heartbeat_last_trade_time
+            if time_since_last < HEARTBEAT_TRADE_INTERVAL_SECONDS:
+                return False
+        
+        # Verify broker is available
+        if not broker or not broker.connected:
+            logger.debug("   Heartbeat trade skipped: no broker connected")
+            return False
+        
+        broker_name = self._get_broker_name(broker)
+        
+        try:
+            # Get account balance to verify we can trade
+            balance = broker.get_account_balance()
+            if balance < HEARTBEAT_TRADE_SIZE_USD:
+                logger.warning(f"   ❤️  Heartbeat trade skipped: ${balance:.2f} < ${HEARTBEAT_TRADE_SIZE_USD:.2f} minimum")
+                return False
+            
+            # Get available markets
+            markets = broker.get_available_markets()
+            if not markets:
+                logger.warning("   ❤️  Heartbeat trade skipped: no markets available")
+                return False
+            
+            # Select a liquid, low-volatility market for heartbeat (prefer BTC-USD or ETH-USD)
+            # Try multiple symbol format variations to match broker's format
+            preferred_symbols = ['BTC-USD', 'BTCUSD', 'ETH-USD', 'ETHUSD', 'BTC/USD', 'ETH/USD']
+            heartbeat_symbol = None
+            
+            for symbol in preferred_symbols:
+                # Try exact match first
+                if symbol in markets:
+                    heartbeat_symbol = symbol
+                    break
+                # Try format variations
+                symbol_dash = symbol.replace('/', '-')
+                symbol_slash = symbol.replace('-', '/')
+                if symbol_dash in markets:
+                    heartbeat_symbol = symbol_dash
+                    break
+                if symbol_slash in markets:
+                    heartbeat_symbol = symbol_slash
+                    break
+            
+            # Fallback to first available market
+            if not heartbeat_symbol and markets:
+                heartbeat_symbol = markets[0]
+            
+            if not heartbeat_symbol:
+                logger.warning("   ❤️  Heartbeat trade skipped: no suitable symbol found")
+                return False
+            
+            # Execute tiny market buy order
+            logger.info("=" * 70)
+            logger.info(f"❤️  HEARTBEAT TRADE EXECUTION")
+            logger.info("=" * 70)
+            logger.info(f"   Symbol: {heartbeat_symbol}")
+            logger.info(f"   Size: ${HEARTBEAT_TRADE_SIZE_USD:.2f}")
+            logger.info(f"   Broker: {broker_name.upper()}")
+            logger.info(f"   Purpose: Verify connectivity & order execution")
+            
+            # Place market buy order
+            # Note: size_type='quote' means size is in USD, not base currency
+            # If broker doesn't support size_type parameter, this will use the size as base currency amount
+            try:
+                order_result = broker.place_market_order(
+                    symbol=heartbeat_symbol,
+                    side='buy',
+                    size=HEARTBEAT_TRADE_SIZE_USD,
+                    size_type='quote'  # USD amount, not base currency amount
+                )
+            except TypeError:
+                # Broker doesn't support size_type parameter - fallback to positional args
+                logger.debug(f"   Broker {broker_name} doesn't support size_type parameter, using default")
+                order_result = broker.place_market_order(
+                    symbol=heartbeat_symbol,
+                    side='buy',
+                    size=HEARTBEAT_TRADE_SIZE_USD
+                )
+            
+            if order_result and order_result.get('status') in ['filled', 'open', 'pending']:
+                self.heartbeat_last_trade_time = current_time
+                self.heartbeat_trade_count += 1
+                
+                logger.info(f"   ✅ Heartbeat trade #{self.heartbeat_trade_count} EXECUTED")
+                logger.info(f"   Order ID: {order_result.get('order_id', 'N/A')}")
+                logger.info(f"   Status: {order_result.get('status', 'unknown')}")
+                logger.info("=" * 70)
+                
+                return True
+            else:
+                logger.warning(f"   ❌ Heartbeat trade failed: {order_result}")
+                logger.info("=" * 70)
+                return False
+                
+        except Exception as e:
+            logger.error(f"   ❤️  Heartbeat trade error: {e}")
+            logger.error(f"   {traceback.format_exc()}")
+            return False
+
     def run_cycle(self, broker=None, user_mode=False):
         """Execute a complete trading cycle with position cap enforcement.
 
@@ -1822,6 +2364,16 @@ class TradingStrategy:
         # Log mode for clarity
         mode_label = "USER (position management only)" if user_mode else "MASTER (full strategy)"
         logger.info(f"🔄 Trading cycle mode: {mode_label}")
+        
+        # Display user status banner (trust layer feature)
+        self._display_user_status_banner(broker=active_broker)
+        
+        # Execute heartbeat trade if enabled and due
+        if not user_mode:  # Only execute heartbeat in MASTER mode
+            heartbeat_executed = self._execute_heartbeat_trade(broker=active_broker)
+            if heartbeat_executed:
+                logger.info("   ❤️  Heartbeat trade executed - connectivity verified")
+        
         try:
             # 🚨 EMERGENCY: Check if LIQUIDATE_ALL mode is active
             liquidate_all_file = os.path.join(os.path.dirname(__file__), '..', 'LIQUIDATE_ALL_NOW.conf')
@@ -3466,8 +4018,13 @@ class TradingStrategy:
                     logger.info("")
                 else:
                     logger.warning("🔴 RESULT: CONDITIONS FAILED - SKIPPING MARKET SCAN")
-                    logger.warning(f"   Reasons: {', '.join(skip_reasons)}")
-                    logger.warning("═" * 80)
+                    # 🧠 TRUST LAYER: Explicit trade veto reason logging
+                    logger.warning("=" * 70)
+                    logger.warning("🚫 TRADE VETO - Signal Blocked from Execution")
+                    logger.warning("=" * 70)
+                    for idx, reason in enumerate(skip_reasons, 1):
+                        logger.warning(f"   Veto Reason {idx}: {reason}")
+                    logger.warning("=" * 70)
                     logger.warning("")
 
             # Continue with market scanning if conditions passed
