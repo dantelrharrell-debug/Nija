@@ -393,7 +393,6 @@ BROKER_MIN_BALANCE = {
 HEARTBEAT_TRADE_ENABLED = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
 HEARTBEAT_TRADE_SIZE_USD = float(os.getenv('HEARTBEAT_TRADE_SIZE', '5.50'))  # Minimum viable trade size
 HEARTBEAT_TRADE_INTERVAL_SECONDS = int(os.getenv('HEARTBEAT_TRADE_INTERVAL', '600'))  # 10 minutes default
-HEARTBEAT_LAST_TRADE_TIME = 0  # Track last heartbeat trade timestamp
 
 if HEARTBEAT_TRADE_ENABLED:
     logger.info(f"❤️  HEARTBEAT TRADE ENABLED: ${HEARTBEAT_TRADE_SIZE_USD:.2f} every {HEARTBEAT_TRADE_INTERVAL_SECONDS}s")
@@ -1955,12 +1954,23 @@ class TradingStrategy:
                 return False
             
             # Select a liquid, low-volatility market for heartbeat (prefer BTC-USD or ETH-USD)
+            # Try multiple symbol format variations to match broker's format
             preferred_symbols = ['BTC-USD', 'BTCUSD', 'ETH-USD', 'ETHUSD', 'BTC/USD', 'ETH/USD']
             heartbeat_symbol = None
             
             for symbol in preferred_symbols:
-                if symbol in markets or symbol.replace('-', '/') in markets or symbol.replace('/', '-') in markets:
+                # Try exact match first
+                if symbol in markets:
                     heartbeat_symbol = symbol
+                    break
+                # Try format variations
+                symbol_dash = symbol.replace('/', '-')
+                symbol_slash = symbol.replace('-', '/')
+                if symbol_dash in markets:
+                    heartbeat_symbol = symbol_dash
+                    break
+                if symbol_slash in markets:
+                    heartbeat_symbol = symbol_slash
                     break
             
             # Fallback to first available market
@@ -1981,12 +1991,23 @@ class TradingStrategy:
             logger.info(f"   Purpose: Verify connectivity & order execution")
             
             # Place market buy order
-            order_result = broker.place_market_order(
-                symbol=heartbeat_symbol,
-                side='buy',
-                size=HEARTBEAT_TRADE_SIZE_USD,
-                size_type='quote'  # USD amount, not base currency amount
-            )
+            # Note: size_type='quote' means size is in USD, not base currency
+            # If broker doesn't support size_type parameter, this will use the size as base currency amount
+            try:
+                order_result = broker.place_market_order(
+                    symbol=heartbeat_symbol,
+                    side='buy',
+                    size=HEARTBEAT_TRADE_SIZE_USD,
+                    size_type='quote'  # USD amount, not base currency amount
+                )
+            except TypeError:
+                # Broker doesn't support size_type parameter - fallback to positional args
+                logger.debug(f"   Broker {broker_name} doesn't support size_type parameter, using default")
+                order_result = broker.place_market_order(
+                    symbol=heartbeat_symbol,
+                    side='buy',
+                    size=HEARTBEAT_TRADE_SIZE_USD
+                )
             
             if order_result and order_result.get('status') in ['filled', 'open', 'pending']:
                 self.heartbeat_last_trade_time = current_time

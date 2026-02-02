@@ -83,11 +83,19 @@ HEARTBEAT_TRADE=false
 - Enable ONLY for verification, then disable
 - Each heartbeat costs money (trade fees)
 - Not intended for continuous operation in production
+- **RECOMMENDED**: Auto-disable after verifying 1-3 successful trades
 
 ✅ **Best Practice**:
 - Enable after deployment
-- Wait for 1 successful trade
+- Wait for 1-3 successful trades (10-30 minutes)
 - Disable immediately after verification
+- Re-enable only if you suspect connectivity issues
+
+💡 **Auto-Disable Recommendation**:
+While the bot won't auto-disable heartbeat, you should:
+1. Set a calendar reminder to disable after 30 minutes
+2. Or monitor logs and manually disable after seeing heartbeat execution
+3. Consider heartbeat as a temporary diagnostic tool, not a permanent feature
 
 ## 2. Trade Veto Logging
 
