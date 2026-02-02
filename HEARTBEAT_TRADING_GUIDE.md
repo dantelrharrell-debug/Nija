@@ -1,5 +1,46 @@
 # Heartbeat Trading & Trust Layer Guide
 
+**Complete guide for deployment verification and transparent trade decision logging**
+
+## Quick Start: Railway Deployment (10 minutes)
+
+### Step 1: Set Environment Variables in Railway
+
+```bash
+# REQUIRED: Kraken Platform Credentials
+KRAKEN_PLATFORM_API_KEY=<your-64-char-api-key>
+KRAKEN_PLATFORM_API_SECRET=<your-88-char-api-secret>
+
+# REQUIRED: Trading Safety
+LIVE_CAPITAL_VERIFIED=true
+
+# REQUIRED: Heartbeat Verification (enable temporarily)
+HEARTBEAT_TRADE=true
+HEARTBEAT_TRADE_SIZE=5.50
+HEARTBEAT_TRADE_INTERVAL=600
+```
+
+### Step 2: Deploy & Monitor Logs
+
+Watch for heartbeat execution (~10 minutes):
+```
+❤️  HEARTBEAT TRADE ENABLED: $5.50 every 600s
+...
+❤️  HEARTBEAT TRADE EXECUTION
+   ✅ Heartbeat trade #1 EXECUTED
+```
+
+### Step 3: Disable Heartbeat
+
+Update Railway environment variable:
+```bash
+HEARTBEAT_TRADE=false
+```
+
+**That's it! Full details below.**
+
+---
+
 ## Overview
 
 This guide covers the new features added to NIJA for deployment verification and enhanced transparency:
