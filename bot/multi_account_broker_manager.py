@@ -240,6 +240,11 @@ class MultiAccountBrokerManager:
             bool: True if platform is connected, False otherwise
         """
         try:
+            # Validate broker_type parameter
+            if broker_type is None:
+                logger.error("❌ is_platform_connected called with broker_type=None")
+                return False
+                
             # Debug logging to diagnose false warnings
             broker_in_dict = broker_type in self.platform_brokers
             
@@ -264,10 +269,10 @@ class MultiAccountBrokerManager:
             
             return connected_status
             
-        except Exception as e:
-            logger.error(f"❌ Error checking platform broker connection for {broker_type.value}: {e}")
-            logger.error(f"   This is unexpected - please report this error")
-            logger.error(traceback.format_exc())
+        except Exception:
+            # Use logger.exception() to automatically include traceback
+            broker_name = broker_type.value if broker_type else "Unknown"
+            logger.exception(f"❌ Error checking platform broker connection for {broker_name}: This is unexpected - please report this error")
             return False
 
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
