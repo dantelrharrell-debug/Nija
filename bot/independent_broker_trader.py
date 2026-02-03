@@ -67,7 +67,9 @@ try:
 except ImportError:
     from broker_manager import BrokerType
 
-# Import copy trade engine for checking if copy trading is active
+# LEGACY: Import copy trade engine for checking if copy trading is active
+# NOTE: Copy trading is deprecated. This import is kept for backward compatibility.
+# Expected: ImportError (module doesn't exist) - system uses independent trading
 try:
     from bot.copy_trade_engine import get_copy_engine
 except ImportError:
@@ -75,7 +77,7 @@ except ImportError:
     try:
         from copy_trade_engine import get_copy_engine
     except ImportError:
-        # If we can't import, we'll handle it gracefully in the code
+        # Expected: Copy trading modules don't exist (using independent trading)
         get_copy_engine = None
 
 logger = logging.getLogger("nija.independent_trader")
@@ -343,20 +345,21 @@ class IndependentBrokerTrader:
                 for broker_name, balance in brokers.items():
                     logger.info(f"      • {broker_name}: ${balance:,.2f}")
         else:
-            # Check if copy trading engine is active
+            # LEGACY: Check if copy trading engine is active (deprecated)
+            # NOTE: Copy trading is deprecated. In normal operation, get_copy_engine is None.
             if get_copy_engine is not None:
                 try:
                     copy_trading_engine = get_copy_engine()
                     if copy_trading_engine.active:
-                        logger.info("ℹ️  No independent USER brokers detected (users operate via copy trading)")
+                        logger.info("ℹ️  No independent USER brokers detected (users operate via legacy copy trading)")
                     else:
-                        logger.warning("⚠️  No funded USER brokers detected")
+                        logger.info("ℹ️  No funded USER brokers detected (independent trading mode)")
                 except Exception:
-                    # If we can't check the copy engine, fall back to warning
-                    logger.warning("⚠️  No funded USER brokers detected")
+                    # If we can't check the copy engine, this is expected
+                    logger.info("ℹ️  No funded USER brokers detected (independent trading mode)")
             else:
-                # If get_copy_engine wasn't imported, fall back to warning
-                logger.warning("⚠️  No funded USER brokers detected")
+                # Expected: get_copy_engine is None (copy trading deprecated)
+                logger.info("ℹ️  No funded USER brokers detected (independent trading mode)")
         logger.info("=" * 70)
 
         return funded_users

@@ -100,8 +100,10 @@ class MultiAccountBrokerManager:
         # Structure: {user_id: {'name': str, 'enabled': bool, 'brokers': {BrokerType: bool}}}
         self._user_metadata: Dict[str, Dict] = {}
 
-        # Track Kraken copy trading status (set by trading_strategy.py when copy trading is enabled)
-        # This prevents duplicate user connections when copy trading is active
+        # Track Kraken copy trading status (DEPRECATED - kept for backward compatibility)
+        # NOTE: Copy trading is deprecated. NIJA uses independent trading where all accounts
+        # trade independently. This flag is set to True only if legacy copy trading module exists.
+        # Expected value: False (copy trading module doesn't exist)
         self.kraken_copy_trading_active: bool = False
 
         # FIX #3: Initialize portfolio manager for user portfolio states
@@ -778,11 +780,12 @@ class MultiAccountBrokerManager:
                 logger.warning(f"⚠️  Error mapping broker type for {user.name}: {e}")
                 continue
 
-            # Attempting to create KrakenBroker instances here would duplicate connections
-            # and cause nonce conflicts / connection errors
+            # LEGACY CHECK: Skip if copy trading is active (deprecated feature)
+            # NOTE: Copy trading is deprecated. This check is kept for backward compatibility.
+            # In normal operation (independent trading), this will always be False and users connect normally.
             if broker_type == BrokerType.KRAKEN and self.kraken_copy_trading_active:
                 logger.info("=" * 70)
-                logger.info(f"✅ KRAKEN USER ALREADY ACTIVE: {user.name} ({user.user_id})")
+                logger.info(f"✅ KRAKEN USER ALREADY ACTIVE VIA COPY TRADING: {user.name} ({user.user_id})")
                 logger.info("=" * 70)
                 continue
             # Check if Platform account is connected for this broker type

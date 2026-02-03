@@ -614,9 +614,10 @@ class TradingStrategy:
                     logger.info("   ✅ Kraken PLATFORM connected")
                     logger.info("   ✅ Kraken registered as PLATFORM broker in multi-account manager")
 
-                    # COPY TRADING INTEGRATION: Initialize and wrap Kraken broker
-                    # CRITICAL FIX (Jan 18, 2026): Track if copy trading initialized users
-                    # to prevent duplicate initialization in connect_users_from_config()
+                    # LEGACY COPY TRADING CHECK (DEPRECATED - Feb 3, 2026)
+                    # NOTE: Copy trading is deprecated. NIJA now uses independent trading.
+                    # All accounts (platform + users) trade independently using the same strategy.
+                    # This check is kept for backward compatibility but is expected to fail.
                     try:
                         from bot.kraken_copy_trading import (
                             initialize_copy_trading_system,
@@ -631,11 +632,12 @@ class TradingStrategy:
                             # Notify multi_account_manager that Kraken users are handled by copy trading
                             self.multi_account_manager.kraken_copy_trading_active = True
                         else:
-                            logger.warning("   ⚠️  Kraken copy trading initialization failed - trades will execute on PLATFORM only")
-                    except ImportError as import_err:
-                        logger.warning(f"   ⚠️  Kraken copy trading module not available: {import_err}")
+                            logger.info("   ℹ️  Copy trading not initialized - using independent trading mode")
+                    except ImportError:
+                        # Expected: Copy trading is deprecated, using independent trading
+                        logger.info("   ℹ️  Copy trading not available - all accounts use independent trading")
                     except Exception as copy_err:
-                        logger.error(f"   ❌ Kraken copy trading setup error: {copy_err}")
+                        logger.error(f"   ❌ Unexpected error in copy trading check: {copy_err}")
                         import traceback
                         logger.error(traceback.format_exc())
 
