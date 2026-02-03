@@ -1,5 +1,8 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+📋 **Version 7.2.0**
+
+> **⚠️ Breaking Changes in v7.2.0:** NIJA now supports **independent trading only**. The copy-trading system has been removed. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 > **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
 
 ## 🧠 **NEW: NAMIE - Adaptive Market Intelligence Engine** (January 30, 2026)
