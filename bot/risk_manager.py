@@ -703,16 +703,27 @@ class AdaptiveRiskManager:
         # First apply the ceiling (max)
         final_pct = max(self.min_position_pct, min(final_pct, tier_max_pct))
         
+        # ═══════════════════════════════════════════════════════════════════════════════
+        # TIER FLOOR ENFORCEMENT - LOW-CAPITAL PROTECTION (ALWAYS ACTIVE)
+        # ═══════════════════════════════════════════════════════════════════════════════
         # CRITICAL FIX (Jan 30, 2026): Enforce tier floor to prevent LOW_CAPITAL or fee-aware
         # adjustments from reducing below tier-defined maximum position size.
+        # 
+        # This protection is ALWAYS enforced for all non-master accounts (low-capital protection).
         # For example, INVESTOR tier has 22% max, which should be the FLOOR for that tier.
-        # This ensures Kraken min order is satisfied and risk doesn't explode.
+        # This ensures:
+        #   - Kraken $10 minimum order requirements are met
+        #   - Risk doesn't explode from too-small positions
+        #   - LOW_CAPITAL accounts maintain minimum viable position sizes
+        #   - Fee-aware adjustments don't undercut tier-defined floors
+        # ═══════════════════════════════════════════════════════════════════════════════
         if TIER_AWARE_MODE and 'tier_floor_pct' in breakdown and not breakdown.get('is_master', False):
             tier_floor = breakdown['tier_floor_pct']
             if final_pct < tier_floor:
-                logger.info(f"🛡️ TIER FLOOR ENFORCEMENT: Raising {final_pct*100:.1f}% → {tier_floor*100:.1f}% (tier minimum)")
+                logger.info(f"🛡️ TIER FLOOR ENFORCEMENT (LOW-CAPITAL PROTECTION): Raising {final_pct*100:.1f}% → {tier_floor*100:.1f}% (tier minimum)")
                 final_pct = tier_floor
                 breakdown['tier_floor_enforced'] = True
+                breakdown['low_capital_protection_active'] = True
 
         # OPTIMIZED: Check total exposure limit with safety buffer
         # Previous limit (80%) was too high, allowing overexposure
