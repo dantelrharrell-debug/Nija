@@ -1067,8 +1067,6 @@ class MultiAccountBrokerManager:
             if not is_enabled:
                 continue
 
-            # Determine trading mode
-
             # Get actual broker connections from user_brokers
             user_broker_dict = self.user_brokers.get(user_id, {})
 
@@ -1083,7 +1081,7 @@ class MultiAccountBrokerManager:
                 if broker_type in user_broker_dict:
                     broker = user_broker_dict[broker_type]
                     if broker.connected:
-                        logger.info(f"✅ {user_name} ({broker_name}): CONNECTED – {trading_mode}")
+                        logger.info(f"✅ {user_name} ({broker_name}): CONNECTED")
                         user_has_connection = True
                     else:
                         logger.info(f"⚪ {user_name} ({broker_name}): Not configured")
