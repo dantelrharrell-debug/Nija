@@ -27,6 +27,8 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     subscription_tier = Column(String(20), default='basic')
     enabled = Column(Boolean, default=True)
+    education_mode = Column(Boolean, default=True)  # Start in education mode by default
+    consented_to_live_trading = Column(Boolean, default=False)  # Explicit consent required
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
