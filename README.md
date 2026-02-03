@@ -2,6 +2,9 @@
 
 📋 **Version 7.2.0**
 
+> **CRITICAL SAFETY GUARANTEE**  
+> **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
 > **⚠️ Breaking Changes in v7.2.0:** NIJA now supports **independent trading only**. The copy-trading system has been removed. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 > **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
 

@@ -7,6 +7,11 @@
 
 ---
 
+> **CRITICAL SAFETY GUARANTEE**  
+> **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
+---
+
 ## 🎯 QUICK START (2 MINUTES)
 
 This guide helps you quickly test NIJA's core functionality without any setup.

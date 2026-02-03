@@ -1,6 +1,9 @@
 # 🚀 Green-Light Checklist: Apple App Store Submission
 ## Profitability Enforcement Feature
 
+> **CRITICAL SAFETY GUARANTEE**  
+> **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
 ### Pre-Submission Checklist - Complete Before Submission
 
 ---
