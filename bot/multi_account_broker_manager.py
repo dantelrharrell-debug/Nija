@@ -16,6 +16,7 @@ Each account trades independently with its own:
 import logging
 import sys
 import time
+from types import MappingProxyType
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
@@ -125,13 +126,13 @@ class MultiAccountBrokerManager:
         """
         Read-only access to platform brokers.
         
-        Platform brokers must be registered via add_platform_broker() method.
-        Direct assignment is not allowed.
+        Platform brokers must be registered via add_platform_broker() or
+        register_platform_broker_instance() methods. Direct assignment is not allowed.
         
         Returns:
-            Dict mapping broker types to broker instances
+            Read-only mapping proxy of platform brokers (Dict[BrokerType, BaseBroker])
         """
-        return self._platform_brokers.copy()
+        return MappingProxyType(self._platform_brokers)
     
     def _lock_platform_brokers(self):
         """

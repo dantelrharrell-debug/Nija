@@ -122,25 +122,27 @@ def test_read_only_property():
     broker1.connect()
     manager.register_platform_broker_instance(BrokerType.KRAKEN, broker1)
     
-    # Access via property should return a copy
-    brokers_copy1 = manager.platform_brokers
-    brokers_copy2 = manager.platform_brokers
+    # Access via property should return a MappingProxyType (read-only view)
+    brokers_view1 = manager.platform_brokers
+    brokers_view2 = manager.platform_brokers
     
-    # Verify it's a copy (different object IDs)
-    assert id(brokers_copy1) != id(brokers_copy2), "Property should return a copy each time"
-    print("✅ Test 3a PASSED: Property returns copy (not reference)")
+    # Both should be MappingProxyType instances
+    from types import MappingProxyType
+    assert isinstance(brokers_view1, MappingProxyType), "Property should return MappingProxyType"
+    assert isinstance(brokers_view2, MappingProxyType), "Property should return MappingProxyType"
+    print("✅ Test 3a PASSED: Property returns MappingProxyType (read-only view)")
     
-    # Verify the broker is in the copy
-    assert BrokerType.KRAKEN in brokers_copy1, "Copy should contain registered broker"
-    assert brokers_copy1[BrokerType.KRAKEN] == broker1, "Copy should have same broker instance"
-    print("✅ Test 3b PASSED: Copy contains correct broker data")
+    # Verify the broker is in the view
+    assert BrokerType.KRAKEN in brokers_view1, "View should contain registered broker"
+    assert brokers_view1[BrokerType.KRAKEN] == broker1, "View should have same broker instance"
+    print("✅ Test 3b PASSED: View contains correct broker data")
     
-    # Modifying the copy should not affect internal state
-    brokers_copy1[BrokerType.OKX] = MockBroker(BrokerType.OKX)
-    
-    # Verify internal state unchanged
-    assert BrokerType.OKX not in manager.platform_brokers, "Modifying copy should not affect internal state"
-    print("✅ Test 3c PASSED: Modifying copy does not affect internal state")
+    # Attempting to modify the view should raise TypeError
+    try:
+        brokers_view1[BrokerType.OKX] = MockBroker(BrokerType.OKX)
+        assert False, "Should not be able to modify MappingProxyType"
+    except TypeError:
+        print("✅ Test 3c PASSED: MappingProxyType prevents modification (immutable)")
     
     print()
 
