@@ -38,9 +38,37 @@ if not WEBHOOK_SECRET:
     )
 if len(WEBHOOK_SECRET) < 32:
     raise ValueError(
-        "TRADINGVIEW_WEBHOOK_SECRET must be at least 32 characters for security. "
-        "Current length: " + str(len(WEBHOOK_SECRET))
+        "TRADINGVIEW_WEBHOOK_SECRET must be at least 32 characters for security."
     )
+
+def validate_position_size(position_size, client):
+    """
+    Validate position size with three-tier checks.
+    Returns (is_valid, error_message)
+    """
+    # Tier 1: Minimum size check
+    if position_size < 0.005:
+        return False, f'Position size too small: ${position_size:.4f} (min: $0.005)'
+    
+    # Tier 2: Hard cap (always enforced)
+    if position_size > 10000:
+        return False, 'Position size exceeds maximum allowed limit'
+    
+    # Tier 3: Percentage-based limit (20% of available balance)
+    try:
+        accounts = client.get_accounts()
+        usd_account = next((acc for acc in accounts if acc.get('currency') == 'USD'), None)
+        if usd_account:
+            available_balance = float(usd_account.get('available_balance', {}).get('value', 0))
+            max_position_percentage = available_balance * 0.20
+            if position_size > max_position_percentage:
+                # Generic error - don't reveal account balance
+                return False, 'Position size exceeds account risk limits'
+    except Exception as e:
+        print(f"⚠️ Could not validate against account balance: {e}")
+        # Still enforce hard cap even if balance check fails
+    
+    return True, None
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -144,41 +172,21 @@ def tradingview_webhook():
                     if df is None or len(df) < 50:
                         results.append({'error': f'Insufficient data for {symbol}'})
                         continue
+                    
+                    # Calculate or use custom position size
                     if custom_size:
                         position_size = float(custom_size)
-                        
-                        # Security: Validate position size bounds
+                        # Validate position size with helper function
+                        is_valid, error_msg = validate_position_size(position_size, client)
+                        if not is_valid:
+                            results.append({'error': error_msg})
+                            continue
+                    else:
+                        position_size = strategy.calculate_position_size(symbol, signal_score=5, df=df)
+                        # Still validate calculated sizes
                         if position_size < 0.005:
                             results.append({'error': f'Position size too small: ${position_size:.4f} (min: $0.005)'})
                             continue
-                        
-                        # Hard cap: Never allow positions over $10,000
-                        if position_size > 10000:
-                            results.append({'error': f'Position size exceeds hard cap: ${position_size:.2f} (max: $10,000)'})
-                            continue
-                        
-                        # Get account balance for percentage-based limit
-                        try:
-                            accounts = client.get_accounts()
-                            usd_account = next((acc for acc in accounts if acc.get('currency') == 'USD'), None)
-                            if usd_account:
-                                available_balance = float(usd_account.get('available_balance', {}).get('value', 0))
-                                max_position_percentage = available_balance * 0.20  # 20% max per position
-                                if position_size > max_position_percentage:
-                                    results.append({
-                                        'error': f'Position size too large: ${position_size:.2f} exceeds 20% of balance (max: ${max_position_percentage:.2f})'
-                                    })
-                                    continue
-                        except Exception as e:
-                            print(f"⚠️ Could not validate against account balance: {e}")
-                            # Still enforce hard cap even if balance check fails
-                    else:
-                        position_size = strategy.calculate_position_size(symbol, signal_score=5, df=df)
-                    
-                    # Final minimum check for calculated sizes
-                    if position_size < 0.005:
-                        results.append({'error': f'Position size too small: ${position_size:.4f} (min: $0.005)'})
-                        continue
                     strategy.enter_position(symbol, 'long', position_size, df)
                     results.append({
                         'status': 'success',
@@ -256,33 +264,14 @@ def tradingview_webhook():
             # Position size validation (same as multi-order)
             if custom_size:
                 position_size = float(custom_size)
-                
-                # Security: Validate position size bounds
-                if position_size < 0.005:
-                    return jsonify({'error': f'Position size too small: ${position_size:.4f} (min: $0.005)'}), 400
-                
-                # Hard cap: Never allow positions over $10,000
-                if position_size > 10000:
-                    return jsonify({'error': f'Position size exceeds hard cap: ${position_size:.2f} (max: $10,000)'}), 400
-                
-                # Get account balance for percentage-based limit
-                try:
-                    accounts = client.get_accounts()
-                    usd_account = next((acc for acc in accounts if acc.get('currency') == 'USD'), None)
-                    if usd_account:
-                        available_balance = float(usd_account.get('available_balance', {}).get('value', 0))
-                        max_position_percentage = available_balance * 0.20  # 20% max per position
-                        if position_size > max_position_percentage:
-                            return jsonify({
-                                'error': f'Position size too large: ${position_size:.2f} exceeds 20% of balance (max: ${max_position_percentage:.2f})'
-                            }), 400
-                except Exception as e:
-                    print(f"⚠️ Could not validate against account balance: {e}")
-                    # Still enforce hard cap even if balance check fails
+                # Validate position size with helper function
+                is_valid, error_msg = validate_position_size(position_size, client)
+                if not is_valid:
+                    return jsonify({'error': error_msg}), 400
             else:
                 position_size = strategy.calculate_position_size(symbol, signal_score=5, df=df)
             
-            # Final minimum check
+            # Final minimum check for calculated sizes
             if position_size < 0.005:
                 return jsonify({'error': f'Position size too small: ${position_size:.4f} (min: $0.005)'}), 400
             strategy.enter_position(symbol, 'long', position_size, df)

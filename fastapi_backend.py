@@ -93,8 +93,7 @@ if not JWT_SECRET_KEY:
     )
 if len(JWT_SECRET_KEY) < 32:
     raise ValueError(
-        "JWT_SECRET_KEY must be at least 32 characters for security. "
-        "Current length: " + str(len(JWT_SECRET_KEY))
+        "JWT_SECRET_KEY must be at least 32 characters for security."
     )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
