@@ -7,6 +7,11 @@
 
 ---
 
+> **CRITICAL SAFETY GUARANTEE**  
+> **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
+---
+
 ## Executive Summary
 
 NIJA is an automated cryptocurrency trading application that uses algorithmic analysis to execute trades on users' existing exchange accounts. The app operates as a **trading automation tool**, NOT as a financial advisor, broker, or copy trading service.

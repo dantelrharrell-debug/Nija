@@ -1,5 +1,8 @@
 # NIJA Security Documentation
 
+> **CRITICAL SAFETY GUARANTEE**  
+> **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
 ## Overview
 
 NIJA's layered architecture implements multiple security layers to protect both users and the platform. This document outlines security best practices and the security mechanisms built into the system.

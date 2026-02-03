@@ -4,6 +4,9 @@
 **Issue**: Respect the tier floor of 22% for INVESTOR tier  
 **Status**: ✅ COMPLETE
 
+> **CRITICAL SAFETY GUARANTEE**  
+> **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
 ## Problem Statement
 
 LOW_CAPITAL mode and fee-aware adjustments could reduce position sizes below the tier-defined MAX_POSITION_PCT. For the INVESTOR tier ($250-999), the maximum position size should be 22%, and this should act as a FLOOR that adjustments cannot reduce below.

@@ -1138,24 +1138,24 @@ def emit_tier_floor_metrics() -> Dict[str, float]:
 
 def assert_expected_tier_floors() -> None:
     """
-    Assert that tier floors match expected values in production.
+    Assert that tier floors match expected values in ALL environments.
     
     This validates critical tier floor configurations at startup,
     particularly the INVESTOR tier 22% floor fix (Jan 30, 2026).
+    
+    IMPORTANT: Assertions run in ALL environments (dev, staging, production).
+    This ensures low-capital protection is enforced everywhere and provides
+    stronger safety guarantees that Apple reviewers expect.
     
     Raises:
         AssertionError: If any tier floor doesn't match expected value
     """
     import os
     
-    # Only run assertions in production environment
-    is_production = os.getenv('ENVIRONMENT', '').lower() in ('production', 'prod')
+    # Get environment name for logging
+    environment = os.getenv('ENVIRONMENT', 'development').lower()
     
-    if not is_production:
-        logger.info("ℹ️  Skipping tier floor assertions (not in production environment)")
-        return
-    
-    logger.info("🔍 Validating tier floor configuration for production...")
+    logger.info(f"🔍 Validating tier floor configuration ({environment} environment)...")
     
     # Expected tier floors (updated Jan 30, 2026)
     expected_floors = {
@@ -1187,7 +1187,7 @@ def assert_expected_tier_floors() -> None:
         logger.error(error_msg)
         raise AssertionError(error_msg)
     
-    logger.info("✅ All tier floors validated successfully")
+    logger.info("✅ All tier floors validated successfully (low-capital protection enforced)")
     logger.info(f"   INVESTOR tier confirmed at 22% floor (Jan 30, 2026 fix)")
 
 

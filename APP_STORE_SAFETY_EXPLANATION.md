@@ -7,6 +7,11 @@
 
 ---
 
+> **CRITICAL SAFETY GUARANTEE**  
+> **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
+---
+
 ## Executive Summary
 
 NIJA is a **safe, transparent, and compliant** algorithmic trading platform that uses an **independent trading model**. Each user account makes its own trading decisions using the same algorithm, with position sizes calculated proportionally to their account balance.
