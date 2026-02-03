@@ -739,6 +739,12 @@ def human_readable_status():
         with app.test_request_context():
             status_response = get_trading_status()
             data = status_response.get_json()
+        
+        # Get account manager to check copy trading status
+        account_mgr = _get_account_manager()
+        if account_mgr is None:
+            logger.debug("Account manager not available - defaulting to Independent Trading mode")
+        copy_trading_active = getattr(account_mgr, 'kraken_copy_trading_active', False)
 
         # Build HTML
         html = """<!DOCTYPE html>
@@ -870,26 +876,43 @@ def human_readable_status():
         # User details (if available)
         if data.get('users') and len(data.get('users', [])) > 0:
             html += """
-        <h2 style="margin-top: 30px; color: #1d9bf0;">👥 User Accounts & Trading Activity</h2>
+        <h2 style="margin-top: 30px; color: #1d9bf0;">👥 User Accounts & Trading Activity</h2>"""
+            
+            # Display trading mode banner based on actual status from MultiAccountBrokerManager
+            if copy_trading_active:
+                html += """
         <div style="background: #16181c; border: 2px solid #1d9bf0; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
             <div style="font-size: 14px; font-weight: bold; color: #1d9bf0; margin-bottom: 8px;">🔄 Copy Trading Active</div>
             <div style="font-size: 13px; color: #e7e9ea; line-height: 1.6;">
                 All user trades are <strong>automatically copied</strong> from the NIJA platform account. Users <strong>cannot initiate their own trades</strong>.
                 Position sizes are scaled proportionally to each user's account balance.
             </div>
-        </div>
+        </div>"""
+            else:
+                html += """
+        <div style="background: #16181c; border: 2px solid #00ba7c; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+            <div style="font-size: 14px; font-weight: bold; color: #00ba7c; margin-bottom: 8px;">👥 Independent Trading</div>
+            <div style="font-size: 13px; color: #e7e9ea; line-height: 1.6;">
+                Each account trades <strong>independently</strong> using NIJA's strategy. All accounts scan markets and execute trades based on their own analysis and risk parameters.
+            </div>
+        </div>"""
+            
+            html += """
         <div class="user-list">"""
             for user in data['users']:
                 status_icon = "✅" if user.get('enabled') else "❌"
                 pnl_color = "color: #00ba7c;" if user.get('total_pnl', 0) >= 0 else "color: #f91880;"
                 daily_pnl_color = "color: #00ba7c;" if user.get('daily_pnl', 0) >= 0 else "color: #f91880;"
+                
+                # Set trading mode label based on actual status from MultiAccountBrokerManager
+                trading_mode_label = "Copy Trading" if copy_trading_active else "Independent Trading"
 
                 html += """
             <div class="user-item" style="padding: 20px;">
                 <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
                     <div>
                         <div style="font-size: 18px; font-weight: bold; margin-bottom: 5px;">
-                            """ + status_icon + """ """ + user.get('name', user.get('user_id', 'Unknown')) + """ <span style="font-size: 12px; color: #71767b; font-weight: normal;">(Copy Trading)</span>
+                            """ + status_icon + """ """ + user.get('name', user.get('user_id', 'Unknown')) + """ <span style="font-size: 12px; color: #71767b; font-weight: normal;">(""" + trading_mode_label + """)</span>
                         </div>
                         <div style="font-size: 13px; color: #71767b;">
                             """ + user.get('user_id', '') + """ • """ + user.get('broker_type', 'N/A').upper() + """ • """ + user.get('account_type', 'N/A').title() + """

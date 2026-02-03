@@ -508,6 +508,17 @@ class IndependentBrokerTrader:
                     logger.info(f"   🎯 {broker_name.upper()} PLATFORM TRADING CYCLE #{cycle_count}")
                     logger.info(f"   ═══════════════════════════════════════════════════════════")
                     logger.info(f"   💰 Current balance: ${balance:.2f}")
+                    
+                    # TRADE REHYDRATION: Load and display managed positions
+                    try:
+                        platform_positions = broker.get_positions()
+                        if platform_positions:
+                            logger.info(f"   🔁 Rehydrated {len(platform_positions)} NIJA-managed position(s)")
+                        else:
+                            logger.info(f"   📊 No open positions to manage")
+                    except Exception as pos_err:
+                        logger.warning(f"   ⚠️  Could not load positions: {pos_err}")
+                    
                     logger.info(f"   📊 Mode: PLATFORM (full strategy execution)")
                     logger.info(f"   🔍 Will scan markets for opportunities")
                     logger.info(f"   ⚡ Will execute trades if signals trigger")
@@ -618,6 +629,22 @@ class IndependentBrokerTrader:
 
                 # Run trading cycle for this user broker
                 try:
+                    # TRADE REHYDRATION: Load and manage positions for this user
+                    # This proves NIJA ownership and continues managing positions opened by NIJA
+                    try:
+                        user_positions = broker.get_positions()
+                        if user_positions:
+                            logger.info(f"   🔁 {broker_name}: Rehydrated {len(user_positions)} NIJA-managed position(s)")
+                            for pos in user_positions:
+                                symbol = pos.get('symbol', 'UNKNOWN')
+                                size = pos.get('size', 0)
+                                entry = pos.get('entry_price', 0)
+                                logger.info(f"      • {symbol}: {size} @ ${entry:.4f}")
+                        else:
+                            logger.info(f"   🔁 {broker_name}: No open positions to manage")
+                    except Exception as pos_err:
+                        logger.warning(f"   ⚠️  {broker_name}: Could not load positions: {pos_err}")
+                    
                     # USER accounts should NEVER generate signals
                     # Users only execute copy trades from master - they don't run strategy themselves
                     # This prevents users from making independent trading decisions
