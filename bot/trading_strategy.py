@@ -2540,8 +2540,7 @@ class TradingStrategy:
                         logger.debug(f"   ⚠️ Periodic position sync failed: {sync_err}")
 
             if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
-                # Get positions from all connected master brokers
-                # ℹ️  User positions excluded from platform caps
+                # Get positions from all connected platform brokers (user brokers tracked separately)
                 logger.info("ℹ️  User positions excluded from platform caps")
                 for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
