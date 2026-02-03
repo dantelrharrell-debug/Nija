@@ -83,13 +83,7 @@ To verify that credentials are properly configured:
 1. Check that `.env` file exists in repository root (local development only)
 2. Verify credentials are loaded:
    ```bash
-   python3 -c "
-   import os
-   from dotenv import load_dotenv
-   load_dotenv()
-   print('API Key loaded:', bool(os.getenv('KRAKEN_PLATFORM_API_KEY')))
-   print('API Secret loaded:', bool(os.getenv('KRAKEN_PLATFORM_API_SECRET')))
-   "
+   python3 -c "import os; from dotenv import load_dotenv; load_dotenv(); print('API Key loaded:', bool(os.getenv('KRAKEN_PLATFORM_API_KEY'))); print('API Secret loaded:', bool(os.getenv('KRAKEN_PLATFORM_API_SECRET')))"
    ```
 3. Start the bot and check logs for "✅ Using KRAKEN_PLATFORM_API_KEY"
 
