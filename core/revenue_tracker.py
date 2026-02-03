@@ -71,7 +71,8 @@ class RevenueType(Enum):
     """Types of revenue."""
     SUBSCRIPTION = "subscription"
     PERFORMANCE_FEE = "performance_fee"
-    COPY_TRADING_FEE = "copy_trading_fee"
+    # DEPRECATED: COPY_TRADING_FEE - removed as of Feb 2026 (independent trading model)
+    # COPY_TRADING_FEE = "copy_trading_fee"
 
 
 @dataclass
@@ -92,14 +93,15 @@ class RevenueTracker:
     Features:
     - Subscription revenue tracking
     - Performance fee calculation
-    - Copy trading fee tracking
     - Revenue analytics and reporting
     """
 
     # Performance fee configuration
     PERFORMANCE_FEE_PCT = 10.0  # 10% of profits
-    COPY_TRADING_PLATFORM_FEE_PCT = 2.0  # 2% platform fee
-    COPY_TRADING_MASTER_FEE_PCT = 5.0  # 5% to master trader
+    
+    # DEPRECATED (Feb 2026): Copy trading fees removed with independent trading model
+    # COPY_TRADING_PLATFORM_FEE_PCT = 2.0  # 2% platform fee
+    # COPY_TRADING_MASTER_FEE_PCT = 5.0  # 5% to master trader
 
     def __init__(self):
         """Initialize revenue tracker."""
@@ -204,74 +206,22 @@ class RevenueTracker:
 
         return None
 
-    def record_copy_trading_fee(
-        self,
-        platform_user_id: str,
-        follower_user_id: str,
-        follower_profit: float
-    ) -> Tuple[RevenueEvent, RevenueEvent]:
-        """
-        Record copy trading fees.
-
-        Splits follower profit:
-        - 5% to master trader
-        - 2% to platform
-        - 93% to follower
-
-        Args:
-            platform_user_id: Master trader user ID
-            follower_user_id: Follower user ID
-            follower_profit: Profit made by follower
-
-        Returns:
-            Tuple of (platform_fee_event, master_fee_event)
-        """
-        profit_decimal = Decimal(str(follower_profit))
-
-        # Platform fee (2%)
-        platform_fee = profit_decimal * Decimal(str(self.COPY_TRADING_PLATFORM_FEE_PCT / 100.0))
-
-        platform_event = RevenueEvent(
-            user_id=follower_user_id,
-            revenue_type=RevenueType.COPY_TRADING_FEE,
-            amount=platform_fee,
-            timestamp=datetime.now(),
-            description=f"Copy trading platform fee: {self.COPY_TRADING_PLATFORM_FEE_PCT}% of follower profit",
-            metadata={
-                "platform_user_id": platform_user_id,
-                "follower_user_id": follower_user_id,
-                "follower_profit": follower_profit,
-                "fee_pct": self.COPY_TRADING_PLATFORM_FEE_PCT
-            }
-        )
-
-        # Master trader fee (5%) - not counted as platform revenue but tracked
-        master_fee = profit_decimal * Decimal(str(self.COPY_TRADING_MASTER_FEE_PCT / 100.0))
-
-        master_event = RevenueEvent(
-            user_id=platform_user_id,
-            revenue_type=RevenueType.COPY_TRADING_FEE,
-            amount=master_fee,
-            timestamp=datetime.now(),
-            description=f"Master trader fee: {self.COPY_TRADING_MASTER_FEE_PCT}% of follower profit",
-            metadata={
-                "platform_user_id": platform_user_id,
-                "follower_user_id": follower_user_id,
-                "follower_profit": follower_profit,
-                "fee_pct": self.COPY_TRADING_MASTER_FEE_PCT,
-                "is_master_payout": True  # This goes to master, not platform
-            }
-        )
-
-        self.revenue_events.append(platform_event)
-        self.revenue_events.append(master_event)
-
-        logger.info(
-            f"Copy trading fees recorded: platform=${platform_fee}, "
-            f"master=${master_fee}, follower_profit=${follower_profit}"
-        )
-
-        return (platform_event, master_event)
+    # DEPRECATED (Feb 2026): Copy trading removed with independent trading model
+    # def record_copy_trading_fee(
+    #     self,
+    #     platform_user_id: str,
+    #     follower_user_id: str,
+    #     follower_profit: float
+    # ) -> Tuple[RevenueEvent, RevenueEvent]:
+    #     """
+    #     Record copy trading fees.
+    #
+    #     DEPRECATED: This method is no longer used as NIJA operates in independent
+    #     trading mode only. Kept for historical reference.
+    #     """
+    #     raise NotImplementedError(
+    #         "Copy trading fees are deprecated. NIJA uses independent trading mode only."
+    #     )
 
     def get_total_revenue(
         self,
@@ -329,7 +279,7 @@ class RevenueTracker:
         breakdown = {
             RevenueType.SUBSCRIPTION: Decimal("0"),
             RevenueType.PERFORMANCE_FEE: Decimal("0"),
-            RevenueType.COPY_TRADING_FEE: Decimal("0")
+            # DEPRECATED: COPY_TRADING_FEE removed (Feb 2026)
         }
 
         for event in self.revenue_events:

@@ -169,30 +169,11 @@ ENTRY_REQUIREMENTS = {
 }
 
 # ============================================================================
-# COPY TRADING CONFIGURATION
+# TRADING MODE CONFIGURATION
 # ============================================================================
 
-COPY_TRADING = {
-    # Enable copy trading by default
-    'enabled': True,
-    'mode': 'MASTER_FOLLOW',  # Follow platform account
-
-    # Position scaling
-    'allocation_strategy': 'proportional',  # Scale by balance ratio
-    'max_copy_position_pct': 0.05,  # Never exceed 5% on copy
-    'min_copy_position_usd': 5.00,  # Minimum $5 per copy trade
-
-    # Safety limits for copy trading
-    'max_copied_trades_per_day': 8,  # Max 8 copied trades/day
-    'respect_local_risk_limits': True,  # Always respect local limits
-    'can_reduce_position_size': True,  # Can reduce (never increase)
-    'can_skip_trades': True,  # Can skip if too risky
-
-    # Sync settings
-    'sync_exits': True,  # Follow master exits
-    'sync_stop_adjustments': True,  # Follow stop adjustments
-    'allow_independent_exit': True,  # Can exit early if needed
-}
+# Trading mode: Independent trading (no copy trading)
+TRADING_MODE = "independent"
 
 # ============================================================================
 # EXCHANGE SELECTION - FEE OPTIMIZATION
@@ -358,7 +339,7 @@ PRESET_INFO = {
     'target_accounts': '$20-$100',
     'risk_level': 'Very Low',
     'experience_level': 'Beginner-Friendly',
-    'copy_trading_optimized': True,
+    'independent_trading': True,
     'fee_optimized': True,
     'author': 'NIJA Trading Systems',
     'created': '2026-01-20',
@@ -376,7 +357,7 @@ def get_environment_variables():
         Dict of environment variable names and values
     """
     return {
-        'COPY_TRADING_MODE': 'MASTER_FOLLOW',
+        'TRADING_MODE': 'independent',
         'PRO_MODE': 'true',
         'MINIMUM_TRADING_BALANCE': str(ACCOUNT_SIZE['min_balance']),
         'MIN_CASH_TO_BUY': str(POSITION_SIZING['absolute_min_position_usd']),
@@ -413,7 +394,7 @@ def apply_small_account_preset(set_env_vars=True):
         'stop_loss': STOP_LOSS,
         'take_profit': TAKE_PROFIT,
         'entry_requirements': ENTRY_REQUIREMENTS,
-        'copy_trading': COPY_TRADING,
+        'trading_mode': TRADING_MODE,
         'exchange_preferences': EXCHANGE_PREFERENCES,
         'pro_mode': PRO_MODE,
         'safety_features': SAFETY_FEATURES,
@@ -458,11 +439,9 @@ def get_preset_summary():
    • Range: {STOP_LOSS['min_stop_pct']*100:.1f}% - {STOP_LOSS['max_stop_pct']*100:.1f}%
    • Trailing Stop: Active at +{STOP_LOSS['trailing_activation_pct']*100:.1f}%
 
-🔄 COPY TRADING:
-   • Mode: {COPY_TRADING['mode']}
-   • Strategy: {COPY_TRADING['allocation_strategy'].title()}
-   • Max Trades/Day: {COPY_TRADING['max_copied_trades_per_day']}
-   • Local Risk Limits: Always Respected
+⚙️  TRADING MODE:
+   • Mode: {TRADING_MODE}
+   • Independent: Each account trades independently
 
 🏦 EXCHANGE PRIORITY:
    1. {EXCHANGE_PREFERENCES['priority_order'][0].upper()} (Primary)
@@ -506,4 +485,4 @@ if __name__ == "__main__":
     print(f"\n✅ Preset applied successfully!")
     print(f"   Account Size: ${config['account_size']['min_balance']:.0f} - ${config['account_size']['max_balance']:.0f}")
     print(f"   Max Risk/Trade: {config['risk_limits']['max_risk_per_trade_pct']*100:.1f}%")
-    print(f"   Copy Trading: {config['copy_trading']['enabled']}")
+    print(f"   Trading Mode: {config['trading_mode']}")
