@@ -7,6 +7,7 @@
     <title>NIJA - AI Trading Platform</title>
     <link rel="stylesheet" href="../static/css/style.css">
     <link rel="stylesheet" href="../static/css/app-store-ui.css">
+    <link rel="stylesheet" href="../static/css/onboarding.css">
     <link rel="manifest" href="../static/manifest.json">
     <meta name="theme-color" content="#6366f1">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -80,6 +81,157 @@
             </div>
         </div>
 
+        <!-- Onboarding Welcome Screen -->
+        <div id="onboarding-screen" class="onboarding-screen hidden">
+            <div class="onboarding-container">
+                <!-- Step 1: Welcome / Product Positioning -->
+                <div id="onboarding-welcome" class="onboarding-step">
+                    <div class="onboarding-header">
+                        <div class="onboarding-icon">🎓</div>
+                        <h1>Learn Trading Without Risking Real Money</h1>
+                        <p class="onboarding-subtitle">Master algorithmic trading with our simulated environment</p>
+                    </div>
+
+                    <div class="onboarding-features">
+                        <div class="feature-item">
+                            <div class="feature-icon">💰</div>
+                            <div class="feature-content">
+                                <h3>$10,000 Simulated Balance</h3>
+                                <p>Practice with virtual money. Learn without risk.</p>
+                            </div>
+                        </div>
+                        <div class="feature-item">
+                            <div class="feature-icon">📊</div>
+                            <div class="feature-content">
+                                <h3>Real Market Data</h3>
+                                <p>Trade on live market conditions with simulated execution.</p>
+                            </div>
+                        </div>
+                        <div class="feature-item">
+                            <div class="feature-icon">📈</div>
+                            <div class="feature-content">
+                                <h3>Track Your Progress</h3>
+                                <p>Monitor win rate, risk control, and profitability.</p>
+                            </div>
+                        </div>
+                        <div class="feature-item">
+                            <div class="feature-icon">🎯</div>
+                            <div class="feature-content">
+                                <h3>Upgrade When Ready</h3>
+                                <p>Connect your broker and trade live after you've built confidence.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-primary btn-large" onclick="startEducationMode()">
+                        Start in Education Mode
+                    </button>
+
+                    <div class="onboarding-disclaimer">
+                        <p>🔒 <strong>Your funds never touch our platform.</strong> Trades execute directly on your broker.</p>
+                        <p>✨ <strong>You're always in control.</strong> You can stop trading anytime.</p>
+                    </div>
+                </div>
+
+                <!-- Step 2: Education Mode Active -->
+                <div id="onboarding-education" class="onboarding-step hidden">
+                    <div class="education-badge">
+                        📚 Education Mode Active
+                    </div>
+
+                    <h2>You're Learning with Simulated Money</h2>
+                    <p class="education-notice">This is not real money. All trades are simulated for learning purposes.</p>
+
+                    <div class="progress-card">
+                        <h3>Your Progress</h3>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="education-progress-bar" style="width: 0%"></div>
+                        </div>
+                        <p class="progress-text" id="education-progress-text">0% Complete</p>
+
+                        <div class="milestones">
+                            <div class="milestone" id="milestone-first-trade">
+                                <span class="milestone-icon">⚪</span>
+                                <span>Complete First Trade</span>
+                            </div>
+                            <div class="milestone" id="milestone-10-trades">
+                                <span class="milestone-icon">⚪</span>
+                                <span>Complete 10 Trades</span>
+                            </div>
+                            <div class="milestone" id="milestone-positive-pnl">
+                                <span class="milestone-icon">⚪</span>
+                                <span>Achieve Profitability</span>
+                            </div>
+                            <div class="milestone" id="milestone-ready">
+                                <span class="milestone-icon">⚪</span>
+                                <span>Ready for Live Trading</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-primary" onclick="continueToDashboard()">
+                        Continue to Dashboard
+                    </button>
+                </div>
+
+                <!-- Step 3: Upgrade to Live Trading (shown when ready) -->
+                <div id="onboarding-upgrade" class="onboarding-step hidden">
+                    <div class="upgrade-header">
+                        <div class="success-icon">🎉</div>
+                        <h2>Congratulations! You're Ready</h2>
+                        <p>You've demonstrated consistent profitability in education mode.</p>
+                    </div>
+
+                    <div class="upgrade-stats">
+                        <div class="upgrade-stat">
+                            <span class="stat-label">Win Rate</span>
+                            <span class="stat-value" id="upgrade-winrate">--</span>
+                        </div>
+                        <div class="upgrade-stat">
+                            <span class="stat-label">Total Trades</span>
+                            <span class="stat-value" id="upgrade-trades">--</span>
+                        </div>
+                        <div class="upgrade-stat">
+                            <span class="stat-label">Total P&L</span>
+                            <span class="stat-value" id="upgrade-pnl">--</span>
+                        </div>
+                    </div>
+
+                    <div class="upgrade-option">
+                        <h3>Want to Trade Live?</h3>
+                        <p>Connect your broker account and start trading with real money.</p>
+
+                        <div class="consent-checklist">
+                            <label class="consent-item">
+                                <input type="checkbox" id="consent-understand-risk">
+                                <span>I understand that live trading involves real financial risk</span>
+                            </label>
+                            <label class="consent-item">
+                                <input type="checkbox" id="consent-can-afford">
+                                <span>I can afford to lose the capital I'm trading with</span>
+                            </label>
+                            <label class="consent-item">
+                                <input type="checkbox" id="consent-broker-direct">
+                                <span>I understand trades execute directly on my broker account</span>
+                            </label>
+                            <label class="consent-item">
+                                <input type="checkbox" id="consent-in-control">
+                                <span>I understand I'm always in control and can stop anytime</span>
+                            </label>
+                        </div>
+
+                        <button class="btn btn-primary btn-large" onclick="proceedToLiveTrading()" id="proceed-live-btn" disabled>
+                            Connect Broker & Go Live
+                        </button>
+                    </div>
+
+                    <button class="btn btn-secondary" onclick="stayInEducation()">
+                        Stay in Education Mode
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Main Dashboard -->
         <div id="dashboard-screen" class="dashboard-screen hidden">
             <!-- Always-Visible Safety Status Banner (GO CONDITION #2) -->
@@ -141,6 +293,19 @@
 
             <!-- Dashboard Content -->
             <div id="dashboard-content" class="dashboard-content">
+                <!-- Education Mode Banner -->
+                <div id="education-mode-banner" class="education-mode-banner hidden">
+                    <div class="banner-icon">📚</div>
+                    <div class="banner-content">
+                        <div class="banner-title">Education Mode - Simulated Trading</div>
+                        <div class="banner-subtitle">All balances and trades are simulated with virtual money. <strong>This is not real money.</strong></div>
+                        <div class="banner-actions">
+                            <button class="btn btn-small btn-secondary" onclick="showEducationProgress()">View Progress</button>
+                            <button class="btn btn-small btn-primary" onclick="showUpgradeOption()" id="upgrade-btn" style="display: none;">Upgrade to Live Trading</button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="dashboard-header">
                     <h2>Trading Dashboard</h2>
                     <div class="user-info">
@@ -379,5 +544,6 @@
     <script src="../static/js/capacitor-init.js"></script>
     <script src="../static/js/app.js"></script>
     <script src="../static/js/app-store-ui.js"></script>
+    <script src="../static/js/onboarding.js"></script>
 </body>
 </html>

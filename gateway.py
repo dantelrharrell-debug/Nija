@@ -646,6 +646,263 @@ def get_user_stats():
 
 
 # ========================================
+# Education Mode & Onboarding Endpoints
+# ========================================
+
+@app.route('/api/user/onboarding/status', methods=['GET'])
+@require_auth
+def get_onboarding_status():
+    """
+    Get user's onboarding status and education mode progress.
+    
+    Returns onboarding state, progress metrics, and next steps.
+    """
+    try:
+        from bot.education_mode import get_education_manager
+        
+        user_id = request.user_id
+        education_manager = get_education_manager()
+        
+        # Get onboarding status
+        status = education_manager.get_onboarding_status(user_id)
+        
+        logger.info(f"Onboarding status requested for user {user_id}")
+        
+        return jsonify({
+            'success': True,
+            'onboarding': status
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting onboarding status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user/mode', methods=['GET'])
+@require_auth
+def get_user_mode():
+    """
+    Get current user mode (education or live_trading).
+    
+    Returns the user's current trading mode and whether they can upgrade.
+    """
+    try:
+        from bot.education_mode import get_education_manager, UserMode
+        from database.db_connection import get_db_session
+        from database.models import User
+        
+        user_id = request.user_id
+        education_manager = get_education_manager()
+        
+        # Get user from database
+        with get_db_session() as session:
+            user = session.query(User).filter_by(user_id=user_id).first()
+            
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            
+            # Determine mode
+            mode = UserMode.LIVE_TRADING.value if not user.education_mode else UserMode.EDUCATION.value
+            
+            # Get progress if in education mode
+            progress = None
+            ready_for_upgrade = False
+            
+            if user.education_mode:
+                education_manager.update_from_paper_account(user_id)
+                user_progress = education_manager.get_progress(user_id)
+                if user_progress:
+                    progress = user_progress.to_dict()
+                    ready_for_upgrade = user_progress.is_ready_for_live_trading()
+            
+            return jsonify({
+                'success': True,
+                'mode': mode,
+                'education_mode': user.education_mode,
+                'consented_to_live_trading': user.consented_to_live_trading,
+                'progress': progress,
+                'ready_for_upgrade': ready_for_upgrade
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error getting user mode: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user/mode/education/progress', methods=['POST'])
+@require_auth
+def update_education_progress():
+    """
+    Update education mode progress from current trading stats.
+    
+    This syncs the user's education progress with their paper trading account.
+    """
+    try:
+        from bot.education_mode import get_education_manager
+        
+        user_id = request.user_id
+        education_manager = get_education_manager()
+        
+        # Update progress from paper account
+        progress = education_manager.update_from_paper_account(user_id)
+        
+        logger.info(f"Education progress updated for user {user_id}")
+        
+        return jsonify({
+            'success': True,
+            'progress': progress.to_dict()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error updating education progress: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user/mode/live/consent', methods=['POST'])
+@require_auth
+def consent_to_live_trading():
+    """
+    Record user's explicit consent to switch to live trading.
+    
+    Required before user can connect broker and trade with real money.
+    This implements the explicit opt-in requirement.
+    """
+    try:
+        from database.db_connection import get_db_session
+        from database.models import User
+        
+        user_id = request.user_id
+        data = request.get_json() or {}
+        
+        # Require explicit consent confirmation
+        if not data.get('consent_confirmed'):
+            return jsonify({'error': 'Explicit consent required'}), 400
+        
+        # Require acknowledgment of risks
+        if not data.get('risks_acknowledged'):
+            return jsonify({'error': 'Risk acknowledgment required'}), 400
+        
+        with get_db_session() as session:
+            user = session.query(User).filter_by(user_id=user_id).first()
+            
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            
+            # Record consent
+            user.consented_to_live_trading = True
+            user.updated_at = datetime.utcnow()
+            session.commit()
+            
+            logger.info(f"User {user_id} consented to live trading")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Consent recorded. You can now connect your broker account.',
+                'consented_to_live_trading': True
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error recording consent: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user/mode/live/activate', methods=['POST'])
+@require_auth
+def activate_live_trading():
+    """
+    Activate live trading mode after consent and broker connection.
+    
+    This switches the user from education mode to live trading mode.
+    Requires:
+    - Prior consent to live trading
+    - Connected broker account
+    """
+    try:
+        from database.db_connection import get_db_session
+        from database.models import User, BrokerCredential
+        
+        user_id = request.user_id
+        
+        with get_db_session() as session:
+            user = session.query(User).filter_by(user_id=user_id).first()
+            
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            
+            # Check consent
+            if not user.consented_to_live_trading:
+                return jsonify({
+                    'error': 'Must consent to live trading first',
+                    'action_required': 'consent'
+                }), 400
+            
+            # Check broker connection
+            broker_creds = session.query(BrokerCredential).filter_by(user_id=user_id).first()
+            if not broker_creds:
+                return jsonify({
+                    'error': 'Must connect broker account first',
+                    'action_required': 'connect_broker'
+                }), 400
+            
+            # Activate live trading
+            user.education_mode = False
+            user.updated_at = datetime.utcnow()
+            session.commit()
+            
+            logger.info(f"User {user_id} activated live trading mode")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Live trading mode activated',
+                'mode': 'live_trading',
+                'education_mode': False
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error activating live trading: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user/mode/education/revert', methods=['POST'])
+@require_auth
+def revert_to_education():
+    """
+    Revert user back to education mode from live trading.
+    
+    Allows users to switch back to safe simulation mode anytime.
+    """
+    try:
+        from database.db_connection import get_db_session
+        from database.models import User
+        
+        user_id = request.user_id
+        
+        with get_db_session() as session:
+            user = session.query(User).filter_by(user_id=user_id).first()
+            
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            
+            # Switch back to education mode
+            user.education_mode = True
+            user.updated_at = datetime.utcnow()
+            session.commit()
+            
+            logger.info(f"User {user_id} reverted to education mode")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Switched back to education mode',
+                'mode': 'education',
+                'education_mode': True
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error reverting to education mode: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ========================================
 # Error Handlers
 # ========================================
 
