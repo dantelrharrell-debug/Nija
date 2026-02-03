@@ -1151,24 +1151,25 @@ class ExecutionEngine:
         # Each threshold ensures NET profit after broker-specific round-trip fees
 
         # For low-fee brokers (Kraken 0.36%, Binance 0.28%, OKX 0.30%)
-        # OPTIMIZED (Jan 29, 2026): Raised targets to let winners run longer
-        # Previous targets (0.7%, 1.0%, 1.5%) were cutting winners too early
-        # New targets aligned closer to Coinbase for better performance
+        # PROFITABILITY FIX (Feb 3, 2026): Widened targets for proper risk/reward
+        # CRITICAL: With 1.5% stop-loss, need 3.0%+ average targets for 2:1 risk/reward
+        # Previous: 1.2%/1.7%/2.2%/3.0% = 2.0% avg (only 1.35:1 risk/reward - UNPROFITABLE)
+        # New: 2.0%/2.5%/3.0%/4.0% = 2.9% avg (1.93:1 risk/reward - PROFITABLE at 52%+ win rate)
         if broker_round_trip_fee <= 0.005:  # <= 0.5% fees (Kraken, Binance, OKX)
             exit_levels = [
-                (0.012, 0.10, 'tp_exit_1.2pct'),   # Exit 10% at 1.2% gross → ~0.84% NET (was 0.7% = too early)
-                (0.017, 0.15, 'tp_exit_1.7pct'),   # Exit 15% at 1.7% gross → ~1.34% NET (was 1.0% = too early)
-                (0.022, 0.25, 'tp_exit_2.2pct'),   # Exit 25% at 2.2% gross → ~1.84% NET (was 1.5% = too early)
-                (0.030, 0.50, 'tp_exit_3.0pct'),   # Exit 50% at 3.0% gross → ~2.64% NET (was 2.5%, raised to 3.0%)
+                (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~1.64% NET (wider than 1.2%)
+                (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~2.14% NET (wider than 1.7%)
+                (0.030, 0.25, 'tp_exit_3.0pct'),   # Exit 25% at 3.0% gross → ~2.64% NET (wider than 2.2%)
+                (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~3.64% NET (wider than 3.0%)
             ]
         # For high-fee brokers (Coinbase 1.4%)
-        # Use conservative profit-taking to ensure profitability
+        # Use even wider targets due to higher fees
         else:
             exit_levels = [
-                (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~0.6% NET
-                (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~1.1% NET
-                (0.030, 0.25, 'tp_exit_3.0pct'),   # Exit 25% at 3.0% gross → ~1.6% NET
-                (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~2.6% NET
+                (0.025, 0.10, 'tp_exit_2.5pct'),   # Exit 10% at 2.5% gross → ~1.1% NET
+                (0.030, 0.15, 'tp_exit_3.0pct'),   # Exit 15% at 3.0% gross → ~1.6% NET
+                (0.040, 0.25, 'tp_exit_4.0pct'),   # Exit 25% at 4.0% gross → ~2.6% NET
+                (0.050, 0.50, 'tp_exit_5.0pct'),   # Exit 50% at 5.0% gross → ~3.6% NET
             ]
 
         for gross_threshold, exit_pct, exit_flag in exit_levels:
@@ -1278,10 +1279,10 @@ class ExecutionEngine:
 
             # Determine next profit target
             if broker_round_trip_fee <= 0.005:  # Low-fee broker (Kraken, Binance, OKX)
-                # OPTIMIZED JAN 29, 2026: Raised targets to let winners run longer
-                next_targets = [0.012, 0.017, 0.022, 0.030]  # 1.2%, 1.7%, 2.2%, 3.0% (was 0.7%, 1.0%, 1.5%, 2.5%)
-            else:  # High-fee broker
-                next_targets = [0.020, 0.025, 0.030, 0.040]
+                # PROFITABILITY FIX (Feb 3, 2026): Widened for 2:1 risk/reward
+                next_targets = [0.020, 0.025, 0.030, 0.040]  # 2.0%, 2.5%, 3.0%, 4.0% (was 1.2%, 1.7%, 2.2%, 3.0%)
+            else:  # High-fee broker (Coinbase)
+                next_targets = [0.025, 0.030, 0.040, 0.050]  # 2.5%, 3.0%, 4.0%, 5.0%
 
             next_target = None
             for target in next_targets:

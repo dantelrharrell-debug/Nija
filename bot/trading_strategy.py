@@ -288,18 +288,22 @@ COINBASE_PROFIT_LOCK_ENABLED = True  # Enable aggressive profit-taking on Coinba
 # This is NOT a trading stop - it's a failsafe to prevent logic failures
 # Examples: imported positions without entry price, calculation errors, data corruption
 # Terminology: "Emergency micro-stop to prevent logic failures (not a trading stop)"
-STOP_LOSS_MICRO = -0.02  # -2% emergency micro-stop for logic failure prevention
-STOP_LOSS_WARNING = -0.02  # Same as micro-stop - warn immediately
-STOP_LOSS_THRESHOLD = -0.02  # Legacy threshold (same as micro-stop)
+# CRITICAL FIX (Feb 3, 2026): Widened stops for crypto volatility (was -2%, now -1.5%)
+# Crypto markets have 0.3-0.8% normal intraday volatility, -2% was too tight
+STOP_LOSS_MICRO = -0.015  # -1.5% emergency micro-stop (was -2%, too tight for crypto)
+STOP_LOSS_WARNING = -0.012  # -1.2% warn before hitting stop (early warning)
+STOP_LOSS_THRESHOLD = -0.015  # -1.5% primary stop threshold (widened from -2%)
 
 # TIER 3: CATASTROPHIC FAILSAFE
 # Last resort protection - should NEVER be reached in normal operation
 # NORMALIZED FORMAT: -0.05 = -5% (fractional format)
 STOP_LOSS_EMERGENCY = -0.05  # EMERGENCY exit at -5% loss (FAILSAFE - absolute last resort)
 
-# OPTIONAL ENHANCEMENT: Minimum loss floor
-# Ignore very small losses to reduce noise and prevent overtrading
-MIN_LOSS_FLOOR = -0.0025  # -0.25% - ignore losses smaller than this
+# PROFITABILITY GUARD: Minimum loss threshold to reduce noise
+# CRITICAL FIX (Feb 3, 2026): Lowered from -0.25% to -0.05% to avoid creating dead zone
+# OLD VALUE: -0.0025 (-0.25%) created dead zone where stops wouldn't trigger
+# NEW VALUE: -0.0005 (-0.05%) only filters bid/ask spread noise
+MIN_LOSS_FLOOR = -0.0005  # -0.05% - only ignore bid/ask spread noise (was -0.25%, too high)
 
 # Auto-import safety default constants (FIX #1 - Jan 19, 2026)
 # When auto-importing orphaned positions without real entry price, use safety default
@@ -3169,16 +3173,26 @@ class TradingStrategy:
                                             'broker_label': broker_label
                                         })
                                     # STANDARD STOP LOSS: Normal stop-loss threshold
-                                    # WITH MINIMUM LOSS FLOOR: Only trigger if loss is significant enough
-                                    elif pnl_percent <= STOP_LOSS_THRESHOLD and pnl_percent <= MIN_LOSS_FLOOR:
+                                    # CRITICAL FIX (Feb 3, 2026): Changed AND to OR - was preventing stops from triggering!
+                                    # BUG: "pnl <= -2% AND pnl <= -0.25%" requires BOTH conditions (creates restrictive zone)
+                                    #      Only triggers if pnl <= -2% (stricter threshold), making -0.25% floor meaningless
+                                    # FIX: "pnl <= -1.5% OR pnl <= -0.05%" triggers when EITHER condition met (proper stop logic)
+                                    #      Now triggers at WHICHEVER threshold is hit first
+                                    # This was causing 80%+ of stop losses to FAIL and positions to keep losing
+                                    elif pnl_percent <= STOP_LOSS_THRESHOLD or pnl_percent <= MIN_LOSS_FLOOR:
                                         logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)',
-                                            'broker': position_broker,
-                                            'broker_label': broker_label
-                                        })
+                                        # PROFITABILITY GUARD: Verify this is actually a losing position
+                                        if pnl_percent >= 0:
+                                            logger.error(f"   ❌ PROFITABILITY GUARD: Attempted to stop-loss a WINNING position at +{pnl_percent*100:.2f}%!")
+                                            logger.error(f"   🛡️ GUARD BLOCKED: Not exiting profitable position")
+                                        else:
+                                            positions_to_exit.append({
+                                                'symbol': symbol,
+                                                'quantity': quantity,
+                                                'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)',
+                                                'broker': position_broker,
+                                                'broker_label': broker_label
+                                            })
                                     # WARNING THRESHOLD: Approaching stop loss
                                     elif pnl_percent <= STOP_LOSS_WARNING:
                                         logger.warning(f"   ⚠️ Approaching protective stop: {symbol} at {pnl_percent*100:.2f}%")

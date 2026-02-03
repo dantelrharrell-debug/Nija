@@ -5086,14 +5086,14 @@ class KrakenBroker(BaseBroker):
 
         # CRITICAL FIX (Jan 17, 2026): Each account uses its own nonce file
         # This prevents nonce collisions between PLATFORM and USER accounts
-        # - MASTER: data/kraken_nonce_platform.txt
+        # - PLATFORM: data/kraken_nonce_platform.txt
         # - USER accounts: data/kraken_nonce_user_daivon_frazier.txt, etc.
         self._nonce_file = get_kraken_nonce_file(self.account_identifier)
 
         # VERIFICATION: Ensure nonce file path is unique per account (prevent cross-contamination)
         # This assertion protects against regression bugs where nonce files might be shared
         if account_type == AccountType.PLATFORM:
-            assert "master" in self._nonce_file.lower(), f"PLATFORM nonce file must contain 'master': {self._nonce_file}"
+            assert "platform" in self._nonce_file.lower(), f"PLATFORM nonce file must contain 'platform': {self._nonce_file}"
         else:
             # USER accounts: user_id is guaranteed to be non-None (validated above at line 3607-3608)
             assert user_id.lower() in self._nonce_file.lower(), f"USER nonce file must contain user_id '{user_id}': {self._nonce_file}"
