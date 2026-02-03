@@ -3174,8 +3174,10 @@ class TradingStrategy:
                                         })
                                     # STANDARD STOP LOSS: Normal stop-loss threshold
                                     # CRITICAL FIX (Feb 3, 2026): Changed AND to OR - was preventing stops from triggering!
-                                    # BUG: "pnl <= -2% AND pnl <= -0.25%" only true when BOTH met (impossible for -2% to also be <= -0.25%)
+                                    # BUG: "pnl <= -2% AND pnl <= -0.25%" requires BOTH conditions (creates restrictive zone)
+                                    #      Only triggers if pnl <= -2% (stricter threshold), making -0.25% floor meaningless
                                     # FIX: "pnl <= -1.5% OR pnl <= -0.05%" triggers when EITHER condition met (proper stop logic)
+                                    #      Now triggers at WHICHEVER threshold is hit first
                                     # This was causing 80%+ of stop losses to FAIL and positions to keep losing
                                     elif pnl_percent <= STOP_LOSS_THRESHOLD or pnl_percent <= MIN_LOSS_FLOOR:
                                         logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
