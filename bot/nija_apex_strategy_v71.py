@@ -26,6 +26,14 @@ from indicators import (
 from risk_manager import RiskManager
 from execution_engine import ExecutionEngine
 
+# Import profitability assertion for configuration validation
+try:
+    from profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
+    PROFITABILITY_ASSERTION_AVAILABLE = True
+except ImportError:
+    PROFITABILITY_ASSERTION_AVAILABLE = False
+    logger.warning("Profitability assertion module not available - configuration validation disabled")
+
 # Initialize logger before any imports that might fail
 logger = logging.getLogger("nija")
 
@@ -184,6 +192,11 @@ class NIJAApexStrategyV71:
         # AI Momentum Scoring (optional, skeleton for future)
         self.ai_momentum_enabled = self.config.get('ai_momentum_enabled', False)
 
+        # PROFITABILITY ASSERTION: Validate strategy configuration (CRITICAL GUARD RAIL)
+        # This prevents deployment of unprofitable configurations that would lose money after fees
+        # Added as part of profitability assertion pass (Feb 2026)
+        self._validate_profitability_configuration()
+
         # Track last candle time for timing filter (per-symbol to avoid cross-market contamination)
         self.last_candle_times = {}  # symbol -> timestamp
 
@@ -218,6 +231,63 @@ class NIJAApexStrategyV71:
         logger.info(f"✅ Confidence threshold: {MIN_CONFIDENCE*100:.0f}% (balanced quality)")
         logger.info(f"✅ Minimum ADX: {self.min_adx} (moderate trend strength)")
         logger.info("=" * 70)
+
+    def _validate_profitability_configuration(self):
+        """
+        Validate that strategy configuration is profitable after fees.
+        
+        This is a CRITICAL GUARD RAIL that prevents deployment of unprofitable
+        trading configurations. Validates:
+        1. Profit targets exceed exchange fees by minimum margin
+        2. Risk/reward ratios are favorable after fees
+        3. Configuration would be profitable at reasonable win rates
+        
+        Raises:
+            ProfitabilityAssertionError: If configuration is unprofitable
+        """
+        if not PROFITABILITY_ASSERTION_AVAILABLE:
+            logger.warning("⚠️ Profitability assertion unavailable - skipping validation")
+            return
+        
+        # Determine exchange from broker client
+        broker_name = self._get_broker_name() if hasattr(self, 'broker_client') else 'coinbase'
+        if broker_name == 'unknown':
+            broker_name = 'coinbase'  # Default to Coinbase (most conservative)
+        
+        # Extract profit targets from stepped exit levels
+        profit_targets = sorted(self.stepped_exit_levels.keys())
+        profit_targets_pct = [pt * 100 for pt in profit_targets]  # Convert to percentages
+        
+        # Estimate stop loss percentage (typical ATR-based stop is ~1-2%)
+        # Using conservative 1.5% estimate for validation
+        stop_loss_pct = 1.5
+        
+        # Use the highest profit target as primary target
+        primary_target_pct = profit_targets_pct[-1] if profit_targets_pct else 6.0
+        
+        try:
+            logger.info("🛡️ Validating strategy profitability configuration...")
+            logger.info(f"   Exchange: {broker_name.upper()}")
+            logger.info(f"   Profit targets: {profit_targets_pct}")
+            logger.info(f"   Estimated stop loss: {stop_loss_pct}%")
+            
+            # Validate configuration
+            assert_strategy_is_profitable(
+                profit_targets=profit_targets_pct,
+                stop_loss_pct=stop_loss_pct,
+                primary_target_pct=primary_target_pct,
+                exchange=broker_name
+            )
+            
+            logger.info("✅ PROFITABILITY VALIDATION PASSED")
+            logger.info("   Strategy configuration is profitable after fees")
+            
+        except ProfitabilityAssertionError as e:
+            logger.error("❌ PROFITABILITY VALIDATION FAILED")
+            logger.error(f"   {str(e)}")
+            logger.error("   CRITICAL: This configuration would lose money after fees!")
+            logger.error("   Strategy initialization blocked to prevent losses.")
+            raise
 
     def _get_broker_name(self) -> str:
         """
