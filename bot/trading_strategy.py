@@ -483,16 +483,27 @@ class TradingStrategy:
             'rsi_14': None
         }
 
-        # Dry-run simulator toggle (for App Store reviewers)
-        self.dry_run_mode = os.getenv('DRY_RUN_MODE', 'false').lower() in ('true', '1', 'yes')
-        if self.dry_run_mode:
-            logger.info("=" * 70)
-            logger.info("🎭 DRY-RUN SIMULATOR MODE ACTIVE")
-            logger.info("=" * 70)
-            logger.info("   FOR APP STORE REVIEW ONLY")
-            logger.info("   All trades are simulated - NO REAL ORDERS PLACED")
-            logger.info("   Broker API calls return mock data")
-            logger.info("=" * 70)
+        # Initialize safety controller (App Store compliance)
+        try:
+            from safety_controller import get_safety_controller, TradingMode
+            self.safety = get_safety_controller()
+            self.safety.log_status()
+            
+            # Store dry_run_mode for backward compatibility
+            self.dry_run_mode = (self.safety.get_current_mode() == TradingMode.DRY_RUN)
+        except ImportError:
+            # Fallback if safety_controller not available
+            logger.warning("⚠️ Safety controller not available - using legacy safety checks")
+            self.safety = None
+            self.dry_run_mode = os.getenv('DRY_RUN_MODE', 'false').lower() in ('true', '1', 'yes')
+            if self.dry_run_mode:
+                logger.info("=" * 70)
+                logger.info("🎭 DRY-RUN SIMULATOR MODE ACTIVE")
+                logger.info("=" * 70)
+                logger.info("   FOR APP STORE REVIEW ONLY")
+                logger.info("   All trades are simulated - NO REAL ORDERS PLACED")
+                logger.info("   Broker API calls return mock data")
+                logger.info("=" * 70)
 
         # FIX #1: Initialize portfolio state manager for total equity tracking
         try:
@@ -1377,15 +1388,28 @@ class TradingStrategy:
         logger.info("🧠 TRUST LAYER - USER STATUS BANNER")
         logger.info("=" * 70)
         
-        # Safety settings
-        live_capital_verified = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower() in ('true', '1', 'yes')
-        pro_mode_enabled = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
-        heartbeat_enabled = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
-        
-        logger.info("📋 SAFETY SETTINGS:")
-        logger.info(f"   • LIVE_CAPITAL_VERIFIED: {'✅ TRUE' if live_capital_verified else '❌ FALSE'}")
-        logger.info(f"   • PRO_MODE: {'✅ ENABLED' if pro_mode_enabled else '❌ DISABLED'}")
-        logger.info(f"   • HEARTBEAT_TRADE: {'✅ ENABLED' if heartbeat_enabled else '❌ DISABLED'}")
+        # Safety settings (enhanced with safety controller)
+        if hasattr(self, 'safety') and self.safety:
+            # Use new safety controller
+            status = self.safety.get_status_summary()
+            logger.info("📋 SAFETY SETTINGS:")
+            logger.info(f"   • MODE: {status['mode'].upper()}")
+            logger.info(f"   • TRADING ALLOWED: {'✅ YES' if status['trading_allowed'] else '❌ NO'}")
+            logger.info(f"   • REASON: {status['reason']}")
+            logger.info(f"   • EMERGENCY STOP: {'🚨 ACTIVE' if status['emergency_stop_active'] else '✅ INACTIVE'}")
+            logger.info(f"   • CREDENTIALS: {'✅ CONFIGURED' if status['credentials_configured'] else '❌ NOT CONFIGURED'}")
+        else:
+            # Legacy safety checks
+            live_capital_verified = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower() in ('true', '1', 'yes')
+            pro_mode_enabled = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
+            heartbeat_enabled = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
+            dry_run_mode = os.getenv('DRY_RUN_MODE', 'false').lower() in ('true', '1', 'yes')
+            
+            logger.info("📋 SAFETY SETTINGS:")
+            logger.info(f"   • LIVE_CAPITAL_VERIFIED: {'✅ TRUE' if live_capital_verified else '❌ FALSE'}")
+            logger.info(f"   • DRY_RUN_MODE: {'✅ ENABLED' if dry_run_mode else '❌ DISABLED'}")
+            logger.info(f"   • PRO_MODE: {'✅ ENABLED' if pro_mode_enabled else '❌ DISABLED'}")
+            logger.info(f"   • HEARTBEAT_TRADE: {'✅ ENABLED' if heartbeat_enabled else '❌ DISABLED'}")
         
         # Platform account status
         logger.info("")
@@ -2366,6 +2390,21 @@ class TradingStrategy:
         """
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
+
+        # CRITICAL SAFETY CHECK: Verify trading is allowed before ANY operations
+        if self.safety:
+            trading_allowed, reason = self.safety.is_trading_allowed()
+            if not trading_allowed and not user_mode:
+                # Trading not allowed - only execute if this is a position management cycle
+                logger.warning("=" * 70)
+                logger.warning("🛑 TRADING NOT ALLOWED")
+                logger.warning("=" * 70)
+                logger.warning(f"   Reason: {reason}")
+                logger.warning("   Mode: Position management only (exits/stops)")
+                logger.warning("   No new entries will be executed")
+                logger.warning("=" * 70)
+                # Allow position management (exits/stops) but block new entries
+                user_mode = True  # Force user mode to disable new entries
 
         # Log mode for clarity
         mode_label = "USER (position management only)" if user_mode else "MASTER (full strategy)"
