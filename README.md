@@ -969,12 +969,13 @@ MIN_CASH_TO_BUY=5.0              # Lower minimum order (default: 5.50)
 **Configuration:**
 ```bash
 # Independent trading mode (default)
-COPY_TRADING_MODE=INDEPENDENT
+TRADING_MODE=independent
 ```
 
 **⚠️ Important Notice:**
-- `COPY_TRADING_MODE=MASTER_FOLLOW` is deprecated and no longer supported
-- All accounts now trade independently using risk-gated execution
+- `COPY_TRADING_MODE` is deprecated (removed Feb 2026)
+- Use `TRADING_MODE=independent` instead
+- All accounts trade independently using risk-gated execution
 - Results may differ per account based on timing, balance, and market conditions
 
 **Learn More:**
@@ -2082,20 +2083,7 @@ cp .env.platform_only .env
 
 **Documentation:** [PLATFORM_ONLY_GUIDE.md](PLATFORM_ONLY_GUIDE.md)
 
-#### 2. **Copy Trading Mode** - Mirror Master Trades
-
-Follow a platform account's trades with proportional position sizing.
-
-**Quick Start:**
-```bash
-cp .env.copy_trading_example .env
-# Edit .env with your API credentials
-./start.sh
-```
-
-**Documentation:** [COPY_TRADING_SETUP.md](COPY_TRADING_SETUP.md)
-
-#### 3. **Small Account Mode** - $50-$250 Accounts
+#### 2. **Small Account Mode** - $50-$250 Accounts
 
 Optimized for smaller account sizes with conservative risk.
 
@@ -2416,8 +2404,11 @@ Nija/
 
 ### Environment Variables
 
+**See [FEATURE_FLAGS.md](FEATURE_FLAGS.md) for complete feature flag reference and usage guidelines.**
+
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
+| `TRADING_MODE` | ✅ | Trading mode (independent only) | `independent` |
 | `COINBASE_API_KEY` | ✅ | Coinbase API key | `organizations/.../apiKeys/...` |
 | `COINBASE_API_SECRET` | ✅ | PEM private key | `-----BEGIN EC PRIVATE KEY-----\n...` |
 | `ALLOW_CONSUMER_USD` | ⚠️ | Accept consumer balances | `true` |
@@ -3269,7 +3260,7 @@ cat KRAKEN_NO_TRADES_FIX.md
 **Common Kraken issues:**
 - Missing `PRO_MODE=true` environment variable
 - Missing `LIVE_TRADING=1` environment variable
-- `COPY_TRADING_MODE` should be set to `INDEPENDENT` (MASTER_FOLLOW is deprecated)
+- `TRADING_MODE` should be set to `independent` (COPY_TRADING_MODE is deprecated)
 - Kraken API credentials not set (KRAKEN_PLATFORM_API_KEY, KRAKEN_PLATFORM_API_SECRET)
 - User balance below $50 minimum
 - See [KRAKEN_NO_TRADES_FIX.md](KRAKEN_NO_TRADES_FIX.md) for complete guide

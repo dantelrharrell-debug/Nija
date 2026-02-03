@@ -23,8 +23,8 @@ from typing import List, Dict, Optional
 # TRADING MODE CONFIGURATION
 # ============================================================================
 
-# Master-only mode: Trade independently without copy trading
-COPY_TRADING_MODE = "INDEPENDENT"
+# Trading mode: Independent trading (no copy trading)
+TRADING_MODE = "independent"
 PRO_MODE = True  # Enable position rotation for capital efficiency
 
 # ============================================================================
@@ -233,7 +233,7 @@ def get_env_config() -> Dict[str, str]:
         Dict of environment variable names and values
     """
     return {
-        'COPY_TRADING_MODE': COPY_TRADING_MODE,
+        'TRADING_MODE': TRADING_MODE,
         'PRO_MODE': str(PRO_MODE).lower(),
         'MAX_CONCURRENT_POSITIONS': str(MAX_POSITIONS),
         'MIN_CASH_TO_BUY': str(MIN_TRADE_SIZE_USD),
@@ -251,7 +251,7 @@ PLATFORM_ONLY Mode - A+ Setups Configuration
 To activate this configuration:
 
 1. Update your .env file:
-   COPY_TRADING_MODE=INDEPENDENT
+   TRADING_MODE=independent
    PRO_MODE=true
    MAX_CONCURRENT_POSITIONS=2
    MIN_CASH_TO_BUY=5.00
