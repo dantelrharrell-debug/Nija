@@ -16,6 +16,7 @@ Each account trades independently with its own:
 import logging
 import sys
 import time
+import traceback
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
@@ -266,7 +267,6 @@ class MultiAccountBrokerManager:
         except Exception as e:
             logger.error(f"❌ Error checking platform broker connection for {broker_type.value}: {e}")
             logger.error(f"   This is unexpected - please report this error")
-            import traceback
             logger.error(traceback.format_exc())
             return False
 
