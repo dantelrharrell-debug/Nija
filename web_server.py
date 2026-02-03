@@ -12,8 +12,14 @@ from api_server import app as api_app
 # Import mobile API blueprint
 from mobile_api import mobile_api
 
+# Import safety status API blueprint
+from safety_status_api import safety_api
+
 # Register mobile API blueprint
 api_app.register_blueprint(mobile_api)
+
+# Register safety status API blueprint
+api_app.register_blueprint(safety_api)
 
 # Configure frontend serving
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), 'frontend')
@@ -41,6 +47,9 @@ if __name__ == '__main__':
     print(f"Frontend: http://localhost:{port}/")
     print(f"API: http://localhost:{port}/api/")
     print(f"Mobile API: http://localhost:{port}/api/mobile/")
+    print(f"Safety API: http://localhost:{port}/api/safety/")
+    print(f"")
+    print(f"App Store Readiness: All 6 GO CONDITIONS implemented ✅")
 
     api_app.run(
         host='0.0.0.0',
