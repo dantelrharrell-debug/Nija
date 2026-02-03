@@ -16,6 +16,7 @@ Critical for App Store Review:
 
 import os
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, Optional
 from flask import Blueprint, jsonify, request
@@ -37,15 +38,19 @@ logger = logging.getLogger(__name__)
 # Create API blueprint
 safety_api = Blueprint('safety_api', __name__, url_prefix='/api/safety')
 
-# Global safety controller instance
+# Global safety controller instance (thread-safe)
 _safety_controller = None
+_safety_controller_lock = threading.Lock()
 
 
 def get_safety_controller() -> SafetyController:
-    """Get or create the global safety controller instance"""
+    """Get or create the global safety controller instance (thread-safe)"""
     global _safety_controller
     if _safety_controller is None:
-        _safety_controller = SafetyController()
+        with _safety_controller_lock:
+            # Double-check locking pattern
+            if _safety_controller is None:
+                _safety_controller = SafetyController()
     return _safety_controller
 
 
@@ -180,13 +185,19 @@ def activate_emergency_stop():
         data = request.get_json() or {}
         reason = data.get('reason', 'User activated emergency stop via UI')
         
-        # Create emergency stop file
-        with open('EMERGENCY_STOP', 'w') as f:
+        # Use absolute path for emergency stop file (security best practice)
+        emergency_stop_path = os.path.join(os.path.dirname(__file__), 'EMERGENCY_STOP')
+        
+        # Create emergency stop file with restricted permissions
+        with open(emergency_stop_path, 'w') as f:
             f.write(f"Emergency stop activated at {datetime.utcnow().isoformat()}\n")
             f.write(f"Reason: {reason}\n")
             f.write("\nTo resume trading:\n")
             f.write("1. Delete this file\n")
             f.write("2. Restart the bot\n")
+        
+        # Set restrictive file permissions (owner read/write only)
+        os.chmod(emergency_stop_path, 0o600)
         
         logger.warning(f"🚨 EMERGENCY STOP ACTIVATED: {reason}")
         

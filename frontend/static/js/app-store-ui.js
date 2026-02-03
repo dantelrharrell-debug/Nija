@@ -38,7 +38,7 @@ function updateSafetyUI(status) {
     // Update main status banner (GO CONDITION #2)
     const statusDot = document.getElementById('status-indicator-dot');
     const statusText = document.getElementById('status-indicator-text');
-    const stopSwitch = document.getElementById('stop-switch-state');
+    const killSwitchState = document.getElementById('kill-switch-state');
     const lastAction = document.getElementById('last-action-time');
 
     if (statusDot && statusText) {
@@ -52,9 +52,9 @@ function updateSafetyUI(status) {
     }
 
     // Update emergency stop state (GO CONDITION #5)
-    if (stopSwitch) {
-        stopSwitch.textContent = status.emergency_stop_active ? 'ACTIVE' : 'Inactive';
-        stopSwitch.style.color = status.emergency_stop_active ? '#ef4444' : '#10b981';
+    if (killSwitchState) {
+        killSwitchState.textContent = status.emergency_stop_active ? 'ACTIVE' : 'Inactive';
+        killSwitchState.style.color = status.emergency_stop_active ? '#ef4444' : '#10b981';
     }
 
     // Update last action timestamp
@@ -348,23 +348,31 @@ function checkRiskAcknowledgmentBeforeLive(currentMode) {
 // ========================================
 
 // Override or extend loadDashboard to start safety updates
-const originalLoadDashboard = window.loadDashboard;
-window.loadDashboard = async function() {
-    if (originalLoadDashboard) {
-        await originalLoadDashboard();
-    }
-    // Start safety status updates when dashboard loads
-    startSafetyStatusUpdates();
-};
+if (typeof window.loadDashboard !== 'undefined') {
+    const originalLoadDashboard = window.loadDashboard;
+    window.loadDashboard = async function() {
+        if (originalLoadDashboard) {
+            await originalLoadDashboard();
+        }
+        // Start safety status updates when dashboard loads
+        startSafetyStatusUpdates();
+    };
+} else {
+    // If loadDashboard doesn't exist yet, just export our function
+    // It will be called manually when needed
+    console.log('loadDashboard not found - safety status will start manually');
+}
 
 // Stop safety updates on logout
-const originalHandleLogout = window.handleLogout;
-window.handleLogout = function() {
-    stopSafetyStatusUpdates();
-    if (originalHandleLogout) {
-        originalHandleLogout();
-    }
-};
+if (typeof window.handleLogout !== 'undefined') {
+    const originalHandleLogout = window.handleLogout;
+    window.handleLogout = function() {
+        stopSafetyStatusUpdates();
+        if (originalHandleLogout) {
+            originalHandleLogout();
+        }
+    };
+}
 
 // Export functions to global scope for use in HTML onclick handlers
 window.handleEmergencyStop = handleEmergencyStop;
