@@ -742,6 +742,8 @@ def human_readable_status():
         
         # Get account manager to check copy trading status
         account_mgr = _get_account_manager()
+        if account_mgr is None:
+            logger.debug("Account manager not available - defaulting to Independent Trading mode")
         copy_trading_active = getattr(account_mgr, 'kraken_copy_trading_active', False)
 
         # Build HTML
