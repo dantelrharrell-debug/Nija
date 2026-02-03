@@ -238,7 +238,16 @@ class MultiAccountBrokerManager:
         Returns:
             bool: True if master is connected, False otherwise
         """
-        return broker_type in self.platform_brokers and self.platform_brokers[broker_type].connected
+        # Debug logging to diagnose false warnings
+        broker_in_dict = broker_type in self.platform_brokers
+        if broker_in_dict:
+            broker_obj = self.platform_brokers[broker_type]
+            connected_status = broker_obj.connected
+            logger.debug(f"🔍 Platform broker check for {broker_type.value}: in_dict={broker_in_dict}, connected={connected_status}")
+            return connected_status
+        else:
+            logger.debug(f"🔍 Platform broker check for {broker_type.value}: NOT in platform_brokers dict (registered brokers: {list(self.platform_brokers.keys())})")
+            return False
 
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
         """
