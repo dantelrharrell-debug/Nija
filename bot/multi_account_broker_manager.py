@@ -271,7 +271,12 @@ class MultiAccountBrokerManager:
             
         except Exception:
             # Use logger.exception() to automatically include traceback
-            broker_name = broker_type.value if broker_type else "Unknown"
+            # Safe fallback for broker name in case broker_type is malformed
+            try:
+                broker_name = broker_type.value if broker_type else "Unknown"
+            except (AttributeError, TypeError):
+                broker_name = str(broker_type) if broker_type else "Unknown"
+            
             logger.exception(f"❌ Error checking platform broker connection for {broker_name}: This is unexpected - please report this error")
             return False
 
