@@ -236,17 +236,38 @@ class MultiAccountBrokerManager:
             broker_type: Type of broker to check
 
         Returns:
-            bool: True if master is connected, False otherwise
+            bool: True if platform is connected, False otherwise
         """
-        # Debug logging to diagnose false warnings
-        broker_in_dict = broker_type in self.platform_brokers
-        if broker_in_dict:
+        try:
+            # Debug logging to diagnose false warnings
+            broker_in_dict = broker_type in self.platform_brokers
+            
+            if not broker_in_dict:
+                logger.debug(f"🔍 Platform broker check for {broker_type.value}: NOT in platform_brokers dict")
+                logger.debug(f"   Registered platform brokers: {[bt.value for bt in self.platform_brokers.keys()]}")
+                return False
+            
             broker_obj = self.platform_brokers[broker_type]
+            
+            # Defensive check: Ensure broker object exists and has connected attribute
+            if broker_obj is None:
+                logger.debug(f"🔍 Platform broker check for {broker_type.value}: broker object is None")
+                return False
+            
+            if not hasattr(broker_obj, 'connected'):
+                logger.debug(f"🔍 Platform broker check for {broker_type.value}: broker has no 'connected' attribute")
+                return False
+            
             connected_status = broker_obj.connected
-            logger.debug(f"🔍 Platform broker check for {broker_type.value}: in_dict={broker_in_dict}, connected={connected_status}")
+            logger.debug(f"🔍 Platform broker check for {broker_type.value}: broker={broker_obj.__class__.__name__}, connected={connected_status}")
+            
             return connected_status
-        else:
-            logger.debug(f"🔍 Platform broker check for {broker_type.value}: NOT in platform_brokers dict (registered brokers: {list(self.platform_brokers.keys())})")
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking platform broker connection for {broker_type.value}: {e}")
+            logger.error(f"   This is unexpected - please report this error")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
@@ -800,7 +821,11 @@ class MultiAccountBrokerManager:
             # Check if Platform account is connected for this broker type
             # IMPORTANT: Platform accounts should connect first and be primary
             # User accounts are SECONDARY and should not connect if Platform isn't connected
+            logger.debug(f"🔍 Checking platform connection for {broker_type.value}")
+            logger.debug(f"   platform_brokers dict keys: {list(self.platform_brokers.keys())}")
+            logger.debug(f"   {broker_type} in platform_brokers: {broker_type in self.platform_brokers}")
             platform_connected = self.is_platform_connected(broker_type)
+            logger.debug(f"   is_platform_connected result: {platform_connected}")
 
             if not platform_connected:
                 # CRITICAL FIX (Jan 17, 2026): ENFORCE connection order for Kraken copy trading

@@ -629,6 +629,9 @@ class TradingStrategy:
                     logger.info("   ✅ Kraken PLATFORM connected")
                     logger.info("   ✅ Kraken registered as PLATFORM broker in multi-account manager")
                     logger.debug(f"   🔍 Kraken broker object: connected={kraken.connected}, account_type={kraken.account_type}")
+                    logger.debug(f"   🔍 BrokerType.KRAKEN enum value: {BrokerType.KRAKEN}, type: {type(BrokerType.KRAKEN)}")
+                    logger.debug(f"   🔍 platform_brokers dict keys: {list(self.multi_account_manager.platform_brokers.keys())}")
+                    logger.debug(f"   🔍 BrokerType.KRAKEN in platform_brokers: {BrokerType.KRAKEN in self.multi_account_manager.platform_brokers}")
 
                     # LEGACY COPY TRADING CHECK (DEPRECATED - Feb 3, 2026)
                     # NOTE: Copy trading is deprecated. NIJA now uses independent trading.
