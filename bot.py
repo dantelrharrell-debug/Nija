@@ -250,6 +250,28 @@ def main():
         exchange_status.append("✅ Kraken (Platform)")
         logger.info("✅ Kraken Platform credentials detected")
         kraken_master_configured = True
+        
+        # WARNING: Check if platform keys exist but trading is disabled
+        live_capital_verified = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower() in ('true', '1', 'yes')
+        if not live_capital_verified:
+            logger.warning("")
+            logger.warning("=" * 70)
+            logger.warning("⚠️  PLATFORM KEYS CONFIGURED BUT TRADING DISABLED")
+            logger.warning("=" * 70)
+            logger.warning("   Platform Kraken credentials are configured, but:")
+            logger.warning("   LIVE_CAPITAL_VERIFIED=false (trading is disabled)")
+            logger.warning("")
+            logger.warning("   This means:")
+            logger.warning("   ✅ Your API keys are valid and will be used to connect")
+            logger.warning("   ⚠️  But NO TRADES will be executed (safety lock enabled)")
+            logger.warning("")
+            logger.warning("   To enable live trading:")
+            logger.warning("   1. Set LIVE_CAPITAL_VERIFIED=true in your environment")
+            logger.warning("   2. Restart the bot")
+            logger.warning("")
+            logger.warning("   This is a safety feature to prevent accidental trading.")
+            logger.warning("=" * 70)
+            logger.warning("")
     else:
         exchange_status.append("❌ Kraken (Platform)")
         logger.warning("⚠️  Kraken Platform credentials NOT SET")
