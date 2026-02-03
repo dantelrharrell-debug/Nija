@@ -38,7 +38,7 @@ class EducationProgress:
     """Track user progress in education mode"""
     
     user_id: str
-    started_at: datetime = field(default_factory=datetime.now)
+    started_at: datetime = field(default_factory=datetime.utcnow)
     
     # Trading metrics
     total_trades: int = 0

@@ -401,30 +401,26 @@ if (typeof window !== 'undefined') {
     window.handleLogin = async function(event) {
         event.preventDefault();
         
-        // Call original login
+        // Call original login and wait for it to complete
         if (originalHandleLogin) {
             await originalHandleLogin.call(this, event);
         }
         
-        // Initialize onboarding after login
-        setTimeout(() => {
-            initializeOnboarding();
-        }, 500);
+        // Initialize onboarding after login completes
+        await initializeOnboarding();
     };
 
     const originalHandleRegister = window.handleRegister;
     window.handleRegister = async function(event) {
         event.preventDefault();
         
-        // Call original register
+        // Call original register and wait for it to complete
         if (originalHandleRegister) {
             await originalHandleRegister.call(this, event);
         }
         
-        // Initialize onboarding after registration
-        setTimeout(() => {
-            initializeOnboarding();
-        }, 500);
+        // Initialize onboarding after registration completes
+        await initializeOnboarding();
     };
 }
 
