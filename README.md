@@ -1,5 +1,7 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
+> **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
+
 ## 🧠 **NEW: NAMIE - Adaptive Market Intelligence Engine** (January 30, 2026)
 
 **The Highest ROI Upgrade - Multiplies Everything You've Built**
