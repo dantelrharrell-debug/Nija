@@ -189,7 +189,8 @@ def main():
             git_commit = "unknown"
 
     logger.info("=" * 70)
-    logger.info("NIJA TRADING BOT - APEX v7.1")
+    logger.info("NIJA TRADING BOT - APEX v7.2")
+    logger.info("🏷 Version: 7.2.0 — Independent Trading Only")
     logger.info("Branch: %s", git_branch)
     logger.info("Commit: %s", git_commit)
     logger.info("=" * 70)
