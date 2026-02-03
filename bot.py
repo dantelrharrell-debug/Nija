@@ -198,6 +198,18 @@ def main():
     logger.info(f"Python version: {sys.version.split()[0]}")
     logger.info(f"Log file: {LOG_FILE}")
     logger.info(f"Working directory: {os.getcwd()}")
+    
+    # Display financial disclaimers (App Store compliance)
+    try:
+        from bot.financial_disclaimers import display_startup_disclaimers, log_compliance_notice
+        display_startup_disclaimers()
+        log_compliance_notice()
+    except ImportError:
+        # Fallback if disclaimers module not available
+        logger.warning("=" * 70)
+        logger.warning("⚠️  RISK WARNING: Trading involves substantial risk of loss")
+        logger.warning("   Only trade with money you can afford to lose")
+        logger.warning("=" * 70)
 
     # Portfolio override visibility at startup
     portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
