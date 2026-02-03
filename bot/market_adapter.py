@@ -171,6 +171,9 @@ class MarketAdapter:
         """Calculate market-adjusted stop-loss"""
         params = self.get_parameters(symbol)
 
+        # PROFITABILITY FIX (Feb 3, 2026): Disable ultra-tight stops for crypto
+        # These 0.15-0.25% stops are for futures only, NOT crypto
+        # Crypto volatility: 0.3-0.8% intraday, needs 1.5%+ stops (handled in trading_strategy.py)
         # For futures, could implement tick-based logic here
         if params.market_type == MarketType.FUTURES:
             # Example: ES tick = 0.25, NQ tick = 0.25, GC tick = 0.10
@@ -183,7 +186,10 @@ class MarketAdapter:
             else:
                 sl_pct = params.sl_min + (volatility * 10)
         else:
-            sl_pct = params.sl_min + (volatility * 10)
+            # CRYPTO/STOCKS: Use strategy-level stops (1.5%), NOT market adapter
+            # Previously this was applying 0.15% stops to crypto = death by whipsaws
+            # Now delegates to trading_strategy.py which uses proper 1.5% crypto stops
+            sl_pct = params.sl_min + (volatility * 10)  # Will be overridden by trading_strategy.py
 
         # Clamp to market limits
         sl_pct = max(params.sl_min, min(sl_pct, params.sl_max))
