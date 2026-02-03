@@ -60,14 +60,21 @@ app = FastAPI(
     ]
 )
 
-# CORS configuration
-allowed_origins = os.getenv('ALLOWED_ORIGINS', '*').split(',')
+# CORS configuration - Security: Require explicit origins
+allowed_origins_str = os.getenv('ALLOWED_ORIGINS', '')
+if not allowed_origins_str:
+    # Development fallback - still restrictive
+    allowed_origins = ['http://localhost:3000', 'http://localhost:5173']
+    print("⚠️ WARNING: ALLOWED_ORIGINS not set, using localhost defaults")
+else:
+    allowed_origins = allowed_origins_str.split(',')
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # Explicit methods only
+    allow_headers=["Content-Type", "Authorization"],  # Whitelist headers
 )
 
 # Trusted host middleware (security)
@@ -77,8 +84,18 @@ if os.getenv('TRUSTED_HOSTS'):
         allowed_hosts=os.getenv('TRUSTED_HOSTS').split(',')
     )
 
-# Configuration
-JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', secrets.token_hex(32))
+# Configuration - Security: Require JWT secret
+JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
+if not JWT_SECRET_KEY:
+    raise ValueError(
+        "JWT_SECRET_KEY environment variable is required. "
+        "Generate a secure secret: openssl rand -hex 32"
+    )
+if len(JWT_SECRET_KEY) < 32:
+    raise ValueError(
+        "JWT_SECRET_KEY must be at least 32 characters for security. "
+        "Current length: " + str(len(JWT_SECRET_KEY))
+    )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
 

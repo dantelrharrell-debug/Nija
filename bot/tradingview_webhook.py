@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify
 import json
 import os
 import sys
+import re
 from datetime import datetime
 
 # Add bot directory to path
@@ -17,6 +18,10 @@ from trading_strategy import TradingStrategy
 
 app = Flask(__name__)
 
+# Security constants
+MAX_ORDERS_PER_REQUEST = 5
+SYMBOL_PATTERN = re.compile(r'^[A-Z0-9]{1,10}-USD$')
+
 # Initialize Coinbase client and strategy
 client = RESTClient(
     api_key=os.getenv('COINBASE_API_KEY'),
@@ -24,8 +29,18 @@ client = RESTClient(
 )
 strategy = TradingStrategy(client, paper_mode=False)
 
-# Webhook secret for security (set in Railway environment)
-WEBHOOK_SECRET = os.getenv('TRADINGVIEW_WEBHOOK_SECRET', 'nija_webhook_2025')
+# Webhook secret for security - REQUIRED environment variable
+WEBHOOK_SECRET = os.getenv('TRADINGVIEW_WEBHOOK_SECRET')
+if not WEBHOOK_SECRET:
+    raise ValueError(
+        "TRADINGVIEW_WEBHOOK_SECRET environment variable is required. "
+        "Generate a secure secret: openssl rand -hex 32"
+    )
+if len(WEBHOOK_SECRET) < 32:
+    raise ValueError(
+        "TRADINGVIEW_WEBHOOK_SECRET must be at least 32 characters for security. "
+        "Current length: " + str(len(WEBHOOK_SECRET))
+    )
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -80,6 +95,13 @@ def tradingview_webhook():
         orders = data.get('orders')
         results = []
         if orders and isinstance(orders, list):
+            # Security: Limit number of orders per request
+            if len(orders) > MAX_ORDERS_PER_REQUEST:
+                return jsonify({
+                    'error': f'Too many orders in single request (max: {MAX_ORDERS_PER_REQUEST}, received: {len(orders)})',
+                    'max_allowed': MAX_ORDERS_PER_REQUEST
+                }), 400
+            
             for order in orders:
                 action = order.get('action', '').lower()
                 symbol = order.get('symbol', '').upper()
@@ -93,6 +115,11 @@ def tradingview_webhook():
                     continue
                 if '-' not in symbol:
                     symbol = f"{symbol}-USD"
+                
+                # Security: Validate symbol format
+                if not SYMBOL_PATTERN.match(symbol):
+                    results.append({'error': f'Invalid symbol format: {symbol} (must match pattern: XXX-USD)'})
+                    continue
                 print(f"\n{'='*70}")
                 print(f"📡 TRADINGVIEW WEBHOOK RECEIVED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 print(f"{'='*70}")
@@ -119,10 +146,38 @@ def tradingview_webhook():
                         continue
                     if custom_size:
                         position_size = float(custom_size)
+                        
+                        # Security: Validate position size bounds
+                        if position_size < 0.005:
+                            results.append({'error': f'Position size too small: ${position_size:.4f} (min: $0.005)'})
+                            continue
+                        
+                        # Hard cap: Never allow positions over $10,000
+                        if position_size > 10000:
+                            results.append({'error': f'Position size exceeds hard cap: ${position_size:.2f} (max: $10,000)'})
+                            continue
+                        
+                        # Get account balance for percentage-based limit
+                        try:
+                            accounts = client.get_accounts()
+                            usd_account = next((acc for acc in accounts if acc.get('currency') == 'USD'), None)
+                            if usd_account:
+                                available_balance = float(usd_account.get('available_balance', {}).get('value', 0))
+                                max_position_percentage = available_balance * 0.20  # 20% max per position
+                                if position_size > max_position_percentage:
+                                    results.append({
+                                        'error': f'Position size too large: ${position_size:.2f} exceeds 20% of balance (max: ${max_position_percentage:.2f})'
+                                    })
+                                    continue
+                        except Exception as e:
+                            print(f"⚠️ Could not validate against account balance: {e}")
+                            # Still enforce hard cap even if balance check fails
                     else:
                         position_size = strategy.calculate_position_size(symbol, signal_score=5, df=df)
+                    
+                    # Final minimum check for calculated sizes
                     if position_size < 0.005:
-                        results.append({'error': f'Position size too small: ${position_size:.4f}'})
+                        results.append({'error': f'Position size too small: ${position_size:.4f} (min: $0.005)'})
                         continue
                     strategy.enter_position(symbol, 'long', position_size, df)
                     results.append({
@@ -165,6 +220,10 @@ def tradingview_webhook():
             return jsonify({'error': 'Symbol is required'}), 400
         if '-' not in symbol:
             symbol = f"{symbol}-USD"
+        
+        # Security: Validate symbol format
+        if not SYMBOL_PATTERN.match(symbol):
+            return jsonify({'error': f'Invalid symbol format: {symbol} (must match pattern: XXX-USD)'}), 400
         print(f"\n{'='*70}")
         print(f"📡 TRADINGVIEW WEBHOOK RECEIVED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*70}")
@@ -193,12 +252,39 @@ def tradingview_webhook():
             df = strategy.get_product_candles(symbol)
             if df is None or len(df) < 50:
                 return jsonify({'error': f'Insufficient data for {symbol}'}), 400
+            
+            # Position size validation (same as multi-order)
             if custom_size:
                 position_size = float(custom_size)
+                
+                # Security: Validate position size bounds
+                if position_size < 0.005:
+                    return jsonify({'error': f'Position size too small: ${position_size:.4f} (min: $0.005)'}), 400
+                
+                # Hard cap: Never allow positions over $10,000
+                if position_size > 10000:
+                    return jsonify({'error': f'Position size exceeds hard cap: ${position_size:.2f} (max: $10,000)'}), 400
+                
+                # Get account balance for percentage-based limit
+                try:
+                    accounts = client.get_accounts()
+                    usd_account = next((acc for acc in accounts if acc.get('currency') == 'USD'), None)
+                    if usd_account:
+                        available_balance = float(usd_account.get('available_balance', {}).get('value', 0))
+                        max_position_percentage = available_balance * 0.20  # 20% max per position
+                        if position_size > max_position_percentage:
+                            return jsonify({
+                                'error': f'Position size too large: ${position_size:.2f} exceeds 20% of balance (max: ${max_position_percentage:.2f})'
+                            }), 400
+                except Exception as e:
+                    print(f"⚠️ Could not validate against account balance: {e}")
+                    # Still enforce hard cap even if balance check fails
             else:
                 position_size = strategy.calculate_position_size(symbol, signal_score=5, df=df)
+            
+            # Final minimum check
             if position_size < 0.005:
-                return jsonify({'error': f'Position size too small: ${position_size:.4f}'}), 400
+                return jsonify({'error': f'Position size too small: ${position_size:.4f} (min: $0.005)'}), 400
             strategy.enter_position(symbol, 'long', position_size, df)
             return jsonify({
                 'status': 'success',
@@ -232,9 +318,20 @@ def tradingview_webhook():
                 'symbol': symbol,
                 'message': f'Sell order executed for {symbol}'
             }), 200
+    except ValueError as e:
+        # Input validation errors
+        print(f"⚠️ Webhook validation error: {str(e)}")
+        return jsonify({'error': 'Invalid input data'}), 400
+    except KeyError as e:
+        # Missing required data
+        print(f"⚠️ Webhook missing required field: {str(e)}")
+        return jsonify({'error': 'Missing required field'}), 400
     except Exception as e:
-        print(f"❌ Webhook error: {e}")
-        return jsonify({'error': 'Webhook processing failed'}), 500
+        # Unexpected errors - log details internally, return generic message
+        import traceback
+        print(f"❌ Unexpected webhook error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/positions', methods=['GET'])
 def get_positions():
