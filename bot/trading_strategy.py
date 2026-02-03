@@ -623,8 +623,8 @@ class TradingStrategy:
                 # This is similar to how other brokers handle transient connection issues
                 if connection_successful:
                     self.broker_manager.add_broker(kraken)
-                    # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.platform_brokers[BrokerType.KRAKEN] = kraken
+                    # Register in multi_account_manager using proper method to enforce invariant
+                    self.multi_account_manager.register_platform_broker_instance(BrokerType.KRAKEN, kraken)
                     connected_brokers.append("Kraken")
                     logger.info("   ✅ Kraken PLATFORM connected")
                     logger.info("   ✅ Kraken registered as PLATFORM broker in multi-account manager")
@@ -713,8 +713,8 @@ class TradingStrategy:
             #     coinbase = CoinbaseBroker()
             #     if coinbase.connect():
             #         self.broker_manager.add_broker(coinbase)
-            #         # Manually register in multi_account_manager (reuse same instance)
-            #         self.multi_account_manager.platform_brokers[BrokerType.COINBASE] = coinbase
+            #         # Register in multi_account_manager using proper method to enforce invariant
+            #         self.multi_account_manager.register_platform_broker_instance(BrokerType.COINBASE, coinbase)
             #         connected_brokers.append("Coinbase")
             #         logger.info("   ✅ Coinbase MASTER connected")
             #         logger.info("   ✅ Coinbase registered as PLATFORM broker in multi-account manager")
@@ -732,8 +732,8 @@ class TradingStrategy:
                 okx = OKXBroker()
                 if okx.connect():
                     self.broker_manager.add_broker(okx)
-                    # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.platform_brokers[BrokerType.OKX] = okx
+                    # Register in multi_account_manager using proper method to enforce invariant
+                    self.multi_account_manager.register_platform_broker_instance(BrokerType.OKX, okx)
                     connected_brokers.append("OKX")
                     logger.info("   ✅ OKX PLATFORM connected")
                     logger.info("   ✅ OKX registered as PLATFORM broker in multi-account manager")
@@ -751,8 +751,8 @@ class TradingStrategy:
                 binance = BinanceBroker()
                 if binance.connect():
                     self.broker_manager.add_broker(binance)
-                    # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.platform_brokers[BrokerType.BINANCE] = binance
+                    # Register in multi_account_manager using proper method to enforce invariant
+                    self.multi_account_manager.register_platform_broker_instance(BrokerType.BINANCE, binance)
                     connected_brokers.append("Binance")
                     logger.info("   ✅ Binance PLATFORM connected")
                     logger.info("   ✅ Binance registered as PLATFORM broker in multi-account manager")
@@ -770,8 +770,8 @@ class TradingStrategy:
                 alpaca = AlpacaBroker()
                 if alpaca.connect():
                     self.broker_manager.add_broker(alpaca)
-                    # Manually register in multi_account_manager (reuse same instance)
-                    self.multi_account_manager.platform_brokers[BrokerType.ALPACA] = alpaca
+                    # Register in multi_account_manager using proper method to enforce invariant
+                    self.multi_account_manager.register_platform_broker_instance(BrokerType.ALPACA, alpaca)
                     connected_brokers.append("Alpaca")
                     logger.info("   ✅ Alpaca PLATFORM connected")
                     logger.info("   ✅ Alpaca registered as PLATFORM broker in multi-account manager")
@@ -1316,7 +1316,8 @@ class TradingStrategy:
         """
         self.failed_brokers[BrokerType.KRAKEN] = kraken_broker
         self.broker_manager.add_broker(kraken_broker)
-        self.multi_account_manager.platform_brokers[BrokerType.KRAKEN] = kraken_broker
+        # Register in multi_account_manager using proper method to enforce invariant
+        self.multi_account_manager.register_platform_broker_instance(BrokerType.KRAKEN, kraken_broker)
         logger.info("   ✅ Kraken registered for background connection retry")
 
     def _get_total_capital_across_all_accounts(self) -> float:
