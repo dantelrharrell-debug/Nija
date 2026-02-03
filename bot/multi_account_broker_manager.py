@@ -100,6 +100,10 @@ class MultiAccountBrokerManager:
         # Structure: {user_id: {'name': str, 'enabled': bool, 'brokers': {BrokerType: bool}}}
         self._user_metadata: Dict[str, Dict] = {}
 
+        # Track Kraken copy trading status (set by trading_strategy.py when copy trading is enabled)
+        # This prevents duplicate user connections when copy trading is active
+        self.kraken_copy_trading_active: bool = False
+
         # FIX #3: Initialize portfolio manager for user portfolio states
         try:
             from portfolio_state import get_portfolio_manager
