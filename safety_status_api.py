@@ -481,7 +481,8 @@ def register_safety_api(app):
 
 
 if __name__ == '__main__':
-    # Test the API
+    # Test the API (for development only - NOT for production)
+    # Production should use a WSGI server like gunicorn
     from flask import Flask
     
     app = Flask(__name__)
@@ -495,5 +496,7 @@ if __name__ == '__main__':
     print("  GET  /api/safety/risk-disclaimer")
     print("  POST /api/safety/acknowledge-risk")
     print("\nStarting test server on http://localhost:5001")
+    print("WARNING: Debug mode disabled for security")
     
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    # Never use debug=True in production
+    app.run(host='0.0.0.0', port=5001, debug=False)
