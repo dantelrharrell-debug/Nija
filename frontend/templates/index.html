@@ -6,6 +6,7 @@
     <meta name="description" content="NIJA AI Trading Platform - Autonomous cryptocurrency trading">
     <title>NIJA - AI Trading Platform</title>
     <link rel="stylesheet" href="../static/css/style.css">
+    <link rel="stylesheet" href="../static/css/app-store-ui.css">
     <link rel="manifest" href="../static/manifest.json">
     <meta name="theme-color" content="#6366f1">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -81,6 +82,50 @@
 
         <!-- Main Dashboard -->
         <div id="dashboard-screen" class="dashboard-screen hidden">
+            <!-- Always-Visible Safety Status Banner (GO CONDITION #2) -->
+            <div id="safety-status-banner" class="safety-status-banner">
+                <div class="status-banner-content">
+                    <div class="status-indicator">
+                        <span class="status-indicator-dot" id="status-indicator-dot"></span>
+                        <span class="status-indicator-text" id="status-indicator-text">Loading...</span>
+                    </div>
+                    <div class="kill-switch-indicator" id="kill-switch-indicator">
+                        <span>Kill Switch: <strong id="kill-switch-state">Unknown</strong></span>
+                    </div>
+                    <div class="last-action-indicator" id="last-action-indicator">
+                        <span>Last Action: <strong id="last-action-time">Never</strong></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Conditional Banners -->
+            <!-- DRY RUN Simulation Banner (GO CONDITION #6) -->
+            <div id="simulation-banner" class="simulation-banner hidden">
+                <div class="banner-icon">🎭</div>
+                <div class="banner-content">
+                    <div class="banner-title">SIMULATION MODE - NO REAL TRADES</div>
+                    <div class="banner-subtitle">All trades are simulated. No real money at risk.</div>
+                </div>
+            </div>
+
+            <!-- Emergency Stop Banner -->
+            <div id="emergency-banner" class="emergency-banner hidden">
+                <div class="banner-icon">🚨</div>
+                <div class="banner-content">
+                    <div class="banner-title">EMERGENCY STOP ACTIVE</div>
+                    <div class="banner-subtitle">All trading halted. System is stopped.</div>
+                </div>
+            </div>
+
+            <!-- Setup Required Banner (GO CONDITION #1) -->
+            <div id="setup-banner" class="setup-banner hidden">
+                <div class="banner-icon">⚠️</div>
+                <div class="banner-content">
+                    <div class="banner-title">Trading OFF — Setup Required</div>
+                    <div class="banner-subtitle">Configure exchange credentials to enable trading.</div>
+                </div>
+            </div>
+
             <!-- Navigation Bar -->
             <nav class="navbar">
                 <div class="navbar-brand">
@@ -142,6 +187,20 @@
                             <p>Engine: <span id="engine-status">-</span></p>
                             <p>Last Trade: <span id="last-trade">Never</span></p>
                         </div>
+                        <!-- Idle Message (GO CONDITION #3) -->
+                        <div class="idle-message" id="idle-message">
+                            <p>Monitoring only. No trades active.</p>
+                        </div>
+                    </div>
+
+                    <!-- Emergency Stop Button (GO CONDITION #5) -->
+                    <div class="emergency-stop-container">
+                        <button id="emergency-stop-btn" class="btn btn-emergency" onclick="handleEmergencyStop()">
+                            🚨 EMERGENCY STOP
+                        </button>
+                        <p class="emergency-stop-description">
+                            One-tap emergency stop. Instantly halts all trading.
+                        </p>
                     </div>
                 </div>
 
@@ -233,7 +292,89 @@
         </div>
     </div>
 
+    <!-- Risk Acknowledgment Modal (GO CONDITION #4) -->
+    <div id="risk-acknowledgment-modal" class="modal hidden">
+        <div class="modal-overlay" onclick="closeRiskModal()"></div>
+        <div class="modal-content risk-modal-content">
+            <div class="modal-header">
+                <h2>⚠️ Risk Acknowledgment Required</h2>
+                <button class="modal-close" onclick="closeRiskModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="risk-disclaimer-text">
+                    <h3>CRYPTOCURRENCY TRADING INVOLVES SUBSTANTIAL RISK OF LOSS</h3>
+                    
+                    <h4>⚠️ YOU CAN LOSE MONEY:</h4>
+                    <ul>
+                        <li>Cryptocurrency markets are highly volatile</li>
+                        <li>Past performance does NOT indicate future results</li>
+                        <li>You can lose some or ALL of your invested capital</li>
+                        <li>Only trade with money you can afford to lose</li>
+                    </ul>
+
+                    <h4>🤖 ABOUT THIS SOFTWARE:</h4>
+                    <ul>
+                        <li>NIJA is an independent trading tool - NOT investment advice</li>
+                        <li>You make all decisions about when and what to trade</li>
+                        <li>This software executes trades based on YOUR configuration</li>
+                        <li>NO GUARANTEES of profit or performance are made</li>
+                    </ul>
+
+                    <h4>🛡️ YOUR RESPONSIBILITY:</h4>
+                    <ul>
+                        <li>You are solely responsible for your trading decisions</li>
+                        <li>You control when trading is enabled or disabled</li>
+                        <li>You set your own risk parameters and position sizes</li>
+                        <li>Consult a licensed financial advisor before trading</li>
+                    </ul>
+                </div>
+
+                <div class="acknowledgment-checkbox">
+                    <label>
+                        <input type="checkbox" id="risk-acknowledgment-checkbox">
+                        <span>I acknowledge that I have read and understood all risks. I am solely responsible for my trading decisions and accept that I can lose money.</span>
+                    </label>
+                </div>
+
+                <div class="acknowledgment-timestamp" id="acknowledgment-timestamp"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeRiskModal()">Cancel</button>
+                <button class="btn btn-primary" id="acknowledge-risk-btn" onclick="acknowledgeRisk()" disabled>
+                    I Acknowledge the Risks
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Emergency Stop Confirmation Modal -->
+    <div id="emergency-stop-modal" class="modal hidden">
+        <div class="modal-overlay" onclick="closeEmergencyModal()"></div>
+        <div class="modal-content emergency-modal-content">
+            <div class="modal-header">
+                <h2>🚨 Emergency Stop Confirmation</h2>
+            </div>
+            <div class="modal-body">
+                <p class="emergency-warning">
+                    <strong>This will IMMEDIATELY halt ALL trading operations.</strong>
+                </p>
+                <p>
+                    All active trades will be managed (exits only), but no new trades will be opened.
+                    The bot will need to be restarted to resume trading.
+                </p>
+                <p>Are you sure you want to activate the emergency stop?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeEmergencyModal()">Cancel</button>
+                <button class="btn btn-emergency" onclick="confirmEmergencyStop()">
+                    Yes, Stop All Trading
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script src="../static/js/capacitor-init.js"></script>
     <script src="../static/js/app.js"></script>
+    <script src="../static/js/app-store-ui.js"></script>
 </body>
 </html>
