@@ -1152,7 +1152,7 @@ def assert_expected_tier_floors() -> None:
     """
     import os
     
-    # Get environment for logging purposes
+    # Get environment name for logging
     environment = os.getenv('ENVIRONMENT', 'development').lower()
     
     logger.info(f"🔍 Validating tier floor configuration ({environment} environment)...")

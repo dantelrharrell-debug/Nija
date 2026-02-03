@@ -703,9 +703,9 @@ class AdaptiveRiskManager:
         # First apply the ceiling (max)
         final_pct = max(self.min_position_pct, min(final_pct, tier_max_pct))
         
-        # ═══════════════════════════════════════════════════════════════════════════════
+        # ==============================================================================
         # TIER FLOOR ENFORCEMENT - LOW-CAPITAL PROTECTION (ALWAYS ACTIVE)
-        # ═══════════════════════════════════════════════════════════════════════════════
+        # ==============================================================================
         # CRITICAL FIX (Jan 30, 2026): Enforce tier floor to prevent LOW_CAPITAL or fee-aware
         # adjustments from reducing below tier-defined maximum position size.
         # 
@@ -716,7 +716,7 @@ class AdaptiveRiskManager:
         #   - Risk doesn't explode from too-small positions
         #   - LOW_CAPITAL accounts maintain minimum viable position sizes
         #   - Fee-aware adjustments don't undercut tier-defined floors
-        # ═══════════════════════════════════════════════════════════════════════════════
+        # ==============================================================================
         if TIER_AWARE_MODE and 'tier_floor_pct' in breakdown and not breakdown.get('is_master', False):
             tier_floor = breakdown['tier_floor_pct']
             if final_pct < tier_floor:
