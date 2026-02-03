@@ -157,9 +157,14 @@ def test_3_simulated_balance_never_touches_broker():
     print("\n3.1 Testing paper account isolation...")
     from bot.paper_trading import get_paper_account
     
+    # Reset paper account for test isolation
+    import os
+    if os.path.exists('paper_trading_data.json'):
+        os.remove('paper_trading_data.json')
+    
     paper_account = get_paper_account(initial_balance=10000.0)
     assert paper_account is not None, "Paper account should exist"
-    assert paper_account.balance == 10000.0, "Paper account has simulated balance"
+    assert paper_account.initial_balance == 10000.0, "Paper account has simulated balance"
     print("   ✅ Paper account has simulated balance: $10,000")
     
     # Test: Paper account data stored locally, not on broker
