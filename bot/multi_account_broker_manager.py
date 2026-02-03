@@ -153,33 +153,28 @@ class MultiAccountBrokerManager:
             broker: Already-created BaseBroker instance
             
         Returns:
-            True if successfully registered, False otherwise
+            True if successfully registered
             
         Raises:
             RuntimeError: If platform brokers are locked or broker already registered
         """
-        try:
-            # Enforce immutability: Cannot add brokers after locking
-            if self._platform_brokers_locked:
-                error_msg = f"❌ INVARIANT VIOLATION: Cannot register platform broker {broker_type.value} - platform brokers are locked (immutable)"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
-            
-            # Enforce single registration: Check if already registered
-            if broker_type in self._platform_brokers:
-                error_msg = f"❌ INVARIANT VIOLATION: Platform broker {broker_type.value} already registered - duplicate registration not allowed"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
-            
-            # Register the broker instance
-            self._platform_brokers[broker_type] = broker
-            logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
-            logger.info(f"   Platform broker registered once, globally")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Error registering platform broker instance {broker_type.value}: {e}")
-            return False
+        # Enforce immutability: Cannot add brokers after locking
+        if self._platform_brokers_locked:
+            error_msg = f"❌ INVARIANT VIOLATION: Cannot register platform broker {broker_type.value} - platform brokers are locked (immutable)"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
+        # Enforce single registration: Check if already registered
+        if broker_type in self._platform_brokers:
+            error_msg = f"❌ INVARIANT VIOLATION: Platform broker {broker_type.value} already registered - duplicate registration not allowed"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
+        # Register the broker instance
+        self._platform_brokers[broker_type] = broker
+        logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
+        logger.info(f"   Platform broker registered once, globally")
+        return True
 
     def add_platform_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
