@@ -44,9 +44,7 @@ SECONDARY_BROKER = None    # No secondary broker (Coinbase disabled)
 # Live trading settings
 LIVE_TRADING = True
 PRO_MODE = True
-
-# Copy trading (disabled until >= $500, managed by dynamic scaling)
-COPY_TRADING = False  # Auto-enabled when BASE_CAPITAL >= $500
+TRADING_MODE = "independent"  # Independent trading mode (no copy trading)
 
 # ============================================================================
 # BALANCE AND TRADE SIZE REQUIREMENTS
@@ -159,7 +157,6 @@ def get_dynamic_config(equity: float) -> Dict:
     config = {
         'max_positions': MAX_POSITIONS,
         'risk_per_trade': RISK_PER_TRADE,
-        'copy_trading': COPY_TRADING,
         'leverage_enabled': LEVERAGE_ENABLED,
     }
     
@@ -172,8 +169,7 @@ def get_dynamic_config(equity: float) -> Dict:
     # Scaling at $500
     if equity >= 500:
         config['max_positions'] = 4
-        config['copy_trading'] = True
-        logger.info(f"Equity ${equity:.2f}: Scaled to 4 positions, copy trading enabled")
+        logger.info(f"Equity ${equity:.2f}: Scaled to 4 positions")
     
     # Scaling at $1000
     if equity >= 1000:
@@ -241,7 +237,7 @@ MICRO_CAPITAL_CONFIG = {
     # Trading settings
     'live_trading': LIVE_TRADING,
     'pro_mode': PRO_MODE,
-    'copy_trading': COPY_TRADING,
+    'trading_mode': TRADING_MODE,
     
     # Balance requirements
     'min_balance_to_trade': MIN_BALANCE_TO_TRADE,
@@ -341,7 +337,7 @@ def get_environment_variables(equity: Optional[float] = None) -> Dict[str, str]:
         
         'LIVE_TRADING': '1' if LIVE_TRADING else '0',
         'PRO_MODE': str(PRO_MODE).lower(),
-        'COPY_TRADING_MODE': 'MASTER_FOLLOW' if dynamic_config.get('copy_trading', COPY_TRADING) else 'INDEPENDENT',
+        'TRADING_MODE': TRADING_MODE,
         
         'MINIMUM_TRADING_BALANCE': str(MIN_BALANCE_TO_TRADE),
         'MIN_CASH_TO_BUY': str(MIN_TRADE_SIZE),
@@ -433,7 +429,6 @@ def get_config_summary(equity: Optional[float] = None) -> str:
     
     max_positions = dynamic_config.get('max_positions', MAX_POSITIONS)
     risk_per_trade = dynamic_config.get('risk_per_trade', RISK_PER_TRADE)
-    copy_trading = dynamic_config.get('copy_trading', COPY_TRADING)
     leverage_enabled = dynamic_config.get('leverage_enabled', LEVERAGE_ENABLED)
     
     equity_str = f"${equity:.2f}" if equity is not None else "$0.00"
@@ -485,7 +480,7 @@ def get_config_summary(equity: Optional[float] = None) -> str:
    • Market Regime Engine: {MARKET_REGIME_ENGINE}
    • Signal Ensemble: {SIGNAL_ENSEMBLE}
    • AI Trade Filter: {AI_TRADE_FILTER}
-   • Copy Trading: {copy_trading} {'(auto-enabled at $500+)' if not copy_trading and equity and equity < 500 else ''}
+   • Trading Mode: {TRADING_MODE}
    • Leverage: {leverage_enabled} {'(auto-enabled at $1000+)' if not leverage_enabled and equity and equity < 1000 else ''}
    • Arbitrage: {ARBITRAGE}
 
@@ -496,7 +491,7 @@ def get_config_summary(equity: Optional[float] = None) -> str:
 
 📊 DYNAMIC SCALING THRESHOLDS:
    • $250+: 3 positions, 4% risk per trade
-   • $500+: 4 positions, copy trading enabled
+   • $500+: 4 positions
    • $1000+: 6 positions, 5% risk, leverage enabled
 
 📝 LOGGING:
