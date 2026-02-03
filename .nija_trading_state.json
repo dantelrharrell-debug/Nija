@@ -1,0 +1,12 @@
+{
+  "current_state": "DRY_RUN",
+  "history": [
+    {
+      "from": "OFF",
+      "to": "DRY_RUN",
+      "reason": "Test",
+      "timestamp": "2026-02-03T03:53:47.326144"
+    }
+  ],
+  "last_updated": "2026-02-03T03:53:47.326161"
+}
