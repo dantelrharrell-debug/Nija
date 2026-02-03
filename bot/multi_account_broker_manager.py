@@ -250,7 +250,9 @@ class MultiAccountBrokerManager:
             
             if not broker_in_dict:
                 logger.debug(f"🔍 Platform broker check for {broker_type.value}: NOT in platform_brokers dict")
-                logger.debug(f"   Registered platform brokers: {[bt.value for bt in self.platform_brokers.keys()]}")
+                # Format registered brokers efficiently without creating intermediate list
+                registered = ', '.join(bt.value for bt in self.platform_brokers.keys()) if self.platform_brokers else 'none'
+                logger.debug(f"   Registered platform brokers: {registered}")
                 return False
             
             broker_obj = self.platform_brokers[broker_type]
@@ -273,7 +275,7 @@ class MultiAccountBrokerManager:
             # Use logger.exception() to automatically include traceback
             # Safe fallback for broker name in case broker_type is malformed
             try:
-                broker_name = broker_type.value if broker_type else "Unknown"
+                broker_name = broker_type.value
             except (AttributeError, TypeError):
                 broker_name = str(broker_type) if broker_type else "Unknown"
             
