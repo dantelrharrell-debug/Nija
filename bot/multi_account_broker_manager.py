@@ -16,6 +16,7 @@ Each account trades independently with its own:
 import logging
 import sys
 import time
+from types import MappingProxyType
 import traceback
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
@@ -68,8 +69,9 @@ class MultiAccountBrokerManager:
 
     def __init__(self):
         """Initialize multi-account broker manager."""
-        # Platform account brokers
-        self.platform_brokers: Dict[BrokerType, BaseBroker] = {}
+        # Platform account brokers - registered once globally and marked immutable
+        self._platform_brokers: Dict[BrokerType, BaseBroker] = {}
+        self._platform_brokers_locked: bool = False
 
         # User account brokers - structure: {user_id: {BrokerType: BaseBroker}}
         self.user_brokers: Dict[str, Dict[BrokerType, BaseBroker]] = {}
@@ -120,17 +122,90 @@ class MultiAccountBrokerManager:
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
 
+    @property
+    def platform_brokers(self) -> Dict[BrokerType, BaseBroker]:
+        """
+        Read-only access to platform brokers.
+        
+        Platform brokers must be registered via add_platform_broker() or
+        register_platform_broker_instance() methods. Direct assignment is not allowed.
+        
+        Returns:
+            Read-only mapping proxy of platform brokers (Dict[BrokerType, BaseBroker])
+        """
+        return MappingProxyType(self._platform_brokers)
+    
+    def _lock_platform_brokers(self):
+        """
+        Lock platform brokers to prevent further modifications.
+        Called after initial broker registration is complete.
+        """
+        self._platform_brokers_locked = True
+        logger.info("🔒 Platform brokers locked (immutable)")
+
+    def register_platform_broker_instance(self, broker_type: BrokerType, broker: BaseBroker) -> bool:
+        """
+        Register an already-created broker instance for the platform account.
+        
+        This method is for cases where the broker is created externally with custom configuration.
+        Enforces the same invariant: Platform brokers registered once, globally, and marked immutable.
+        
+        Args:
+            broker_type: Type of broker being registered
+            broker: Already-created BaseBroker instance
+            
+        Returns:
+            True if successfully registered
+            
+        Raises:
+            RuntimeError: If platform brokers are locked or broker already registered
+        """
+        # Enforce immutability: Cannot add brokers after locking
+        if self._platform_brokers_locked:
+            error_msg = f"❌ INVARIANT VIOLATION: Cannot register platform broker {broker_type.value} - platform brokers are locked (immutable)"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
+        # Enforce single registration: Check if already registered
+        if broker_type in self._platform_brokers:
+            error_msg = f"❌ INVARIANT VIOLATION: Platform broker {broker_type.value} already registered - duplicate registration not allowed"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
+        # Register the broker instance
+        self._platform_brokers[broker_type] = broker
+        logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
+        logger.info(f"   Platform broker registered once, globally")
+        return True
+
     def add_platform_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
         Add a broker for the master (Nija system) account.
+        
+        Enforces invariant: Platform brokers are registered once, globally, and marked immutable.
 
         Args:
             broker_type: Type of broker to add (COINBASE, KRAKEN, etc.)
 
         Returns:
             BaseBroker instance or None if failed
+            
+        Raises:
+            RuntimeError: If platform brokers are locked or broker already registered
         """
         try:
+            # Enforce immutability: Cannot add brokers after locking
+            if self._platform_brokers_locked:
+                error_msg = f"❌ INVARIANT VIOLATION: Cannot add platform broker {broker_type.value} - platform brokers are locked (immutable)"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            # Enforce single registration: Check if already registered
+            if broker_type in self._platform_brokers:
+                error_msg = f"❌ INVARIANT VIOLATION: Platform broker {broker_type.value} already registered - duplicate registration not allowed"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
             broker = None
 
             if broker_type == BrokerType.COINBASE:
@@ -147,8 +222,9 @@ class MultiAccountBrokerManager:
 
             # Connect the broker
             if broker.connect():
-                self.platform_brokers[broker_type] = broker
+                self._platform_brokers[broker_type] = broker
                 logger.info(f"✅ Platform broker added: {broker_type.value}")
+                logger.info(f"   Platform broker registered once, globally")
                 return broker
             else:
                 logger.warning(f"⚠️  Failed to connect platform broker: {broker_type.value}")
@@ -213,7 +289,7 @@ class MultiAccountBrokerManager:
         Returns:
             BaseBroker instance or None if not found
         """
-        return self.platform_brokers.get(broker_type)
+        return self._platform_brokers.get(broker_type)
 
     def get_user_broker(self, user_id: str, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
@@ -239,6 +315,7 @@ class MultiAccountBrokerManager:
         Returns:
             bool: True if platform is connected, False otherwise
         """
+        return broker_type in self._platform_brokers and self._platform_brokers[broker_type].connected
         try:
             # Validate broker_type parameter
             if broker_type is None:
@@ -388,7 +465,7 @@ class MultiAccountBrokerManager:
             Balance in USD
         """
         if broker_type:
-            broker = self.platform_brokers.get(broker_type)
+            broker = self._platform_brokers.get(broker_type)
             if not broker:
                 return 0.0
 
@@ -400,7 +477,7 @@ class MultiAccountBrokerManager:
 
         # Total across all master brokers
         total = 0.0
-        for broker_type, broker in self.platform_brokers.items():
+        for broker_type, broker in self._platform_brokers.items():
             if broker.connected:
                 if broker_type == BrokerType.KRAKEN:
                     total += self._get_cached_balance('platform', 'platform', broker_type, broker)
@@ -533,7 +610,7 @@ class MultiAccountBrokerManager:
         }
 
         # Platform balances
-        for broker_type, broker in self.platform_brokers.items():
+        for broker_type, broker in self._platform_brokers.items():
             if broker.connected:
                 result['platform'][broker_type.value] = broker.get_account_balance()
 
@@ -621,7 +698,7 @@ class MultiAccountBrokerManager:
         }
 
         # Platform balances with status
-        for broker_type, broker in self.platform_brokers.items():
+        for broker_type, broker in self._platform_brokers.items():
             result['platform'][broker_type.value] = {
                 'balance': broker.get_account_balance() if broker.connected else 0.0,
                 'connected': broker.connected
@@ -673,9 +750,9 @@ class MultiAccountBrokerManager:
         # Platform account
         lines.append("\n🔷 PLATFORM ACCOUNT (Nija System)")
         lines.append("-" * 70)
-        if self.platform_brokers:
+        if self._platform_brokers:
             platform_total = 0.0
-            for broker_type, broker in self.platform_brokers.items():
+            for broker_type, broker in self._platform_brokers.items():
                 if broker.connected:
                     balance = broker.get_account_balance()
                     platform_total += balance
@@ -974,8 +1051,8 @@ class MultiAccountBrokerManager:
 
         # Show Platform broker status
         logger.info("🔷 PLATFORM ACCOUNTS (Primary Trading Accounts):")
-        if self.platform_brokers:
-            for broker_type, broker in self.platform_brokers.items():
+        if self._platform_brokers:
+            for broker_type, broker in self._platform_brokers.items():
                 status = "✅ CONNECTED" if broker.connected else "❌ NOT CONNECTED"
                 logger.info(f"   • {broker_type.value.upper()}: {status}")
         else:
