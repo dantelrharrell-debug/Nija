@@ -742,9 +742,7 @@ def human_readable_status():
         
         # Get account manager to check copy trading status
         account_mgr = _get_account_manager()
-        copy_trading_active = False
-        if account_mgr:
-            copy_trading_active = getattr(account_mgr, 'kraken_copy_trading_active', False)
+        copy_trading_active = getattr(account_mgr, 'kraken_copy_trading_active', False) if account_mgr else False
 
         # Build HTML
         html = """<!DOCTYPE html>
