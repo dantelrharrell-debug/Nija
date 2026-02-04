@@ -206,11 +206,45 @@ ZOMBIE_PNL_THRESHOLD = 0.01  # Consider position "stuck" if abs(P&L) < this % (0
 # Previous bug: targets were in percentage format (4.0 = 4%), causing profit-taking to NEVER fire
 # Fix: Divide all targets by 100 to convert to fractional format
 
-PROFIT_TARGETS = [
-    (0.015, "Profit target +1.5% (Net ~0.1% after fees) - GOOD"),          # Check first - lock profits quickly
-    (0.012, "Profit target +1.2% (Net ~-0.2% after fees) - ACCEPTABLE"),   # Check second - accept small loss vs reversal
-    (0.010, "Profit target +1.0% (Net ~-0.4% after fees) - EMERGENCY"),    # Emergency exit to prevent larger loss
+# 📈 CAPITAL TIER PROFIT LADDERS (Feb 4, 2026)
+# Different capital tiers use different profit targets for optimal risk/reward
+# Larger accounts can afford to wait for bigger wins
+# Smaller accounts need to take profits more aggressively
+
+# MICRO TIER ($10-$100): Aggressive profit-taking, build capital fast
+PROFIT_TARGETS_MICRO = [
+    (0.025, "Profit target +2.5% (Micro tier) - EXCELLENT"),
+    (0.020, "Profit target +2.0% (Micro tier) - GOOD"),
+    (0.015, "Profit target +1.5% (Micro tier) - ACCEPTABLE"),
+    (0.012, "Profit target +1.2% (Micro tier) - MINIMAL"),
 ]
+
+# SMALL TIER ($100-$1000): Balanced approach
+PROFIT_TARGETS_SMALL = [
+    (0.030, "Profit target +3.0% (Small tier) - EXCELLENT"),
+    (0.025, "Profit target +2.5% (Small tier) - GOOD"),
+    (0.020, "Profit target +2.0% (Small tier) - ACCEPTABLE"),
+    (0.015, "Profit target +1.5% (Small tier) - MINIMAL"),
+]
+
+# MEDIUM TIER ($1000-$10000): Let winners run more
+PROFIT_TARGETS_MEDIUM = [
+    (0.040, "Profit target +4.0% (Medium tier) - MAJOR PROFIT"),
+    (0.030, "Profit target +3.0% (Medium tier) - EXCELLENT"),
+    (0.025, "Profit target +2.5% (Medium tier) - GOOD"),
+    (0.020, "Profit target +2.0% (Medium tier) - ACCEPTABLE"),
+]
+
+# LARGE TIER ($10000+): Maximum profit potential
+PROFIT_TARGETS_LARGE = [
+    (0.050, "Profit target +5.0% (Large tier) - MAJOR PROFIT"),
+    (0.040, "Profit target +4.0% (Large tier) - EXCELLENT"),
+    (0.030, "Profit target +3.0% (Large tier) - GOOD"),
+    (0.025, "Profit target +2.5% (Large tier) - ACCEPTABLE"),
+]
+
+# Default fallback targets (medium tier)
+PROFIT_TARGETS = PROFIT_TARGETS_MEDIUM
 
 # BROKER-SPECIFIC PROFIT TARGETS (Jan 27, 2026 - PROFITABILITY FIX)
 # 🚨 CRITICAL FIX (Feb 4, 2026): All values converted to FRACTIONAL format (0.04 = 4%)
@@ -1738,6 +1772,33 @@ class TradingStrategy:
         logger.info("   ✅ OTHER BROKERS CONTINUE TRADING INDEPENDENTLY")
         logger.info("   ℹ️  Kraken offline does NOT block Coinbase or other exchanges")
         logger.info("")
+
+    def _get_profit_targets_for_capital(self, balance: float) -> list:
+        """
+        📈 Select profit ladder based on capital tier.
+        
+        Different capital sizes use different profit targets for optimal risk/reward.
+        Larger accounts can afford to wait for bigger wins.
+        Smaller accounts need to take profits more aggressively to build capital.
+        
+        Args:
+            balance: Current account balance in USD
+            
+        Returns:
+            list: Profit target ladder (tuples of (pct, reason))
+        """
+        if balance < 100:
+            # MICRO tier: Aggressive profit-taking
+            return PROFIT_TARGETS_MICRO
+        elif balance < 1000:
+            # SMALL tier: Balanced approach
+            return PROFIT_TARGETS_SMALL
+        elif balance < 10000:
+            # MEDIUM tier: Let winners run more
+            return PROFIT_TARGETS_MEDIUM
+        else:
+            # LARGE tier: Maximum profit potential
+            return PROFIT_TARGETS_LARGE
 
     def _register_kraken_for_retry(self, kraken_broker):
         """
