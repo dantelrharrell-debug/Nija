@@ -5,6 +5,16 @@ echo "=============================="
 echo "    STARTING NIJA TRADING BOT"
 echo "=============================="
 
+# Helper function to exit gracefully for configuration errors
+exit_config_error() {
+    echo ""
+    echo "⚠️  Configuration error - exiting without restart (exit code 0)"
+    echo "    The container will not restart automatically."
+    echo "    Please configure credentials and manually restart the deployment."
+    echo ""
+    exit 0
+}
+
 # Prefer workspace venv Python, fallback to system python3
 PY=""
 if [ -x ./.venv/bin/python ]; then
@@ -53,11 +63,7 @@ if [ -n "${KRAKEN_PLATFORM_API_KEY}" ] && [ -n "${KRAKEN_PLATFORM_API_SECRET}" ]
         echo ""
         echo "📖 See SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md for detailed troubleshooting"
         echo ""
-        echo "⚠️  Configuration error - exiting without restart (exit code 0)"
-        echo "    The container will not restart automatically."
-        echo "    Please fix the installation and manually restart the deployment."
-        echo ""
-        exit 0
+        exit_config_error
     }
 else
     # CRITICAL: Kraken credentials are REQUIRED since Coinbase is disabled
@@ -76,11 +82,7 @@ else
     echo ""
     echo "📖 See .env.example for detailed setup instructions"
     echo ""
-    echo "⚠️  Configuration error - exiting without restart (exit code 0)"
-    echo "    The container will not restart automatically."
-    echo "    Please configure credentials and manually restart the deployment."
-    echo ""
-    exit 0
+    exit_config_error
 fi
 
 # Ensure all Python test output is flushed before continuing
@@ -208,11 +210,7 @@ if [ -z "${KRAKEN_PLATFORM_API_KEY}" ] || [ -z "${KRAKEN_PLATFORM_API_SECRET}" ]
     echo ""
     echo "📖 See .env.example for detailed setup instructions"
     echo ""
-    echo "⚠️  Configuration error - exiting without restart (exit code 0)"
-    echo "    The container will not restart automatically."
-    echo "    Please configure credentials and manually restart the deployment."
-    echo ""
-    exit 0
+    exit_config_error
 fi
 
 # Enforce live mode explicitly
