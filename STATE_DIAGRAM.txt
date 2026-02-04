@@ -1,0 +1,156 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                     NIJA Wait-for-Config State Machine                       ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+                              START: ./start.sh
+                                      │
+                                      ▼
+                        ┌─────────────────────────┐
+                        │ Check WAIT_FOR_CONFIG   │
+                        │ env var or --flag       │
+                        └─────────────────────────┘
+                                      │
+                        ┌─────────────┴─────────────┐
+                        │                           │
+                   false│                           │true
+                        ▼                           ▼
+            ┌─────────────────────┐     ┌─────────────────────┐
+            │  Legacy Mode        │     │  Wait-for-Config    │
+            │  (exit on error)    │     │  Mode (stay alive)  │
+            └─────────────────────┘     └─────────────────────┘
+                        │                           │
+                        │                           ▼
+                        │               ┌─────────────────────┐
+                        │               │ Check Configuration │
+                        │               └─────────────────────┘
+                        │                           │
+                        │           ┌───────────────┼──────────────┐
+                        │           │               │              │
+                        │      Missing          Valid        EMERGENCY_STOP
+                        │           │               │              │
+                        │           ▼               ▼              ▼
+                        │  ┌──────────────┐  ┌──────────┐  ┌────────────┐
+                        │  │   BLOCKED    │  │  READY   │  │   ERROR    │
+                        │  │   HTTP 503   │  │ HTTP 200 │  │  HTTP 500  │
+                        │  └──────────────┘  └──────────┘  └────────────┘
+                        │           │               │              │
+                        │           │               │              │
+                        ▼           ▼               ▼              ▼
+                ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+                │ Exit 0   │  │ Health   │  │  Start   │  │ Health   │
+                │ (Manual  │  │ Server   │  │  Bot     │  │ Server   │
+                │ restart) │  │ Running  │  │          │  │ Running  │
+                └──────────┘  └──────────┘  └──────────┘  └──────────┘
+                                     │               │              │
+                                     │               │              │
+                                     └───────┬───────┘              │
+                                             │                      │
+                                    Container Stays                 │
+                                       Running                      │
+                                             │                      │
+                                    No Restart Loop!                │
+                                             │                      │
+                                             └──────────────────────┘
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                          Health Endpoint States                               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ BLOCKED (503 Service Unavailable)                                          │
+├────────────────────────────────────────────────────────────────────────────┤
+│ When: Missing KRAKEN_PLATFORM_API_KEY or KRAKEN_PLATFORM_API_SECRET       │
+│ Means: Waiting for configuration                                          │
+│ Action: Add environment variables and restart deployment                  │
+│                                                                            │
+│ Response:                                                                  │
+│ {                                                                          │
+│   "status": "blocked",                                                     │
+│   "state": "awaiting_configuration",                                      │
+│   "message": "Waiting for configuration",                                 │
+│   "required": {                                                            │
+│     "KRAKEN_PLATFORM_API_KEY": "Kraken API key (required)",               │
+│     "KRAKEN_PLATFORM_API_SECRET": "Kraken API secret (required)"          │
+│   }                                                                        │
+│ }                                                                          │
+└────────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ READY (200 OK)                                                             │
+├────────────────────────────────────────────────────────────────────────────┤
+│ When: All required credentials are configured                             │
+│ Means: Bot is operational and ready to trade                              │
+│ Action: None needed - bot is running normally                             │
+│                                                                            │
+│ Response:                                                                  │
+│ {                                                                          │
+│   "status": "ready",                                                       │
+│   "state": "configured",                                                   │
+│   "message": "Configuration is complete, bot is ready to trade",          │
+│   "credentials": {                                                         │
+│     "kraken_platform": "configured"                                        │
+│   }                                                                        │
+│ }                                                                          │
+└────────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ ERROR (500 Internal Server Error)                                         │
+├────────────────────────────────────────────────────────────────────────────┤
+│ When: EMERGENCY_STOP file exists OR critical files missing                │
+│ Means: Hard error detected, needs human intervention                      │
+│ Action: Check logs, investigate error, remove EMERGENCY_STOP or redeploy  │
+│                                                                            │
+│ Response (emergency_stopped):                                              │
+│ {                                                                          │
+│   "status": "error",                                                       │
+│   "state": "emergency_stopped",                                            │
+│   "message": "Emergency stop is active",                                   │
+│   "action_required": "Remove EMERGENCY_STOP file to resume"               │
+│ }                                                                          │
+│                                                                            │
+│ Response (corrupted_deployment):                                           │
+│ {                                                                          │
+│   "status": "error",                                                       │
+│   "state": "corrupted_deployment",                                         │
+│   "message": "Critical files missing",                                     │
+│   "missing_files": ["bot.py"],                                             │
+│   "action_required": "Redeploy from clean image"                           │
+│ }                                                                          │
+└────────────────────────────────────────────────────────────────────────────┘
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                        Production Benefits Summary                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+✅ No Restart Loops
+   • Missing config → container stays running
+   • Health endpoint reports BLOCKED (503)
+   • Platform doesn't restart container indefinitely
+
+✅ Clear Health Signals  
+   • HTTP 503 = waiting for config (normal, not an error)
+   • HTTP 200 = operational (all systems go)
+   • HTTP 500 = hard error (needs intervention)
+
+✅ Machine-Readable Status
+   • JSON responses with structured data
+   • "required" field lists missing credentials
+   • "action_required" field guides resolution
+
+✅ Debuggable in Seconds
+   • curl /healthz → instant status
+   • No log diving required
+   • Clear next steps provided
+
+✅ Railway/K8s Compatible
+   • Standard health check endpoint
+   • Follows platform expectations
+   • Works with orchestrator health probes
+
+✅ Backward Compatible
+   • Default behavior unchanged
+   • Opt-in via flag or env var
+   • No breaking changes
+
