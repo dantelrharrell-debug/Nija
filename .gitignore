@@ -230,7 +230,8 @@ PRO_MODE*.md
 !PRO_MODE_README.md  # Core feature guide
 RESTART*.md
 SECURITY_*.md
-!SECURITY.md  # Core security guide
+!SECURITY.md  # Core security guide - exception to SECURITY_*.md
+!SECURITY_MODEL.md  # Investor-facing security model document - exception to SECURITY_*.md
 SETUP*.md
 TEST_RESULTS*.md
 TROUBLESHOOTING*.md
