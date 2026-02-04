@@ -45,6 +45,9 @@ class AlertType(Enum):
     BOT_STOPPED = "BOT_STOPPED"
     DAILY_LOSS_LIMIT = "DAILY_LOSS_LIMIT"
     PROFITABILITY_MILESTONE = "PROFITABILITY_MILESTONE"
+    ORDER_STUCK = "ORDER_STUCK"
+    ADOPTION_GUARDRAIL = "ADOPTION_GUARDRAIL"
+    PLATFORM_EXPOSURE = "PLATFORM_EXPOSURE"
 
 
 @dataclass
@@ -161,6 +164,11 @@ class MonitoringSystem:
         self.max_error_rate = 0.30  # Alert if >30% errors
         self.min_win_rate = 40.0  # Alert if win rate <40%
         self.max_consecutive_losses = 4  # Alert after 4 losses
+        
+        # New thresholds for operational safety
+        self.max_order_age_seconds = 300  # Alert if order pending >5 minutes
+        self.max_adoption_rate_pct = 80.0  # Alert if >80% of users active
+        self.max_platform_exposure_pct = 30.0  # Alert if >30% capital on one platform
 
         # Tracking
         self.alerts: List[Alert] = []
@@ -172,6 +180,9 @@ class MonitoringSystem:
         self.last_health_check = datetime.now()
         self.error_count = 0
         self.api_call_count = 0
+        
+        # Track pending orders
+        self.pending_orders: Dict[str, datetime] = {}
 
         # Load existing data
         self._load_state()
@@ -395,6 +406,152 @@ class MonitoringSystem:
                 json.dump([asdict(a) for a in recent_alerts], f, indent=2)
         except Exception as e:
             logger.error(f"Could not save alerts: {e}")
+
+    def track_pending_order(self, order_id: str):
+        """
+        Track a pending order for stuck order detection.
+        
+        Args:
+            order_id: Unique order identifier
+        """
+        self.pending_orders[order_id] = datetime.now()
+        logger.debug(f"Tracking pending order: {order_id}")
+    
+    def complete_order(self, order_id: str):
+        """
+        Mark order as complete and remove from tracking.
+        
+        Args:
+            order_id: Unique order identifier
+        """
+        if order_id in self.pending_orders:
+            del self.pending_orders[order_id]
+            logger.debug(f"Order completed: {order_id}")
+    
+    def check_stuck_orders(self) -> List[str]:
+        """
+        Check for stuck orders that exceed max age.
+        
+        Returns:
+            List of stuck order IDs
+        """
+        now = datetime.now()
+        stuck_orders = []
+        
+        for order_id, submission_time in list(self.pending_orders.items()):
+            age_seconds = (now - submission_time).total_seconds()
+            
+            if age_seconds > self.max_order_age_seconds:
+                stuck_orders.append(order_id)
+                
+                self._create_alert(
+                    AlertLevel.CRITICAL,
+                    AlertType.ORDER_STUCK,
+                    f"⚠️ Order stuck for {age_seconds:.0f}s (max: {self.max_order_age_seconds}s): {order_id}",
+                    {
+                        'order_id': order_id,
+                        'age_seconds': age_seconds,
+                        'max_age': self.max_order_age_seconds
+                    }
+                )
+                
+                # Consider auto-activating kill switch for very old orders
+                if age_seconds > self.max_order_age_seconds * 3:
+                    logger.critical(f"Order {order_id} stuck for {age_seconds:.0f}s - Consider kill switch")
+        
+        return stuck_orders
+    
+    def check_adoption_guardrail(
+        self,
+        active_users: int,
+        total_users: int,
+        auto_trigger_kill_switch: bool = False
+    ):
+        """
+        Check adoption guardrail to prevent overwhelming the system.
+        
+        Args:
+            active_users: Number of currently active users
+            total_users: Total number of users
+            auto_trigger_kill_switch: Whether to auto-activate kill switch if triggered
+        """
+        if total_users == 0:
+            return
+        
+        adoption_rate = (active_users / total_users) * 100
+        
+        if adoption_rate > self.max_adoption_rate_pct:
+            self._create_alert(
+                AlertLevel.EMERGENCY,
+                AlertType.ADOPTION_GUARDRAIL,
+                f"🚨 Adoption guardrail triggered: {adoption_rate:.1f}% active (max: {self.max_adoption_rate_pct}%)",
+                {
+                    'active_users': active_users,
+                    'total_users': total_users,
+                    'adoption_rate_pct': adoption_rate,
+                    'threshold': self.max_adoption_rate_pct
+                }
+            )
+            
+            # Auto-activate kill switch if configured
+            if auto_trigger_kill_switch:
+                try:
+                    from bot.kill_switch import get_kill_switch
+                    kill_switch = get_kill_switch()
+                    kill_switch.activate(
+                        f"Adoption guardrail triggered: {adoption_rate:.1f}% active users",
+                        source="AUTO_MONITORING"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to auto-activate kill switch: {e}")
+    
+    def check_platform_exposure(
+        self,
+        platform_balances: Dict[str, float],
+        total_balance: float,
+        auto_trigger_kill_switch: bool = False
+    ):
+        """
+        Check platform exposure to detect concentration risk.
+        
+        Args:
+            platform_balances: Dict of {platform_name: balance}
+            total_balance: Total balance across all platforms
+            auto_trigger_kill_switch: Whether to auto-activate kill switch if triggered
+        """
+        if total_balance == 0:
+            return
+        
+        for platform, balance in platform_balances.items():
+            exposure_pct = (balance / total_balance) * 100
+            
+            if exposure_pct > self.max_platform_exposure_pct:
+                level = AlertLevel.EMERGENCY if exposure_pct > self.max_platform_exposure_pct * 1.5 else AlertLevel.CRITICAL
+                
+                self._create_alert(
+                    level,
+                    AlertType.PLATFORM_EXPOSURE,
+                    f"⚠️ High {platform} exposure: {exposure_pct:.1f}% (max: {self.max_platform_exposure_pct}%)",
+                    {
+                        'platform': platform,
+                        'balance': balance,
+                        'total_balance': total_balance,
+                        'exposure_pct': exposure_pct,
+                        'threshold': self.max_platform_exposure_pct
+                    }
+                )
+                
+                # Auto-activate kill switch for extreme exposure
+                if auto_trigger_kill_switch and exposure_pct > self.max_platform_exposure_pct * 1.5:
+                    try:
+                        from bot.kill_switch import get_kill_switch
+                        kill_switch = get_kill_switch()
+                        kill_switch.activate(
+                            f"Extreme {platform} exposure: {exposure_pct:.1f}%",
+                            source="AUTO_MONITORING"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to auto-activate kill switch: {e}")
 
     def get_summary(self) -> str:
         """Get a text summary of current status"""

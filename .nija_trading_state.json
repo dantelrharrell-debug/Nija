@@ -1,12 +1,18 @@
 {
-  "current_state": "DRY_RUN",
+  "current_state": "EMERGENCY_STOP",
   "history": [
     {
       "from": "OFF",
       "to": "DRY_RUN",
       "reason": "Test",
       "timestamp": "2026-02-03T03:53:47.326144"
+    },
+    {
+      "from": "DRY_RUN",
+      "to": "EMERGENCY_STOP",
+      "reason": "Kill switch activated: Test activation",
+      "timestamp": "2026-02-04T20:56:56.468392"
     }
   ],
-  "last_updated": "2026-02-03T03:53:47.326161"
+  "last_updated": "2026-02-04T20:56:56.468401"
 }

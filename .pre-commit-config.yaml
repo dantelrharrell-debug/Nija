@@ -162,6 +162,14 @@ repos:
           )
         stages: [pre-commit]
 
+      - id: check-schema-changes
+        name: Check for database schema changes without migration
+        entry: python .pre-commit-hooks/check-schema-changes.py
+        language: system
+        pass_filenames: false
+        files: \.py$
+        stages: [pre-commit]
+
 # Configuration for CI (run all hooks on all files)
 ci:
   autofix_prs: false
