@@ -141,13 +141,72 @@ def require_auth(f):
 # ========================================
 
 @app.route('/health', methods=['GET'])
+@app.route('/healthz', methods=['GET'])
 def health_check():
-    """Health check endpoint for monitoring."""
+    """
+    Liveness probe - indicates if the process is alive and not deadlocked.
+    Always returns 200 OK if the process is running.
+    """
+    return jsonify({
+        'status': 'alive',
+        'timestamp': datetime.utcnow().isoformat(),
+        'service': 'NIJA Cloud API',
+        'version': '1.0.0'
+    })
+
+
+@app.route('/ready', methods=['GET'])
+@app.route('/readiness', methods=['GET'])
+def readiness_check():
+    """
+    Readiness probe - indicates if the service is ready to handle traffic.
+    Returns 200 OK only if the service is properly configured and ready.
+    Returns 503 Service Unavailable if not ready or configuration error.
+    """
+    # For API server, readiness means we can connect to required services
+    # For now, we'll do basic checks
+    ready = True
+    errors = []
+    
+    # Check if required managers are available
+    try:
+        if api_key_manager is None:
+            ready = False
+            errors.append("API key manager not initialized")
+        if user_manager is None:
+            ready = False
+            errors.append("User manager not initialized")
+    except Exception as e:
+        ready = False
+        errors.append(f"Service initialization error: {str(e)}")
+    
+    status = {
+        'status': 'ready' if ready else 'not_ready',
+        'ready': ready,
+        'timestamp': datetime.utcnow().isoformat(),
+        'service': 'NIJA Cloud API',
+        'version': '1.0.0'
+    }
+    
+    if errors:
+        status['errors'] = errors
+    
+    return jsonify(status), 200 if ready else 503
+
+
+@app.route('/status', methods=['GET'])
+def detailed_status():
+    """Detailed status information for operators and debugging."""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.utcnow().isoformat(),
         'service': 'NIJA Cloud API',
-        'version': '1.0.0'
+        'version': '1.0.0',
+        'components': {
+            'api_key_manager': 'available' if api_key_manager else 'unavailable',
+            'user_manager': 'available' if user_manager else 'unavailable',
+            'permission_validator': 'available' if permission_validator else 'unavailable'
+        }
     })
 
 
