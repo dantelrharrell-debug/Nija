@@ -47,9 +47,26 @@ if os.path.exists('EMERGENCY_STOP'):
     print("="*80 + "\n")
     sys.exit(0)
 
-# Minimal HTTP health server to satisfy platforms expecting $PORT
+# Infrastructure-grade health server with liveness and readiness probes
 def _start_health_server():
+    """
+    Start HTTP health server with proper liveness and readiness endpoints.
+    
+    Endpoints:
+    - /health or /healthz - Liveness probe (is process alive?)
+    - /ready or /readiness - Readiness probe (is service ready to handle traffic?)
+    - /status - Detailed status information for operators
+    
+    This allows orchestrators to properly distinguish between:
+    - Configuration errors (should NOT restart)
+    - Service not ready (should NOT receive traffic)
+    - Service crashed (should restart)
+    """
     try:
+        # Import health manager
+        from bot.health_check import get_health_manager
+        health_manager = get_health_manager()
+        
         # Resolve port with a safe default if env is missing
         port_env = os.getenv("PORT", "")
         default_port = 8080
@@ -58,33 +75,63 @@ def _start_health_server():
         except Exception:
             port = default_port
         from http.server import BaseHTTPRequestHandler, HTTPServer
+        import json
 
         class HealthHandler(BaseHTTPRequestHandler):
             def do_GET(self):
                 try:
-                    # Simple health endpoint
-                    if self.path in ("/", "/health", "/healthz", "/status"):
+                    # Liveness probe - always returns 200 if process is alive
+                    if self.path in ("/health", "/healthz"):
+                        status = health_manager.get_liveness_status()
                         self.send_response(200)
-                        self.send_header("Content-Type", "text/plain")
+                        self.send_header("Content-Type", "application/json")
                         self.end_headers()
-                        self.wfile.write(b"OK")
+                        self.wfile.write(json.dumps(status).encode())
+                    
+                    # Readiness probe - returns 200 only if ready, 503 if not ready/config error
+                    elif self.path in ("/ready", "/readiness"):
+                        status, http_code = health_manager.get_readiness_status()
+                        self.send_response(http_code)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps(status).encode())
+                    
+                    # Detailed status for operators and debugging
+                    elif self.path in ("/status", "/"):
+                        status = health_manager.get_detailed_status()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps(status, indent=2).encode())
+                    
                     else:
                         self.send_response(404)
+                        self.send_header("Content-Type", "application/json")
                         self.end_headers()
-                except Exception:
+                        self.wfile.write(json.dumps({
+                            "error": "Not found",
+                            "available_endpoints": ["/health", "/healthz", "/ready", "/readiness", "/status"]
+                        }).encode())
+                except Exception as e:
                     try:
                         self.send_response(500)
+                        self.send_header("Content-Type", "application/json")
                         self.end_headers()
+                        self.wfile.write(json.dumps({"error": str(e)}).encode())
                     except Exception:
                         pass
+            
             def log_message(self, format, *args):
-                # Silence default HTTP server logging
+                # Silence default HTTP server logging to reduce noise
                 return
 
         server = HTTPServer(("0.0.0.0", port), HealthHandler)
         t = threading.Thread(target=server.serve_forever, daemon=True)
         t.start()
         logger.info(f"🌐 Health server listening on port {port}")
+        logger.info(f"   📍 Liveness:  http://0.0.0.0:{port}/health")
+        logger.info(f"   📍 Readiness: http://0.0.0.0:{port}/ready")
+        logger.info(f"   📍 Status:    http://0.0.0.0:{port}/status")
     except Exception as e:
         logger.warning(f"Health server failed to start: {e}")
 
@@ -160,6 +207,10 @@ def main():
     # Graceful shutdown handlers to avoid non-zero exits on platform terminations
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+
+    # Initialize health check manager early
+    from bot.health_check import get_health_manager
+    health_manager = get_health_manager()
 
     # Get git metadata - try env vars first, then git commands
     git_branch = os.getenv("GIT_BRANCH", "")
@@ -435,7 +486,29 @@ def main():
         logger.error("  • Run: python3 diagnose_env_vars.py")
         logger.error("=" * 70)
         logger.error("Exiting - No trading possible without credentials")
-        sys.exit(1)
+        
+        # Mark as configuration error for health checks
+        health_manager.mark_configuration_error("No exchange credentials configured")
+        
+        # Start health server to report configuration error state
+        logger.info("Starting health server to report configuration status...")
+        _start_health_server()
+        
+        # Keep process alive to allow health checks to report status
+        # This prevents container restart loops while allowing operators to see the issue
+        logger.info("")
+        logger.info("⚠️  Configuration error - keeping service alive for health monitoring")
+        logger.info("   Container will NOT restart automatically")
+        logger.info("   Configure credentials and manually restart the deployment")
+        logger.info("")
+        
+        try:
+            while True:
+                time.sleep(60)
+                health_manager.heartbeat()
+        except KeyboardInterrupt:
+            logger.info("Shutdown requested")
+            sys.exit(0)
     elif exchanges_configured < 2:
         # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
         suppress_warning = os.getenv("SUPPRESS_SINGLE_EXCHANGE_WARNING", "false").lower() in ("true", "1", "yes")
@@ -561,6 +634,13 @@ def main():
             logger.info("Active Platform Exchanges:")
             for exchange in connected_platform_brokers:
                 logger.info(f"   ✅ {exchange}")
+            
+            # Mark configuration as valid and update exchange status
+            health_manager.mark_configuration_valid()
+            health_manager.update_exchange_status(
+                connected=len(connected_platform_brokers),
+                expected=exchanges_configured
+            )
 
             # Show failed brokers if any were expected to connect
             if failed_platform_brokers:
@@ -673,6 +753,11 @@ def main():
             logger.warning("   1. Run: python3 validate_all_env_vars.py")
             logger.warning("   2. Configure at least one platform exchange")
             logger.warning("   3. Restart the bot")
+            
+            # Update health status - exchanges configured but none connected
+            health_manager.update_exchange_status(connected=0, expected=exchanges_configured)
+            # Don't mark as configuration error - configs exist but connections failed
+            # This is degraded but not a config error
 
         logger.info("=" * 70)
 
@@ -696,6 +781,9 @@ def main():
                 while True:
                     try:
                         cycle_count += 1
+                        
+                        # Update health heartbeat
+                        health_manager.heartbeat()
 
                         # Log status every 10 cycles (25 minutes)
                         if cycle_count % 10 == 0:
@@ -725,6 +813,10 @@ def main():
             while True:
                 try:
                     cycle_count += 1
+                    
+                    # Update health heartbeat
+                    health_manager.heartbeat()
+                    
                     logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
                     strategy.run_cycle()
                     time.sleep(150)  # 2.5 minutes

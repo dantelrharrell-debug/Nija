@@ -37,9 +37,9 @@ RUN mkdir -p /app/cache /app/data /app/logs && \
 USER nija
 
 # Security: Drop all capabilities and run as non-root
-# Health check endpoint
+# Health check endpoint - use liveness probe
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:5000/health')" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:5000/healthz', timeout=5)" || exit 1
 
 # Default command: use repo start script to launch bot.py
 CMD ["bash", "start.sh"]
