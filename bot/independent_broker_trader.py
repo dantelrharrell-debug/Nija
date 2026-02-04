@@ -509,26 +509,37 @@ class IndependentBrokerTrader:
                     logger.info(f"   ═══════════════════════════════════════════════════════════")
                     logger.info(f"   💰 Current balance: ${balance:.2f}")
                     
-                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION REHYDRATION
-                    # Platform account also independently manages its positions with exit logic
+                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION ADOPTION (ONCE AT STARTUP)
+                    # Platform account independently adopts and manages its positions with exit logic
+                    # 🔒 GUARDRAIL: This MUST run to prevent silent position management failures
                     try:
-                        if hasattr(self.trading_strategy, 'rehydrate_open_positions'):
-                            # Call the rehydrate function - it handles everything
-                            rehydrated = self.trading_strategy.rehydrate_open_positions(
+                        if hasattr(self.trading_strategy, 'adopt_existing_positions'):
+                            # Determine account_id for tracking
+                            account_id = f"PLATFORM_{broker_name.upper()}"
+                            
+                            # Call the adopt function - returns detailed status dict
+                            adoption_status = self.trading_strategy.adopt_existing_positions(
                                 broker=broker,
-                                broker_name=broker_name.upper()
+                                broker_name=broker_name.upper(),
+                                account_id=account_id
                             )
-                            if rehydrated > 0:
-                                logger.info(f"   ✅ {broker_name.upper()}: {rehydrated} position(s) now managed by exit engine")
+                            
+                            # 🔒 GUARDRAIL: Verify adoption completed
+                            if adoption_status['success']:
+                                logger.info(f"   ✅ {broker_name.upper()}: {adoption_status['positions_adopted']} position(s) adopted")
+                            else:
+                                logger.error(f"   ❌ {broker_name.upper()}: Adoption failed - {adoption_status.get('error', 'unknown')}")
                         else:
-                            # Fallback to legacy logging if method not available
+                            # Fallback for backward compatibility
+                            logger.warning(f"   ⚠️  adopt_existing_positions() not available - using legacy method")
                             platform_positions = broker.get_positions()
                             if platform_positions:
-                                logger.info(f"   🔁 Rehydrated {len(platform_positions)} NIJA-managed position(s)")
+                                logger.info(f"   🔁 Found {len(platform_positions)} position(s)")
                             else:
-                                logger.info(f"   📊 No open positions to manage")
+                                logger.info(f"   📊 No open positions")
                     except Exception as pos_err:
-                        logger.warning(f"   ⚠️  Could not load positions: {pos_err}")
+                        logger.error(f"   ❌ Position adoption failed: {pos_err}")
+                        logger.error(f"   🔒 GUARDRAIL: This may result in unmanaged positions!")
                     
                     logger.info(f"   📊 Mode: PLATFORM (full strategy execution)")
                     logger.info(f"   🔍 Will scan markets for opportunities")
@@ -640,26 +651,49 @@ class IndependentBrokerTrader:
 
                 # Run trading cycle for this user broker
                 try:
-                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION REHYDRATION
-                    # Each account independently manages its positions with identical exit logic
+                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION ADOPTION (ONCE AT STARTUP)
+                    # Each user account independently adopts and manages positions with identical exit logic
                     # 
-                    # CRITICAL: This is run ONCE per cycle to:
-                    # 1. Scan exchange for existing open positions
-                    # 2. Register them locally in NIJA's position tracker
-                    # 3. Attach exit logic (stop-loss, profit targets, trailing stops, time exits)
+                    # 🔒 CRITICAL GUARDRAIL: This is run ONCE per cycle to:
+                    # 1. Scan Kraken (or any exchange) for existing open positions
+                    # 2. Register them locally as managed_positions in NIJA's position tracker
+                    # 3. Attach exit logic immediately (stop-loss, profit targets, trailing stops, time exits)
                     #
                     # Result: Profit realization starts immediately for ALL positions
+                    # This can NEVER be silently skipped - guardrails will alert if it fails
                     try:
-                        if hasattr(self.trading_strategy, 'rehydrate_open_positions'):
-                            # Call the rehydrate function - it handles everything
-                            rehydrated = self.trading_strategy.rehydrate_open_positions(
+                        if hasattr(self.trading_strategy, 'adopt_existing_positions'):
+                            # Determine account_id for this user
+                            account_id = f"USER_{user_id}_{broker_name}"
+                            
+                            # Call the adopt function - returns detailed status dict
+                            adoption_status = self.trading_strategy.adopt_existing_positions(
                                 broker=broker,
-                                broker_name=broker_name
+                                broker_name=broker_name,
+                                account_id=account_id
                             )
-                            if rehydrated > 0:
-                                logger.info(f"   ✅ {broker_name}: {rehydrated} position(s) now managed by exit engine")
+                            
+                            # 🔒 GUARDRAIL: Verify adoption completed successfully
+                            if adoption_status['success']:
+                                adopted = adoption_status['positions_adopted']
+                                if adopted > 0:
+                                    logger.info(f"   ✅ {broker_name}: {adopted} position(s) now managed by exit engine")
+                                    logger.info(f"   💰 Profit realization ACTIVE for all {adopted} position(s)")
+                            else:
+                                logger.error(f"   ❌ {broker_name}: Adoption failed - {adoption_status.get('error', 'unknown')}")
+                                logger.error(f"   🔒 GUARDRAIL: Positions may exist but are NOT being managed!")
+                            
+                            # Additional verification using guardrail
+                            if hasattr(self.trading_strategy, 'verify_position_adoption_status'):
+                                verified = self.trading_strategy.verify_position_adoption_status(
+                                    account_id=account_id,
+                                    broker_name=broker_name
+                                )
+                                if not verified:
+                                    logger.error(f"   🔒 GUARDRAIL FAILURE: Adoption verification failed for {account_id}")
                         else:
-                            # Fallback to legacy logging if method not available
+                            # Fallback for backward compatibility (should not happen with new code)
+                            logger.warning(f"   ⚠️  adopt_existing_positions() not available - using legacy method")
                             user_positions = broker.get_positions()
                             if user_positions:
                                 logger.info(f"   🔁 {broker_name}: Found {len(user_positions)} position(s)")
@@ -671,7 +705,10 @@ class IndependentBrokerTrader:
                             else:
                                 logger.info(f"   🔁 {broker_name}: No open positions found")
                     except Exception as pos_err:
-                        logger.warning(f"   ⚠️  {broker_name}: Position rehydration failed: {pos_err}")
+                        logger.error(f"   ❌ {broker_name}: Position adoption failed: {pos_err}")
+                        logger.error(f"   🔒 GUARDRAIL: This is a CRITICAL failure - positions may be unmanaged!")
+                        import traceback
+                        logger.error(traceback.format_exc())
                     
                     # USER accounts should NEVER generate signals
                     # Users only execute copy trades from master - they don't run strategy themselves

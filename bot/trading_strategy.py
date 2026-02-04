@@ -1298,38 +1298,98 @@ class TradingStrategy:
             self.apex = None
             self.independent_trader = None
 
-    def rehydrate_open_positions(self, broker, broker_name: str = "UNKNOWN") -> int:
+    def adopt_existing_positions(self, broker, broker_name: str = "UNKNOWN", account_id: str = "PLATFORM") -> dict:
         """
-        UNIFIED STRATEGY PER ACCOUNT - Core Function
+        UNIFIED STRATEGY PER ACCOUNT - Core Position Adoption Function
         
-        Rehydrate existing open positions from the exchange and immediately
-        attach exit logic (stop-loss, take-profit, trailing stops, time exits).
+        🔒 GUARDRAIL: This function MUST be called on startup for EVERY account.
+        It adopts existing open positions from the exchange and immediately
+        attaches exit logic (stop-loss, take-profit, trailing stops, time exits).
         
         This enables each account to manage its own positions independently with
         identical exit strategies, regardless of where the position originated.
         
-        Steps:
-        1. Query broker for open positions (via get_positions or get_open_positions)
-        2. Wrap each position in NIJA's internal position model (position_tracker)
-        3. Hand positions to exit engine (exit logic auto-attaches during run_cycle)
+        EXACT FLOW:
+        ═══════════════════════════════════════════════════════════════════
+        STEP 1: Query Exchange
+        ───────────────────────
+        - Call broker.get_positions() OR broker.get_open_positions()
+        - Fetch ALL open positions currently on the exchange
+        - Log count and details of positions found
+        
+        STEP 2: Wrap in NIJA Model
+        ───────────────────────────
+        - For each position, extract: symbol, entry_price, quantity, size_usd
+        - If entry_price missing: use current_price * 1.01 (safety default)
+        - Register in broker.position_tracker using track_entry()
+        - This makes positions visible to exit engine
+        
+        STEP 3: Hand to Exit Engine
+        ────────────────────────────
+        - Positions are now in position_tracker
+        - Next run_cycle() will automatically:
+          • Calculate P&L for each position
+          • Check stop-loss levels
+          • Check take-profit targets
+          • Apply trailing stops
+          • Monitor time-based exits
+        - Exit logic is IDENTICAL for all accounts
+        
+        STEP 4: Guardrail Verification
+        ───────────────────────────────
+        - Record adoption in self.position_adoption_status
+        - Set adoption_completed flag to prevent silent skips
+        - Log adoption summary with position count
+        - Return detailed status dict for verification
+        ═══════════════════════════════════════════════════════════════════
         
         Args:
             broker: Broker instance to query for positions
             broker_name: Human-readable broker name for logging
+            account_id: Account identifier (for multi-account tracking)
             
         Returns:
-            int: Number of positions rehydrated and registered
+            dict: Detailed adoption status {
+                'success': bool,
+                'positions_found': int,
+                'positions_adopted': int,
+                'adoption_time': str (ISO timestamp),
+                'broker_name': str,
+                'account_id': str,
+                'positions': list of dicts
+            }
         """
         if not broker:
-            logger.warning(f"⚠️  Cannot rehydrate positions: broker is None")
-            return 0
+            logger.error(f"🔒 GUARDRAIL VIOLATION: Cannot adopt positions - broker is None for {account_id}")
+            return {
+                'success': False,
+                'positions_found': 0,
+                'positions_adopted': 0,
+                'adoption_time': datetime.now().isoformat(),
+                'broker_name': broker_name,
+                'account_id': account_id,
+                'error': 'Broker is None',
+                'positions': []
+            }
             
+        from datetime import datetime
+        adoption_start = datetime.now()
+        
         try:
-            logger.info("=" * 70)
-            logger.info(f"🔄 REHYDRATING OPEN POSITIONS FROM {broker_name.upper()}")
-            logger.info("=" * 70)
+            logger.info("")
+            logger.info("═" * 70)
+            logger.info(f"🔄 ADOPTING EXISTING POSITIONS")
+            logger.info("═" * 70)
+            logger.info(f"   Account: {account_id}")
+            logger.info(f"   Broker: {broker_name.upper()}")
+            logger.info(f"   Time: {adoption_start.isoformat()}")
+            logger.info("─" * 70)
             
-            # Step 1: Query broker for existing open positions
+            # ═══════════════════════════════════════════════════════════════
+            # STEP 1: Query Exchange for Open Positions
+            # ═══════════════════════════════════════════════════════════════
+            logger.info("📡 STEP 1/4: Querying exchange for open positions...")
+            
             try:
                 # Try get_positions first (standard method)
                 if hasattr(broker, 'get_positions'):
@@ -1338,26 +1398,65 @@ class TradingStrategy:
                 elif hasattr(broker, 'get_open_positions'):
                     positions = broker.get_open_positions()
                 else:
-                    logger.error(f"   ❌ Broker {broker_name} does not support position queries")
-                    return 0
+                    error_msg = f"Broker {broker_name} does not support position queries"
+                    logger.error(f"   ❌ {error_msg}")
+                    return {
+                        'success': False,
+                        'positions_found': 0,
+                        'positions_adopted': 0,
+                        'adoption_time': adoption_start.isoformat(),
+                        'broker_name': broker_name,
+                        'account_id': account_id,
+                        'error': error_msg,
+                        'positions': []
+                    }
                     
+                positions_found = len(positions) if positions else 0
+                logger.info(f"   ✅ Exchange query complete: {positions_found} position(s) found")
+                
                 if not positions:
-                    logger.info(f"   ✅ No open positions found on {broker_name}")
-                    logger.info("=" * 70)
-                    return 0
-                    
-                logger.info(f"   📊 Found {len(positions)} open position(s) on exchange")
+                    logger.info("   ℹ️  No open positions to adopt")
+                    logger.info("─" * 70)
+                    logger.info("✅ ADOPTION COMPLETE: 0 positions (account has no open positions)")
+                    logger.info("═" * 70)
+                    logger.info("")
+                    return {
+                        'success': True,
+                        'positions_found': 0,
+                        'positions_adopted': 0,
+                        'adoption_time': adoption_start.isoformat(),
+                        'broker_name': broker_name,
+                        'account_id': account_id,
+                        'positions': []
+                    }
                 
             except Exception as fetch_err:
-                logger.error(f"   ❌ Failed to fetch positions from {broker_name}: {fetch_err}")
-                logger.info("=" * 70)
-                return 0
+                error_msg = f"Failed to fetch positions: {fetch_err}"
+                logger.error(f"   ❌ {error_msg}")
+                return {
+                    'success': False,
+                    'positions_found': 0,
+                    'positions_adopted': 0,
+                    'adoption_time': adoption_start.isoformat(),
+                    'broker_name': broker_name,
+                    'account_id': account_id,
+                    'error': error_msg,
+                    'positions': []
+                }
             
-            # Step 2: Wrap each position in NIJA's internal position model
-            rehydrated_count = 0
+            # ═══════════════════════════════════════════════════════════════
+            # STEP 2: Wrap Each Position in NIJA's Internal Model
+            # ═══════════════════════════════════════════════════════════════
+            logger.info("📦 STEP 2/4: Wrapping positions in NIJA internal model...")
+            
+            adopted_count = 0
+            adopted_positions = []
             position_tracker = getattr(broker, 'position_tracker', None)
             
-            for pos in positions:
+            if not position_tracker:
+                logger.warning("   ⚠️  No position_tracker found - positions will be managed via direct broker queries")
+            
+            for i, pos in enumerate(positions, 1):
                 try:
                     symbol = pos.get('symbol', 'UNKNOWN')
                     entry_price = pos.get('entry_price', 0.0)
@@ -1369,11 +1468,10 @@ class TradingStrategy:
                     if size_usd == 0 and current_price > 0 and quantity > 0:
                         size_usd = current_price * quantity
                     
-                    # If entry price is missing, use current price with safety multiplier
-                    # This creates a small loss to trigger aggressive exit management
+                    # 🔒 SAFETY GUARDRAIL: If entry price is missing, use safety default
                     if entry_price == 0:
                         entry_price = current_price * 1.01  # 1% above current = -0.99% immediate loss
-                        logger.warning(f"   ⚠️  {symbol}: No entry price available, using safety default (current * 1.01)")
+                        logger.warning(f"   [{i}/{positions_found}] ⚠️  {symbol}: Missing entry price - using safety default (${entry_price:.4f})")
                     
                     # Register position in tracker if available
                     if position_tracker:
@@ -1382,53 +1480,240 @@ class TradingStrategy:
                             entry_price=entry_price,
                             quantity=quantity,
                             size_usd=size_usd,
-                            strategy="REHYDRATED"
+                            strategy="ADOPTED"
                         )
-                        if success:
-                            rehydrated_count += 1
-                            
-                            # Calculate current P&L for logging
-                            if current_price > 0 and entry_price > 0:
-                                pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                            else:
-                                pnl_pct = 0.0
-                            
-                            logger.info(f"   ✅ {symbol}: Registered (Entry: ${entry_price:.4f}, Current: ${current_price:.4f}, P&L: {pnl_pct:+.2f}%)")
-                        else:
-                            logger.warning(f"   ⚠️  {symbol}: Failed to register in position tracker")
+                        if not success:
+                            logger.warning(f"   [{i}/{positions_found}] ⚠️  {symbol}: Failed to register in position tracker")
+                            continue
+                    
+                    # Position successfully adopted
+                    adopted_count += 1
+                    
+                    # Calculate current P&L for logging
+                    if current_price > 0 and entry_price > 0:
+                        pnl_pct = ((current_price - entry_price) / entry_price) * 100
                     else:
-                        # No position tracker, but still count as rehydrated
-                        # Exit logic will still work via get_positions() in run_cycle
-                        rehydrated_count += 1
-                        if current_price > 0 and entry_price > 0:
-                            pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                        else:
-                            pnl_pct = 0.0
-                        logger.info(f"   ✅ {symbol}: Ready for exit management (P&L: {pnl_pct:+.2f}%)")
+                        pnl_pct = 0.0
+                    
+                    position_summary = {
+                        'symbol': symbol,
+                        'entry_price': entry_price,
+                        'current_price': current_price,
+                        'quantity': quantity,
+                        'size_usd': size_usd,
+                        'pnl_pct': pnl_pct
+                    }
+                    adopted_positions.append(position_summary)
+                    
+                    logger.info(f"   [{i}/{positions_found}] ✅ {symbol}: Entry=${entry_price:.4f}, Current=${current_price:.4f}, P&L={pnl_pct:+.2f}%, Size=${size_usd:.2f}")
                         
                 except Exception as pos_err:
-                    logger.error(f"   ❌ Failed to rehydrate position {pos.get('symbol', 'UNKNOWN')}: {pos_err}")
+                    logger.error(f"   [{i}/{positions_found}] ❌ Failed to adopt position: {pos_err}")
                     continue
             
-            # Step 3: Log handoff to exit engine
-            logger.info("")
-            logger.info(f"   🎯 EXIT ENGINE ACTIVATED FOR {rehydrated_count} POSITION(S)")
+            # ═══════════════════════════════════════════════════════════════
+            # STEP 3: Hand Positions to Exit Engine
+            # ═══════════════════════════════════════════════════════════════
+            logger.info("🎯 STEP 3/4: Handing positions to exit engine...")
+            logger.info(f"   ✅ {adopted_count} position(s) now under exit management")
             logger.info("   ✅ Stop-loss protection: ENABLED")
             logger.info("   ✅ Take-profit targets: ENABLED")
             logger.info("   ✅ Trailing stops: ENABLED")
             logger.info("   ✅ Time-based exits: ENABLED")
-            logger.info("")
-            logger.info(f"   💰 Profit realization will begin NEXT CYCLE (2.5 min)")
-            logger.info("=" * 70)
             
-            return rehydrated_count
+            # ═══════════════════════════════════════════════════════════════
+            # STEP 4: Guardrail Verification & Status Recording
+            # ═══════════════════════════════════════════════════════════════
+            logger.info("🔒 STEP 4/4: Recording adoption status (guardrail)...")
+            
+            # Initialize adoption status tracking if not exists
+            if not hasattr(self, 'position_adoption_status'):
+                self.position_adoption_status = {}
+            
+            # Record adoption for this account
+            adoption_key = f"{account_id}_{broker_name}"
+            adoption_status = {
+                'success': True,
+                'positions_found': positions_found,
+                'positions_adopted': adopted_count,
+                'adoption_time': adoption_start.isoformat(),
+                'broker_name': broker_name,
+                'account_id': account_id,
+                'positions': adopted_positions,
+                'adoption_completed': True  # 🔒 GUARDRAIL FLAG
+            }
+            self.position_adoption_status[adoption_key] = adoption_status
+            
+            logger.info(f"   ✅ Adoption recorded for {adoption_key}")
+            logger.info("─" * 70)
+            
+            # 🔒 GUARDRAIL: Log clear summary
+            if adopted_count != positions_found:
+                logger.warning("⚠️  ADOPTION MISMATCH:")
+                logger.warning(f"   Found: {positions_found} positions")
+                logger.warning(f"   Adopted: {adopted_count} positions")
+                logger.warning(f"   Failed: {positions_found - adopted_count} positions")
+            else:
+                logger.info("✅ ADOPTION COMPLETE:")
+                logger.info(f"   All {adopted_count} position(s) successfully adopted")
+            
+            logger.info("")
+            logger.info("💰 PROFIT REALIZATION ACTIVE:")
+            logger.info(f"   Exit logic will run NEXT CYCLE (2.5 min)")
+            logger.info(f"   All {adopted_count} position(s) monitored for exits")
+            logger.info("═" * 70)
+            logger.info("")
+            
+            return adoption_status
             
         except Exception as e:
-            logger.error(f"❌ Critical error during position rehydration: {e}")
+            error_msg = f"Critical error during position adoption: {e}"
+            logger.error(f"❌ {error_msg}")
             import traceback
             logger.error(traceback.format_exc())
-            logger.info("=" * 70)
-            return 0
+            logger.info("═" * 70)
+            logger.info("")
+            
+            return {
+                'success': False,
+                'positions_found': 0,
+                'positions_adopted': 0,
+                'adoption_time': adoption_start.isoformat(),
+                'broker_name': broker_name,
+                'account_id': account_id,
+                'error': error_msg,
+                'positions': []
+            }
+
+    def verify_position_adoption_status(self, account_id: str, broker_name: str) -> bool:
+        """
+        🔒 GUARDRAIL: Verify that position adoption completed for an account.
+        
+        This prevents the silent failure where an account has positions but
+        they are not being managed by the exit engine.
+        
+        MUST be called before allowing trading to proceed.
+        
+        Args:
+            account_id: Account identifier
+            broker_name: Broker name
+            
+        Returns:
+            bool: True if adoption completed (or no positions exist), False if silently skipped
+        """
+        if not hasattr(self, 'position_adoption_status'):
+            logger.error("🔒 GUARDRAIL VIOLATION: position_adoption_status not initialized")
+            logger.error(f"   Account: {account_id}")
+            logger.error(f"   Broker: {broker_name}")
+            logger.error("   ❌ adopt_existing_positions() was NEVER called")
+            return False
+        
+        adoption_key = f"{account_id}_{broker_name}"
+        
+        if adoption_key not in self.position_adoption_status:
+            logger.error("🔒 GUARDRAIL VIOLATION: Position adoption was skipped")
+            logger.error(f"   Account: {account_id}")
+            logger.error(f"   Broker: {broker_name}")
+            logger.error(f"   Key: {adoption_key}")
+            logger.error("   ❌ adopt_existing_positions() was NOT called for this account")
+            logger.error("   ⚠️  Positions may exist but are NOT being managed")
+            return False
+        
+        status = self.position_adoption_status[adoption_key]
+        
+        if not status.get('adoption_completed', False):
+            logger.error("🔒 GUARDRAIL VIOLATION: Adoption incomplete")
+            logger.error(f"   Account: {account_id}")
+            logger.error(f"   Status: {status}")
+            return False
+        
+        # Log successful verification
+        logger.info(f"✅ Position adoption verified for {adoption_key}")
+        logger.info(f"   Found: {status['positions_found']} position(s)")
+        logger.info(f"   Adopted: {status['positions_adopted']} position(s)")
+        logger.info(f"   Time: {status['adoption_time']}")
+        
+        return True
+
+    def get_adoption_summary(self) -> dict:
+        """
+        Get summary of position adoption status across all accounts.
+        
+        Also checks for anomalies like users having positions when platform doesn't.
+        
+        Returns:
+            dict: Summary of adoption status for monitoring/debugging
+        """
+        if not hasattr(self, 'position_adoption_status'):
+            return {
+                'initialized': False,
+                'accounts': 0,
+                'total_positions_found': 0,
+                'total_positions_adopted': 0
+            }
+        
+        total_found = 0
+        total_adopted = 0
+        accounts_with_positions = 0
+        
+        # Track platform vs user positions for anomaly detection
+        platform_positions = 0
+        user_positions = 0
+        user_accounts_with_positions = []
+        
+        for key, status in self.position_adoption_status.items():
+            positions_count = status.get('positions_found', 0)
+            
+            if positions_count > 0:
+                accounts_with_positions += 1
+                
+                # Identify if this is platform or user account
+                account_id = status.get('account_id', '')
+                if account_id.startswith('PLATFORM_'):
+                    platform_positions += positions_count
+                elif account_id.startswith('USER_'):
+                    user_positions += positions_count
+                    user_accounts_with_positions.append(account_id)
+            
+            total_found += positions_count
+            total_adopted += status.get('positions_adopted', 0)
+        
+        # 🔒 ANOMALY DETECTION: Log when users have positions but platform doesn't
+        if user_positions > 0 and platform_positions == 0:
+            logger.warning("")
+            logger.warning("═" * 70)
+            logger.warning("⚠️  POSITION DISTRIBUTION ANOMALY DETECTED")
+            logger.warning("═" * 70)
+            logger.warning(f"   USER accounts have {user_positions} position(s)")
+            logger.warning(f"   PLATFORM account has 0 positions")
+            logger.warning("")
+            logger.warning(f"   User accounts with positions:")
+            for user_account in user_accounts_with_positions:
+                user_status = self.position_adoption_status.get(f"{user_account}")
+                if user_status:
+                    logger.warning(f"      • {user_account}: {user_status.get('positions_found', 0)} position(s)")
+            logger.warning("")
+            logger.warning("   This is NORMAL if:")
+            logger.warning("   - Platform account just started (no trades yet)")
+            logger.warning("   - Users opened positions independently")
+            logger.warning("   - Platform positions were closed but user positions remain")
+            logger.warning("")
+            logger.warning("   ✅ Each account manages positions INDEPENDENTLY")
+            logger.warning("   ✅ Exit logic active for ALL accounts")
+            logger.warning("═" * 70)
+            logger.warning("")
+        
+        return {
+            'initialized': True,
+            'accounts': len(self.position_adoption_status),
+            'accounts_with_positions': accounts_with_positions,
+            'total_positions_found': total_found,
+            'total_positions_adopted': total_adopted,
+            'platform_positions': platform_positions,
+            'user_positions': user_positions,
+            'anomaly_detected': (user_positions > 0 and platform_positions == 0),
+            'details': self.position_adoption_status
+        }
 
     def _log_broker_independence_message(self):
         """
