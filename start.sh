@@ -53,7 +53,11 @@ if [ -n "${KRAKEN_PLATFORM_API_KEY}" ] && [ -n "${KRAKEN_PLATFORM_API_SECRET}" ]
         echo ""
         echo "📖 See SOLUTION_KRAKEN_LIBRARY_NOT_INSTALLED.md for detailed troubleshooting"
         echo ""
-        exit 1
+        echo "⚠️  Configuration error - exiting without restart (exit code 0)"
+        echo "    The container will not restart automatically."
+        echo "    Please fix the installation and manually restart the deployment."
+        echo ""
+        exit 0
     }
 else
     # CRITICAL: Kraken credentials are REQUIRED since Coinbase is disabled
@@ -72,7 +76,11 @@ else
     echo ""
     echo "📖 See .env.example for detailed setup instructions"
     echo ""
-    exit 1
+    echo "⚠️  Configuration error - exiting without restart (exit code 0)"
+    echo "    The container will not restart automatically."
+    echo "    Please configure credentials and manually restart the deployment."
+    echo ""
+    exit 0
 fi
 
 # Ensure all Python test output is flushed before continuing
@@ -200,7 +208,11 @@ if [ -z "${KRAKEN_PLATFORM_API_KEY}" ] || [ -z "${KRAKEN_PLATFORM_API_SECRET}" ]
     echo ""
     echo "📖 See .env.example for detailed setup instructions"
     echo ""
-    exit 1
+    echo "⚠️  Configuration error - exiting without restart (exit code 0)"
+    echo "    The container will not restart automatically."
+    echo "    Please configure credentials and manually restart the deployment."
+    echo ""
+    exit 0
 fi
 
 # Enforce live mode explicitly
