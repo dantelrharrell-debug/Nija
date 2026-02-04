@@ -18,7 +18,16 @@
     {
       "reason": "Test cleanup",
       "timestamp": "2026-02-04T20:59:33.760786"
+    },
+    {
+      "reason": "Test activation",
+      "source": "TEST",
+      "timestamp": "2026-02-04T21:03:56.285808"
+    },
+    {
+      "reason": "Test cleanup",
+      "timestamp": "2026-02-04T21:03:56.287028"
     }
   ],
-  "last_updated": "2026-02-04T20:59:33.760883"
+  "last_updated": "2026-02-04T21:03:56.287107"
 }
