@@ -104,15 +104,35 @@ def test_platform_trades_never_execute_on_user_brokers():
     manager.user_brokers['user2'] = {BrokerType.KRAKEN: user2_broker}
     print(f"✅ User broker registered: user2/KRAKEN (balance: ${user2_broker.balance:.2f})")
     
+    # Add held positions for user1 and user2 to test position tracking
+    print(f"\n🔄 Adding held positions to user1 and user2...")
+    user1_broker.positions.append({
+        'symbol': 'ETH-USD',
+        'quantity': 0.5,
+        'usd_value': 50.0
+    })
+    user2_broker.positions.append({
+        'symbol': 'SOL-USD',
+        'quantity': 2.0,
+        'usd_value': 30.0
+    })
+    print(f"   User1 positions: {len(user1_broker.positions)} (ETH-USD: $50)")
+    print(f"   User2 positions: {len(user2_broker.positions)} (SOL-USD: $30)")
+    
     # Record initial balances
     initial_platform_balance = platform_broker.balance
     initial_user1_balance = user1_broker.balance
     initial_user2_balance = user2_broker.balance
+    initial_user1_positions = len(user1_broker.positions)
+    initial_user2_positions = len(user2_broker.positions)
     
     print(f"\n📊 Initial State:")
     print(f"   Platform balance: ${initial_platform_balance:.2f}")
+    print(f"   Platform positions: {len(platform_broker.positions)}")
     print(f"   User1 balance: ${initial_user1_balance:.2f}")
+    print(f"   User1 held positions: {initial_user1_positions}")
     print(f"   User2 balance: ${initial_user2_balance:.2f}")
+    print(f"   User2 held positions: {initial_user2_positions}")
     
     # Simulate platform trade
     print(f"\n🔄 Simulating PLATFORM trade (BUY BTC-USD $50)...")
@@ -130,11 +150,27 @@ def test_platform_trades_never_execute_on_user_brokers():
     assert len(user1_broker.orders_placed) == 0, "User1 should have 0 orders from platform trade"
     assert len(user2_broker.orders_placed) == 0, "User2 should have 0 orders from platform trade"
     
+    # CRITICAL: Verify user1 and user2 held positions remain unchanged
+    assert len(user1_broker.positions) == initial_user1_positions, "User1 held positions should NOT change from platform trade"
+    assert len(user2_broker.positions) == initial_user2_positions, "User2 held positions should NOT change from platform trade"
+    
     print(f"✅ User brokers UNAFFECTED:")
     print(f"   User1 balance: ${user1_broker.balance:.2f} (unchanged)")
+    print(f"   User1 held positions: {len(user1_broker.positions)} (unchanged)")
     print(f"   User2 balance: ${user2_broker.balance:.2f} (unchanged)")
+    print(f"   User2 held positions: {len(user2_broker.positions)} (unchanged)")
     print(f"   User1 orders: {len(user1_broker.orders_placed)}")
     print(f"   User2 orders: {len(user2_broker.orders_placed)}")
+    
+    # Additional verification: Check user1 and user2 positions are still correct
+    print(f"\n✅ User1 and User2 Held Trades Verification:")
+    assert user1_broker.positions[0]['symbol'] == 'ETH-USD', "User1 ETH position should still exist"
+    assert user1_broker.positions[0]['usd_value'] == 50.0, "User1 ETH position value should be unchanged"
+    print(f"   User1 held trade: ETH-USD (value: ${user1_broker.positions[0]['usd_value']:.2f}) ✓")
+    
+    assert user2_broker.positions[0]['symbol'] == 'SOL-USD', "User2 SOL position should still exist"
+    assert user2_broker.positions[0]['usd_value'] == 30.0, "User2 SOL position value should be unchanged"
+    print(f"   User2 held trade: SOL-USD (value: ${user2_broker.positions[0]['usd_value']:.2f}) ✓")
     
     print(f"\n✅ TEST 1 PASSED: Platform trades never execute on user brokers")
     print()
@@ -302,6 +338,30 @@ def test_user_positions_excluded_from_platform_caps():
     assert len(platform_broker.positions) == 8, "Platform should now be at cap"
     assert total_user_positions == 50, "User positions unchanged at 50"
     
+    # CRITICAL: Verify user1 and user2 specifically have correct held positions
+    print(f"\n✅ User1 and User2 Held Positions Verification:")
+    user1_broker = manager.user_brokers['user1'][BrokerType.KRAKEN]
+    user2_broker = manager.user_brokers['user2'][BrokerType.KRAKEN]
+    
+    assert len(user1_broker.positions) == 10, "User1 should have 10 held positions"
+    assert len(user2_broker.positions) == 10, "User2 should have 10 held positions"
+    
+    # Verify user1's positions
+    user1_position_value = sum(p['usd_value'] for p in user1_broker.positions)
+    print(f"   User1: {len(user1_broker.positions)} positions, total value: ${user1_position_value:.2f}")
+    print(f"     Sample positions: {user1_broker.positions[0]['symbol']}, {user1_broker.positions[1]['symbol']}")
+    
+    # Verify user2's positions
+    user2_position_value = sum(p['usd_value'] for p in user2_broker.positions)
+    print(f"   User2: {len(user2_broker.positions)} positions, total value: ${user2_position_value:.2f}")
+    print(f"     Sample positions: {user2_broker.positions[0]['symbol']}, {user2_broker.positions[1]['symbol']}")
+    
+    assert user1_position_value == 500.0, "User1 position value should be 10 * $50 = $500"
+    assert user2_position_value == 500.0, "User2 position value should be 10 * $50 = $500"
+    
+    print(f"   ✓ User1 held trades verified: 10 positions worth $500")
+    print(f"   ✓ User2 held trades verified: 10 positions worth $500")
+    
     print(f"\n✅ TEST 3 PASSED: User positions excluded from platform caps")
     print()
 
@@ -324,6 +384,7 @@ def run_all_tests():
         print("1. ✅ Platform trades NEVER execute on user brokers")
         print("2. ✅ Platform entries affect ONLY platform equity")
         print("3. ✅ User positions excluded from platform caps")
+        print("4. ✅ User1 and User2 held trades are properly tracked and verified")
         print("=" * 70)
         return True
         

@@ -45,6 +45,9 @@ logger = logging.getLogger("nija")
 # This creates an immediate small loss to trigger aggressive exit management
 MISSING_ENTRY_PRICE_MULTIPLIER = 1.01  # 1% above current = -0.99% immediate P&L
 
+# Maximum number of open orders to display in logs when positions are being adopted
+MAX_DISPLAYED_ORDERS = 5  # Show first 5 orders, summarize remaining
+
 # Import BrokerType and AccountType at module level for use throughout the class
 # These are needed in _register_kraken_for_retry and other methods outside __init__
 try:
@@ -1474,6 +1477,47 @@ class TradingStrategy:
                 
                 if not positions:
                     logger.info("   ℹ️  No open positions to adopt")
+                    
+                    # Check for open orders (pending orders that haven't filled yet)
+                    open_orders_count = 0
+                    open_orders_info = []
+                    try:
+                        if hasattr(broker, 'get_open_orders'):
+                            open_orders = broker.get_open_orders()
+                            if open_orders:
+                                open_orders_count = len(open_orders)
+                                # Extract key details from orders (show first MAX_DISPLAYED_ORDERS)
+                                for order in open_orders[:MAX_DISPLAYED_ORDERS]:
+                                    pair = order.get('pair', order.get('symbol', 'UNKNOWN'))
+                                    side = order.get('type', order.get('side', 'UNKNOWN'))
+                                    price = order.get('price', 0)
+                                    age_seconds = order.get('age_seconds', 0)
+                                    age_minutes = int(age_seconds / 60) if age_seconds > 0 else 0
+                                    origin = order.get('origin', 'UNKNOWN')
+                                    
+                                    open_orders_info.append({
+                                        'pair': pair,
+                                        'side': side.upper(),
+                                        'price': price,
+                                        'age_minutes': age_minutes,
+                                        'origin': origin
+                                    })
+                    except Exception as order_err:
+                        logger.debug(f"   Could not check open orders: {order_err}")
+                    
+                    # Log informative message about open orders
+                    if open_orders_count > 0:
+                        logger.info(f"   📋 {account_id}: {open_orders_count} open order(s) found but no filled positions yet")
+                        logger.info(f"   ⏳ Orders are being monitored and will be adopted upon fill")
+                        
+                        # Log details of open orders for visibility
+                        for i, order_info in enumerate(open_orders_info, 1):
+                            logger.info(f"      {i}. {order_info['pair']} {order_info['side']} @ ${order_info['price']:.4f} "
+                                      f"(age: {order_info['age_minutes']}m, origin: {order_info['origin']})")
+                        
+                        if open_orders_count > MAX_DISPLAYED_ORDERS:
+                            logger.info(f"      ... and {open_orders_count - MAX_DISPLAYED_ORDERS} more order(s)")
+                    
                     logger.info("─" * 70)
                     logger.info("✅ ADOPTION COMPLETE: 0 positions (account has no open positions)")
                     logger.info("═" * 70)
@@ -1485,6 +1529,7 @@ class TradingStrategy:
                         'adoption_time': adoption_start.isoformat(),
                         'broker_name': broker_name,
                         'account_id': account_id,
+                        'open_orders_count': open_orders_count,
                         'positions': []
                     }
                 
