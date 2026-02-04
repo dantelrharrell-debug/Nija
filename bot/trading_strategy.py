@@ -196,37 +196,44 @@ ZOMBIE_PNL_THRESHOLD = 0.01  # Consider position "stuck" if abs(P&L) < this % (0
 # Kraken fees are ~0.36%, so lower targets are profitable
 # Strategy: Exit FULL position at FIRST target hit, checking from HIGHEST to LOWEST
 # This prioritizes larger gains while providing emergency exit near breakeven
+# 🚨 CRITICAL FIX (Feb 4, 2026): Convert PROFIT_TARGETS to fractional format
+# pnl_percent is in fractional format (0.02 = 2%), so targets must match
+# Previous bug: targets were in percentage format (4.0 = 4%), causing profit-taking to NEVER fire
+# Fix: Divide all targets by 100 to convert to fractional format
+
 PROFIT_TARGETS = [
-    (1.5, "Profit target +1.5% (Net ~0.1% after fees) - GOOD"),          # Check first - lock profits quickly
-    (1.2, "Profit target +1.2% (Net ~-0.2% after fees) - ACCEPTABLE"),   # Check second - accept small loss vs reversal
-    (1.0, "Profit target +1.0% (Net ~-0.4% after fees) - EMERGENCY"),    # Emergency exit to prevent larger loss
+    (0.015, "Profit target +1.5% (Net ~0.1% after fees) - GOOD"),          # Check first - lock profits quickly
+    (0.012, "Profit target +1.2% (Net ~-0.2% after fees) - ACCEPTABLE"),   # Check second - accept small loss vs reversal
+    (0.010, "Profit target +1.0% (Net ~-0.4% after fees) - EMERGENCY"),    # Emergency exit to prevent larger loss
 ]
 
 # BROKER-SPECIFIC PROFIT TARGETS (Jan 27, 2026 - PROFITABILITY FIX)
+# 🚨 CRITICAL FIX (Feb 4, 2026): All values converted to FRACTIONAL format (0.04 = 4%)
 # Different brokers have different fee structures, requiring different profit targets
 # These ensure NET profitability after fees for each broker
 # PHILOSOPHY: "Little loss, major profit" - tight stops, wide profit targets
 # Kraken fees: ~0.52% round-trip (0.26% taker fee x 2 sides)
 # Using 0.6% in calculations for safety margin (includes spread)
 PROFIT_TARGETS_KRAKEN = [
-    (4.0, "Profit target +4.0% (Net +3.4% after 0.6% fees) - MAJOR PROFIT"),    # Major profit - let winners run
-    (3.0, "Profit target +3.0% (Net +2.4% after 0.6% fees) - EXCELLENT"),       # Excellent profit
-    (2.0, "Profit target +2.0% (Net +1.4% after 0.6% fees) - GOOD"),            # Good profit (preferred target)
-    (1.5, "Profit target +1.5% (Net +0.9% after 0.6% fees) - ACCEPTABLE"),      # Acceptable profit
-    (1.0, "Profit target +1.0% (Net +0.4% after 0.6% fees) - MINIMAL"),         # Bare minimum profit
+    (0.040, "Profit target +4.0% (Net +3.4% after 0.6% fees) - MAJOR PROFIT"),    # Major profit - let winners run
+    (0.030, "Profit target +3.0% (Net +2.4% after 0.6% fees) - EXCELLENT"),       # Excellent profit
+    (0.020, "Profit target +2.0% (Net +1.4% after 0.6% fees) - GOOD"),            # Good profit (preferred target)
+    (0.015, "Profit target +1.5% (Net +0.9% after 0.6% fees) - ACCEPTABLE"),      # Acceptable profit
+    (0.010, "Profit target +1.0% (Net +0.4% after 0.6% fees) - MINIMAL"),         # Bare minimum profit
 ]
 
 # 🚨 COINBASE PROFIT FIX (Jan 2026) - ENSURE NET PROFITABILITY
+# 🚨 CRITICAL FIX (Feb 4, 2026): All values converted to FRACTIONAL format (0.05 = 5%)
 # Coinbase fees are 1.4% round-trip (0.7% entry + 0.7% exit)
 # ALL profit targets must exceed 1.6% to ensure NET profitability after fees and spread
 # REMOVED all loss-making "emergency exit" targets - these guaranteed losses
 # PHILOSOPHY: Only take trades with positive risk/reward ratio
 PROFIT_TARGETS_COINBASE = [
-    (5.0, "Profit target +5.0% (Net +3.6% after 1.4% fees) - MAJOR PROFIT"),    # Major profit - let winners run
-    (3.5, "Profit target +3.5% (Net +2.1% after 1.4% fees) - EXCELLENT"),       # Excellent profit
-    (2.5, "Profit target +2.5% (Net +1.1% after 1.4% fees) - GOOD"),            # Good profit (preferred target)
-    (2.0, "Profit target +2.0% (Net +0.6% after fees) - ACCEPTABLE"),           # Minimum acceptable profit
-    (1.6, "Profit target +1.6% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum (emergency only)
+    (0.050, "Profit target +5.0% (Net +3.6% after 1.4% fees) - MAJOR PROFIT"),    # Major profit - let winners run
+    (0.035, "Profit target +3.5% (Net +2.1% after 1.4% fees) - EXCELLENT"),       # Excellent profit
+    (0.025, "Profit target +2.5% (Net +1.1% after 1.4% fees) - GOOD"),            # Good profit (preferred target)
+    (0.020, "Profit target +2.0% (Net +0.6% after fees) - ACCEPTABLE"),           # Minimum acceptable profit
+    (0.016, "Profit target +1.6% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum (emergency only)
 ]
 
 # PROFITABILITY FIX (Jan 27, 2026): Updated profit targets to ensure NET gains
@@ -2602,6 +2609,9 @@ class TradingStrategy:
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
 
+            # Determine if we're in management-only mode
+            managing_only = user_mode or entries_blocked or len(current_positions) >= MAX_POSITIONS_ALLOWED
+
             if entries_blocked:
                 logger.error("🛑 ALL NEW ENTRIES BLOCKED: STOP_ALL_ENTRIES.conf is active")
                 logger.info("   Exiting positions only (no new buys)")
@@ -2610,6 +2620,21 @@ class TradingStrategy:
                 logger.info("   Closing positions only until below cap")
             else:
                 logger.info(f"✅ Position cap OK ({len(current_positions)}/{MAX_POSITIONS_ALLOWED}) - entries enabled")
+
+            # 🎯 EXPLICIT PROFIT REALIZATION ACTIVE PROOF
+            if managing_only and len(current_positions) > 0:
+                logger.info("=" * 70)
+                logger.info("💰 PROFIT REALIZATION ACTIVE (Management Mode)")
+                logger.info("=" * 70)
+                logger.info(f"   📊 {len(current_positions)} open position(s) being monitored")
+                logger.info("   ✅ Independent exit logic ENABLED:")
+                logger.info("      • Take-profit targets")
+                logger.info("      • Trailing stops")
+                logger.info("      • Stop-loss protection")
+                logger.info("      • Time-based exits")
+                logger.info("   🔄 Profit realization runs EVERY cycle (2.5 min)")
+                logger.info("   🚫 New entries: BLOCKED")
+                logger.info("=" * 70)
 
             # Get account balance for position sizing
             if not active_broker or not self.apex:
@@ -2780,6 +2805,15 @@ class TradingStrategy:
             if positions_over_cap > 0:
                 logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} positions ({positions_over_cap} excess)")
                 logger.warning(f"   Will prioritize selling {positions_over_cap} weakest positions first")
+                logger.info("=" * 70)
+                logger.info("🔥 LEGACY POSITION DRAIN MODE ACTIVE")
+                logger.info("=" * 70)
+                logger.info(f"   📊 Excess positions: {positions_over_cap}")
+                logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
+                logger.info(f"   🔄 Drain rate: 1-{min(positions_over_cap, 3)} positions per cycle")
+                logger.info(f"   🚫 New entries: BLOCKED until under {MAX_POSITIONS_ALLOWED} positions")
+                logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
+                logger.info("=" * 70)
 
             # CRITICAL FIX: Identify ALL positions that need to exit first
             # Then sell them ALL concurrently, not one at a time
@@ -3190,17 +3224,25 @@ class TradingStrategy:
                                     if pnl_percent >= target_pct:
                                         # Double-check: ensure profit meets minimum threshold
                                         if pnl_percent >= min_threshold:
-                                            logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent:.2f}% (target: +{target_pct}%, min threshold: +{min_threshold*100:.1f}%)")
+                                            # 💰 EXPLICIT PROFIT REALIZATION LOG (Management Mode)
+                                            if managing_only:
+                                                logger.info(f"   💰 PROFIT REALIZATION (MANAGEMENT MODE): {symbol}")
+                                                logger.info(f"      Current P&L: +{pnl_percent*100:.2f}%")
+                                                logger.info(f"      Profit target: +{target_pct*100:.2f}%")
+                                                logger.info(f"      Reason: {reason}")
+                                                logger.info(f"      🔥 Proof: Realizing profit even with new entries BLOCKED")
+                                            else:
+                                                logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent*100:.2f}% (target: +{target_pct*100}%, min threshold: +{min_threshold*100:.1f}%)")
                                             positions_to_exit.append({
                                                 'symbol': symbol,
                                                 'quantity': quantity,
-                                                'reason': f'{reason} hit (actual: +{pnl_percent:.2f}%)',
+                                                'reason': f'{reason} hit (actual: +{pnl_percent*100:.2f}%)',
                                                 'broker': position_broker,
                                                 'broker_label': broker_label
                                             })
                                             break  # Exit the for loop, continue to next position
                                         else:
-                                            logger.info(f"   ⚠️ Target {target_pct}% hit but profit {pnl_percent:.2f}% < minimum threshold {min_threshold*100:.1f}% - holding")
+                                            logger.info(f"   ⚠️ Target {target_pct*100}% hit but profit {pnl_percent*100:.2f}% < minimum threshold {min_threshold*100:.1f}% - holding")
                                 else:
                                     # No profit target hit, check stop loss (LEGACY FALLBACK)
                                     # CRITICAL FIX (Jan 19, 2026): Stop-loss checks happen BEFORE time-based exits
@@ -3208,7 +3250,13 @@ class TradingStrategy:
 
                                     # CATASTROPHIC STOP LOSS: Force exit at -5% or worse (ABSOLUTE FAILSAFE)
                                     if pnl_percent <= STOP_LOSS_EMERGENCY:
-                                        logger.warning(f"   🛡️ CATASTROPHIC PROTECTIVE EXIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_EMERGENCY*100:.0f}%)")
+                                        if managing_only:
+                                            logger.warning(f"   💰 LOSS PROTECTION (MANAGEMENT MODE): {symbol}")
+                                            logger.warning(f"      Current P&L: {pnl_percent*100:.2f}%")
+                                            logger.warning(f"      Catastrophic stop: {STOP_LOSS_EMERGENCY*100:.0f}%")
+                                            logger.warning(f"      🔥 Proof: Protecting capital even with new entries BLOCKED")
+                                        else:
+                                            logger.warning(f"   🛡️ CATASTROPHIC PROTECTIVE EXIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_EMERGENCY*100:.0f}%)")
                                         logger.warning(f"   💥 PROTECTIVE ACTION: Exiting to prevent severe capital loss")
                                         positions_to_exit.append({
                                             'symbol': symbol,
@@ -3225,7 +3273,13 @@ class TradingStrategy:
                                     #      Now triggers at WHICHEVER threshold is hit first
                                     # This was causing 80%+ of stop losses to FAIL and positions to keep losing
                                     elif pnl_percent <= STOP_LOSS_THRESHOLD or pnl_percent <= MIN_LOSS_FLOOR:
-                                        logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
+                                        if managing_only:
+                                            logger.warning(f"   💰 LOSS PROTECTION (MANAGEMENT MODE): {symbol}")
+                                            logger.warning(f"      Current P&L: {pnl_percent*100:.2f}%")
+                                            logger.warning(f"      Stop-loss threshold: {STOP_LOSS_THRESHOLD*100:.2f}%")
+                                            logger.warning(f"      🔥 Proof: Cutting losses even with new entries BLOCKED")
+                                        else:
+                                            logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
                                         # PROFITABILITY GUARD: Verify this is actually a losing position
                                         if pnl_percent >= 0:
                                             logger.error(f"   ❌ PROFITABILITY GUARD: Attempted to stop-loss a WINNING position at +{pnl_percent*100:.2f}%!")
