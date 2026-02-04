@@ -27,6 +27,11 @@ except ImportError:
 # "🚨 KRAKEN MASTER CREDENTIALS ARE SET BUT CONNECTION FAILED" (61 chars + 2 spaces padding)
 ERROR_SEPARATOR = "═" * 63
 
+# Configuration error heartbeat interval (seconds)
+# When configuration errors prevent trading, the bot stays alive to report status
+# and updates its heartbeat at this interval
+CONFIG_ERROR_HEARTBEAT_INTERVAL = 60
+
 # EMERGENCY STOP CHECK
 if os.path.exists('EMERGENCY_STOP'):
     print("\n" + "="*80)
@@ -504,7 +509,7 @@ def main():
         
         try:
             while True:
-                time.sleep(60)
+                time.sleep(CONFIG_ERROR_HEARTBEAT_INTERVAL)
                 health_manager.heartbeat()
         except KeyboardInterrupt:
             logger.info("Shutdown requested")
