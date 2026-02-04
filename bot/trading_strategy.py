@@ -45,6 +45,9 @@ logger = logging.getLogger("nija")
 # This creates an immediate small loss to trigger aggressive exit management
 MISSING_ENTRY_PRICE_MULTIPLIER = 1.01  # 1% above current = -0.99% immediate P&L
 
+# Maximum number of open orders to display in logs when positions are being adopted
+MAX_DISPLAYED_ORDERS = 5  # Show first 5 orders, summarize remaining
+
 # Import BrokerType and AccountType at module level for use throughout the class
 # These are needed in _register_kraken_for_retry and other methods outside __init__
 try:
@@ -1483,8 +1486,8 @@ class TradingStrategy:
                             open_orders = broker.get_open_orders()
                             if open_orders:
                                 open_orders_count = len(open_orders)
-                                # Extract key details from orders
-                                for order in open_orders[:5]:  # Show first 5 orders
+                                # Extract key details from orders (show first MAX_DISPLAYED_ORDERS)
+                                for order in open_orders[:MAX_DISPLAYED_ORDERS]:
                                     pair = order.get('pair', order.get('symbol', 'UNKNOWN'))
                                     side = order.get('type', order.get('side', 'UNKNOWN'))
                                     price = order.get('price', 0)
@@ -1512,8 +1515,8 @@ class TradingStrategy:
                             logger.info(f"      {i}. {order_info['pair']} {order_info['side']} @ ${order_info['price']:.4f} "
                                       f"(age: {order_info['age_minutes']}m, origin: {order_info['origin']})")
                         
-                        if open_orders_count > 5:
-                            logger.info(f"      ... and {open_orders_count - 5} more order(s)")
+                        if open_orders_count > MAX_DISPLAYED_ORDERS:
+                            logger.info(f"      ... and {open_orders_count - MAX_DISPLAYED_ORDERS} more order(s)")
                     
                     logger.info("─" * 70)
                     logger.info("✅ ADOPTION COMPLETE: 0 positions (account has no open positions)")
