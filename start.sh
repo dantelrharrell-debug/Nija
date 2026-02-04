@@ -5,14 +5,75 @@ echo "=============================="
 echo "    STARTING NIJA TRADING BOT"
 echo "=============================="
 
+# Parse command line arguments
+WAIT_FOR_CONFIG="${WAIT_FOR_CONFIG:-false}"  # Default from environment
+for arg in "$@"; do
+    case $arg in
+        --wait-for-config)
+            WAIT_FOR_CONFIG="true"
+            shift
+            ;;
+    esac
+done
+
+# Show wait-for-config mode status
+if [ "$WAIT_FOR_CONFIG" = "true" ]; then
+    echo "⏸️  Wait-for-config mode: ENABLED"
+    echo ""
+    echo "   Health endpoint will report one of three states:"
+    echo "   • BLOCKED (503) - Missing config, waiting for credentials"
+    echo "   • READY   (200) - Config complete, bot operational"
+    echo "   • ERROR   (500) - Hard error detected, needs intervention"
+    echo ""
+    echo "   This prevents restart loops while providing clear status signals."
+else
+    echo "📋 Wait-for-config mode: DISABLED (use --wait-for-config or set WAIT_FOR_CONFIG=true)"
+    echo "   If config is missing, container will exit with code 0"
+fi
+echo ""
+
 # Helper function to exit gracefully for configuration errors
 exit_config_error() {
     echo ""
-    echo "⚠️  Configuration error - exiting without restart (exit code 0)"
-    echo "    The container will not restart automatically."
-    echo "    Please configure credentials and manually restart the deployment."
-    echo ""
-    exit 0
+    if [ "$WAIT_FOR_CONFIG" = "true" ]; then
+        echo "⏸️  Configuration incomplete - entering wait mode"
+        echo ""
+        echo "   🎯 This prevents restart loops while waiting for configuration"
+        echo ""
+        echo "   Health endpoint will report:"
+        echo "   • Status: BLOCKED (HTTP 503)"
+        echo "   • State:  awaiting_configuration"
+        echo "   • Action: Set credentials and restart"
+        echo ""
+        echo "   Query the health endpoint:"
+        echo "     curl http://localhost:\${PORT:-8080}/healthz"
+        echo ""
+        echo "   Expected response:"
+        echo "     {"
+        echo "       \"status\": \"blocked\","
+        echo "       \"state\": \"awaiting_configuration\","
+        echo "       \"message\": \"Waiting for configuration\","
+        echo "       \"required\": {"
+        echo "         \"KRAKEN_PLATFORM_API_KEY\": \"Kraken API key (required)\","
+        echo "         \"KRAKEN_PLATFORM_API_SECRET\": \"Kraken API secret (required)\""
+        echo "       }"
+        echo "     }"
+        echo ""
+        echo "   Once configured, restart and health will return:"
+        echo "     {\"status\": \"ready\", \"state\": \"configured\"} (HTTP 200)"
+        echo ""
+        # Start health server in wait mode and keep container running
+        echo "🌐 Starting config-aware health server..."
+        $PY -u config_health_server.py
+        # If health server exits, exit with 0 to prevent restart loop
+        exit 0
+    else
+        echo "⚠️  Configuration error - exiting without restart (exit code 0)"
+        echo "    The container will not restart automatically."
+        echo "    Please configure credentials and manually restart the deployment."
+        echo ""
+        exit 0
+    fi
 }
 
 # Prefer workspace venv Python, fallback to system python3
