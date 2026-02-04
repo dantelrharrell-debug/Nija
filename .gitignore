@@ -332,8 +332,9 @@ deploy_*.sh
 commit_*.py
 commit_*.sh
 push_*.sh
-emergency_*.py
-emergency_*.sh
+# Emergency/test files (commented out - emergency_kill_switch.py is needed)
+# emergency_*.py  
+# emergency_*.sh
 liquidate_*.py
 force_*.py
 cleanup_*.sh
