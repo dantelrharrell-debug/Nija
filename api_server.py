@@ -28,6 +28,7 @@ import secrets
 
 from auth import get_api_key_manager, get_user_manager
 from execution import get_permission_validator, UserPermissions
+from bot.kill_switch import get_kill_switch
 
 # Configure logging
 logging.basicConfig(
@@ -517,6 +518,109 @@ def get_trade_history():
         'limit': limit,
         'offset': offset
     })
+
+
+# ========================================
+# Emergency Controls - Kill Switch
+# ========================================
+
+@app.route('/api/emergency/kill-switch/status', methods=['GET'])
+def get_kill_switch_status():
+    """
+    Get kill-switch status (no auth required for emergency access).
+    
+    Returns kill switch status and recent activation history.
+    """
+    try:
+        kill_switch = get_kill_switch()
+        status = kill_switch.get_status()
+        
+        return jsonify({
+            'is_active': status['is_active'],
+            'kill_file_exists': status['kill_file_exists'],
+            'kill_file_path': status['kill_file_path'],
+            'recent_history': status['recent_history'],
+            'activation_count': kill_switch.get_activation_count()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting kill-switch status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/emergency/kill-switch/activate', methods=['POST'])
+def activate_kill_switch():
+    """
+    EMERGENCY: Activate kill-switch to halt all trading.
+    
+    No authentication required - this is an EMERGENCY endpoint.
+    Can be called from anywhere when immediate halt is needed.
+    
+    Request body:
+    {
+        "reason": "Human-readable reason for activation",
+        "source": "UI|CLI|MANUAL|AUTO" (optional)
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        reason = data.get('reason', 'Emergency activation via API')
+        source = data.get('source', 'API')
+        
+        kill_switch = get_kill_switch()
+        kill_switch.activate(reason, source)
+        
+        logger.critical(f"🚨 KILL SWITCH ACTIVATED via API - Reason: {reason}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Kill switch activated - all trading halted',
+            'reason': reason,
+            'source': source,
+            'is_active': True
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error activating kill-switch: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/emergency/kill-switch/deactivate', methods=['POST'])
+@require_auth  # Deactivation requires authentication for safety
+def deactivate_kill_switch():
+    """
+    Deactivate kill-switch (REQUIRES AUTHENTICATION).
+    
+    This should only be done after:
+    1. Understanding why it was activated
+    2. Resolving the underlying issue
+    3. Verifying system integrity
+    
+    Request body:
+    {
+        "reason": "Reason for deactivation"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        reason = data.get('reason', f'Deactivation by user {request.user_id}')
+        
+        kill_switch = get_kill_switch()
+        kill_switch.deactivate(reason)
+        
+        logger.warning(f"🟢 Kill switch deactivated by user {request.user_id} - Reason: {reason}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Kill switch deactivated - trading can resume',
+            'reason': reason,
+            'is_active': False,
+            'warning': 'Manual verification recommended before resuming trading'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error deactivating kill-switch: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 # ========================================
