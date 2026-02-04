@@ -40,6 +40,11 @@ load_dotenv()
 
 logger = logging.getLogger("nija")
 
+# Position adoption safety constants
+# When entry price is missing from exchange, use current_price * this multiplier
+# This creates an immediate small loss to trigger aggressive exit management
+MISSING_ENTRY_PRICE_MULTIPLIER = 1.01  # 1% above current = -0.99% immediate P&L
+
 # Import BrokerType and AccountType at module level for use throughout the class
 # These are needed in _register_kraken_for_retry and other methods outside __init__
 try:
@@ -1372,7 +1377,6 @@ class TradingStrategy:
                 'positions': []
             }
             
-        from datetime import datetime
         adoption_start = datetime.now()
         
         try:
@@ -1470,7 +1474,7 @@ class TradingStrategy:
                     
                     # 🔒 SAFETY GUARDRAIL: If entry price is missing, use safety default
                     if entry_price == 0:
-                        entry_price = current_price * 1.01  # 1% above current = -0.99% immediate loss
+                        entry_price = current_price * MISSING_ENTRY_PRICE_MULTIPLIER
                         logger.warning(f"   [{i}/{positions_found}] ⚠️  {symbol}: Missing entry price - using safety default (${entry_price:.4f})")
                     
                     # Register position in tracker if available
@@ -1689,9 +1693,18 @@ class TradingStrategy:
             logger.warning("")
             logger.warning(f"   User accounts with positions:")
             for user_account in user_accounts_with_positions:
-                user_status = self.position_adoption_status.get(f"{user_account}")
+                # Look up status using the account_id (which is already the full key)
+                # Find the matching status from position_adoption_status
+                user_status = None
+                for key, status in self.position_adoption_status.items():
+                    if status.get('account_id') == user_account:
+                        user_status = status
+                        break
+                
                 if user_status:
                     logger.warning(f"      • {user_account}: {user_status.get('positions_found', 0)} position(s)")
+                else:
+                    logger.warning(f"      • {user_account}: (status not found)")
             logger.warning("")
             logger.warning("   This is NORMAL if:")
             logger.warning("   - Platform account just started (no trades yet)")

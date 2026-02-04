@@ -509,9 +509,10 @@ class IndependentBrokerTrader:
                     logger.info(f"   ═══════════════════════════════════════════════════════════")
                     logger.info(f"   💰 Current balance: ${balance:.2f}")
                     
-                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION ADOPTION (ONCE AT STARTUP)
+                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION ADOPTION (EVERY CYCLE)
                     # Platform account independently adopts and manages its positions with exit logic
-                    # 🔒 GUARDRAIL: This MUST run to prevent silent position management failures
+                    # 🔒 GUARDRAIL: This runs every cycle to ensure all positions are managed
+                    # Position tracker prevents duplicates, so re-adoption is safe
                     try:
                         if hasattr(self.trading_strategy, 'adopt_existing_positions'):
                             # Determine account_id for tracking
@@ -651,16 +652,20 @@ class IndependentBrokerTrader:
 
                 # Run trading cycle for this user broker
                 try:
-                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION ADOPTION (ONCE AT STARTUP)
+                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION ADOPTION (EVERY CYCLE)
                     # Each user account independently adopts and manages positions with identical exit logic
                     # 
-                    # 🔒 CRITICAL GUARDRAIL: This is run ONCE per cycle to:
+                    # 🔒 CRITICAL GUARDRAIL: This runs on EVERY trading cycle (2.5 min) to:
                     # 1. Scan Kraken (or any exchange) for existing open positions
                     # 2. Register them locally as managed_positions in NIJA's position tracker
                     # 3. Attach exit logic immediately (stop-loss, profit targets, trailing stops, time exits)
                     #
+                    # Note: While this runs every cycle, position_tracker prevents duplicates.
+                    # If a position already exists, it updates rather than creating duplicates.
+                    # This ensures new positions are adopted immediately when they appear.
+                    #
                     # Result: Profit realization starts immediately for ALL positions
-                    # This can NEVER be silently skipped - guardrails will alert if it fails
+                    # Guardrails will alert if adoption fails - this can NEVER be silently skipped
                     try:
                         if hasattr(self.trading_strategy, 'adopt_existing_positions'):
                             # Determine account_id for this user
