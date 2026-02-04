@@ -109,13 +109,21 @@ def _start_health_server():
                         self.end_headers()
                         self.wfile.write(json.dumps(status, indent=2).encode())
                     
+                    # Prometheus metrics endpoint
+                    elif self.path == "/metrics":
+                        metrics = health_manager.get_prometheus_metrics()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/plain; version=0.0.4")
+                        self.end_headers()
+                        self.wfile.write(metrics.encode())
+                    
                     else:
                         self.send_response(404)
                         self.send_header("Content-Type", "application/json")
                         self.end_headers()
                         self.wfile.write(json.dumps({
                             "error": "Not found",
-                            "available_endpoints": ["/health", "/healthz", "/ready", "/readiness", "/status"]
+                            "available_endpoints": ["/health", "/healthz", "/ready", "/readiness", "/status", "/metrics"]
                         }).encode())
                 except Exception as e:
                     try:
@@ -137,6 +145,7 @@ def _start_health_server():
         logger.info(f"   📍 Liveness:  http://0.0.0.0:{port}/health")
         logger.info(f"   📍 Readiness: http://0.0.0.0:{port}/ready")
         logger.info(f"   📍 Status:    http://0.0.0.0:{port}/status")
+        logger.info(f"   📍 Metrics:   http://0.0.0.0:{port}/metrics")
     except Exception as e:
         logger.warning(f"Health server failed to start: {e}")
 

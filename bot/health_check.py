@@ -63,6 +63,13 @@ class HealthState:
     last_error: Optional[str] = None
     error_count: int = 0
     
+    # Metrics tracking
+    configuration_error_start_time: Optional[float] = None  # When config error first occurred
+    configuration_error_duration_seconds: float = 0.0  # Total time in config error state
+    total_ready_time_seconds: float = 0.0  # Total time in ready state
+    total_not_ready_time_seconds: float = 0.0  # Total time in not-ready state
+    readiness_state_changes: int = 0  # Count of readiness state transitions
+    
     def __post_init__(self):
         if self.configuration_errors is None:
             self.configuration_errors = []
@@ -94,14 +101,34 @@ class HealthCheckManager:
         self.state.last_heartbeat = time.time()
         self._start_time = time.time()
         self._configuration_checked = False
+        self._last_readiness_state = None  # Track previous readiness state for transitions
+        self._last_state_change_time = time.time()  # Track when state last changed
         
         logger.info("Health check manager initialized")
     
     def heartbeat(self):
-        """Update liveness heartbeat - call this regularly from main loop"""
-        self.state.last_heartbeat = time.time()
-        self.state.uptime_seconds = time.time() - self._start_time
+        """Update liveness heartbeat and metrics - call this regularly from main loop"""
+        current_time = time.time()
+        self.state.last_heartbeat = current_time
+        self.state.uptime_seconds = current_time - self._start_time
         self.state.is_alive = True
+        
+        # Update duration metrics based on current state
+        time_since_last_update = current_time - self._last_state_change_time
+        
+        if self.state.readiness_status == ReadinessStatus.CONFIGURATION_ERROR.value:
+            # Update configuration error duration
+            if self.state.configuration_error_start_time is None:
+                self.state.configuration_error_start_time = current_time
+            self.state.configuration_error_duration_seconds = (
+                current_time - self.state.configuration_error_start_time
+            )
+        elif self.state.is_ready:
+            self.state.total_ready_time_seconds += time_since_last_update
+        else:
+            self.state.total_not_ready_time_seconds += time_since_last_update
+        
+        self._last_state_change_time = current_time
     
     def mark_configuration_error(self, error_message: str):
         """
@@ -114,21 +141,47 @@ class HealthCheckManager:
         Args:
             error_message: Description of the configuration error
         """
+        # Track state change
+        previous_state = self.state.readiness_status
+        
         self.state.configuration_valid = False
         self.state.readiness_status = ReadinessStatus.CONFIGURATION_ERROR.value
         self.state.is_ready = False
         self.state.last_error = error_message
         self.state.error_count += 1
         
+        # Start tracking configuration error duration
+        if self.state.configuration_error_start_time is None:
+            self.state.configuration_error_start_time = time.time()
+        
         if error_message not in self.state.configuration_errors:
             self.state.configuration_errors.append(error_message)
         
-        logger.error(f"Configuration error marked: {error_message}")
+        # Track state transition
+        if previous_state != ReadinessStatus.CONFIGURATION_ERROR.value:
+            self.state.readiness_state_changes += 1
+            logger.error(f"Configuration error marked (transition #{self.state.readiness_state_changes}): {error_message}")
+        else:
+            logger.error(f"Configuration error marked: {error_message}")
     
     def mark_configuration_valid(self):
         """Mark configuration as valid"""
+        previous_state = self.state.readiness_status
+        
         self.state.configuration_valid = True
         self._configuration_checked = True
+        
+        # Clear configuration error tracking if we're resolving it
+        if self.state.configuration_error_start_time is not None:
+            # Record final duration before clearing
+            final_duration = time.time() - self.state.configuration_error_start_time
+            logger.info(f"Configuration error resolved after {final_duration:.1f} seconds")
+            self.state.configuration_error_start_time = None
+        
+        # Track state transition if status changed
+        if previous_state == ReadinessStatus.CONFIGURATION_ERROR.value:
+            self.state.readiness_state_changes += 1
+        
         logger.info("Configuration marked as valid")
     
     def update_exchange_status(self, connected: int, expected: int):
@@ -256,6 +309,87 @@ class HealthCheckManager:
                 "uptime_seconds": self.state.uptime_seconds
             }
         }
+    
+    def get_prometheus_metrics(self) -> str:
+        """
+        Get Prometheus-compatible metrics.
+        
+        Returns metrics in Prometheus text format for scraping.
+        Includes:
+        - Health state metrics
+        - Configuration error duration
+        - Readiness state durations
+        - State transition counts
+        
+        Returns:
+            str: Prometheus-formatted metrics
+        """
+        metrics = []
+        
+        # Liveness metric
+        metrics.append('# HELP nija_up Service is up and running')
+        metrics.append('# TYPE nija_up gauge')
+        metrics.append(f'nija_up {1 if self.state.is_alive else 0}')
+        
+        # Readiness metric
+        metrics.append('# HELP nija_ready Service is ready to handle traffic')
+        metrics.append('# TYPE nija_ready gauge')
+        metrics.append(f'nija_ready {1 if self.state.is_ready else 0}')
+        
+        # Configuration valid metric
+        metrics.append('# HELP nija_configuration_valid Configuration is valid')
+        metrics.append('# TYPE nija_configuration_valid gauge')
+        metrics.append(f'nija_configuration_valid {1 if self.state.configuration_valid else 0}')
+        
+        # Configuration error duration (critical SLO metric)
+        metrics.append('# HELP nija_configuration_error_duration_seconds Time spent in configuration error state')
+        metrics.append('# TYPE nija_configuration_error_duration_seconds gauge')
+        metrics.append(f'nija_configuration_error_duration_seconds {self.state.configuration_error_duration_seconds}')
+        
+        # Uptime
+        metrics.append('# HELP nija_uptime_seconds Service uptime in seconds')
+        metrics.append('# TYPE nija_uptime_seconds gauge')
+        metrics.append(f'nija_uptime_seconds {self.state.uptime_seconds}')
+        
+        # Ready time
+        metrics.append('# HELP nija_ready_time_seconds Total time service has been ready')
+        metrics.append('# TYPE nija_ready_time_seconds counter')
+        metrics.append(f'nija_ready_time_seconds {self.state.total_ready_time_seconds}')
+        
+        # Not ready time
+        metrics.append('# HELP nija_not_ready_time_seconds Total time service has been not ready')
+        metrics.append('# TYPE nija_not_ready_time_seconds counter')
+        metrics.append(f'nija_not_ready_time_seconds {self.state.total_not_ready_time_seconds}')
+        
+        # State changes (for tracking flapping)
+        metrics.append('# HELP nija_readiness_state_changes_total Number of readiness state transitions')
+        metrics.append('# TYPE nija_readiness_state_changes_total counter')
+        metrics.append(f'nija_readiness_state_changes_total {self.state.readiness_state_changes}')
+        
+        # Exchange connectivity
+        metrics.append('# HELP nija_exchanges_connected Number of exchanges connected')
+        metrics.append('# TYPE nija_exchanges_connected gauge')
+        metrics.append(f'nija_exchanges_connected {self.state.exchanges_connected}')
+        
+        metrics.append('# HELP nija_exchanges_expected Number of exchanges expected to connect')
+        metrics.append('# TYPE nija_exchanges_expected gauge')
+        metrics.append(f'nija_exchanges_expected {self.state.expected_exchanges}')
+        
+        # Trading status
+        metrics.append('# HELP nija_trading_enabled Trading is enabled')
+        metrics.append('# TYPE nija_trading_enabled gauge')
+        metrics.append(f'nija_trading_enabled {1 if self.state.trading_enabled else 0}')
+        
+        metrics.append('# HELP nija_active_positions Number of active trading positions')
+        metrics.append('# TYPE nija_active_positions gauge')
+        metrics.append(f'nija_active_positions {self.state.active_positions}')
+        
+        # Error count
+        metrics.append('# HELP nija_error_count_total Total number of errors encountered')
+        metrics.append('# TYPE nija_error_count_total counter')
+        metrics.append(f'nija_error_count_total {self.state.error_count}')
+        
+        return '\n'.join(metrics) + '\n'
 
 
 # Singleton accessor
