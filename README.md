@@ -3598,10 +3598,49 @@ python3 diagnose_profitability_now.py
 
 **NEW - December 30, 2025**: Complete playbooks and guides added
 **UPDATED - December 31, 2025**: Added comprehensive system health check tools
+**NEW - February 4, 2026**: Safety guarantees and deployment documentation added
+
+### 🛡️ Safety & Compliance Documentation
+
+**NEW** 1. **[NIJA_SAFETY_GUARANTEES.md](NIJA_SAFETY_GUARANTEES.md)** ⭐ **USER SAFETY SUMMARY**
+   - One-page safety guarantees for users
+   - Core safety mechanisms explained
+   - Risk disclosures and user responsibilities
+   - Independent trading model overview
+   - Full control and transparency features
+   - Quick safety checklist before trading
+
+**NEW** 2. **[APPLE_FINAL_SUBMISSION_NOTE.md](APPLE_FINAL_SUBMISSION_NOTE.md)** 🍎 **APP STORE QUICK REFERENCE**
+   - 60-second review summary for Apple reviewers
+   - Common review questions answered
+   - Compliance checklist verification
+   - App flow walkthrough
+   - Complete documentation index
+
+**NEW** 3. **[DEPLOY_CHECKLIST.md](DEPLOY_CHECKLIST.md)** 🚀 **INFRASTRUCTURE & MONITORING**
+   - Comprehensive production deployment checklist
+   - Infrastructure setup (Railway, Docker, Kubernetes, VPS)
+   - Database configuration and backups
+   - Monitoring and alerting setup
+   - Security validation steps
+   - Disaster recovery procedures
+
+4. **[RISK_DISCLOSURE.md](RISK_DISCLOSURE.md)** ⚠️ **COMPLETE RISK STATEMENT**
+   - Detailed risk disclosure for trading
+   - All risks explained comprehensively
+   - User acknowledgment requirements
+
+5. **[TERMS_OF_SERVICE.md](TERMS_OF_SERVICE.md)** 📜 **LEGAL TERMS**
+   - Complete terms of service
+   - User agreement and responsibilities
+
+6. **[PRIVACY_POLICY.md](PRIVACY_POLICY.md)** 🔐 **PRIVACY POLICY**
+   - How user data is protected
+   - Privacy commitments
 
 ### System Health & Verification
 
-**NEW** 1. **[NIJA_CHECK_SUMMARY.md](NIJA_CHECK_SUMMARY.md)** 🔍 **QUICK STATUS CHECK**
+**NEW** 7. **[NIJA_CHECK_SUMMARY.md](NIJA_CHECK_SUMMARY.md)** 🔍 **QUICK STATUS CHECK**
    - One-page comprehensive health check summary
    - Broker connection status
    - Profitability configuration verification
@@ -3609,14 +3648,14 @@ python3 diagnose_profitability_now.py
    - Quick commands reference
    - **Script**: `./check_nija_comprehensive.sh` or `python3 comprehensive_nija_check.py`
 
-**NEW** 2. **[NIJA_COMPREHENSIVE_CHECK_REPORT.md](NIJA_COMPREHENSIVE_CHECK_REPORT.md)** 📊 **DETAILED ANALYSIS**
+**NEW** 8. **[NIJA_COMPREHENSIVE_CHECK_REPORT.md](NIJA_COMPREHENSIVE_CHECK_REPORT.md)** 📊 **DETAILED ANALYSIS**
    - Complete technical health report
    - System architecture overview
    - Troubleshooting guide
    - Expected performance metrics
    - Support resources
 
-**NEW** 3. **[NIJA_BROKER_PROFITABILITY_CHECKLIST.md](NIJA_BROKER_PROFITABILITY_CHECKLIST.md)** ✅ **INTERACTIVE CHECKLIST**
+**NEW** 9. **[NIJA_BROKER_PROFITABILITY_CHECKLIST.md](NIJA_BROKER_PROFITABILITY_CHECKLIST.md)** ✅ **INTERACTIVE CHECKLIST**
    - Step-by-step verification checklist
    - Component-by-component status
    - Expected behavior guide
@@ -3624,7 +3663,7 @@ python3 diagnose_profitability_now.py
 
 ### Core Playbooks & Guides
 
-4. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **START HERE**
+10. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **START HERE**
    - Complete guide to growing from any balance to $1000+/day
    - Capital tiers ($10, $50, $200, $1K, $5K, $20K+)
    - Position sizing rules per tier
@@ -3632,7 +3671,7 @@ python3 diagnose_profitability_now.py
    - Compound growth strategies
    - Common pitfalls and solutions
 
-5. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
+11. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
    - Comprehensive issue diagnosis
    - Balance & API problems
    - Trading issues (no trades, too many trades, etc.)
@@ -3640,7 +3679,7 @@ python3 diagnose_profitability_now.py
    - Performance optimization
    - Recovery procedures
 
-6. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
+12. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
    - Immediate stop procedures
    - Emergency liquidation
    - Trading lock/unlock
@@ -3648,55 +3687,55 @@ python3 diagnose_profitability_now.py
 
 ### Broker & Integration Guides
 
-7. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
+13. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
    - Coinbase Advanced Trade setup
    - Multi-broker configuration
    - API troubleshooting
 
-8. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
+14. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
    - OKX exchange integration
    - Lower fees (0.08% vs 1.4%)
 
-9. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
+15. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
    - Using multiple exchanges
    - Fee optimization strategies
 
 ### Profitability & Performance
 
-10. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
+16. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
    - Complete profitability analysis
    - How NIJA makes money
    - Verification methods
 
-11. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
+17. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
    - v7.2 upgrade details
    - Performance improvements
    - Configuration changes
 
-12. **[V7.2_UPGRADE_COMPLETE.md](V7.2_UPGRADE_COMPLETE.md)**
+18. **[V7.2_UPGRADE_COMPLETE.md](V7.2_UPGRADE_COMPLETE.md)**
    - v7.2 technical summary
    - Code changes
    - Deployment checklist
 
 ### Deployment & Operations
 
-13. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** / **[DEPLOYMENT_GUIDE_PROFIT_FIX.md](DEPLOYMENT_GUIDE_PROFIT_FIX.md)**
+19. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** / **[DEPLOYMENT_GUIDE_PROFIT_FIX.md](DEPLOYMENT_GUIDE_PROFIT_FIX.md)**
     - Railway deployment
     - Docker setup
     - Environment configuration
 
-14. **[ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md)** ⭐ NEW
+20. **[ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md)** ⭐ NEW
     - Complete environment variables reference
     - Local development (.env file) setup
     - Production deployment (Railway/Render/Heroku)
     - Multi-account Kraken credentials
     - Troubleshooting missing credentials
 
-15. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
+21. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
     - Alternative hosting on Render
     - Configuration steps
 
-16. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
+22. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
     - Safe restart procedures
     - Verification steps
 
