@@ -509,13 +509,24 @@ class IndependentBrokerTrader:
                     logger.info(f"   ═══════════════════════════════════════════════════════════")
                     logger.info(f"   💰 Current balance: ${balance:.2f}")
                     
-                    # TRADE REHYDRATION: Load and display managed positions
+                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION REHYDRATION
+                    # Platform account also independently manages its positions with exit logic
                     try:
-                        platform_positions = broker.get_positions()
-                        if platform_positions:
-                            logger.info(f"   🔁 Rehydrated {len(platform_positions)} NIJA-managed position(s)")
+                        if hasattr(self.trading_strategy, 'rehydrate_open_positions'):
+                            # Call the rehydrate function - it handles everything
+                            rehydrated = self.trading_strategy.rehydrate_open_positions(
+                                broker=broker,
+                                broker_name=broker_name.upper()
+                            )
+                            if rehydrated > 0:
+                                logger.info(f"   ✅ {broker_name.upper()}: {rehydrated} position(s) now managed by exit engine")
                         else:
-                            logger.info(f"   📊 No open positions to manage")
+                            # Fallback to legacy logging if method not available
+                            platform_positions = broker.get_positions()
+                            if platform_positions:
+                                logger.info(f"   🔁 Rehydrated {len(platform_positions)} NIJA-managed position(s)")
+                            else:
+                                logger.info(f"   📊 No open positions to manage")
                     except Exception as pos_err:
                         logger.warning(f"   ⚠️  Could not load positions: {pos_err}")
                     
@@ -629,21 +640,38 @@ class IndependentBrokerTrader:
 
                 # Run trading cycle for this user broker
                 try:
-                    # TRADE REHYDRATION: Load and manage positions for this user
-                    # This proves NIJA ownership and continues managing positions opened by NIJA
+                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION REHYDRATION
+                    # Each account independently manages its positions with identical exit logic
+                    # 
+                    # CRITICAL: This is run ONCE per cycle to:
+                    # 1. Scan exchange for existing open positions
+                    # 2. Register them locally in NIJA's position tracker
+                    # 3. Attach exit logic (stop-loss, profit targets, trailing stops, time exits)
+                    #
+                    # Result: Profit realization starts immediately for ALL positions
                     try:
-                        user_positions = broker.get_positions()
-                        if user_positions:
-                            logger.info(f"   🔁 {broker_name}: Rehydrated {len(user_positions)} NIJA-managed position(s)")
-                            for pos in user_positions:
-                                symbol = pos.get('symbol', 'UNKNOWN')
-                                size = pos.get('size', 0)
-                                entry = pos.get('entry_price', 0)
-                                logger.info(f"      • {symbol}: {size} @ ${entry:.4f}")
+                        if hasattr(self.trading_strategy, 'rehydrate_open_positions'):
+                            # Call the rehydrate function - it handles everything
+                            rehydrated = self.trading_strategy.rehydrate_open_positions(
+                                broker=broker,
+                                broker_name=broker_name
+                            )
+                            if rehydrated > 0:
+                                logger.info(f"   ✅ {broker_name}: {rehydrated} position(s) now managed by exit engine")
                         else:
-                            logger.info(f"   🔁 {broker_name}: No open positions to manage")
+                            # Fallback to legacy logging if method not available
+                            user_positions = broker.get_positions()
+                            if user_positions:
+                                logger.info(f"   🔁 {broker_name}: Found {len(user_positions)} position(s)")
+                                for pos in user_positions:
+                                    symbol = pos.get('symbol', 'UNKNOWN')
+                                    size = pos.get('size', 0)
+                                    entry = pos.get('entry_price', 0)
+                                    logger.info(f"      • {symbol}: {size} @ ${entry:.4f}")
+                            else:
+                                logger.info(f"   🔁 {broker_name}: No open positions found")
                     except Exception as pos_err:
-                        logger.warning(f"   ⚠️  {broker_name}: Could not load positions: {pos_err}")
+                        logger.warning(f"   ⚠️  {broker_name}: Position rehydration failed: {pos_err}")
                     
                     # USER accounts should NEVER generate signals
                     # Users only execute copy trades from master - they don't run strategy themselves

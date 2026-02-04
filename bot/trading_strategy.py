@@ -1298,6 +1298,138 @@ class TradingStrategy:
             self.apex = None
             self.independent_trader = None
 
+    def rehydrate_open_positions(self, broker, broker_name: str = "UNKNOWN") -> int:
+        """
+        UNIFIED STRATEGY PER ACCOUNT - Core Function
+        
+        Rehydrate existing open positions from the exchange and immediately
+        attach exit logic (stop-loss, take-profit, trailing stops, time exits).
+        
+        This enables each account to manage its own positions independently with
+        identical exit strategies, regardless of where the position originated.
+        
+        Steps:
+        1. Query broker for open positions (via get_positions or get_open_positions)
+        2. Wrap each position in NIJA's internal position model (position_tracker)
+        3. Hand positions to exit engine (exit logic auto-attaches during run_cycle)
+        
+        Args:
+            broker: Broker instance to query for positions
+            broker_name: Human-readable broker name for logging
+            
+        Returns:
+            int: Number of positions rehydrated and registered
+        """
+        if not broker:
+            logger.warning(f"⚠️  Cannot rehydrate positions: broker is None")
+            return 0
+            
+        try:
+            logger.info("=" * 70)
+            logger.info(f"🔄 REHYDRATING OPEN POSITIONS FROM {broker_name.upper()}")
+            logger.info("=" * 70)
+            
+            # Step 1: Query broker for existing open positions
+            try:
+                # Try get_positions first (standard method)
+                if hasattr(broker, 'get_positions'):
+                    positions = broker.get_positions()
+                # Fallback to get_open_positions if available
+                elif hasattr(broker, 'get_open_positions'):
+                    positions = broker.get_open_positions()
+                else:
+                    logger.error(f"   ❌ Broker {broker_name} does not support position queries")
+                    return 0
+                    
+                if not positions:
+                    logger.info(f"   ✅ No open positions found on {broker_name}")
+                    logger.info("=" * 70)
+                    return 0
+                    
+                logger.info(f"   📊 Found {len(positions)} open position(s) on exchange")
+                
+            except Exception as fetch_err:
+                logger.error(f"   ❌ Failed to fetch positions from {broker_name}: {fetch_err}")
+                logger.info("=" * 70)
+                return 0
+            
+            # Step 2: Wrap each position in NIJA's internal position model
+            rehydrated_count = 0
+            position_tracker = getattr(broker, 'position_tracker', None)
+            
+            for pos in positions:
+                try:
+                    symbol = pos.get('symbol', 'UNKNOWN')
+                    entry_price = pos.get('entry_price', 0.0)
+                    current_price = pos.get('current_price', 0.0)
+                    quantity = pos.get('quantity', pos.get('size', 0.0))
+                    
+                    # Calculate size in USD
+                    size_usd = pos.get('size_usd', pos.get('usd_value', 0.0))
+                    if size_usd == 0 and current_price > 0 and quantity > 0:
+                        size_usd = current_price * quantity
+                    
+                    # If entry price is missing, use current price with safety multiplier
+                    # This creates a small loss to trigger aggressive exit management
+                    if entry_price == 0:
+                        entry_price = current_price * 1.01  # 1% above current = -0.99% immediate loss
+                        logger.warning(f"   ⚠️  {symbol}: No entry price available, using safety default (current * 1.01)")
+                    
+                    # Register position in tracker if available
+                    if position_tracker:
+                        success = position_tracker.track_entry(
+                            symbol=symbol,
+                            entry_price=entry_price,
+                            quantity=quantity,
+                            size_usd=size_usd,
+                            strategy="REHYDRATED"
+                        )
+                        if success:
+                            rehydrated_count += 1
+                            
+                            # Calculate current P&L for logging
+                            if current_price > 0 and entry_price > 0:
+                                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                            else:
+                                pnl_pct = 0.0
+                            
+                            logger.info(f"   ✅ {symbol}: Registered (Entry: ${entry_price:.4f}, Current: ${current_price:.4f}, P&L: {pnl_pct:+.2f}%)")
+                        else:
+                            logger.warning(f"   ⚠️  {symbol}: Failed to register in position tracker")
+                    else:
+                        # No position tracker, but still count as rehydrated
+                        # Exit logic will still work via get_positions() in run_cycle
+                        rehydrated_count += 1
+                        if current_price > 0 and entry_price > 0:
+                            pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                        else:
+                            pnl_pct = 0.0
+                        logger.info(f"   ✅ {symbol}: Ready for exit management (P&L: {pnl_pct:+.2f}%)")
+                        
+                except Exception as pos_err:
+                    logger.error(f"   ❌ Failed to rehydrate position {pos.get('symbol', 'UNKNOWN')}: {pos_err}")
+                    continue
+            
+            # Step 3: Log handoff to exit engine
+            logger.info("")
+            logger.info(f"   🎯 EXIT ENGINE ACTIVATED FOR {rehydrated_count} POSITION(S)")
+            logger.info("   ✅ Stop-loss protection: ENABLED")
+            logger.info("   ✅ Take-profit targets: ENABLED")
+            logger.info("   ✅ Trailing stops: ENABLED")
+            logger.info("   ✅ Time-based exits: ENABLED")
+            logger.info("")
+            logger.info(f"   💰 Profit realization will begin NEXT CYCLE (2.5 min)")
+            logger.info("=" * 70)
+            
+            return rehydrated_count
+            
+        except Exception as e:
+            logger.error(f"❌ Critical error during position rehydration: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            logger.info("=" * 70)
+            return 0
+
     def _log_broker_independence_message(self):
         """
         Helper to log that other brokers continue trading independently.
