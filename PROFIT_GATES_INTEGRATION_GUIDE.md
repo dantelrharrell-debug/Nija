@@ -4,7 +4,12 @@
 
 This guide explains how to integrate the profit gates features into NIJA's existing trading system.
 
-## Four Requirements Implemented
+**Three Guardrails for Bulletproof Audits:**
+1. **Meaningful Profit Metric** - Internal quality tracking
+2. **Hard Drawdown Circuit Breaker** - Survival mechanism
+3. **Honest Accounting** - No neutral outcomes
+
+## Four Requirements + Three Guardrails Implemented
 
 ### A. Profit Gates ✅
 **What**: No neutral/breakeven outcomes - all trades are win or loss
@@ -58,6 +63,67 @@ This ensures trade outcomes are immediately recorded, not left pending.
 **Why**: The one metric that determines if NIJA is profitable
 **Files Created**:
 - `bot/nija_health_metric.py` - Health metric engine
+
+---
+
+## Three Guardrails (Bulletproof Audits)
+
+### Guardrail 1: Meaningful Profit Metric ✅
+**What**: Track `MEANINGFUL_WIN = net_pnl >= (2 × fees)`
+**Why**: A $0.01 win on $0.10 fees is technically true but strategically useless
+
+**Implementation**:
+- Keep WIN/LOSS as truth (honest accounting)
+- Separately track MEANINGFUL_WIN (strategy quality)
+- Internal discipline only - NOT exposed to users
+
+**Formula**:
+```python
+if pnl_dollars > 0:
+    outcome = 'win'  # Truth
+    meaningful_win = (pnl_dollars >= 2 * total_fees)  # Quality
+else:
+    outcome = 'loss'
+    meaningful_win = False
+```
+
+**Files Modified**:
+- `bot/trade_journal.py` - Added meaningful_win classification
+
+### Guardrail 2: Hard Drawdown Circuit Breaker ✅
+**What**: If 24h net PnL <= -3% → pause new entries, exits only
+**Why**: Survives bad market regimes
+
+**Implementation**:
+- Triggers automatically at -3% 24h loss
+- NEW ENTRIES PAUSED (exits still allowed)
+- Resets automatically on profitability
+- Simple but effective protection
+
+**Usage**:
+```python
+health = NIJAHealthMetric()
+allowed, reason = health.should_allow_new_entry()
+
+if not allowed:
+    logger.error(f"🧯 {reason}")
+    # Process exits only, block new entries
+else:
+    # Normal trading allowed
+```
+
+**Files Modified**:
+- `bot/nija_health_metric.py` - Added circuit breaker logic
+
+### Guardrail 3: Integration Complete ✅
+**What**: All systems working together
+**Why**: Makes audits bulletproof
+
+**Features**:
+- Circuit breaker status in health metric logs
+- Helper methods for checking status
+- Automatic reset mechanisms
+- Clear logging with 🧯 emoji
 
 ---
 
