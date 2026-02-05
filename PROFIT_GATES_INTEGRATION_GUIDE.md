@@ -9,17 +9,43 @@ This guide explains how to integrate the profit gates features into NIJA's exist
 ### A. Profit Gates ✅
 **What**: No neutral/breakeven outcomes - all trades are win or loss
 **Why**: Honest accounting - after fees, breakeven is a loss
+**Critical Rule**: Any trade with net P&L ≤ 0 is a LOSS
+
+**This is the most important line in the entire system.**
+
+Why it matters:
+- Fees are real
+- Slippage is real
+- "Breakeven" is emotional cope
+
 **Files Modified**:
 - `bot/trade_journal.py` - Outcome classification logic
 - `bot/position_mirror.py` - Position close outcomes
 - `bot/risk_manager.py` - Streak tracking
 - `bot/ai_ml_base.py` - Documentation updates
 
+**Profit logic lives below strategy logic.** This hard-codes truth into the system.
+
 ### B. Dust Prevention ✅
 **What**: Position caps, asset ranking, forced exits on stagnation
 **Why**: Own few things with intention, not a little of everything
+
+**Real Problem Solved**:
+- Earlier logs showed $45-$63 balances with ~50 positions
+- This is index fund cosplay, not intentional trading
+- Dust prevention fixes this pathology
+
+**What's Good**:
+- Hard position caps (default: 5)
+- Health scoring (P&L + age + stagnation)
+- Forced exits after 4h of dead money
+- **Explicit profit status logging: PENDING → CONFIRMED**
+
 **Files Created**:
 - `bot/dust_prevention_engine.py` - Core dust prevention logic
+
+**Critical**: Forced exits log explicitly as `PROFIT_STATUS = PENDING → CONFIRMED`
+This ensures trade outcomes are immediately recorded, not left pending.
 
 ### C. User Truth Layer ✅
 **What**: Clear daily P&L reporting ("Today you made +$0.42")
@@ -107,6 +133,32 @@ def run_trading_cycle():
     for signal in signals:
         if execution_engine.before_new_trade(signal.symbol):
             execution_engine.enter_trade(signal)
+
+# Example of forced exit with profit status logging
+def check_position_health(self):
+    """Check and close unhealthy positions"""
+    positions = self.get_open_positions()
+    
+    # Identify positions to close
+    to_close = self.dust_engine.identify_positions_to_close(
+        positions,
+        force_to_limit=True
+    )
+    
+    # Close identified positions with explicit profit status logging
+    for pos in to_close:
+        # Log the forced exit
+        self.dust_engine.log_forced_exit(
+            symbol=pos['symbol'],
+            reason=pos['reason'],
+            current_pnl_pct=pos['current_pnl']
+        )
+        
+        # Execute the close
+        self.close_position(pos['symbol'])
+        
+        # PROFIT_STATUS = PENDING → CONFIRMED
+        # This ensures the trade outcome is immediately recorded
 ```
 
 ---

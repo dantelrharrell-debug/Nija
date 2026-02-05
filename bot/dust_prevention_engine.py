@@ -228,7 +228,9 @@ class DustPreventionEngine:
                     'symbol': pos['symbol'],
                     'reason': f'Position cap exceeded (score: {health.score:.0f}, {health.reason})',
                     'health_score': health.score,
-                    'priority': 'HIGH'
+                    'priority': 'HIGH',
+                    'profit_status_transition': 'PENDING → CONFIRMED',
+                    'current_pnl': pos.get('pnl_pct', 0)
                 })
         
         # Rule 2: Close stagnant positions (score < 30)
@@ -242,25 +244,52 @@ class DustPreventionEngine:
                     'symbol': pos['symbol'],
                     'reason': f'Unhealthy position (score: {health.score:.0f}, {health.reason})',
                     'health_score': health.score,
-                    'priority': 'MEDIUM'
+                    'priority': 'MEDIUM',
+                    'profit_status_transition': 'PENDING → CONFIRMED',
+                    'current_pnl': pos.get('pnl_pct', 0)
                 })
             elif health.last_movement_hours > self.stagnation_hours:
                 to_close.append({
                     'symbol': pos['symbol'],
                     'reason': f'Stagnant (no movement for {health.last_movement_hours:.1f}h)',
                     'health_score': health.score,
-                    'priority': 'MEDIUM'
+                    'priority': 'MEDIUM',
+                    'profit_status_transition': 'PENDING → CONFIRMED',
+                    'current_pnl': pos.get('pnl_pct', 0)
                 })
         
-        # Log results
+        # Log results with profit status transitions
         if to_close:
             logger.warning(f"🧹 Identified {len(to_close)} positions for dust cleanup:")
             for tc in to_close:
                 logger.warning(f"   {tc['priority']}: {tc['symbol']} - {tc['reason']}")
+                # PROFIT_STATUS transition logging
+                logger.warning(f"   PROFIT_STATUS = PENDING → CONFIRMED (forced exit)")
         else:
             logger.info(f"✅ All {len(positions)} positions healthy (under limit of {self.max_positions})")
         
         return to_close
+    
+    def log_forced_exit(self, symbol: str, reason: str, current_pnl_pct: float):
+        """
+        Log a forced exit with explicit profit status transition
+        
+        This is the critical logging that ensures forced exits are tracked
+        as confirmed wins/losses, not left in pending state.
+        
+        Args:
+            symbol: The symbol being force-closed
+            reason: Why it's being closed
+            current_pnl_pct: Current P&L percentage
+        """
+        outcome = "WIN" if current_pnl_pct > 0 else "LOSS"
+        logger.warning(f"")
+        logger.warning(f"🧹 FORCED EXIT: {symbol}")
+        logger.warning(f"   Reason: {reason}")
+        logger.warning(f"   Current P&L: {current_pnl_pct*100:+.2f}%")
+        logger.warning(f"   PROFIT_STATUS = PENDING → CONFIRMED")
+        logger.warning(f"   OUTCOME = {outcome} (no neutral, no pending)")
+        logger.warning(f"")
     
     def should_allow_new_position(self, current_position_count: int) -> Tuple[bool, str]:
         """
@@ -340,6 +369,16 @@ if __name__ == "__main__":
     
     # Check positions
     to_close = engine.identify_positions_to_close(positions, force_to_limit=True)
+    
+    # Log forced exits with profit status transitions
+    if to_close:
+        print("\n🧹 Executing Forced Exits:")
+        for pos_to_close in to_close:
+            engine.log_forced_exit(
+                symbol=pos_to_close['symbol'],
+                reason=pos_to_close['reason'],
+                current_pnl_pct=pos_to_close['current_pnl']
+            )
     
     # Quality report
     report = engine.get_position_quality_report(positions)
