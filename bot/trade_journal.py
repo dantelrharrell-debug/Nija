@@ -155,6 +155,12 @@ class TradeJournal:
             pnl_pct = ((entry_price - exit_price) / entry_price) * 100
 
         pnl_dollars = (pnl_pct / 100) * position_size * exit_pct
+        
+        # Calculate fees (estimate if not provided)
+        # Typical Coinbase Advanced: 0.6% maker, 0.8% taker = ~1.4% round trip
+        # Use conservative 1.4% for fee estimation
+        estimated_fees = position_size * 0.014 * exit_pct if 'fees' not in trade else trade.get('fees', 0)
+        total_fees = estimated_fees
 
         # Calculate hold time
         entry_time = trade['entry_time']
@@ -162,12 +168,20 @@ class TradeJournal:
         hold_minutes = int(hold_time.total_seconds() / 60)
 
         # Determine outcome
+        # PROFIT GATE: No neutral outcomes - if not profitable, it's a loss
+        # After fees, breakeven or zero P&L means money was lost on fees
         if pnl_dollars > 0:
             outcome = 'win'
-        elif pnl_dollars < 0:
-            outcome = 'loss'
         else:
-            outcome = 'breakeven'
+            # Any trade that doesn't make money (including breakeven) is a loss
+            # This ensures honest accounting - fees mean breakeven = loss
+            outcome = 'loss'
+        
+        # GUARDRAIL 1: Meaningful profit metric (internal discipline)
+        # A $0.01 win on $0.10 fees is technically true but strategically useless
+        # Track separately: MEANINGFUL_WIN = net_pnl >= (2 × fees)
+        # This is NOT exposed to users - internal strategy quality metric
+        meaningful_win = (pnl_dollars >= 2 * total_fees) if outcome == 'win' else False
 
         # Update trade record
         if partial_exit:
@@ -180,7 +194,9 @@ class TradeJournal:
             exit_record['hold_minutes'] = hold_minutes
             exit_record['pnl_pct'] = pnl_pct
             exit_record['pnl_dollars'] = pnl_dollars
+            exit_record['fees'] = total_fees
             exit_record['outcome'] = outcome
+            exit_record['meaningful_win'] = meaningful_win  # Internal metric
             exit_record['status'] = 'partial_exit'
 
             # Reduce position size in active trade
@@ -194,7 +210,9 @@ class TradeJournal:
             trade['hold_minutes'] = hold_minutes
             trade['pnl_pct'] = pnl_pct
             trade['pnl_dollars'] = pnl_dollars
+            trade['fees'] = total_fees
             trade['outcome'] = outcome
+            trade['meaningful_win'] = meaningful_win  # Internal metric
             trade['status'] = 'closed'
 
             exit_record = trade
@@ -288,7 +306,11 @@ class TradeJournal:
         total_trades = len(trades)
         wins = len(trades[trades['outcome'] == 'win'])
         losses = len(trades[trades['outcome'] == 'loss'])
-        breakevens = len(trades[trades['outcome'] == 'breakeven'])
+        # PROFIT GATE: No breakeven outcomes - removed from metrics
+        
+        # GUARDRAIL 1: Meaningful profit metrics (internal only)
+        meaningful_wins = len(trades[trades.get('meaningful_win', False) == True]) if 'meaningful_win' in trades.columns else 0
+        meaningful_win_rate = (meaningful_wins / total_trades * 100) if total_trades > 0 else 0
 
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
 
@@ -329,8 +351,11 @@ class TradeJournal:
             'total_trades': total_trades,
             'wins': wins,
             'losses': losses,
-            'breakevens': breakevens,
+            # PROFIT GATE: No breakeven outcomes tracked
             'win_rate': win_rate,
+            # GUARDRAIL 1: Internal meaningful profit tracking
+            'meaningful_wins': meaningful_wins,
+            'meaningful_win_rate': meaningful_win_rate,
             'total_pnl': total_pnl,
             'avg_win': avg_win,
             'avg_loss': avg_loss,
@@ -452,7 +477,8 @@ class TradeJournal:
         print(f"TRADING JOURNAL SUMMARY - Last {days} Days")
         print("="*60)
         print(f"Total Trades: {metrics['total_trades']}")
-        print(f"Wins: {metrics['wins']} | Losses: {metrics['losses']} | Breakeven: {metrics['breakevens']}")
+        print(f"Wins: {metrics['wins']} | Losses: {metrics['losses']}")
+        # PROFIT GATE: No breakeven outcomes to report
         print(f"Win Rate: {metrics['win_rate']:.1f}%")
         print(f"\nP&L Performance:")
         print(f"  Total P&L: ${metrics['total_pnl']:.2f}")

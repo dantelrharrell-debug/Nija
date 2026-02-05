@@ -340,7 +340,7 @@ class LiveDataLogger:
 
         Args:
             signal_id: ID from log_signal()
-            outcome: 'win', 'loss', or 'breakeven'
+            outcome: 'win' or 'loss' (PROFIT GATE: no breakeven outcomes)
             pnl: Profit/loss in dollars
             duration_minutes: How long trade was held
             exit_reason: Why trade was exited
@@ -574,7 +574,7 @@ class EnhancedAIEngine:
 
         Args:
             signal_id: ID returned from predict_signal()
-            outcome: 'win', 'loss', or 'breakeven'
+            outcome: 'win' or 'loss' (PROFIT GATE: no breakeven outcomes)
             pnl: Profit/loss in dollars
             duration_minutes: Trade duration
             exit_reason: Why trade was exited
