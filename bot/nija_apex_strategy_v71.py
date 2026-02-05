@@ -762,11 +762,11 @@ class NIJAApexStrategyV71:
             long_rsi_min = 30
             long_rsi_max = 55
 
-        # Apply adaptive RSI condition: balanced entry strategy
-        # - In uptrends: RSI 30-55 captures both pullbacks and momentum
-        # - Lower RSI (30-40): Deep pullback entries (mean reversion)
-        # - Mid RSI (40-50): Shallow pullback entries (momentum continuation)  
-        # - Upper RSI (50-55): Early momentum entries (trend following)
+        # Apply adaptive RSI condition: balanced entry strategy (fallback)
+        # When regime detection is unavailable, use balanced ranges for all market conditions
+        # - RSI 30-40: Deep pullback entries (mean reversion)
+        # - RSI 40-50: Shallow pullback entries (momentum continuation)
+        # - RSI 50-55: Early momentum entries (trend following)
         conditions['rsi_pullback'] = long_rsi_min <= rsi <= long_rsi_max and rsi > rsi_prev
 
         # 3. Bullish candlestick patterns
@@ -862,11 +862,11 @@ class NIJAApexStrategyV71:
             short_rsi_min = 45
             short_rsi_max = 70
 
-        # Apply adaptive RSI condition: balanced short entry strategy
-        # - In downtrends: RSI 45-70 captures both bounces and momentum
-        # - Lower RSI (45-50): Early momentum short entries (trend following)
-        # - Mid RSI (50-60): Bounce short entries (momentum continuation)
-        # - Upper RSI (60-70): Extreme overbought shorts (mean reversion)
+        # Apply adaptive RSI condition: balanced short entry strategy (fallback)
+        # When regime detection is unavailable, use balanced ranges for all market conditions
+        # - RSI 45-50: Early momentum short entries (trend following)
+        # - RSI 50-60: Bounce short entries (momentum continuation)
+        # - RSI 60-70: Extreme overbought shorts (mean reversion)
         conditions['rsi_pullback'] = short_rsi_min <= rsi <= short_rsi_max and rsi < rsi_prev
 
         # 3. Bearish candlestick patterns
