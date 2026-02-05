@@ -243,7 +243,8 @@ class LivePositionMirror:
             'net_pnl': net_pnl,
             'pnl_pct': pnl_pct,
             'exit_reason': exit_reason,
-            'outcome': 'win' if net_pnl > 0 else ('loss' if net_pnl < 0 else 'breakeven')
+            # PROFIT GATE: No neutral outcomes - if not profitable, it's a loss
+            'outcome': 'win' if net_pnl > 0 else 'loss'
         }
 
         # Remove from active positions

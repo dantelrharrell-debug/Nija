@@ -162,12 +162,14 @@ class TradeJournal:
         hold_minutes = int(hold_time.total_seconds() / 60)
 
         # Determine outcome
+        # PROFIT GATE: No neutral outcomes - if not profitable, it's a loss
+        # After fees, breakeven or zero P&L means money was lost on fees
         if pnl_dollars > 0:
             outcome = 'win'
-        elif pnl_dollars < 0:
-            outcome = 'loss'
         else:
-            outcome = 'breakeven'
+            # Any trade that doesn't make money (including breakeven) is a loss
+            # This ensures honest accounting - fees mean breakeven = loss
+            outcome = 'loss'
 
         # Update trade record
         if partial_exit:
@@ -288,7 +290,7 @@ class TradeJournal:
         total_trades = len(trades)
         wins = len(trades[trades['outcome'] == 'win'])
         losses = len(trades[trades['outcome'] == 'loss'])
-        breakevens = len(trades[trades['outcome'] == 'breakeven'])
+        # PROFIT GATE: No breakeven outcomes - removed from metrics
 
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
 
@@ -329,7 +331,7 @@ class TradeJournal:
             'total_trades': total_trades,
             'wins': wins,
             'losses': losses,
-            'breakevens': breakevens,
+            # PROFIT GATE: No breakeven outcomes tracked
             'win_rate': win_rate,
             'total_pnl': total_pnl,
             'avg_win': avg_win,
@@ -452,7 +454,8 @@ class TradeJournal:
         print(f"TRADING JOURNAL SUMMARY - Last {days} Days")
         print("="*60)
         print(f"Total Trades: {metrics['total_trades']}")
-        print(f"Wins: {metrics['wins']} | Losses: {metrics['losses']} | Breakeven: {metrics['breakevens']}")
+        print(f"Wins: {metrics['wins']} | Losses: {metrics['losses']}")
+        # PROFIT GATE: No breakeven outcomes to report
         print(f"Win Rate: {metrics['win_rate']:.1f}%")
         print(f"\nP&L Performance:")
         print(f"  Total P&L: ${metrics['total_pnl']:.2f}")

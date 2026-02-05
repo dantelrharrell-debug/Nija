@@ -236,8 +236,10 @@ class AdaptiveRiskManager:
         for trade in reversed(self.recent_trades):
             outcome = trade['outcome']
 
+            # PROFIT GATE: No breakeven outcomes anymore - only win or loss
+            # If somehow breakeven appears, treat as loss (shouldn't happen)
             if outcome == 'breakeven':
-                break  # Breakeven ends streak
+                outcome = 'loss'
 
             if streak_type is None:
                 # First trade in streak
