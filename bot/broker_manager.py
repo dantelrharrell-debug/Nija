@@ -3844,7 +3844,7 @@ class CoinbaseBroker(BaseBroker):
             )
 
             if hasattr(candles, 'candles'):
-                return [vars(c) for c in candles.candles]
+                return [dict(vars(c)) for c in candles.candles]
             elif isinstance(candles, dict) and 'candles' in candles:
                 return candles['candles']
             return []
