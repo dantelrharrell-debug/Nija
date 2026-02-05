@@ -57,22 +57,27 @@ class RegimeDetector:
                 'position_size_multiplier': 1.2,  # Increase position size by 20%
                 'trailing_stop_distance': 1.5,  # Wider trailing stop (1.5x ATR)
                 'take_profit_multiplier': 1.5,  # Higher profit targets
-                # ADAPTIVE RSI RANGES (MAX ALPHA UPGRADE)
-                'long_rsi_min': 25,   # Tighter range for high conviction
-                'long_rsi_max': 45,   # Standard institutional grade
-                'short_rsi_min': 55,  # Standard institutional grade
-                'short_rsi_max': 75,  # Tighter range for high conviction
+                # ADAPTIVE RSI RANGES (MOMENTUM-OPTIMIZED FOR TRENDING MARKETS)
+                # CRITICAL FIX: Wider RSI ranges to capture momentum moves, not just pullbacks
+                # In strong trends, waiting for deep pullbacks (RSI 25-45) causes missed entries
+                # Solution: Allow entries at higher RSI levels to ride momentum
+                'long_rsi_min': 30,   # Allow slightly higher entries for momentum
+                'long_rsi_max': 55,   # WIDENED: Capture momentum entries (was 45)
+                'short_rsi_min': 45,  # WIDENED: Capture momentum entries (was 55)
+                'short_rsi_max': 70,  # Allow slightly lower entries for momentum
             },
             MarketRegime.RANGING: {
                 'min_entry_score': 4,  # Require 4/5 conditions (more selective)
                 'position_size_multiplier': 0.8,  # Reduce position size by 20%
                 'trailing_stop_distance': 1.0,  # Tighter trailing stop (1.0x ATR)
                 'take_profit_multiplier': 0.8,  # Lower profit targets (take profits faster)
-                # ADAPTIVE RSI RANGES (MAX ALPHA UPGRADE)
-                'long_rsi_min': 20,   # Wider range for more opportunities
-                'long_rsi_max': 50,   # Extended to neutral zone
-                'short_rsi_min': 50,  # Extended to neutral zone
-                'short_rsi_max': 80,  # Wider range for more opportunities
+                # ADAPTIVE RSI RANGES (MEAN-REVERSION OPTIMIZED FOR RANGING MARKETS)
+                # In ranging markets, true "buy low, sell high" mean reversion works best
+                # Buy extreme oversold, sell extreme overbought
+                'long_rsi_min': 20,   # Buy at extreme oversold levels
+                'long_rsi_max': 35,   # NARROWED: Only buy very low (was 50)
+                'short_rsi_min': 65,  # NARROWED: Only sell very high (was 50)
+                'short_rsi_max': 80,  # Sell at extreme overbought levels
             },
             MarketRegime.VOLATILE: {
                 'min_entry_score': 4,  # Require 4/5 conditions (more selective)
