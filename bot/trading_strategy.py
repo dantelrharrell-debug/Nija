@@ -4512,7 +4512,8 @@ class TradingStrategy:
                     # Get all available brokers for selection
                     all_brokers = {}
                     if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
-                        all_brokers = getattr(self.multi_account_manager, 'platform_brokers', {})
+                        # ensure mutable broker registry
+                        all_brokers = dict(getattr(self.multi_account_manager, 'platform_brokers', {}))
 
                     # Add current active broker if not in multi_account_manager
                     if active_broker and hasattr(active_broker, 'broker_type'):
