@@ -21,6 +21,18 @@ except ImportError:
         # Graceful fallback if market_filters not available
         check_pair_quality = None
 
+# Import Market Readiness Gate for entry quality control
+try:
+    from market_readiness_gate import MarketReadinessGate, MarketMode
+except ImportError:
+    try:
+        from bot.market_readiness_gate import MarketReadinessGate, MarketMode
+    except ImportError:
+        # Graceful fallback if market readiness gate not available
+        MarketReadinessGate = None
+        MarketMode = None
+        logger.warning("⚠️ Market Readiness Gate not available - using legacy entry mode")
+
 # Import scalar helper for indicator conversions
 try:
     from indicators import scalar
@@ -562,6 +574,18 @@ class TradingStrategy:
         except ImportError:
             logger.warning("⚠️ Portfolio state manager not available - falling back to cash-based sizing")
             self.portfolio_manager = None
+
+        # Initialize Market Readiness Gate for entry quality control
+        if MarketReadinessGate is not None:
+            try:
+                self.market_readiness_gate = MarketReadinessGate()
+                logger.info("✅ Market Readiness Gate initialized - entry quality control active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Market Readiness Gate: {e}")
+                self.market_readiness_gate = None
+        else:
+            self.market_readiness_gate = None
+            logger.warning("⚠️ Market Readiness Gate not available - using legacy entry mode")
 
         # FIX #2: Initialize forced stop-loss executor
         try:
@@ -4901,6 +4925,60 @@ class TradingStrategy:
                                     # If quality check fails, log warning but don't block trading
                                     logger.debug(f"   ⚠️ Quality check error for {symbol}: {quality_err}")
 
+                            # ═══════════════════════════════════════════════════════
+                            # MARKET READINESS GATE - Check market conditions
+                            # ═══════════════════════════════════════════════════════
+                            # Calculate required indicators for market readiness check
+                            if self.market_readiness_gate is not None:
+                                try:
+                                    # Calculate indicators needed for readiness check
+                                    current_price = df['close'].iloc[-1]
+                                    
+                                    # Calculate ATR if not already in df
+                                    if 'atr' not in df.columns:
+                                        from indicators import calculate_atr
+                                        df['atr'] = calculate_atr(df, period=14)
+                                    atr = scalar(df['atr'].iloc[-1])
+                                    
+                                    # Calculate ADX if not already in df
+                                    if 'adx' not in df.columns:
+                                        from indicators import calculate_adx
+                                        df['adx'] = calculate_adx(df, period=14)
+                                    adx = scalar(df['adx'].iloc[-1])
+                                    
+                                    # Calculate volume percentile (current volume vs 24h average)
+                                    volume_percentile = 50.0  # Default to neutral
+                                    if 'volume' in df.columns and len(df) >= 20:
+                                        current_volume = df['volume'].iloc[-1]
+                                        avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
+                                        if avg_volume > 0:
+                                            volume_ratio = current_volume / avg_volume
+                                            # Convert ratio to percentile (0.5 = 50%, 1.0 = 100%, 2.0 = 200%)
+                                            volume_percentile = min(100, volume_ratio * 50)
+                                    
+                                    # Estimate spread (TODO: get real bid/ask from broker)
+                                    spread_pct = 0.001  # Conservative 0.1% estimate
+                                    
+                                    # Check market readiness (pass None for entry_score initially)
+                                    mode, conditions, details = self.market_readiness_gate.check_market_readiness(
+                                        atr=atr,
+                                        current_price=current_price,
+                                        adx=adx,
+                                        volume_percentile=volume_percentile,
+                                        spread_pct=spread_pct,
+                                        entry_score=None  # Will check again after scoring
+                                    )
+                                    
+                                    # Block entries in IDLE mode
+                                    if mode == MarketMode.IDLE:
+                                        logger.debug(f"   ⏸️  {symbol}: IDLE MODE - {details['message']}")
+                                        filter_stats['market_filter'] += 1
+                                        continue
+                                    
+                                except Exception as readiness_err:
+                                    logger.debug(f"   ⚠️ Market readiness check error for {symbol}: {readiness_err}")
+                                    # Continue with analysis if readiness check fails
+
                             # Analyze for entry
                             # CRITICAL: Use broker-specific balance for position sizing
                             # PRO MODE: Include broker's position values (total capital)
@@ -4931,6 +5009,49 @@ class TradingStrategy:
                             if action in ['enter_long', 'enter_short']:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
+                                entry_score = analysis.get('score', 0)  # Get entry score from analysis
+
+                                # ═══════════════════════════════════════════════════════
+                                # MARKET READINESS GATE - Re-check with entry score for CAUTIOUS mode
+                                # ═══════════════════════════════════════════════════════
+                                if self.market_readiness_gate is not None:
+                                    try:
+                                        # Re-check market readiness with actual entry score
+                                        # This enables CAUTIOUS mode filtering (requires score ≥85)
+                                        mode, conditions, details = self.market_readiness_gate.check_market_readiness(
+                                            atr=atr,
+                                            current_price=current_price,
+                                            adx=adx,
+                                            volume_percentile=volume_percentile,
+                                            spread_pct=spread_pct,
+                                            entry_score=entry_score
+                                        )
+                                        
+                                        # Apply mode-specific position size adjustments
+                                        if mode == MarketMode.IDLE:
+                                            logger.info(f"   ⏸️  {symbol}: IDLE MODE - No entries allowed")
+                                            logger.info(f"      {details['message']}")
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        elif mode == MarketMode.CAUTIOUS:
+                                            if not details['allow_entries']:
+                                                logger.info(f"   ⚠️  {symbol}: CAUTIOUS MODE - Entry blocked (score {entry_score:.0f} < 85)")
+                                                filter_stats['market_filter'] += 1
+                                                continue
+                                            else:
+                                                # CAUTIOUS mode: Cap position size at 20% of normal
+                                                cautious_multiplier = details.get('position_size_multiplier', 0.20)
+                                                original_size = position_size
+                                                position_size = position_size * cautious_multiplier
+                                                logger.info(f"   ⚠️  {symbol}: CAUTIOUS MODE - Position size reduced to {cautious_multiplier*100:.0f}%")
+                                                logger.info(f"      Original: ${original_size:.2f} → Cautious: ${position_size:.2f}")
+                                                logger.info(f"      Entry score: {entry_score:.0f}/100 (A+ setup)")
+                                        elif mode == MarketMode.AGGRESSIVE:
+                                            logger.debug(f"   🚀 {symbol}: AGGRESSIVE MODE - Full position sizing")
+                                        
+                                    except Exception as readiness_err:
+                                        logger.warning(f"   ⚠️ Market readiness re-check error for {symbol}: {readiness_err}")
+                                        # Continue with trade if readiness check fails
 
                                 # Calculate dynamic minimum based on account balance (OPTION 3)
                                 min_position_size_dynamic = get_dynamic_min_position_size(account_balance)
@@ -5239,6 +5360,16 @@ class TradingStrategy:
                 self.failsafes.record_trade_result(profit_usd, pnl_pct)
             except Exception as e:
                 logger.warning(f"Failed to record trade in failsafes: {e}")
+        
+        # Record with Market Readiness Gate for win rate tracking
+        if hasattr(self, 'market_readiness_gate') and self.market_readiness_gate:
+            try:
+                # Calculate profit as percentage (assumes $100 position size for approximation)
+                # TODO: Track actual position size for accurate percentage calculation
+                pnl_pct = (profit_usd / 100.0) if profit_usd != 0 else 0.0
+                self.market_readiness_gate.record_trade_result(pnl_pct)
+            except Exception as e:
+                logger.warning(f"Failed to record trade in market readiness gate: {e}")
 
         # Record with market adaptation for learning
         if hasattr(self, 'market_adapter') and self.market_adapter:
