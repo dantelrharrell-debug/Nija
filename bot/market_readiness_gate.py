@@ -451,8 +451,10 @@ class MarketReadinessGate:
         if mode == MarketMode.AGGRESSIVE:
             return base_size  # No adjustment
         elif mode == MarketMode.CAUTIOUS:
-            # Cap at 15-25% range
+            # Apply 20% reduction to position size
+            # NOTE: min/max are absolute caps, not used in normal operation
+            # The 20% multiplier is the primary sizing mechanism
             cautious_size = base_size * 0.20  # 20% of normal
-            return max(min(cautious_size, self.CAUTIOUS_SIZE_MAX), self.CAUTIOUS_SIZE_MIN)
+            return cautious_size
         else:  # IDLE
             return 0.0  # No entries allowed
