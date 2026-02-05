@@ -42,6 +42,9 @@ class NIJAHealthMetric:
     
     This is the truth that determines if NIJA can claim profitability.
     If this metric is red (negative), NIJA must reduce aggression.
+    
+    GUARDRAIL 2: Hard drawdown circuit breaker
+    If 24h net PnL <= -3% → new entries paused, exits only
     """
     
     # Aggression level thresholds (class-level constants)
@@ -66,13 +69,18 @@ class NIJAHealthMetric:
     
     FLAT_AGGRESSION = 0.75  # No change
     
+    # GUARDRAIL 2: Circuit breaker threshold
+    CIRCUIT_BREAKER_PCT = 3.0  # -3% in 24h triggers circuit breaker
+    
     def __init__(self, 
                  storage_path: str = "/tmp/nija_health_metric.json",
-                 lookback_hours: int = 24):
+                 lookback_hours: int = 24,
+                 circuit_breaker_enabled: bool = True):
         """
         Args:
             storage_path: Where to persist health records
             lookback_hours: How far back to compare (default: 24 hours)
+            circuit_breaker_enabled: Enable hard drawdown circuit breaker
         """
         self.storage_path = storage_path
         self.lookback_hours = lookback_hours
@@ -82,7 +90,14 @@ class NIJAHealthMetric:
         # Trading aggression level (affected by health)
         self.current_aggression_level = 1.0  # 0.0 to 1.0 (1.0 = normal)
         
+        # GUARDRAIL 2: Circuit breaker state
+        self.circuit_breaker_enabled = circuit_breaker_enabled
+        self.circuit_breaker_active = False
+        self.circuit_breaker_trigger_time = None
+        
         logger.info(f"📊 NIJAHealthMetric initialized (lookback: {lookback_hours}h)")
+        if circuit_breaker_enabled:
+            logger.info(f"🧯 Circuit breaker enabled: -{self.CIRCUIT_BREAKER_PCT}% triggers pause")
     
     def _load_history(self):
         """Load historical health snapshots"""
@@ -183,10 +198,31 @@ class NIJAHealthMetric:
         
         If losing money → reduce aggression
         If making money → maintain or increase aggression
+        
+        GUARDRAIL 2: Circuit breaker activation
+        If 24h loss >= 3% → PAUSE new entries (exits only)
         """
         if snapshot.status == "LOSING":
             # Calculate how much we're losing
             loss_pct = abs(snapshot.net_change / snapshot.starting_balance * 100) if snapshot.starting_balance > 0 else 0
+            
+            # GUARDRAIL 2: Check circuit breaker
+            if self.circuit_breaker_enabled and loss_pct >= self.CIRCUIT_BREAKER_PCT:
+                if not self.circuit_breaker_active:
+                    self.circuit_breaker_active = True
+                    self.circuit_breaker_trigger_time = datetime.now()
+                    logger.error("")
+                    logger.error("=" * 60)
+                    logger.error("🧯 CIRCUIT BREAKER ACTIVATED")
+                    logger.error("=" * 60)
+                    logger.error(f"24h Loss: -{loss_pct:.2f}% (threshold: -{self.CIRCUIT_BREAKER_PCT}%)")
+                    logger.error(f"NEW ENTRIES PAUSED - EXITS ONLY")
+                    logger.error(f"Triggered at: {self.circuit_breaker_trigger_time}")
+                    logger.error("This protects capital during bad market regimes")
+                    logger.error("=" * 60)
+                    logger.error("")
+                else:
+                    logger.warning(f"🧯 Circuit breaker still active (loss: -{loss_pct:.2f}%)")
             
             if loss_pct > self.SEVERE_LOSS_PCT:
                 self.current_aggression_level = self.SEVERE_LOSS_AGGRESSION
@@ -204,6 +240,18 @@ class NIJAHealthMetric:
         elif snapshot.status == "PROFITABLE":
             # Making money → can be more aggressive
             profit_pct = (snapshot.net_change / snapshot.starting_balance * 100) if snapshot.starting_balance > 0 else 0
+            
+            # GUARDRAIL 2: Reset circuit breaker on profitability
+            if self.circuit_breaker_active:
+                self.circuit_breaker_active = False
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("✅ CIRCUIT BREAKER RESET")
+                logger.info("=" * 60)
+                logger.info(f"24h Profit: +{profit_pct:.2f}%")
+                logger.info(f"NEW ENTRIES RESUMED")
+                logger.info("=" * 60)
+                logger.info("")
             
             if profit_pct > self.STRONG_PROFIT_PCT:
                 self.current_aggression_level = self.STRONG_PROFIT_AGGRESSION
@@ -237,6 +285,9 @@ class NIJAHealthMetric:
         
         logger.info(f"Status: {snapshot.status}")
         logger.info(f"Aggression Level: {self.current_aggression_level*100:.0f}%")
+        # GUARDRAIL 2: Show circuit breaker status
+        if self.circuit_breaker_active:
+            logger.info(f"🧯 CIRCUIT BREAKER: ACTIVE (new entries PAUSED)")
         logger.info("=" * 60)
         logger.info("")
     
@@ -267,6 +318,26 @@ class NIJAHealthMetric:
     def should_pause_trading(self) -> bool:
         """Check if losses are severe enough to pause trading"""
         return self.current_aggression_level < 0.4
+    
+    def is_circuit_breaker_active(self) -> bool:
+        """
+        GUARDRAIL 2: Check if circuit breaker is active
+        
+        Returns:
+            True if new entries should be paused (exits only)
+        """
+        return self.circuit_breaker_active
+    
+    def should_allow_new_entry(self) -> tuple[bool, str]:
+        """
+        GUARDRAIL 2: Check if new entries are allowed
+        
+        Returns:
+            (allowed: bool, reason: str)
+        """
+        if self.circuit_breaker_active:
+            return False, "Circuit breaker active: 24h loss >= 3%, NEW ENTRIES PAUSED"
+        return True, "OK"
     
     def get_health_summary(self, days: int = 7) -> Dict:
         """
