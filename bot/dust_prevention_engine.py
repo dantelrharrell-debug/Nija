@@ -39,6 +39,17 @@ class DustPreventionEngine:
     - Forcing exits on stagnant positions
     """
     
+    # Scoring thresholds (class-level constants)
+    PNL_STRONG_PROFIT_THRESHOLD = 0.02  # > 2% profit
+    PNL_PROFIT_THRESHOLD = 0.005  # > 0.5% profit
+    PNL_STRONG_LOSS_THRESHOLD = -0.02  # > 2% loss
+    PNL_LOSS_THRESHOLD = -0.005  # > 0.5% loss
+    
+    # Age thresholds
+    AGE_OLD_HOURS = 12.0
+    AGE_AGING_HOURS = 6.0
+    AGE_FRESH_HOURS = 1.0
+    
     def __init__(self, 
                  max_positions: int = 5,
                  stagnation_hours: float = 4.0,
@@ -119,16 +130,16 @@ class DustPreventionEngine:
         reasons = []
         
         # Factor 1: P&L Performance (±30 points)
-        if current_pnl_pct > 0.02:  # > 2% profit
+        if current_pnl_pct > self.PNL_STRONG_PROFIT_THRESHOLD:
             score += 30
             reasons.append("strong profit")
-        elif current_pnl_pct > 0.005:  # > 0.5% profit
+        elif current_pnl_pct > self.PNL_PROFIT_THRESHOLD:
             score += 15
             reasons.append("profitable")
-        elif current_pnl_pct < -0.02:  # > 2% loss
+        elif current_pnl_pct < self.PNL_STRONG_LOSS_THRESHOLD:
             score -= 30
             reasons.append("strong loss")
-        elif current_pnl_pct < -0.005:  # > 0.5% loss
+        elif current_pnl_pct < self.PNL_LOSS_THRESHOLD:
             score -= 15
             reasons.append("losing")
         else:
@@ -143,13 +154,13 @@ class DustPreventionEngine:
             reasons.append("active movement")
         
         # Factor 3: Age (±15 points) - prefer younger positions
-        if age_hours > 12:
+        if age_hours > self.AGE_OLD_HOURS:
             score -= 15
             reasons.append(f"old {age_hours:.1f}h")
-        elif age_hours > 6:
+        elif age_hours > self.AGE_AGING_HOURS:
             score -= 5
             reasons.append(f"aging {age_hours:.1f}h")
-        elif age_hours < 1:
+        elif age_hours < self.AGE_FRESH_HOURS:
             score += 5
             reasons.append("fresh")
         

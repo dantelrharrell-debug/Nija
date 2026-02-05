@@ -17,7 +17,7 @@ If green (positive) → maintain or increase aggression
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 import json
 import os
@@ -43,6 +43,28 @@ class NIJAHealthMetric:
     This is the truth that determines if NIJA can claim profitability.
     If this metric is red (negative), NIJA must reduce aggression.
     """
+    
+    # Aggression level thresholds (class-level constants)
+    SEVERE_LOSS_PCT = 10.0  # > 10% loss
+    SEVERE_LOSS_AGGRESSION = 0.3
+    
+    SIGNIFICANT_LOSS_PCT = 5.0  # > 5% loss
+    SIGNIFICANT_LOSS_AGGRESSION = 0.5
+    
+    MODERATE_LOSS_PCT = 2.0  # > 2% loss
+    MODERATE_LOSS_AGGRESSION = 0.7
+    
+    MINOR_LOSS_AGGRESSION = 0.85  # < 2% loss
+    
+    STRONG_PROFIT_PCT = 5.0  # > 5% gain
+    STRONG_PROFIT_AGGRESSION = 1.0
+    
+    GOOD_PROFIT_PCT = 2.0  # > 2% gain
+    GOOD_PROFIT_AGGRESSION = 0.95
+    
+    SMALL_PROFIT_AGGRESSION = 0.9  # < 2% gain
+    
+    FLAT_AGGRESSION = 0.75  # No change
     
     def __init__(self, 
                  storage_path: str = "/tmp/nija_health_metric.json",
@@ -166,43 +188,35 @@ class NIJAHealthMetric:
             # Calculate how much we're losing
             loss_pct = abs(snapshot.net_change / snapshot.starting_balance * 100) if snapshot.starting_balance > 0 else 0
             
-            if loss_pct > 10:
-                # Losing >10% → very conservative
-                self.current_aggression_level = 0.3
+            if loss_pct > self.SEVERE_LOSS_PCT:
+                self.current_aggression_level = self.SEVERE_LOSS_AGGRESSION
                 logger.warning(f"⚠️  SEVERE LOSSES: Reducing aggression to {self.current_aggression_level*100:.0f}%")
-            elif loss_pct > 5:
-                # Losing >5% → conservative
-                self.current_aggression_level = 0.5
+            elif loss_pct > self.SIGNIFICANT_LOSS_PCT:
+                self.current_aggression_level = self.SIGNIFICANT_LOSS_AGGRESSION
                 logger.warning(f"⚠️  SIGNIFICANT LOSSES: Reducing aggression to {self.current_aggression_level*100:.0f}%")
-            elif loss_pct > 2:
-                # Losing >2% → cautious
-                self.current_aggression_level = 0.7
+            elif loss_pct > self.MODERATE_LOSS_PCT:
+                self.current_aggression_level = self.MODERATE_LOSS_AGGRESSION
                 logger.warning(f"⚠️  LOSSES DETECTED: Reducing aggression to {self.current_aggression_level*100:.0f}%")
             else:
-                # Small losses → slightly cautious
-                self.current_aggression_level = 0.85
+                self.current_aggression_level = self.MINOR_LOSS_AGGRESSION
                 logger.info(f"⚠️  Minor losses: Slight aggression reduction to {self.current_aggression_level*100:.0f}%")
         
         elif snapshot.status == "PROFITABLE":
             # Making money → can be more aggressive
             profit_pct = (snapshot.net_change / snapshot.starting_balance * 100) if snapshot.starting_balance > 0 else 0
             
-            if profit_pct > 5:
-                # Strong profits → maximum aggression
-                self.current_aggression_level = 1.0
+            if profit_pct > self.STRONG_PROFIT_PCT:
+                self.current_aggression_level = self.STRONG_PROFIT_AGGRESSION
                 logger.info(f"✅ STRONG PROFITS: Maximum aggression {self.current_aggression_level*100:.0f}%")
-            elif profit_pct > 2:
-                # Good profits → high aggression
-                self.current_aggression_level = 0.95
+            elif profit_pct > self.GOOD_PROFIT_PCT:
+                self.current_aggression_level = self.GOOD_PROFIT_AGGRESSION
                 logger.info(f"✅ GOOD PROFITS: High aggression {self.current_aggression_level*100:.0f}%")
             else:
-                # Small profits → normal aggression
-                self.current_aggression_level = 0.9
+                self.current_aggression_level = self.SMALL_PROFIT_AGGRESSION
                 logger.info(f"✅ PROFITS: Normal aggression {self.current_aggression_level*100:.0f}%")
         
         else:  # FLAT
-            # No change → cautious
-            self.current_aggression_level = 0.75
+            self.current_aggression_level = self.FLAT_AGGRESSION
             logger.info(f"⚠️  FLAT PERFORMANCE: Cautious aggression {self.current_aggression_level*100:.0f}%")
     
     def _log_health_metric(self, snapshot: HealthSnapshot):
