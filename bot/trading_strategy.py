@@ -33,6 +33,15 @@ except ImportError:
         MarketMode = None
         logger.warning("⚠️ Market Readiness Gate not available - using legacy entry mode")
 
+# Import Trade Quality Gate for Layer 2 improvements
+try:
+    from trade_quality_gate import TradeQualityGate
+except ImportError:
+    try:
+        from bot.trade_quality_gate import TradeQualityGate
+    except ImportError:
+        TradeQualityGate = None
+
 # Import scalar helper for indicator conversions
 try:
     from indicators import scalar
@@ -586,6 +595,17 @@ class TradingStrategy:
         else:
             self.market_readiness_gate = None
             logger.warning("⚠️ Market Readiness Gate not available - using legacy entry mode")
+        
+        # Initialize Trade Quality Gate (Layer 2: Better Math Per Trade)
+        if TradeQualityGate is not None:
+            try:
+                self.quality_gate = TradeQualityGate(min_reward_risk=1.5, require_momentum=True)
+                logger.info("✅ Trade Quality Gate initialized - R:R filtering active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Trade Quality Gate: {e}")
+                self.quality_gate = None
+        else:
+            self.quality_gate = None
 
         # FIX #2: Initialize forced stop-loss executor
         try:
@@ -4987,6 +5007,14 @@ class TradingStrategy:
                             # (updated at lines 3418 and 3440 from selected entry broker)
                             broker_balance = total_capital if self.pro_mode_enabled else account_balance
                             analysis = self.apex.analyze_market(df, symbol, broker_balance)
+                            
+                            # ═══════════════════════════════════════════════════════
+                            # LAYER 2: TRADE QUALITY GATE
+                            # ═══════════════════════════════════════════════════════
+                            # Filter trades through quality gate (R:R, momentum, stop quality)
+                            if hasattr(self, 'quality_gate') and self.quality_gate:
+                                analysis = self.quality_gate.filter_strategy_signal(analysis, df)
+                            
                             action = analysis.get('action', 'hold')
                             reason = analysis.get('reason', '')
 
