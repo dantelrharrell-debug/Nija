@@ -1,67 +1,60 @@
-# Platform Account Configuration - Required for Stable Operation
+# Platform Account Configuration - Recommended for Optimal Operation
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Last Updated:** February 6, 2026  
-**Status:** CRITICAL - Required for production stability
+**Status:** RECOMMENDED - Optimal for production stability
 
 ---
 
-## The ONE Fix That Solves Hierarchy Warnings
+## The ONE Fix for Cleaner Logs and Stable Startup
 
-### Problem
+### Current Behavior
 
-When running NIJA with only user accounts (no Platform account), you may experience:
+When running NIJA with only user accounts (no Platform account), you may see:
 
-- ❌ **Hierarchy warnings** flooding startup logs
-- ❌ **Repeated reconciliation logic** during initialization
-- ❌ **Unstable startup flow** with verbose warnings
-- ❌ **Unclear account status** messages
-- ❌ **"MVP mode, not production hierarchy"** warnings
+- ℹ️  **Informational messages** about Platform account not connected
+- ℹ️  **Recommendation** to configure Platform account
+- ℹ️  **Suggestions** for optimal system operation
 
 ### The Solution
 
-**Configure Platform Kraken credentials, even if the Platform account never trades.**
+**Configure Platform Kraken credentials for optimal operation.**
 
-This single configuration change will:
-- ✅ **Silence all hierarchy warnings**
+This configuration change will:
+- ✅ **Enable Platform to trade independently** (additional trading capacity)
 - ✅ **Stabilize startup flow** 
-- ✅ **Prevent repeated reconciliation logic**
-- ✅ **Make logs calm and linear**
-- ✅ **Enable production-ready account hierarchy**
+- ✅ **Provide cleaner, quieter logs**
+- ✅ **Improve system initialization**
 
 ---
 
-## Why Is Platform Account Required?
+## Understanding the Architecture
 
-### Architecture Design
+### Independent Trading Model
 
-NIJA uses a two-tier account hierarchy:
+NIJA uses an **independent trading model** where all accounts trade separately:
 
 ```
-🔷 PLATFORM ACCOUNT (Primary)
-   ↓ 
-👤 USER ACCOUNTS (Secondary)
+🔷 PLATFORM ACCOUNT (Independent Trader #1)
+   ↓ Uses NIJA signals + execution logic
+   ↓ Trades with its own capital
+   
+👤 USER ACCOUNT 1 (Independent Trader #2)
+   ↓ Uses same NIJA signals + execution logic
+   ↓ Trades with their own capital
+   
+👤 USER ACCOUNT 2 (Independent Trader #3)
+   ↓ Uses same NIJA signals + execution logic
+   ↓ Trades with their own capital
 ```
 
-**Platform Account Purpose:**
-- Acts as the **primary reference** for system-wide operations
-- Provides **stable connection** for market data and reconciliation
-- Enables **clean account hierarchy** for multi-user setups
-- Serves as **global coordinator** even if it doesn't trade
-
-**User Accounts:**
-- **Trade independently** using their own capital
-- **Secondary accounts** that depend on Platform being connected
-- **Optional** - can have zero, one, or many user accounts
-
-### What Happens Without Platform Account?
-
-When Platform account is not configured:
-1. System runs in "MVP mode" (development/testing mode)
-2. Hierarchy validation triggers warnings repeatedly
-3. Reconciliation checks loop looking for Platform connection
-4. Startup logs are verbose with configuration warnings
-5. Account status displays "incorrect hierarchy" messages
+**Key Points:**
+- ❌ Platform is **NOT** a "master" account
+- ❌ Platform does **NOT** control user accounts
+- ❌ Platform is **NOT** a capital allocator
+- ✅ Platform **IS** just another independent trader
+- ✅ All accounts trade **independently** using same logic
+- ✅ All accounts are **equal** - no hierarchy
 
 ---
 
@@ -147,44 +140,53 @@ If you see warnings, verify:
 
 ---
 
-## Platform Account Does NOT Need Capital
+## Why Configure Platform Account?
 
-### Important Clarification
+### Benefits
 
-**The Platform account does not need trading capital to serve its purpose.**
+**1. Platform trades independently** - Additional trading capacity
+- Platform account is another independent trader
+- Uses same NIJA signals and execution logic
+- Deploys more capital in the strategy
 
-Even with $0 balance, a connected Platform account will:
-- ✅ Silence hierarchy warnings
-- ✅ Stabilize startup flow
-- ✅ Prevent reconciliation loops
-- ✅ Enable production-ready architecture
+**2. Cleaner system operation**
+- Less verbose startup logs
+- Smoother initialization flow
+- Fewer informational messages
+
+**3. All accounts are equal**
+- No hierarchy or master/follower relationship
+- All accounts are independent traders
+- Each manages its own capital and positions
 
 ### Minimum Balance Recommendations
 
 | Account Purpose | Minimum Balance | Notes |
 |----------------|-----------------|-------|
-| **Platform account (passive)** | $0 - $25 | Just needs to connect - won't trade |
-| **Platform account (active trading)** | $50+ | If you want Platform to trade independently |
+| **Platform account** | $50+ | Trades independently like any user account |
 | **User accounts** | $50+ | Each user trades independently |
+
+**Note:** Platform account CAN have $0 balance (it just won't trade), but recommended to fund it so it trades alongside users.
 
 ### Trading Control
 
-Platform account trading is controlled separately:
+All accounts trade independently:
 - Set `PLATFORM_ACCOUNT_TIER=BALLER` in `.env` for best risk parameters
 - Platform trades independently from user accounts
 - Each account has its own capital, positions, and risk limits
+- All use same NIJA signal generation and execution logic
 
 ---
 
 ## Frequently Asked Questions
 
-### Q: Can I run NIJA without Platform account?
+### Q: Is Platform account required?
 
-**A:** Technically yes, but you'll experience:
-- Hierarchy warnings on every startup
-- "MVP mode" messages
-- Verbose reconciliation logging
-- Unstable startup flow
+**A:** No, but it's recommended. Without Platform account:
+- ✅ System still works normally
+- ℹ️  Informational messages suggest configuring Platform
+- ✅ User accounts trade independently
+- ❌ Missing Platform's trading capacity
 
 For production use, **Platform account is required**.
 
