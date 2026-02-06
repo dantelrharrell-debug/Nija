@@ -1,8 +1,8 @@
 {
   "confirmations": {},
-  "total_confirmations": 3,
+  "total_confirmations": 4,
   "total_givebacks": 1,
-  "total_profit_taken_usd": 2.5400000000000005,
+  "total_profit_taken_usd": 3.0447619047619052,
   "total_profit_given_back_usd": 0.24,
   "trade_history": [
     {
@@ -79,7 +79,22 @@
       "exit_type": "PROFIT_GIVEBACK",
       "is_winner": false,
       "r_multiple": -0.4
+    },
+    {
+      "timestamp": "2026-02-06T14:46:24.927240",
+      "symbol": "BTC-USD",
+      "entry_price": 42000.0,
+      "exit_price": 42800.0,
+      "position_size_usd": 100.0,
+      "net_profit_pct": 0.005047619047619049,
+      "net_profit_usd": 0.5047619047619049,
+      "fees_paid_usd": 1.4000000000000001,
+      "risk_amount_usd": 0.8,
+      "hold_time_seconds": 600.000238,
+      "exit_type": "PROFIT_CONFIRMED",
+      "is_winner": true,
+      "r_multiple": 0.630952380952381
     }
   ],
-  "last_updated": "2026-02-06T14:44:31.868901"
+  "last_updated": "2026-02-06T14:46:24.927800"
 }
