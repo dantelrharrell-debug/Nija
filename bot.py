@@ -32,9 +32,14 @@ ERROR_SEPARATOR = "═" * 63
 # and updates its heartbeat at this interval
 CONFIG_ERROR_HEARTBEAT_INTERVAL = 60
 
+# Heartbeat update interval (seconds) for Railway health check responsiveness
+# Background thread updates heartbeat at this frequency to ensure health checks
+# always get fresh data (Railway checks every ~30s, this is faster)
+HEARTBEAT_INTERVAL_SECONDS = 10
+
 # Keep-alive loop sleep interval (seconds)
 # When trading loops exit, the keep-alive loop sleeps for this duration between status logs
-# Note: Heartbeat is updated by dedicated background thread (10s), not by this loop
+# Note: Heartbeat is updated by dedicated background thread, not by this loop
 KEEP_ALIVE_SLEEP_INTERVAL_SECONDS = 300
 
 # EMERGENCY STOP CHECK
@@ -236,18 +241,18 @@ def main():
     # regardless of trading loop timing (150 seconds)
     # Critical for Railway health check responsiveness (~30 second intervals)
     def heartbeat_worker():
-        """Background thread that updates heartbeat every 10 seconds"""
+        """Background thread that updates heartbeat at regular intervals"""
         while True:
             try:
                 health_manager.heartbeat()
-                time.sleep(10)  # Update every 10 seconds (much faster than Railway's ~30s checks)
+                time.sleep(HEARTBEAT_INTERVAL_SECONDS)
             except Exception as e:
                 logger.error(f"Error in heartbeat worker: {e}", exc_info=True)
-                time.sleep(10)
+                time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     
     heartbeat_thread = threading.Thread(target=heartbeat_worker, daemon=True, name="HeartbeatWorker")
     heartbeat_thread.start()
-    logger.info("✅ Started dedicated heartbeat thread (10-second interval)")
+    logger.info(f"✅ Started dedicated heartbeat thread ({HEARTBEAT_INTERVAL_SECONDS}s interval)")
 
     # Get git metadata - try env vars first, then git commands
     git_branch = os.getenv("GIT_BRANCH", "")
@@ -872,13 +877,13 @@ def main():
         logger.info("=" * 70)
         logger.info("Trading loops have exited, but process will remain alive.")
         logger.info("This prevents Railway from restarting the service.")
-        logger.info("Heartbeat is maintained by dedicated background thread (10s interval).")
+        logger.info(f"Heartbeat is maintained by heartbeat_worker background thread ({HEARTBEAT_INTERVAL_SECONDS}s interval).")
         logger.info("To shutdown: Use SIGTERM or SIGINT (handled by signal handlers at startup)")
         logger.info("=" * 70)
         
         while True:
             try:
-                # Note: Heartbeat is updated by dedicated background thread (line 229-245)
+                # Note: Heartbeat is updated by heartbeat_worker background thread
                 # This loop just keeps the process alive and logs periodic status
                 logger.info("💓 Keep-alive status check (heartbeat via background thread)")
                 time.sleep(KEEP_ALIVE_SLEEP_INTERVAL_SECONDS)
