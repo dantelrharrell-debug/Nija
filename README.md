@@ -1027,6 +1027,28 @@ NIJA now automatically:
 
 ---
 
+## ⚙️ **Platform Account Configuration - REQUIRED**
+
+**🔧 Critical for stable operation:** Platform Kraken credentials **MUST** be configured for production use.
+
+Even if the Platform account never trades, configuring it provides:
+- ✅ **Silences all hierarchy warnings**
+- ✅ **Stabilizes startup flow**
+- ✅ **Prevents repeated reconciliation logic**
+- ✅ **Makes logs calm and linear**
+
+**The Platform account does not need trading capital - it just needs to exist and connect.**
+
+```bash
+# Add to .env or deployment platform
+KRAKEN_PLATFORM_API_KEY=your-api-key
+KRAKEN_PLATFORM_API_SECRET=your-api-secret
+```
+
+📚 **Complete Guide:** [PLATFORM_ACCOUNT_REQUIRED.md](PLATFORM_ACCOUNT_REQUIRED.md)
+
+---
+
 **🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for complete setup!
 
 ## 💎 Kraken Trading - Fully Enabled & Profit-Taking Verified
@@ -1050,11 +1072,18 @@ NIJA now automatically:
 
 **Step 2**: Add to your platform (Railway/Render/Local):
 ```bash
+# CRITICAL: Platform account credentials REQUIRED for stable operation
+# Even if the Platform account never trades, it MUST be configured to:
+#   ✅ Silence hierarchy warnings
+#   ✅ Stabilize startup flow  
+#   ✅ Prevent repeated reconciliation logic
 KRAKEN_PLATFORM_API_KEY=your-api-key-here
 KRAKEN_PLATFORM_API_SECRET=your-private-key-here
 ```
 
 **Step 3**: Restart and watch Kraken trade automatically!
+
+**⚠️ IMPORTANT:** Platform account credentials are **required** even if the account never trades. See [PLATFORM_ACCOUNT_REQUIRED.md](PLATFORM_ACCOUNT_REQUIRED.md) for details.
 
 **Library**: NIJA uses official Kraken SDKs: [`krakenex`](https://github.com/veox/python3-krakenex) + [`pykrakenapi`](https://github.com/dominiktraxl/pykrakenapi)
 
