@@ -1043,6 +1043,9 @@ Even if the Platform account never trades, configuring it provides:
 # Add to .env or deployment platform
 KRAKEN_PLATFORM_API_KEY=your-api-key
 KRAKEN_PLATFORM_API_SECRET=your-api-secret
+
+# Verify configuration (recommended)
+python3 check_platform_credentials.py
 ```
 
 📚 **Complete Guide:** [PLATFORM_ACCOUNT_REQUIRED.md](PLATFORM_ACCOUNT_REQUIRED.md)

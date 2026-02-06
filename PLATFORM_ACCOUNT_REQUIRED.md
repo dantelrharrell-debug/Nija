@@ -109,6 +109,20 @@ Add these environment variables:
 
 After setting credentials, restart the bot and check logs:
 
+**Quick Check (Recommended):**
+```bash
+# Run the credential validation script
+python3 check_platform_credentials.py
+```
+
+This script will:
+- ✅ Check if credentials are configured
+- ✅ Detect whitespace issues
+- ✅ Provide actionable fix instructions
+- ✅ Verify configuration is correct
+
+**Manual Check in Logs:**
+
 **✅ Success indicators:**
 ```
 ✅ Kraken Platform credentials detected
