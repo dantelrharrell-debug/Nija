@@ -43,11 +43,12 @@ HEARTBEAT_INTERVAL_SECONDS = 10
 KEEP_ALIVE_SLEEP_INTERVAL_SECONDS = 300
 
 # EMERGENCY STOP CHECK
+# Note: Uses print() instead of logger because logger is not yet initialized
 if os.path.exists('EMERGENCY_STOP'):
     print("\n" + "┏" + "━" * 78 + "┓")
     print("┃ 🚨 EXIT POINT - EMERGENCY STOP FILE DETECTED                             ┃")
-    print("┃ Exit Code: 0                                                             ┃")
-    print(f"┃ PID: {os.getpid():71} ┃")
+    print(f"┃ Exit Code: {0:<67} ┃")
+    print(f"┃ PID: {os.getpid():<71} ┃")
     print("┣" + "━" * 78 + "┫")
     print("┃ Bot is disabled. See EMERGENCY_STOP file for details.                   ┃")
     print("┃ Delete EMERGENCY_STOP file to resume trading.                           ┃")
@@ -229,8 +230,8 @@ def _log_exit_point(reason, exit_code=0, details=None):
     logger.info("")
     logger.info("┏" + "━" * 78 + "┓")
     logger.info(f"┃ {icon} EXIT POINT - {reason:68} ┃")
-    logger.info(f"┃ Exit Code: {exit_code:65} ┃")
-    logger.info(f"┃ PID: {os.getpid():71} ┃")
+    logger.info(f"┃ Exit Code: {exit_code:<67} ┃")
+    logger.info(f"┃ PID: {os.getpid():<71} ┃")
     if details:
         logger.info("┣" + "━" * 78 + "┫")
         for detail in details:
