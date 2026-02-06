@@ -1483,6 +1483,48 @@ class NIJAApexStrategyV71:
                             self.current_regime, tp_levels
                         )
 
+                    # ═══════════════════════════════════════════════════════════════
+                    # LAYER 2: TRADE MATH VERIFICATION
+                    # ═══════════════════════════════════════════════════════════════
+                    # Verify trade has acceptable math before accepting signal
+                    # This is our last line of defense against poor-quality setups
+                    
+                    # Extract first target for ratio calculation
+                    first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
+                    
+                    # Compute reward and risk amounts
+                    risk_dollars = abs(current_price - stop_loss)
+                    reward_dollars = abs(first_target - current_price)
+                    
+                    # Calculate ratio (reward / risk)
+                    trade_ratio = reward_dollars / risk_dollars if risk_dollars > 0 else 0
+                    
+                    # Gate: Minimum acceptable ratio is 1.5
+                    MIN_ACCEPTABLE_RATIO = 1.5
+                    if trade_ratio < MIN_ACCEPTABLE_RATIO:
+                        logger.info(f"   ⏭️  Trade math rejected: ratio {trade_ratio:.2f} below {MIN_ACCEPTABLE_RATIO}")
+                        return {
+                            'action': 'hold',
+                            'reason': f'Poor trade math: {trade_ratio:.2f}:1 ratio (need {MIN_ACCEPTABLE_RATIO}:1)'
+                        }
+                    
+                    # Verify stop placement relative to noise
+                    if 'atr' in indicators:
+                        atr_value = scalar(indicators['atr'].iloc[-1])
+                        stop_distance = abs(current_price - stop_loss)
+                        
+                        # Stop should be at least 1.0x ATR (outside immediate noise)
+                        min_stop_distance = atr_value * 1.0
+                        if stop_distance < min_stop_distance:
+                            logger.info(f"   ⏭️  Stop too tight: {stop_distance:.4f} < {min_stop_distance:.4f} (ATR)")
+                            return {
+                                'action': 'hold',
+                                'reason': f'Stop inside noise zone (ATR {atr_value:.4f})'
+                            }
+                    
+                    # Log approval
+                    logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
+
                     result = {
                         'action': 'enter_long',
                         'reason': reason,
@@ -1624,6 +1666,47 @@ class NIJAApexStrategyV71:
                         tp_levels = self.regime_detector.adjust_take_profit_levels(
                             self.current_regime, tp_levels
                         )
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # LAYER 2: TRADE MATH VERIFICATION (SHORT)
+                    # ═══════════════════════════════════════════════════════════════
+                    # Verify trade has acceptable math before accepting signal
+                    
+                    # Extract first target for ratio calculation
+                    first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
+                    
+                    # Compute reward and risk amounts
+                    risk_dollars = abs(stop_loss - current_price)
+                    reward_dollars = abs(current_price - first_target)
+                    
+                    # Calculate ratio (reward / risk)
+                    trade_ratio = reward_dollars / risk_dollars if risk_dollars > 0 else 0
+                    
+                    # Gate: Minimum acceptable ratio is 1.5
+                    MIN_ACCEPTABLE_RATIO = 1.5
+                    if trade_ratio < MIN_ACCEPTABLE_RATIO:
+                        logger.info(f"   ⏭️  Trade math rejected: ratio {trade_ratio:.2f} below {MIN_ACCEPTABLE_RATIO}")
+                        return {
+                            'action': 'hold',
+                            'reason': f'Poor trade math: {trade_ratio:.2f}:1 ratio (need {MIN_ACCEPTABLE_RATIO}:1)'
+                        }
+                    
+                    # Verify stop placement relative to noise
+                    if 'atr' in indicators:
+                        atr_value = scalar(indicators['atr'].iloc[-1])
+                        stop_distance = abs(stop_loss - current_price)
+                        
+                        # Stop should be at least 1.0x ATR (outside immediate noise)
+                        min_stop_distance = atr_value * 1.0
+                        if stop_distance < min_stop_distance:
+                            logger.info(f"   ⏭️  Stop too tight: {stop_distance:.4f} < {min_stop_distance:.4f} (ATR)")
+                            return {
+                                'action': 'hold',
+                                'reason': f'Stop inside noise zone (ATR {atr_value:.4f})'
+                            }
+                    
+                    # Log approval
+                    logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
 
                     result = {
                         'action': 'enter_short',
