@@ -841,6 +841,31 @@ def main():
                     logger.error(f"Error in trading cycle: {e}", exc_info=True)
                     time.sleep(10)
 
+        # CRITICAL: Keep-alive loop to prevent process exit
+        # This ensures NIJA runs as a long-running worker, not a web service
+        # Railway will not restart the service as long as this process is alive
+        logger.info("=" * 70)
+        logger.info("🔒 ENTERING KEEP-ALIVE MODE")
+        logger.info("=" * 70)
+        logger.info("Trading loops have exited, but process will remain alive.")
+        logger.info("This prevents Railway from restarting the service.")
+        logger.info("The process will continue sending heartbeats for health monitoring.")
+        logger.info("=" * 70)
+        
+        while True:
+            try:
+                # Continue heartbeat for health monitoring
+                health_manager.heartbeat()
+                logger.info("💓 Keep-alive heartbeat sent")
+                time.sleep(300)  # 5 minutes between heartbeats in keep-alive mode
+            except KeyboardInterrupt:
+                logger.info("Received shutdown signal in keep-alive mode, continuing...")
+                # Don't break - stay alive even on Ctrl+C
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Error in keep-alive loop: {e}", exc_info=True)
+                time.sleep(10)
+
     except RuntimeError as e:
         if "Broker connection failed" in str(e):
             logger.error("=" * 70)
