@@ -853,6 +853,9 @@ def main():
         logger.info("To shutdown: Use SIGTERM or SIGINT (handled by signal handlers at startup)")
         logger.info("=" * 70)
         
+        # Track if we've already warned about health_manager unavailability
+        health_manager_warning_logged = False
+        
         while True:
             try:
                 # Continue heartbeat for health monitoring if available
@@ -860,7 +863,10 @@ def main():
                     health_manager.heartbeat()
                     logger.info("💓 Keep-alive heartbeat sent")
                 else:
-                    logger.warning("⚠️  Health manager not available in keep-alive mode")
+                    # Only log warning once to avoid log spam
+                    if not health_manager_warning_logged:
+                        logger.warning("⚠️  Health manager not available in keep-alive mode")
+                        health_manager_warning_logged = True
                 time.sleep(300)  # 5 minutes between heartbeats in keep-alive mode
             except KeyboardInterrupt:
                 # Note: In normal circumstances, SIGINT is handled by signal handlers above
