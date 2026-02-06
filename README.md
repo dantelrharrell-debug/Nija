@@ -1027,17 +1027,16 @@ NIJA now automatically:
 
 ---
 
-## ⚙️ **Platform Account Configuration - REQUIRED**
+## ⚙️ **Platform Account Configuration - Recommended**
 
-**🔧 Critical for stable operation:** Platform Kraken credentials **MUST** be configured for production use.
+**💡 Recommended for optimal operation:** Configure Platform Kraken credentials for best results.
 
-Even if the Platform account never trades, configuring it provides:
-- ✅ **Silences all hierarchy warnings**
-- ✅ **Stabilizes startup flow**
-- ✅ **Prevents repeated reconciliation logic**
-- ✅ **Makes logs calm and linear**
+Configuring Platform account provides:
+- ✅ **Additional trading capacity** (Platform trades independently)
+- ✅ **Cleaner logs and startup flow**
+- ✅ **Stable system initialization**
 
-**The Platform account does not need trading capital - it just needs to exist and connect.**
+**Platform is an independent trader** - it trades alongside users using the same NIJA logic (not as a master/controller).
 
 ```bash
 # Add to .env or deployment platform
@@ -1056,14 +1055,13 @@ python3 check_platform_credentials.py
 
 ## 💎 Kraken Trading - Fully Enabled & Profit-Taking Verified
 
-**Status**: ✅ **KRAKEN IS FULLY OPERATIONAL** - Master + Multi-User Copy Trading VERIFIED ✅
+**Status**: ✅ **KRAKEN IS FULLY OPERATIONAL** - Independent Trading VERIFIED ✅
 
 | Component | Status | Details |
 |-----------|--------|---------|
 | **Code Integration** | ✅ Complete | KrakenBroker fully implemented |
-| **Independent Trading** | ✅ Enabled | Trades independently alongside other exchanges |
-| **Copy Trading** | ✅ VERIFIED | 100% success rate (2/2 users) - Jan 25, 2026 |
-| **Profit-Taking** | ✅ VERIFIED | Master + all users taking profits successfully |
+| **Independent Trading** | ✅ Enabled | All accounts trade independently using same logic |
+| **Profit-Taking** | ✅ VERIFIED | Platform + all users taking profits successfully |
 | **SDK Libraries** | ✅ Installed | krakenex + pykrakenapi in requirements.txt |
 | **Multi-Account** | ✅ Active | 3 accounts (platform + 2 users) trading live |
 
@@ -1075,18 +1073,16 @@ python3 check_platform_credentials.py
 
 **Step 2**: Add to your platform (Railway/Render/Local):
 ```bash
-# CRITICAL: Platform account credentials REQUIRED for stable operation
-# Even if the Platform account never trades, it MUST be configured to:
-#   ✅ Silence hierarchy warnings
-#   ✅ Stabilize startup flow  
-#   ✅ Prevent repeated reconciliation logic
+# Platform account credentials (recommended for optimal operation)
+# Platform trades independently alongside user accounts
+# All accounts use same NIJA signals + execution logic
 KRAKEN_PLATFORM_API_KEY=your-api-key-here
 KRAKEN_PLATFORM_API_SECRET=your-private-key-here
 ```
 
 **Step 3**: Restart and watch Kraken trade automatically!
 
-**⚠️ IMPORTANT:** Platform account credentials are **required** even if the account never trades. See [PLATFORM_ACCOUNT_REQUIRED.md](PLATFORM_ACCOUNT_REQUIRED.md) for details.
+**💡 TIP:** Platform account is recommended for additional trading capacity and cleaner logs. See [PLATFORM_ACCOUNT_REQUIRED.md](PLATFORM_ACCOUNT_REQUIRED.md) for details.
 
 **Library**: NIJA uses official Kraken SDKs: [`krakenex`](https://github.com/veox/python3-krakenex) + [`pykrakenapi`](https://github.com/dominiktraxl/pykrakenapi)
 
