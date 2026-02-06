@@ -300,6 +300,16 @@ class BrokerFailsafes:
                 self.state.circuit_breaker_count += 1
                 logger.error(f"🔴 CIRCUIT BREAKER: {self.state.consecutive_losses} consecutive losses!")
                 logger.error(f"   Consider pausing trading for review")
+                
+                # Notify Market Readiness Gate of circuit breaker trigger
+                try:
+                    from market_readiness_gate import MarketReadinessGate
+                    # Load gate instance (uses same state file path)
+                    gate = MarketReadinessGate()
+                    gate.record_circuit_breaker_clear()
+                    logger.warning(f"   ⚠️ Market Readiness Gate notified - IDLE mode for 2h")
+                except Exception as e:
+                    logger.debug(f"Could not notify Market Readiness Gate: {e}")
 
                 # Auto-trigger emergency stop if 2+ circuit breakers in one day
                 if self.state.circuit_breaker_count >= 2:
