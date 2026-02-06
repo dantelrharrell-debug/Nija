@@ -1085,8 +1085,10 @@ class MultiAccountBrokerManager:
         # Log warnings for problematic setups
         logger.info("")
 
-        # Determine if there are any warnings to display
-        users_without_master = []
+        # Account architecture validation
+        # All accounts (Platform + Users) trade independently using same NIJA logic
+        # Platform is not a "master" - it's just another independent trading account
+        users_without_platform = []
         for brokerage, user_ids in connected_users.items():
             try:
                 # Safely convert brokerage string to BrokerType enum
@@ -1094,64 +1096,52 @@ class MultiAccountBrokerManager:
                 broker_type = BrokerType[brokerage.upper()]
                 platform_connected = self.is_platform_connected(broker_type)
                 if not platform_connected and user_ids:
-                    users_without_master.append(brokerage.upper())
+                    users_without_platform.append(brokerage.upper())
             except KeyError:
                 # Invalid broker type - this shouldn't happen, but handle gracefully
                 logger.warning(f"⚠️  Unknown broker type in connected users: {brokerage}")
                 continue
 
-        if users_without_master:
-            # Display warning header only when there are actual warnings
-            logger.info("⚠️  ACCOUNT PRIORITY WARNINGS:")
-            logger.warning(f"   ⚠️  User accounts trading WITHOUT Platform account on: {', '.join(users_without_master)}")
-            logger.warning(f"   🔧 RECOMMENDATION: Configure Platform credentials for {', '.join(users_without_master)}")
-            logger.warning(f"      Platform should always be PRIMARY, users should be SECONDARY")
-            logger.warning("")
-            logger.warning("   📋 HOW TO FIX:")
-            for broker in users_without_master:
-                logger.warning(f"")
-                logger.warning(f"   For {broker} Platform account:")
-                logger.warning(f"   1. Get API credentials from the {broker} website")
+        if users_without_platform:
+            # Platform account missing - recommend configuring it for stability
+            # Platform trades independently (not as master), but its presence stabilizes system
+            logger.info("ℹ️  ACCOUNT CONFIGURATION:")
+            logger.info(f"   ℹ️  Platform account not connected on: {', '.join(users_without_platform)}")
+            logger.info("   💡 RECOMMENDATION: Configure Platform account for optimal operation")
+            logger.info("")
+            logger.info("   Platform account provides:")
+            logger.info("   • Stable system initialization")
+            logger.info("   • Additional trading capacity (Platform trades independently)")
+            logger.info("   • Cleaner logs and startup flow")
+            logger.info("")
+            logger.info("   📋 TO CONFIGURE PLATFORM ACCOUNT:")
+            for broker in users_without_platform:
+                logger.info(f"")
+                logger.info(f"   For {broker} Platform account:")
+                logger.info(f"   1. Get API credentials from the {broker} website")
                 if broker == "KRAKEN":
-                    logger.warning(f"      URL: https://www.kraken.com/u/security/api")
-                    logger.warning(f"   2. Set these environment variables:")
-                    logger.warning(f"      KRAKEN_PLATFORM_API_KEY=<your-api-key>")
-                    logger.warning(f"      KRAKEN_PLATFORM_API_SECRET=<your-api-secret>")
+                    logger.info(f"      URL: https://www.kraken.com/u/security/api")
+                    logger.info(f"   2. Set these environment variables:")
+                    logger.info(f"      KRAKEN_PLATFORM_API_KEY=<your-api-key>")
+                    logger.info(f"      KRAKEN_PLATFORM_API_SECRET=<your-api-secret>")
                 elif broker == "ALPACA":
-                    logger.warning(f"      URL: https://alpaca.markets/")
-                    logger.warning(f"   2. Set these environment variables (Platform account):")
-                    logger.warning(f"      ALPACA_API_KEY=<your-api-key>")
-                    logger.warning(f"      ALPACA_API_SECRET=<your-api-secret>")
-                    logger.warning(f"      ALPACA_PAPER=true  # Set to false for live trading")
-                elif broker == "COINBASE":
-                    logger.warning(f"      URL: https://portal.cdp.coinbase.com/")
-                    logger.warning(f"   2. Set these environment variables (Platform account):")
-                    logger.warning(f"      COINBASE_API_KEY=<your-api-key>")
-                    logger.warning(f"      COINBASE_API_SECRET=<your-api-secret>")
-                elif broker == "OKX":
-                    logger.warning(f"      URL: https://www.okx.com/account/my-api")
-                    logger.warning(f"   2. Set these environment variables (Platform account):")
-                    logger.warning(f"      OKX_API_KEY=<your-api-key>")
-                    logger.warning(f"      OKX_API_SECRET=<your-api-secret>")
-                    logger.warning(f"      OKX_PASSPHRASE=<your-passphrase>")
-                elif broker == "BINANCE":
-                    logger.warning(f"      URL: https://www.binance.com/en/my/settings/api-management")
-                    logger.warning(f"   2. Set these environment variables (Platform account):")
-                    logger.warning(f"      BINANCE_API_KEY=<your-api-key>")
-                    logger.warning(f"      BINANCE_API_SECRET=<your-api-secret>")
+                    logger.info(f"      URL: https://alpaca.markets/")
+                    logger.info(f"   2. Set these environment variables:")
+                    logger.info(f"      ALPACA_API_KEY=<your-api-key>")
+                    logger.info(f"      ALPACA_API_SECRET=<your-api-secret>")
+                    logger.info(f"      ALPACA_PAPER=true  # Set to false for live trading")
                 else:
-                    # Fallback for unknown brokers - use MASTER prefix pattern
-                    logger.warning(f"   2. Set environment variables:")
-                    logger.warning(f"      {broker}_PLATFORM_API_KEY=<your-api-key>")
-                    logger.warning(f"      {broker}_PLATFORM_API_SECRET=<your-api-secret>")
-                logger.warning(f"   3. Restart the bot")
-            logger.warning("")
-            logger.warning("   💡 TIP: Once Platform accounts are connected, the warning will disappear")
-            logger.warning("=" * 70)
+                    logger.info(f"   2. Set environment variables:")
+                    logger.info(f"      {broker}_PLATFORM_API_KEY=<your-api-key>")
+                    logger.info(f"      {broker}_PLATFORM_API_SECRET=<your-api-secret>")
+                logger.info(f"   3. Restart the bot")
+            logger.info("")
+            logger.info("   Note: Platform and Users all trade independently using same NIJA logic")
+            logger.info("=" * 70)
         else:
-            # Display positive status when there are no warnings
-            logger.info("✅ ACCOUNT HIERARCHY STATUS:")
-            logger.info("   ✅ All user accounts have corresponding Platform accounts (correct hierarchy)")
+            # All accounts connected and trading
+            logger.info("✅ ACCOUNT STATUS:")
+            logger.info("   ✅ Platform and User accounts connected - all trading independently")
 
         logger.info("=" * 70)
 
