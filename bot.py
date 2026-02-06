@@ -850,17 +850,25 @@ def main():
         logger.info("Trading loops have exited, but process will remain alive.")
         logger.info("This prevents Railway from restarting the service.")
         logger.info("The process will continue sending heartbeats for health monitoring.")
+        logger.info("To shutdown: Use SIGTERM or SIGINT (handled by signal handlers at startup)")
         logger.info("=" * 70)
         
         while True:
             try:
-                # Continue heartbeat for health monitoring
-                health_manager.heartbeat()
-                logger.info("💓 Keep-alive heartbeat sent")
+                # Continue heartbeat for health monitoring if available
+                if health_manager:
+                    health_manager.heartbeat()
+                    logger.info("💓 Keep-alive heartbeat sent")
+                else:
+                    logger.warning("⚠️  Health manager not available in keep-alive mode")
                 time.sleep(300)  # 5 minutes between heartbeats in keep-alive mode
             except KeyboardInterrupt:
-                logger.info("Received shutdown signal in keep-alive mode, continuing...")
-                # Don't break - stay alive even on Ctrl+C
+                # Note: In normal circumstances, SIGINT is handled by signal handlers above
+                # This catch is defensive - if we somehow get here, log and continue staying alive
+                # to maintain the long-running worker behavior
+                logger.info("⚠️  KeyboardInterrupt in keep-alive mode (unexpected)")
+                logger.info("   Signal handlers should have intercepted this.")
+                logger.info("   Continuing to stay alive as a long-running worker.")
                 time.sleep(1)
             except Exception as e:
                 logger.error(f"Error in keep-alive loop: {e}", exc_info=True)
