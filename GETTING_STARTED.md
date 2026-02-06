@@ -81,15 +81,24 @@ You should see:
 
 ---
 
-## Adding Kraken Platform Account (Optional)
+## Adding Kraken Platform Account (REQUIRED for Production)
 
-Want to expand your trading to Kraken? You can enable Kraken for the platform account to trade on multiple exchanges simultaneously.
+**⚠️ CRITICAL:** Kraken Platform account credentials are **REQUIRED** for stable operation, even if you only trade with user accounts.
 
-### Quick Setup for Kraken Master
+Configuring Platform Kraken credentials (even with $0 balance) provides:
+- ✅ **Silences all hierarchy warnings**
+- ✅ **Stabilizes startup flow**
+- ✅ **Prevents repeated reconciliation logic**
+- ✅ **Makes logs calm and linear**
+
+**The Platform account does not need trading capital - it just needs to exist and connect.**
+
+### Quick Setup for Kraken Platform
 
 **🚀 NEW: Quick Guide Available!**
 
 For the fastest setup, check out:
+- **[PLATFORM_ACCOUNT_REQUIRED.md](PLATFORM_ACCOUNT_REQUIRED.md)** - Complete guide (RECOMMENDED)
 - **QUICKSTART_MASTER_KRAKEN.txt** - Visual one-page guide
 - **SETUP_MASTER_KRAKEN.md** - Detailed step-by-step instructions
 - Run: `python3 setup_kraken_master.py` - Interactive setup wizard
@@ -99,7 +108,8 @@ For the fastest setup, check out:
 1. **Get Kraken API credentials:**
    - Log in to Kraken: https://www.kraken.com/u/security/api
    - Click "Generate New Key"
-   - Name it "NIJA Trading Bot - Master"
+   - Name it "NIJA Trading Bot - Platform"
+   - **IMPORTANT:** Use "Classic API Key" (NOT OAuth)
    - Enable permissions:
      - ✅ Query Funds
      - ✅ Query Open Orders & Trades
@@ -110,16 +120,20 @@ For the fastest setup, check out:
 
 2. **Add to `.env` file (local) OR Railway/Render (production):**
    ```bash
-   KRAKEN_PLATFORM_API_KEY=your-master-api-key
-   KRAKEN_PLATFORM_API_SECRET=your-master-private-key
+   # REQUIRED for stable operation
+   KRAKEN_PLATFORM_API_KEY=your-platform-api-key
+   KRAKEN_PLATFORM_API_SECRET=your-platform-private-key
    ```
 
 3. **Restart NIJA**
 
 You should now see:
 ```
-📊 KRAKEN (Master):
-   ✅ Configured (Key: 56 chars, Secret: 88 chars)
+✅ Kraken Platform credentials detected
+🔷 PLATFORM ACCOUNTS (Primary Trading Accounts):
+   • KRAKEN: ✅ CONNECTED
+✅ ACCOUNT HIERARCHY STATUS:
+   ✅ All user accounts have corresponding Platform accounts (correct hierarchy)
 ```
 
 **For Railway/Render deployments:** See SETUP_MASTER_KRAKEN.md for platform-specific instructions.
