@@ -303,7 +303,7 @@ class HardControls:
         
         # Log to audit logger if available
         try:
-            from bot.audit_logger import get_audit_logger
+            from bot.trading_audit_logger import get_audit_logger
             audit_logger = get_audit_logger()
             audit_logger.log_position_validation(
                 user_id=user_id,

@@ -1,0 +1,147 @@
+{
+  "event_id": "AE-20260206150547350082-000003",
+  "event_type": "position_size_validation",
+  "timestamp": "2026-02-06T15:05:47.350097Z",
+  "user_id": "test_user",
+  "account_id": null,
+  "broker": null,
+  "trade_id": null,
+  "symbol": "ETH-USD",
+  "event_data": {
+    "requested_size_usd": 75.0,
+    "requested_size_pct": 7.5,
+    "enforced_limit": null
+  },
+  "validation_result": true,
+  "validation_reason": null,
+  "amount_usd": null,
+  "position_size_usd": 75.0,
+  "account_balance_usd": 1000.0,
+  "checksum": "89b4f3db2a3a2048c9d079734c8f5ea0f1f0b075790108541f41017e641181be"
+}
+{
+  "event_id": "AE-20260206150547350317-000004",
+  "event_type": "position_size_validation",
+  "timestamp": "2026-02-06T15:05:47.350330Z",
+  "user_id": "test_user",
+  "account_id": null,
+  "broker": null,
+  "trade_id": null,
+  "symbol": "BTC-USD",
+  "event_data": {
+    "requested_size_usd": 100,
+    "requested_size_pct": 10.0,
+    "enforced_limit": null
+  },
+  "validation_result": true,
+  "validation_reason": null,
+  "amount_usd": null,
+  "position_size_usd": 100,
+  "account_balance_usd": 1000,
+  "checksum": "045380294a92d37bbb2996f07d50e523b1d922e41dbfc1c3d900b6967aeeba20"
+}
+{
+  "event_id": "AE-20260206150547350510-000005",
+  "event_type": "position_size_validation",
+  "timestamp": "2026-02-06T15:05:47.350524Z",
+  "user_id": "test_user",
+  "account_id": null,
+  "broker": null,
+  "trade_id": null,
+  "symbol": "BTC-USD",
+  "event_data": {
+    "requested_size_usd": 50,
+    "requested_size_pct": 5.0,
+    "enforced_limit": null
+  },
+  "validation_result": true,
+  "validation_reason": null,
+  "amount_usd": null,
+  "position_size_usd": 50,
+  "account_balance_usd": 1000,
+  "checksum": "248c509908130ae0931c07ef8581da8e15ac5b7705b319be641e1142f089d07c"
+}
+{
+  "event_id": "AE-20260206150547350696-000006",
+  "event_type": "position_size_rejected",
+  "timestamp": "2026-02-06T15:05:47.350712Z",
+  "user_id": "test_user",
+  "account_id": null,
+  "broker": null,
+  "trade_id": null,
+  "symbol": "BTC-USD",
+  "event_data": {
+    "requested_size_usd": 150,
+    "requested_size_pct": 15.0,
+    "enforced_limit": null
+  },
+  "validation_result": false,
+  "validation_reason": "Position too large: $150.00 (maximum $100.00, 10%)",
+  "amount_usd": null,
+  "position_size_usd": 150,
+  "account_balance_usd": 1000,
+  "checksum": "8ec6a6f41ade3b1a53023afe7588d9a7033085fb54e1c9b2630325f744500498"
+}
+{
+  "event_id": "AE-20260206150547350882-000007",
+  "event_type": "position_size_rejected",
+  "timestamp": "2026-02-06T15:05:47.350898Z",
+  "user_id": "test_user",
+  "account_id": null,
+  "broker": null,
+  "trade_id": null,
+  "symbol": "BTC-USD",
+  "event_data": {
+    "requested_size_usd": 10,
+    "requested_size_pct": 1.0,
+    "enforced_limit": null
+  },
+  "validation_result": false,
+  "validation_reason": "Position too small: $10.00 (minimum $20.00, 2%)",
+  "amount_usd": null,
+  "position_size_usd": 10,
+  "account_balance_usd": 1000,
+  "checksum": "caa14c1fe49f49b77911e0d23eabafb8f13997e6f7e495e0ce9fb7ffc0808ffb"
+}
+{
+  "event_id": "AE-20260206150547351094-000008",
+  "event_type": "position_size_rejected",
+  "timestamp": "2026-02-06T15:05:47.351110Z",
+  "user_id": "test_user",
+  "account_id": null,
+  "broker": null,
+  "trade_id": null,
+  "symbol": "BTC-USD",
+  "event_data": {
+    "requested_size_usd": 200,
+    "requested_size_pct": 20.0,
+    "enforced_limit": null
+  },
+  "validation_result": false,
+  "validation_reason": "Position too large: $200.00 (maximum $100.00, 10%)",
+  "amount_usd": null,
+  "position_size_usd": 200,
+  "account_balance_usd": 1000,
+  "checksum": "9fbe92985d66dbc1243fdcb7db4c94fcaaf5efcecde3b1e66eadd2c519a3cb0a"
+}
+{
+  "event_id": "AE-20260206150547351279-000009",
+  "event_type": "position_size_rejected",
+  "timestamp": "2026-02-06T15:05:47.351295Z",
+  "user_id": "test_user",
+  "account_id": null,
+  "broker": null,
+  "trade_id": null,
+  "symbol": "BTC-USD",
+  "event_data": {
+    "requested_size_usd": 11000,
+    "requested_size_pct": 11.0,
+    "enforced_limit": null
+  },
+  "validation_result": false,
+  "validation_reason": "Position too large: $11000.00 (maximum $10000.00, 10%)",
+  "amount_usd": null,
+  "position_size_usd": 11000,
+  "account_balance_usd": 100000,
+  "checksum": "553dc8ce0318c5522531087b302296f3ba64a1cec318d2dc17f7d213c5cdda4f"
+}
