@@ -233,6 +233,17 @@ class ExecutionEngine:
                 self.execution_intelligence = None
         else:
             self.execution_intelligence = None
+        
+        # Initialize Profit Confirmation Logger
+        if PROFIT_CONFIRMATION_AVAILABLE:
+            try:
+                self.profit_logger = ProfitConfirmationLogger(data_dir="./data")
+                logger.info("✅ Profit Confirmation Logger initialized - Enhanced profit tracking enabled")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not initialize Profit Confirmation Logger: {e}")
+                self.profit_logger = None
+        else:
+            self.profit_logger = None
 
     def _get_market_microstructure(self, symbol: str) -> Optional[MarketMicrostructure]:
         """
@@ -889,6 +900,58 @@ class ExecutionEngine:
                             logger.warning(f"Could not close position in ledger: {e}")
 
                     logger.info(f"✅ TRADE COMPLETE: {symbol}")
+                    
+                    # Log profit confirmation if profit logger available
+                    if self.profit_logger:
+                        try:
+                            entry_price = position.get('entry_price', 0)
+                            entry_time = position.get('opened_at')
+                            position_size_usd = position.get('position_size', 0)
+                            side = position.get('side', 'long')
+                            
+                            # Calculate profit
+                            if side == 'long':
+                                gross_profit_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0
+                            else:
+                                gross_profit_pct = (entry_price - exit_price) / entry_price if entry_price > 0 else 0
+                            
+                            # Get broker fee (estimate if not available)
+                            broker_fee_pct = self._get_broker_round_trip_fee()
+                            net_profit_pct = gross_profit_pct - broker_fee_pct
+                            net_profit_usd = position_size_usd * net_profit_pct
+                            fees_paid_usd = position_size_usd * broker_fee_pct
+                            
+                            # Calculate hold time
+                            if entry_time and isinstance(entry_time, datetime):
+                                hold_time_seconds = (datetime.now() - entry_time).total_seconds()
+                            else:
+                                hold_time_seconds = 0
+                            
+                            # Determine exit type
+                            if "PROFIT" in reason.upper() or "TP" in reason.upper():
+                                exit_type = "PROFIT_CONFIRMED"
+                            elif "GIVEBACK" in reason.upper():
+                                exit_type = "PROFIT_GIVEBACK"
+                            elif "STOP" in reason.upper() or "SL" in reason.upper():
+                                exit_type = "STOP_LOSS"
+                            else:
+                                exit_type = "MANUAL_EXIT"
+                            
+                            # Log the profit confirmation
+                            self.profit_logger.log_profit_confirmation(
+                                symbol=symbol,
+                                entry_price=entry_price,
+                                exit_price=exit_price,
+                                position_size_usd=position_size_usd,
+                                net_profit_pct=net_profit_pct,
+                                net_profit_usd=net_profit_usd,
+                                hold_time_seconds=hold_time_seconds,
+                                exit_type=exit_type,
+                                fees_paid_usd=fees_paid_usd,
+                                risk_amount_usd=position.get('risk_amount_usd', 0)
+                            )
+                        except Exception as log_error:
+                            logger.warning(f"Could not log profit confirmation: {log_error}")
 
                     # FIX #2: Immediate Position State Flush After Sell
                     # Instantly purge the internal position object - DO NOT wait for exchange refresh
