@@ -14,6 +14,7 @@ class FeatureFlag(Enum):
     VOLATILITY_ADAPTIVE_SIZING = "volatility_adaptive_sizing"
     DYNAMIC_STOP_EXPANSION = "dynamic_stop_expansion"
     LIVE_DASHBOARD = "live_dashboard"
+    PROFIT_CONFIRMATION = "profit_confirmation"
     
     # Safety killswitches (always ON)
     PROFITABILITY_ASSERTION = "profitability_assertion"
@@ -44,6 +45,7 @@ class FeatureFlagManager:
             FeatureFlag.VOLATILITY_ADAPTIVE_SIZING: False,
             FeatureFlag.DYNAMIC_STOP_EXPANSION: False,
             FeatureFlag.LIVE_DASHBOARD: False,
+            FeatureFlag.PROFIT_CONFIRMATION: True,  # Enabled by default for production
             
             # Safety features ALWAYS ON (cannot be disabled)
             FeatureFlag.PROFITABILITY_ASSERTION: True,
