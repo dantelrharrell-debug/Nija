@@ -68,6 +68,15 @@ class HardControls:
     MAX_POSITION_PCT = 0.10   # 10% maximum per trade
     MAX_DAILY_TRADES = 50     # Maximum trades per day per user
     ERROR_THRESHOLD = 5       # Max API errors before auto-disable
+    
+    # ABSOLUTE MAXIMUM POSITION SIZE (UNBYPASABLE)
+    # This is a fail-safe that cannot be overridden under any circumstances
+    # Even if other checks fail, this prevents catastrophic position sizes
+    ABSOLUTE_MAX_POSITION_PCT = 0.15  # 15% absolute hard cap
+    ABSOLUTE_MAX_POSITION_USD = 10000.0  # $10,000 absolute hard cap
+    
+    # Position validation tracking for audit trail
+    _position_validations: List[Dict[str, any]] = []
 
     def __init__(self):
         self.global_kill_switch = KillSwitchStatus.ACTIVE
@@ -87,6 +96,7 @@ class HardControls:
 
         logger.info("Hard controls initialized")
         logger.info(f"Position limits: {self.MIN_POSITION_PCT*100:.0f}% - {self.MAX_POSITION_PCT*100:.0f}%")
+        logger.info(f"ABSOLUTE MAX: {self.ABSOLUTE_MAX_POSITION_PCT*100:.0f}% or ${self.ABSOLUTE_MAX_POSITION_USD:.0f} (UNBYPASABLE)")
 
         # Log verification status prominently
         if self.live_capital_verified:
@@ -176,36 +186,137 @@ class HardControls:
         self,
         user_id: str,
         position_size_usd: float,
-        account_balance: float
+        account_balance: float,
+        symbol: Optional[str] = None,
+        log_to_audit: bool = True
     ) -> tuple[bool, Optional[str]]:
         """
-        Validate position size against hard limits.
+        Validate position size against hard limits with UNBYPASABLE fail-safe.
+        
+        This method enforces THREE layers of protection:
+        1. Standard limits (2-10%)
+        2. Absolute percentage cap (15%)
+        3. Absolute USD cap ($10,000)
+        
+        ALL THREE must pass. No exceptions, no overrides.
 
         Args:
             user_id: User identifier
             position_size_usd: Requested position size in USD
             account_balance: User's account balance
+            symbol: Trading symbol (for audit logging)
+            log_to_audit: Whether to log to audit trail
 
         Returns:
             (is_valid, error_message)
         """
         # Calculate position percentage
         if account_balance <= 0:
-            return False, "Invalid account balance"
+            rejection_reason = "Invalid account balance"
+            self._log_position_validation(user_id, symbol, position_size_usd,
+                                          account_balance, False, rejection_reason)
+            return False, rejection_reason
 
         position_pct = position_size_usd / account_balance
 
-        # Check minimum
+        # LAYER 1: Check minimum
         if position_pct < self.MIN_POSITION_PCT:
             min_usd = account_balance * self.MIN_POSITION_PCT
-            return False, f"Position too small: ${position_size_usd:.2f} (minimum ${min_usd:.2f}, {self.MIN_POSITION_PCT*100:.0f}%)"
+            rejection_reason = f"Position too small: ${position_size_usd:.2f} (minimum ${min_usd:.2f}, {self.MIN_POSITION_PCT*100:.0f}%)"
+            self._log_position_validation(user_id, symbol, position_size_usd,
+                                          account_balance, False, rejection_reason)
+            return False, rejection_reason
 
-        # Check maximum
+        # LAYER 2: Check standard maximum
         if position_pct > self.MAX_POSITION_PCT:
             max_usd = account_balance * self.MAX_POSITION_PCT
-            return False, f"Position too large: ${position_size_usd:.2f} (maximum ${max_usd:.2f}, {self.MAX_POSITION_PCT*100:.0f}%)"
+            rejection_reason = f"Position too large: ${position_size_usd:.2f} (maximum ${max_usd:.2f}, {self.MAX_POSITION_PCT*100:.0f}%)"
+            self._log_position_validation(user_id, symbol, position_size_usd,
+                                          account_balance, False, rejection_reason)
+            return False, rejection_reason
+        
+        # LAYER 3: ABSOLUTE PERCENTAGE CAP (UNBYPASABLE)
+        if position_pct > self.ABSOLUTE_MAX_POSITION_PCT:
+            rejection_reason = (f"🚨 ABSOLUTE MAXIMUM EXCEEDED: {position_pct*100:.2f}% "
+                              f"(hard cap: {self.ABSOLUTE_MAX_POSITION_PCT*100:.0f}%) - "
+                              f"THIS LIMIT CANNOT BE BYPASSED")
+            logger.critical(rejection_reason)
+            self._log_position_validation(user_id, symbol, position_size_usd,
+                                          account_balance, False, rejection_reason,
+                                          enforced_limit="ABSOLUTE_MAX_POSITION_PCT")
+            return False, rejection_reason
+        
+        # LAYER 4: ABSOLUTE USD CAP (UNBYPASABLE)
+        if position_size_usd > self.ABSOLUTE_MAX_POSITION_USD:
+            rejection_reason = (f"🚨 ABSOLUTE USD MAXIMUM EXCEEDED: ${position_size_usd:.2f} "
+                              f"(hard cap: ${self.ABSOLUTE_MAX_POSITION_USD:.0f}) - "
+                              f"THIS LIMIT CANNOT BE BYPASSED")
+            logger.critical(rejection_reason)
+            self._log_position_validation(user_id, symbol, position_size_usd,
+                                          account_balance, False, rejection_reason,
+                                          enforced_limit="ABSOLUTE_MAX_POSITION_USD")
+            return False, rejection_reason
 
+        # All checks passed
+        self._log_position_validation(user_id, symbol, position_size_usd,
+                                      account_balance, True, None)
         return True, None
+    
+    def _log_position_validation(
+        self,
+        user_id: str,
+        symbol: Optional[str],
+        position_size_usd: float,
+        account_balance: float,
+        approved: bool,
+        rejection_reason: Optional[str],
+        enforced_limit: Optional[str] = None
+    ) -> None:
+        """
+        Log position validation to audit trail.
+        
+        Args:
+            user_id: User identifier
+            symbol: Trading symbol
+            position_size_usd: Requested position size
+            account_balance: Account balance
+            approved: Whether validation passed
+            rejection_reason: Reason if rejected
+            enforced_limit: Which limit was enforced
+        """
+        validation_record = {
+            'timestamp': datetime.now().isoformat(),
+            'user_id': user_id,
+            'symbol': symbol,
+            'position_size_usd': position_size_usd,
+            'account_balance': account_balance,
+            'position_pct': (position_size_usd / account_balance * 100) if account_balance > 0 else 0,
+            'approved': approved,
+            'rejection_reason': rejection_reason,
+            'enforced_limit': enforced_limit,
+        }
+        
+        # Add to internal tracking (limited to last 1000 validations)
+        self._position_validations.append(validation_record)
+        if len(self._position_validations) > 1000:
+            self._position_validations.pop(0)
+        
+        # Log to audit logger if available
+        try:
+            from bot.audit_logger import get_audit_logger
+            audit_logger = get_audit_logger()
+            audit_logger.log_position_validation(
+                user_id=user_id,
+                symbol=symbol or "UNKNOWN",
+                requested_size_usd=position_size_usd,
+                account_balance_usd=account_balance,
+                is_approved=approved,
+                rejection_reason=rejection_reason,
+                enforced_limit=enforced_limit
+            )
+        except ImportError:
+            # Audit logger not available - validation still recorded internally
+            pass
 
     def check_daily_loss_limit(
         self,
@@ -391,6 +502,74 @@ class HardControls:
             )
 
         self.daily_loss_trackers[user_id].record_loss(loss_usd)
+    
+    def get_position_validation_history(
+        self,
+        user_id: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Dict[str, any]]:
+        """
+        Get recent position validation history for audit purposes.
+        
+        Args:
+            user_id: Filter by user ID (None for all users)
+            limit: Maximum number of records to return
+        
+        Returns:
+            List of validation records
+        """
+        # Filter by user if specified
+        if user_id:
+            filtered = [v for v in self._position_validations if v['user_id'] == user_id]
+        else:
+            filtered = self._position_validations
+        
+        # Return most recent records
+        return filtered[-limit:] if len(filtered) > limit else filtered
+    
+    def get_rejection_stats(self, user_id: Optional[str] = None) -> Dict[str, any]:
+        """
+        Get statistics on position validation rejections.
+        
+        Args:
+            user_id: Filter by user ID (None for all users)
+        
+        Returns:
+            Dict with rejection statistics
+        """
+        # Get relevant validations
+        if user_id:
+            validations = [v for v in self._position_validations if v['user_id'] == user_id]
+        else:
+            validations = self._position_validations
+        
+        if not validations:
+            return {
+                'total_validations': 0,
+                'approved': 0,
+                'rejected': 0,
+                'rejection_rate': 0.0,
+                'rejection_reasons': {},
+            }
+        
+        approved = sum(1 for v in validations if v['approved'])
+        rejected = sum(1 for v in validations if not v['approved'])
+        
+        # Count rejection reasons
+        rejection_reasons = {}
+        for v in validations:
+            if not v['approved'] and v['rejection_reason']:
+                # Extract key reason (first few words)
+                reason_key = v['rejection_reason'].split(':')[0]
+                rejection_reasons[reason_key] = rejection_reasons.get(reason_key, 0) + 1
+        
+        return {
+            'total_validations': len(validations),
+            'approved': approved,
+            'rejected': rejected,
+            'rejection_rate': (rejected / len(validations) * 100) if validations else 0,
+            'rejection_reasons': rejection_reasons,
+        }
 
 
 # Global hard controls instance
