@@ -32,6 +32,11 @@ ERROR_SEPARATOR = "═" * 63
 # and updates its heartbeat at this interval
 CONFIG_ERROR_HEARTBEAT_INTERVAL = 60
 
+# Keep-alive loop sleep interval (seconds)
+# When trading loops exit, the keep-alive loop sleeps for this duration between status logs
+# Note: Heartbeat is updated by dedicated background thread (10s), not by this loop
+KEEP_ALIVE_SLEEP_INTERVAL_SECONDS = 300
+
 # EMERGENCY STOP CHECK
 if os.path.exists('EMERGENCY_STOP'):
     print("\n" + "="*80)
@@ -867,25 +872,16 @@ def main():
         logger.info("=" * 70)
         logger.info("Trading loops have exited, but process will remain alive.")
         logger.info("This prevents Railway from restarting the service.")
-        logger.info("The process will continue sending heartbeats for health monitoring.")
+        logger.info("Heartbeat is maintained by dedicated background thread (10s interval).")
         logger.info("To shutdown: Use SIGTERM or SIGINT (handled by signal handlers at startup)")
         logger.info("=" * 70)
         
-        # Track if we've already warned about health_manager unavailability
-        health_manager_warning_logged = False
-        
         while True:
             try:
-                # Continue heartbeat for health monitoring if available
-                if health_manager:
-                    health_manager.heartbeat()
-                    logger.info("💓 Keep-alive heartbeat sent")
-                else:
-                    # Only log warning once to avoid log spam
-                    if not health_manager_warning_logged:
-                        logger.warning("⚠️  Health manager not available in keep-alive mode")
-                        health_manager_warning_logged = True
-                time.sleep(300)  # 5 minutes between heartbeats in keep-alive mode
+                # Note: Heartbeat is updated by dedicated background thread (line 229-245)
+                # This loop just keeps the process alive and logs periodic status
+                logger.info("💓 Keep-alive status check (heartbeat via background thread)")
+                time.sleep(KEEP_ALIVE_SLEEP_INTERVAL_SECONDS)
             except KeyboardInterrupt:
                 # Note: In normal circumstances, SIGINT is handled by signal handlers above
                 # This catch is defensive - if we somehow get here, log and continue staying alive
