@@ -3041,6 +3041,14 @@ This project is proprietary software. All rights reserved.
 
 ## ⚡ Quick Reference
 
+> **🎯 NEW: Comprehensive Operator Quick Reference Card**  
+> A one-page reference consolidating all critical operator commands, alerts, snapshots, and filters:
+> - **[📄 Markdown Version](NIJA_OPERATOR_QUICK_REFERENCE.md)** - Text-based, terminal-friendly, searchable
+> - **[🎨 HTML Version](NIJA_OPERATOR_QUICK_REFERENCE.html)** - Styled with icons & color coding (open in browser)
+> - **[📖 About the Quick Reference](NIJA_OPERATOR_QUICK_REFERENCE_README.md)** - Guide to using both versions
+>
+> Perfect for: Emergency response, operator training, system monitoring, troubleshooting
+
 ### Essential Commands
 
 ```bash
@@ -3798,7 +3806,18 @@ python3 diagnose_profitability_now.py
 
 ### Getting Started & Quick References
 
-12. **[USER_TRADING_ACTIVATION_QUICK_REF.md](USER_TRADING_ACTIVATION_QUICK_REF.md)** 🚀 **ACTIVATION CARD** ⭐ **NEW**
+**NEW** 12. **[NIJA_OPERATOR_QUICK_REFERENCE.md](NIJA_OPERATOR_QUICK_REFERENCE.md)** / **[NIJA_OPERATOR_QUICK_REFERENCE.html](NIJA_OPERATOR_QUICK_REFERENCE.html)** 🎯 **OPERATOR REFERENCE CARD** ⭐ **NEW**
+   - **One-page consolidation** of all critical operator commands
+   - **Emergency kill switch** activation methods (<5 seconds)
+   - **Status commands** (balance, profitability, diagnostics)
+   - **Alerts & monitoring** (thresholds, safety tests)
+   - **Snapshots & metrics** (Command Center, API endpoints)
+   - **Market filters** (ADX, volume, spread, volatility)
+   - **Troubleshooting** checklist and rapid-fire commands
+   - **Two versions**: Markdown (terminal-friendly) & HTML (styled with icons & color coding)
+   - **[Usage Guide](NIJA_OPERATOR_QUICK_REFERENCE_README.md)** - How to use both versions
+
+13. **[USER_TRADING_ACTIVATION_QUICK_REF.md](USER_TRADING_ACTIVATION_QUICK_REF.md)** 🚀 **ACTIVATION CARD**
    - 10-minute trading activation guide
    - Step-by-step credential setup
    - Environment configuration
@@ -3806,7 +3825,7 @@ python3 diagnose_profitability_now.py
    - Troubleshooting common issues
    - Safety features overview
 
-13. **[GETTING_STARTED.md](GETTING_STARTED.md)** 📖 **COMPLETE SETUP GUIDE**
+14. **[GETTING_STARTED.md](GETTING_STARTED.md)** 📖 **COMPLETE SETUP GUIDE**
    - Full setup instructions
    - Multi-user configuration
    - Platform and user accounts
@@ -3814,7 +3833,7 @@ python3 diagnose_profitability_now.py
 
 ### Core Playbooks & Guides
 
-14. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **GROWTH STRATEGY**
+15. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **GROWTH STRATEGY**
    - Complete guide to growing from any balance to $1000+/day
    - Capital tiers ($10, $50, $200, $1K, $5K, $20K+)
    - Position sizing rules per tier
@@ -3822,15 +3841,7 @@ python3 diagnose_profitability_now.py
    - Compound growth strategies
    - Common pitfalls and solutions
 
-14. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **GROWTH STRATEGY**
-   - Complete guide to growing from any balance to $1000+/day
-   - Capital tiers ($10, $50, $200, $1K, $5K, $20K+)
-   - Position sizing rules per tier
-   - Expected returns and timelines
-   - Compound growth strategies
-   - Common pitfalls and solutions
-
-15. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
+16. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
    - Comprehensive issue diagnosis
    - Balance & API problems
    - Trading issues (no trades, too many trades, etc.)
@@ -3838,7 +3849,7 @@ python3 diagnose_profitability_now.py
    - Performance optimization
    - Recovery procedures
 
-16. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
+17. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
    - Immediate stop procedures
    - Emergency liquidation
    - Trading lock/unlock
@@ -3846,27 +3857,27 @@ python3 diagnose_profitability_now.py
 
 ### Broker & Integration Guides
 
-17. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
+18. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
    - Coinbase Advanced Trade setup
    - Multi-broker configuration
    - API troubleshooting
 
-18. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
+19. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
    - OKX exchange integration
    - Lower fees (0.08% vs 1.4%)
 
-19. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
+20. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
    - Using multiple exchanges
    - Fee optimization strategies
 
 ### Profitability & Performance
 
-20. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
+21. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
    - Complete profitability analysis
    - How NIJA makes money
    - Verification methods
 
-21. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
+22. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
    - v7.2 upgrade details
    - Performance improvements
    - Configuration changes
