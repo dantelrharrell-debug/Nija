@@ -66,6 +66,15 @@ except ImportError:
     except ImportError:
         logger.warning("Command Center API not available")
         register_command_center_routes = None
+
+# Import Control Center API
+try:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    from control_center_api import create_control_center_api
+    CONTROL_CENTER_API_AVAILABLE = True
+except ImportError:
+    logger.warning("Control Center API not available")
+    CONTROL_CENTER_API_AVAILABLE = False
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 10  # 10 seconds
 
@@ -126,6 +135,12 @@ def trades_dashboard():
 def command_center_dashboard():
     """Command Center dashboard page with live metrics"""
     return render_template('command_center.html')
+
+
+@app.route('/control-center')
+def control_center_dashboard():
+    """NIJA Control Center dashboard page - unified operational dashboard"""
+    return render_template('control_center.html')
 
 
 @app.route('/api/status')
@@ -2037,10 +2052,23 @@ if __name__ == "__main__":
     else:
         logger.warning("⚠️ Command Center routes not available")
 
+    # Register Control Center API routes if available
+    if CONTROL_CENTER_API_AVAILABLE:
+        try:
+            from control_center_api import create_control_center_api
+            # This function will register all control center routes on our app
+            create_control_center_api(app)
+            logger.info("✅ Control Center API routes registered")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not register Control Center API: {e}")
+    else:
+        logger.warning("⚠️ Control Center API not available")
+
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")
     print("👥 Users Dashboard: http://localhost:5001/users")
     print("⚡ Command Center: http://localhost:5001/command-center")
+    print("🎯 Control Center: http://localhost:5001/control-center")
     print(f"🔄 Auto-refresh every {AUTO_REFRESH_INTERVAL} seconds")
     print("\nPress Ctrl+C to stop\n")
 
