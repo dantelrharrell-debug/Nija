@@ -60,23 +60,20 @@ if os.path.exists('EMERGENCY_STOP'):
 # Infrastructure-grade health server with liveness and readiness probes
 def _start_health_server():
     """
-    Start HTTP health server with proper liveness and readiness endpoints.
+    Start HTTP health server with Railway-optimized liveness endpoint.
     
-    Endpoints:
-    - /health or /healthz - Liveness probe (is process alive?)
+    CRITICAL for Railway deployment:
+    - /health and /healthz ALWAYS return 200 OK (stateless, < 50ms)
+    - No dependencies on bot state, locks, or initialization
+    - Binds immediately before any Kraken connections or user loading
+    
+    This prevents Railway from killing the container during startup.
+    
+    Other endpoints:
     - /ready or /readiness - Readiness probe (is service ready to handle traffic?)
     - /status - Detailed status information for operators
-    
-    This allows orchestrators to properly distinguish between:
-    - Configuration errors (should NOT restart)
-    - Service not ready (should NOT receive traffic)
-    - Service crashed (should restart)
     """
     try:
-        # Import health manager
-        from bot.health_check import get_health_manager
-        health_manager = get_health_manager()
-        
         # Resolve port with a safe default if env is missing
         port_env = os.getenv("PORT", "")
         default_port = 8080
@@ -90,37 +87,64 @@ def _start_health_server():
         class HealthHandler(BaseHTTPRequestHandler):
             def do_GET(self):
                 try:
-                    # Liveness probe - always returns 200 if process is alive
+                    # Railway liveness probe - ALWAYS returns 200 OK (stateless, no checks)
+                    # This ensures Railway never kills the container during startup
                     if self.path in ("/health", "/healthz"):
-                        status = health_manager.get_liveness_status()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
                         self.end_headers()
-                        self.wfile.write(json.dumps(status).encode())
+                        self.wfile.write(json.dumps({"status": "ok"}).encode())
                     
                     # Readiness probe - returns 200 only if ready, 503 if not ready/config error
                     elif self.path in ("/ready", "/readiness"):
-                        status, http_code = health_manager.get_readiness_status()
-                        self.send_response(http_code)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        self.wfile.write(json.dumps(status).encode())
+                        try:
+                            from bot.health_check import get_health_manager
+                            health_manager = get_health_manager()
+                            status, http_code = health_manager.get_readiness_status()
+                            self.send_response(http_code)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps(status).encode())
+                        except Exception:
+                            # If health manager not ready, return not ready
+                            self.send_response(503)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"status": "not_ready", "reason": "initializing"}).encode())
                     
                     # Detailed status for operators and debugging
                     elif self.path in ("/status", "/"):
-                        status = health_manager.get_detailed_status()
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        self.wfile.write(json.dumps(status, indent=2).encode())
+                        try:
+                            from bot.health_check import get_health_manager
+                            health_manager = get_health_manager()
+                            status = health_manager.get_detailed_status()
+                            self.send_response(200)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps(status, indent=2).encode())
+                        except Exception:
+                            # If health manager not ready, return basic status
+                            self.send_response(200)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"status": "initializing"}, indent=2).encode())
                     
                     # Prometheus metrics endpoint
                     elif self.path == "/metrics":
-                        metrics = health_manager.get_prometheus_metrics()
-                        self.send_response(200)
-                        self.send_header("Content-Type", "text/plain; version=0.0.4")
-                        self.end_headers()
-                        self.wfile.write(metrics.encode())
+                        try:
+                            from bot.health_check import get_health_manager
+                            health_manager = get_health_manager()
+                            metrics = health_manager.get_prometheus_metrics()
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/plain; version=0.0.4")
+                            self.end_headers()
+                            self.wfile.write(metrics.encode())
+                        except Exception:
+                            # Return minimal metrics if health manager not ready
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/plain; version=0.0.4")
+                            self.end_headers()
+                            self.wfile.write(b"# Initializing\nnija_up 1\n")
                     
                     else:
                         self.send_response(404)
@@ -144,15 +168,15 @@ def _start_health_server():
                 return
 
         server = HTTPServer(("0.0.0.0", port), HealthHandler)
-        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t = threading.Thread(target=server.serve_forever, daemon=True, name="HealthServer")
         t.start()
-        logger.info(f"🌐 Health server listening on port {port}")
-        logger.info(f"   📍 Liveness:  http://0.0.0.0:{port}/health")
-        logger.info(f"   📍 Readiness: http://0.0.0.0:{port}/ready")
-        logger.info(f"   📍 Status:    http://0.0.0.0:{port}/status")
-        logger.info(f"   📍 Metrics:   http://0.0.0.0:{port}/metrics")
+        print(f"🌐 Health server listening on port {port} (Railway-optimized)")
+        print(f"   📍 Liveness:  http://0.0.0.0:{port}/health (ALWAYS returns 200 OK)")
+        print(f"   📍 Readiness: http://0.0.0.0:{port}/ready")
+        print(f"   📍 Status:    http://0.0.0.0:{port}/status")
+        print(f"   📍 Metrics:   http://0.0.0.0:{port}/metrics")
     except Exception as e:
-        logger.warning(f"Health server failed to start: {e}")
+        print(f"❌ Health server failed to start: {e}")
 
 # Try to load dotenv if available, but don't fail if not
 try:
@@ -335,8 +359,31 @@ def _log_memory_usage():
 
 
 def main():
-    """Main entry point for NIJA trading bot"""
+    """Main entry point for NIJA trading bot - Railway optimized"""
     
+    # ═══════════════════════════════════════════════════════════════════════
+    # CRITICAL: START HEALTH SERVER FIRST (Railway requirement)
+    # ═══════════════════════════════════════════════════════════════════════
+    # Health server MUST bind BEFORE:
+    # - Kraken connections
+    # - User loading  
+    # - Any sleeps or loops
+    # - Even logging setup
+    #
+    # This prevents Railway from killing the container during startup.
+    # The /health endpoint ALWAYS returns 200 OK regardless of bot state.
+    print("=" * 70)
+    print("🌐 STARTING HEALTH SERVER (Railway requirement)")
+    print("=" * 70)
+    _start_health_server()
+    print("✅ Health server started - Railway will not kill this container")
+    print("=" * 70)
+    print("")
+    
+    # Small delay to ensure health server is fully bound
+    time.sleep(0.2)
+    
+    # Now setup logging (after health server is running)
     # Log process startup
     _log_lifecycle_banner(
         "🚀 NIJA TRADING BOT STARTUP",
@@ -344,6 +391,7 @@ def main():
             f"Process ID: {os.getpid()}",
             f"Python Version: {sys.version.split()[0]}",
             f"Working Directory: {os.getcwd()}",
+            "Health server: ✅ RUNNING (started before initialization)",
             "Initializing lifecycle management..."
         ]
     )
@@ -679,9 +727,8 @@ def main():
         # Mark as configuration error for health checks
         health_manager.mark_configuration_error("No exchange credentials configured")
         
-        # Start health server to report configuration error state
-        logger.info("Starting health server to report configuration status...")
-        _start_health_server()
+        # Health server already started at beginning of main()
+        logger.info("Health server already running - will report configuration error status")
         
         _log_lifecycle_banner(
             "⚠️  ENTERING CONFIG ERROR KEEP-ALIVE MODE",
@@ -736,9 +783,8 @@ def main():
 
     try:
         logger.info("Initializing trading strategy...")
-        # Start health server if PORT is provided by platform (e.g., Railway)
+        # Health server already started at beginning of main()
         logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
-        _start_health_server()
         strategy = TradingStrategy()
 
         # AUDIT USER BALANCES - Show all user balances regardless of trading status
