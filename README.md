@@ -8,6 +8,54 @@
 > **⚠️ Breaking Changes in v7.2.0:** NIJA now supports **independent trading only**. The copy-trading system has been removed. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 > **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
 
+## 👥 **NEW: User Status Summary** (February 7, 2026)
+
+**Monitor All Users with One Clean Report**
+
+The User Status Summary tool provides real-time monitoring of all users in your NIJA platform:
+
+- ✅ **Account Balances** - See balances across all configured brokers
+- ✅ **Trading Readiness** - Check if each user can trade and why/why not
+- ✅ **Position Overview** - Monitor open positions and unrealized P&L
+- ✅ **Risk Status** - Track daily P&L and risk levels
+- ✅ **Multiple Formats** - Clean text or JSON for automation
+
+### 🚀 Quick Start
+
+```bash
+# Show status summary for all users
+python user_status_summary.py
+
+# Detailed information
+python user_status_summary.py --detailed
+
+# JSON output for automation
+python user_status_summary.py --json
+```
+
+### 📊 Example Output
+
+```
+====================================================================================================
+NIJA LIVE USER STATUS SUMMARY
+====================================================================================================
+
+📊 PLATFORM OVERVIEW
+   Total Users: 2 | Active: 2 | Trading Ready: 1 | With Positions: 1
+   Total Capital: $12,500.00 | Unrealized P&L: +$150.00
+
+👥 USER STATUS
+✅ 💰 📈 💚 john_doe (pro)
+      Balance: $10,000.00 (coinbase: $6,000 | kraken: $4,000)
+      Positions: 3 open | Unrealized P&L: +$150.00
+
+⛔          jane_smith (basic)
+      Balance: $2,500.00
+      Status: ⛔ Trading disabled - Circuit breaker triggered
+```
+
+**Legend:** ✅ Ready | ⛔ Disabled | 💰 Has Balance | 📈 Open Positions | 🔴 High Risk | 🟡 Medium Risk | 🟢 Normal | 💚 Profitable
+
 ## 📊 **NEW: Paper Trading Analytics System** (February 7, 2026)
 
 **Data-Driven Strategy Optimization - Kill Losers, Promote Winners**

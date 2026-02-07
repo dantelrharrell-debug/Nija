@@ -1,0 +1,10 @@
+[Unit]
+Description=NIJA Status Alerts Check
+After=network.target
+
+[Service]
+Type=oneshot
+User=nija
+WorkingDirectory=/opt/nija
+Environment="DATABASE_URL=postgresql://nija:password@localhost/nija"
+ExecStart=/usr/bin/python3 /opt/nija/status_alerts.py
