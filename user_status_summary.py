@@ -413,11 +413,14 @@ class UserStatusSummary:
         
         # Balance info
         if user.total_balance_usd > 0 or user.broker_balances:
-            broker_info = " | ".join([
-                f"{broker}: ${bal:,.2f}" 
-                for broker, bal in user.broker_balances.items()
-            ])
-            print(f"      Balance: ${user.total_balance_usd:,.2f} ({broker_info})")
+            if user.broker_balances:
+                broker_info = " | ".join([
+                    f"{broker}: ${bal:,.2f}" 
+                    for broker, bal in user.broker_balances.items()
+                ])
+                print(f"      Balance: ${user.total_balance_usd:,.2f} ({broker_info})")
+            else:
+                print(f"      Balance: ${user.total_balance_usd:,.2f}")
         else:
             print(f"      Balance: No balance data available")
         
@@ -526,11 +529,9 @@ def main():
             init_database()
             health = check_database_health()
             if not health.get('healthy'):
-                import sys
                 print(f"\n⚠️  Warning: Database health check failed: {health.get('error')}", file=sys.stderr)
                 print("Some features may not be available.\n", file=sys.stderr)
         except Exception as e:
-            import sys
             print(f"\n⚠️  Warning: Could not initialize database: {e}", file=sys.stderr)
             print("Some features may not be available.\n", file=sys.stderr)
     
