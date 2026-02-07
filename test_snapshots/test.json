@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-02-07T19:06:49.815179",
+  "platform_overview": {
+    "total_users": 2,
+    "active_users": 2,
+    "trading_ready": 0,
+    "users_with_positions": 0,
+    "total_capital_usd": 0.0,
+    "total_unrealized_pnl": 0.0
+  },
+  "users": [
+    {
+      "user_id": "daivon_frazier",
+      "email": "",
+      "tier": "basic",
+      "enabled": true,
+      "can_trade": false,
+      "trading_status": "\ud83d\udd34 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading.",
+      "instance_status": "unknown",
+      "total_balance_usd": 0.0,
+      "broker_balances": {},
+      "open_positions": 0,
+      "unrealized_pnl": 0.0,
+      "daily_pnl": 0.0,
+      "risk_level": "unknown",
+      "circuit_breaker": false,
+      "configured_brokers": [],
+      "last_activity": null
+    },
+    {
+      "user_id": "tania_gilbert",
+      "email": "",
+      "tier": "basic",
+      "enabled": true,
+      "can_trade": false,
+      "trading_status": "\ud83d\udd34 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading.",
+      "instance_status": "unknown",
+      "total_balance_usd": 0.0,
+      "broker_balances": {},
+      "open_positions": 0,
+      "unrealized_pnl": 0.0,
+      "daily_pnl": 0.0,
+      "risk_level": "unknown",
+      "circuit_breaker": false,
+      "configured_brokers": [],
+      "last_activity": null
+    }
+  ]
+}
