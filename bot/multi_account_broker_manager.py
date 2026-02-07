@@ -315,7 +315,6 @@ class MultiAccountBrokerManager:
         Returns:
             bool: True if platform is connected, False otherwise
         """
-        return broker_type in self._platform_brokers and self._platform_brokers[broker_type].connected
         try:
             # Validate broker_type parameter
             if broker_type is None:
