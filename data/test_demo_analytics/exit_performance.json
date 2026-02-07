@@ -1,0 +1,80 @@
+{
+  "time_exit": {
+    "exit_reason": "time_exit",
+    "total_trades": 21,
+    "winning_trades": 0,
+    "losing_trades": 21,
+    "total_pnl": -795.6666027442382,
+    "avg_pnl": -37.888885844963724,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -37.88888584496372,
+    "capital_allocation_pct": 50.0
+  },
+  "stop_loss": {
+    "exit_reason": "stop_loss",
+    "total_trades": 49,
+    "winning_trades": 0,
+    "losing_trades": 49,
+    "total_pnl": -1731.767435114473,
+    "avg_pnl": -35.3421925533566,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -35.3421925533566,
+    "capital_allocation_pct": 100.0
+  },
+  "profit_target": {
+    "exit_reason": "profit_target",
+    "total_trades": 27,
+    "winning_trades": 27,
+    "losing_trades": 0,
+    "total_pnl": 1397.007074118353,
+    "avg_pnl": 51.74100274512419,
+    "win_rate": 100.0,
+    "profit_factor": 0.0,
+    "avg_win": 51.741002745124206,
+    "avg_loss": 0.0,
+    "capital_allocation_pct": 100.0
+  },
+  "signal_reversal": {
+    "exit_reason": "signal_reversal",
+    "total_trades": 24,
+    "winning_trades": 0,
+    "losing_trades": 24,
+    "total_pnl": -847.8478157747261,
+    "avg_pnl": -35.32699232394692,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -35.32699232394692,
+    "capital_allocation_pct": 100.0
+  },
+  "partial_profit": {
+    "exit_reason": "partial_profit",
+    "total_trades": 10,
+    "winning_trades": 10,
+    "losing_trades": 0,
+    "total_pnl": 518.4343028067728,
+    "avg_pnl": 51.84343028067728,
+    "win_rate": 100.0,
+    "profit_factor": 0.0,
+    "avg_win": 51.84343028067728,
+    "avg_loss": 0.0,
+    "capital_allocation_pct": 100.0
+  },
+  "trailing_stop": {
+    "exit_reason": "trailing_stop",
+    "total_trades": 19,
+    "winning_trades": 19,
+    "losing_trades": 0,
+    "total_pnl": 1225.2537579243572,
+    "avg_pnl": 64.48703989075564,
+    "win_rate": 100.0,
+    "profit_factor": 0.0,
+    "avg_win": 64.48703989075564,
+    "avg_loss": 0.0,
+    "capital_allocation_pct": 100.0
+  }
+}
