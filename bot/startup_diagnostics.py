@@ -201,9 +201,16 @@ class StartupRetryManager:
         
         Returns:
             Delay in seconds
+            
+        Note:
+            This should be called AFTER record_attempt() to get the correct delay.
+            Delay sequence: 5s, 10s, 20s for attempts 1, 2, 3
         """
         # Exponential backoff: 5s, 10s, 20s
-        return self.initial_delay * (2 ** self.current_attempt)
+        # Use (current_attempt - 1) since we increment before calling this
+        if self.current_attempt == 0:
+            return self.initial_delay
+        return self.initial_delay * (2 ** (self.current_attempt - 1))
     
     def record_attempt(self):
         """Record that we've made another attempt."""
