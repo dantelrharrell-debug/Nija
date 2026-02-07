@@ -890,11 +890,11 @@ def _run_bot_startup_and_trading():
                     *_get_thread_status()
                 ]
             )
-            logger.error(f"Unhandled fatal error in startup thread: {e}", exc_info=True)
+            logger.exception("❌ Startup thread crashed")
             sys.exit(1)
             
     except Exception as e:
-        logger.error(f"🧵 ❌ Fatal error in startup thread outer handler: {e}", exc_info=True)
+        logger.exception("🧵 ❌ Fatal error in startup thread outer handler")
         sys.exit(1)
 
 
