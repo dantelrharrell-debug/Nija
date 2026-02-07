@@ -8,7 +8,61 @@
 > **⚠️ Breaking Changes in v7.2.0:** NIJA now supports **independent trading only**. The copy-trading system has been removed. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 > **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
 
-## 👥 **NEW: User Status Summary** (February 7, 2026)
+## 🎯 **NEW: NIJA Control Center** (February 7, 2026)
+
+**Your Unified Operational Command Center**
+
+The NIJA Control Center is a comprehensive dashboard that provides real-time monitoring and control of all trading operations in one place. Available as both a CLI and web interface.
+
+### Key Features
+
+- 📊 **Live Monitoring** - Real-time balances, positions, and P&L across all users and brokers
+- 🚨 **Alert Management** - Visual alerts with severity levels and acknowledgment system
+- ⚡ **Quick Actions** - Emergency stop, pause/resume trading, instant refresh
+- 📈 **Position Tracking** - Monitor all open positions with real-time P&L
+- 💰 **User Overview** - See trading status, balances, and risk levels per user
+- 🔧 **System Health** - Monitor database, services, and component status
+
+### Quick Start
+
+**CLI Dashboard (Interactive Terminal)**
+```bash
+# Start interactive dashboard
+python nija_control_center.py
+
+# One-time snapshot
+python nija_control_center.py --snapshot
+
+# Custom refresh interval (5 seconds)
+python nija_control_center.py --refresh-interval 5
+```
+
+**Web Dashboard (Browser-based)**
+```bash
+# Start web server
+python bot/dashboard_server.py
+
+# Access at http://localhost:5001/control-center
+```
+
+### CLI Keyboard Commands
+
+- `R` - Refresh data now
+- `E` - Emergency stop (disable all trading)
+- `P` - Pause trading
+- `S` - Start/resume trading  
+- `U` - Show detailed user status
+- `Q` - Quit
+
+### Documentation
+
+📚 See [CONTROL_CENTER.md](CONTROL_CENTER.md) for complete documentation including:
+- API endpoints and usage
+- Web dashboard features
+- Integration guide
+- Troubleshooting
+
+## 👥 **User Status Summary** (February 7, 2026)
 
 **Monitor All Users with One Clean Report**
 
