@@ -359,6 +359,50 @@ def _log_memory_usage():
         logger.debug(f"Error logging memory usage: {e}")
 
 
+def _run_bot_startup_and_trading_with_retry():
+    """
+    Wrapper function that implements startup retry logic.
+    
+    This function wraps the actual startup logic with retry capability,
+    preventing permanent failure from transient errors.
+    """
+    from bot.startup_diagnostics import StartupRetryManager
+    import time
+    
+    # Initialize retry manager
+    # Default: 3 retries with 5 second initial delay (exponential backoff)
+    retry_manager = StartupRetryManager(max_retries=3, initial_delay=5)
+    
+    while True:
+        try:
+            # Attempt to start the bot
+            _run_bot_startup_and_trading()
+            # If we get here, startup succeeded
+            return
+            
+        except (KeyboardInterrupt, SystemExit):
+            # Don't retry on explicit exit signals
+            logger.info("Received exit signal, stopping...")
+            raise
+            
+        except Exception as e:
+            # Check if we should retry
+            if retry_manager.should_retry(e):
+                retry_manager.record_attempt()
+                delay = retry_manager.get_retry_delay()
+                retry_manager.log_retry_attempt(e, delay)
+                
+                # Wait before retrying
+                time.sleep(delay)
+                
+                # Continue to next iteration (retry)
+                continue
+            else:
+                # All retries exhausted or fatal error
+                retry_manager.log_final_failure(e)
+                raise
+
+
 def _run_bot_startup_and_trading():
     """
     Background thread: Initialize bot and run trading loops.
@@ -432,6 +476,23 @@ def _run_bot_startup_and_trading():
             logger.warning("⚠️  RISK WARNING: Trading involves substantial risk of loss")
             logger.warning("   Only trade with money you can afford to lose")
             logger.warning("=" * 70)
+        
+        # Display feature flag banner
+        try:
+            from bot.startup_diagnostics import display_feature_flag_banner
+            display_feature_flag_banner()
+        except Exception as e:
+            logger.warning(f"⚠️  Could not display feature flag banner: {e}")
+        
+        # Verify trading capability
+        try:
+            from bot.startup_diagnostics import verify_trading_capability
+            capability_ok, issues = verify_trading_capability()
+            if not capability_ok:
+                logger.warning("⚠️  Trading capability verification found issues")
+                logger.warning("   Bot may not function correctly")
+        except Exception as e:
+            logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
         # Portfolio override visibility at startup
         portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
@@ -1007,7 +1068,7 @@ def main():
     logger.info("=" * 70)
     
     startup_thread = threading.Thread(
-        target=_run_bot_startup_and_trading,
+        target=_run_bot_startup_and_trading_with_retry,
         daemon=False,  # NOT daemon - we want this to keep running
         name="BotStartup"
     )
