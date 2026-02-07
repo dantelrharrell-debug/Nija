@@ -3876,14 +3876,6 @@ python3 diagnose_profitability_now.py
    - Compound growth strategies
    - Common pitfalls and solutions
 
-14. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **GROWTH STRATEGY**
-   - Complete guide to growing from any balance to $1000+/day
-   - Capital tiers ($10, $50, $200, $1K, $5K, $20K+)
-   - Position sizing rules per tier
-   - Expected returns and timelines
-   - Compound growth strategies
-   - Common pitfalls and solutions
-
 15. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
    - Comprehensive issue diagnosis
    - Balance & API problems
