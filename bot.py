@@ -88,12 +88,13 @@ def _start_health_server():
             def do_GET(self):
                 try:
                     # Railway liveness probe - ALWAYS returns 200 OK (stateless, no checks)
+                    # No logging. No conditionals. No imports. Dumb and fast wins.
                     # This ensures Railway never kills the container during startup
                     if self.path in ("/health", "/healthz"):
                         self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Type", "text/plain")
                         self.end_headers()
-                        self.wfile.write(json.dumps({"status": "ok"}).encode())
+                        self.wfile.write(b"ok")
                     
                     # Readiness probe - returns 200 only if ready, 503 if not ready/config error
                     elif self.path in ("/ready", "/readiness"):
@@ -588,25 +589,312 @@ def _run_bot_startup_and_trading():
             logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
             logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
 
-        # NOTE: All the remaining bot initialization code will be added here
-        # This includes:
-        # - TradingStrategy() initialization (Kraken connection happens here)
-        # - User balance loading
-        # - Trading loop startup
-        # For now, just log that we got to this point
-        logger.info("=" * 70)
-        logger.info("🧵 STARTUP THREAD: Initialization logic will continue here")
-        logger.info("=" * 70)
-        logger.warning("⚠️  TODO: Move remaining bot initialization code into this thread")
-        logger.warning("   This is a work in progress - bot will not trade yet")
+        # ═══════════════════════════════════════════════════════════════════════
+        # BOT INITIALIZATION - This is where Kraken connection happens
+        # ═══════════════════════════════════════════════════════════════════════
         
-        # Keep the thread alive for now
-        while True:
-            time.sleep(60)
-            logger.debug("🧵 Startup thread alive (waiting for full implementation)")
+        try:
+            logger.info("🧵 STARTUP THREAD: Initializing trading strategy...")
+            logger.info("   This is where Kraken connection will be established")
+            logger.info("   Main thread health server remains responsive during this")
+            logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
+            
+            # This is where the actual bot initialization happens
+            # TradingStrategy() constructor:
+            # - Connects to Kraken
+            # - Loads users
+            # - Fetches balances
+            # This can take 30-60 seconds, but health server is already running!
+            strategy = TradingStrategy()
+
+            # AUDIT USER BALANCES - Show all user balances regardless of trading status
+            # This runs BEFORE trading starts to ensure visibility even if users aren't actively trading
+            logger.info("=" * 70)
+            logger.info("🔍 AUDITING USER ACCOUNT BALANCES")
+            logger.info("=" * 70)
+            if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
+                strategy.multi_account_manager.audit_user_accounts()
+            else:
+                logger.warning("   ⚠️  Multi-account manager not available - skipping balance audit")
+
+            # STARTUP BALANCE CONFIRMATION - Display live capital for legal/operational protection
+            logger.info("")
+            logger.info("=" * 70)
+            logger.info("💰 LIVE CAPITAL CONFIRMED:")
+            logger.info("=" * 70)
+            if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
+                try:
+                    manager = strategy.multi_account_manager
+
+                    # Get all balances
+                    all_balances = manager.get_all_balances()
+
+                    # Platform account total
+                    platform_total = sum(all_balances.get('platform', {}).values())
+                    logger.info(f"   Platform: ${platform_total:,.2f}")
+
+                    # User accounts - specifically Daivon and Tania
+                    users_balances = all_balances.get('users', {})
+
+                    # Find Daivon's balance
+                    daivon_total = 0.0
+                    for user_id, balances in users_balances.items():
+                        if 'daivon' in user_id.lower():
+                            daivon_total = sum(balances.values())
+                            break
+                    logger.info(f"   Daivon: ${daivon_total:,.2f}")
+
+                    # Find Tania's balance
+                    tania_total = 0.0
+                    for user_id, balances in users_balances.items():
+                        if 'tania' in user_id.lower():
+                            tania_total = sum(balances.values())
+                            break
+                    logger.info(f"   Tania: ${tania_total:,.2f}")
+
+                    # Show grand total
+                    grand_total = platform_total + daivon_total + tania_total
+                    logger.info("")
+                    logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
+                except Exception as e:
+                    logger.error(f"   ⚠️  Error fetching balances: {e}")
+                    logger.error("   ⚠️  Continuing with startup - balances will be shown in trade logs")
+            else:
+                logger.warning("   ⚠️  Multi-account manager not available - cannot confirm balances")
+            logger.info("=" * 70)
+
+            # Independent trading mode - all accounts trade using same logic
+            logger.info("=" * 70)
+            logger.info("🔄 INDEPENDENT TRADING MODE ENABLED")
+            logger.info("=" * 70)
+            logger.info("   ✅ Each account trades independently")
+            logger.info("   ✅ Same NIJA strategy logic for all accounts")
+            logger.info("   ✅ Same risk management rules for all accounts")
+            logger.info("   ✅ Position sizing scaled by account balance")
+            logger.info("   ℹ️  No trade copying or mirroring between accounts")
+            logger.info("=" * 70)
+
+            # Log clear trading readiness status
+            logger.info("=" * 70)
+            logger.info("📊 TRADING READINESS STATUS")
+            logger.info("=" * 70)
+
+            # Check which master brokers are connected
+            connected_platform_brokers = []
+            failed_platform_brokers = []
+
+            if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
+                for broker_type, broker in strategy.multi_account_manager.platform_brokers.items():
+                    if broker and broker.connected:
+                        connected_platform_brokers.append(broker_type.value.upper())
+
+            # CRITICAL FIX: Check for brokers with credentials configured but failed to connect
+            # This catches cases where credentials are set but connection failed due to:
+            # - SDK not installed (krakenex/pykrakenapi missing)
+            # - Permission errors (API key lacks required permissions)
+            # - Nonce errors (timing issues)
+            # - Network errors
+            # Check if Kraken was expected but didn't connect
+            if kraken_platform_configured and 'KRAKEN' not in connected_platform_brokers:
+                failed_platform_brokers.append('KRAKEN')
+
+            # Track if Kraken credentials were not configured at all
+            kraken_not_configured = not kraken_platform_configured
+
+            if connected_platform_brokers:
+                logger.info("✅ Connected Platform Exchanges:")
+                for exchange in connected_platform_brokers:
+                    logger.info(f"   ✅ {exchange}")
+                logger.info("")
+                
+                # Show failures if any
+                if failed_platform_brokers:
+                    logger.info("")
+                    logger.warning("⚠️  Expected but NOT Connected:")
+                    for exchange in failed_platform_brokers:
+                        logger.warning(f"   ❌ {exchange}")
+                        if exchange == 'KRAKEN':
+                            # Try to get the specific error from the failed broker instance
+                            error_msg = None
+                            if hasattr(strategy, 'failed_brokers') and BrokerType.KRAKEN in strategy.failed_brokers:
+                                failed_broker = strategy.failed_brokers[BrokerType.KRAKEN]
+                                if hasattr(failed_broker, 'last_connection_error') and failed_broker.last_connection_error:
+                                    error_msg = failed_broker.last_connection_error
+
+                            if error_msg:
+                                _log_kraken_connection_error_header(error_msg)
+                                # Check for SDK import errors
+                                is_sdk_error = any(pattern in error_msg.lower() for pattern in [
+                                    "sdk import error",
+                                    "modulenotfounderror",
+                                    "no module named 'krakenex'",
+                                    "no module named 'pykrakenapi'",
+                                ])
+                                if is_sdk_error:
+                                    logger.error("")
+                                    logger.error("      ❌ KRAKEN SDK NOT INSTALLED")
+                                    logger.error("      The Kraken libraries (krakenex/pykrakenapi) are missing!")
+                                    logger.error("")
+                                    logger.error("      🔧 IMMEDIATE FIX REQUIRED:")
+                                    logger.error("      1. Verify your deployment platform is using the Dockerfile")
+                                    logger.error("")
+                                elif "permission" in error_msg.lower():
+                                    logger.error("      → Fix: Enable required permissions at https://www.kraken.com/u/security/api")
+                                elif "nonce" in error_msg.lower():
+                                    logger.error("      → Fix: Wait 1-2 minutes and restart the bot")
+                                else:
+                                    logger.error("      → Verify credentials at https://www.kraken.com/u/security/api")
+
+                logger.info("")
+                logger.info(f"📈 Trading will occur on {len(connected_platform_brokers)} exchange(s)")
+                logger.info("💡 Each exchange operates independently")
+                logger.info("🛡️  Failures on one exchange won't affect others")
+            else:
+                logger.warning("⚠️  NO PLATFORM EXCHANGES CONNECTED")
+                logger.warning("Bot is running in MONITOR MODE (no trades will execute)")
+                logger.warning("")
+                logger.warning("To enable trading:")
+                logger.warning("   1. Run: python3 validate_all_env_vars.py")
+                logger.warning("   2. Configure at least one platform exchange")
+                logger.warning("   3. Restart the bot")
+                
+                # Update health status - exchanges configured but none connected
+                health_manager.update_exchange_status(connected=0, expected=exchanges_configured)
+
+            logger.info("=" * 70)
+
+            # Check if we should use independent multi-broker trading mode
+            use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
+
+            if use_independent_trading and strategy.independent_trader:
+                logger.info("=" * 70)
+                logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING MODE")
+                logger.info("=" * 70)
+                logger.info("Each broker will trade independently in isolated threads.")
+                logger.info("Failures in one broker will NOT affect other brokers.")
+                logger.info("=" * 70)
+
+                # Start independent trading for all funded brokers
+                if strategy.start_independent_multi_broker_trading():
+                    logger.info("✅ Independent multi-broker trading started successfully")
+
+                    # Main loop just monitors status and keeps process alive
+                    cycle_count = 0
+                    while True:
+                        try:
+                            cycle_count += 1
+                            
+                            # Update health heartbeat
+                            health_manager.heartbeat()
+
+                            # Log status every 10 cycles (25 minutes)
+                            if cycle_count % 10 == 0:
+                                logger.info(f"🔄 Status check #{cycle_count // 10}")
+                                strategy.log_multi_broker_status()
+
+                            # Sleep for 2.5 minutes
+                            time.sleep(150)
+
+                        except KeyboardInterrupt:
+                            _log_lifecycle_banner(
+                                "⚠️  TRADING LOOP INTERRUPTED - Multi-Broker Mode",
+                                [
+                                    "KeyboardInterrupt received in independent multi-broker loop",
+                                    "Stopping all independent trading threads...",
+                                    f"Completed {cycle_count} monitoring cycles",
+                                    *_get_thread_status()
+                                ]
+                            )
+                            logger.info("Stopping all independent trading...")
+                            strategy.stop_independent_trading()
+                            logger.info("✅ Independent trading stopped")
+                            break
+                        except Exception as e:
+                            logger.error(f"❌ Error in monitoring loop: {e}", exc_info=True)
+                            logger.warning(f"Recovering from error, continuing monitoring...")
+                            time.sleep(10)
+                else:
+                    logger.error("❌ Failed to start independent multi-broker trading")
+                    logger.info("Falling back to single-broker mode...")
+                    use_independent_trading = False
+
+            if not use_independent_trading:
+                # Single broker mode (original behavior)
+                logger.info("🚀 Starting single-broker trading loop (2.5 minute cadence)...")
+                cycle_count = 0
+
+                while True:
+                    try:
+                        cycle_count += 1
+                        
+                        # Update health heartbeat
+                        health_manager.heartbeat()
+                        
+                        logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
+                        strategy.run_cycle()
+                        time.sleep(150)  # 2.5 minutes
+                    except KeyboardInterrupt:
+                        _log_lifecycle_banner(
+                            "⚠️  TRADING LOOP INTERRUPTED - Single-Broker Mode",
+                            [
+                                "KeyboardInterrupt received in single-broker trading loop",
+                                f"Completed {cycle_count} trading cycles",
+                                "Exiting trading loop...",
+                                *_get_thread_status()
+                            ]
+                        )
+                        break
+                    except Exception as e:
+                        logger.error(f"❌ Error in trading cycle: {e}", exc_info=True)
+                        logger.warning(f"Recovering from error, continuing trading...")
+                        time.sleep(10)
+
+            # CRITICAL: Keep-alive loop to prevent process exit
+            logger.info("🔒 Trading loops completed - entering keep-alive mode")
+            while True:
+                time.sleep(300)
+                logger.debug("🧵 Startup thread keep-alive")
+                
+        except RuntimeError as e:
+            if "Broker connection failed" in str(e):
+                _log_exit_point(
+                    "Broker Connection Failed",
+                    exit_code=1,
+                    details=[
+                        "RuntimeError: Broker connection failed",
+                        "Credentials not found or invalid",
+                        *_get_thread_status()
+                    ]
+                )
+                sys.exit(1)
+            else:
+                _log_exit_point(
+                    "Fatal Initialization Error",
+                    exit_code=1,
+                    details=[
+                        f"RuntimeError: {str(e)}",
+                        "Bot initialization failed",
+                        *_get_thread_status()
+                    ]
+                )
+                logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
+                sys.exit(1)
+        except Exception as e:
+            _log_exit_point(
+                "Unhandled Fatal Error in Startup Thread",
+                exit_code=1,
+                details=[
+                    f"Exception Type: {type(e).__name__}",
+                    f"Error: {str(e)}",
+                    "An unexpected error occurred in startup thread",
+                    *_get_thread_status()
+                ]
+            )
+            logger.error(f"Unhandled fatal error in startup thread: {e}", exc_info=True)
+            sys.exit(1)
             
     except Exception as e:
-        logger.error(f"🧵 ❌ Fatal error in startup thread: {e}", exc_info=True)
+        logger.error(f"🧵 ❌ Fatal error in startup thread outer handler: {e}", exc_info=True)
         sys.exit(1)
 
 
