@@ -186,6 +186,7 @@ PROFITABILITY*.md
 OPTIMIZATION*.md
 USER*.md
 !USER_MANAGEMENT.md  # Core user guide
+!USER_TRADING_ACTIVATION_QUICK_REF.md  # User activation quick reference card
 TRADING*.md
 !TRADINGVIEW_SETUP.md  # Core setup guide
 UNBOUNDLOCALERROR*.md
