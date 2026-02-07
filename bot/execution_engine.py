@@ -168,6 +168,28 @@ except ImportError:
         def is_geographic_restriction_error(error_msg):
             return False
 
+# Import profit confirmation feature flag and logger
+try:
+    from config.feature_flags import PROFIT_CONFIRMATION_AVAILABLE
+    logger.info("✅ Profit confirmation feature flag loaded")
+except ImportError:
+    PROFIT_CONFIRMATION_AVAILABLE = False
+    logger.warning("⚠️ Profit confirmation feature flag not available - feature disabled")
+
+try:
+    from bot.profit_confirmation_logger import ProfitConfirmationLogger
+    PROFIT_LOGGER_AVAILABLE = True
+    logger.info("✅ Profit Confirmation Logger available")
+except ImportError:
+    try:
+        from profit_confirmation_logger import ProfitConfirmationLogger
+        PROFIT_LOGGER_AVAILABLE = True
+        logger.info("✅ Profit Confirmation Logger available")
+    except ImportError:
+        PROFIT_LOGGER_AVAILABLE = False
+        logger.warning("⚠️ Profit Confirmation Logger not available - profit tracking disabled")
+        ProfitConfirmationLogger = None
+
 
 class ExecutionEngine:
     """
@@ -235,7 +257,7 @@ class ExecutionEngine:
             self.execution_intelligence = None
         
         # Initialize Profit Confirmation Logger
-        if PROFIT_CONFIRMATION_AVAILABLE:
+        if PROFIT_CONFIRMATION_AVAILABLE and PROFIT_LOGGER_AVAILABLE:
             try:
                 self.profit_logger = ProfitConfirmationLogger(data_dir="./data")
                 logger.info("✅ Profit Confirmation Logger initialized - Enhanced profit tracking enabled")
