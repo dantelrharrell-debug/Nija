@@ -35,7 +35,6 @@ coinbase-advanced
 test_*.py
 !bot/test_*.py
 !bot/tests/test_*.py
-!scripts/chaos/test_*.py
 *.backup
 *.bak
 *.old
@@ -116,9 +115,6 @@ calculate_*.py
 analyze_*.py
 simulate_*.py
 fix_*.py
-test_*.py
-!bot/test_*.py
-!bot/tests/test_*.py
 run_*_backtest.py
 run_*_paper_trading.py
 profitability_audit_report.py
