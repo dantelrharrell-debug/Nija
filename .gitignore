@@ -187,6 +187,7 @@ OPTIMIZATION*.md
 USER*.md
 !USER_MANAGEMENT.md  # Core user guide
 !USER_TRADING_ACTIVATION_QUICK_REF.md  # User activation quick reference card
+!USER_TRADING_ACTIVATION_CHECKLIST.md  # User activation checklist
 TRADING*.md
 !TRADINGVIEW_SETUP.md  # Core setup guide
 UNBOUNDLOCALERROR*.md
