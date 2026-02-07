@@ -315,7 +315,6 @@ class MultiAccountBrokerManager:
         Returns:
             bool: True if platform is connected, False otherwise
         """
-        return broker_type in self._platform_brokers and self._platform_brokers[broker_type].connected
         try:
             # Validate broker_type parameter
             if broker_type is None:
@@ -920,15 +919,14 @@ class MultiAccountBrokerManager:
                 # CRITICAL FIX (Jan 17, 2026): ENFORCE connection order for Kraken copy trading
                 # For Kraken, user accounts MUST NOT connect without master (prevents nonce conflicts & broken copy trading)
                 # For other brokers, allow connection with warning (user may want standalone trading)
-                #
-                    logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Platform account!")
-                    logger.warning(f"   User: {user.name} ({user.user_id})")
-                    logger.warning(f"   Platform {broker_type.value.upper()} account is NOT connected")
-                    logger.warning("   🔧 RECOMMENDATION: Configure Platform account credentials first")
-                    logger.warning(f"      Platform should be PRIMARY, users should be SECONDARY")
-                    logger.warning("=" * 70)
-                    # Allow connection to proceed for non-Kraken brokers - user may want standalone trading
-                    # But log the warning so they know this is not the ideal setup
+                logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Platform account!")
+                logger.warning(f"   User: {user.name} ({user.user_id})")
+                logger.warning(f"   Platform {broker_type.value.upper()} account is NOT connected")
+                logger.warning("   🔧 RECOMMENDATION: Configure Platform account credentials first")
+                logger.warning(f"      Platform should be PRIMARY, users should be SECONDARY")
+                logger.warning("=" * 70)
+                # Allow connection to proceed for non-Kraken brokers - user may want standalone trading
+                # But log the warning so they know this is not the ideal setup
 
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken

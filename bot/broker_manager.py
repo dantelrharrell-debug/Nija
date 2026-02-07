@@ -5867,7 +5867,11 @@ class KrakenBroker(BaseBroker):
                             logger.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
 
                         logger.info("=" * 70)
-                        logger.info(f"✅ KRAKEN PRO CONNECTED ({cred_label})")
+                        # Display "PLATFORM KRAKEN CONNECTED" for platform accounts, "USER KRAKEN CONNECTED" for users
+                        if cred_label == "PLATFORM":
+                            logger.info("✅ PLATFORM KRAKEN CONNECTED")
+                        else:
+                            logger.info(f"✅ KRAKEN CONNECTED ({cred_label})")
                         logger.info("=" * 70)
 
                         # Log USD/USDT balance
