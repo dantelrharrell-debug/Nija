@@ -1098,7 +1098,8 @@ python3 check_platform_credentials.py
 
 ---
 
-**🚀 New to NIJA?** See the **[Getting Started Guide](GETTING_STARTED.md)** for complete setup!
+**🚀 New to NIJA?** Quick activation in 10 minutes: **[User Trading Activation Quick Reference Card](USER_TRADING_ACTIVATION_QUICK_REF.md)** ⚡  
+**📖 Complete setup:** [Getting Started Guide](GETTING_STARTED.md)
 
 ## 💎 Kraken Trading - Fully Enabled & Profit-Taking Verified
 
@@ -3747,9 +3748,25 @@ python3 diagnose_profitability_now.py
    - Expected behavior guide
    - Recommendations and next steps
 
+### Getting Started & Quick References
+
+12. **[USER_TRADING_ACTIVATION_QUICK_REF.md](USER_TRADING_ACTIVATION_QUICK_REF.md)** 🚀 **ACTIVATION CARD** ⭐ **NEW**
+   - 10-minute trading activation guide
+   - Step-by-step credential setup
+   - Environment configuration
+   - Verification commands
+   - Troubleshooting common issues
+   - Safety features overview
+
+13. **[GETTING_STARTED.md](GETTING_STARTED.md)** 📖 **COMPLETE SETUP GUIDE**
+   - Full setup instructions
+   - Multi-user configuration
+   - Platform and user accounts
+   - Deployment to Railway/Render
+
 ### Core Playbooks & Guides
 
-12. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **START HERE**
+14. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **GROWTH STRATEGY**
    - Complete guide to growing from any balance to $1000+/day
    - Capital tiers ($10, $50, $200, $1K, $5K, $20K+)
    - Position sizing rules per tier
@@ -3757,7 +3774,15 @@ python3 diagnose_profitability_now.py
    - Compound growth strategies
    - Common pitfalls and solutions
 
-13. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
+14. **[CAPITAL_SCALING_PLAYBOOK.md](CAPITAL_SCALING_PLAYBOOK.md)** ⭐ **GROWTH STRATEGY**
+   - Complete guide to growing from any balance to $1000+/day
+   - Capital tiers ($10, $50, $200, $1K, $5K, $20K+)
+   - Position sizing rules per tier
+   - Expected returns and timelines
+   - Compound growth strategies
+   - Common pitfalls and solutions
+
+15. **[TROUBLESHOOTING_GUIDE.md](TROUBLESHOOTING_GUIDE.md)** 🔧 **WHEN THINGS BREAK**
    - Comprehensive issue diagnosis
    - Balance & API problems
    - Trading issues (no trades, too many trades, etc.)
@@ -3765,7 +3790,7 @@ python3 diagnose_profitability_now.py
    - Performance optimization
    - Recovery procedures
 
-14. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
+16. **[EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)** 🚨 **CRITICAL ISSUES**
    - Immediate stop procedures
    - Emergency liquidation
    - Trading lock/unlock
@@ -3773,55 +3798,55 @@ python3 diagnose_profitability_now.py
 
 ### Broker & Integration Guides
 
-15. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
+17. **[BROKER_INTEGRATION_GUIDE.md](BROKER_INTEGRATION_GUIDE.md)**
    - Coinbase Advanced Trade setup
    - Multi-broker configuration
    - API troubleshooting
 
-16. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
+18. **[OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)** / **[OKX_QUICK_REFERENCE.md](OKX_QUICK_REFERENCE.md)**
    - OKX exchange integration
    - Lower fees (0.08% vs 1.4%)
 
-17. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
+19. **[MULTI_BROKER_ACTIVATION_GUIDE.md](MULTI_BROKER_ACTIVATION_GUIDE.md)**
    - Using multiple exchanges
    - Fee optimization strategies
 
 ### Profitability & Performance
 
-16. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
+20. **[PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md)**
    - Complete profitability analysis
    - How NIJA makes money
    - Verification methods
 
-17. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
+21. **[PROFITABILITY_UPGRADE_GUIDE.md](PROFITABILITY_UPGRADE_GUIDE.md)**
    - v7.2 upgrade details
    - Performance improvements
    - Configuration changes
 
-18. **[V7.2_UPGRADE_COMPLETE.md](V7.2_UPGRADE_COMPLETE.md)**
+22. **[V7.2_UPGRADE_COMPLETE.md](V7.2_UPGRADE_COMPLETE.md)**
    - v7.2 technical summary
    - Code changes
    - Deployment checklist
 
 ### Deployment & Operations
 
-19. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** / **[DEPLOYMENT_GUIDE_PROFIT_FIX.md](DEPLOYMENT_GUIDE_PROFIT_FIX.md)**
+23. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** / **[DEPLOYMENT_GUIDE_PROFIT_FIX.md](DEPLOYMENT_GUIDE_PROFIT_FIX.md)**
     - Railway deployment
     - Docker setup
     - Environment configuration
 
-20. **[ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md)** ⭐ NEW
+24. **[ENVIRONMENT_VARIABLES_GUIDE.md](ENVIRONMENT_VARIABLES_GUIDE.md)** ⭐ NEW
     - Complete environment variables reference
     - Local development (.env file) setup
     - Production deployment (Railway/Render/Heroku)
     - Multi-account Kraken credentials
     - Troubleshooting missing credentials
 
-21. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
+25. **[RENDER_GUIDE.md](RENDER_GUIDE.md)**
     - Alternative hosting on Render
     - Configuration steps
 
-22. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
+26. **[BOT_RESTART_GUIDE.md](BOT_RESTART_GUIDE.md)**
     - Safe restart procedures
     - Verification steps
 
