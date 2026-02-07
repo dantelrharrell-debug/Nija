@@ -1223,7 +1223,6 @@ This balance snapshot represents a **verified success point** in the startup seq
 - 🧠 **Advanced AI Strategy Engine**: APEX v7.1/v7.2 with dual RSI, machine learning filters, and adaptive growth management
 - 🎯 **Intelligent Risk Management**: Dynamic position sizing, circuit breakers, stop-loss automation, and profit-taking systems
 - 📊 **Real-Time Analytics**: P&L tracking, position monitoring, performance metrics, and trade journaling
-- 🔔 **TradingView Integration**: Instant execution via custom webhooks for manual strategy overlay
 - 🧪 **Development Tools**: Backtesting engine, paper trading mode, and comprehensive diagnostics
 - ⚡ **24/7 Autonomous Operation**: Self-healing, auto-scaling, and continuous market scanning
 - 👥 **Multi-User Platform**: Secure layered architecture with user-specific permissions and encrypted API keys
@@ -1397,11 +1396,6 @@ NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic
 - **Position Monitoring**: 2.5-minute scan cycles for instant reaction
 - **Performance Metrics**: Win rate, average hold time, daily/monthly returns
 
-### 🔔 TradingView Integration
-- **Custom Webhook Server**: Execute trades instantly from TradingView alerts
-- **Strategy Overlay**: Combine NIJA automation with manual TradingView signals
-- **Dual-Mode Operation**: Autonomous scanning + webhook-triggered execution
-
 ### 🧪 Development & Testing Tools
 - **Backtesting Engine**: Historical performance validation with multi-timeframe analysis
 - **Paper Trading Mode**: Risk-free strategy testing with simulated capital
@@ -1413,7 +1407,7 @@ NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic
 - **Auto-Recovery**: Self-healing mechanisms for API failures and network issues
 - **Multi-Platform Deployment**: Docker, Railway, Render support
 - **Version Control**: Git-based recovery points with verified working states
-- **Security**: API key encryption, webhook signature validation, secret management
+- **Security**: API key encryption, multi-user authentication, secret management
 
 ### 📈 Scalable Architecture
 - **Micro to Institutional**: Optimized for accounts from $10 to $1M+
@@ -2414,7 +2408,6 @@ Nija/
 │   ├── execution_engine.py      # Trade execution
 │   ├── indicators.py            # Technical indicators
 │   ├── apex_*.py                # APEX strategy components
-│   └── tradingview_webhook.py  # Webhook server
 │
 ├── scripts/                     # Utility scripts
 │   ├── print_accounts.py        # Balance checker
@@ -2448,7 +2441,7 @@ Nija/
 | `COINBASE_API_KEY` | ✅ | Coinbase API key | `organizations/.../apiKeys/...` |
 | `COINBASE_API_SECRET` | ✅ | PEM private key | `-----BEGIN EC PRIVATE KEY-----\n...` |
 | `ALLOW_CONSUMER_USD` | ⚠️ | Accept consumer balances | `true` |
-| `PORT` | ❌ | Webhook server port | `5000` |
+| `PORT` | ❌ | Health check server port | `8080` |
 | `WEB_CONCURRENCY` | ❌ | Worker processes | `1` |
 
 ### Strategy Parameters
