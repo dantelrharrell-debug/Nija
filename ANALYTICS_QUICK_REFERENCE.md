@@ -100,7 +100,7 @@ print(report)
 - `heartbeat_trade` - Connectivity test
 - `unknown` - Fallback
 
-## Exit Reasons (17 total)
+## Exit Reasons (19 total)
 
 **Profit Targets:**
 - `profit_target_1/2/3` - Partial exits (25% each)
