@@ -32,24 +32,29 @@ ERROR_SEPARATOR = "═" * 63
 # and updates its heartbeat at this interval
 CONFIG_ERROR_HEARTBEAT_INTERVAL = 60
 
-# EMERGENCY STOP CHECK
-if os.path.exists('EMERGENCY_STOP'):
-    print("\n" + "="*80)
-    print("🚨 EMERGENCY STOP ACTIVE")
-    print("="*80)
-    print("Bot is disabled. See EMERGENCY_STOP file for details.")
-    print("Delete EMERGENCY_STOP file to resume trading.")
-    print("="*80 + "\n")
-    sys.exit(0)
+# Heartbeat update interval (seconds) for Railway health check responsiveness
+# Background thread updates heartbeat at this frequency to ensure health checks
+# always get fresh data (Railway checks every ~30s, this is faster)
+HEARTBEAT_INTERVAL_SECONDS = 10
+
+# Keep-alive loop sleep interval (seconds)
+# When trading loops exit, the keep-alive loop sleeps for this duration between status logs
+# Note: Heartbeat is updated by dedicated background thread, not by this loop
+KEEP_ALIVE_SLEEP_INTERVAL_SECONDS = 300
 
 # EMERGENCY STOP CHECK
+# Note: Uses print() instead of logger because logger is not yet initialized
 if os.path.exists('EMERGENCY_STOP'):
-    print("\n" + "="*80)
-    print("🚨 EMERGENCY STOP ACTIVE")
-    print("="*80)
-    print("Bot is disabled. See EMERGENCY_STOP file for details.")
-    print("Delete EMERGENCY_STOP file to resume trading.")
-    print("="*80 + "\n")
+    print("\n" + "┏" + "━" * 78 + "┓")
+    print("┃ 🚨 EXIT POINT - EMERGENCY STOP FILE DETECTED                             ┃")
+    print(f"┃ Exit Code: {0:<67} ┃")
+    print(f"┃ PID: {os.getpid():<71} ┃")
+    print("┣" + "━" * 78 + "┫")
+    print("┃ Bot is disabled. See EMERGENCY_STOP file for details.                   ┃")
+    print("┃ Delete EMERGENCY_STOP file to resume trading.                           ┃")
+    print("┃ This is an intentional shutdown (not a crash).                          ┃")
+    print("┗" + "━" * 78 + "┛")
+    print("")
     sys.exit(0)
 
 # Infrastructure-grade health server with liveness and readiness probes
@@ -193,8 +198,72 @@ if not logger.hasHandlers():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
+def _log_lifecycle_banner(title, details=None):
+    """
+    Log a visual lifecycle banner for major state transitions.
+    
+    Args:
+        title: The main title to display
+        details: Optional list of detail strings to include
+    """
+    logger.info("")
+    logger.info("╔" + "═" * 78 + "╗")
+    logger.info(f"║ {title:^76} ║")
+    if details:
+        logger.info("╠" + "═" * 78 + "╣")
+        for detail in details:
+            logger.info(f"║ {detail:76} ║")
+    logger.info("╚" + "═" * 78 + "╝")
+    logger.info("")
+
+
+def _log_exit_point(reason, exit_code=0, details=None):
+    """
+    Log a visual exit point marker before sys.exit().
+    
+    Args:
+        reason: Why the process is exiting
+        exit_code: The exit code (0 = success, 1 = error)
+        details: Optional list of detail strings
+    """
+    icon = "✅" if exit_code == 0 else "❌"
+    logger.info("")
+    logger.info("┏" + "━" * 78 + "┓")
+    logger.info(f"┃ {icon} EXIT POINT - {reason:68} ┃")
+    logger.info(f"┃ Exit Code: {exit_code:<67} ┃")
+    logger.info(f"┃ PID: {os.getpid():<71} ┃")
+    if details:
+        logger.info("┣" + "━" * 78 + "┫")
+        for detail in details:
+            logger.info(f"┃ {detail:76} ┃")
+    logger.info("┗" + "━" * 78 + "┛")
+    logger.info("")
+
+
+def _get_thread_status():
+    """Get status of all running threads for visual verification."""
+    threads = threading.enumerate()
+    status = []
+    status.append(f"Total Threads: {len(threads)}")
+    for thread in threads:
+        daemon_marker = "🔹" if thread.daemon else "🔸"
+        alive_marker = "✅" if thread.is_alive() else "❌"
+        status.append(f"  {daemon_marker} {alive_marker} {thread.name} (ID: {thread.ident})")
+    return status
+
+
 def _handle_signal(sig, frame):
-    logger.info(f"Received signal {sig}, shutting down gracefully")
+    """Handle shutdown signals (SIGTERM, SIGINT) with visual logging."""
+    signal_name = signal.Signals(sig).name if hasattr(signal, 'Signals') else str(sig)
+    _log_exit_point(
+        f"Signal {signal_name} received",
+        exit_code=0,
+        details=[
+            "Graceful shutdown initiated by signal handler",
+            "This is an expected exit (not a crash)",
+            *_get_thread_status()
+        ]
+    )
     sys.exit(0)
 
 
@@ -218,13 +287,67 @@ def _log_kraken_connection_error_header(error_msg):
 
 def main():
     """Main entry point for NIJA trading bot"""
+    
+    # Log process startup
+    _log_lifecycle_banner(
+        "🚀 NIJA TRADING BOT STARTUP",
+        [
+            f"Process ID: {os.getpid()}",
+            f"Python Version: {sys.version.split()[0]}",
+            f"Working Directory: {os.getcwd()}",
+            "Initializing lifecycle management..."
+        ]
+    )
+    
     # Graceful shutdown handlers to avoid non-zero exits on platform terminations
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+    logger.info("✅ Signal handlers registered (SIGTERM, SIGINT)")
 
     # Initialize health check manager early
     from bot.health_check import get_health_manager
     health_manager = get_health_manager()
+    logger.info("✅ Health check manager initialized")
+    
+    # Start dedicated heartbeat thread for Railway health checks
+    # This ensures heartbeat is updated frequently (every 10 seconds)
+    # regardless of trading loop timing (150 seconds)
+    # Critical for Railway health check responsiveness (~30 second intervals)
+    def heartbeat_worker():
+        """Background thread that updates heartbeat at regular intervals"""
+        thread_id = threading.get_ident()
+        logger.info(f"🧵 Heartbeat thread started (ID: {thread_id}, Interval: {HEARTBEAT_INTERVAL_SECONDS}s)")
+        
+        heartbeat_count = 0
+        while True:
+            try:
+                health_manager.heartbeat()
+                heartbeat_count += 1
+                
+                # Log every 60 heartbeats (10 minutes at 10s interval) for visibility
+                if heartbeat_count % 60 == 0:
+                    logger.debug(f"🧵 Heartbeat thread alive - {heartbeat_count} heartbeats sent")
+                
+                time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            except Exception as e:
+                logger.error(f"🧵 ❌ Error in heartbeat worker thread (ID: {thread_id}): {e}", exc_info=True)
+                time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+    
+    heartbeat_thread = threading.Thread(target=heartbeat_worker, daemon=True, name="HeartbeatWorker")
+    heartbeat_thread.start()
+    
+    # Wait briefly to ensure thread actually starts
+    time.sleep(0.1)
+    
+    _log_lifecycle_banner(
+        "✅ BACKGROUND THREADS STARTED",
+        [
+            f"HeartbeatWorker: Thread ID {heartbeat_thread.ident}",
+            f"Update Interval: {HEARTBEAT_INTERVAL_SECONDS} seconds",
+            f"Thread is alive: {heartbeat_thread.is_alive()}",
+            "Health checks will be responsive to Railway (~30s check interval)"
+        ]
+    )
 
     # Get git metadata - try env vars first, then git commands
     git_branch = os.getenv("GIT_BRANCH", "")
@@ -508,20 +631,38 @@ def main():
         logger.info("Starting health server to report configuration status...")
         _start_health_server()
         
-        # Keep process alive to allow health checks to report status
-        # This prevents container restart loops while allowing operators to see the issue
-        logger.info("")
-        logger.info("⚠️  Configuration error - keeping service alive for health monitoring")
-        logger.info("   Container will NOT restart automatically")
-        logger.info("   Configure credentials and manually restart the deployment")
-        logger.info("")
+        _log_lifecycle_banner(
+            "⚠️  ENTERING CONFIG ERROR KEEP-ALIVE MODE",
+            [
+                "No exchange credentials configured - cannot trade",
+                "Process will stay alive for health monitoring",
+                "Container will NOT restart automatically",
+                f"Heartbeat interval: {CONFIG_ERROR_HEARTBEAT_INTERVAL}s",
+                "Configure credentials and manually restart deployment",
+                *_get_thread_status()
+            ]
+        )
         
         try:
+            loop_count = 0
             while True:
                 time.sleep(CONFIG_ERROR_HEARTBEAT_INTERVAL)
                 health_manager.heartbeat()
+                loop_count += 1
+                
+                # Log status every 10 iterations (10 minutes at 60s interval)
+                if loop_count % 10 == 0:
+                    logger.info(f"⏱️  Config error keep-alive: {loop_count * CONFIG_ERROR_HEARTBEAT_INTERVAL}s elapsed")
         except KeyboardInterrupt:
-            logger.info("Shutdown requested")
+            _log_exit_point(
+                "Configuration error keep-alive interrupted",
+                exit_code=0,
+                details=[
+                    "KeyboardInterrupt in config error keep-alive loop",
+                    "No exchange credentials were configured",
+                    *_get_thread_status()
+                ]
+            )
             sys.exit(0)
     elif exchanges_configured < 2:
         # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
@@ -808,11 +949,22 @@ def main():
                         time.sleep(150)
 
                     except KeyboardInterrupt:
-                        logger.info("Received shutdown signal, stopping all trading...")
+                        _log_lifecycle_banner(
+                            "⚠️  TRADING LOOP INTERRUPTED - Multi-Broker Mode",
+                            [
+                                "KeyboardInterrupt received in independent multi-broker loop",
+                                "Stopping all independent trading threads...",
+                                f"Completed {cycle_count} monitoring cycles",
+                                *_get_thread_status()
+                            ]
+                        )
+                        logger.info("Stopping all independent trading...")
                         strategy.stop_independent_trading()
+                        logger.info("✅ Independent trading stopped")
                         break
                     except Exception as e:
-                        logger.error(f"Error in monitoring loop: {e}", exc_info=True)
+                        logger.error(f"❌ Error in monitoring loop: {e}", exc_info=True)
+                        logger.warning(f"Recovering from error, continuing monitoring...")
                         time.sleep(10)
             else:
                 logger.error("❌ Failed to start independent multi-broker trading")
@@ -835,39 +987,113 @@ def main():
                     strategy.run_cycle()
                     time.sleep(150)  # 2.5 minutes
                 except KeyboardInterrupt:
-                    logger.info("Trading bot stopped by user (Ctrl+C)")
+                    _log_lifecycle_banner(
+                        "⚠️  TRADING LOOP INTERRUPTED - Single-Broker Mode",
+                        [
+                            "KeyboardInterrupt received in single-broker trading loop",
+                            f"Completed {cycle_count} trading cycles",
+                            "Exiting trading loop...",
+                            *_get_thread_status()
+                        ]
+                    )
                     break
                 except Exception as e:
-                    logger.error(f"Error in trading cycle: {e}", exc_info=True)
+                    logger.error(f"❌ Error in trading cycle: {e}", exc_info=True)
+                    logger.warning(f"Recovering from error, continuing trading...")
                     time.sleep(10)
+
+        # CRITICAL: Keep-alive loop to prevent process exit
+        # This ensures NIJA runs as a long-running worker, not a web service
+        # Railway will not restart the service as long as this process is alive
+        _log_lifecycle_banner(
+            "🔒 ENTERING KEEP-ALIVE MODE",
+            [
+                "Trading loops have exited, but process will remain alive",
+                "This prevents Railway from restarting the service",
+                f"Heartbeat maintained by heartbeat_worker thread ({HEARTBEAT_INTERVAL_SECONDS}s)",
+                f"Status logging every {KEEP_ALIVE_SLEEP_INTERVAL_SECONDS}s",
+                "To shutdown: Use SIGTERM or SIGINT (handled by signal handlers)",
+                *_get_thread_status()
+            ]
+        )
+        
+        loop_count = 0
+        while True:
+            try:
+                loop_count += 1
+                # Note: Heartbeat is updated by heartbeat_worker background thread
+                # This loop just keeps the process alive and logs periodic status
+                logger.info(f"💓 Keep-alive status check #{loop_count} (heartbeat via background thread)")
+                
+                # Log detailed thread status every hour (12 iterations at 300s)
+                if loop_count % 12 == 0:
+                    logger.info("🧵 Thread Status Report:")
+                    for status_line in _get_thread_status():
+                        logger.info(f"   {status_line}")
+                
+                time.sleep(KEEP_ALIVE_SLEEP_INTERVAL_SECONDS)
+            except KeyboardInterrupt:
+                # Note: In normal circumstances, SIGINT is handled by signal handlers above
+                # This catch is defensive - if we somehow get here, log and continue staying alive
+                # to maintain the long-running worker behavior
+                _log_lifecycle_banner(
+                    "⚠️  KEYBOARD INTERRUPT IN KEEP-ALIVE (UNEXPECTED)",
+                    [
+                        "Received KeyboardInterrupt in keep-alive loop",
+                        "Signal handlers should have intercepted SIGINT",
+                        "This is unexpected - continuing to stay alive",
+                        "Process will remain alive as a long-running worker",
+                        *_get_thread_status()
+                    ]
+                )
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"❌ Error in keep-alive loop: {e}", exc_info=True)
+                logger.warning("Recovering from keep-alive loop error...")
+                time.sleep(10)
 
     except RuntimeError as e:
         if "Broker connection failed" in str(e):
-            logger.error("=" * 70)
-            logger.error("❌ BROKER CONNECTION FAILED")
-            logger.error("=" * 70)
-            logger.error("")
-            logger.error("Coinbase credentials not found or invalid. Check and set ONE of:")
-            logger.error("")
-            logger.error("1. PEM File (mounted):")
-            logger.error("   - COINBASE_PEM_PATH=/path/to/file.pem (file must exist)")
-            logger.error("")
-            logger.error("2. PEM Content (as env var):")
-            logger.error("   - COINBASE_PEM_CONTENT='-----BEGIN PRIVATE KEY-----\\n...'")
-            logger.error("")
-            logger.error("3. Base64-Encoded PEM:")
-            logger.error("   - COINBASE_PEM_BASE64='<base64-encoded-pem>'")
-            logger.error("")
-            logger.error("4. API Key + Secret (JWT):")
-            logger.error("   - COINBASE_API_KEY='<key>'")
-            logger.error("   - COINBASE_API_SECRET='<secret>'")
-            logger.error("")
-            logger.error("=" * 70)
+            _log_exit_point(
+                "Broker Connection Failed",
+                exit_code=1,
+                details=[
+                    "RuntimeError: Broker connection failed",
+                    "Coinbase credentials not found or invalid",
+                    "",
+                    "Check and set ONE of:",
+                    "1. PEM File: COINBASE_PEM_PATH=/path/to/file.pem",
+                    "2. PEM Content: COINBASE_PEM_CONTENT='-----BEGIN...'",
+                    "3. Base64 PEM: COINBASE_PEM_BASE64='<base64>'",
+                    "4. API Key+Secret: COINBASE_API_KEY & COINBASE_API_SECRET",
+                    "",
+                    *_get_thread_status()
+                ]
+            )
             sys.exit(1)
         else:
+            _log_exit_point(
+                "Fatal Initialization Error",
+                exit_code=1,
+                details=[
+                    f"RuntimeError: {str(e)}",
+                    "Bot initialization failed",
+                    *_get_thread_status()
+                ]
+            )
             logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
             sys.exit(1)
     except Exception as e:
+        _log_exit_point(
+            "Unhandled Fatal Error",
+            exit_code=1,
+            details=[
+                f"Exception Type: {type(e).__name__}",
+                f"Error: {str(e)}",
+                "An unexpected error occurred",
+                *_get_thread_status()
+            ]
+        )
         logger.error(f"Unhandled fatal error: {e}", exc_info=True)
         sys.exit(1)
 
