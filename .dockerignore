@@ -4,6 +4,7 @@ __pycache__
 .gitignore
 .env
 venv/
+.venv/
 node_modules/
 *.log
 
@@ -17,3 +18,137 @@ coinbase
 coinbase_advanced
 coinbase_advanced_py
 coinbase-advanced
+
+# IDEs / editors
+.vscode/
+.idea/
+.devcontainer/
+
+# Git-related
+.github/
+.gitleaks.toml
+.pre-commit-config.yaml
+.pre-commit-hooks/
+.secrets.baseline
+
+# Test files and directories
+test_*.py
+!bot/test_*.py
+!bot/tests/test_*.py
+!scripts/chaos/test_*.py
+*.backup
+*.bak
+*.old
+*.save
+*.orig
+*.rej
+*.swp
+
+# Coverage and test reports
+.coverage
+htmlcov/
+.pytest_cache/
+*_test_results.json
+
+# Documentation (not needed at runtime)
+*.md
+!README.md
+
+# Archive directory (old implementations)
+archive/
+
+# Results and data directories (generated at runtime)
+results/
+data/
+cache/
+
+# Mobile app directories (not needed for bot)
+mobile/
+frontend/
+ui/
+
+# Kubernetes configs (not needed in container)
+k8s/
+
+# Security reports
+security-reports/
+chaos-results/
+all-reports/
+all-chaos-results/
+security_metrics.json
+bandit-report.json
+safety-report.json
+
+# Build and deployment artifacts
+build/
+dist/
+*.sha256
+.railway-*
+.render-*
+.redeploy*
+
+# Additional Python directories
+pip-wheel-metadata/
+
+# Database files (not needed in build)
+*.db
+*.db-journal
+vault.db
+users.db
+
+# State files (generated at runtime)
+.nija_kill_switch_state.json
+.nija_trading_state.json
+test_state.json
+*.jsonl
+
+# Scripts not needed at runtime
+scripts/
+check_*.py
+verify_*.py
+validate_*.py
+diagnose_*.py
+deploy_*.py
+generate_*.py
+demo_*.py
+example_*.py
+calculate_*.py
+analyze_*.py
+simulate_*.py
+fix_*.py
+test_*.py
+!bot/test_*.py
+!bot/tests/test_*.py
+run_*_backtest.py
+run_*_paper_trading.py
+profitability_audit_report.py
+alpha_onboarding.py
+PROFITABILITY_INTEGRATION_*.py
+
+# Test shell scripts
+test_*.sh
+setup-mobile.sh
+restart_nija.sh
+
+# Capacitor and mobile build files
+.capacitor/
+capacitor.config.ts
+capacitor.config.json
+*.apk
+*.aab
+*.ipa
+*.dSYM.zip
+package.json
+package-lock.json
+
+# Deployment configs (not needed in container)
+railway.json
+render.yaml
+alembic.ini
+alembic/
+
+# Miscellaneous
+docs/
+examples/
+curriculum/
+scanner.out
