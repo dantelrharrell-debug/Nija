@@ -516,6 +516,28 @@ def main():
         action='store_true',
         help='Suppress warnings and info messages'
     )
+    parser.add_argument(
+        '--user',
+        type=str,
+        help='Filter to show only specific user(s) (comma-separated)'
+    )
+    parser.add_argument(
+        '--broker',
+        type=str,
+        help='Filter to show only users with specific broker (coinbase, kraken, alpaca, etc.)'
+    )
+    parser.add_argument(
+        '--risk-level',
+        type=str,
+        choices=['high', 'medium', 'normal', 'profitable'],
+        help='Filter to show only users at specific risk level'
+    )
+    parser.add_argument(
+        '--snapshot',
+        type=str,
+        metavar='PATH',
+        help='Save snapshot to specified file path (JSON format)'
+    )
     
     args = parser.parse_args()
     
@@ -538,6 +560,39 @@ def main():
     # Generate summary
     summary = UserStatusSummary()
     users = summary.get_all_users()
+    
+    # Apply filters
+    if args.user:
+        user_ids = [u.strip() for u in args.user.split(',')]
+        users = [u for u in users if u.user_id in user_ids]
+        if not args.json:
+            print(f"\nFiltered to user(s): {', '.join(user_ids)}")
+    
+    if args.broker:
+        broker_name = args.broker.lower()
+        users = [u for u in users if broker_name in [b.lower() for b in u.configured_brokers]]
+        if not args.json:
+            print(f"\nFiltered to broker: {args.broker}")
+    
+    if args.risk_level:
+        users = [u for u in users if u.risk_level == args.risk_level]
+        if not args.json:
+            print(f"\nFiltered to risk level: {args.risk_level}")
+    
+    # Save snapshot if requested
+    if args.snapshot:
+        import json
+        import os
+        snapshot_dir = os.path.dirname(args.snapshot)
+        if snapshot_dir and not os.path.exists(snapshot_dir):
+            os.makedirs(snapshot_dir, exist_ok=True)
+        
+        summary_dict = summary.get_summary_dict(users)
+        with open(args.snapshot, 'w') as f:
+            json.dump(summary_dict, f, indent=2)
+        
+        if not args.json:
+            print(f"\n✅ Snapshot saved to: {args.snapshot}")
     
     # Output
     if args.json:
