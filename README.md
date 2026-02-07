@@ -8,6 +8,53 @@
 > **⚠️ Breaking Changes in v7.2.0:** NIJA now supports **independent trading only**. The copy-trading system has been removed. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 > **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
 
+## 📊 **NEW: Paper Trading Analytics System** (February 7, 2026)
+
+**Data-Driven Strategy Optimization - Kill Losers, Promote Winners**
+
+The Paper Trading Analytics System implements a systematic 3-phase process to ensure profitability before risking real capital:
+
+### ✅ 3-Phase Optimization Process
+
+**1️⃣ Collect Data with Analytics ON**
+- Track 100-300 trades with full context
+- Monitor signal type performance (Dual RSI, Breakout, Trend Following, etc.)
+- Track exit strategy performance (Profit Target, Stop Loss, Trailing Stop, etc.)
+- Gather 1-2 weeks of trading data
+
+**2️⃣ Kill Losers Ruthlessly**
+- Identify underperformers (bottom 25% by profit factor)
+- Disable losing signal types automatically
+- Reduce capital allocation to weak exit strategies
+- Promote only top-quartile performers
+
+**3️⃣ Validate Profit-Ready Criteria**
+- Define specific profitability requirements (return %, drawdown %, Sharpe ratio, etc.)
+- Validate all criteria before live trading
+- Only scale when proven profitable in paper trading
+
+### 🚀 Quick Start
+
+```bash
+# Run demo with 150 simulated trades
+python demo_paper_analytics.py --trades 150
+
+# View comprehensive analytics report
+python paper_trading_manager.py --report
+
+# Analyze top and bottom performers
+python paper_trading_manager.py --analyze
+
+# Disable underperformers (bottom 25%)
+python paper_trading_manager.py --kill-losers
+
+# Check if ready for live trading
+python paper_trading_manager.py --check-ready
+```
+
+### 📖 Full Documentation
+See [PAPER_TRADING_ANALYTICS_GUIDE.md](PAPER_TRADING_ANALYTICS_GUIDE.md) for complete guide with examples.
+
 ## 🧠 **NEW: NAMIE - Adaptive Market Intelligence Engine** (January 30, 2026)
 
 **The Highest ROI Upgrade - Multiplies Everything You've Built**
