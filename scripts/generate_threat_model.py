@@ -110,16 +110,6 @@ class ThreatModeler:
                     "authentication_required": True
                 })
         
-        # Webhook endpoints
-        self.attack_surface.append({
-            "type": "webhook",
-            "file": "bot/tradingview_webhook.py",
-            "endpoint": "/webhook/tradingview",
-            "exposure": "external",
-            "authentication_required": True,
-            "validation": "Signature verification required"
-        })
-        
         # Database connections
         self.attack_surface.append({
             "type": "database",
@@ -164,19 +154,6 @@ class ThreatModeler:
                     "API key validation",
                     "User session management",
                     "Multi-factor authentication (recommended)"
-                ],
-                "status": "MITIGATED"
-            },
-            {
-                "id": "T002",
-                "category": "Spoofing",
-                "threat": "Malicious webhook from fake TradingView server",
-                "severity": "HIGH",
-                "affected_assets": ["Trading Positions"],
-                "mitigations": [
-                    "Webhook signature verification",
-                    "IP whitelist filtering",
-                    "Request validation"
                 ],
                 "status": "MITIGATED"
             }
