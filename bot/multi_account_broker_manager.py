@@ -1116,7 +1116,8 @@ class MultiAccountBrokerManager:
                 logger.info("   • Cleaner logs and startup flow")
                 logger.info("")
                 # Flush output to ensure recommendations are visible
-                _root_logger.handlers[0].flush() if _root_logger.handlers else None
+                for handler in _root_logger.handlers:
+                    handler.flush()
                 
                 logger.info("   📋 TO CONFIGURE PLATFORM ACCOUNT:")
                 for broker in users_without_platform:
@@ -1140,16 +1141,17 @@ class MultiAccountBrokerManager:
                         logger.info(f"      {broker}_PLATFORM_API_SECRET=<your-api-secret>")
                     logger.info(f"   3. Restart the bot")
                     # Flush after each broker to ensure output is visible
-                    _root_logger.handlers[0].flush() if _root_logger.handlers else None
+                    for handler in _root_logger.handlers:
+                        handler.flush()
                 
                 logger.info("")
                 logger.info("   Note: Platform and Users all trade independently using same NIJA logic")
                 logger.info("=" * 70)
                 # Final flush to ensure all configuration messages are visible
-                _root_logger.handlers[0].flush() if _root_logger.handlers else None
+                for handler in _root_logger.handlers:
+                    handler.flush()
             except Exception as e:
                 logger.error(f"⚠️  Error logging account configuration: {e}")
-                import traceback
                 logger.debug(traceback.format_exc())
         else:
             # All accounts connected and trading
@@ -1158,7 +1160,8 @@ class MultiAccountBrokerManager:
 
         logger.info("=" * 70)
         # Flush final separator
-        _root_logger.handlers[0].flush() if _root_logger.handlers else None
+        for handler in _root_logger.handlers:
+            handler.flush()
 
         return connected_users
 
