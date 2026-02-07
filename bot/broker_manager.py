@@ -5897,6 +5897,13 @@ class KrakenBroker(BaseBroker):
                         # Calculate total funds (available + held) for minimum balance check
                         total_funds = total + held_amount
 
+                        # CRITICAL FIX: Cache the balance fetched during connection
+                        # This prevents redundant API calls when get_account_balance() is called immediately after connect()
+                        # Reduces startup time and prevents potential rate limiting issues
+                        self._last_known_balance = total_funds
+                        self._balance_last_updated = time.time()
+                        self.balance_cache["kraken"] = total_funds
+
                         logger.info(f"   Account: {self.account_identifier}")
                         logger.info(f"   USD Balance: ${usd_balance:.2f}")
                         logger.info(f"   USDT Balance: ${usdt_balance:.2f}")

@@ -285,6 +285,55 @@ def _log_kraken_connection_error_header(error_msg):
     logger.error("")
 
 
+def _log_memory_usage():
+    """
+    Log lightweight memory usage at startup.
+    
+    Logs RSS (Resident Set Size) and VMS (Virtual Memory Size) in a single line.
+    Optionally warns if memory usage exceeds 70% of available system memory.
+    """
+    try:
+        import psutil
+        
+        # Get current process memory info
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        
+        # RSS: Resident Set Size (physical memory used)
+        # VMS: Virtual Memory Size (total virtual memory)
+        rss_mb = mem_info.rss / (1024 * 1024)  # Convert to MB
+        vms_mb = mem_info.vms / (1024 * 1024)  # Convert to MB
+        
+        # Get system memory for percentage calculation
+        system_mem = psutil.virtual_memory()
+        total_mb = system_mem.total / (1024 * 1024)
+        percent_used = (mem_info.rss / system_mem.total) * 100
+        
+        # Single line log with RSS and VMS
+        logger.info(f"💾 Memory: RSS={rss_mb:.1f}MB, VMS={vms_mb:.1f}MB ({percent_used:.1f}% of {total_mb:.0f}MB system)")
+        
+        # Optional: warn if memory usage is at 70% of system memory
+        if percent_used >= 70.0:
+            logger.warning(f"⚠️  High memory usage: {percent_used:.1f}% (threshold: 70%)")
+            
+    except ImportError:
+        # psutil not available - use basic resource module as fallback
+        try:
+            import resource
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            # maxrss is in KB on Linux, bytes on macOS
+            import platform
+            if platform.system() == 'Darwin':  # macOS
+                rss_mb = usage.ru_maxrss / (1024 * 1024)
+            else:  # Linux
+                rss_mb = usage.ru_maxrss / 1024
+            logger.info(f"💾 Memory: RSS={rss_mb:.1f}MB (psutil not available, limited info)")
+        except Exception as e:
+            logger.debug(f"Could not log memory usage: {e}")
+    except Exception as e:
+        logger.debug(f"Error logging memory usage: {e}")
+
+
 def main():
     """Main entry point for NIJA trading bot"""
     
@@ -298,6 +347,9 @@ def main():
             "Initializing lifecycle management..."
         ]
     )
+    
+    # Log memory usage at startup (lightweight - single line)
+    _log_memory_usage()
     
     # Graceful shutdown handlers to avoid non-zero exits on platform terminations
     signal.signal(signal.SIGTERM, _handle_signal)
