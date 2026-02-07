@@ -561,5 +561,6 @@ def create_control_center_api(app: Flask = None) -> Flask:
 
 if __name__ == '__main__':
     # Run standalone server
+    # Note: debug=False for security in production
     app = create_control_center_api()
-    app.run(host='0.0.0.0', port=5002, debug=True)
+    app.run(host='0.0.0.0', port=5002, debug=False)
