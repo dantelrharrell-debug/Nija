@@ -1105,45 +1105,60 @@ class MultiAccountBrokerManager:
         if users_without_platform:
             # Platform account missing - recommend configuring it for stability
             # Platform trades independently (not as master), but its presence stabilizes system
-            logger.info("ℹ️  ACCOUNT CONFIGURATION:")
-            logger.info(f"   ℹ️  Platform account not connected on: {', '.join(users_without_platform)}")
-            logger.info("   💡 RECOMMENDATION: Configure Platform account for optimal operation")
-            logger.info("")
-            logger.info("   Platform account provides:")
-            logger.info("   • Stable system initialization")
-            logger.info("   • Additional trading capacity (Platform trades independently)")
-            logger.info("   • Cleaner logs and startup flow")
-            logger.info("")
-            logger.info("   📋 TO CONFIGURE PLATFORM ACCOUNT:")
-            for broker in users_without_platform:
-                logger.info(f"")
-                logger.info(f"   For {broker} Platform account:")
-                logger.info(f"   1. Get API credentials from the {broker} website")
-                if broker == "KRAKEN":
-                    logger.info(f"      URL: https://www.kraken.com/u/security/api")
-                    logger.info(f"   2. Set these environment variables:")
-                    logger.info(f"      KRAKEN_PLATFORM_API_KEY=<your-api-key>")
-                    logger.info(f"      KRAKEN_PLATFORM_API_SECRET=<your-api-secret>")
-                elif broker == "ALPACA":
-                    logger.info(f"      URL: https://alpaca.markets/")
-                    logger.info(f"   2. Set these environment variables:")
-                    logger.info(f"      ALPACA_API_KEY=<your-api-key>")
-                    logger.info(f"      ALPACA_API_SECRET=<your-api-secret>")
-                    logger.info(f"      ALPACA_PAPER=true  # Set to false for live trading")
-                else:
-                    logger.info(f"   2. Set environment variables:")
-                    logger.info(f"      {broker}_PLATFORM_API_KEY=<your-api-key>")
-                    logger.info(f"      {broker}_PLATFORM_API_SECRET=<your-api-secret>")
-                logger.info(f"   3. Restart the bot")
-            logger.info("")
-            logger.info("   Note: Platform and Users all trade independently using same NIJA logic")
-            logger.info("=" * 70)
+            try:
+                logger.info("ℹ️  ACCOUNT CONFIGURATION:")
+                logger.info(f"   ℹ️  Platform account not connected on: {', '.join(users_without_platform)}")
+                logger.info("   💡 RECOMMENDATION: Configure Platform account for optimal operation")
+                logger.info("")
+                logger.info("   Platform account provides:")
+                logger.info("   • Stable system initialization")
+                logger.info("   • Additional trading capacity (Platform trades independently)")
+                logger.info("   • Cleaner logs and startup flow")
+                logger.info("")
+                # Flush output to ensure recommendations are visible
+                _root_logger.handlers[0].flush() if _root_logger.handlers else None
+                
+                logger.info("   📋 TO CONFIGURE PLATFORM ACCOUNT:")
+                for broker in users_without_platform:
+                    logger.info(f"")
+                    logger.info(f"   For {broker} Platform account:")
+                    logger.info(f"   1. Get API credentials from the {broker} website")
+                    if broker == "KRAKEN":
+                        logger.info(f"      URL: https://www.kraken.com/u/security/api")
+                        logger.info(f"   2. Set these environment variables:")
+                        logger.info(f"      KRAKEN_PLATFORM_API_KEY=<your-api-key>")
+                        logger.info(f"      KRAKEN_PLATFORM_API_SECRET=<your-api-secret>")
+                    elif broker == "ALPACA":
+                        logger.info(f"      URL: https://alpaca.markets/")
+                        logger.info(f"   2. Set these environment variables:")
+                        logger.info(f"      ALPACA_API_KEY=<your-api-key>")
+                        logger.info(f"      ALPACA_API_SECRET=<your-api-secret>")
+                        logger.info(f"      ALPACA_PAPER=true  # Set to false for live trading")
+                    else:
+                        logger.info(f"   2. Set environment variables:")
+                        logger.info(f"      {broker}_PLATFORM_API_KEY=<your-api-key>")
+                        logger.info(f"      {broker}_PLATFORM_API_SECRET=<your-api-secret>")
+                    logger.info(f"   3. Restart the bot")
+                    # Flush after each broker to ensure output is visible
+                    _root_logger.handlers[0].flush() if _root_logger.handlers else None
+                
+                logger.info("")
+                logger.info("   Note: Platform and Users all trade independently using same NIJA logic")
+                logger.info("=" * 70)
+                # Final flush to ensure all configuration messages are visible
+                _root_logger.handlers[0].flush() if _root_logger.handlers else None
+            except Exception as e:
+                logger.error(f"⚠️  Error logging account configuration: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
         else:
             # All accounts connected and trading
             logger.info("✅ ACCOUNT STATUS:")
             logger.info("   ✅ Platform and User accounts connected - all trading independently")
 
         logger.info("=" * 70)
+        # Flush final separator
+        _root_logger.handlers[0].flush() if _root_logger.handlers else None
 
         return connected_users
 
