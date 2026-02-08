@@ -39,6 +39,7 @@ try:
     from bot.user_nonce_manager import get_user_nonce_manager
     from bot.trade_webhook_notifier import get_webhook_notifier
     from bot.trade_ledger_db import get_trade_ledger_db
+    from bot.position_source_constants import categorize_positions, get_source_label, is_nija_managed
     from controls import get_hard_controls
 except ImportError:
     from user_pnl_tracker import get_user_pnl_tracker
@@ -46,6 +47,7 @@ except ImportError:
     from user_nonce_manager import get_user_nonce_manager
     from trade_webhook_notifier import get_webhook_notifier
     from trade_ledger_db import get_trade_ledger_db
+    from position_source_constants import categorize_positions, get_source_label, is_nija_managed
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     from controls import get_hard_controls
@@ -740,6 +742,7 @@ def get_aggregated_positions():
 
     Returns position breakdown by:
         - Account (master vs users)
+        - Position Source (NIJA-managed vs Existing Holdings)
         - Symbol
         - Broker
     """
@@ -753,6 +756,11 @@ def get_aggregated_positions():
         platform_positions = [p for p in all_positions if p.get('user_id') == 'platform']
         user_positions = [p for p in all_positions if p.get('user_id') != 'platform']
 
+        # NEW: Categorize by position source using helper function
+        categorized = categorize_positions(all_positions)
+        nija_managed = categorized['nija_managed']
+        existing_holdings = categorized['existing_holdings']
+
         # Aggregate by symbol
         symbol_aggregate = {}
         for position in all_positions:
@@ -762,6 +770,8 @@ def get_aggregated_positions():
                     'total_positions': 0,
                     'platform_positions': 0,
                     'user_positions': 0,
+                    'nija_managed_positions': 0,
+                    'existing_holdings': 0,
                     'total_size': 0.0,
                     'total_unrealized_pnl': 0.0
                 }
@@ -771,6 +781,12 @@ def get_aggregated_positions():
                 symbol_aggregate[symbol]['platform_positions'] += 1
             else:
                 symbol_aggregate[symbol]['user_positions'] += 1
+
+            # Track by source using helper function
+            if is_nija_managed(position):
+                symbol_aggregate[symbol]['nija_managed_positions'] += 1
+            else:
+                symbol_aggregate[symbol]['existing_holdings'] += 1
 
             symbol_aggregate[symbol]['total_size'] += position.get('size', 0.0)
             symbol_aggregate[symbol]['total_unrealized_pnl'] += position.get('unrealized_pnl', 0.0)
@@ -782,11 +798,18 @@ def get_aggregated_positions():
             if broker not in broker_aggregate:
                 broker_aggregate[broker] = {
                     'positions': 0,
+                    'nija_managed': 0,
+                    'existing_holdings': 0,
                     'total_size': 0.0,
                     'unrealized_pnl': 0.0
                 }
 
             broker_aggregate[broker]['positions'] += 1
+            # Use helper function for consistency
+            if is_nija_managed(position):
+                broker_aggregate[broker]['nija_managed'] += 1
+            else:
+                broker_aggregate[broker]['existing_holdings'] += 1
             broker_aggregate[broker]['total_size'] += position.get('size', 0.0)
             broker_aggregate[broker]['unrealized_pnl'] += position.get('unrealized_pnl', 0.0)
 
@@ -796,13 +819,29 @@ def get_aggregated_positions():
                 'total_positions': len(all_positions),
                 'platform_positions': len(platform_positions),
                 'user_positions': len(user_positions),
+                'nija_managed_positions': len(nija_managed),
+                'existing_holdings': len(existing_holdings),
                 'unique_symbols': len(symbol_aggregate),
                 'unique_brokers': len(broker_aggregate)
+            },
+            'by_source': {
+                'nija_managed': {
+                    'count': len(nija_managed),
+                    'label': 'NIJA-Managed Positions',
+                    'description': 'Positions opened and managed by NIJA trading algorithm'
+                },
+                'existing_holdings': {
+                    'count': len(existing_holdings),
+                    'label': 'Existing Holdings (not managed by NIJA)',
+                    'description': 'Pre-existing positions or manually entered positions that NIJA does not actively manage'
+                }
             },
             'by_symbol': symbol_aggregate,
             'by_broker': broker_aggregate,
             'platform_positions_list': platform_positions,
-            'user_positions_list': user_positions
+            'user_positions_list': user_positions,
+            'nija_managed_list': nija_managed,
+            'existing_holdings_list': existing_holdings
         })
 
     except Exception as e:

@@ -206,6 +206,11 @@ class TradeLedgerDB:
                 ON copy_trade_map(user_id)
             """)
 
+            # POSITION SOURCE TRACKING (Feb 8, 2026): Add position_source field to distinguish
+            # NIJA-managed positions from existing holdings
+            # Run this AFTER all tables are created
+            self._migrate_add_position_source(cursor)
+
             logger.info("✅ Database schema initialized")
 
     def _migrate_add_platform_trade_id(self, cursor):
@@ -251,6 +256,53 @@ class TradeLedgerDB:
         except Exception as e:
             # Unexpected error - re-raise for visibility
             logger.error(f"Unexpected error during migration: {e}")
+            raise
+
+    def _migrate_add_position_source(self, cursor):
+        """
+        Migration: Add position_source column to open_positions table if it doesn't exist.
+
+        POSITION SOURCE TRACKING (Feb 8, 2026): Track whether positions are:
+        - 'nija_strategy': Opened by NIJA's trading algorithm
+        - 'broker_existing': Pre-existing position (adopted on restart)
+        - 'manual': Manually entered by user
+        - 'unknown': Source not yet determined
+
+        Args:
+            cursor: SQLite cursor
+        """
+        try:
+            # Check if column exists by querying table info
+            cursor.execute("PRAGMA table_info(open_positions)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'position_source' not in columns:
+                logger.info("🔧 Running migration: Adding position_source column to open_positions")
+                cursor.execute("""
+                    ALTER TABLE open_positions
+                    ADD COLUMN position_source TEXT DEFAULT 'unknown'
+                """)
+
+                # Add index for filtering by source
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_positions_source
+                    ON open_positions(position_source)
+                """)
+
+                logger.info("✅ Migration complete: position_source column added")
+            else:
+                logger.debug("✓ position_source column already exists")
+        except sqlite3.OperationalError as e:
+            # Expected error: column already exists from a previous migration
+            if 'duplicate column name' in str(e).lower():
+                logger.debug(f"Column already exists (duplicate column error): {e}")
+            else:
+                # Unexpected operational error - re-raise
+                logger.error(f"Unexpected operational error during position_source migration: {e}")
+                raise
+        except Exception as e:
+            # Unexpected error - re-raise for visibility
+            logger.error(f"Unexpected error during position_source migration: {e}")
             raise
 
     def record_buy(self, symbol: str, price: float, quantity: float,
@@ -358,9 +410,23 @@ class TradeLedgerDB:
                      stop_loss: float = None, take_profit_1: float = None,
                      take_profit_2: float = None, take_profit_3: float = None,
                      entry_fee: float = 0.0, user_id: str = 'platform',
-                     notes: str = None) -> bool:
+                     notes: str = None, position_source: str = 'nija_strategy') -> bool:
         """
         Record a new open position
+
+        Args:
+            position_id: Unique position identifier
+            symbol: Trading symbol
+            side: Position side (long/short)
+            entry_price: Entry price
+            quantity: Position quantity
+            size_usd: Position size in USD
+            stop_loss: Stop loss price (optional)
+            take_profit_1/2/3: Take profit targets (optional)
+            entry_fee: Entry transaction fee
+            user_id: User account ID
+            notes: Additional notes
+            position_source: Source of position ('nija_strategy', 'broker_existing', 'manual', 'unknown')
 
         Returns:
             True if successful
@@ -372,8 +438,8 @@ class TradeLedgerDB:
                     INSERT INTO open_positions
                     (position_id, user_id, symbol, side, entry_price, quantity,
                      size_usd, stop_loss, take_profit_1, take_profit_2,
-                     take_profit_3, entry_fee, entry_time, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     take_profit_3, entry_fee, entry_time, notes, position_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     position_id,
                     user_id,
@@ -388,10 +454,11 @@ class TradeLedgerDB:
                     take_profit_3,
                     entry_fee,
                     datetime.now().isoformat(),
-                    notes
+                    notes,
+                    position_source
                 ))
 
-                logger.info(f"📈 Position opened: {symbol} {side} (ID: {position_id})")
+                logger.info(f"📈 Position opened: {symbol} {side} (ID: {position_id}, Source: {position_source})")
                 return True
         except sqlite3.IntegrityError:
             logger.warning(f"Position {position_id} already exists")

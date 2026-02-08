@@ -69,7 +69,8 @@ class PositionTracker:
             logger.error(f"Error saving positions: {e}")
 
     def track_entry(self, symbol: str, entry_price: float, quantity: float,
-                   size_usd: float, strategy: str = "APEX_v7.1") -> bool:
+                   size_usd: float, strategy: str = "APEX_v7.1", 
+                   position_source: str = "nija_strategy") -> bool:
         """
         Record a new position entry.
 
@@ -79,6 +80,7 @@ class PositionTracker:
             quantity: Quantity of asset purchased
             size_usd: Position size in USD
             strategy: Strategy name for tracking
+            position_source: Source of position ('nija_strategy', 'broker_existing', 'manual')
 
         Returns:
             True if tracked successfully
@@ -107,7 +109,8 @@ class PositionTracker:
                         'last_entry_time': datetime.now().isoformat(),
                         'strategy': strategy,
                         'num_adds': existing.get('num_adds', 0) + 1,
-                        'previous_profit_pct': existing.get('previous_profit_pct', 0.0)  # Preserve previous profit tracking
+                        'previous_profit_pct': existing.get('previous_profit_pct', 0.0),  # Preserve previous profit tracking
+                        'position_source': existing.get('position_source', position_source)  # Keep original source
                     }
                     logger.info(f"Updated position {symbol}: avg_entry=${avg_price:.2f}, qty={total_qty:.8f}")
                 else:
@@ -120,9 +123,10 @@ class PositionTracker:
                         'last_entry_time': datetime.now().isoformat(),
                         'strategy': strategy,
                         'num_adds': 0,
-                        'previous_profit_pct': 0.0  # Initialize previous profit tracking
+                        'previous_profit_pct': 0.0,  # Initialize previous profit tracking
+                        'position_source': position_source  # Track position source
                     }
-                    logger.info(f"Tracking new position {symbol}: entry=${entry_price:.2f}, qty={quantity:.8f}")
+                    logger.info(f"Tracking new position {symbol}: entry=${entry_price:.2f}, qty={quantity:.8f}, source={position_source}")
 
                 self._save_positions()
                 return True
