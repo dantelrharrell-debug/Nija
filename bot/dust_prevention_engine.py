@@ -227,6 +227,7 @@ class DustPreventionEngine:
         health_scores.sort(key=lambda x: x[1].score)
         
         to_close = []
+        symbols_to_close = set()  # Track symbols for O(1) lookup
         
         # Rule 0: Auto-close dust positions (if enabled)
         if self.auto_dust_cleanup_enabled:
@@ -243,6 +244,7 @@ class DustPreventionEngine:
                         'size_usd': size_usd,
                         'cleanup_type': 'DUST'
                     })
+                    symbols_to_close.add(pos['symbol'])
         
         # Rule 1: Force close if over position limit
         if force_to_limit and len(positions) > self.max_positions:
@@ -252,8 +254,8 @@ class DustPreventionEngine:
             
             for i in range(excess):
                 pos, health = health_scores[i]
-                # Skip if already marked for dust cleanup
-                if any(c['symbol'] == pos['symbol'] for c in to_close):
+                # Skip if already marked for dust cleanup (O(1) lookup)
+                if pos['symbol'] in symbols_to_close:
                     continue
                     
                 to_close.append({
@@ -265,11 +267,12 @@ class DustPreventionEngine:
                     'current_pnl': pos.get('pnl_pct', 0),
                     'cleanup_type': 'CAP_EXCEEDED'
                 })
+                symbols_to_close.add(pos['symbol'])
         
         # Rule 2: Close stagnant positions (score < 30)
         for pos, health in health_scores:
-            # Skip if already marked for closure
-            if any(c['symbol'] == pos['symbol'] for c in to_close):
+            # Skip if already marked for closure (O(1) lookup)
+            if pos['symbol'] in symbols_to_close:
                 continue
             
             if health.score < 30:
@@ -282,6 +285,7 @@ class DustPreventionEngine:
                     'current_pnl': pos.get('pnl_pct', 0),
                     'cleanup_type': 'UNHEALTHY'
                 })
+                symbols_to_close.add(pos['symbol'])
             elif health.last_movement_hours > self.stagnation_hours:
                 to_close.append({
                     'symbol': pos['symbol'],
@@ -292,6 +296,7 @@ class DustPreventionEngine:
                     'current_pnl': pos.get('pnl_pct', 0),
                     'cleanup_type': 'STAGNANT'
                 })
+                symbols_to_close.add(pos['symbol'])
         
         # Log results with profit status transitions
         if to_close:

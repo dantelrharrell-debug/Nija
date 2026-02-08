@@ -7,11 +7,31 @@ import sys
 import os
 from datetime import datetime, timedelta
 
-# Add bot directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+# Set up paths correctly
+repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, repo_root)
 
-from dust_prevention_engine import DustPreventionEngine
-from user_risk_manager import UserRiskManager, UserRiskLimits
+# Import directly from modules
+import importlib.util
+
+# Load dust_prevention_engine
+dust_spec = importlib.util.spec_from_file_location(
+    "dust_prevention_engine",
+    os.path.join(repo_root, "bot", "dust_prevention_engine.py")
+)
+dust_module = importlib.util.module_from_spec(dust_spec)
+dust_spec.loader.exec_module(dust_module)
+DustPreventionEngine = dust_module.DustPreventionEngine
+
+# Load user_risk_manager
+risk_spec = importlib.util.spec_from_file_location(
+    "user_risk_manager",
+    os.path.join(repo_root, "bot", "user_risk_manager.py")
+)
+risk_module = importlib.util.module_from_spec(risk_spec)
+risk_spec.loader.exec_module(risk_module)
+UserRiskManager = risk_module.UserRiskManager
+UserRiskLimits = risk_module.UserRiskLimits
 
 def test_dust_cleanup():
     """Test auto-dust cleanup functionality"""
@@ -90,8 +110,7 @@ def test_position_cap():
     print("TEST 2: HARD POSITION CAP")
     print("="*70)
     
-    # Test the risk limits directly
-    from user_risk_manager import UserRiskLimits
+    # Test the risk limits directly (already imported at module level)
     
     # Create test limits
     test_user = "test_user_123"

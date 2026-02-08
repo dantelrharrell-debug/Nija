@@ -307,6 +307,22 @@ class UserRiskManager:
 
             self._save_state(state)
 
+    def _check_position_limit(self, user_id: str, current_position_count: int, limits: UserRiskLimits) -> Tuple[bool, Optional[str]]:
+        """
+        Helper method to check position count limit.
+        
+        Args:
+            user_id: User identifier
+            current_position_count: Current number of open positions
+            limits: User's risk limits
+        
+        Returns:
+            (allowed, error_message)
+        """
+        if current_position_count >= limits.max_open_positions:
+            return False, f"Position limit reached ({current_position_count}/{limits.max_open_positions})"
+        return True, None
+    
     def can_trade(self, user_id: str, position_size_usd: float, current_position_count: int = 0) -> Tuple[bool, Optional[str]]:
         """
         Check if user can place a trade.
@@ -335,9 +351,10 @@ class UserRiskManager:
             if state.circuit_breaker_triggered:
                 return False, "Circuit breaker triggered (daily loss limit)"
 
-            # Check position count limit (HARD CAP)
-            if current_position_count >= limits.max_open_positions:
-                return False, f"Position limit reached ({current_position_count}/{limits.max_open_positions})"
+            # Check position count limit (HARD CAP) - using helper method
+            allowed, error = self._check_position_limit(user_id, current_position_count, limits)
+            if not allowed:
+                return False, error
 
             # Check daily trade limit
             if state.daily_trades >= limits.max_daily_trades:
@@ -389,7 +406,10 @@ class UserRiskManager:
         with lock:
             limits = self.get_limits(user_id)
             
-            if current_position_count >= limits.max_open_positions:
+            # Use helper method for consistent error messages
+            allowed, error = self._check_position_limit(user_id, current_position_count, limits)
+            if not allowed:
+                # Make error message more specific for this method
                 return False, f"Maximum open positions reached ({current_position_count}/{limits.max_open_positions})"
             
             return True, None
