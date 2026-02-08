@@ -46,6 +46,22 @@ except ImportError:
         ExecutionPlan = None
         EIOrderType = None
 
+# Import Minimum Notional Gate (Enhancement #1)
+try:
+    from bot.minimum_notional_gate import get_minimum_notional_gate, NotionalGateConfig
+    MIN_NOTIONAL_GATE_AVAILABLE = True
+    logger.info("✅ Minimum Notional Gate loaded - Entry size validation active")
+except ImportError:
+    try:
+        from minimum_notional_gate import get_minimum_notional_gate, NotionalGateConfig
+        MIN_NOTIONAL_GATE_AVAILABLE = True
+        logger.info("✅ Minimum Notional Gate loaded - Entry size validation active")
+    except ImportError:
+        MIN_NOTIONAL_GATE_AVAILABLE = False
+        logger.warning("⚠️ Minimum Notional Gate not available")
+        get_minimum_notional_gate = None
+        NotionalGateConfig = None
+
 # Import hard controls for LIVE CAPITAL VERIFIED check
 try:
     # Try standard import first (when running as package)
@@ -98,6 +114,22 @@ except ImportError:
         ExecutionIntelligence = None
         ExecutionPlan = None
         EIOrderType = None
+
+# Import Minimum Notional Gate (Enhancement #1)
+try:
+    from bot.minimum_notional_gate import get_minimum_notional_gate, NotionalGateConfig
+    MIN_NOTIONAL_GATE_AVAILABLE = True
+    logger.info("✅ Minimum Notional Gate loaded - Entry size validation active")
+except ImportError:
+    try:
+        from minimum_notional_gate import get_minimum_notional_gate, NotionalGateConfig
+        MIN_NOTIONAL_GATE_AVAILABLE = True
+        logger.info("✅ Minimum Notional Gate loaded - Entry size validation active")
+    except ImportError:
+        MIN_NOTIONAL_GATE_AVAILABLE = False
+        logger.warning("⚠️ Minimum Notional Gate not available")
+        get_minimum_notional_gate = None
+        NotionalGateConfig = None
 
 # Constants
 VALID_ORDER_STATUSES = ['open', 'closed', 'filled', 'pending']
@@ -561,6 +593,32 @@ class ExecutionEngine:
 
             # Log entry attempt
             logger.info(f"Executing {side} entry: {symbol} size=${position_size:.2f}")
+
+            # ✅ ENHANCEMENT #1: MINIMUM NOTIONAL GATE
+            # Check if entry size meets minimum notional requirements
+            if MIN_NOTIONAL_GATE_AVAILABLE and get_minimum_notional_gate:
+                notional_gate = get_minimum_notional_gate()
+                broker_name = None
+                
+                # Get broker name if available
+                if self.broker_client and hasattr(self.broker_client, 'broker_type'):
+                    broker_type = self.broker_client.broker_type
+                    if hasattr(broker_type, 'value'):
+                        broker_name = broker_type.value
+                    else:
+                        broker_name = str(broker_type)
+                
+                # Validate entry size
+                is_valid, rejection_reason = notional_gate.validate_entry_size(
+                    symbol=symbol,
+                    size_usd=position_size,
+                    is_stop_loss=False,
+                    broker_name=broker_name
+                )
+                
+                if not is_valid:
+                    logger.warning(f"❌ Entry rejected: {rejection_reason}")
+                    return None
 
             # 🎯 EXECUTION INTELLIGENCE: Optimize execution before placing order
             execution_plan = self._optimize_execution_with_intelligence(
