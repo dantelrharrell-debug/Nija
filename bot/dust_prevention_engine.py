@@ -37,6 +37,7 @@ class DustPreventionEngine:
     - Enforcing strict position limits
     - Ranking positions by quality
     - Forcing exits on stagnant positions
+    - Auto-closing dust positions (< $1 USD)
     """
     
     # Scoring thresholds (class-level constants)
@@ -50,19 +51,28 @@ class DustPreventionEngine:
     AGE_AGING_HOURS = 6.0
     AGE_FRESH_HOURS = 1.0
     
+    # Dust threshold (USD value)
+    DUST_THRESHOLD_USD = 1.00  # Positions below $1 USD are considered dust
+    
     def __init__(self, 
                  max_positions: int = 5,
                  stagnation_hours: float = 4.0,
-                 min_pnl_movement: float = 0.002):
+                 min_pnl_movement: float = 0.002,
+                 auto_dust_cleanup_enabled: bool = True,
+                 dust_threshold_usd: float = 1.00):
         """
         Args:
             max_positions: Maximum concurrent positions (default: 5 for quality focus)
             stagnation_hours: Hours without P&L movement before forced exit
             min_pnl_movement: Minimum P&L% change to consider "movement" (0.2%)
+            auto_dust_cleanup_enabled: Enable automatic cleanup of dust positions
+            dust_threshold_usd: USD value threshold for dust positions (default: $1.00)
         """
         self.max_positions = max_positions
         self.stagnation_hours = stagnation_hours
         self.min_pnl_movement = min_pnl_movement
+        self.auto_dust_cleanup_enabled = auto_dust_cleanup_enabled
+        self.dust_threshold_usd = dust_threshold_usd
         
         # Track P&L movement over time
         self.position_history: Dict[str, List[Tuple[datetime, float]]] = {}
@@ -71,6 +81,8 @@ class DustPreventionEngine:
         logger.info(f"   Max Positions: {max_positions} (QUALITY > QUANTITY)")
         logger.info(f"   Stagnation Limit: {stagnation_hours}h")
         logger.info(f"   Min Movement: {min_pnl_movement*100:.2f}%")
+        logger.info(f"   Auto Dust Cleanup: {'ENABLED' if auto_dust_cleanup_enabled else 'DISABLED'}")
+        logger.info(f"   Dust Threshold: ${dust_threshold_usd:.2f} USD")
     
     def update_position_pnl(self, symbol: str, pnl_pct: float):
         """Track P&L changes to detect stagnation"""
@@ -188,7 +200,7 @@ class DustPreventionEngine:
         Identify which positions should be closed
         
         Args:
-            positions: List of position dicts with 'symbol', 'entry_time', 'pnl_pct'
+            positions: List of position dicts with 'symbol', 'entry_time', 'pnl_pct', 'size_usd'
             force_to_limit: If True and over limit, force close worst positions
         
         Returns:
@@ -216,6 +228,22 @@ class DustPreventionEngine:
         
         to_close = []
         
+        # Rule 0: Auto-close dust positions (if enabled)
+        if self.auto_dust_cleanup_enabled:
+            for pos, health in health_scores:
+                size_usd = pos.get('size_usd', 0)
+                if size_usd > 0 and size_usd < self.dust_threshold_usd:
+                    to_close.append({
+                        'symbol': pos['symbol'],
+                        'reason': f'Dust position (${size_usd:.2f} < ${self.dust_threshold_usd:.2f})',
+                        'health_score': health.score,
+                        'priority': 'HIGH',
+                        'profit_status_transition': 'PENDING → CONFIRMED',
+                        'current_pnl': pos.get('pnl_pct', 0),
+                        'size_usd': size_usd,
+                        'cleanup_type': 'DUST'
+                    })
+        
         # Rule 1: Force close if over position limit
         if force_to_limit and len(positions) > self.max_positions:
             excess = len(positions) - self.max_positions
@@ -224,13 +252,18 @@ class DustPreventionEngine:
             
             for i in range(excess):
                 pos, health = health_scores[i]
+                # Skip if already marked for dust cleanup
+                if any(c['symbol'] == pos['symbol'] for c in to_close):
+                    continue
+                    
                 to_close.append({
                     'symbol': pos['symbol'],
                     'reason': f'Position cap exceeded (score: {health.score:.0f}, {health.reason})',
                     'health_score': health.score,
                     'priority': 'HIGH',
                     'profit_status_transition': 'PENDING → CONFIRMED',
-                    'current_pnl': pos.get('pnl_pct', 0)
+                    'current_pnl': pos.get('pnl_pct', 0),
+                    'cleanup_type': 'CAP_EXCEEDED'
                 })
         
         # Rule 2: Close stagnant positions (score < 30)
@@ -246,7 +279,8 @@ class DustPreventionEngine:
                     'health_score': health.score,
                     'priority': 'MEDIUM',
                     'profit_status_transition': 'PENDING → CONFIRMED',
-                    'current_pnl': pos.get('pnl_pct', 0)
+                    'current_pnl': pos.get('pnl_pct', 0),
+                    'cleanup_type': 'UNHEALTHY'
                 })
             elif health.last_movement_hours > self.stagnation_hours:
                 to_close.append({
@@ -255,14 +289,16 @@ class DustPreventionEngine:
                     'health_score': health.score,
                     'priority': 'MEDIUM',
                     'profit_status_transition': 'PENDING → CONFIRMED',
-                    'current_pnl': pos.get('pnl_pct', 0)
+                    'current_pnl': pos.get('pnl_pct', 0),
+                    'cleanup_type': 'STAGNANT'
                 })
         
         # Log results with profit status transitions
         if to_close:
-            logger.warning(f"🧹 Identified {len(to_close)} positions for dust cleanup:")
+            logger.warning(f"🧹 Identified {len(to_close)} positions for cleanup:")
             for tc in to_close:
-                logger.warning(f"   {tc['priority']}: {tc['symbol']} - {tc['reason']}")
+                cleanup_tag = f"[{tc.get('cleanup_type', 'UNKNOWN')}]"
+                logger.warning(f"   {tc['priority']} {cleanup_tag}: {tc['symbol']} - {tc['reason']}")
                 # PROFIT_STATUS transition logging
                 logger.warning(f"   PROFIT_STATUS = PENDING → CONFIRMED (forced exit)")
         else:
@@ -290,6 +326,37 @@ class DustPreventionEngine:
         logger.warning(f"   PROFIT_STATUS = PENDING → CONFIRMED")
         logger.warning(f"   OUTCOME = {outcome} (no neutral, no pending)")
         logger.warning(f"")
+    
+    def identify_dust_positions(self, positions: List[Dict]) -> List[Dict]:
+        """
+        Identify positions that are below the dust threshold
+        
+        Args:
+            positions: List of position dicts with 'symbol', 'size_usd'
+        
+        Returns:
+            List of dust positions with details
+        """
+        if not self.auto_dust_cleanup_enabled:
+            return []
+        
+        dust_positions = []
+        for pos in positions:
+            size_usd = pos.get('size_usd', 0)
+            if size_usd > 0 and size_usd < self.dust_threshold_usd:
+                dust_positions.append({
+                    'symbol': pos['symbol'],
+                    'size_usd': size_usd,
+                    'reason': f'Dust position (${size_usd:.2f} < ${self.dust_threshold_usd:.2f})',
+                    'pnl_pct': pos.get('pnl_pct', 0)
+                })
+        
+        if dust_positions:
+            logger.info(f"🧹 Found {len(dust_positions)} dust positions:")
+            for dp in dust_positions:
+                logger.info(f"   {dp['symbol']}: ${dp['size_usd']:.2f} (P&L: {dp['pnl_pct']*100:+.2f}%)")
+        
+        return dust_positions
     
     def should_allow_new_position(self, current_position_count: int) -> Tuple[bool, str]:
         """
