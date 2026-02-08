@@ -17,6 +17,8 @@ from typing import Optional, Dict, List
 from flask import Flask, request, jsonify, Blueprint
 from functools import wraps
 from datetime import datetime
+import json
+from pathlib import Path
 
 # Import authentication decorator from api_server
 # NOTE: In production, uncomment and use require_auth decorator
@@ -544,6 +546,124 @@ def get_mobile_config():
             }
         }
     })
+
+
+# ========================================
+# Mobile Simulation & Education Mode
+# ========================================
+
+@mobile_api.route('/simulation/dashboard', methods=['GET'])
+# @require_auth
+def get_simulation_dashboard():
+    """
+    Get simulation dashboard optimized for mobile display.
+    
+    Returns key metrics and performance data for education mode.
+    Mobile-optimized with smaller payloads and formatted data.
+    """
+    try:
+        results_path = Path('/home/runner/work/Nija/Nija/results/demo_backtest.json')
+        
+        if not results_path.exists():
+            # Return default education mode state
+            return jsonify({
+                'mode': 'education',
+                'balance': 10000.0,
+                'status': 'ready',
+                'message': 'Start trading to see results'
+            }), 200
+        
+        with open(results_path, 'r') as f:
+            results = json.load(f)
+        
+        summary = results.get('summary', {})
+        
+        # Mobile-optimized response with key metrics
+        response = {
+            'mode': 'education',
+            'balance': {
+                'initial': summary.get('initial_balance', 10000.0),
+                'current': summary.get('final_balance', 10000.0),
+                'pnl': summary.get('total_pnl', 0.0),
+                'pnl_pct': summary.get('total_return_pct', 0.0)
+            },
+            'performance': {
+                'total_trades': summary.get('total_trades', 0),
+                'win_rate': round(summary.get('win_rate', 0.0) * 100, 1),
+                'profit_factor': round(summary.get('profit_factor', 0.0), 2),
+                'sharpe_ratio': round(summary.get('sharpe_ratio', 0.0), 2)
+            },
+            'risk': {
+                'max_drawdown': summary.get('max_drawdown', 0.0),
+                'max_drawdown_pct': round(summary.get('max_drawdown_pct', 0.0), 2)
+            },
+            'recent_trades': summary.get('total_trades', 0),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving simulation dashboard: {e}")
+        return jsonify({
+            'error': 'Failed to load simulation data',
+            'mode': 'education',
+            'balance': {'initial': 10000.0, 'current': 10000.0}
+        }), 500
+
+
+@mobile_api.route('/simulation/trades/recent', methods=['GET'])
+# @require_auth
+def get_recent_simulation_trades():
+    """
+    Get recent simulation trades for mobile display.
+    
+    Returns last 10 trades by default, formatted for mobile UI.
+    """
+    try:
+        limit = min(int(request.args.get('limit', 10)), 50)
+        
+        results_path = Path('/home/runner/work/Nija/Nija/results/demo_backtest.json')
+        
+        if not results_path.exists():
+            return jsonify({
+                'trades': [],
+                'total': 0,
+                'message': 'No simulation trades yet'
+            }), 200
+        
+        with open(results_path, 'r') as f:
+            results = json.load(f)
+        
+        all_trades = results.get('trades', [])
+        
+        # Get most recent trades
+        recent_trades = all_trades[-limit:] if all_trades else []
+        recent_trades.reverse()  # Most recent first
+        
+        # Format for mobile
+        formatted_trades = []
+        for trade in recent_trades:
+            formatted_trades.append({
+                'symbol': trade.get('symbol', ''),
+                'side': trade.get('side', ''),
+                'pnl': round(trade.get('pnl', 0.0), 2),
+                'pnl_pct': round(trade.get('pnl_pct', 0.0), 2),
+                'entry_time': trade.get('entry_time', ''),
+                'exit_time': trade.get('exit_time', ''),
+                'exit_reason': trade.get('exit_reason', ''),
+                'status': 'win' if trade.get('pnl', 0) > 0 else 'loss' if trade.get('pnl', 0) < 0 else 'breakeven'
+            })
+        
+        return jsonify({
+            'trades': formatted_trades,
+            'total': len(all_trades),
+            'showing': len(formatted_trades)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving simulation trades: {e}")
+        return jsonify({'error': 'Failed to load trades'}), 500
 
 
 # Export helper functions
