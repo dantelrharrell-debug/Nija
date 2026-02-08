@@ -15,7 +15,7 @@ even when trading is paused or positions were adopted from legacy holdings.
 import logging
 import time
 import os
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union, Any
 from datetime import datetime
 from enum import Enum
 
@@ -103,14 +103,14 @@ class ForcedPositionCleanup:
             else:
                 logger.info(f"   Cancellation Mode: ALWAYS")
     
-    def _parse_cancel_conditions(self, conditions_str: str) -> Dict[str, float]:
+    def _parse_cancel_conditions(self, conditions_str: str) -> Dict[str, Union[float, bool]]:
         """
         Parse cancellation conditions from string format.
         
         Format: "usd_value<1.0,rank>max_positions"
         
         Returns:
-            Dict with parsed conditions
+            Dict with parsed conditions (values can be float or bool)
         """
         conditions = {}
         if not conditions_str:
@@ -118,13 +118,34 @@ class ForcedPositionCleanup:
         
         for condition in conditions_str.split(','):
             condition = condition.strip()
-            if '<' in condition:
-                key, value = condition.split('<')
-                conditions[key.strip()] = float(value.strip())
-            elif '>' in condition:
-                key, value = condition.split('>')
-                if value.strip() == 'max_positions':
-                    conditions['rank_exceeds_cap'] = True
+            
+            try:
+                if '<' in condition:
+                    parts = condition.split('<')
+                    if len(parts) != 2:
+                        logger.warning(f"   ⚠️  Malformed condition (expected one '<'): {condition}")
+                        continue
+                    key, value = parts
+                    try:
+                        conditions[key.strip()] = float(value.strip())
+                    except ValueError:
+                        logger.warning(f"   ⚠️  Invalid numeric value in condition: {condition}")
+                        continue
+                elif '>' in condition:
+                    parts = condition.split('>')
+                    if len(parts) != 2:
+                        logger.warning(f"   ⚠️  Malformed condition (expected one '>'): {condition}")
+                        continue
+                    key, value = parts
+                    if value.strip() == 'max_positions':
+                        conditions['rank_exceeds_cap'] = True
+                    else:
+                        logger.warning(f"   ⚠️  Unsupported '>' condition value: {value.strip()}")
+                else:
+                    logger.warning(f"   ⚠️  Condition missing operator ('<' or '>'): {condition}")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Error parsing condition '{condition}': {e}")
+                continue
         
         return conditions
     
