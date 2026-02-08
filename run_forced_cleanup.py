@@ -164,7 +164,7 @@ Safety:
                 broker_mgr = BrokerManager()
                 
                 # Try Coinbase first
-                from bot.broker_integration import CoinbaseBroker
+                from broker_integration import CoinbaseBroker
                 broker = CoinbaseBroker()
                 if broker.connect():
                     result = cleanup.cleanup_single_account(broker, "platform_coinbase")

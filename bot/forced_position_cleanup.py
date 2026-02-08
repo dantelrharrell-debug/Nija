@@ -111,8 +111,8 @@ class ForcedPositionCleanup:
         # Sort by ranking criteria
         ranked_positions = sorted(positions, key=lambda p: (
             p.get('size_usd', 0) or p.get('usd_value', 0),  # 1. Smallest first
-            p.get('pnl_pct', 0),  # 2. Worst P&L first
-            p.get('entry_time', datetime.now())  # 3. Oldest first
+            p.get('pnl_pct', 0) or 0,  # 2. Worst P&L first (handle None)
+            -(p.get('entry_time', datetime.min).timestamp() if isinstance(p.get('entry_time'), datetime) else 0)  # 3. Oldest first (use min for missing dates)
         ))
         
         excess_positions = []
@@ -159,7 +159,7 @@ class ForcedPositionCleanup:
             symbol = pos_data['symbol']
             cleanup_type = pos_data['cleanup_type']
             reason = pos_data['reason']
-            pnl_pct = pos_data.get('pnl_pct', 0)
+            pnl_pct = pos_data.get('pnl_pct', 0) or 0  # Handle None values
             size_usd = pos_data.get('size_usd', 0)
             
             outcome = "WIN" if pnl_pct > 0 else "LOSS"

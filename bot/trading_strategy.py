@@ -396,6 +396,16 @@ except ValueError:
     MAX_POSITIONS_ALLOWED = 8  # Default fallback
 logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED}")
 
+# Forced cleanup interval (cycles between cleanup runs)
+# Default: 20 cycles (~50 minutes at 2.5 min/cycle)
+# Can be overridden via FORCED_CLEANUP_INTERVAL environment variable
+_cleanup_interval_env = os.getenv('FORCED_CLEANUP_INTERVAL', '20')
+try:
+    FORCED_CLEANUP_INTERVAL = int(_cleanup_interval_env)
+except ValueError:
+    FORCED_CLEANUP_INTERVAL = 20  # Default fallback
+logger.debug(f"🧹 Forced cleanup interval: every {FORCED_CLEANUP_INTERVAL} cycles (~{FORCED_CLEANUP_INTERVAL * 2.5:.0f} minutes)")
+
 # OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
 # MIN_TRADE_USD = max(2.00, balance * 0.15)
 # This scales automatically with account size:
@@ -3139,13 +3149,12 @@ class TradingStrategy:
                     logger.info(f"   Sold {result['sold']} positions")
             
             # 🧹 FORCED CLEANUP: Run aggressive dust cleanup and retroactive cap enforcement
-            # This runs periodically (every 20 cycles ~50 minutes) to clean up:
+            # This runs periodically to clean up:
             # 1. Dust positions < $1 USD
             # 2. Excess positions over hard cap (retroactive enforcement)
             # Runs across ALL accounts (platform + users)
-            forced_cleanup_interval = 20
             run_startup_cleanup = hasattr(self, 'cycle_count') and self.cycle_count == 0
-            run_periodic_cleanup = hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % forced_cleanup_interval == 0)
+            run_periodic_cleanup = hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % FORCED_CLEANUP_INTERVAL == 0)
             
             if hasattr(self, 'forced_cleanup') and self.forced_cleanup and (run_startup_cleanup or run_periodic_cleanup):
                 cleanup_reason = "STARTUP" if run_startup_cleanup else f"PERIODIC (cycle {self.cycle_count})"
