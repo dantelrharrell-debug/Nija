@@ -115,22 +115,6 @@ except ImportError:
         ExecutionPlan = None
         EIOrderType = None
 
-# Import Minimum Notional Gate (Enhancement #1)
-try:
-    from bot.minimum_notional_gate import get_minimum_notional_gate, NotionalGateConfig
-    MIN_NOTIONAL_GATE_AVAILABLE = True
-    logger.info("✅ Minimum Notional Gate loaded - Entry size validation active")
-except ImportError:
-    try:
-        from minimum_notional_gate import get_minimum_notional_gate, NotionalGateConfig
-        MIN_NOTIONAL_GATE_AVAILABLE = True
-        logger.info("✅ Minimum Notional Gate loaded - Entry size validation active")
-    except ImportError:
-        MIN_NOTIONAL_GATE_AVAILABLE = False
-        logger.warning("⚠️ Minimum Notional Gate not available")
-        get_minimum_notional_gate = None
-        NotionalGateConfig = None
-
 # Constants
 VALID_ORDER_STATUSES = ['open', 'closed', 'filled', 'pending']
 LOG_SEPARATOR = "=" * 70
