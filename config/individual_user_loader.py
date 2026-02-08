@@ -43,7 +43,8 @@ class IndividualUserConfig:
         role: str = "user",
         enabled: bool = True,
         copy_from_platform: bool = True,
-        risk_multiplier: float = 1.0
+        risk_multiplier: float = 1.0,
+        independent_trading: bool = False
     ):
         """
         Initialize individual user configuration.
@@ -56,6 +57,7 @@ class IndividualUserConfig:
             enabled: Whether this account is active
             copy_from_platform: Whether to copy trades from master
             risk_multiplier: Risk multiplier (default: 1.0)
+            independent_trading: Whether user should run independent trading thread (default: False)
         """
         self.user_id = user_id
         self.name = name
@@ -64,6 +66,7 @@ class IndividualUserConfig:
         self.enabled = enabled
         self.copy_from_platform = copy_from_platform
         self.risk_multiplier = risk_multiplier
+        self.independent_trading = independent_trading
 
         # For compatibility with existing code
         self.account_type = "retail"  # Default to retail
@@ -84,7 +87,8 @@ class IndividualUserConfig:
             role=data.get('role', 'user'),
             enabled=data.get('enabled', True),
             copy_from_platform=data.get('copy_from_platform', True),
-            risk_multiplier=data.get('risk_multiplier', 1.0)
+            risk_multiplier=data.get('risk_multiplier', 1.0),
+            independent_trading=data.get('independent_trading', False)
         )
 
     def to_dict(self) -> Dict:
@@ -95,7 +99,8 @@ class IndividualUserConfig:
             'role': self.role,
             'enabled': self.enabled,
             'copy_from_platform': self.copy_from_platform,
-            'risk_multiplier': self.risk_multiplier
+            'risk_multiplier': self.risk_multiplier,
+            'independent_trading': self.independent_trading
         }
 
     def has_api_keys(self) -> bool:

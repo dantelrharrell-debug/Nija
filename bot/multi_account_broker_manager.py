@@ -76,6 +76,10 @@ class MultiAccountBrokerManager:
         # User account brokers - structure: {user_id: {BrokerType: BaseBroker}}
         self.user_brokers: Dict[str, Dict[BrokerType, BaseBroker]] = {}
 
+        # User configurations - structure: {user_id: UserConfig}
+        # Stores user configs to check independent_trading and other settings
+        self.user_configs: Dict[str, any] = {}
+
         # FIX #3: User portfolio states for total equity tracking
         # Structure: {(user_id, broker_type): UserPortfolioState}
         self.user_portfolios: Dict[Tuple[str, str], any] = {}
@@ -883,6 +887,9 @@ class MultiAccountBrokerManager:
         last_connection_time = {}
 
         for user in enabled_users:
+            # Store user config for later access (e.g., checking independent_trading flag)
+            self.user_configs[user.user_id] = user
+
             # Convert broker_type string to BrokerType enum
             try:
                 if user.broker_type.upper() == 'KRAKEN':
