@@ -109,8 +109,18 @@ class ForcedPositionCleanup:
         
         Format: "usd_value<1.0,rank>max_positions"
         
+        Supported conditions:
+        - usd_value<X: Cancel if position USD value < X (float)
+        - rank>max_positions: Cancel if position ranked for cap pruning (bool)
+        
         Returns:
-            Dict with parsed conditions (values can be float or bool)
+            Dict with parsed conditions (values can be float or bool).
+            Returns empty dict if conditions_str is empty or all conditions are malformed.
+        
+        Error handling:
+        - Malformed conditions are skipped with warning logs
+        - Invalid numeric values are skipped with warnings
+        - Missing operators are skipped with warnings
         """
         conditions = {}
         if not conditions_str:
@@ -265,6 +275,10 @@ class ForcedPositionCleanup:
         """
         Get open orders for a specific symbol.
         
+        Handles broker API inconsistencies:
+        - Some brokers use 'symbol' field (Coinbase, Alpaca)
+        - Some brokers use 'pair' field (Kraken)
+        
         Args:
             broker: Broker instance
             symbol: Trading symbol
@@ -277,7 +291,7 @@ class ForcedPositionCleanup:
             if hasattr(broker, 'get_open_orders'):
                 all_orders = broker.get_open_orders()
                 if all_orders:
-                    # Filter for this symbol
+                    # Filter for this symbol (check both 'symbol' and 'pair' for compatibility)
                     return [order for order in all_orders if order.get('symbol') == symbol or order.get('pair') == symbol]
             
             # Fallback: check if broker has symbol-specific method
@@ -292,6 +306,11 @@ class ForcedPositionCleanup:
     def _cancel_open_orders_for_symbol(self, broker, symbol: str, is_startup: bool = False) -> Tuple[int, int]:
         """
         Cancel all open orders for a symbol.
+        
+        Handles broker API inconsistencies for order ID field names:
+        - Coinbase: uses 'id' field
+        - Kraken: uses 'txid' field  
+        - Alpaca: uses 'order_id' or 'id' field
         
         Args:
             broker: Broker instance
@@ -310,6 +329,7 @@ class ForcedPositionCleanup:
         failed = 0
         
         for order in open_orders:
+            # Try multiple field names for order ID (broker-specific)
             order_id = order.get('id') or order.get('order_id') or order.get('txid')
             if not order_id:
                 logger.warning(f"   ⚠️  No order ID found for order on {symbol}")
