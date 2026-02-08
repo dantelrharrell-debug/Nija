@@ -14,6 +14,7 @@ even when trading is paused or positions were adopted from legacy holdings.
 
 import logging
 import time
+import os
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 from enum import Enum
@@ -43,7 +44,10 @@ class ForcedPositionCleanup:
     def __init__(self,
                  dust_threshold_usd: float = 1.00,
                  max_positions: int = 8,
-                 dry_run: bool = False):
+                 dry_run: bool = False,
+                 cancel_open_orders: bool = False,
+                 startup_only: bool = False,
+                 cancel_conditions: Optional[str] = None):
         """
         Initialize forced cleanup engine.
         
@@ -51,15 +55,113 @@ class ForcedPositionCleanup:
             dust_threshold_usd: USD value threshold for dust positions
             max_positions: Hard cap on total positions
             dry_run: If True, log actions but don't execute trades
+            cancel_open_orders: If True, cancel open orders during cleanup
+            startup_only: If True with cancel_open_orders, only cancel on first run (nuclear mode)
+            cancel_conditions: Selective cancellation conditions (e.g., "usd_value<1.0,rank>max_positions")
         """
         self.dust_threshold_usd = dust_threshold_usd
         self.max_positions = max_positions
         self.dry_run = dry_run
+        self.cancel_open_orders = cancel_open_orders
+        self.startup_only = startup_only
+        self.cancel_conditions = self._parse_cancel_conditions(cancel_conditions) if cancel_conditions else None
+        self.has_run_startup = False  # Track if startup cleanup has run
+        
+        # Load config from environment if not explicitly set
+        if not cancel_open_orders and not cancel_conditions:
+            env_cancel = os.getenv('FORCED_CLEANUP_CANCEL_OPEN_ORDERS', 'false').lower() in ['true', '1', 'yes']
+            env_startup_only = os.getenv('FORCED_CLEANUP_STARTUP_ONLY', 'false').lower() in ['true', '1', 'yes']
+            env_conditions = os.getenv('FORCED_CLEANUP_CANCEL_OPEN_ORDERS_IF', '')
+            
+            if env_conditions:
+                self.cancel_conditions = self._parse_cancel_conditions(env_conditions)
+                self.cancel_open_orders = True  # Enable if conditions specified
+            else:
+                self.cancel_open_orders = env_cancel
+            
+            self.startup_only = env_startup_only
         
         logger.info("🧹 FORCED POSITION CLEANUP ENGINE INITIALIZED")
         logger.info(f"   Dust Threshold: ${dust_threshold_usd:.2f} USD")
         logger.info(f"   Max Positions: {max_positions}")
         logger.info(f"   Dry Run: {dry_run}")
+        logger.info(f"   Cancel Open Orders: {self.cancel_open_orders}")
+        if self.cancel_open_orders:
+            if self.cancel_conditions:
+                logger.info(f"   Cancellation Mode: SELECTIVE (conditions: {self.cancel_conditions})")
+            elif self.startup_only:
+                logger.info(f"   Cancellation Mode: NUCLEAR (startup-only)")
+            else:
+                logger.info(f"   Cancellation Mode: ALWAYS")
+    
+    def _parse_cancel_conditions(self, conditions_str: str) -> Dict[str, float]:
+        """
+        Parse cancellation conditions from string format.
+        
+        Format: "usd_value<1.0,rank>max_positions"
+        
+        Returns:
+            Dict with parsed conditions
+        """
+        conditions = {}
+        if not conditions_str:
+            return conditions
+        
+        for condition in conditions_str.split(','):
+            condition = condition.strip()
+            if '<' in condition:
+                key, value = condition.split('<')
+                conditions[key.strip()] = float(value.strip())
+            elif '>' in condition:
+                key, value = condition.split('>')
+                if value.strip() == 'max_positions':
+                    conditions['rank_exceeds_cap'] = True
+        
+        return conditions
+    
+    def _should_cancel_open_orders(self, position_data: Dict, is_startup: bool = False) -> bool:
+        """
+        Determine if open orders should be cancelled for this position.
+        
+        Args:
+            position_data: Position data with cleanup metadata
+            is_startup: Whether this is a startup cleanup
+        
+        Returns:
+            True if open orders should be cancelled
+        """
+        # If open order cancellation is disabled, never cancel
+        if not self.cancel_open_orders:
+            return False
+        
+        # If startup-only mode and this is not startup, don't cancel
+        if self.startup_only and not is_startup:
+            return False
+        
+        # If startup-only mode and startup already ran, don't cancel
+        if self.startup_only and self.has_run_startup:
+            return False
+        
+        # If selective conditions are set, check them
+        if self.cancel_conditions:
+            size_usd = position_data.get('size_usd', 0)
+            cleanup_type = position_data.get('cleanup_type', '')
+            
+            # Check USD value condition
+            if 'usd_value' in self.cancel_conditions:
+                if size_usd < self.cancel_conditions['usd_value']:
+                    return True
+            
+            # Check rank condition (cap exceeded positions)
+            if 'rank_exceeds_cap' in self.cancel_conditions:
+                if cleanup_type == CleanupType.CAP_EXCEEDED.value:
+                    return True
+            
+            # If conditions exist but none matched, don't cancel
+            return False
+        
+        # Default: cancel if enabled and not in selective mode
+        return True
     
     def identify_dust_positions(self, positions: List[Dict]) -> List[Dict]:
         """
@@ -129,17 +231,100 @@ class ForcedPositionCleanup:
         
         return excess_positions
     
+    def _get_open_orders_for_symbol(self, broker, symbol: str) -> List[Dict]:
+        """
+        Get open orders for a specific symbol.
+        
+        Args:
+            broker: Broker instance
+            symbol: Trading symbol
+        
+        Returns:
+            List of open order dicts
+        """
+        try:
+            # Try to get all open orders
+            if hasattr(broker, 'get_open_orders'):
+                all_orders = broker.get_open_orders()
+                if all_orders:
+                    # Filter for this symbol
+                    return [order for order in all_orders if order.get('symbol') == symbol or order.get('pair') == symbol]
+            
+            # Fallback: check if broker has symbol-specific method
+            if hasattr(broker, 'get_open_orders_for_symbol'):
+                return broker.get_open_orders_for_symbol(symbol)
+            
+            return []
+        except Exception as e:
+            logger.warning(f"   ⚠️  Failed to get open orders for {symbol}: {e}")
+            return []
+    
+    def _cancel_open_orders_for_symbol(self, broker, symbol: str, is_startup: bool = False) -> Tuple[int, int]:
+        """
+        Cancel all open orders for a symbol.
+        
+        Args:
+            broker: Broker instance
+            symbol: Trading symbol
+            is_startup: Whether this is a startup cleanup
+        
+        Returns:
+            Tuple of (cancelled_count, failed_count)
+        """
+        open_orders = self._get_open_orders_for_symbol(broker, symbol)
+        
+        if not open_orders:
+            return 0, 0
+        
+        cancelled = 0
+        failed = 0
+        
+        for order in open_orders:
+            order_id = order.get('id') or order.get('order_id') or order.get('txid')
+            if not order_id:
+                logger.warning(f"   ⚠️  No order ID found for order on {symbol}")
+                failed += 1
+                continue
+            
+            try:
+                if self.dry_run:
+                    logger.warning(f"   [DRY RUN][OPEN_ORDER][WOULD_CANCEL] Order {order_id} on {symbol}")
+                    cancelled += 1
+                else:
+                    logger.warning(f"   [OPEN_ORDER][CANCELLING] Order {order_id} on {symbol}")
+                    if hasattr(broker, 'cancel_order'):
+                        result = broker.cancel_order(order_id)
+                        if result:
+                            logger.warning(f"   ✅ [OPEN_ORDER][CANCELLED] Order {order_id}")
+                            cancelled += 1
+                        else:
+                            logger.error(f"   ❌ [OPEN_ORDER][CANCEL_FAILED] Order {order_id}")
+                            failed += 1
+                    else:
+                        logger.warning(f"   ⚠️  Broker does not support order cancellation")
+                        failed += 1
+                
+                # Rate limiting
+                time.sleep(0.3)
+            except Exception as e:
+                logger.error(f"   ❌ [OPEN_ORDER][CANCEL_FAILED] Order {order_id}: {e}")
+                failed += 1
+        
+        return cancelled, failed
+    
     def execute_cleanup(self, 
                        positions_to_close: List[Dict],
                        broker,
-                       account_id: str = "platform") -> Tuple[int, int]:
+                       account_id: str = "platform",
+                       is_startup: bool = False) -> Tuple[int, int]:
         """
-        Execute cleanup by closing positions.
+        Execute cleanup by closing positions and optionally cancelling open orders.
         
         Args:
             positions_to_close: List of positions with cleanup metadata
             broker: Broker instance to execute trades
             account_id: Account identifier for logging
+            is_startup: Whether this is a startup cleanup
         
         Returns:
             Tuple of (successful_closes, failed_closes)
@@ -173,8 +358,22 @@ class ForcedPositionCleanup:
             logger.warning(f"   PROFIT_STATUS = PENDING → CONFIRMED")
             logger.warning(f"   OUTCOME = {outcome}")
             
+            # Check if we should cancel open orders for this position
+            should_cancel = self._should_cancel_open_orders(pos_data, is_startup)
+            
+            if should_cancel:
+                logger.warning(f"   🔍 Checking for open orders...")
+                cancelled, cancel_failed = self._cancel_open_orders_for_symbol(broker, symbol, is_startup)
+                if cancelled > 0:
+                    logger.warning(f"   ✅ Cancelled {cancelled} open order(s)")
+                if cancel_failed > 0:
+                    logger.warning(f"   ⚠️  Failed to cancel {cancel_failed} open order(s)")
+            
             if self.dry_run:
-                logger.warning(f"   [DRY RUN] Would close position")
+                if should_cancel:
+                    logger.warning(f"   [DRY RUN][WOULD_CLOSE] Position (after cancelling open orders)")
+                else:
+                    logger.warning(f"   [DRY RUN][WOULD_CLOSE] Position")
                 successful += 1
                 continue
             
@@ -207,13 +406,15 @@ class ForcedPositionCleanup:
     
     def cleanup_single_account(self,
                                broker,
-                               account_id: str = "platform") -> Dict:
+                               account_id: str = "platform",
+                               is_startup: bool = False) -> Dict:
         """
         Run forced cleanup on a single account.
         
         Args:
             broker: Broker instance for the account
             account_id: Account identifier for logging
+            is_startup: Whether this is a startup cleanup
         
         Returns:
             Cleanup result summary
@@ -265,7 +466,7 @@ class ForcedPositionCleanup:
         if dust_positions:
             logger.warning(f"   🧹 Found {len(dust_positions)} dust positions")
             dust_success, dust_fail = self.execute_cleanup(
-                dust_positions, broker, account_id
+                dust_positions, broker, account_id, is_startup
             )
             dust_closed = dust_success
         
@@ -287,9 +488,13 @@ class ForcedPositionCleanup:
         if cap_excess_positions:
             logger.warning(f"   🔒 Position cap exceeded: {len(non_dust_positions)}/{self.max_positions}")
             cap_success, cap_fail = self.execute_cleanup(
-                cap_excess_positions, broker, account_id
+                cap_excess_positions, broker, account_id, is_startup
             )
             cap_closed = cap_success
+        
+        # Mark startup as complete if this was a startup cleanup
+        if is_startup:
+            self.has_run_startup = True
         
         # Final position count
         try:
@@ -307,12 +512,13 @@ class ForcedPositionCleanup:
             'status': 'cleaned'
         }
     
-    def cleanup_all_accounts(self, multi_account_manager) -> Dict:
+    def cleanup_all_accounts(self, multi_account_manager, is_startup: bool = False) -> Dict:
         """
         Run forced cleanup across all accounts (platform + users).
         
         Args:
             multi_account_manager: MultiAccountBrokerManager instance
+            is_startup: Whether this is a startup cleanup
         
         Returns:
             Summary of cleanup across all accounts
@@ -331,7 +537,7 @@ class ForcedPositionCleanup:
         for broker_type, broker in multi_account_manager.platform_brokers.items():
             if broker and broker.connected:
                 account_id = f"platform_{broker_type.value}"
-                result = self.cleanup_single_account(broker, account_id)
+                result = self.cleanup_single_account(broker, account_id, is_startup)
                 results.append(result)
         
         # Cleanup user accounts
@@ -343,7 +549,7 @@ class ForcedPositionCleanup:
             for broker_type, broker in user_broker_dict.items():
                 if broker and broker.connected:
                     account_id = f"user_{user_id}_{broker_type.value}"
-                    result = self.cleanup_single_account(broker, account_id)
+                    result = self.cleanup_single_account(broker, account_id, is_startup)
                     results.append(result)
         
         # Summary

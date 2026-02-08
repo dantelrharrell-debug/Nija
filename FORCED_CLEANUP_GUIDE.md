@@ -70,7 +70,84 @@ python3 run_forced_cleanup.py --dust 0.50 --max-positions 5
 
 # Skip confirmation prompt
 python3 run_forced_cleanup.py --yes
+
+# NEW: Cancel open orders during cleanup
+python3 run_forced_cleanup.py --include-open-orders
+
+# NEW: Preview with open order cancellation
+python3 run_forced_cleanup.py --dry-run --include-open-orders
+
+# NEW: Nuclear mode (startup-only cleanup with open order cancellation)
+python3 run_forced_cleanup.py --include-open-orders --startup-only
+
+# NEW: Selective cancellation (only if USD value < $1)
+python3 run_forced_cleanup.py --cancel-if "usd_value<1.0"
+
+# NEW: Selective cancellation (only for positions ranked for pruning)
+python3 run_forced_cleanup.py --cancel-if "rank>max_positions"
+
+# NEW: Combined selective conditions
+python3 run_forced_cleanup.py --cancel-if "usd_value<1.0,rank>max_positions"
 ```
+
+## Open Order Cancellation Modes
+
+### Conservative Mode (Default)
+By default, forced cleanup will **NOT** cancel open orders. Positions with open orders are skipped.
+
+**Use when:** You want to preserve all active trading orders.
+
+### Option A: Nuclear Mode (Startup-Only)
+Cancel all open orders below thresholds **only on startup**.
+
+**Configuration:**
+```bash
+# Via command line
+python3 run_forced_cleanup.py --include-open-orders --startup-only
+
+# Via environment variables
+FORCED_CLEANUP_CANCEL_OPEN_ORDERS=true
+FORCED_CLEANUP_STARTUP_ONLY=true
+```
+
+**Behavior:**
+- Cancels dust + cap-excess orders on first run
+- One-time normalization
+- Safe afterward (reverts to conservative mode)
+
+**Use when:** You need to clean up legacy positions once, then preserve orders.
+
+### Option B: Selective Mode (Best Practice)
+Only cancel open orders if specific conditions are met.
+
+**Configuration:**
+```bash
+# Via command line
+python3 run_forced_cleanup.py --cancel-if "usd_value<1.0,rank>max_positions"
+
+# Via environment variable
+FORCED_CLEANUP_CANCEL_OPEN_ORDERS_IF=usd_value<1.0,rank>max_positions
+```
+
+**Available Conditions:**
+- `usd_value<X`: Cancel if position USD value is less than X
+- `rank>max_positions`: Cancel if position is ranked for cap pruning
+
+**Use when:** You want fine-grained control over which open orders get cancelled.
+
+### Option C: Always Cancel
+Cancel open orders for all positions being cleaned up.
+
+**Configuration:**
+```bash
+# Via command line
+python3 run_forced_cleanup.py --include-open-orders
+
+# Via environment variable
+FORCED_CLEANUP_CANCEL_OPEN_ORDERS=true
+```
+
+**Use when:** You want aggressive cleanup without preserving any orders.
 
 ## Usage Examples
 
@@ -106,7 +183,46 @@ python3 run_forced_cleanup.py
 python3 run_forced_cleanup.py --max-positions 5 --dust 2.00
 ```
 
-### Scenario 3: Automated Cleanup via Bot
+### Scenario 3: Cleanup with Open Orders (Nuclear Mode)
+
+**Problem:** User has 59 positions with many open orders, needs one-time cleanup
+
+**Solution:**
+```bash
+# Step 1: Preview what would be cancelled
+python3 run_forced_cleanup.py --dry-run --include-open-orders
+
+# Output shows:
+# [DUST][OPEN_ORDER][WOULD_CANCEL] Order xxx on SHIB-USD
+# [DUST][OPEN_ORDER][WOULD_CANCEL] Order yyy on DOGE-USD
+# [CAP][OPEN_ORDER][WOULD_CANCEL] Order zzz on ATOM-USD
+
+# Step 2: Execute nuclear cleanup (startup-only)
+python3 run_forced_cleanup.py --include-open-orders --startup-only
+
+# Result:
+# - Open orders cancelled for dust positions
+# - Open orders cancelled for cap-excess positions
+# - 59 positions → 8 positions
+# - Future cleanups preserve open orders
+```
+
+### Scenario 4: Selective Open Order Cancellation
+
+**Problem:** Cancel open orders only for tiny positions (< $1 USD)
+
+**Solution:**
+```bash
+# Selective mode - only cancel if USD value < $1
+python3 run_forced_cleanup.py --cancel-if "usd_value<1.0"
+
+# This will:
+# - Cancel orders for positions < $1
+# - Preserve orders for larger positions
+# - Still close positions per normal cleanup rules
+```
+
+### Scenario 5: Automated Cleanup via Bot
 
 **Setup:** The bot automatically runs forced cleanup:
 
@@ -127,23 +243,40 @@ For each position:
     Log: [DUST][FORCED]
 ```
 
-### Step 2: Dust Execution
+### Step 2: Open Order Cancellation (Optional)
+```
+If open order cancellation enabled:
+  For each position marked for cleanup:
+    Check if should cancel (based on mode):
+      - Nuclear: Yes if startup
+      - Selective: Yes if conditions match
+      - Always: Yes
+    If yes:
+      Get open orders for symbol
+      Cancel each order
+      Log: [OPEN_ORDER][CANCELLED]
+```
+
+### Step 3: Dust Execution
 ```
 For each dust position:
+  Cancel open orders (if enabled)
   Log profit status transition (PENDING → CONFIRMED)
   Execute market sell
   Record outcome (WIN/LOSS)
 ```
 
-### Step 3: Cap Enforcement
+### Step 4: Cap Enforcement
 ```
 Remaining_positions = All positions - Dust positions
 If count(Remaining_positions) > max_positions:
   Rank by: size_usd ASC, pnl_pct ASC, age DESC
-  Close excess positions until count <= cap
+  For each excess position:
+    Cancel open orders (if enabled)
+    Close position
 ```
 
-### Step 4: Final Reconciliation
+### Step 5: Final Reconciliation
 ```
 Verify final position count
 Log summary:
@@ -152,11 +285,12 @@ Log summary:
   - Cap excess closed
   - Final positions
   - Total reduction
+  - Open orders cancelled (if applicable)
 ```
 
 ## Logging Output
 
-### Example Cleanup Log
+### Example Cleanup Log (Without Open Order Cancellation)
 
 ```
 🧹 FORCED CLEANUP TRIGGERED: STARTUP
@@ -202,6 +336,74 @@ Log summary:
    Total reduced by: 51
 ```
 
+### Example Cleanup Log (With Open Order Cancellation)
+
+```
+🧹 FORCED CLEANUP TRIGGERED: STARTUP
+🔍 Scanning account: platform_coinbase
+   Initial positions: 59
+   Cancel Open Orders: True
+   Cancellation Mode: SELECTIVE (usd_value<1.0,rank>max_positions)
+
+🧹 Found 45 dust positions
+
+🧹 [DUST][FORCED] SHIB-USD
+   Account: platform_coinbase
+   Reason: Dust position ($0.43 < $1.00)
+   Size: $0.43
+   P&L: -2.15%
+   PROFIT_STATUS = PENDING → CONFIRMED
+   OUTCOME = LOSS
+   🔍 Checking for open orders...
+   [OPEN_ORDER][CANCELLING] Order abc123 on SHIB-USD
+   ✅ [OPEN_ORDER][CANCELLED] Order abc123
+   ✅ Cancelled 1 open order(s)
+   ✅ CLOSED SUCCESSFULLY
+
+🧹 [DUST][FORCED] DOGE-USD
+   Account: platform_coinbase
+   Reason: Dust position ($0.87 < $1.00)
+   Size: $0.87
+   P&L: +1.05%
+   PROFIT_STATUS = PENDING → CONFIRMED
+   OUTCOME = WIN
+   🔍 Checking for open orders...
+   (No open orders found)
+   ✅ CLOSED SUCCESSFULLY
+
+... (repeated for each dust position)
+
+🔒 Position cap exceeded: 14/8
+
+🧹 [CAP_EXCEEDED][FORCED] ATOM-USD
+   Account: platform_coinbase
+   Reason: Position cap exceeded (14/8)
+   Size: $3.20
+   P&L: +0.50%
+   PROFIT_STATUS = PENDING → CONFIRMED
+   OUTCOME = WIN
+   🔍 Checking for open orders...
+   [OPEN_ORDER][CANCELLING] Order xyz789 on ATOM-USD
+   ✅ [OPEN_ORDER][CANCELLED] Order xyz789
+   ✅ Cancelled 1 open order(s)
+   ✅ CLOSED SUCCESSFULLY
+
+... (repeated for each excess position)
+
+🧹 CLEANUP COMPLETE: platform_coinbase
+   Successful: 51
+   Failed: 0
+
+📊 FINAL SUMMARY
+   Accounts processed: 1
+   Initial total positions: 59
+   Dust positions closed: 45
+   Cap excess closed: 6
+   Final total positions: 8
+   Total reduced by: 51
+   Open orders cancelled: 12
+```
+
 ## Safety Features
 
 ### 1. Dry Run Mode
@@ -224,34 +426,76 @@ Log summary:
 - **Safety:** Errors in one account don't block others
 - **Logging:** Clear account identification in all logs
 
+### 5. Open Order Safety
+- **Default:** Open orders are preserved (conservative mode)
+- **Modes:** Nuclear (startup-only), Selective (conditional), Always
+- **Logging:** All order cancellations explicitly logged
+- **Dry-run:** Preview shows [WOULD_CANCEL] without executing
+
 ## Configuration
 
 ### Default Settings
 
 ```python
-DUST_THRESHOLD_USD = 1.00      # Positions < $1 are dust
-MAX_POSITIONS = 8              # Hard cap on total positions
-CLEANUP_INTERVAL = 20          # Cycles between cleanups (~50 min)
-DRY_RUN = False               # Execute trades (not preview)
+DUST_THRESHOLD_USD = 1.00              # Positions < $1 are dust
+MAX_POSITIONS = 8                      # Hard cap on total positions
+CLEANUP_INTERVAL = 20                  # Cycles between cleanups (~50 min)
+DRY_RUN = False                       # Execute trades (not preview)
+CANCEL_OPEN_ORDERS = False            # Conservative: preserve open orders
+STARTUP_ONLY = False                  # Run periodically (not just startup)
+CANCEL_CONDITIONS = None              # No selective conditions
+```
+
+### Environment Variables
+
+**Via .env file:**
+```bash
+# Enable open order cancellation
+FORCED_CLEANUP_CANCEL_OPEN_ORDERS=true
+
+# Nuclear mode (startup-only)
+FORCED_CLEANUP_STARTUP_ONLY=true
+
+# Selective cancellation
+FORCED_CLEANUP_CANCEL_OPEN_ORDERS_IF=usd_value<1.0,rank>max_positions
 ```
 
 ### Customization Options
 
 **Via Manual Script:**
 ```bash
---dust <amount>          # Custom dust threshold (USD)
---max-positions <count>  # Custom position cap
---dry-run               # Preview mode
---yes                   # Auto-confirm
+--dust <amount>                 # Custom dust threshold (USD)
+--max-positions <count>         # Custom position cap
+--dry-run                       # Preview mode
+--yes                          # Auto-confirm
+--include-open-orders          # Cancel open orders during cleanup
+--startup-only                 # Nuclear mode (startup-only cancellation)
+--cancel-if <conditions>       # Selective cancellation conditions
 ```
 
 **Via Code (bot/trading_strategy.py):**
 ```python
 self.forced_cleanup = ForcedPositionCleanup(
-    dust_threshold_usd=1.00,    # Customize
-    max_positions=8,            # Customize
-    dry_run=False              # Customize
+    dust_threshold_usd=1.00,          # Customize
+    max_positions=8,                  # Customize
+    dry_run=False,                    # Customize
+    cancel_open_orders=True,          # Enable open order cancellation
+    startup_only=False,               # Nuclear mode (startup-only)
+    cancel_conditions="usd_value<1.0" # Selective conditions
 )
+```
+
+**Recommended Production Settings:**
+
+For best practice, use selective cancellation:
+```bash
+# .env configuration
+FORCED_CLEANUP_CANCEL_OPEN_ORDERS_IF=usd_value<1.0,rank>max_positions
+
+# This will:
+# - Cancel orders for positions < $1 USD
+# - Cancel orders for positions ranked for cap pruning
+# - Preserve all other open orders
 ```
 
 ## Integration with Existing Systems
