@@ -899,22 +899,17 @@ class IndependentBrokerTrader:
                 for broker_type, broker in user_brokers.items():
                     broker_name = f"{user_id}_{broker_type.value}"
 
-                    # CRITICAL FIX (Jan 17, 2026): Disable independent strategy loops for Kraken USER accounts
-                    # When copy trading is active, Kraken users should ONLY execute copied trades from master
-                    # They should NOT run their own independent strategy loops (prevents conflicting signals)
-                    if broker_type == BrokerType.KRAKEN:
-                        # Check if Kraken platform is connected (indicates copy trading is active)
-                        kraken_platform_connected = self.multi_account_manager.is_platform_connected(BrokerType.KRAKEN)
-                        if kraken_platform_connected:
-                            logger.info(f"⏭️  Skipping {broker_name} - Kraken copy trading active (user executes copied trades only)")
-                            logger.info(f"   ℹ️  {user_id} will execute trades copied from Kraken PLATFORM")
-                            logger.info(f"   ℹ️  Independent strategy loop disabled for copy trading mode")
-                            continue
-                        else:
-                            logger.info(f"⏭️  Skipping {broker_name} - Kraken PLATFORM offline")
-                            logger.info(f"   ℹ️  Kraken copy trading disabled until PLATFORM reconnects")
-                            logger.info(f"   ✅ OTHER BROKERS (Coinbase, etc.) continue trading independently")
-                            continue
+                    # Check if user has independent_trading enabled in their config
+                    user_config = self.multi_account_manager.user_configs.get(user_id)
+                    if user_config and user_config.independent_trading:
+                        # User has independent_trading enabled - start their thread
+                        pass  # Continue with thread startup below
+                    else:
+                        # User does not have independent_trading enabled - skip
+                        logger.info(f"⏭️  Skipping {broker_name} - independent_trading not enabled")
+                        logger.info(f"   ℹ️  {user_id} will only execute trades via copy trading or other mechanisms")
+                        logger.info(f"   ℹ️  To enable independent trading, set 'independent_trading': true in user config")
+                        continue
 
                     # Only start threads for funded user brokers
                     if user_id not in funded_users or broker_type.value not in funded_users[user_id]:

@@ -28,7 +28,7 @@ class UserConfig:
     Represents a single user or investor configuration.
     """
 
-    def __init__(self, user_id: str, name: str, account_type: str, broker_type: str, enabled: bool = True, description: str = "", copy_from_platform: bool = True, disabled_symbols: Optional[List[str]] = None):
+    def __init__(self, user_id: str, name: str, account_type: str, broker_type: str, enabled: bool = True, description: str = "", copy_from_platform: bool = True, disabled_symbols: Optional[List[str]] = None, independent_trading: bool = False):
         """
         Initialize user/investor configuration.
 
@@ -41,6 +41,7 @@ class UserConfig:
             description: Optional description
             copy_from_platform: Whether to copy trades from master (default: True)
             disabled_symbols: List of symbols to disable for this user (default: None)
+            independent_trading: Whether user should run independent trading thread (default: False)
         """
         self.user_id = user_id
         self.name = name
@@ -50,6 +51,7 @@ class UserConfig:
         self.description = description
         self.copy_from_platform = copy_from_platform
         self.disabled_symbols = disabled_symbols or []
+        self.independent_trading = independent_trading
 
     def __repr__(self):
         status = "enabled" if self.enabled else "disabled"
@@ -66,7 +68,8 @@ class UserConfig:
             enabled=data.get('enabled', True),
             description=data.get('description', ''),
             copy_from_platform=data.get('copy_from_platform', True),
-            disabled_symbols=data.get('disabled_symbols', [])
+            disabled_symbols=data.get('disabled_symbols', []),
+            independent_trading=data.get('independent_trading', False)
         )
 
     def to_dict(self) -> Dict:
@@ -79,7 +82,8 @@ class UserConfig:
             'enabled': self.enabled,
             'description': self.description,
             'copy_from_platform': self.copy_from_platform,
-            'disabled_symbols': self.disabled_symbols
+            'disabled_symbols': self.disabled_symbols,
+            'independent_trading': self.independent_trading
         }
 
 
