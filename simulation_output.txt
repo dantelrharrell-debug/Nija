@@ -1,0 +1,214 @@
+
+🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯
+USER POSITION REDUCTION SIMULATION
+Simulating deployment impact on user positions
+🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯🎯
+
+================================================================================
+🔍 SIMULATING CLEANUP FOR: user_daivon_frazier
+================================================================================
+
+📊 INITIAL STATE:
+   Total Positions: 59
+   Total Capital: $544.08
+   Total P&L: $-9.35 (-1.72%)
+
+🧹 STEP 1: DUST CLEANUP (threshold: $1.00)
+   Found 46 dust positions
+   Dust Capital: $25.79
+   Dust P&L: $-1.00
+   Outcomes: 9 WINS, 30 LOSSES, 7 BREAKEVEN
+
+🔒 STEP 2: POSITION CAP ENFORCEMENT (max: 8)
+   Positions after dust cleanup: 13
+   Over cap by: 5 positions
+   Cap Excess Capital: $18.99
+   Cap Excess P&L: $-0.35
+   Outcomes: 1 WINS, 2 LOSSES, 2 BREAKEVEN
+
+================================================================================
+📊 FINAL SUMMARY FOR user_daivon_frazier
+================================================================================
+
+🔢 POSITION COUNT:
+   Initial:   59 positions
+   Closed:    51 positions (46 dust + 5 cap excess)
+   Final:     8 positions
+   Reduction: 51 positions (86.4%)
+
+💰 CAPITAL ANALYSIS:
+   Initial Capital:  $544.08
+   Closed Capital:   $44.77 (8.2%)
+   Final Capital:    $499.31 (91.8%)
+
+📈 PROFIT/LOSS TRACKING:
+   Initial Total P&L:  $-9.35
+   Closed P&L:         $-1.35
+   Final Total P&L:    $-8.01
+
+🎯 CLOSED POSITION OUTCOMES:
+   WINS:      10 positions (19.6%)
+   LOSSES:    32 positions (62.7%)
+   BREAKEVEN: 9 positions (17.6%)
+
+📋 POSITIONS TO BE CLOSED (51 total):
+
+   DUST POSITIONS (46):
+      1. XLM-USD      $   0.11 | P&L:  -0.88% ($ -0.00) | BREAKEVEN
+      2. SHIB-USD     $   0.22 | P&L:  -5.84% ($ -0.01) | LOSS
+      3. ONT-USD      $   0.29 | P&L:  -3.09% ($ -0.01) | LOSS
+      4. UNI-USD      $   0.30 | P&L:  -1.99% ($ -0.01) | LOSS
+      5. MANA-USD     $   0.31 | P&L:  -9.81% ($ -0.03) | LOSS
+      6. LSK-USD      $   0.33 | P&L:  -4.95% ($ -0.02) | LOSS
+      7. ALGO-USD     $   0.35 | P&L:  -3.23% ($ -0.01) | LOSS
+      8. TRX-USD      $   0.36 | P&L: -14.08% ($ -0.05) | LOSS
+      9. KMD-USD      $   0.37 | P&L:  -5.71% ($ -0.02) | LOSS
+      10. STEEM-USD    $   0.38 | P&L:  +3.51% ($ +0.01) | WIN
+      ... (36 more dust positions)
+
+   CAP EXCESS POSITIONS (5):
+      1. ZIL-USD      $   1.10 | P&L:  +0.36% ($ +0.00) | BREAKEVEN
+      2. XTZ-USD      $   3.83 | P&L:  -0.21% ($ -0.01) | BREAKEVEN
+      3. COMP-USD     $   4.06 | P&L:  -8.58% ($ -0.35) | LOSS
+      4. BCH-USD      $   4.42 | P&L:  +8.51% ($ +0.38) | WIN
+      5. MKR-USD      $   5.57 | P&L:  -6.63% ($ -0.37) | LOSS
+
+📋 FINAL POSITIONS REMAINING (8):
+      1. XRP-USD      $   8.25 | P&L:  +1.60% ($ +0.13)
+      2. SNX-USD      $  28.38 | P&L:  -0.52% ($ -0.15)
+      3. AVAX-USD     $  57.94 | P&L:  -4.06% ($ -2.35)
+      4. CHZ-USD      $  59.10 | P&L: -18.35% ($-10.85)
+      5. AAVE-USD     $  78.58 | P&L:  +1.96% ($ +1.54)
+      6. BAT-USD      $  80.66 | P&L:  -3.73% ($ -3.01)
+      7. DGB-USD      $  93.02 | P&L: +33.96% ($+31.59)
+      8. BTC-USD      $  93.37 | P&L: -26.67% ($-24.91)
+
+
+
+
+================================================================================
+🔍 SIMULATING CLEANUP FOR: user_tania_gilbert
+================================================================================
+
+📊 INITIAL STATE:
+   Total Positions: 54
+   Total Capital: $501.14
+   Total P&L: $+30.53 (+6.09%)
+
+🧹 STEP 1: DUST CLEANUP (threshold: $1.00)
+   Found 31 dust positions
+   Dust Capital: $16.35
+   Dust P&L: $+0.60
+   Outcomes: 16 WINS, 11 LOSSES, 4 BREAKEVEN
+
+🔒 STEP 2: POSITION CAP ENFORCEMENT (max: 8)
+   Positions after dust cleanup: 23
+   Over cap by: 15 positions
+   Cap Excess Capital: $80.90
+   Cap Excess P&L: $-0.96
+   Outcomes: 6 WINS, 8 LOSSES, 1 BREAKEVEN
+
+================================================================================
+📊 FINAL SUMMARY FOR user_tania_gilbert
+================================================================================
+
+🔢 POSITION COUNT:
+   Initial:   54 positions
+   Closed:    46 positions (31 dust + 15 cap excess)
+   Final:     8 positions
+   Reduction: 46 positions (85.2%)
+
+💰 CAPITAL ANALYSIS:
+   Initial Capital:  $501.14
+   Closed Capital:   $97.25 (19.4%)
+   Final Capital:    $403.90 (80.6%)
+
+📈 PROFIT/LOSS TRACKING:
+   Initial Total P&L:  $+30.53
+   Closed P&L:         $-0.36
+   Final Total P&L:    $+30.89
+
+🎯 CLOSED POSITION OUTCOMES:
+   WINS:      22 positions (47.8%)
+   LOSSES:    19 positions (41.3%)
+   BREAKEVEN: 5 positions (10.9%)
+
+📋 POSITIONS TO BE CLOSED (46 total):
+
+   DUST POSITIONS (31):
+      1. THETA-USD    $   0.14 | P&L:  +5.68% ($ +0.01) | WIN
+      2. DOT-USD      $   0.14 | P&L: +18.97% ($ +0.03) | WIN
+      3. ATOM-USD     $   0.15 | P&L:  +5.88% ($ +0.01) | WIN
+      4. QTUM-USD     $   0.17 | P&L:  +8.80% ($ +0.02) | WIN
+      5. DGB-USD      $   0.20 | P&L: +41.31% ($ +0.08) | WIN
+      6. MKR-USD      $   0.29 | P&L:  -9.78% ($ -0.03) | LOSS
+      7. LSK-USD      $   0.31 | P&L:  +7.89% ($ +0.02) | WIN
+      8. AXS-USD      $   0.33 | P&L:  -7.43% ($ -0.02) | LOSS
+      9. LINK-USD     $   0.38 | P&L:  +4.04% ($ +0.02) | WIN
+      10. SHIB-USD     $   0.38 | P&L: +42.09% ($ +0.16) | WIN
+      ... (21 more dust positions)
+
+   CAP EXCESS POSITIONS (15):
+      1. SAND-USD     $   1.95 | P&L: +35.42% ($ +0.69) | WIN
+      2. IMX-USD      $   2.51 | P&L:  +7.73% ($ +0.19) | WIN
+      3. SOL-USD      $   2.89 | P&L:  -9.07% ($ -0.26) | LOSS
+      4. MATIC-USD    $   3.00 | P&L: -20.79% ($ -0.62) | LOSS
+      5. KMD-USD      $   3.05 | P&L:  -8.26% ($ -0.25) | LOSS
+      6. WAVES-USD    $   3.40 | P&L:  -0.78% ($ -0.03) | BREAKEVEN
+      7. CHZ-USD      $   4.66 | P&L:  +2.39% ($ +0.11) | WIN
+      8. SC-USD       $   4.93 | P&L: +14.63% ($ +0.72) | WIN
+      9. ZIL-USD      $   5.93 | P&L: -15.13% ($ -0.90) | LOSS
+      10. FTM-USD      $   6.46 | P&L:  -6.02% ($ -0.39) | LOSS
+      11. SNX-USD      $   7.26 | P&L:  +6.02% ($ +0.44) | WIN
+      12. ETH-USD      $   7.89 | P&L:  -9.95% ($ -0.78) | LOSS
+      13. MANA-USD     $   8.68 | P&L: +26.76% ($ +2.32) | WIN
+      14. BTC-USD      $   8.74 | P&L: -14.43% ($ -1.26) | LOSS
+      15. DOGE-USD     $   9.55 | P&L:  -9.82% ($ -0.94) | LOSS
+
+📋 FINAL POSITIONS REMAINING (8):
+      1. ICX-USD      $   9.68 | P&L:  -9.77% ($ -0.95)
+      2. SUSHI-USD    $   9.70 | P&L:  -4.23% ($ -0.41)
+      3. XRP-USD      $   9.79 | P&L: -12.37% ($ -1.21)
+      4. APE-USD      $  35.10 | P&L:  +7.75% ($ +2.72)
+      5. ONT-USD      $  58.26 | P&L: +14.61% ($ +8.51)
+      6. NEAR-USD     $  90.23 | P&L:  +7.47% ($ +6.74)
+      7. AVAX-USD     $  92.87 | P&L:  +6.97% ($ +6.47)
+      8. HBAR-USD     $  98.26 | P&L:  +9.16% ($ +9.00)
+
+
+================================================================================
+🎯 COMBINED DEPLOYMENT IMPACT
+================================================================================
+
+📊 BOTH USERS COMBINED:
+   Initial Positions:  113
+   Positions Closed:   97
+   Final Positions:    16
+   Reduction:          97 (85.8%)
+
+💰 COMBINED CAPITAL:
+   Initial Capital:  $1045.22
+   Closed Capital:   $142.02 (13.6%)
+   Final Capital:    $903.20 (86.4%)
+
+📈 COMBINED P&L:
+   Initial Total P&L:  $+21.18
+   Closed P&L:         $-1.71
+   Final Total P&L:    $+22.88
+
+🎯 COMBINED OUTCOMES:
+   WINS:      32 positions (33.0%)
+   LOSSES:    51 positions (52.6%)
+   BREAKEVEN: 14 positions (14.4%)
+
+================================================================================
+✅ SIMULATION COMPLETE
+================================================================================
+
+This simulation shows exactly what will happen during deployment:
+1. Dust positions (< $1 USD) are identified and closed
+2. Remaining positions over the 8-position cap are closed (smallest first)
+3. Each user ends up with exactly 8 positions
+4. All closed positions have their profit/loss realized and tracked
+
+
