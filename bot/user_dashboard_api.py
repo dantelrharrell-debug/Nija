@@ -39,6 +39,7 @@ try:
     from bot.user_nonce_manager import get_user_nonce_manager
     from bot.trade_webhook_notifier import get_webhook_notifier
     from bot.trade_ledger_db import get_trade_ledger_db
+    from bot.position_source_constants import categorize_positions, get_source_label, is_nija_managed
     from controls import get_hard_controls
 except ImportError:
     from user_pnl_tracker import get_user_pnl_tracker
@@ -46,6 +47,7 @@ except ImportError:
     from user_nonce_manager import get_user_nonce_manager
     from trade_webhook_notifier import get_webhook_notifier
     from trade_ledger_db import get_trade_ledger_db
+    from position_source_constants import categorize_positions, get_source_label, is_nija_managed
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     from controls import get_hard_controls
@@ -754,9 +756,10 @@ def get_aggregated_positions():
         platform_positions = [p for p in all_positions if p.get('user_id') == 'platform']
         user_positions = [p for p in all_positions if p.get('user_id') != 'platform']
 
-        # NEW: Separate by position source (NIJA-managed vs Existing Holdings)
-        nija_managed = [p for p in all_positions if p.get('position_source') == 'nija_strategy']
-        existing_holdings = [p for p in all_positions if p.get('position_source') in ['broker_existing', 'manual', 'unknown']]
+        # NEW: Categorize by position source using helper function
+        categorized = categorize_positions(all_positions)
+        nija_managed = categorized['nija_managed']
+        existing_holdings = categorized['existing_holdings']
 
         # Aggregate by symbol
         symbol_aggregate = {}
@@ -779,8 +782,8 @@ def get_aggregated_positions():
             else:
                 symbol_aggregate[symbol]['user_positions'] += 1
 
-            # Track by source
-            if position.get('position_source') == 'nija_strategy':
+            # Track by source using helper function
+            if is_nija_managed(position):
                 symbol_aggregate[symbol]['nija_managed_positions'] += 1
             else:
                 symbol_aggregate[symbol]['existing_holdings'] += 1
@@ -802,7 +805,8 @@ def get_aggregated_positions():
                 }
 
             broker_aggregate[broker]['positions'] += 1
-            if position.get('position_source') == 'nija_strategy':
+            # Use helper function for consistency
+            if is_nija_managed(position):
                 broker_aggregate[broker]['nija_managed'] += 1
             else:
                 broker_aggregate[broker]['existing_holdings'] += 1

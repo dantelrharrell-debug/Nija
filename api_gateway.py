@@ -55,6 +55,7 @@ try:
     from auth import get_api_key_manager, get_user_manager
     from execution import get_permission_validator, UserPermissions
     from user_control import get_user_control_backend
+    from position_source_constants import PositionSource, get_source_label, is_nija_managed
 except ImportError as e:
     logger.warning(f"Import warning: {e}. Some features may not be available.")
     # Define fallback stubs
@@ -66,6 +67,11 @@ except ImportError as e:
         return None
     def get_user_control_backend():
         return None
+    # Fallback for position source utils
+    def get_source_label(source):
+        return "Unknown Source"
+    def is_nija_managed(pos):
+        return pos.get('position_source') == 'nija_strategy'
 
 # Import broker manager for balance queries
 try:
@@ -168,7 +174,7 @@ class Position(BaseModel):
     take_profit: Optional[float] = None
     opened_at: Optional[str] = None
     # Position source tracking (Feb 8, 2026)
-    position_source: Optional[str] = 'unknown'  # 'nija_strategy', 'broker_existing', 'manual', 'unknown'
+    position_source: Optional[str] = 'unknown'  # Use PositionSource enum values
     managed_by_nija: Optional[bool] = None  # Computed field for convenience
     source_label: Optional[str] = None  # Human-readable label
 
@@ -464,16 +470,6 @@ async def get_positions(
         instance = user_control.get_or_create_instance(user_id)
         positions_data = instance.get_positions()
 
-        # Helper function to get source label
-        def get_source_label(source: str) -> str:
-            """Convert position_source to human-readable label"""
-            if source == 'nija_strategy':
-                return 'NIJA-Managed Position'
-            elif source in ['broker_existing', 'manual', 'unknown']:
-                return 'Existing Holdings (not managed by NIJA)'
-            else:
-                return 'Unknown Source'
-
         # Convert to Position models with source tracking
         positions = []
         nija_managed_count = 0
@@ -481,7 +477,7 @@ async def get_positions(
         
         for pos in positions_data:
             position_source = pos.get('position_source', 'unknown')
-            managed_by_nija = position_source == 'nija_strategy'
+            managed_by_nija = is_nija_managed(pos)
             
             # Track counts
             if managed_by_nija:
