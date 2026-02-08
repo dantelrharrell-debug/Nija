@@ -292,6 +292,303 @@ To resume trading:
         """Get total number of times kill switch has been activated"""
         with self._lock:
             return len([h for h in self._activation_history if 'source' in h])
+
+
+# ============================================================================
+# AUTO-TRIGGER SYSTEM - Added February 8, 2026
+# ============================================================================
+
+class KillSwitchAutoTrigger:
+    """
+    Automatic kill switch triggers based on risk thresholds.
+    
+    Monitors:
+    - Max daily loss %
+    - Consecutive losing trades
+    - API instability (consecutive errors)
+    - Unexpected balance delta
+    """
+    
+    def __init__(
+        self,
+        max_daily_loss_pct: float = 10.0,
+        max_consecutive_losses: int = 5,
+        max_consecutive_api_errors: int = 10,
+        max_balance_delta_pct: float = 50.0,
+        enable_auto_trigger: bool = True
+    ):
+        """
+        Initialize auto-trigger system.
+        
+        Args:
+            max_daily_loss_pct: Max % loss before kill switch (default 10%)
+            max_consecutive_losses: Max consecutive losses (default 5)
+            max_consecutive_api_errors: Max API errors (default 10)
+            max_balance_delta_pct: Max unexpected balance change % (default 50%)
+            enable_auto_trigger: Enable automatic triggers
+        """
+        self.max_daily_loss_pct = max_daily_loss_pct
+        self.max_consecutive_losses = max_consecutive_losses
+        self.max_consecutive_api_errors = max_consecutive_api_errors
+        self.max_balance_delta_pct = max_balance_delta_pct
+        self.enable_auto_trigger = enable_auto_trigger
+        
+        # Track metrics
+        self._daily_starting_balance: Optional[float] = None
+        self._daily_start_time: Optional[datetime] = None
+        self._consecutive_losses = 0
+        self._consecutive_api_errors = 0
+        self._last_known_balance: Optional[float] = None
+        
+        self._lock = threading.Lock()
+        
+        logger.info(
+            f"✅ Kill Switch Auto-Trigger initialized: "
+            f"max_daily_loss={self.max_daily_loss_pct}%, "
+            f"max_consecutive_losses={self.max_consecutive_losses}, "
+            f"enabled={self.enable_auto_trigger}"
+        )
+    
+    def _should_reset_daily_metrics(self) -> bool:
+        """Check if daily metrics should reset"""
+        if self._daily_start_time is None:
+            return True
+        
+        # Reset if new day
+        now = datetime.utcnow()
+        return now.date() > self._daily_start_time.date()
+    
+    def check_daily_loss(self, current_balance: float) -> Optional[str]:
+        """
+        Check if daily loss exceeds threshold.
+        
+        Args:
+            current_balance: Current account balance
+        
+        Returns:
+            Optional[str]: Trigger reason if threshold exceeded
+        """
+        with self._lock:
+            # Initialize or reset if new day
+            if self._should_reset_daily_metrics():
+                self._daily_starting_balance = current_balance
+                self._daily_start_time = datetime.utcnow()
+                logger.debug(f"📊 Daily metrics reset: starting balance ${current_balance:.2f}")
+                return None
+            
+            # Calculate daily P&L
+            if self._daily_starting_balance is None:
+                return None
+            
+            daily_pnl = current_balance - self._daily_starting_balance
+            daily_pnl_pct = (daily_pnl / self._daily_starting_balance) * 100
+            
+            # Check if loss exceeds threshold
+            if daily_pnl_pct <= -self.max_daily_loss_pct:
+                reason = (
+                    f"Daily loss limit exceeded: {daily_pnl_pct:.2f}% "
+                    f"(max: -{self.max_daily_loss_pct:.0f}%) - "
+                    f"Lost ${abs(daily_pnl):.2f} of ${self._daily_starting_balance:.2f}"
+                )
+                logger.critical(f"🚨 {reason}")
+                return reason
+            
+            return None
+    
+    def record_trade_result(self, is_winner: bool) -> Optional[str]:
+        """
+        Record trade result and check consecutive losses.
+        
+        Args:
+            is_winner: True if trade was profitable, False if loss
+        
+        Returns:
+            Optional[str]: Trigger reason if threshold exceeded
+        """
+        with self._lock:
+            if is_winner:
+                self._consecutive_losses = 0
+                return None
+            
+            # Increment consecutive losses
+            self._consecutive_losses += 1
+            
+            logger.warning(
+                f"📉 Consecutive losses: {self._consecutive_losses} "
+                f"(max: {self.max_consecutive_losses})"
+            )
+            
+            # Check threshold
+            if self._consecutive_losses >= self.max_consecutive_losses:
+                reason = (
+                    f"Consecutive loss limit exceeded: "
+                    f"{self._consecutive_losses} losses in a row "
+                    f"(max: {self.max_consecutive_losses})"
+                )
+                logger.critical(f"🚨 {reason}")
+                return reason
+            
+            return None
+    
+    def record_api_error(self) -> Optional[str]:
+        """
+        Record API error and check threshold.
+        
+        Returns:
+            Optional[str]: Trigger reason if threshold exceeded
+        """
+        with self._lock:
+            self._consecutive_api_errors += 1
+            
+            logger.warning(
+                f"⚠️ Consecutive API errors: {self._consecutive_api_errors} "
+                f"(max: {self.max_consecutive_api_errors})"
+            )
+            
+            # Check threshold
+            if self._consecutive_api_errors >= self.max_consecutive_api_errors:
+                reason = (
+                    f"API instability detected: "
+                    f"{self._consecutive_api_errors} consecutive errors "
+                    f"(max: {self.max_consecutive_api_errors})"
+                )
+                logger.critical(f"🚨 {reason}")
+                return reason
+            
+            return None
+    
+    def record_api_success(self):
+        """Record successful API call (resets error counter)"""
+        with self._lock:
+            if self._consecutive_api_errors > 0:
+                logger.debug(f"✅ API success - resetting error counter from {self._consecutive_api_errors}")
+                self._consecutive_api_errors = 0
+    
+    def check_balance_delta(self, current_balance: float) -> Optional[str]:
+        """
+        Check for unexpected balance changes.
+        
+        Args:
+            current_balance: Current account balance
+        
+        Returns:
+            Optional[str]: Trigger reason if unexpected delta detected
+        """
+        with self._lock:
+            # Initialize if first check
+            if self._last_known_balance is None:
+                self._last_known_balance = current_balance
+                return None
+            
+            # Calculate change
+            delta = current_balance - self._last_known_balance
+            delta_pct = (delta / self._last_known_balance) * 100 if self._last_known_balance > 0 else 0
+            
+            # Check for large unexpected change (both directions)
+            if abs(delta_pct) > self.max_balance_delta_pct:
+                reason = (
+                    f"Unexpected balance delta: {delta_pct:+.2f}% "
+                    f"(${self._last_known_balance:.2f} → ${current_balance:.2f}). "
+                    f"Possible hack, API error, or unauthorized access."
+                )
+                logger.critical(f"🚨 {reason}")
+                return reason
+            
+            # Update last known balance
+            self._last_known_balance = current_balance
+            return None
+    
+    def check_all_triggers(
+        self,
+        current_balance: float,
+        last_trade_result: Optional[bool] = None
+    ) -> Optional[str]:
+        """
+        Check all auto-trigger conditions.
+        
+        Args:
+            current_balance: Current account balance
+            last_trade_result: True if last trade won, False if lost, None to skip
+        
+        Returns:
+            Optional[str]: First trigger reason found, or None
+        """
+        if not self.enable_auto_trigger:
+            return None
+        
+        # Check daily loss
+        reason = self.check_daily_loss(current_balance)
+        if reason:
+            return reason
+        
+        # Check balance delta
+        reason = self.check_balance_delta(current_balance)
+        if reason:
+            return reason
+        
+        # Check consecutive losses
+        if last_trade_result is not None:
+            reason = self.record_trade_result(last_trade_result)
+            if reason:
+                return reason
+        
+        return None
+    
+    def auto_trigger_if_needed(
+        self,
+        current_balance: float,
+        last_trade_result: Optional[bool] = None
+    ) -> bool:
+        """
+        Check conditions and auto-trigger kill switch if needed.
+        
+        Args:
+            current_balance: Current account balance
+            last_trade_result: True if last trade won, False if lost, None to skip
+        
+        Returns:
+            bool: True if kill switch was triggered
+        """
+        reason = self.check_all_triggers(current_balance, last_trade_result)
+        
+        if reason:
+            kill_switch = get_kill_switch()
+            kill_switch.activate(reason, "AUTO_TRIGGER")
+            return True
+        
+        return False
+    
+    def reset_metrics(self):
+        """Reset all tracking metrics"""
+        with self._lock:
+            self._daily_starting_balance = None
+            self._daily_start_time = None
+            self._consecutive_losses = 0
+            self._consecutive_api_errors = 0
+            self._last_known_balance = None
+            logger.info("🔄 Auto-trigger metrics reset")
+
+
+# Global auto-trigger instance
+_auto_trigger: Optional[KillSwitchAutoTrigger] = None
+
+
+def get_auto_trigger(
+    max_daily_loss_pct: float = 10.0,
+    max_consecutive_losses: int = 5,
+    enable_auto_trigger: bool = True
+) -> KillSwitchAutoTrigger:
+    """Get or create the global auto-trigger instance"""
+    global _auto_trigger
+    
+    with _instance_lock:
+        if _auto_trigger is None:
+            _auto_trigger = KillSwitchAutoTrigger(
+                max_daily_loss_pct=max_daily_loss_pct,
+                max_consecutive_losses=max_consecutive_losses,
+                enable_auto_trigger=enable_auto_trigger
+            )
+        return _auto_trigger
             
 
 # Global singleton instance
