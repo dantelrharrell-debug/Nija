@@ -335,3 +335,100 @@ class FeeValidator:
             account_id=account_id,
             metrics={'order_value': order_value, 'fee_impact_pct': fee_impact_pct}
         )
+    
+    def validate_fee_to_position_ratio(
+        self,
+        position_size: float,
+        entry_price: float,
+        broker: str,
+        max_fee_pct: float = 2.0,
+        symbol: str = "unknown",
+        account_id: str = "default"
+    ) -> ValidationResult:
+        """
+        Validate that estimated fees don't exceed X% of position size.
+        
+        This is Feature #2: Fee-Aware Position Sizing
+        Aborts trade if expected_fee > max_fee_pct of position size
+        
+        Args:
+            position_size: Position size in base currency
+            entry_price: Entry price
+            broker: Broker name
+            max_fee_pct: Maximum fee as % of position (default 2%)
+            symbol: Trading symbol
+            account_id: Account identifier
+        
+        Returns:
+            ValidationResult
+        """
+        # Calculate position value
+        position_value = position_size * entry_price
+        
+        # Estimate total fees (entry + exit at same price for conservative estimate)
+        entry_fee = self.calculate_entry_fee(position_size, entry_price, broker)
+        exit_fee = self.calculate_exit_fee(position_size, entry_price, broker)  # Assume same price
+        total_fees = entry_fee + exit_fee
+        
+        # Calculate fee as percentage of position
+        fee_pct_of_position = (total_fees / position_value) * 100 if position_value > 0 else 0
+        
+        if fee_pct_of_position > max_fee_pct:
+            return ValidationResult(
+                level=ValidationLevel.ERROR,
+                category=ValidationCategory.FEE_VALIDATION,
+                validator_name="FeeValidator.validate_fee_to_position_ratio",
+                message=(
+                    f"Fees too high: {fee_pct_of_position:.2f}% of position "
+                    f"(max: {max_fee_pct:.2f}%) - ${total_fees:.2f} on ${position_value:.2f}"
+                ),
+                symbol=symbol,
+                broker=broker,
+                account_id=account_id,
+                can_proceed=False,
+                metrics={
+                    'position_value': position_value,
+                    'total_fees': total_fees,
+                    'fee_pct_of_position': fee_pct_of_position,
+                    'max_fee_pct': max_fee_pct,
+                    'entry_fee': entry_fee,
+                    'exit_fee': exit_fee
+                },
+                recommended_action="ABORT TRADE - Fees will consume too much of position. Increase size or skip."
+            )
+        
+        # Warn if fees are getting close to threshold
+        if fee_pct_of_position > (max_fee_pct * 0.75):  # Within 75% of limit
+            return ValidationResult(
+                level=ValidationLevel.WARNING,
+                category=ValidationCategory.FEE_VALIDATION,
+                validator_name="FeeValidator.validate_fee_to_position_ratio",
+                message=(
+                    f"Fees approaching limit: {fee_pct_of_position:.2f}% of position "
+                    f"(max: {max_fee_pct:.2f}%)"
+                ),
+                symbol=symbol,
+                broker=broker,
+                account_id=account_id,
+                metrics={
+                    'position_value': position_value,
+                    'total_fees': total_fees,
+                    'fee_pct_of_position': fee_pct_of_position
+                },
+                recommended_action="Consider increasing position size to improve fee efficiency"
+            )
+        
+        return ValidationResult(
+            level=ValidationLevel.PASS,
+            category=ValidationCategory.FEE_VALIDATION,
+            validator_name="FeeValidator.validate_fee_to_position_ratio",
+            message=f"Fee ratio acceptable: {fee_pct_of_position:.2f}% of position",
+            symbol=symbol,
+            broker=broker,
+            account_id=account_id,
+            metrics={
+                'position_value': position_value,
+                'total_fees': total_fees,
+                'fee_pct_of_position': fee_pct_of_position
+            }
+        )
