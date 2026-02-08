@@ -491,3 +491,4 @@ data/test_demo_analytics/
 data/demo_paper_analytics/
 # Analytics data files (can be large)
 data/analytics/*.jsonl
+test_forced_cleanup.py
