@@ -29,6 +29,8 @@ import secrets
 from auth import get_api_key_manager, get_user_manager
 from execution import get_permission_validator, UserPermissions
 from bot.kill_switch import get_kill_switch
+import json
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -697,6 +699,132 @@ def internal_error(error):
     """Handle 500 errors."""
     logger.error(f"Internal server error: {error}")
     return jsonify({'error': 'Internal server error'}), 500
+
+
+# ========================================
+# Simulation & Backtest Results API
+# ========================================
+
+@app.route('/api/simulation/results', methods=['GET'])
+@require_auth
+def get_simulation_results():
+    """
+    Get backtest/simulation results.
+    
+    Returns the latest simulation results from the results directory.
+    This allows users to view historical performance metrics.
+    
+    Returns:
+        JSON response with simulation results or error
+    """
+    try:
+        results_path = Path('/home/runner/work/Nija/Nija/results/demo_backtest.json')
+        
+        if not results_path.exists():
+            return jsonify({
+                'error': 'No simulation results available',
+                'message': 'Run a backtest first to generate results'
+            }), 404
+        
+        with open(results_path, 'r') as f:
+            results = json.load(f)
+        
+        # Return summary data (full trade list can be very large)
+        response = {
+            'summary': results.get('summary', {}),
+            'total_trades': len(results.get('trades', [])),
+            'timestamp': datetime.utcnow().isoformat(),
+            'source': 'demo_backtest.json'
+        }
+        
+        return jsonify(response), 200
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing simulation results: {e}")
+        return jsonify({'error': 'Invalid simulation results format'}), 500
+    except Exception as e:
+        logger.error(f"Error retrieving simulation results: {e}")
+        return jsonify({'error': 'Failed to retrieve simulation results'}), 500
+
+
+@app.route('/api/simulation/results/trades', methods=['GET'])
+@require_auth
+def get_simulation_trades():
+    """
+    Get detailed trade history from simulation.
+    
+    Query parameters:
+        - limit: Maximum number of trades to return (default: 50, max: 500)
+        - offset: Number of trades to skip (default: 0)
+    
+    Returns:
+        JSON response with trade details
+    """
+    try:
+        limit = min(int(request.args.get('limit', 50)), 500)
+        offset = int(request.args.get('offset', 0))
+        
+        results_path = Path('/home/runner/work/Nija/Nija/results/demo_backtest.json')
+        
+        if not results_path.exists():
+            return jsonify({
+                'error': 'No simulation results available'
+            }), 404
+        
+        with open(results_path, 'r') as f:
+            results = json.load(f)
+        
+        all_trades = results.get('trades', [])
+        total_trades = len(all_trades)
+        
+        # Paginate trades
+        trades_slice = all_trades[offset:offset + limit]
+        
+        response = {
+            'trades': trades_slice,
+            'total_trades': total_trades,
+            'limit': limit,
+            'offset': offset,
+            'has_more': (offset + limit) < total_trades
+        }
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving simulation trades: {e}")
+        return jsonify({'error': 'Failed to retrieve simulation trades'}), 500
+
+
+@app.route('/api/simulation/status', methods=['GET'])
+@require_auth
+def get_simulation_status():
+    """
+    Get status of simulation/backtest system.
+    
+    Returns:
+        JSON response with simulation system status
+    """
+    try:
+        results_path = Path('/home/runner/work/Nija/Nija/results/demo_backtest.json')
+        
+        status = {
+            'simulation_available': True,
+            'results_available': results_path.exists(),
+            'education_mode': True,
+            'simulated_balance': 10000.0,
+            'description': 'Paper trading with simulated funds'
+        }
+        
+        if results_path.exists():
+            # Get last modified time
+            stat = results_path.stat()
+            status['last_updated'] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+        
+        return jsonify(status), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving simulation status: {e}")
+        return jsonify({'error': 'Failed to retrieve simulation status'}), 500
 
 
 # ========================================
