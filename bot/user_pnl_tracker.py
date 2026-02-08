@@ -40,6 +40,9 @@ class Trade:
     pnl_pct: Optional[float] = None
     strategy: str = "APEX_v7.1"
     broker: str = "unknown"
+    fee_usd: Optional[float] = None  # NEW - Fee tracking
+    entry_time: Optional[str] = None  # NEW - For hold time calculation
+    exit_time: Optional[str] = None   # NEW - For hold time calculation
 
 
 @dataclass
@@ -178,7 +181,10 @@ class UserPnLTracker:
         pnl_usd: Optional[float] = None,
         pnl_pct: Optional[float] = None,
         strategy: str = "APEX_v7.1",
-        broker: str = "unknown"
+        broker: str = "unknown",
+        fee_usd: Optional[float] = None,
+        entry_time: Optional[str] = None,
+        exit_time: Optional[str] = None
     ):
         """
         Record a trade for a user.
@@ -194,6 +200,9 @@ class UserPnLTracker:
             pnl_pct: Profit/loss percentage (for exits)
             strategy: Strategy name
             broker: Broker name
+            fee_usd: Trading fee in USD (NEW)
+            entry_time: Entry timestamp for hold time calculation (NEW)
+            exit_time: Exit timestamp for hold time calculation (NEW)
         """
         lock = self._get_user_lock(user_id)
 
@@ -213,7 +222,10 @@ class UserPnLTracker:
                 pnl_usd=pnl_usd,
                 pnl_pct=pnl_pct,
                 strategy=strategy,
-                broker=broker
+                broker=broker,
+                fee_usd=fee_usd,
+                entry_time=entry_time,
+                exit_time=exit_time
             )
 
             # Add to history
@@ -227,7 +239,8 @@ class UserPnLTracker:
 
             # Log the trade
             if pnl_usd is not None:
-                logger.info(f"📊 {user_id} {side.upper()} {symbol}: ${size_usd:.2f} | PnL: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)")
+                fee_info = f", Fee: ${fee_usd:.2f}" if fee_usd else ""
+                logger.info(f"📊 {user_id} {side.upper()} {symbol}: ${size_usd:.2f} | PnL: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%){fee_info}")
             else:
                 logger.info(f"📊 {user_id} {side.upper()} {symbol}: ${size_usd:.2f}")
 
@@ -260,7 +273,11 @@ class UserPnLTracker:
                     'completed_trades': 0,
                     'total_pnl': 0.0,
                     'win_rate': 0.0,
-                    'avg_pnl': 0.0
+                    'avg_pnl': 0.0,
+                    'total_fees': 0.0,
+                    'avg_hold_time_minutes': 0.0,
+                    'realized_pnl': 0.0,
+                    'unrealized_pnl': 0.0
                 }
 
             # Calculate overall statistics
@@ -273,6 +290,28 @@ class UserPnLTracker:
             avg_loss = sum(t.pnl_usd for t in losers) / len(losers) if losers else 0.0
             avg_pnl = total_pnl / len(completed_trades) if completed_trades else 0.0
 
+            # NEW METRICS - February 8, 2026
+            # Total fees paid
+            total_fees = sum(t.fee_usd for t in trades if t.fee_usd is not None)
+            
+            # Average hold time
+            hold_times = []
+            for t in completed_trades:
+                if t.entry_time and t.exit_time:
+                    try:
+                        entry = datetime.fromisoformat(t.entry_time)
+                        exit = datetime.fromisoformat(t.exit_time)
+                        hold_time = (exit - entry).total_seconds() / 60  # minutes
+                        hold_times.append(hold_time)
+                    except:
+                        pass
+            
+            avg_hold_time_minutes = sum(hold_times) / len(hold_times) if hold_times else 0.0
+            
+            # Realized vs Unrealized P&L
+            realized_pnl = total_pnl  # Completed trades are realized
+            unrealized_pnl = 0.0  # Would need current prices for open positions
+            
             # Find best and worst trades
             best_trade = max(completed_trades, key=lambda t: t.pnl_usd) if completed_trades else None
             worst_trade = min(completed_trades, key=lambda t: t.pnl_usd) if completed_trades else None
@@ -296,6 +335,9 @@ class UserPnLTracker:
                 # Overall PnL
                 'total_pnl': total_pnl,
                 'avg_pnl': avg_pnl,
+                'realized_pnl': realized_pnl,
+                'unrealized_pnl': unrealized_pnl,
+                'net_pnl_after_fees': total_pnl - total_fees,
 
                 # Win/Loss stats
                 'winners': len(winners),
@@ -304,6 +346,11 @@ class UserPnLTracker:
                 'avg_win': avg_win,
                 'avg_loss': avg_loss,
                 'profit_factor': abs(avg_win / avg_loss) if avg_loss != 0 else 0.0,
+
+                # NEW: Fee and hold time tracking
+                'total_fees': total_fees,
+                'avg_hold_time_minutes': avg_hold_time_minutes,
+                'avg_hold_time_hours': avg_hold_time_minutes / 60,
 
                 # Best/Worst
                 'best_trade': {

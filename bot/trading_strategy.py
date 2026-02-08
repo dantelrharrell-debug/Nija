@@ -396,6 +396,16 @@ except ValueError:
     MAX_POSITIONS_ALLOWED = 8  # Default fallback
 logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED}")
 
+# Forced cleanup interval (cycles between cleanup runs)
+# Default: 20 cycles (~50 minutes at 2.5 min/cycle)
+# Can be overridden via FORCED_CLEANUP_INTERVAL environment variable
+_cleanup_interval_env = os.getenv('FORCED_CLEANUP_INTERVAL', '20')
+try:
+    FORCED_CLEANUP_INTERVAL = int(_cleanup_interval_env)
+except ValueError:
+    FORCED_CLEANUP_INTERVAL = 20  # Default fallback
+logger.debug(f"🧹 Forced cleanup interval: every {FORCED_CLEANUP_INTERVAL} cycles (~{FORCED_CLEANUP_INTERVAL * 2.5:.0f} minutes)")
+
 # OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
 # MIN_TRADE_USD = max(2.00, balance * 0.15)
 # This scales automatically with account size:
@@ -1345,6 +1355,19 @@ class TradingStrategy:
             # Initialize position cap enforcer (Maximum 8 positions total across all brokers)
             if self.broker:
                 self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
+                
+                # Initialize forced cleanup engine for aggressive dust and cap enforcement
+                try:
+                    from forced_position_cleanup import ForcedPositionCleanup
+                    self.forced_cleanup = ForcedPositionCleanup(
+                        dust_threshold_usd=1.00,
+                        max_positions=8,
+                        dry_run=False
+                    )
+                    logger.info("🧹 Forced position cleanup engine initialized")
+                except Exception as cleanup_err:
+                    logger.warning(f"⚠️  Failed to initialize forced cleanup: {cleanup_err}")
+                    self.forced_cleanup = None
 
                 # Initialize broker failsafes (hard limits and circuit breakers)
                 # CRITICAL: Use ONLY master balance, not user balances
@@ -3124,6 +3147,35 @@ class TradingStrategy:
                 if result['excess'] > 0:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
                     logger.info(f"   Sold {result['sold']} positions")
+            
+            # 🧹 FORCED CLEANUP: Run aggressive dust cleanup and retroactive cap enforcement
+            # This runs periodically to clean up:
+            # 1. Dust positions < $1 USD
+            # 2. Excess positions over hard cap (retroactive enforcement)
+            # Runs across ALL accounts (platform + users)
+            run_startup_cleanup = hasattr(self, 'cycle_count') and self.cycle_count == 0
+            run_periodic_cleanup = hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % FORCED_CLEANUP_INTERVAL == 0)
+            
+            if hasattr(self, 'forced_cleanup') and self.forced_cleanup and (run_startup_cleanup or run_periodic_cleanup):
+                cleanup_reason = "STARTUP" if run_startup_cleanup else f"PERIODIC (cycle {self.cycle_count})"
+                logger.info(f"")
+                logger.info(f"🧹 FORCED CLEANUP TRIGGERED: {cleanup_reason}")
+                try:
+                    if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+                        # Run cleanup across all accounts
+                        summary = self.forced_cleanup.cleanup_all_accounts(self.multi_account_manager)
+                        logger.info(f"   ✅ Cleanup complete: Reduced positions by {summary['reduction']}")
+                    else:
+                        # Single account mode - just cleanup platform
+                        logger.info(f"   Running single-account cleanup...")
+                        if active_broker:
+                            result = self.forced_cleanup.cleanup_single_account(active_broker, "platform")
+                            logger.info(f"   ✅ Cleanup complete: {result['initial_positions']} → {result['final_positions']}")
+                except Exception as cleanup_err:
+                    logger.error(f"   ❌ Forced cleanup failed: {cleanup_err}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                logger.info(f"")
 
             # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
             # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.

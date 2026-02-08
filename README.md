@@ -62,6 +62,106 @@ python bot/dashboard_server.py
 - Integration guide
 - Troubleshooting
 
+---
+
+## 🛡️ **NEW: Advanced Risk Management System** (February 8, 2026)
+
+**Making NIJA Structurally Safe, Capital-Efficient, and Risk-Contained**
+
+NIJA now includes **7 critical operational features** that prevent fragmentation, optimize capital usage, and contain risk:
+
+### 🎯 The 7 Risk Management Pillars
+
+**1️⃣ Minimum Notional Guard**
+- ❌ Blocks orders below $3-$5 USD
+- Prevents unprofitable micro-positions
+- Exchange-specific minimums (Kraken: $10, Coinbase: $2)
+
+**2️⃣ Fee-Aware Position Sizing**
+- Estimates fees before order placement
+- ❌ Aborts trades if fees > 2% of position
+- Improves net P&L more than most indicators
+
+**3️⃣ Capital Reservation Manager**
+- Reserves capital per open position
+- Maintains 20% safety buffer by default
+- Prevents over-promising with small accounts
+
+**4️⃣ Enhanced Kill Switch with Auto-Triggers**
+- 🚨 Auto-triggers on:
+  - Daily loss > 10% (configurable)
+  - 5 consecutive losing trades
+  - 10+ consecutive API errors
+  - 50%+ unexpected balance change
+- Exit-only mode (no new entries)
+- Complete audit trail
+
+**5️⃣ Exchange ↔ Internal Reconciliation Watchdog**
+- Detects orphaned assets and phantom positions
+- Identifies airdrops and forks
+- Flags partial fills not tracked internally
+- Auto-adopt or liquidate (configurable)
+
+**6️⃣ Per-User Performance Attribution**
+- Tracks realized/unrealized P&L
+- Total fees paid tracking
+- Win rate and average hold time
+- Daily/Weekly/Monthly breakdowns
+
+**7️⃣ High Signal-to-Noise Alerting**
+- Alerts **only** on critical events:
+  - Position cap breach
+  - Forced cleanup triggered
+  - Kill switch activated
+  - Exchange desync detected
+  - Drawdown threshold exceeded
+
+### 🚀 Quick Start
+
+```python
+from bot.minimum_notional_guard import should_block_order
+from bot.capital_reservation_manager import can_open_position
+from bot.kill_switch import get_kill_switch
+
+# Check minimum notional before order
+if should_block_order(size, price, exchange, balance, symbol):
+    print("Order blocked - below minimum")
+
+# Check capital availability
+can_open, msg, details = can_open_position(balance, position_size)
+
+# Check kill switch before every trade
+kill_switch = get_kill_switch()
+if kill_switch.is_active():
+    print("No new entries - kill switch active")
+```
+
+### 📚 Complete Documentation
+
+See **[RISK_MANAGEMENT_GUIDE.md](RISK_MANAGEMENT_GUIDE.md)** for:
+- Complete feature descriptions
+- Configuration options
+- Integration examples
+- Best practices
+- Troubleshooting
+
+### ✅ What NIJA Does NOT Need
+
+Per the design philosophy: **Discipline, not aggression.**
+
+❌ More indicators  
+❌ More coins  
+❌ More leverage  
+❌ More speed  
+❌ More AI buzzwords  
+
+✅ Better risk management  
+✅ Capital efficiency  
+✅ Structural safety  
+✅ Trust and transparency
+
+---
+
 ## 👥 **User Status Summary** (February 7, 2026)
 
 **Monitor All Users with One Clean Report**
