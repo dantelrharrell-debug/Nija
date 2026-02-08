@@ -40,10 +40,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 run_forced_cleanup.py                    # Execute cleanup
-  python3 run_forced_cleanup.py --dry-run          # Preview only
-  python3 run_forced_cleanup.py --dust 0.50        # Custom dust threshold
-  python3 run_forced_cleanup.py --max-positions 5  # Custom position cap
+  python3 run_forced_cleanup.py                           # Execute cleanup
+  python3 run_forced_cleanup.py --dry-run                 # Preview only
+  python3 run_forced_cleanup.py --dust 0.50               # Custom dust threshold
+  python3 run_forced_cleanup.py --max-positions 5         # Custom position cap
+  python3 run_forced_cleanup.py --include-open-orders     # Cancel open orders during cleanup
+  python3 run_forced_cleanup.py --dry-run --include-open-orders  # Preview with open order handling
+
+Open Order Cancellation:
+  --include-open-orders              Cancel open orders for positions being cleaned
+  --startup-only                     Only cancel open orders on startup (nuclear mode)
+  --cancel-if "usd_value<1.0"        Selective: cancel only if USD value < $1
+  --cancel-if "rank>max_positions"   Selective: cancel only if ranked for pruning
 
 Safety:
   - Dry run mode is safe and shows what would be closed
@@ -78,6 +86,25 @@ Safety:
         help='Skip confirmation prompt (auto-confirm)'
     )
     
+    parser.add_argument(
+        '--include-open-orders',
+        action='store_true',
+        help='Cancel open orders for positions being cleaned up'
+    )
+    
+    parser.add_argument(
+        '--startup-only',
+        action='store_true',
+        help='Nuclear mode - cancel open orders only on startup (one-time cleanup)'
+    )
+    
+    parser.add_argument(
+        '--cancel-if',
+        type=str,
+        default=None,
+        help='Selective cancellation conditions (e.g., "usd_value<1.0,rank>max_positions")'
+    )
+    
     args = parser.parse_args()
     
     logger.info("")
@@ -87,6 +114,14 @@ Safety:
     logger.info(f"   Mode: {'DRY RUN (Preview)' if args.dry_run else 'LIVE (Execute)'}")
     logger.info(f"   Dust Threshold: ${args.dust:.2f} USD")
     logger.info(f"   Max Positions: {args.max_positions}")
+    logger.info(f"   Cancel Open Orders: {args.include_open_orders}")
+    if args.include_open_orders:
+        if args.cancel_if:
+            logger.info(f"   Cancellation Mode: SELECTIVE ({args.cancel_if})")
+        elif args.startup_only:
+            logger.info(f"   Cancellation Mode: NUCLEAR (startup-only)")
+        else:
+            logger.info(f"   Cancellation Mode: ALWAYS")
     logger.info(f"   Timestamp: {datetime.now().isoformat()}")
     logger.info("=" * 70)
     logger.info("")
@@ -111,7 +146,10 @@ Safety:
     cleanup = ForcedPositionCleanup(
         dust_threshold_usd=args.dust,
         max_positions=args.max_positions,
-        dry_run=args.dry_run
+        dry_run=args.dry_run,
+        cancel_open_orders=args.include_open_orders,
+        startup_only=args.startup_only,
+        cancel_conditions=args.cancel_if
     )
     
     # Confirmation prompt (unless --yes or --dry-run)
