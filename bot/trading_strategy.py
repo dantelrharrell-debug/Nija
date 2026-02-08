@@ -677,7 +677,7 @@ class TradingStrategy:
             )
             from multi_account_broker_manager import multi_account_broker_manager
             from position_cap_enforcer import PositionCapEnforcer
-            from nija_apex_strategy_v71 import NIJAApexStrategyV71
+            from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
 
             # Initialize multi-account broker manager for user-specific trading
             logger.info("=" * 70)

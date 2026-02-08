@@ -642,7 +642,7 @@ def create_default_orchestrator(total_capital: float) -> StrategyOrchestrator:
 
     # Register v7.2 strategy (profitability focused)
     try:
-        from nija_apex_strategy_v72_upgrade import NIJAApexStrategyV72
+        from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71 as NIJAApexStrategyV72
 
         v72_config = StrategyConfig(
             strategy_id="apex_v72",
@@ -659,7 +659,7 @@ def create_default_orchestrator(total_capital: float) -> StrategyOrchestrator:
 
     # Register v7.1 strategy (enhanced scoring)
     try:
-        from nija_apex_strategy_v71 import NIJAApexStrategyV71
+        from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
 
         v71_config = StrategyConfig(
             strategy_id="apex_v71",
