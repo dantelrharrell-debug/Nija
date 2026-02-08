@@ -1,0 +1,17 @@
+{
+  "2026-02-08": {
+    "date": "2026-02-08",
+    "dust_positions_removed": 3,
+    "dust_capital_reclaimed": 2.45,
+    "cap_exceeded_removals": 0,
+    "cap_exceeded_capital": 0.0,
+    "unhealthy_removals": 2,
+    "unhealthy_capital": 90.0,
+    "stagnant_removals": 0,
+    "stagnant_capital": 0.0,
+    "total_removals": 5,
+    "total_capital_reclaimed": 92.45,
+    "avg_position_size": 130.0,
+    "total_pnl_from_cleanup": -2.2914999999999996
+  }
+}

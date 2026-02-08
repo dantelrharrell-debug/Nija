@@ -9,6 +9,8 @@ Prevents "own a little of everything" by enforcing:
 3. Forced exits on stagnation (close positions that aren't moving)
 
 Philosophy: "Own a few things with intention" not "spray and pray"
+
+Enhanced with Position Score Telemetry and Cleanup Metrics (Feb 8, 2026)
 """
 
 import logging
@@ -17,6 +19,35 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# Import telemetry and metrics tracking (Enhancement #2 and #3)
+try:
+    from bot.position_score_telemetry import get_position_telemetry
+    TELEMETRY_AVAILABLE = True
+    logger.info("✅ Position Score Telemetry loaded")
+except ImportError:
+    try:
+        from position_score_telemetry import get_position_telemetry
+        TELEMETRY_AVAILABLE = True
+        logger.info("✅ Position Score Telemetry loaded")
+    except ImportError:
+        TELEMETRY_AVAILABLE = False
+        logger.warning("⚠️ Position Score Telemetry not available")
+        get_position_telemetry = None
+
+try:
+    from bot.cleanup_metrics_tracker import get_cleanup_metrics_tracker
+    CLEANUP_METRICS_AVAILABLE = True
+    logger.info("✅ Cleanup Metrics Tracker loaded")
+except ImportError:
+    try:
+        from cleanup_metrics_tracker import get_cleanup_metrics_tracker
+        CLEANUP_METRICS_AVAILABLE = True
+        logger.info("✅ Cleanup Metrics Tracker loaded")
+    except ImportError:
+        CLEANUP_METRICS_AVAILABLE = False
+        logger.warning("⚠️ Cleanup Metrics Tracker not available")
+        get_cleanup_metrics_tracker = None
 
 
 @dataclass
@@ -59,7 +90,9 @@ class DustPreventionEngine:
                  stagnation_hours: float = 4.0,
                  min_pnl_movement: float = 0.002,
                  auto_dust_cleanup_enabled: bool = True,
-                 dust_threshold_usd: float = 1.00):
+                 dust_threshold_usd: float = 1.00,
+                 enable_telemetry: bool = True,
+                 enable_cleanup_metrics: bool = True):
         """
         Args:
             max_positions: Maximum concurrent positions (default: 5 for quality focus)
@@ -67,6 +100,8 @@ class DustPreventionEngine:
             min_pnl_movement: Minimum P&L% change to consider "movement" (0.2%)
             auto_dust_cleanup_enabled: Enable automatic cleanup of dust positions
             dust_threshold_usd: USD value threshold for dust positions (default: $1.00)
+            enable_telemetry: Enable position score telemetry tracking (Enhancement #2)
+            enable_cleanup_metrics: Enable cleanup metrics tracking (Enhancement #3)
         """
         self.max_positions = max_positions
         self.stagnation_hours = stagnation_hours
@@ -76,6 +111,22 @@ class DustPreventionEngine:
         
         # Track P&L movement over time
         self.position_history: Dict[str, List[Tuple[datetime, float]]] = {}
+        
+        # Initialize telemetry (Enhancement #2)
+        self.telemetry_enabled = enable_telemetry and TELEMETRY_AVAILABLE
+        if self.telemetry_enabled:
+            self.telemetry = get_position_telemetry()
+            logger.info("   Position Score Telemetry: ENABLED")
+        else:
+            self.telemetry = None
+            
+        # Initialize cleanup metrics (Enhancement #3)
+        self.metrics_enabled = enable_cleanup_metrics and CLEANUP_METRICS_AVAILABLE
+        if self.metrics_enabled:
+            self.metrics = get_cleanup_metrics_tracker()
+            logger.info("   Cleanup Metrics Tracking: ENABLED")
+        else:
+            self.metrics = None
         
         logger.info(f"🧹 DustPreventionEngine initialized:")
         logger.info(f"   Max Positions: {max_positions} (QUALITY > QUANTITY)")
@@ -125,7 +176,8 @@ class DustPreventionEngine:
     def score_position_health(self, 
                               symbol: str,
                               entry_time: datetime,
-                              current_pnl_pct: float) -> PositionHealth:
+                              current_pnl_pct: float,
+                              size_usd: float = 0.0) -> PositionHealth:
         """
         Score a position's health (0-100, higher = keep, lower = exit)
         
@@ -133,6 +185,15 @@ class DustPreventionEngine:
         - P&L performance (most important)
         - Movement vs stagnation
         - Age (older positions scored lower)
+        
+        Args:
+            symbol: Trading symbol
+            entry_time: Position entry time
+            current_pnl_pct: Current P&L percentage
+            size_usd: Position size in USD (optional, for telemetry)
+        
+        Returns:
+            PositionHealth object with score and reason
         """
         now = datetime.now()
         age_hours = (now - entry_time).total_seconds() / 3600
@@ -141,47 +202,90 @@ class DustPreventionEngine:
         score = 50.0  # Neutral baseline
         reasons = []
         
+        # Track score contributions for telemetry
+        pnl_contribution = 0.0
+        stagnation_contribution = 0.0
+        age_contribution = 0.0
+        
         # Factor 1: P&L Performance (±30 points)
         if current_pnl_pct > self.PNL_STRONG_PROFIT_THRESHOLD:
-            score += 30
+            pnl_contribution = 30
+            score += pnl_contribution
             reasons.append("strong profit")
         elif current_pnl_pct > self.PNL_PROFIT_THRESHOLD:
-            score += 15
+            pnl_contribution = 15
+            score += pnl_contribution
             reasons.append("profitable")
         elif current_pnl_pct < self.PNL_STRONG_LOSS_THRESHOLD:
-            score -= 30
+            pnl_contribution = -30
+            score += pnl_contribution
             reasons.append("strong loss")
         elif current_pnl_pct < self.PNL_LOSS_THRESHOLD:
-            score -= 15
+            pnl_contribution = -15
+            score += pnl_contribution
             reasons.append("losing")
         else:
             reasons.append("flat P&L")
         
         # Factor 2: Stagnation (±25 points)
         if stagnation_hours > self.stagnation_hours:
-            score -= 25
+            stagnation_contribution = -25
+            score += stagnation_contribution
             reasons.append(f"stagnant {stagnation_hours:.1f}h")
         elif stagnation_hours < 0.5:
-            score += 10
+            stagnation_contribution = 10
+            score += stagnation_contribution
             reasons.append("active movement")
         
         # Factor 3: Age (±15 points) - prefer younger positions
         if age_hours > self.AGE_OLD_HOURS:
-            score -= 15
+            age_contribution = -15
+            score += age_contribution
             reasons.append(f"old {age_hours:.1f}h")
         elif age_hours > self.AGE_AGING_HOURS:
-            score -= 5
+            age_contribution = -5
+            score += age_contribution
             reasons.append(f"aging {age_hours:.1f}h")
         elif age_hours < self.AGE_FRESH_HOURS:
-            score += 5
+            age_contribution = 5
+            score += age_contribution
             reasons.append("fresh")
         
         # Factor 4: Stale losers get worst score
         if current_pnl_pct < 0 and stagnation_hours > self.stagnation_hours / 2:
-            score -= 20
+            penalty = -20
+            score += penalty
             reasons.append("STALE LOSER")
         
         reason = ", ".join(reasons)
+        final_score = max(0, min(100, score))  # Clamp 0-100
+        
+        # Record telemetry (Enhancement #2)
+        if self.telemetry_enabled and self.telemetry:
+            # Determine health status
+            if final_score >= 70:
+                health_status = "excellent"
+            elif final_score >= 50:
+                health_status = "good"
+            elif final_score >= 30:
+                health_status = "fair"
+            else:
+                health_status = "unhealthy"
+            
+            self.telemetry.record_position_score(
+                symbol=symbol,
+                score=final_score,
+                pnl_pct=current_pnl_pct,
+                age_hours=age_hours,
+                stagnation_hours=stagnation_hours,
+                pnl_contribution=pnl_contribution,
+                stagnation_contribution=stagnation_contribution,
+                age_contribution=age_contribution,
+                survived_pruning=True,  # Will be updated if position is pruned
+                health_status=health_status,
+                size_usd=size_usd,
+                entry_time=entry_time
+            )
         
         return PositionHealth(
             symbol=symbol,
@@ -189,7 +293,7 @@ class DustPreventionEngine:
             current_pnl_pct=current_pnl_pct,
             age_hours=age_hours,
             last_movement_hours=stagnation_hours,
-            score=max(0, min(100, score)),  # Clamp 0-100
+            score=final_score,
             reason=reason
         )
     
@@ -215,13 +319,21 @@ class DustPreventionEngine:
             # Update P&L tracking
             self.update_position_pnl(pos['symbol'], pos.get('pnl_pct', 0))
             
+            # Get position size
+            size_usd = pos.get('size_usd', 0)
+            
             # Score health
             health = self.score_position_health(
                 symbol=pos['symbol'],
                 entry_time=pos.get('entry_time', datetime.now()),
-                current_pnl_pct=pos.get('pnl_pct', 0)
+                current_pnl_pct=pos.get('pnl_pct', 0),
+                size_usd=size_usd
             )
             health_scores.append((pos, health))
+            
+            # Track position size for metrics (Enhancement #3)
+            if self.metrics_enabled and self.metrics and size_usd > 0:
+                self.metrics.track_position_size(size_usd)
         
         # Sort by health score (lowest first = worst positions first)
         health_scores.sort(key=lambda x: x[1].score)
@@ -234,17 +346,43 @@ class DustPreventionEngine:
             for pos, health in health_scores:
                 size_usd = pos.get('size_usd', 0)
                 if size_usd > 0 and size_usd < self.dust_threshold_usd:
+                    pnl_pct = pos.get('pnl_pct', 0)
+                    age_hours = health.age_hours
+                    
                     to_close.append({
                         'symbol': pos['symbol'],
                         'reason': f'Dust position (${size_usd:.2f} < ${self.dust_threshold_usd:.2f})',
                         'health_score': health.score,
                         'priority': 'HIGH',
                         'profit_status_transition': 'PENDING → CONFIRMED',
-                        'current_pnl': pos.get('pnl_pct', 0),
+                        'current_pnl': pnl_pct,
                         'size_usd': size_usd,
                         'cleanup_type': 'DUST'
                     })
                     symbols_to_close.add(pos['symbol'])
+                    
+                    # Record cleanup metrics (Enhancement #3)
+                    if self.metrics_enabled and self.metrics:
+                        self.metrics.record_cleanup(
+                            symbol=pos['symbol'],
+                            cleanup_type='DUST',
+                            size_usd=size_usd,
+                            pnl_pct=pnl_pct,
+                            age_hours=age_hours,
+                            reason=f'Dust position (${size_usd:.2f} < ${self.dust_threshold_usd:.2f})'
+                        )
+                    
+                    # Record telemetry (Enhancement #2)
+                    if self.telemetry_enabled and self.telemetry:
+                        self.telemetry.record_pruning_event(
+                            symbol=pos['symbol'],
+                            reason=f'Dust position (${size_usd:.2f} < ${self.dust_threshold_usd:.2f})',
+                            cleanup_type='DUST',
+                            final_score=health.score,
+                            final_pnl_pct=pnl_pct,
+                            size_usd=size_usd,
+                            age_hours=age_hours
+                        )
         
         # Rule 1: Force close if over position limit
         if force_to_limit and len(positions) > self.max_positions:
@@ -268,12 +406,38 @@ class DustPreventionEngine:
                     'cleanup_type': 'CAP_EXCEEDED'
                 })
                 symbols_to_close.add(pos['symbol'])
+                
+                # Record cleanup metrics (Enhancement #3)
+                if self.metrics_enabled and self.metrics:
+                    self.metrics.record_cleanup(
+                        symbol=pos['symbol'],
+                        cleanup_type='CAP_EXCEEDED',
+                        size_usd=pos.get('size_usd', 0),
+                        pnl_pct=pos.get('pnl_pct', 0),
+                        age_hours=health.age_hours,
+                        reason=f'Position cap exceeded (score: {health.score:.0f}, {health.reason})'
+                    )
+                
+                # Record telemetry (Enhancement #2)
+                if self.telemetry_enabled and self.telemetry:
+                    self.telemetry.record_pruning_event(
+                        symbol=pos['symbol'],
+                        reason=f'Position cap exceeded (score: {health.score:.0f}, {health.reason})',
+                        cleanup_type='CAP_EXCEEDED',
+                        final_score=health.score,
+                        final_pnl_pct=pos.get('pnl_pct', 0),
+                        size_usd=pos.get('size_usd', 0),
+                        age_hours=health.age_hours
+                    )
         
         # Rule 2: Close stagnant positions (score < 30)
         for pos, health in health_scores:
             # Skip if already marked for closure (O(1) lookup)
             if pos['symbol'] in symbols_to_close:
                 continue
+            
+            pnl_pct = pos.get('pnl_pct', 0)
+            size_usd = pos.get('size_usd', 0)
             
             if health.score < 30:
                 to_close.append({
@@ -282,10 +446,33 @@ class DustPreventionEngine:
                     'health_score': health.score,
                     'priority': 'MEDIUM',
                     'profit_status_transition': 'PENDING → CONFIRMED',
-                    'current_pnl': pos.get('pnl_pct', 0),
+                    'current_pnl': pnl_pct,
                     'cleanup_type': 'UNHEALTHY'
                 })
                 symbols_to_close.add(pos['symbol'])
+                
+                # Record cleanup metrics (Enhancement #3)
+                if self.metrics_enabled and self.metrics:
+                    self.metrics.record_cleanup(
+                        symbol=pos['symbol'],
+                        cleanup_type='UNHEALTHY',
+                        size_usd=size_usd,
+                        pnl_pct=pnl_pct,
+                        age_hours=health.age_hours,
+                        reason=f'Unhealthy position (score: {health.score:.0f}, {health.reason})'
+                    )
+                
+                # Record telemetry (Enhancement #2)
+                if self.telemetry_enabled and self.telemetry:
+                    self.telemetry.record_pruning_event(
+                        symbol=pos['symbol'],
+                        reason=f'Unhealthy position (score: {health.score:.0f}, {health.reason})',
+                        cleanup_type='UNHEALTHY',
+                        final_score=health.score,
+                        final_pnl_pct=pnl_pct,
+                        size_usd=size_usd,
+                        age_hours=health.age_hours
+                    )
             elif health.last_movement_hours > self.stagnation_hours:
                 to_close.append({
                     'symbol': pos['symbol'],
@@ -293,10 +480,33 @@ class DustPreventionEngine:
                     'health_score': health.score,
                     'priority': 'MEDIUM',
                     'profit_status_transition': 'PENDING → CONFIRMED',
-                    'current_pnl': pos.get('pnl_pct', 0),
+                    'current_pnl': pnl_pct,
                     'cleanup_type': 'STAGNANT'
                 })
                 symbols_to_close.add(pos['symbol'])
+                
+                # Record cleanup metrics (Enhancement #3)
+                if self.metrics_enabled and self.metrics:
+                    self.metrics.record_cleanup(
+                        symbol=pos['symbol'],
+                        cleanup_type='STAGNANT',
+                        size_usd=size_usd,
+                        pnl_pct=pnl_pct,
+                        age_hours=health.age_hours,
+                        reason=f'Stagnant (no movement for {health.last_movement_hours:.1f}h)'
+                    )
+                
+                # Record telemetry (Enhancement #2)
+                if self.telemetry_enabled and self.telemetry:
+                    self.telemetry.record_pruning_event(
+                        symbol=pos['symbol'],
+                        reason=f'Stagnant (no movement for {health.last_movement_hours:.1f}h)',
+                        cleanup_type='STAGNANT',
+                        final_score=health.score,
+                        final_pnl_pct=pnl_pct,
+                        size_usd=size_usd,
+                        age_hours=health.age_hours
+                    )
         
         # Log results with profit status transitions
         if to_close:
