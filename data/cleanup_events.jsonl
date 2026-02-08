@@ -1,0 +1,5 @@
+{"timestamp": "2026-02-08T14:22:11.095838", "symbol": "BTC-USD", "cleanup_type": "DUST", "size_usd": 0.85, "pnl_pct": -0.02, "pnl_usd": -0.017, "age_hours": 24.0, "reason": "Dust position ($0.85 < $1.00)"}
+{"timestamp": "2026-02-08T14:22:11.096210", "symbol": "ETH-USD", "cleanup_type": "UNHEALTHY", "size_usd": 45.0, "pnl_pct": -0.025, "pnl_usd": -1.125, "age_hours": 12.0, "reason": "Unhealthy position (score: 25, strong loss, stagnant 8.0h)"}
+{"timestamp": "2026-02-08T14:22:33.212735", "symbol": "BTC-USD", "cleanup_type": "DUST", "size_usd": 0.85, "pnl_pct": -0.02, "pnl_usd": -0.017, "age_hours": 24.0, "reason": "Dust position ($0.85 < $1.00)"}
+{"timestamp": "2026-02-08T14:22:33.213305", "symbol": "ETH-USD", "cleanup_type": "UNHEALTHY", "size_usd": 45.0, "pnl_pct": -0.025, "pnl_usd": -1.125, "age_hours": 12.0, "reason": "Unhealthy position (score: 25, strong loss, stagnant 8.0h)"}
+{"timestamp": "2026-02-08T14:24:40.399982", "symbol": "DUST-USD", "cleanup_type": "DUST", "size_usd": 0.75, "pnl_pct": -0.01, "pnl_usd": -0.0075, "age_hours": 24.0, "reason": "Test dust cleanup"}
