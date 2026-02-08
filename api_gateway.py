@@ -167,6 +167,10 @@ class Position(BaseModel):
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     opened_at: Optional[str] = None
+    # Position source tracking (Feb 8, 2026)
+    position_source: Optional[str] = 'unknown'  # 'nija_strategy', 'broker_existing', 'manual', 'unknown'
+    managed_by_nija: Optional[bool] = None  # Computed field for convenience
+    source_label: Optional[str] = None  # Human-readable label
 
 
 class PositionsResponse(BaseModel):
@@ -175,6 +179,9 @@ class PositionsResponse(BaseModel):
     positions: List[Position]
     total_positions: int
     total_unrealized_pnl: Optional[float] = None
+    # Position breakdown by source (Feb 8, 2026)
+    nija_managed_count: Optional[int] = None
+    existing_holdings_count: Optional[int] = None
     timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
@@ -442,7 +449,7 @@ async def get_positions(
     Get all active positions for the authenticated user.
 
     Returns:
-        PositionsResponse: List of active positions with P&L
+        PositionsResponse: List of active positions with P&L and source labels
     """
     try:
         logger.info(f"📈 Positions request from user {user_id}")
@@ -457,9 +464,32 @@ async def get_positions(
         instance = user_control.get_or_create_instance(user_id)
         positions_data = instance.get_positions()
 
-        # Convert to Position models
-        positions = [
-            Position(
+        # Helper function to get source label
+        def get_source_label(source: str) -> str:
+            """Convert position_source to human-readable label"""
+            if source == 'nija_strategy':
+                return 'NIJA-Managed Position'
+            elif source in ['broker_existing', 'manual', 'unknown']:
+                return 'Existing Holdings (not managed by NIJA)'
+            else:
+                return 'Unknown Source'
+
+        # Convert to Position models with source tracking
+        positions = []
+        nija_managed_count = 0
+        existing_holdings_count = 0
+        
+        for pos in positions_data:
+            position_source = pos.get('position_source', 'unknown')
+            managed_by_nija = position_source == 'nija_strategy'
+            
+            # Track counts
+            if managed_by_nija:
+                nija_managed_count += 1
+            else:
+                existing_holdings_count += 1
+            
+            positions.append(Position(
                 pair=pos.get('pair', 'UNKNOWN'),
                 side=pos.get('side', 'long'),
                 size=pos.get('size', 0.0),
@@ -469,10 +499,11 @@ async def get_positions(
                 unrealized_pnl_percent=pos.get('unrealized_pnl_percent'),
                 stop_loss=pos.get('stop_loss'),
                 take_profit=pos.get('take_profit'),
-                opened_at=pos.get('opened_at')
-            )
-            for pos in positions_data
-        ]
+                opened_at=pos.get('opened_at'),
+                position_source=position_source,
+                managed_by_nija=managed_by_nija,
+                source_label=get_source_label(position_source)
+            ))
 
         # Calculate total P&L
         total_pnl = sum(p.unrealized_pnl for p in positions if p.unrealized_pnl is not None)
@@ -481,6 +512,8 @@ async def get_positions(
             success=True,
             positions=positions,
             total_positions=len(positions),
+            nija_managed_count=nija_managed_count,
+            existing_holdings_count=existing_holdings_count,
             total_unrealized_pnl=total_pnl if positions else None
         )
 

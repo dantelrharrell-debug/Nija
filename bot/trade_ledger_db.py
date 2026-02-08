@@ -90,10 +90,6 @@ class TradeLedgerDB:
             # CRITICAL FIX (Jan 22, 2026): Ensure platform_trade_id column exists in existing databases
             # This migration is idempotent and safe to run multiple times
             self._migrate_add_platform_trade_id(cursor)
-            
-            # POSITION SOURCE TRACKING (Feb 8, 2026): Add position_source field to distinguish
-            # NIJA-managed positions from existing holdings
-            self._migrate_add_position_source(cursor)
 
             # Open positions table
             cursor.execute("""
@@ -209,6 +205,11 @@ class TradeLedgerDB:
                 CREATE INDEX IF NOT EXISTS idx_copy_trade_map_user
                 ON copy_trade_map(user_id)
             """)
+
+            # POSITION SOURCE TRACKING (Feb 8, 2026): Add position_source field to distinguish
+            # NIJA-managed positions from existing holdings
+            # Run this AFTER all tables are created
+            self._migrate_add_position_source(cursor)
 
             logger.info("✅ Database schema initialized")
 
