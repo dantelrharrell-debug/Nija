@@ -113,10 +113,10 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
     
     # Check 3: Trading strategy can be imported
     try:
-        from bot.nija_apex_strategy_v72_upgrade import NijaApexStrategyV72
-        checks.append(("Trading Strategy (APEX v7.2)", True, None))
+        from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
+        checks.append(("Trading Strategy (APEX v7.1)", True, None))
     except Exception as e:
-        checks.append(("Trading Strategy (APEX v7.2)", False, str(e)))
+        checks.append(("Trading Strategy (APEX v7.1)", False, str(e)))
         issues.append(f"Trading strategy import failed: {e}")
     
     # Check 4: Risk manager available

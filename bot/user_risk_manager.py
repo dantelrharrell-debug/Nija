@@ -307,13 +307,30 @@ class UserRiskManager:
 
             self._save_state(state)
 
-    def can_trade(self, user_id: str, position_size_usd: float) -> Tuple[bool, Optional[str]]:
+    def _check_position_limit(self, user_id: str, current_position_count: int, limits: UserRiskLimits) -> Tuple[bool, Optional[str]]:
+        """
+        Helper method to check position count limit.
+        
+        Args:
+            user_id: User identifier
+            current_position_count: Current number of open positions
+            limits: User's risk limits
+        
+        Returns:
+            (allowed, error_message)
+        """
+        if current_position_count >= limits.max_open_positions:
+            return False, f"Position limit reached ({current_position_count}/{limits.max_open_positions})"
+        return True, None
+    
+    def can_trade(self, user_id: str, position_size_usd: float, current_position_count: int = 0) -> Tuple[bool, Optional[str]]:
         """
         Check if user can place a trade.
 
         Args:
             user_id: User identifier
             position_size_usd: Requested position size
+            current_position_count: Current number of open positions
 
         Returns:
             (can_trade, error_message)
@@ -333,6 +350,11 @@ class UserRiskManager:
             # Check circuit breaker
             if state.circuit_breaker_triggered:
                 return False, "Circuit breaker triggered (daily loss limit)"
+
+            # Check position count limit (HARD CAP) - using helper method
+            allowed, error = self._check_position_limit(user_id, current_position_count, limits)
+            if not allowed:
+                return False, error
 
             # Check daily trade limit
             if state.daily_trades >= limits.max_daily_trades:
@@ -366,6 +388,30 @@ class UserRiskManager:
             if state.current_drawdown_pct >= limits.max_drawdown_pct * 100:
                 return False, f"Max drawdown exceeded: {state.current_drawdown_pct:.1f}%"
 
+            return True, None
+    
+    def can_open_position(self, user_id: str, current_position_count: int) -> Tuple[bool, Optional[str]]:
+        """
+        Check if user can open a new position (position count check only).
+        
+        Args:
+            user_id: User identifier
+            current_position_count: Current number of open positions
+        
+        Returns:
+            (can_open, error_message)
+        """
+        lock = self._get_user_lock(user_id)
+        
+        with lock:
+            limits = self.get_limits(user_id)
+            
+            # Use helper method for consistent error messages
+            allowed, error = self._check_position_limit(user_id, current_position_count, limits)
+            if not allowed:
+                # Make error message more specific for this method
+                return False, f"Maximum open positions reached ({current_position_count}/{limits.max_open_positions})"
+            
             return True, None
 
     def get_state(self, user_id: str) -> UserRiskState:

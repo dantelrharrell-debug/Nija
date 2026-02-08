@@ -640,37 +640,20 @@ def create_default_orchestrator(total_capital: float) -> StrategyOrchestrator:
     """
     orchestrator = StrategyOrchestrator(total_capital)
 
-    # Register v7.2 strategy (profitability focused)
+    # Register v7.1 strategy (known-good, stable)
     try:
-        from nija_apex_strategy_v72_upgrade import NIJAApexStrategyV72
-
-        v72_config = StrategyConfig(
-            strategy_id="apex_v72",
-            strategy_class=NIJAApexStrategyV72,
-            weight=2.0,  # Higher weight - this is our best strategy
-            state=StrategyState.ACTIVE,
-            preferred_regimes=["trending", "ranging"],
-            min_confidence_score=0.70
-        )
-        orchestrator.register_strategy(v72_config)
-        logger.info("✅ Registered APEX v7.2 strategy")
-    except ImportError:
-        logger.warning("APEX v7.2 strategy not available")
-
-    # Register v7.1 strategy (enhanced scoring)
-    try:
-        from nija_apex_strategy_v71 import NIJAApexStrategyV71
+        from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
 
         v71_config = StrategyConfig(
             strategy_id="apex_v71",
             strategy_class=NIJAApexStrategyV71,
-            weight=1.5,
-            state=StrategyState.MONITORING,  # Start in monitoring mode
-            preferred_regimes=["trending", "volatile"],
-            min_confidence_score=0.65
+            weight=2.0,  # Primary strategy - known-good and stable
+            state=StrategyState.ACTIVE,
+            preferred_regimes=["trending", "ranging"],
+            min_confidence_score=0.70
         )
         orchestrator.register_strategy(v71_config)
-        logger.info("✅ Registered APEX v7.1 strategy")
+        logger.info("✅ Registered APEX v7.1 strategy (PRIMARY)")
     except ImportError:
         logger.warning("APEX v7.1 strategy not available")
 
