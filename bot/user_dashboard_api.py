@@ -740,6 +740,7 @@ def get_aggregated_positions():
 
     Returns position breakdown by:
         - Account (master vs users)
+        - Position Source (NIJA-managed vs Existing Holdings)
         - Symbol
         - Broker
     """
@@ -753,6 +754,10 @@ def get_aggregated_positions():
         platform_positions = [p for p in all_positions if p.get('user_id') == 'platform']
         user_positions = [p for p in all_positions if p.get('user_id') != 'platform']
 
+        # NEW: Separate by position source (NIJA-managed vs Existing Holdings)
+        nija_managed = [p for p in all_positions if p.get('position_source') == 'nija_strategy']
+        existing_holdings = [p for p in all_positions if p.get('position_source') in ['broker_existing', 'manual', 'unknown']]
+
         # Aggregate by symbol
         symbol_aggregate = {}
         for position in all_positions:
@@ -762,6 +767,8 @@ def get_aggregated_positions():
                     'total_positions': 0,
                     'platform_positions': 0,
                     'user_positions': 0,
+                    'nija_managed_positions': 0,
+                    'existing_holdings': 0,
                     'total_size': 0.0,
                     'total_unrealized_pnl': 0.0
                 }
@@ -771,6 +778,12 @@ def get_aggregated_positions():
                 symbol_aggregate[symbol]['platform_positions'] += 1
             else:
                 symbol_aggregate[symbol]['user_positions'] += 1
+
+            # Track by source
+            if position.get('position_source') == 'nija_strategy':
+                symbol_aggregate[symbol]['nija_managed_positions'] += 1
+            else:
+                symbol_aggregate[symbol]['existing_holdings'] += 1
 
             symbol_aggregate[symbol]['total_size'] += position.get('size', 0.0)
             symbol_aggregate[symbol]['total_unrealized_pnl'] += position.get('unrealized_pnl', 0.0)
@@ -782,11 +795,17 @@ def get_aggregated_positions():
             if broker not in broker_aggregate:
                 broker_aggregate[broker] = {
                     'positions': 0,
+                    'nija_managed': 0,
+                    'existing_holdings': 0,
                     'total_size': 0.0,
                     'unrealized_pnl': 0.0
                 }
 
             broker_aggregate[broker]['positions'] += 1
+            if position.get('position_source') == 'nija_strategy':
+                broker_aggregate[broker]['nija_managed'] += 1
+            else:
+                broker_aggregate[broker]['existing_holdings'] += 1
             broker_aggregate[broker]['total_size'] += position.get('size', 0.0)
             broker_aggregate[broker]['unrealized_pnl'] += position.get('unrealized_pnl', 0.0)
 
@@ -796,13 +815,29 @@ def get_aggregated_positions():
                 'total_positions': len(all_positions),
                 'platform_positions': len(platform_positions),
                 'user_positions': len(user_positions),
+                'nija_managed_positions': len(nija_managed),
+                'existing_holdings': len(existing_holdings),
                 'unique_symbols': len(symbol_aggregate),
                 'unique_brokers': len(broker_aggregate)
+            },
+            'by_source': {
+                'nija_managed': {
+                    'count': len(nija_managed),
+                    'label': 'NIJA-Managed Positions',
+                    'description': 'Positions opened and managed by NIJA trading algorithm'
+                },
+                'existing_holdings': {
+                    'count': len(existing_holdings),
+                    'label': 'Existing Holdings (not managed by NIJA)',
+                    'description': 'Pre-existing positions or manually entered positions that NIJA does not actively manage'
+                }
             },
             'by_symbol': symbol_aggregate,
             'by_broker': broker_aggregate,
             'platform_positions_list': platform_positions,
-            'user_positions_list': user_positions
+            'user_positions_list': user_positions,
+            'nija_managed_list': nija_managed,
+            'existing_holdings_list': existing_holdings
         })
 
     except Exception as e:

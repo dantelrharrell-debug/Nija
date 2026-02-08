@@ -1,7 +1,7 @@
 # APPLE APP STORE - PREFERRED UI WORDING GUIDE
 
 **For NIJA Trading Application**  
-**Last Updated: February 3, 2026**
+**Last Updated: February 8, 2026**
 
 This document provides **EXACT UI wording** that aligns with Apple App Store Review Guidelines for financial applications.
 
@@ -15,6 +15,113 @@ Apple reviewers look for:
 3. **Risk transparency** - Clear disclosure of risks
 4. **Manual control** - User initiates actions
 5. **No misleading claims** - Honest, factual language
+6. **Clear Position Attribution** - Users know which assets NIJA manages
+
+---
+
+## 📊 POSITION MANAGEMENT WORDING (NEW - Feb 8, 2026)
+
+### Position Overview Screen
+
+**✅ EXACT WORDING:**
+```
+Your Portfolio Overview
+
+Total Positions: 59
+
+✅ NIJA-Managed Positions: 32
+   Opened and managed by NIJA's trading algorithm
+
+📦 Existing Holdings: 27
+   (not managed by NIJA)
+   Pre-existing or manually entered positions
+```
+
+### Position List View
+
+**✅ EXACT WORDING:**
+```
+NIJA-Managed Positions (32)
+───────────────────────────────────────────────
+These positions were opened by NIJA based on your 
+configured strategy. NIJA actively manages exits, 
+stop-losses, and profit targets.
+
+🟢 BTC-USD    +2.3%    $1,234.56    [NIJA-Managed]
+🟢 ETH-USD    +1.8%      $856.23    [NIJA-Managed]
+...
+
+────────────────────────────────────────────────
+
+Existing Holdings - Not Managed by NIJA (27)
+───────────────────────────────────────────────
+These positions existed before NIJA started or 
+were manually entered by you. NIJA does NOT 
+automatically manage or close these positions.
+
+⚪ DOGE-USD    -0.5%     $123.45    [Manual]
+⚪ ADA-USD     +1.2%     $345.67    [Pre-existing]
+...
+```
+
+### Position Detail Tooltip
+
+**For NIJA-Managed:**
+```
+ℹ️ NIJA-Managed Position
+
+This position was opened by NIJA based on your 
+configured trading strategy. NIJA actively manages:
+  • Exit timing based on profit targets
+  • Stop-loss protection
+  • Trailing stops to lock in gains
+
+You can manually close this position at any time.
+```
+
+**For Existing Holdings:**
+```
+ℹ️ Existing Holdings (Not Managed by NIJA)
+
+This position existed in your account before NIJA 
+started trading, or was manually entered by you.
+
+NIJA does NOT automatically manage or close this 
+position. You remain in full manual control.
+
+You can optionally enable NIJA management for this 
+position in settings.
+```
+
+### First Account Connection
+
+**✅ EXACT WORDING:**
+```
+╔═══════════════════════════════════════════════════════╗
+║         🔍 Account Scan Complete                      ║
+╚═══════════════════════════════════════════════════════╝
+
+We found 27 existing positions in your account.
+
+⚠️  IMPORTANT:
+NIJA will NOT automatically manage these existing 
+positions. They will remain under your manual control.
+
+NIJA will only manage NEW positions that it opens 
+based on your configured trading strategy.
+
+What would you like to do?
+
+○ Display only (recommended)
+  Show existing positions for information but do 
+  not manage them
+
+○ Allow NIJA to adopt and manage
+  Apply NIJA's exit logic to existing positions
+  (requires your explicit consent for each position)
+
+[Learn More]  [Continue]
+```
 
 ---
 
