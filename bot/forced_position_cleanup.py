@@ -62,12 +62,21 @@ class ForcedPositionCleanup:
         self.dust_threshold_usd = dust_threshold_usd
         self.max_positions = max_positions
         self.dry_run = dry_run
-        self.cancel_open_orders = cancel_open_orders
-        self.startup_only = startup_only
-        self.cancel_conditions = self._parse_cancel_conditions(cancel_conditions) if cancel_conditions else None
         self.has_run_startup = False  # Track if startup cleanup has run
         
-        # Load config from environment if not explicitly set
+        # Parse cancel_conditions if provided
+        self.cancel_conditions = self._parse_cancel_conditions(cancel_conditions) if cancel_conditions else None
+        
+        # If cancel_conditions are provided, automatically enable cancel_open_orders
+        if self.cancel_conditions:
+            self.cancel_open_orders = True
+            self.startup_only = startup_only
+        else:
+            self.cancel_open_orders = cancel_open_orders
+            self.startup_only = startup_only
+        
+        # Load config from environment if not explicitly set via parameters
+        # Only override if no explicit config was provided
         if not cancel_open_orders and not cancel_conditions:
             env_cancel = os.getenv('FORCED_CLEANUP_CANCEL_OPEN_ORDERS', 'false').lower() in ['true', '1', 'yes']
             env_startup_only = os.getenv('FORCED_CLEANUP_STARTUP_ONLY', 'false').lower() in ['true', '1', 'yes']
