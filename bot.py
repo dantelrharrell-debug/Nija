@@ -726,13 +726,14 @@ def _run_bot_startup_and_trading():
 
             # Independent trading mode - all accounts trade using same logic
             logger.info("=" * 70)
-            logger.info("🔄 INDEPENDENT TRADING MODE ENABLED")
+            logger.info("🔄 INDEPENDENT TRADING MODE ENABLED (NO COPY TRADING)")
             logger.info("=" * 70)
-            logger.info("   ✅ Each account trades independently")
-            logger.info("   ✅ Same NIJA strategy logic for all accounts")
+            logger.info("   ✅ Each account trades INDEPENDENTLY using NIJA strategy")
+            logger.info("   ✅ Same strategy logic, but executed independently per account")
             logger.info("   ✅ Same risk management rules for all accounts")
             logger.info("   ✅ Position sizing scaled by account balance")
-            logger.info("   ℹ️  No trade copying or mirroring between accounts")
+            logger.info("   ❌ NO trade copying or mirroring between accounts")
+            logger.info("   ℹ️  All accounts evaluate signals and execute independently")
             logger.info("=" * 70)
 
             # Log clear trading readiness status

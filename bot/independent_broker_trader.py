@@ -874,9 +874,10 @@ class IndependentBrokerTrader:
                 logger.info(f"   🚀 TRADING THREAD STARTED for {broker_name_upper} (PLATFORM)")
                 logger.info(f"   📊 Thread name: Trader-{broker_name}")
                 logger.info(f"   🔄 This thread will:")
-                logger.info(f"      • Scan markets every 2.5 minutes")
+                logger.info(f"      • Scan markets independently every 2.5 minutes")
                 logger.info(f"      • Execute PLATFORM trades when signals trigger")
-                logger.info(f"      • Manage existing positions")
+                logger.info(f"      • Manage existing positions independently")
+                logger.info(f"      • NO copy trading - independent decision making")
                 logger.info("")
         else:
             logger.warning("=" * 70)
@@ -954,7 +955,15 @@ class IndependentBrokerTrader:
                     user_broker_start_count += 1
                     total_threads += 1
 
-                    logger.info(f"✅ Started independent trading thread for {broker_name} (USER)")
+                    logger.info(f"   🚀 TRADING THREAD STARTED for {broker_name} (USER)")
+                    logger.info(f"   📊 Thread name: Trader-{broker_name}")
+                    logger.info(f"   👤 User: {user_id}")
+                    logger.info(f"   🔄 This thread will:")
+                    logger.info(f"      • Scan markets independently every 2.5 minutes")
+                    logger.info(f"      • Execute USER trades when signals trigger")
+                    logger.info(f"      • Manage existing positions independently")
+                    logger.info(f"      • NO copy trading - makes own trading decisions")
+                    logger.info("")
 
         logger.info("=" * 70)
         logger.info(f"✅ {total_threads} INDEPENDENT TRADING THREADS RUNNING")
