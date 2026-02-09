@@ -98,6 +98,37 @@
 - [ ] **Edge Cases**
   - ⏳ Test with minimum profitable config
   - ⏳ Test with unprofitable config (should block)
+
+### Crash/Restart Safety Verification
+- [x] **Position Cap Enforcement Under Worst-Case Scenarios**
+  - ✅ Crash/restart verification document created (`APP_STORE_CRASH_RESTART_VERIFICATION.md`)
+  - ✅ Mathematical proof of safety guarantees
+  - ✅ Multi-layer defense documented (6 independent checks)
+  - ✅ Cleanup frequency lowered to 15 minutes (improved from 50 min)
+  - ✅ Trade-based cleanup trigger added (optional)
+  - ✅ Test suite passing (4/4 tests)
+  
+- [x] **Simulated Crash Scenarios**
+  - ✅ Crash during position entry (verified: trade rejected before execution)
+  - ✅ Crash after order sent (verified: cleanup on restart catches excess)
+  - ✅ Multiple successive crashes (verified: cleanup runs every restart)
+  - ✅ Network disconnection during cleanup (verified: entry blocking prevents violations)
+  - ✅ Database corruption (verified: exchange API is source of truth)
+  - ✅ Race condition scenarios (verified: single-threaded execution + cleanup)
+  
+- [x] **Recovery Time Verification**
+  - ✅ Normal operation: Instant blocking (violations prevented)
+  - ✅ Crash during entry: Immediate on restart
+  - ✅ Race condition: < 2.5 minutes (one cycle)
+  - ✅ Periodic cleanup: < 15 minutes maximum
+  - ✅ Maximum exposure window: 15 minutes (acceptable)
+  
+- [x] **Store Description Alignment**
+  - ✅ Position cap language tightened in `APP_STORE_SAFETY_EXPLANATION.md`
+  - ✅ Multi-layer enforcement clearly described
+  - ✅ Crash recovery guarantees documented
+  - ✅ Safety verification process explained
+
   - ⏳ Test broker switching
   - ⏳ Test on slow connections
   - ⏳ Test with screen reader

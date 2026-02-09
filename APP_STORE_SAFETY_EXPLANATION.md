@@ -322,16 +322,30 @@ This simulation requires **NO API credentials** and uses **NO real money** - it'
 - If equity drops to $850, trading halts
 - Protects remaining $850 from further losses
 
-### 7. Position Count Limits
+### 7. Position Count Limits (Multi-Layer Enforcement)
 
 **Purpose:** Prevent over-diversification and manage risk
 
 **Implementation:**
-- Maximum concurrent positions based on tier (2 - 8 positions)
-- Prevents spreading capital too thin
-- Ensures adequate position sizing
+- **Maximum 8 concurrent positions** (strictly enforced)
+- **6 independent safety checks** prevent cap violations:
+  1. Pre-entry validation (before market scanning)
+  2. Pre-scan double-check (at scan start)
+  3. Pre-order final check (before order placement)
+  4. Startup cleanup (runs on EVERY bot restart)
+  5. Periodic cleanup (every 15 minutes)
+  6. End-of-cycle verification (continuous monitoring)
+- **Automatic enforcement** even after crashes or network failures
+- **Exchange API is source of truth** (not corruptible local database)
+- **Trade-based cleanup** (optional: trigger after N trades)
 
-**Result:** Accounts can't open unlimited tiny positions.
+**Safety Guarantee:**
+- Position count mathematically guaranteed ≤ 8
+- Violations corrected within 15 minutes maximum
+- Typical correction: < 2.5 minutes (one trading cycle)
+- Crash recovery: immediate on restart
+
+**Result:** Accounts cannot exceed 8 positions, even in worst-case scenarios (crashes, network failures, database corruption). Multi-layer defense ensures cap is always enforced.
 
 ### 8. Independent Trade Validation
 

@@ -397,14 +397,24 @@ except ValueError:
 logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED}")
 
 # Forced cleanup interval (cycles between cleanup runs)
-# Default: 20 cycles (~50 minutes at 2.5 min/cycle)
+# Default: 6 cycles (~15 minutes at 2.5 min/cycle) - For maximum safety optics
 # Can be overridden via FORCED_CLEANUP_INTERVAL environment variable
-_cleanup_interval_env = os.getenv('FORCED_CLEANUP_INTERVAL', '20')
+_cleanup_interval_env = os.getenv('FORCED_CLEANUP_INTERVAL', '6')
 try:
     FORCED_CLEANUP_INTERVAL = int(_cleanup_interval_env)
 except ValueError:
-    FORCED_CLEANUP_INTERVAL = 20  # Default fallback
+    FORCED_CLEANUP_INTERVAL = 6  # Default fallback (15 minutes)
 logger.debug(f"🧹 Forced cleanup interval: every {FORCED_CLEANUP_INTERVAL} cycles (~{FORCED_CLEANUP_INTERVAL * 2.5:.0f} minutes)")
+
+# Optional: Cleanup after N trades executed (alternative/additional trigger)
+# If set, cleanup runs after N trades OR every FORCED_CLEANUP_INTERVAL cycles (whichever comes first)
+_cleanup_trades_env = os.getenv('FORCED_CLEANUP_AFTER_N_TRADES', '')
+try:
+    FORCED_CLEANUP_AFTER_N_TRADES = int(_cleanup_trades_env) if _cleanup_trades_env else None
+    if FORCED_CLEANUP_AFTER_N_TRADES:
+        logger.debug(f"🧹 Forced cleanup also triggers after {FORCED_CLEANUP_AFTER_N_TRADES} trades executed")
+except ValueError:
+    FORCED_CLEANUP_AFTER_N_TRADES = None
 
 # OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
 # MIN_TRADE_USD = max(2.00, balance * 0.15)
@@ -655,6 +665,9 @@ class TradingStrategy:
         # Heartbeat trade state tracking (for deployment verification and health checks)
         self.heartbeat_last_trade_time = 0  # Last heartbeat trade timestamp
         self.heartbeat_trade_count = 0  # Total heartbeat trades executed
+        
+        # Trade execution tracking (for trade-based cleanup trigger)
+        self.trades_since_last_cleanup = 0  # Trades executed since last forced cleanup
         
         # Trade veto tracking for trust layer (log why trades were not executed)
         self.veto_count_session = 0  # Count of vetoed trades this session
@@ -3156,26 +3169,47 @@ class TradingStrategy:
             run_startup_cleanup = hasattr(self, 'cycle_count') and self.cycle_count == 0
             run_periodic_cleanup = hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % FORCED_CLEANUP_INTERVAL == 0)
             
-            if hasattr(self, 'forced_cleanup') and self.forced_cleanup and (run_startup_cleanup or run_periodic_cleanup):
-                cleanup_reason = "STARTUP" if run_startup_cleanup else f"PERIODIC (cycle {self.cycle_count})"
-                logger.info(f"")
-                logger.info(f"🧹 FORCED CLEANUP TRIGGERED: {cleanup_reason}")
+            # Optional trade-based trigger: Cleanup after N trades
+            run_trade_based_cleanup = False
+            if FORCED_CLEANUP_AFTER_N_TRADES and hasattr(self, 'trades_since_last_cleanup'):
+                run_trade_based_cleanup = self.trades_since_last_cleanup >= FORCED_CLEANUP_AFTER_N_TRADES
+            
+            if hasattr(self, 'forced_cleanup') and self.forced_cleanup and (run_startup_cleanup or run_periodic_cleanup or run_trade_based_cleanup):
+                # Determine cleanup reason for logging
+                if run_startup_cleanup:
+                    cleanup_reason = "STARTUP"
+                elif run_trade_based_cleanup:
+                    cleanup_reason = f"TRADE-BASED ({self.trades_since_last_cleanup} trades executed)"
+                else:
+                    cleanup_reason = f"PERIODIC (cycle {self.cycle_count})"
+                
+                logger.warning(f"")
+                logger.warning(f"🧹 FORCED CLEANUP TRIGGERED: {cleanup_reason}")
+                logger.warning(f"   Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.warning(f"   Interval: Every {FORCED_CLEANUP_INTERVAL} cycles (~{FORCED_CLEANUP_INTERVAL * 2.5:.0f} minutes)")
+                if FORCED_CLEANUP_AFTER_N_TRADES:
+                    logger.warning(f"   Trade trigger: After {FORCED_CLEANUP_AFTER_N_TRADES} trades (current: {self.trades_since_last_cleanup})")
                 try:
                     if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
                         # Run cleanup across all accounts
-                        summary = self.forced_cleanup.cleanup_all_accounts(self.multi_account_manager)
-                        logger.info(f"   ✅ Cleanup complete: Reduced positions by {summary['reduction']}")
+                        summary = self.forced_cleanup.cleanup_all_accounts(self.multi_account_manager, is_startup=run_startup_cleanup)
+                        logger.warning(f"   ✅ Cleanup complete: Reduced positions by {summary['reduction']}")
                     else:
                         # Single account mode - just cleanup platform
                         logger.info(f"   Running single-account cleanup...")
                         if active_broker:
-                            result = self.forced_cleanup.cleanup_single_account(active_broker, "platform")
-                            logger.info(f"   ✅ Cleanup complete: {result['initial_positions']} → {result['final_positions']}")
+                            result = self.forced_cleanup.cleanup_single_account(active_broker, "platform", is_startup=run_startup_cleanup)
+                            logger.warning(f"   ✅ Cleanup complete: {result['initial_positions']} → {result['final_positions']}")
+                    
+                    # Reset trade counter after cleanup
+                    if hasattr(self, 'trades_since_last_cleanup'):
+                        self.trades_since_last_cleanup = 0
+                        
                 except Exception as cleanup_err:
                     logger.error(f"   ❌ Forced cleanup failed: {cleanup_err}")
                     import traceback
                     logger.error(traceback.format_exc())
-                logger.info(f"")
+                logger.warning(f"")
 
             # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
             # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.
@@ -3599,6 +3633,9 @@ class TradingStrategy:
                                             # Track the exit
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                 active_broker.position_tracker.track_exit(symbol, quantity)
+                                            # Increment trade counter for trade-based cleanup trigger
+                                            if hasattr(self, 'trades_since_last_cleanup'):
+                                                self.trades_since_last_cleanup += 1
                                         else:
                                             logger.error(f"   ❌ PROTECTIVE STOP-LOSS FAILED: {error}")
                                     else:
@@ -3617,6 +3654,9 @@ class TradingStrategy:
                                                 logger.info(f"   ✅ ORDER ACCEPTED: Order ID {order_id}")
                                                 if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                     active_broker.position_tracker.track_exit(symbol, quantity)
+                                                # Increment trade counter for trade-based cleanup trigger
+                                                if hasattr(self, 'trades_since_last_cleanup'):
+                                                    self.trades_since_last_cleanup += 1
                                             else:
                                                 error_msg = result.get('error', 'Unknown error') if result else 'No response'
                                                 logger.error(f"   ❌ ORDER REJECTED: {error_msg}")
@@ -3649,6 +3689,9 @@ class TradingStrategy:
                                             logger.info(f"   ✅ EMERGENCY STOP EXECUTED: {symbol}")
                                             if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                 active_broker.position_tracker.track_exit(symbol, quantity)
+                                            # Increment trade counter for trade-based cleanup trigger
+                                            if hasattr(self, 'trades_since_last_cleanup'):
+                                                self.trades_since_last_cleanup += 1
                                         else:
                                             logger.error(f"   ❌ EMERGENCY STOP FAILED: {error}")
                                     else:
@@ -3666,6 +3709,9 @@ class TradingStrategy:
                                                 logger.info(f"   ✅ MICRO-STOP EXECUTED: Order ID {order_id}")
                                                 if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                     active_broker.position_tracker.track_exit(symbol, quantity)
+                                                # Increment trade counter for trade-based cleanup trigger
+                                                if hasattr(self, 'trades_since_last_cleanup'):
+                                                    self.trades_since_last_cleanup += 1
                                             else:
                                                 error_msg = result.get('error', 'Unknown error') if result else 'No response'
                                                 logger.error(f"   ❌ MICRO-STOP FAILED: {error_msg}")
@@ -5172,10 +5218,14 @@ class TradingStrategy:
                                 elif position_size < 10.0:
                                     logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
 
-                                # CRITICAL: Verify we're still under position cap
+                                # CRITICAL: Verify we're still under position cap before placing order
                                 if len(current_positions) >= MAX_POSITIONS_ALLOWED:
-                                    logger.warning(f"   ⚠️  Position cap ({MAX_POSITIONS_ALLOWED}) reached - STOP NEW ENTRIES")
+                                    logger.error(f"   ❌ SAFETY VIOLATION: Position cap ({MAX_POSITIONS_ALLOWED}) reached - BLOCKING NEW ENTRY")
+                                    logger.error(f"      Current positions: {len(current_positions)}")
+                                    logger.error(f"      This should not happen - cap should have been checked earlier!")
                                     break
+                                
+                                logger.info(f"   ✅ Final position cap check: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} - OK to enter")
 
                                 # PRO MODE: Check if rotation is needed
                                 needs_rotation = False
@@ -5419,6 +5469,27 @@ class TradingStrategy:
 
             # Increment cycle counter for warmup tracking
             self.cycle_count += 1
+            
+            # SAFETY VERIFICATION: Check position count at end of cycle
+            try:
+                if active_broker:
+                    final_positions = active_broker.get_positions()
+                    final_count = len(final_positions)
+                    
+                    if final_count > MAX_POSITIONS_ALLOWED:
+                        logger.error(f"")
+                        logger.error(f"❌ SAFETY VIOLATION DETECTED AT END OF CYCLE!")
+                        logger.error(f"   Position count: {final_count}")
+                        logger.error(f"   Maximum allowed: {MAX_POSITIONS_ALLOWED}")
+                        logger.error(f"   Excess positions: {final_count - MAX_POSITIONS_ALLOWED}")
+                        logger.error(f"   ⚠️ CRITICAL: Cap enforcement failed - this should never happen!")
+                        logger.error(f"")
+                    elif final_count == MAX_POSITIONS_ALLOWED:
+                        logger.info(f"✅ Position cap verification: At cap ({final_count}/{MAX_POSITIONS_ALLOWED})")
+                    else:
+                        logger.info(f"✅ Position cap verification: Under cap ({final_count}/{MAX_POSITIONS_ALLOWED})")
+            except Exception as verify_err:
+                logger.debug(f"Position count verification skipped: {verify_err}")
 
         except Exception as e:
             # Never raise to keep bot loop alive
