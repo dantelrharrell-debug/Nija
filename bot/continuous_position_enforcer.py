@@ -405,7 +405,10 @@ def create_position_enforcer(
         ContinuousPositionEnforcer instance
     """
     # Import reduction engine
-    from user_position_reduction_engine import UserPositionReductionEngine
+    try:
+        from bot.user_position_reduction_engine import UserPositionReductionEngine
+    except ImportError:
+        from user_position_reduction_engine import UserPositionReductionEngine
     
     # Create reduction engine
     reduction_engine = UserPositionReductionEngine(

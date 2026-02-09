@@ -283,7 +283,7 @@ class UserPositionReductionEngine:
                         pnl_pct=position['pnl_pct'],
                         outcome=outcome.value,
                         reason=position['reason'],
-                        timestamp=datetime.now().isoformat()
+                        timestamp=datetime.utcnow().isoformat()
                     )
                 except Exception as ledger_err:
                     logger.warning(f"Failed to log closure to ledger: {ledger_err}")
