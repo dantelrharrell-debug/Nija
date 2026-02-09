@@ -81,6 +81,9 @@ class UserRiskState:
 
     # Circuit breaker
     circuit_breaker_triggered: bool = False
+    
+    # Forced unwind mode
+    forced_unwind_active: bool = False
 
     def reset_if_new_day(self):
         """Reset daily stats if it's a new day."""
@@ -450,6 +453,62 @@ class UserRiskManager:
                 self._user_states[user_id].circuit_breaker_triggered = False
                 self._save_state(self._user_states[user_id])
                 logger.info(f"Reset circuit breaker for {user_id}")
+    
+    def enable_forced_unwind(self, user_id: str):
+        """
+        Enable forced unwind mode for a user.
+        
+        When enabled, ALL positions for this user will be closed
+        as quickly as possible, bypassing all normal trading filters.
+        
+        Args:
+            user_id: User identifier
+        """
+        lock = self._get_user_lock(user_id)
+        
+        with lock:
+            if user_id not in self._user_states:
+                self._user_states[user_id] = self._load_state(user_id)
+            
+            self._user_states[user_id].forced_unwind_active = True
+            self._save_state(self._user_states[user_id])
+            
+            logger.warning(f"🚨 FORCED UNWIND ENABLED: {user_id}")
+            logger.warning(f"   All positions will be closed immediately")
+            logger.warning(f"   Normal trading filters will be bypassed")
+    
+    def disable_forced_unwind(self, user_id: str):
+        """
+        Disable forced unwind mode for a user.
+        
+        Args:
+            user_id: User identifier
+        """
+        lock = self._get_user_lock(user_id)
+        
+        with lock:
+            if user_id in self._user_states:
+                self._user_states[user_id].forced_unwind_active = False
+                self._save_state(self._user_states[user_id])
+                logger.info(f"✅ FORCED UNWIND DISABLED: {user_id}")
+    
+    def is_forced_unwind_active(self, user_id: str) -> bool:
+        """
+        Check if forced unwind mode is active for a user.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            True if forced unwind is active
+        """
+        lock = self._get_user_lock(user_id)
+        
+        with lock:
+            if user_id not in self._user_states:
+                self._user_states[user_id] = self._load_state(user_id)
+            
+            return self._user_states[user_id].forced_unwind_active
 
 
 # Global singleton instance

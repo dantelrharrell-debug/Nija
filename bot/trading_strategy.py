@@ -3322,10 +3322,20 @@ class TradingStrategy:
                 logger.info("   🚫 New entries: BLOCKED")
                 logger.info("=" * 70)
 
+            # CRITICAL FIX: Always try to manage positions BEFORE checking strategy
+            # This ensures exit logic runs even if apex strategy fails to load
+            # Previous bug: Early return here would skip ALL position management
+            
             # Get account balance for position sizing
-            if not active_broker or not self.apex:
-                logger.info("📡 Monitor mode (strategy not loaded; no trades)")
+            # NOTE: We no longer return early here - we'll check later for new entries only
+            if not active_broker:
+                logger.warning("⚠️ No active broker - cannot manage positions")
+                logger.info("📡 Monitor mode (no broker connection)")
                 return
+            
+            if not self.apex:
+                logger.warning("⚠️ Strategy not loaded - position management may be limited")
+                logger.warning("   Will attempt to close positions but cannot open new ones")
 
             # FIX #1: Update portfolio state from broker data
             # Get detailed balance including crypto holdings
@@ -3454,8 +3464,12 @@ class TradingStrategy:
             # Small delay after balance check to avoid rapid-fire API calls
             time.sleep(0.5)
 
-            # STEP 1: Manage existing positions (check for exits/profit taking)
-            logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
+            # CRITICAL FIX: Wrap position management in try-except to ensure it ALWAYS runs
+            # Previous bug: Any exception in position fetching would skip ALL exit logic
+            # New behavior: Exit logic attempts to run even if other parts fail
+            try:
+                # STEP 1: Manage existing positions (check for exits/profit taking)
+                logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
 
             # LOG POSITION PROFIT STATUS FOR VISIBILITY (Jan 26, 2026)
             if current_positions:
@@ -4590,6 +4604,21 @@ class TradingStrategy:
                     logger.error(f"   💡 Check Coinbase manually and retry or sell manually if needed")
                 logger.info(f"="*80)
                 logger.info(f"")
+
+            # CRITICAL FIX: Ensure position management errors don't crash the entire cycle
+            # If exit logic fails, log the error but continue to allow next cycle to retry
+            except Exception as exit_err:
+                logger.error("=" * 80)
+                logger.error("🚨 POSITION MANAGEMENT ERROR")
+                logger.error("=" * 80)
+                logger.error(f"   Error during position management: {exit_err}")
+                logger.error(f"   Type: {type(exit_err).__name__}")
+                logger.error("   Exit logic will retry next cycle (2.5 min)")
+                logger.error("=" * 80)
+                import traceback
+                logger.error(traceback.format_exc())
+                # Don't return - allow cycle to continue and try new entries
+                # This ensures the bot keeps running even if exit logic fails
 
             # STEP 2: Look for new entry opportunities (only if entries allowed)
             # USER accounts NEVER generate entry signals - they receive signals via CopyTradeEngine
