@@ -454,6 +454,183 @@ class ForcedPositionCleanup:
         
         return successful, failed
     
+    def _cleanup_user_all_brokers(self, 
+                                  user_id: str,
+                                  user_broker_dict: Dict,
+                                  is_startup: bool = False) -> List[Dict]:
+        """
+        Cleanup positions for a single user across ALL their brokers.
+        
+        CRITICAL: Enforces position cap PER USER (not per broker).
+        If a user has multiple brokers, we count positions across all brokers
+        and enforce the cap at the user level.
+        
+        Args:
+            user_id: User identifier
+            user_broker_dict: Dict of {BrokerType: BaseBroker} for this user
+            is_startup: Whether this is a startup cleanup
+        
+        Returns:
+            List of cleanup results (one per broker)
+        """
+        logger.info(f"")
+        logger.info(f"👤 USER: {user_id}")
+        logger.info(f"-" * 70)
+        
+        # Step 1: Collect all positions across all user's brokers
+        all_user_positions = []
+        broker_positions_map = {}  # Maps position symbol to broker instance
+        
+        for broker_type, broker in user_broker_dict.items():
+            if not broker or not broker.connected:
+                continue
+                
+            try:
+                positions = broker.get_positions()
+                for pos in positions:
+                    # Track which broker owns each position
+                    symbol = pos.get('symbol', '')
+                    if symbol:
+                        all_user_positions.append(pos)
+                        broker_positions_map[symbol] = broker
+            except Exception as e:
+                logger.warning(f"   ⚠️ Failed to get positions from {broker_type.value}: {e}")
+        
+        total_user_positions = len(all_user_positions)
+        logger.info(f"   📊 Active Positions: {total_user_positions} (across {len(user_broker_dict)} broker(s))")
+        
+        # Step 2: First pass - identify and close dust positions across all brokers
+        dust_positions = self.identify_dust_positions(all_user_positions)
+        dust_closed_total = 0
+        
+        if dust_positions:
+            logger.warning(f"   🧹 Found {len(dust_positions)} dust positions")
+            for dust_pos in dust_positions:
+                symbol = dust_pos['symbol']
+                broker = broker_positions_map.get(symbol)
+                if broker:
+                    account_id = self._get_account_id(user_id, broker)
+                    success, failed = self.execute_cleanup([dust_pos], broker, account_id, is_startup)
+                    dust_closed_total += success
+        
+        # Step 3: Refresh positions after dust cleanup
+        all_user_positions = []
+        broker_positions_map = {}
+        
+        for broker_type, broker in user_broker_dict.items():
+            if not broker or not broker.connected:
+                continue
+                
+            try:
+                positions = broker.get_positions()
+                for pos in positions:
+                    symbol = pos.get('symbol', '')
+                    if symbol:
+                        all_user_positions.append(pos)
+                        broker_positions_map[symbol] = broker
+            except Exception as e:
+                logger.warning(f"   ⚠️ Failed to refresh positions from {broker_type.value}: {e}")
+        
+        # Filter out dust from cap check
+        non_dust_positions = [
+            p for p in all_user_positions 
+            if (p.get('size_usd', 0) or p.get('usd_value', 0)) >= self.dust_threshold_usd
+        ]
+        
+        # Step 4: Enforce per-user position cap across all brokers
+        cap_closed_total = 0
+        current_count = len(non_dust_positions)
+        
+        logger.info(f"   📊 Active Positions (after dust cleanup): {current_count}")
+        
+        if current_count > self.max_positions:
+            logger.warning(f"   🔒 Position cap exceeded: {current_count}/{self.max_positions}")
+            
+            # Identify positions to close to meet cap
+            cap_excess_positions = self.identify_cap_excess_positions(non_dust_positions)
+            
+            # Close excess positions across all brokers
+            for cap_pos in cap_excess_positions:
+                symbol = cap_pos['symbol']
+                broker = broker_positions_map.get(symbol)
+                if broker:
+                    account_id = self._get_account_id(user_id, broker)
+                    success, failed = self.execute_cleanup([cap_pos], broker, account_id, is_startup)
+                    cap_closed_total += success
+        else:
+            logger.info(f"   ✅ Under cap (no action needed)")
+        
+        # Step 5: Final position count for this user
+        all_user_positions_final = []
+        for broker_type, broker in user_broker_dict.items():
+            if not broker or not broker.connected:
+                continue
+            try:
+                positions = broker.get_positions()
+                all_user_positions_final.extend(positions)
+            except Exception:
+                pass
+        
+        final_count = len(all_user_positions_final)
+        
+        logger.info(f"")
+        logger.info(f"   👤 USER {user_id} SUMMARY:")
+        logger.info(f"      Initial: {total_user_positions} positions")
+        logger.info(f"      Dust closed: {dust_closed_total}")
+        logger.info(f"      Cap excess closed: {cap_closed_total}")
+        logger.info(f"      Final: {final_count} positions")
+        logger.info(f"")
+        
+        # Return results for each broker (for compatibility with existing summary)
+        # Note: To avoid double-counting, we only report dust_closed and cap_closed once
+        results = []
+        totals_reported = False  # Flag to ensure totals reported only once
+        
+        for broker_type, broker in user_broker_dict.items():
+            if broker and broker.connected:
+                account_id = self._get_account_id(user_id, broker)
+                # Note: We already did cleanup above, so just report final state
+                try:
+                    final_positions = broker.get_positions()
+                    results.append({
+                        'account_id': account_id,
+                        'user_id': user_id,
+                        'user_total_initial': total_user_positions,  # Total across all brokers (for context)
+                        'initial_positions': len(final_positions),  # Current count for this broker
+                        'dust_closed': dust_closed_total if not totals_reported else 0,  # Report once
+                        'cap_closed': cap_closed_total if not totals_reported else 0,  # Report once
+                        'final_positions': len(final_positions),  # Current count for this broker
+                        'status': 'cleaned'
+                    })
+                    totals_reported = True  # Mark totals as reported
+                except Exception:
+                    results.append({
+                        'account_id': account_id,
+                        'user_id': user_id,
+                        'user_total_initial': total_user_positions,
+                        'initial_positions': 0,
+                        'dust_closed': 0,
+                        'cap_closed': 0,
+                        'final_positions': 0,
+                        'status': 'error'
+                    })
+        
+        return results
+    
+    def _get_account_id(self, user_id: str, broker) -> str:
+        """
+        Helper to construct account ID from user_id and broker.
+        
+        Args:
+            user_id: User identifier
+            broker: Broker instance
+            
+        Returns:
+            Account ID string (e.g., "user_user123_coinbase")
+        """
+        broker_type_str = broker.broker_type.value if hasattr(broker, 'broker_type') else 'unknown'
+        return f"user_{user_id}_{broker_type_str}"
+
     def cleanup_single_account(self,
                                broker,
                                account_id: str = "platform",
@@ -566,6 +743,9 @@ class ForcedPositionCleanup:
         """
         Run forced cleanup across all accounts (platform + users).
         
+        CRITICAL: Enforces position caps PER USER across all their brokers.
+        Each user is limited to max_positions (default 8) total positions.
+        
         Args:
             multi_account_manager: MultiAccountBrokerManager instance
             is_startup: Whether this is a startup cleanup
@@ -590,17 +770,19 @@ class ForcedPositionCleanup:
                 result = self.cleanup_single_account(broker, account_id, is_startup)
                 results.append(result)
         
-        # Cleanup user accounts
+        # Cleanup user accounts - ENFORCE PER-USER POSITION CAPS
         logger.info("")
         logger.info("👥 USER ACCOUNTS")
         logger.info("-" * 70)
         
         for user_id, user_broker_dict in multi_account_manager.user_brokers.items():
-            for broker_type, broker in user_broker_dict.items():
-                if broker and broker.connected:
-                    account_id = f"user_{user_id}_{broker_type.value}"
-                    result = self.cleanup_single_account(broker, account_id, is_startup)
-                    results.append(result)
+            # Process all brokers for this user together to enforce per-user cap
+            user_result = self._cleanup_user_all_brokers(
+                user_id, 
+                user_broker_dict, 
+                is_startup
+            )
+            results.extend(user_result)
         
         # Summary
         total_initial = sum(r['initial_positions'] for r in results)
