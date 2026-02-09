@@ -88,6 +88,15 @@ function updateSafetyUI(status) {
         tradingToggle.disabled = !status.ui_indicators?.allow_toggle;
         tradingToggle.checked = status.trading_allowed;
     }
+
+    // CRITICAL: Disable all trade execution buttons when in APP_STORE_MODE
+    if (status.app_store_mode || status.ui_indicators?.trade_buttons_disabled) {
+        disableAllTradeButtons();
+        showAppStoreModeBanner();
+    } else {
+        enableTradeButtonsIfAllowed(status.trading_allowed);
+        hideAppStoreModeBanner();
+    }
 }
 
 /**
@@ -103,6 +112,16 @@ function updateConditionalBanners(status) {
             simulationBanner.classList.remove('hidden');
         } else {
             simulationBanner.classList.add('hidden');
+        }
+    }
+
+    // App Store banner (App Store Review Mode)
+    const appStoreBanner = document.getElementById('app-store-banner');
+    if (appStoreBanner) {
+        if (indicators.show_app_store_banner) {
+            appStoreBanner.classList.remove('hidden');
+        } else {
+            appStoreBanner.classList.add('hidden');
         }
     }
 
@@ -125,6 +144,102 @@ function updateConditionalBanners(status) {
         } else {
             setupBanner.classList.add('hidden');
         }
+    }
+}
+
+// ========================================
+// Trade Button Management (APP_STORE_MODE)
+// ========================================
+
+/**
+ * Disable all trade execution buttons
+ * Called when APP_STORE_MODE is active
+ */
+function disableAllTradeButtons() {
+    // Find all buttons that execute trades
+    const tradeButtons = document.querySelectorAll(
+        'button[data-action="buy"], ' +
+        'button[data-action="sell"], ' +
+        'button[data-action="close"], ' +
+        'button[data-action="execute-trade"], ' +
+        '.trade-button, ' +
+        '.execute-button, ' +
+        '.buy-button, ' +
+        '.sell-button'
+    );
+
+    tradeButtons.forEach(button => {
+        button.disabled = true;
+        button.setAttribute('data-app-store-disabled', 'true');
+        button.title = 'Trade execution disabled in App Store review mode';
+        
+        // Add visual indicator
+        if (!button.classList.contains('app-store-disabled')) {
+            button.classList.add('app-store-disabled');
+        }
+    });
+
+    console.log(`🔒 Disabled ${tradeButtons.length} trade execution buttons (APP_STORE_MODE)`);
+}
+
+/**
+ * Enable trade buttons if trading is allowed
+ * Only called when NOT in APP_STORE_MODE
+ */
+function enableTradeButtonsIfAllowed(tradingAllowed) {
+    const tradeButtons = document.querySelectorAll('[data-app-store-disabled="true"]');
+    
+    tradeButtons.forEach(button => {
+        if (tradingAllowed) {
+            button.disabled = false;
+            button.removeAttribute('data-app-store-disabled');
+            button.title = '';
+            button.classList.remove('app-store-disabled');
+        }
+    });
+
+    if (tradingAllowed) {
+        console.log(`✅ Enabled ${tradeButtons.length} trade execution buttons`);
+    }
+}
+
+/**
+ * Show App Store review mode banner
+ */
+function showAppStoreModeBanner() {
+    let banner = document.getElementById('app-store-mode-banner');
+    
+    if (!banner) {
+        // Create banner if it doesn't exist
+        banner = document.createElement('div');
+        banner.id = 'app-store-mode-banner';
+        banner.className = 'app-store-banner';
+        banner.innerHTML = `
+            <div class="banner-content">
+                <span class="banner-icon">📱</span>
+                <div class="banner-text">
+                    <strong>APP STORE REVIEW MODE</strong>
+                    <p>This is a read-only demonstration. All dashboards and metrics are visible, but trade execution is disabled.</p>
+                    <p>Simulator/sandbox trades are available to demonstrate functionality.</p>
+                </div>
+            </div>
+        `;
+        
+        // Insert at top of body or main content area
+        const mainContent = document.querySelector('main') || document.body;
+        mainContent.insertBefore(banner, mainContent.firstChild);
+    }
+    
+    banner.classList.remove('hidden');
+}
+
+/**
+ * Hide App Store review mode banner
+ */
+function hideAppStoreModeBanner() {
+    const banner = document.getElementById('app-store-mode-banner');
+    if (banner) {
+        banner.classList.add('hidden');
     }
 }
 
