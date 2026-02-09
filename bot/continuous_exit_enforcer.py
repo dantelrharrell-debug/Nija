@@ -134,6 +134,9 @@ class ContinuousExitEnforcer:
         logger.info("Starting continuous position monitoring loop...")
         
         check_count = 0
+        # Calculate sleep interval to avoid busy-waiting while allowing quick shutdown
+        # Use smaller intervals (min 1 second) for short check intervals
+        # Use up to 10 seconds for longer check intervals to reduce CPU usage
         sleep_interval = min(10, self.check_interval // 2) if self.check_interval >= 2 else 1
         checks_per_interval = max(1, self.check_interval // sleep_interval)
         
@@ -221,10 +224,14 @@ class ContinuousExitEnforcer:
         """
         try:
             # Sort positions by USD value (smallest first)
-            sorted_positions = sorted(
-                positions,
-                key=lambda p: (p.get('quantity', 0) * p.get('price', 0))
-            )
+            # Use safe fallback for missing or invalid prices
+            def get_position_value(p):
+                quantity = p.get('quantity', 0)
+                price = p.get('price', 0)
+                # Treat missing/zero prices as 0 to sort them first
+                return quantity * (price if price and price > 0 else 0)
+            
+            sorted_positions = sorted(positions, key=get_position_value)
             
             # Close smallest positions
             closed_count = 0

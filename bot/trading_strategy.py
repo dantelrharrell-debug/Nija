@@ -3536,15 +3536,6 @@ class TradingStrategy:
                         logger.error("   ALL positions will be closed immediately")
                         logger.error("   Bypassing all normal trading filters")
                         logger.error("=" * 80)
-                    logger.info("=" * 70)
-                    logger.info("🔥 LEGACY POSITION DRAIN MODE ACTIVE")
-                    logger.info("=" * 70)
-                    logger.info(f"   📊 Excess positions: {positions_over_cap}")
-                    logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
-                    logger.info(f"   🔄 Drain rate: 1-{min(positions_over_cap, 3)} positions per cycle")
-                    logger.info(f"   🚫 New entries: BLOCKED until under {MAX_POSITIONS_ALLOWED} positions")
-                    logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
-                    logger.info("=" * 70)
 
                 # CRITICAL FIX: Identify ALL positions that need to exit first
                 # Then sell them ALL concurrently, not one at a time
@@ -3575,6 +3566,15 @@ class TradingStrategy:
                 
                 # Normal position analysis (only if NOT in forced unwind mode)
                 else:
+                    logger.info("=" * 70)
+                    logger.info("🔥 LEGACY POSITION DRAIN MODE ACTIVE")
+                    logger.info("=" * 70)
+                    logger.info(f"   📊 Excess positions: {positions_over_cap}")
+                    logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
+                    logger.info(f"   🔄 Drain rate: 1-{min(positions_over_cap, 3)} positions per cycle")
+                    logger.info(f"   🚫 New entries: BLOCKED until under {MAX_POSITIONS_ALLOWED} positions")
+                    logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
+                    logger.info("=" * 70)
                     for position_idx, position in enumerate(current_positions):
                         try:
                             symbol = position.get('symbol')
