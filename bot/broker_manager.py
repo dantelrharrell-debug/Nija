@@ -8307,9 +8307,10 @@ class BrokerManager:
         Get all broker objects managed by this BrokerManager.
         
         Returns:
-            Dict[BrokerType, BaseBroker]: Dictionary mapping broker types to broker instances
+            Dict[BrokerType, BaseBroker]: Dictionary mapping broker types to broker instances.
+            Returns a copy to prevent external modification of internal state.
         """
-        return self.brokers
+        return self.brokers.copy()
 
 # Global instance
 broker_manager = BrokerManager()
