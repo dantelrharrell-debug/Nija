@@ -409,7 +409,18 @@ class HardControls:
         Returns:
             (can_trade, error_message)
         """
-        # CRITICAL: Check LIVE CAPITAL VERIFIED first (master kill-switch)
+        # CRITICAL LAYER 1: Check APP STORE MODE first (absolute block)
+        # This check happens BEFORE all other checks to ensure Apple App Review safety
+        try:
+            from bot.app_store_mode import check_execution_allowed
+            execution_allowed, app_store_reason = check_execution_allowed()
+            if not execution_allowed:
+                return False, app_store_reason
+        except ImportError:
+            # App Store mode module not available - continue with other checks
+            pass
+        
+        # CRITICAL LAYER 2: Check LIVE CAPITAL VERIFIED (master kill-switch)
         if not self.live_capital_verified:
             return False, "🔴 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading."
 

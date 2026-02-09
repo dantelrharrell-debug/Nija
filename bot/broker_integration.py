@@ -233,6 +233,10 @@ class BrokerInterface(ABC):
                           size_type: str = 'quote') -> Optional[Dict]:
         """
         Place market order.
+        
+        CRITICAL SAFETY: This method is protected by APP_STORE_MODE.
+        When APP_STORE_MODE=true, this method MUST NOT execute real orders.
+        Implementations should check is_app_store_mode_enabled() before execution.
 
         Args:
             symbol: Trading symbol

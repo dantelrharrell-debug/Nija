@@ -2571,6 +2571,23 @@ class CoinbaseBroker(BaseBroker):
         Returns:
             Order response dictionary
         """
+        # 🍎 CRITICAL LAYER 0: APP STORE MODE CHECK (Absolute Block)
+        # This check happens BEFORE all other checks to ensure Apple App Review safety
+        # When APP_STORE_MODE=true, NO real orders can be placed
+        try:
+            from bot.app_store_mode import get_app_store_mode
+            app_store_mode = get_app_store_mode()
+            if app_store_mode.is_enabled():
+                return app_store_mode.block_execution_with_log(
+                    operation='place_market_order',
+                    symbol=symbol,
+                    side=side,
+                    size=quantity
+                )
+        except ImportError:
+            # App Store mode module not available - continue with other checks
+            pass
+        
         try:
             # CRITICAL FIX (Jan 10, 2026): Validate symbol parameter before any API calls
             # Prevents "ProductID is invalid" errors from Coinbase API
@@ -4219,6 +4236,20 @@ class AlpacaBroker(BaseBroker):
 
     def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Place market order"""
+        # 🍎 CRITICAL LAYER 0: APP STORE MODE CHECK (Absolute Block)
+        try:
+            from bot.app_store_mode import get_app_store_mode
+            app_store_mode = get_app_store_mode()
+            if app_store_mode.is_enabled():
+                return app_store_mode.block_execution_with_log(
+                    operation='place_market_order',
+                    symbol=symbol,
+                    side=side,
+                    size=quantity
+                )
+        except ImportError:
+            pass
+        
         try:
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
@@ -6654,6 +6685,20 @@ class KrakenBroker(BaseBroker):
         Returns:
             dict: Order result with status, order_id, etc.
         """
+        # 🍎 CRITICAL LAYER 0: APP STORE MODE CHECK (Absolute Block)
+        try:
+            from bot.app_store_mode import get_app_store_mode
+            app_store_mode = get_app_store_mode()
+            if app_store_mode.is_enabled():
+                return app_store_mode.block_execution_with_log(
+                    operation='place_market_order',
+                    symbol=symbol,
+                    side=side,
+                    size=quantity
+                )
+        except ImportError:
+            pass
+        
         try:
             if not self.api:
                 return {"status": "error", "error": "Not connected to Kraken"}
