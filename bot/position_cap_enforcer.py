@@ -34,7 +34,7 @@ try:
 except ImportError:
     logger.warning("Failed to import dust_blacklist - blacklist feature disabled")
     get_dust_blacklist = None
-    BLACKLIST_THRESHOLD = DUST_THRESHOLD_USD
+    BLACKLIST_THRESHOLD = 1.00  # Fallback value when dust_blacklist is not available
 
 
 class PositionCapEnforcer:
@@ -180,23 +180,23 @@ class PositionCapEnforcer:
         Returns:
             Ranked list (highest-priority-to-sell first = smallest positions)
         """
-        # Sort by LARGEST first, then reverse to get smallest-to-liquidate first
-        # This ensures we KEEP the top N largest positions
-        ranked_largest_first = sorted(positions, key=lambda p: p['usd_value'], reverse=True)
+        # Sort by smallest first (these will be liquidated)
+        # This is more efficient than sorting by largest then reversing
+        ranked_smallest_first = sorted(positions, key=lambda p: p['usd_value'])
         
-        # Reverse to get smallest positions first (these will be liquidated)
-        ranked = list(reversed(ranked_largest_first))
+        # Also create largest-first list for logging which positions we keep
+        ranked_largest_first = sorted(positions, key=lambda p: p['usd_value'], reverse=True)
 
-        logger.info(f"Ranked {len(ranked)} positions for liquidation:")
+        logger.info(f"Ranked {len(ranked_smallest_first)} positions for liquidation:")
         logger.info(f"  📊 KEEPING largest positions, selling smallest:")
-        for i, pos in enumerate(ranked, 1):
-            logger.info(f"  {i}. {pos['symbol']}: ${pos['usd_value']:.2f} ← LIQUIDATE")
+        for i, pos in enumerate(ranked_smallest_first, 1):
+            logger.info(f"  {i}. {pos['symbol']}: ${pos['usd_value']:.2f} (LIQUIDATE)")
         
         logger.info(f"  📌 Positions to KEEP (largest {self.max_positions}):")
         for i, pos in enumerate(ranked_largest_first[:self.max_positions], 1):
-            logger.info(f"  {i}. {pos['symbol']}: ${pos['usd_value']:.2f} ← KEEP")
+            logger.info(f"  {i}. {pos['symbol']}: ${pos['usd_value']:.2f} (KEEP)")
 
-        return ranked
+        return ranked_smallest_first
 
     def sell_position(self, position: Dict) -> bool:
         """
