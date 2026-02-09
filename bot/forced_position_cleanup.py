@@ -573,6 +573,13 @@ class ForcedPositionCleanup:
         
         final_count = len(all_user_positions_final)
         
+        # SAFETY VERIFICATION: Ensure user is under cap
+        if final_count > self.max_positions:
+            logger.error(f"   ❌ SAFETY VIOLATION: User {user_id} final count {final_count} exceeds cap {self.max_positions}")
+            logger.error(f"      This should never happen - per-user cleanup failed!")
+        else:
+            logger.info(f"   ✅ SAFETY VERIFIED: User {user_id} final count {final_count} ≤ cap {self.max_positions}")
+        
         logger.info(f"")
         logger.info(f"   👤 USER {user_id} SUMMARY:")
         logger.info(f"      Initial: {total_user_positions} positions")
@@ -731,6 +738,13 @@ class ForcedPositionCleanup:
             final_count = len(final_positions)
         except Exception:
             final_count = initial_count - dust_closed - cap_closed
+        
+        # SAFETY VERIFICATION: Ensure we're actually under cap
+        if final_count > self.max_positions:
+            logger.error(f"   ❌ SAFETY VIOLATION: Final count {final_count} still exceeds cap {self.max_positions}")
+            logger.error(f"      This should never happen - cleanup failed to enforce cap!")
+        else:
+            logger.info(f"   ✅ SAFETY VERIFIED: Final count {final_count} ≤ cap {self.max_positions}")
         
         return {
             'account_id': account_id,

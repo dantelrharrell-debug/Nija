@@ -5174,10 +5174,14 @@ class TradingStrategy:
                                 elif position_size < 10.0:
                                     logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
 
-                                # CRITICAL: Verify we're still under position cap
+                                # CRITICAL: Verify we're still under position cap before placing order
                                 if len(current_positions) >= MAX_POSITIONS_ALLOWED:
-                                    logger.warning(f"   ⚠️  Position cap ({MAX_POSITIONS_ALLOWED}) reached - STOP NEW ENTRIES")
+                                    logger.error(f"   ❌ SAFETY VIOLATION: Position cap ({MAX_POSITIONS_ALLOWED}) reached - BLOCKING NEW ENTRY")
+                                    logger.error(f"      Current positions: {len(current_positions)}")
+                                    logger.error(f"      This should not happen - cap should have been checked earlier!")
                                     break
+                                
+                                logger.info(f"   ✅ Final position cap check: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} - OK to enter")
 
                                 # PRO MODE: Check if rotation is needed
                                 needs_rotation = False
@@ -5421,6 +5425,27 @@ class TradingStrategy:
 
             # Increment cycle counter for warmup tracking
             self.cycle_count += 1
+            
+            # SAFETY VERIFICATION: Check position count at end of cycle
+            try:
+                if active_broker:
+                    final_positions = active_broker.get_positions()
+                    final_count = len(final_positions)
+                    
+                    if final_count > MAX_POSITIONS_ALLOWED:
+                        logger.error(f"")
+                        logger.error(f"❌ SAFETY VIOLATION DETECTED AT END OF CYCLE!")
+                        logger.error(f"   Position count: {final_count}")
+                        logger.error(f"   Maximum allowed: {MAX_POSITIONS_ALLOWED}")
+                        logger.error(f"   Excess positions: {final_count - MAX_POSITIONS_ALLOWED}")
+                        logger.error(f"   ⚠️ CRITICAL: Cap enforcement failed - this should never happen!")
+                        logger.error(f"")
+                    elif final_count == MAX_POSITIONS_ALLOWED:
+                        logger.info(f"✅ Position cap verification: At cap ({final_count}/{MAX_POSITIONS_ALLOWED})")
+                    else:
+                        logger.info(f"✅ Position cap verification: Under cap ({final_count}/{MAX_POSITIONS_ALLOWED})")
+            except Exception as verify_err:
+                logger.debug(f"Position count verification skipped: {verify_err}")
 
         except Exception as e:
             # Never raise to keep bot loop alive
