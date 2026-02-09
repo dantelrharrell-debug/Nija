@@ -713,6 +713,7 @@ class TradingStrategy:
             )
             from multi_account_broker_manager import multi_account_broker_manager
             from position_cap_enforcer import PositionCapEnforcer
+            from dust_blacklist import get_dust_blacklist
             from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
 
             # Initialize multi-account broker manager for user-specific trading
@@ -1381,6 +1382,14 @@ class TradingStrategy:
             # Initialize position cap enforcer (Maximum 8 positions total across all brokers)
             if self.broker:
                 self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
+                
+                # Initialize dust blacklist for permanent sub-$1 position exclusion
+                try:
+                    self.dust_blacklist = get_dust_blacklist()
+                    logger.info("🗑️  Dust blacklist initialized for position normalization")
+                except Exception as blacklist_err:
+                    logger.warning(f"⚠️  Failed to initialize dust blacklist: {blacklist_err}")
+                    self.dust_blacklist = None
                 
                 # Initialize forced cleanup engine for aggressive dust and cap enforcement
                 try:
@@ -3304,6 +3313,25 @@ class TradingStrategy:
                     logger.info(f"   ℹ️  Filtered {filtered_count} unsellable position(s) from count (dust or unsupported)")
 
                 current_positions = tradable_positions
+
+            # POSITION NORMALIZATION: Filter out permanently blacklisted dust positions
+            # These are positions < $1 USD that have been permanently excluded
+            if current_positions and hasattr(self, 'dust_blacklist') and self.dust_blacklist:
+                non_blacklisted_positions = []
+                blacklisted_count = 0
+                
+                for pos in current_positions:
+                    symbol = pos.get('symbol')
+                    if symbol and self.dust_blacklist.is_blacklisted(symbol):
+                        blacklisted_count += 1
+                        logger.debug(f"   ⛔ Excluding blacklisted position: {symbol}")
+                        continue
+                    non_blacklisted_positions.append(pos)
+                
+                if blacklisted_count > 0:
+                    logger.info(f"   🗑️  Filtered {blacklisted_count} blacklisted position(s) from count (permanent dust exclusion)")
+                
+                current_positions = non_blacklisted_positions
 
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
