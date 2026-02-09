@@ -7,6 +7,7 @@ The Forced Position Cleanup system addresses critical issues with position fragm
 1. **Aggressive Dust Cleanup** - Automatically closes ALL positions < $1 USD
 2. **Retroactive Position Cap Enforcement** - Prunes excess positions to stay under hard cap
 3. **Multi-Account Support** - Works across platform and user accounts
+4. **Per-User Position Caps** - Enforces 8-position limit **per user** across all their brokers (not per broker)
 
 ## Problem Statement
 
@@ -17,12 +18,18 @@ The Forced Position Cleanup system addresses critical issues with position fragm
 - Existing positions (adopted from legacy holdings) were not subject to cap
 - Result: Users had 50+ positions despite 8-position cap
 
-**2. Extreme Position Fragmentation**
+**2. Position Cap Not Enforced Per User**
+- **CRITICAL FIX**: Position caps were enforced per broker, not per user
+- If a user had 2 brokers with 5 positions each, they had 10 total (exceeds cap)
+- Each broker was under cap individually, but user total exceeded limit
+- **NEW BEHAVIOR**: Positions counted across ALL user's brokers, cap enforced per user
+
+**3. Extreme Position Fragmentation**
 - Many positions worth only pennies ($0.04 - $0.50)
 - Trading fees and spreads eat all potential profit
 - Capital locked in worthless dust positions
 
-**3. Platform Position Count Mismatch**
+**4. Platform Position Count Mismatch**
 - Internal tracker shows different count than exchange
 - Phantom positions or missed holdings
 - Inconsistent exit logic
@@ -40,11 +47,19 @@ The Forced Position Cleanup system addresses critical issues with position fragm
 - Executes market sells with proper logging
 - Supports dry-run mode for testing
 - Multi-account aware
+- **Per-User Position Cap Enforcement** - Counts positions across ALL user's brokers
 
 **Ranking Criteria for Cap Enforcement:**
 1. Lowest USD value (minimize capital impact)
 2. Worst P&L (cut losers first)
 3. Oldest age (if available)
+
+**Per-User Behavior:**
+- Each user's positions are aggregated across ALL their brokers
+- Example: User with Coinbase (5 positions) + Kraken (4 positions) = 9 total
+- Cap enforced at user level: 9 positions triggers cleanup to reach 8
+- Cleanup closes smallest/weakest positions first across all brokers
+- Platform positions counted separately from user positions
 
 #### 2. Automatic Integration
 **File:** `bot/trading_strategy.py`
@@ -569,9 +584,52 @@ FORCED_CLEANUP_CANCEL_OPEN_ORDERS_IF=usd_value<1.0,rank>max_positions
 - **Implementation:** `bot/forced_position_cleanup.py`
 - **Integration:** `bot/trading_strategy.py` (search "FORCED CLEANUP")
 - **Manual Tool:** `run_forced_cleanup.py`
-- **Tests:** `test_forced_cleanup.py`
+- **Tests:** `test_forced_cleanup.py`, `test_user_position_caps.py`
+
+## Expected Output Format
+
+When running cleanup, you should see per-user position aggregation:
+
+```
+👥 USER ACCOUNTS
+----------------------------------------------------------------------
+
+👤 USER: user_123
+----------------------------------------------------------------------
+   📊 Active Positions: 9 (across 2 broker(s))
+   🧹 Found 0 dust positions
+   📊 Active Positions (after dust cleanup): 9
+   🔒 Position cap exceeded: 9/8
+
+🧹 [CAP_EXCEEDED][FORCED] BTC-USD
+   Account: user_user_123_coinbase
+   Reason: Position cap exceeded (9/8)
+   Size: $5.00
+   P&L: +2.50%
+   PROFIT_STATUS = PENDING → CONFIRMED
+   OUTCOME = WIN
+   ✅ CLOSED SUCCESSFULLY
+
+   👤 USER user_123 SUMMARY:
+      Initial: 9 positions
+      Dust closed: 0
+      Cap excess closed: 1
+      Final: 8 positions
+```
+
+**Key Points:**
+- Position count shows TOTAL across all user's brokers
+- Cap enforcement happens at USER level (not per broker)
+- Each user limited to 8 positions total
+- Platform accounts counted separately from user accounts
 
 ## Version History
+
+**v2.0 (Feb 2026)**
+- **BREAKING CHANGE:** Per-user position cap enforcement
+- Positions counted across all user's brokers (not per broker)
+- Enhanced logging with per-user aggregation
+- Clear user-level summaries in output
 
 **v1.0 (Feb 2026)**
 - Initial implementation
