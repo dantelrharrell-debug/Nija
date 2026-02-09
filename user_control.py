@@ -125,6 +125,66 @@ class UserExecutionInstance:
         """Get trading statistics for this user."""
         # TODO: Query actual stats from execution engine
         return self.stats
+    
+    def reduce_positions(
+        self,
+        broker_type: str = "kraken",
+        max_positions: Optional[int] = None,
+        dust_threshold_usd: Optional[float] = None,
+        dry_run: bool = False
+    ) -> Dict:
+        """
+        Reduce positions for this user.
+        
+        Args:
+            broker_type: Broker type (e.g., 'kraken')
+            max_positions: Maximum positions allowed (overrides default)
+            dust_threshold_usd: Dust threshold in USD (overrides default)
+            dry_run: If True, preview only without executing
+        
+        Returns:
+            Dictionary with reduction results
+        """
+        try:
+            # Import reduction engine
+            from bot.user_position_reduction_engine import UserPositionReductionEngine
+            from bot.multi_account_broker_manager import MultiAccountBrokerManager
+            from bot.portfolio_state import PortfolioStateManager
+            
+            # Get managers (in production, these would be injected)
+            broker_mgr = MultiAccountBrokerManager()
+            portfolio_mgr = PortfolioStateManager()
+            
+            # Create reduction engine
+            engine = UserPositionReductionEngine(
+                multi_account_broker_manager=broker_mgr,
+                portfolio_state_manager=portfolio_mgr,
+                trade_ledger=None
+            )
+            
+            # Execute reduction
+            result = engine.reduce_user_positions(
+                user_id=self.user_id,
+                broker_type=broker_type,
+                dry_run=dry_run,
+                max_positions=max_positions,
+                dust_threshold_usd=dust_threshold_usd
+            )
+            
+            # Update stats
+            if not dry_run and result.get('closed_positions', 0) > 0:
+                self.stats['active_positions'] = result.get('final_positions', 0)
+                self.last_activity = datetime.utcnow()
+            
+            return result
+        
+        except Exception as e:
+            logger.error(f"Error reducing positions for {self.user_id}: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'user_id': self.user_id
+            }
 
 
 class UserControlBackend:
