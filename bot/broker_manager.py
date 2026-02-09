@@ -8304,3 +8304,7 @@ class BrokerManager:
 
 # Global instance
 broker_manager = BrokerManager()
+
+def get_broker_manager():
+    """Get the global broker manager instance."""
+    return broker_manager
