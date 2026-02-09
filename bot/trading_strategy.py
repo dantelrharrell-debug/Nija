@@ -690,6 +690,19 @@ class TradingStrategy:
         except Exception as e:
             logger.warning(f"⚠️  Could not start credential monitoring: {e}")
             self.credential_monitor = None
+        
+        # Initialize continuous exit enforcer for fail-safe position management
+        # This runs independently of the main trading loop to ensure positions
+        # are always managed even when main loop encounters errors
+        try:
+            from continuous_exit_enforcer import get_continuous_exit_enforcer
+            logger.info("🛡️ Starting continuous exit enforcer...")
+            self.continuous_exit_enforcer = get_continuous_exit_enforcer()
+            self.continuous_exit_enforcer.start()
+            logger.info("   ✅ Continuous exit enforcer active (checks every 60 seconds)")
+        except Exception as e:
+            logger.warning(f"⚠️  Could not start continuous exit enforcer: {e}")
+            self.continuous_exit_enforcer = None
 
         try:
             # Lazy imports to avoid circular deps and allow fallback
@@ -3471,1142 +3484,1185 @@ class TradingStrategy:
                 # STEP 1: Manage existing positions (check for exits/profit taking)
                 logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
 
-            # LOG POSITION PROFIT STATUS FOR VISIBILITY (Jan 26, 2026)
-            if current_positions:
-                try:
-                    # Get current prices for all open positions
-                    current_prices_dict = {}
-                    for pos in current_positions:
+                # LOG POSITION PROFIT STATUS FOR VISIBILITY (Jan 26, 2026)
+                if current_positions:
+                    try:
+                        # Get current prices for all open positions
+                        current_prices_dict = {}
+                        for pos in current_positions:
+                            try:
+                                symbol = pos.get('symbol')
+                                if symbol:
+                                    # Fetch current price from broker
+                                    candles = active_broker.get_market_data(symbol, limit=1)
+                                    if candles and len(candles) > 0:
+                                        current_prices_dict[symbol] = candles[-1]['close']
+                            except Exception as price_err:
+                                logger.debug(f"Could not fetch price for {pos.get('symbol')}: {price_err}")
+
+                        # Log position profit status summary
+                        if hasattr(self, 'execution_engine') and self.execution_engine:
+                            self.execution_engine.log_position_profit_status(current_prices_dict)
+                    except Exception as log_err:
+                        logger.debug(f"Could not log position profit status during position monitoring: {log_err}")
+
+                # NOTE (Jan 24, 2026): Stop-loss tiers are now calculated PER-POSITION based on each position's broker
+                # This ensures correct stop-loss thresholds for positions on different exchanges (Kraken vs Coinbase)
+                # See line ~2169 where position_primary_stop, position_micro_stop are calculated for each position
+                # using self._get_stop_loss_tier(position_broker, position_broker_balance)
+
+                # CRITICAL: If over position cap, prioritize selling weakest positions immediately
+                # This ensures we get back under cap quickly to avoid further bleeding
+                # Position cap set to 8 maximum concurrent positions
+                positions_over_cap = len(current_positions) - MAX_POSITIONS_ALLOWED
+                if positions_over_cap > 0:
+                    logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} positions ({positions_over_cap} excess)")
+                    logger.warning(f"   Will prioritize selling {positions_over_cap} weakest positions first")
+                
+                # CRITICAL: Check for forced unwind mode (per-user emergency exit)
+                # When enabled, ALL positions are closed immediately regardless of P&L
+                forced_unwind_active = False
+                if hasattr(self, 'continuous_exit_enforcer') and self.continuous_exit_enforcer:
+                    # Get user_id from broker (if available)
+                    user_id = getattr(active_broker, 'user_id', 'platform')
+                    forced_unwind_active = self.continuous_exit_enforcer.is_forced_unwind_active(user_id)
+                    
+                    if forced_unwind_active:
+                        logger.error("=" * 80)
+                        logger.error("🚨 FORCED UNWIND MODE ACTIVE")
+                        logger.error("=" * 80)
+                        logger.error(f"   User: {user_id}")
+                        logger.error(f"   Positions: {len(current_positions)}")
+                        logger.error("   ALL positions will be closed immediately")
+                        logger.error("   Bypassing all normal trading filters")
+                        logger.error("=" * 80)
+                    logger.info("=" * 70)
+                    logger.info("🔥 LEGACY POSITION DRAIN MODE ACTIVE")
+                    logger.info("=" * 70)
+                    logger.info(f"   📊 Excess positions: {positions_over_cap}")
+                    logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
+                    logger.info(f"   🔄 Drain rate: 1-{min(positions_over_cap, 3)} positions per cycle")
+                    logger.info(f"   🚫 New entries: BLOCKED until under {MAX_POSITIONS_ALLOWED} positions")
+                    logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
+                    logger.info("=" * 70)
+
+                # CRITICAL FIX: Identify ALL positions that need to exit first
+                # Then sell them ALL concurrently, not one at a time
+                positions_to_exit = []
+                
+                # FORCED UNWIND MODE: Close all positions immediately
+                if forced_unwind_active:
+                    logger.warning("🚨 FORCED UNWIND: Adding all positions to exit queue")
+                    for position in current_positions:
+                        symbol = position.get('symbol')
+                        quantity = position.get('quantity', 0)
+                        position_broker = position.get('_broker', active_broker)
+                        position_broker_type = position.get('_broker_type')
+                        broker_label = position_broker_type.value.upper() if (position_broker_type and hasattr(position_broker_type, 'value')) else "UNKNOWN"
+                        
+                        if symbol and quantity > 0:
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': 'FORCED UNWIND (emergency consolidation)',
+                                'broker': position_broker,
+                                'broker_label': broker_label,
+                                'force_liquidate': True  # Bypass all filters
+                            })
+                    
+                    logger.warning(f"🚨 FORCED UNWIND: {len(positions_to_exit)} positions queued for immediate exit")
+                    # Skip normal position analysis - just close everything
+                
+                # Normal position analysis (only if NOT in forced unwind mode)
+                else:
+                    for position_idx, position in enumerate(current_positions):
                         try:
-                            symbol = pos.get('symbol')
-                            if symbol:
-                                # Fetch current price from broker
-                                candles = active_broker.get_market_data(symbol, limit=1)
-                                if candles and len(candles) > 0:
-                                    current_prices_dict[symbol] = candles[-1]['close']
-                        except Exception as price_err:
-                            logger.debug(f"Could not fetch price for {pos.get('symbol')}: {price_err}")
+                            symbol = position.get('symbol')
+                            if not symbol:
+                                continue
 
-                    # Log position profit status summary
-                    if hasattr(self, 'execution_engine') and self.execution_engine:
-                        self.execution_engine.log_position_profit_status(current_prices_dict)
-                except Exception as log_err:
-                    logger.debug(f"Could not log position profit status during position monitoring: {log_err}")
+                            # Skip positions we know can't be sold (too small/dust)
+                            # But allow retry after timeout in case position grew or API error was temporary
+                            if symbol in self.unsellable_positions:
+                                # Check if enough time has passed to retry
+                                marked_time = self.unsellable_positions[symbol]
+                                time_since_marked = time.time() - marked_time
+                                if time_since_marked < self.unsellable_retry_timeout:
+                                    logger.debug(f"   ⏭️ Skipping {symbol} (marked unsellable {time_since_marked/3600:.1f}h ago, retry in {(self.unsellable_retry_timeout - time_since_marked)/3600:.1f}h)")
+                                    continue
+                                else:
+                                    logger.info(f"   🔄 Retrying {symbol} (marked unsellable {time_since_marked/3600:.1f}h ago - timeout reached)")
+                                    # Remove from unsellable dict to allow full processing
+                                    del self.unsellable_positions[symbol]
 
-            # NOTE (Jan 24, 2026): Stop-loss tiers are now calculated PER-POSITION based on each position's broker
-            # This ensures correct stop-loss thresholds for positions on different exchanges (Kraken vs Coinbase)
-            # See line ~2169 where position_primary_stop, position_micro_stop are calculated for each position
-            # using self._get_stop_loss_tier(position_broker, position_broker_balance)
+                            # CRITICAL FIX (Jan 24, 2026): Use the correct broker for this position
+                            # Each position is tagged with its broker when fetched from multi_account_manager
+                            position_broker = position.get('_broker', active_broker)
+                            position_broker_type = position.get('_broker_type')
+                            # Safely get broker label (handles both enum and string)
+                            broker_label = position_broker_type.value.upper() if (position_broker_type and hasattr(position_broker_type, 'value')) else "UNKNOWN"
 
-            # CRITICAL: If over position cap, prioritize selling weakest positions immediately
-            # This ensures we get back under cap quickly to avoid further bleeding
-            # Position cap set to 8 maximum concurrent positions
-            positions_over_cap = len(current_positions) - MAX_POSITIONS_ALLOWED
-            if positions_over_cap > 0:
-                logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} positions ({positions_over_cap} excess)")
-                logger.warning(f"   Will prioritize selling {positions_over_cap} weakest positions first")
-                logger.info("=" * 70)
-                logger.info("🔥 LEGACY POSITION DRAIN MODE ACTIVE")
-                logger.info("=" * 70)
-                logger.info(f"   📊 Excess positions: {positions_over_cap}")
-                logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
-                logger.info(f"   🔄 Drain rate: 1-{min(positions_over_cap, 3)} positions per cycle")
-                logger.info(f"   🚫 New entries: BLOCKED until under {MAX_POSITIONS_ALLOWED} positions")
-                logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
-                logger.info("=" * 70)
+                            logger.info(f"   Analyzing {symbol} on {broker_label}...")
 
-            # CRITICAL FIX: Identify ALL positions that need to exit first
-            # Then sell them ALL concurrently, not one at a time
-            positions_to_exit = []
+                            # Get current price from the position's broker
+                            current_price = position_broker.get_current_price(symbol)
+                            if not current_price or current_price == 0:
+                                logger.warning(f"   ⚠️ Could not get price for {symbol} from {broker_label}")
+                                continue
 
-            for position_idx, position in enumerate(current_positions):
-                try:
-                    symbol = position.get('symbol')
-                    if not symbol:
-                        continue
+                            # Get position value
+                            quantity = position.get('quantity', 0)
+                            position_value = current_price * quantity
 
-                    # Skip positions we know can't be sold (too small/dust)
-                    # But allow retry after timeout in case position grew or API error was temporary
-                    if symbol in self.unsellable_positions:
-                        # Check if enough time has passed to retry
-                        marked_time = self.unsellable_positions[symbol]
-                        time_since_marked = time.time() - marked_time
-                        if time_since_marked < self.unsellable_retry_timeout:
-                            logger.debug(f"   ⏭️ Skipping {symbol} (marked unsellable {time_since_marked/3600:.1f}h ago, retry in {(self.unsellable_retry_timeout - time_since_marked)/3600:.1f}h)")
-                            continue
-                        else:
-                            logger.info(f"   🔄 Retrying {symbol} (marked unsellable {time_since_marked/3600:.1f}h ago - timeout reached)")
-                            # Remove from unsellable dict to allow full processing
-                            del self.unsellable_positions[symbol]
+                            logger.info(f"   {symbol} ({broker_label}): {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
 
-                    # CRITICAL FIX (Jan 24, 2026): Use the correct broker for this position
-                    # Each position is tagged with its broker when fetched from multi_account_manager
-                    position_broker = position.get('_broker', active_broker)
-                    position_broker_type = position.get('_broker_type')
-                    # Safely get broker label (handles both enum and string)
-                    broker_label = position_broker_type.value.upper() if (position_broker_type and hasattr(position_broker_type, 'value')) else "UNKNOWN"
+                            # PROFITABILITY MODE: Aggressive exit on weak markets
+                            # Exit positions when market conditions deteriorate to prevent bleeding
 
-                    logger.info(f"   Analyzing {symbol} on {broker_label}...")
+                            # CRITICAL FIX: We don't have entry_price from Coinbase API!
+                            # Instead, use aggressive exit criteria based on:
+                            # 1. Market conditions (if filter fails, exit immediately)
+                            # 2. Small position size (anything under $1 should be exited)
+                            # 3. RSI overbought/oversold (take profits or cut losses)
 
-                    # Get current price from the position's broker
-                    current_price = position_broker.get_current_price(symbol)
-                    if not current_price or current_price == 0:
-                        logger.warning(f"   ⚠️ Could not get price for {symbol} from {broker_label}")
-                        continue
+                            # AUTO-EXIT small positions (under $1) - these are likely losers
+                            if position_value < MIN_POSITION_VALUE:
+                                logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < ${MIN_POSITION_VALUE})")
+                                positions_to_exit.append({
+                                    'symbol': symbol,
+                                    'quantity': quantity,
+                                    'reason': f'Small position cleanup (${position_value:.2f})',
+                                    'broker': position_broker,
+                                    'broker_label': broker_label
+                                })
+                                continue
 
-                    # Get position value
-                    quantity = position.get('quantity', 0)
-                    position_value = current_price * quantity
+                            # PROFIT-BASED EXIT LOGIC (NEW!)
+                            # Check if we have entry price tracked for this position
+                            entry_price_available = False
+                            entry_time_available = False
+                            position_age_hours = 0
+                            just_auto_imported = False  # Track if position was just imported this cycle
 
-                    logger.info(f"   {symbol} ({broker_label}): {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
+                            if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                try:
+                                    tracked_position = active_broker.position_tracker.get_position(symbol)
+                                    if tracked_position:
+                                        entry_price_available = True
 
-                    # PROFITABILITY MODE: Aggressive exit on weak markets
-                    # Exit positions when market conditions deteriorate to prevent bleeding
+                                        # Calculate position age (needed for both stop-loss and time-based logic)
+                                        entry_time = tracked_position.get('first_entry_time')
+                                        if entry_time:
+                                            try:
+                                                entry_dt = datetime.fromisoformat(entry_time)
+                                                now = datetime.now()
+                                                position_age_hours = (now - entry_dt).total_seconds() / 3600
+                                                entry_time_available = True
+                                            except Exception as time_err:
+                                                logger.debug(f"   Could not parse entry time for {symbol}: {time_err}")
 
-                    # CRITICAL FIX: We don't have entry_price from Coinbase API!
-                    # Instead, use aggressive exit criteria based on:
-                    # 1. Market conditions (if filter fails, exit immediately)
-                    # 2. Small position size (anything under $1 should be exited)
-                    # 3. RSI overbought/oversold (take profits or cut losses)
+                                    # CRITICAL FIX (Jan 19, 2026): Calculate P&L FIRST, check stop-loss BEFORE time-based exits
+                                    # Railway Golden Rule #5: Stop-loss > time exit (always)
+                                    # The old logic had time-based exits BEFORE stop-loss checks, which is backwards!
+                                    pnl_data = active_broker.position_tracker.calculate_pnl(symbol, current_price)
+                                    if pnl_data:
+                                        entry_price_available = True
+                                        pnl_percent = pnl_data['pnl_percent']
+                                        pnl_dollars = pnl_data['pnl_dollars']
+                                        entry_price = pnl_data['entry_price']
 
-                    # AUTO-EXIT small positions (under $1) - these are likely losers
-                    if position_value < MIN_POSITION_VALUE:
-                        logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < ${MIN_POSITION_VALUE})")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'Small position cleanup (${position_value:.2f})',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                        continue
+                                        # CRITICAL: Validate PnL is in fractional format (not percentage)
+                                        # If abs(pnl_percent) >= 1, it's likely using wrong scale (percentage instead of fractional)
+                                        assert abs(pnl_percent) < 1.0, f"PNL scale mismatch for {symbol}: {pnl_percent} (expected fractional format like -0.01 for -1%)"
 
-                    # PROFIT-BASED EXIT LOGIC (NEW!)
-                    # Check if we have entry price tracked for this position
-                    entry_price_available = False
-                    entry_time_available = False
-                    position_age_hours = 0
-                    just_auto_imported = False  # Track if position was just imported this cycle
+                                        logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent*100:+.2f}%) | Entry: ${entry_price:.2f}")
 
-                    if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                        try:
-                            tracked_position = active_broker.position_tracker.get_position(symbol)
-                            if tracked_position:
-                                entry_price_available = True
+                                        # 🛡️ 3-TIER PROTECTIVE STOP-LOSS SYSTEM (JAN 21, 2026)
+                                        # Tier 1: Primary trading stop (varies by broker and balance)
+                                        # Tier 2: Emergency micro-stop to prevent logic failures
+                                        # Tier 3: Catastrophic failsafe (last resort)
 
-                                # Calculate position age (needed for both stop-loss and time-based logic)
-                                entry_time = tracked_position.get('first_entry_time')
-                                if entry_time:
-                                    try:
-                                        entry_dt = datetime.fromisoformat(entry_time)
-                                        now = datetime.now()
-                                        position_age_hours = (now - entry_dt).total_seconds() / 3600
-                                        entry_time_available = True
-                                    except Exception as time_err:
-                                        logger.debug(f"   Could not parse entry time for {symbol}: {time_err}")
+                                        # TIER 1: PRIMARY TRADING STOP-LOSS
+                                        # This is the REAL stop-loss for risk management
+                                        # For Kraken small balances: -0.6% to -0.8%
+                                        # For Coinbase/other: -1.0%
+                                        if pnl_percent <= primary_stop:
+                                            logger.warning(f"   🛡️ PRIMARY PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {primary_stop*100:.2f}%)")
+                                            logger.warning(f"   💥 TIER 1: Protective trading stop triggered - capital preservation mode")
 
-                            # CRITICAL FIX (Jan 19, 2026): Calculate P&L FIRST, check stop-loss BEFORE time-based exits
-                            # Railway Golden Rule #5: Stop-loss > time exit (always)
-                            # The old logic had time-based exits BEFORE stop-loss checks, which is backwards!
-                            pnl_data = active_broker.position_tracker.calculate_pnl(symbol, current_price)
-                            if pnl_data:
-                                entry_price_available = True
-                                pnl_percent = pnl_data['pnl_percent']
-                                pnl_dollars = pnl_data['pnl_dollars']
-                                entry_price = pnl_data['entry_price']
+                                            # FIX #2: Use protective stop-loss executor (risk management override)
+                                            if self.forced_stop_loss:
+                                                success, result, error = self.forced_stop_loss.force_sell_position(
+                                                    symbol=symbol,
+                                                    quantity=quantity,
+                                                    reason=f"Primary protective stop-loss: {pnl_percent*100:.2f}% <= {primary_stop*100:.2f}%"
+                                                )
 
-                                # CRITICAL: Validate PnL is in fractional format (not percentage)
-                                # If abs(pnl_percent) >= 1, it's likely using wrong scale (percentage instead of fractional)
-                                assert abs(pnl_percent) < 1.0, f"PNL scale mismatch for {symbol}: {pnl_percent} (expected fractional format like -0.01 for -1%)"
-
-                                logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent*100:+.2f}%) | Entry: ${entry_price:.2f}")
-
-                                # 🛡️ 3-TIER PROTECTIVE STOP-LOSS SYSTEM (JAN 21, 2026)
-                                # Tier 1: Primary trading stop (varies by broker and balance)
-                                # Tier 2: Emergency micro-stop to prevent logic failures
-                                # Tier 3: Catastrophic failsafe (last resort)
-
-                                # TIER 1: PRIMARY TRADING STOP-LOSS
-                                # This is the REAL stop-loss for risk management
-                                # For Kraken small balances: -0.6% to -0.8%
-                                # For Coinbase/other: -1.0%
-                                if pnl_percent <= primary_stop:
-                                    logger.warning(f"   🛡️ PRIMARY PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {primary_stop*100:.2f}%)")
-                                    logger.warning(f"   💥 TIER 1: Protective trading stop triggered - capital preservation mode")
-
-                                    # FIX #2: Use protective stop-loss executor (risk management override)
-                                    if self.forced_stop_loss:
-                                        success, result, error = self.forced_stop_loss.force_sell_position(
-                                            symbol=symbol,
-                                            quantity=quantity,
-                                            reason=f"Primary protective stop-loss: {pnl_percent*100:.2f}% <= {primary_stop*100:.2f}%"
-                                        )
-
-                                        if success:
-                                            logger.info(f"   ✅ PROTECTIVE STOP-LOSS EXECUTED: {symbol}")
-                                            # Track the exit
-                                            if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                                                active_broker.position_tracker.track_exit(symbol, quantity)
-                                            # Increment trade counter for trade-based cleanup trigger
-                                            if hasattr(self, 'trades_since_last_cleanup'):
-                                                self.trades_since_last_cleanup += 1
-                                        else:
-                                            logger.error(f"   ❌ PROTECTIVE STOP-LOSS FAILED: {error}")
-                                    else:
-                                        # Fallback to legacy stop-loss if protective executor not available
-                                        logger.warning("   ⚠️ Protective stop-loss executor not available, using legacy method")
-                                        try:
-                                            result = active_broker.place_market_order(
-                                                symbol=symbol,
-                                                side='sell',
-                                                quantity=quantity,
-                                                size_type='base'
-                                            )
-
-                                            if result and result.get('status') not in ['error', 'unfilled']:
-                                                order_id = result.get('order_id', 'N/A')
-                                                logger.info(f"   ✅ ORDER ACCEPTED: Order ID {order_id}")
-                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                                                    active_broker.position_tracker.track_exit(symbol, quantity)
-                                                # Increment trade counter for trade-based cleanup trigger
-                                                if hasattr(self, 'trades_since_last_cleanup'):
-                                                    self.trades_since_last_cleanup += 1
+                                                if success:
+                                                    logger.info(f"   ✅ PROTECTIVE STOP-LOSS EXECUTED: {symbol}")
+                                                    # Track the exit
+                                                    if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                        active_broker.position_tracker.track_exit(symbol, quantity)
+                                                    # Increment trade counter for trade-based cleanup trigger
+                                                    if hasattr(self, 'trades_since_last_cleanup'):
+                                                        self.trades_since_last_cleanup += 1
+                                                else:
+                                                    logger.error(f"   ❌ PROTECTIVE STOP-LOSS FAILED: {error}")
                                             else:
-                                                error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                                                logger.error(f"   ❌ ORDER REJECTED: {error_msg}")
-                                        except Exception as sell_err:
-                                            logger.error(f"   ❌ ORDER EXCEPTION: {sell_err}")
+                                                # Fallback to legacy stop-loss if protective executor not available
+                                                logger.warning("   ⚠️ Protective stop-loss executor not available, using legacy method")
+                                                try:
+                                                    result = active_broker.place_market_order(
+                                                        symbol=symbol,
+                                                        side='sell',
+                                                        quantity=quantity,
+                                                        size_type='base'
+                                                    )
 
-                                    # Skip ALL remaining logic for this position
-                                    continue
+                                                    if result and result.get('status') not in ['error', 'unfilled']:
+                                                        order_id = result.get('order_id', 'N/A')
+                                                        logger.info(f"   ✅ ORDER ACCEPTED: Order ID {order_id}")
+                                                        if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                            active_broker.position_tracker.track_exit(symbol, quantity)
+                                                        # Increment trade counter for trade-based cleanup trigger
+                                                        if hasattr(self, 'trades_since_last_cleanup'):
+                                                            self.trades_since_last_cleanup += 1
+                                                    else:
+                                                        error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                        logger.error(f"   ❌ ORDER REJECTED: {error_msg}")
+                                                except Exception as sell_err:
+                                                    logger.error(f"   ❌ ORDER EXCEPTION: {sell_err}")
 
-                                # TIER 2: EMERGENCY MICRO-STOP (Logic failure prevention)
-                                # This is NOT a trading stop - it's a failsafe to prevent logic failures
-                                # Examples: imported positions, calculation errors, data corruption
-                                # Note: This should RARELY trigger - Tier 1 should catch most losses
-                                # Only triggers for losses that somehow bypassed Tier 1
-                                # (e.g., imported positions without proper entry price tracking)
-                                if pnl_percent <= micro_stop:
-                                    logger.warning(f"   ⚠️ EMERGENCY MICRO-STOP: {symbol} at {pnl_percent:.2f}% (threshold: {micro_stop*100:.2f}%)")
-                                    logger.warning(f"   💥 TIER 2: Emergency micro-stop to prevent logic failures (not a trading stop)")
-                                    logger.warning(f"   ⚠️  NOTE: Tier 1 was bypassed - possible imported position or logic error")
+                                            # Skip ALL remaining logic for this position
+                                            continue
 
-                                    # FIX #2: Use forced stop-loss for emergency too
-                                    if self.forced_stop_loss:
-                                        success, result, error = self.forced_stop_loss.force_sell_position(
-                                            symbol=symbol,
-                                            quantity=quantity,
-                                            reason=f"Emergency micro-stop: {pnl_percent:.2f}% <= {micro_stop*100:.2f}%"
-                                        )
+                                        # TIER 2: EMERGENCY MICRO-STOP (Logic failure prevention)
+                                        # This is NOT a trading stop - it's a failsafe to prevent logic failures
+                                        # Examples: imported positions, calculation errors, data corruption
+                                        # Note: This should RARELY trigger - Tier 1 should catch most losses
+                                        # Only triggers for losses that somehow bypassed Tier 1
+                                        # (e.g., imported positions without proper entry price tracking)
+                                        if pnl_percent <= micro_stop:
+                                            logger.warning(f"   ⚠️ EMERGENCY MICRO-STOP: {symbol} at {pnl_percent:.2f}% (threshold: {micro_stop*100:.2f}%)")
+                                            logger.warning(f"   💥 TIER 2: Emergency micro-stop to prevent logic failures (not a trading stop)")
+                                            logger.warning(f"   ⚠️  NOTE: Tier 1 was bypassed - possible imported position or logic error")
 
-                                        if success:
-                                            logger.info(f"   ✅ EMERGENCY STOP EXECUTED: {symbol}")
-                                            if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                                                active_broker.position_tracker.track_exit(symbol, quantity)
-                                            # Increment trade counter for trade-based cleanup trigger
-                                            if hasattr(self, 'trades_since_last_cleanup'):
-                                                self.trades_since_last_cleanup += 1
-                                        else:
-                                            logger.error(f"   ❌ EMERGENCY STOP FAILED: {error}")
-                                    else:
-                                        # Fallback
-                                        try:
-                                            result = active_broker.place_market_order(
-                                                symbol=symbol,
-                                                side='sell',
-                                                quantity=quantity,
-                                                size_type='base'
-                                            )
+                                            # FIX #2: Use forced stop-loss for emergency too
+                                            if self.forced_stop_loss:
+                                                success, result, error = self.forced_stop_loss.force_sell_position(
+                                                    symbol=symbol,
+                                                    quantity=quantity,
+                                                    reason=f"Emergency micro-stop: {pnl_percent:.2f}% <= {micro_stop*100:.2f}%"
+                                                )
 
-                                            if result and result.get('status') not in ['error', 'unfilled']:
-                                                order_id = result.get('order_id', 'N/A')
-                                                logger.info(f"   ✅ MICRO-STOP EXECUTED: Order ID {order_id}")
-                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                                                    active_broker.position_tracker.track_exit(symbol, quantity)
-                                                # Increment trade counter for trade-based cleanup trigger
-                                                if hasattr(self, 'trades_since_last_cleanup'):
-                                                    self.trades_since_last_cleanup += 1
+                                                if success:
+                                                    logger.info(f"   ✅ EMERGENCY STOP EXECUTED: {symbol}")
+                                                    if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                        active_broker.position_tracker.track_exit(symbol, quantity)
+                                                    # Increment trade counter for trade-based cleanup trigger
+                                                    if hasattr(self, 'trades_since_last_cleanup'):
+                                                        self.trades_since_last_cleanup += 1
+                                                else:
+                                                    logger.error(f"   ❌ EMERGENCY STOP FAILED: {error}")
                                             else:
-                                                error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                                                logger.error(f"   ❌ MICRO-STOP FAILED: {error_msg}")
-                                        except Exception as sell_err:
-                                            logger.error(f"   ❌ MICRO-STOP EXCEPTION: {sell_err}")
+                                                # Fallback
+                                                try:
+                                                    result = active_broker.place_market_order(
+                                                        symbol=symbol,
+                                                        side='sell',
+                                                        quantity=quantity,
+                                                        size_type='base'
+                                                    )
 
-                                    continue
+                                                    if result and result.get('status') not in ['error', 'unfilled']:
+                                                        order_id = result.get('order_id', 'N/A')
+                                                        logger.info(f"   ✅ MICRO-STOP EXECUTED: Order ID {order_id}")
+                                                        if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                            active_broker.position_tracker.track_exit(symbol, quantity)
+                                                        # Increment trade counter for trade-based cleanup trigger
+                                                        if hasattr(self, 'trades_since_last_cleanup'):
+                                                            self.trades_since_last_cleanup += 1
+                                                    else:
+                                                        error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                        logger.error(f"   ❌ MICRO-STOP FAILED: {error_msg}")
+                                                except Exception as sell_err:
+                                                    logger.error(f"   ❌ MICRO-STOP EXCEPTION: {sell_err}")
 
-                                # 🚨 COINBASE LOCKDOWN (Jan 2026) - EXIT ANY LOSS IMMEDIATELY
-                                # Coinbase has been holding losing trades - enforce ZERO TOLERANCE for losses
-                                # Exit ANY position showing ANY loss on Coinbase (no waiting period)
-                                if pnl_percent < 0 and 'coinbase' in broker_label.lower():
-                                    logger.warning(f"   🚨 COINBASE LOCKDOWN: {symbol} showing loss at {pnl_percent*100:.2f}%")
-                                    logger.warning(f"   💥 ZERO TOLERANCE MODE - exiting Coinbase loss immediately!")
-                                    positions_to_exit.append({
-                                        'symbol': symbol,
-                                        'quantity': quantity,
-                                        'reason': f'Coinbase lockdown: ANY loss exit ({pnl_percent*100:.2f}%)',
-                                        'broker': position_broker,
-                                        'broker_label': broker_label
-                                    })
-                                    continue
+                                            continue
 
-                                # ✅ LOSING TRADES: 15-MINUTE MAXIMUM HOLD TIME (for non-Coinbase)
-                                # For tracked positions with P&L < 0%, enforce STRICT 15-minute max hold time
-                                # This prevents capital erosion from positions held too long in a losing state
-                                # CRITICAL FIX (Jan 21, 2026): Also exit losing positions WITHOUT entry time tracking
-                                # to prevent positions from being stuck indefinitely
-                                if pnl_percent < 0:
-                                    # Convert position age from hours to minutes
-                                    position_age_minutes = position_age_hours * MINUTES_PER_HOUR
-
-                                    # SCENARIO 1: Position with time tracking that exceeds max hold time
-                                    if entry_time_available and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
-                                        logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent*100:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
-                                        logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent*100:.2f}%)',
-                                            'broker': position_broker,
-                                            'broker_label': broker_label
-                                        })
-                                        continue
-                                    elif not entry_time_available:
-                                        # SCENARIO 2: Losing position without time tracking (SAFETY FALLBACK)
-                                        # Exit immediately to prevent indefinite losses when we cannot determine age
-                                        logger.warning(f"   🚨 LOSING POSITION WITHOUT TIME TRACKING: {symbol} at {pnl_percent*100:.2f}%")
-                                        logger.warning(f"   💥 Cannot determine age - exiting to prevent indefinite losses!")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'Losing position without time tracking (P&L: {pnl_percent*100:.2f}%)',
-                                            'broker': position_broker,
-                                            'broker_label': broker_label
-                                        })
-                                        continue
-
-                                # TIER 3: CATASTROPHIC PROTECTIVE FAILSAFE (Last resort protection)
-                                # This should NEVER be reached in normal operation
-                                # Only triggers at -5.0% to catch extreme edge cases
-                                if pnl_percent <= catastrophic_stop:
-                                    logger.warning(f"   🚨 CATASTROPHIC PROTECTIVE FAILSAFE TRIGGERED: {symbol} at {pnl_percent*100:.2f}% (threshold: {catastrophic_stop*100:.1f}%)")
-                                    logger.warning(f"   💥 TIER 3: Last resort capital preservation - severe loss detected!")
-                                    logger.warning(f"   🛡️ PROTECTIVE EXIT MODE — Risk Management Override Active")
-
-                                    # Use forced exit path with retry - bypasses ALL filters
-                                    exit_success = False
-                                    try:
-                                        # Attempt 1: Direct market sell
-                                        result = active_broker.place_market_order(
-                                            symbol=symbol,
-                                            side='sell',
-                                            quantity=quantity,
-                                            size_type='base'
-                                        )
-
-                                        # Enhanced logging for catastrophic events
-                                        if result and result.get('status') not in ['error', 'unfilled']:
-                                            order_id = result.get('order_id', 'N/A')
-                                            logger.error(f"   ✅ CATASTROPHIC EXIT COMPLETE: Order ID {order_id}")
-                                            exit_success = True
-                                            if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                                                active_broker.position_tracker.track_exit(symbol, quantity)
-                                        else:
-                                            error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                                            logger.error(f"   ❌ CATASTROPHIC EXIT ATTEMPT 1 FAILED: {error_msg}")
-
-                                            # Retry once for catastrophic exits
-                                            logger.error(f"   🔄 Retrying catastrophic exit (attempt 2/2)...")
-                                            time.sleep(1)  # Brief pause
-
-                                            result = active_broker.place_market_order(
-                                                symbol=symbol,
-                                                side='sell',
-                                                quantity=quantity,
-                                                size_type='base'
-                                            )
-                                            if result and result.get('status') not in ['error', 'unfilled']:
-                                                order_id = result.get('order_id', 'N/A')
-                                                logger.error(f"   ✅ CATASTROPHIC EXIT COMPLETE (retry): Order ID {order_id}")
-                                                exit_success = True
-                                                if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                                                    active_broker.position_tracker.track_exit(symbol, quantity)
-                                            else:
-                                                error_msg = result.get('error', 'Unknown error') if result else 'No response'
-                                                logger.error(f"   ❌ CATASTROPHIC EXIT RETRY FAILED: {error_msg}")
-                                    except Exception as emergency_err:
-                                        logger.error(f"   ❌ CATASTROPHIC EXIT EXCEPTION: {symbol} - {emergency_err}")
-                                        logger.error(f"   Exception type: {type(emergency_err).__name__}")
-
-                                    # Log final status
-                                    if not exit_success:
-                                        logger.error(f"   🛑 CATASTROPHIC EXIT FAILED AFTER 2 ATTEMPTS")
-                                        logger.error(f"   🛑 MANUAL INTERVENTION REQUIRED FOR {symbol}")
-                                        logger.error(f"   🛑 Position may still be open - check broker manually")
-
-                                    # Skip to next position - catastrophic exit overrides all other logic
-                                    continue
-
-                                # 💎 PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
-                                # NIJA is for PROFIT ONLY - exit when profit decreases more than 0.5%
-                                # Fixed 0.5% pullback allowed - exit when profit drops 0.5%+ from previous check
-                                # Learning and adjusting: allow small pullback but exit on larger decrease
-                                if PROFIT_PROTECTION_ENABLED:
-                                    previous_profit_pct = pnl_data.get('previous_profit_pct', 0.0)
-
-                                    # Determine minimum profit threshold based on broker
-                                    try:
-                                        broker_type = getattr(active_broker, 'broker_type', None)
-                                    except AttributeError:
-                                        broker_type = None
-
-                                    protection_min_profit = PROFIT_PROTECTION_MIN_PROFIT_KRAKEN if broker_type == BrokerType.KRAKEN else PROFIT_PROTECTION_MIN_PROFIT
-
-                                    # RULE 1: Exit on Profit Decrease > 0.5%
-                                    # If position is profitable AND profit decreases by MORE than 0.5%, exit
-                                    # Hold up to 0.5% pullback, exit when it exceeds
-                                    # Example: 3.0% → 2.9% (0.1% decrease) = HOLD
-                                    #          3.0% → 2.5% (0.5% decrease) = HOLD
-                                    #          3.0% → 2.49% (0.51% decrease) = EXIT
-                                    #          3.0% → 2.4% (0.6% decrease) = EXIT
-                                    if pnl_percent >= protection_min_profit and previous_profit_pct >= protection_min_profit:
-                                        # Calculate decrease from previous profit
-                                        profit_decrease = previous_profit_pct - pnl_percent
-
-                                        # Exit if decrease EXCEEDS 0.5% (> not >=)
-                                        if profit_decrease > PROFIT_PROTECTION_PULLBACK_FIXED:
-                                            logger.warning(f"   💎 PROFIT PROTECTION: {symbol} profit pullback exceeded")
-                                            logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
-                                            logger.warning(f"      Pullback: {profit_decrease*100:.3f}% (max allowed: 0.5%)")
-                                            logger.warning(f"   🔒 TAKING PROFIT NOW - PULLBACK EXCEEDS 0.5%!")
+                                        # 🚨 COINBASE LOCKDOWN (Jan 2026) - EXIT ANY LOSS IMMEDIATELY
+                                        # Coinbase has been holding losing trades - enforce ZERO TOLERANCE for losses
+                                        # Exit ANY position showing ANY loss on Coinbase (no waiting period)
+                                        if pnl_percent < 0 and 'coinbase' in broker_label.lower():
+                                            logger.warning(f"   🚨 COINBASE LOCKDOWN: {symbol} showing loss at {pnl_percent*100:.2f}%")
+                                            logger.warning(f"   💥 ZERO TOLERANCE MODE - exiting Coinbase loss immediately!")
                                             positions_to_exit.append({
                                                 'symbol': symbol,
                                                 'quantity': quantity,
-                                                'reason': f'Profit pullback {profit_decrease*100:.2f}% exceeded 0.5% limit',
+                                                'reason': f'Coinbase lockdown: ANY loss exit ({pnl_percent*100:.2f}%)',
                                                 'broker': position_broker,
                                                 'broker_label': broker_label
                                             })
                                             continue
 
-                                        # Log protection status
-                                        if profit_decrease > 0:
-                                            cushion = (PROFIT_PROTECTION_PULLBACK_FIXED - profit_decrease) * 100
-                                            logger.debug(f"   💎 Profit pullback within limit: {symbol} at {pnl_percent*100:+.2f}% (pullback: {profit_decrease*100:.3f}%, cushion: {cushion:.3f}%)")
-                                        else:
-                                            logger.debug(f"   💎 Profit increasing: {symbol} at {pnl_percent*100:+.2f}% (previous: {previous_profit_pct*100:+.2f}%)")
+                                        # ✅ LOSING TRADES: 15-MINUTE MAXIMUM HOLD TIME (for non-Coinbase)
+                                        # For tracked positions with P&L < 0%, enforce STRICT 15-minute max hold time
+                                        # This prevents capital erosion from positions held too long in a losing state
+                                        # CRITICAL FIX (Jan 21, 2026): Also exit losing positions WITHOUT entry time tracking
+                                        # to prevent positions from being stuck indefinitely
+                                        if pnl_percent < 0:
+                                            # Convert position age from hours to minutes
+                                            position_age_minutes = position_age_hours * MINUTES_PER_HOUR
 
-                                    # RULE 2: Never Break Even Protection
-                                    # If position was profitable above minimum threshold and current profit approaches breakeven, exit immediately
-                                    if PROFIT_PROTECTION_NEVER_BREAKEVEN and previous_profit_pct >= protection_min_profit and pnl_percent < protection_min_profit:
-                                        logger.warning(f"   🚫 NEVER BREAK EVEN: {symbol} approaching breakeven after being profitable")
-                                        logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
-                                        logger.warning(f"   🔒 EXITING NOW - NIJA NEVER BREAKS EVEN!")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'Never break even: was {previous_profit_pct*100:+.2f}%, now {pnl_percent*100:+.2f}%',
-                                            'broker': position_broker,
-                                            'broker_label': broker_label
-                                        })
-                                        continue
+                                            # SCENARIO 1: Position with time tracking that exceeds max hold time
+                                            if entry_time_available and position_age_minutes >= MAX_LOSING_POSITION_HOLD_MINUTES:
+                                                logger.warning(f"   🚨 LOSING TRADE TIME EXIT: {symbol} at {pnl_percent*100:.2f}% held for {position_age_minutes:.1f} minutes (max: {MAX_LOSING_POSITION_HOLD_MINUTES} min)")
+                                                logger.warning(f"   💥 NIJA IS FOR PROFIT, NOT LOSSES - selling immediately!")
+                                                positions_to_exit.append({
+                                                    'symbol': symbol,
+                                                    'quantity': quantity,
+                                                    'reason': f'Losing trade time exit (held {position_age_minutes:.1f}min at {pnl_percent*100:.2f}%)',
+                                                    'broker': position_broker,
+                                                    'broker_label': broker_label
+                                                })
+                                                continue
+                                            elif not entry_time_available:
+                                                # SCENARIO 2: Losing position without time tracking (SAFETY FALLBACK)
+                                                # Exit immediately to prevent indefinite losses when we cannot determine age
+                                                logger.warning(f"   🚨 LOSING POSITION WITHOUT TIME TRACKING: {symbol} at {pnl_percent*100:.2f}%")
+                                                logger.warning(f"   💥 Cannot determine age - exiting to prevent indefinite losses!")
+                                                positions_to_exit.append({
+                                                    'symbol': symbol,
+                                                    'quantity': quantity,
+                                                    'reason': f'Losing position without time tracking (P&L: {pnl_percent*100:.2f}%)',
+                                                    'broker': position_broker,
+                                                    'broker_label': broker_label
+                                                })
+                                                continue
 
-                                # STEPPED PROFIT TAKING - Exit portions at profit targets
-                                # This locks in gains and frees capital for new opportunities
-                                # Check targets from highest to lowest
-                                # FIX #3: Only exit if profit > minimum threshold (spread + fees + buffer)
-                                # ENHANCEMENT (Jan 19, 2026): Use broker-specific profit targets
-                                # Different brokers have different fee structures
-                                # Safely get broker_type, defaulting to generic targets if not available
-                                try:
-                                    broker_type = getattr(active_broker, 'broker_type', None)
-                                except AttributeError:
-                                    broker_type = None
+                                        # TIER 3: CATASTROPHIC PROTECTIVE FAILSAFE (Last resort protection)
+                                        # This should NEVER be reached in normal operation
+                                        # Only triggers at -5.0% to catch extreme edge cases
+                                        if pnl_percent <= catastrophic_stop:
+                                            logger.warning(f"   🚨 CATASTROPHIC PROTECTIVE FAILSAFE TRIGGERED: {symbol} at {pnl_percent*100:.2f}% (threshold: {catastrophic_stop*100:.1f}%)")
+                                            logger.warning(f"   💥 TIER 3: Last resort capital preservation - severe loss detected!")
+                                            logger.warning(f"   🛡️ PROTECTIVE EXIT MODE — Risk Management Override Active")
 
-                                if broker_type == BrokerType.KRAKEN:
-                                    profit_targets = PROFIT_TARGETS_KRAKEN
-                                    min_threshold = 0.005  # 0.5% minimum for Kraken (0.36% fees)
-                                elif broker_type == BrokerType.COINBASE:
-                                    profit_targets = PROFIT_TARGETS_COINBASE
-                                    min_threshold = MIN_PROFIT_THRESHOLD  # 1.6% minimum for Coinbase (1.4% fees)
-                                else:
-                                    # Default to Coinbase targets for unknown brokers (conservative)
-                                    profit_targets = PROFIT_TARGETS
-                                    min_threshold = MIN_PROFIT_THRESHOLD
+                                            # Use forced exit path with retry - bypasses ALL filters
+                                            exit_success = False
+                                            try:
+                                                # Attempt 1: Direct market sell
+                                                result = active_broker.place_market_order(
+                                                    symbol=symbol,
+                                                    side='sell',
+                                                    quantity=quantity,
+                                                    size_type='base'
+                                                )
 
-                                for target_pct, reason in profit_targets:
-                                    if pnl_percent >= target_pct:
-                                        # Double-check: ensure profit meets minimum threshold
-                                        if pnl_percent >= min_threshold:
-                                            # 💰 EXPLICIT PROFIT REALIZATION LOG (Management Mode)
-                                            if managing_only:
-                                                logger.info(f"   💰 PROFIT REALIZATION (MANAGEMENT MODE): {symbol}")
-                                                logger.info(f"      Current P&L: +{pnl_percent*100:.2f}%")
-                                                logger.info(f"      Profit target: +{target_pct*100:.2f}%")
-                                                logger.info(f"      Reason: {reason}")
-                                                logger.info(f"      🔥 Proof: Realizing profit even with new entries BLOCKED")
-                                            else:
-                                                logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent*100:.2f}% (target: +{target_pct*100}%, min threshold: +{min_threshold*100:.1f}%)")
-                                            positions_to_exit.append({
-                                                'symbol': symbol,
-                                                'quantity': quantity,
-                                                'reason': f'{reason} hit (actual: +{pnl_percent*100:.2f}%)',
-                                                'broker': position_broker,
-                                                'broker_label': broker_label
-                                            })
-                                            break  # Exit the for loop, continue to next position
-                                        else:
-                                            logger.info(f"   ⚠️ Target {target_pct*100}% hit but profit {pnl_percent*100:.2f}% < minimum threshold {min_threshold*100:.1f}% - holding")
-                                else:
-                                    # No profit target hit, check stop loss (LEGACY FALLBACK)
-                                    # CRITICAL FIX (Jan 19, 2026): Stop-loss checks happen BEFORE time-based exits
-                                    # This ensures losing trades get stopped out immediately, not held for hours
+                                                # Enhanced logging for catastrophic events
+                                                if result and result.get('status') not in ['error', 'unfilled']:
+                                                    order_id = result.get('order_id', 'N/A')
+                                                    logger.error(f"   ✅ CATASTROPHIC EXIT COMPLETE: Order ID {order_id}")
+                                                    exit_success = True
+                                                    if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                        active_broker.position_tracker.track_exit(symbol, quantity)
+                                                else:
+                                                    error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                    logger.error(f"   ❌ CATASTROPHIC EXIT ATTEMPT 1 FAILED: {error_msg}")
 
-                                    # CATASTROPHIC STOP LOSS: Force exit at -5% or worse (ABSOLUTE FAILSAFE)
-                                    if pnl_percent <= STOP_LOSS_EMERGENCY:
-                                        if managing_only:
-                                            logger.warning(f"   💰 LOSS PROTECTION (MANAGEMENT MODE): {symbol}")
-                                            logger.warning(f"      Current P&L: {pnl_percent*100:.2f}%")
-                                            logger.warning(f"      Catastrophic stop: {STOP_LOSS_EMERGENCY*100:.0f}%")
-                                            logger.warning(f"      🔥 Proof: Protecting capital even with new entries BLOCKED")
-                                        else:
-                                            logger.warning(f"   🛡️ CATASTROPHIC PROTECTIVE EXIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_EMERGENCY*100:.0f}%)")
-                                        logger.warning(f"   💥 PROTECTIVE ACTION: Exiting to prevent severe capital loss")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'Catastrophic protective exit at {STOP_LOSS_EMERGENCY*100:.0f}% (actual: {pnl_percent*100:.2f}%)',
-                                            'broker': position_broker,
-                                            'broker_label': broker_label
-                                        })
-                                    # STANDARD STOP LOSS: Normal stop-loss threshold
-                                    # CRITICAL FIX (Feb 3, 2026): Changed AND to OR - was preventing stops from triggering!
-                                    # BUG: "pnl <= -2% AND pnl <= -0.25%" requires BOTH conditions (creates restrictive zone)
-                                    #      Only triggers if pnl <= -2% (stricter threshold), making -0.25% floor meaningless
-                                    # FIX: "pnl <= -1.5% OR pnl <= -0.05%" triggers when EITHER condition met (proper stop logic)
-                                    #      Now triggers at WHICHEVER threshold is hit first
-                                    # This was causing 80%+ of stop losses to FAIL and positions to keep losing
-                                    elif pnl_percent <= STOP_LOSS_THRESHOLD or pnl_percent <= MIN_LOSS_FLOOR:
-                                        if managing_only:
-                                            logger.warning(f"   💰 LOSS PROTECTION (MANAGEMENT MODE): {symbol}")
-                                            logger.warning(f"      Current P&L: {pnl_percent*100:.2f}%")
-                                            logger.warning(f"      Stop-loss threshold: {STOP_LOSS_THRESHOLD*100:.2f}%")
-                                            logger.warning(f"      🔥 Proof: Cutting losses even with new entries BLOCKED")
-                                        else:
-                                            logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
-                                        # PROFITABILITY GUARD: Verify this is actually a losing position
-                                        if pnl_percent >= 0:
-                                            logger.error(f"   ❌ PROFITABILITY GUARD: Attempted to stop-loss a WINNING position at +{pnl_percent*100:.2f}%!")
-                                            logger.error(f"   🛡️ GUARD BLOCKED: Not exiting profitable position")
-                                        else:
-                                            positions_to_exit.append({
-                                                'symbol': symbol,
-                                                'quantity': quantity,
-                                                'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)',
-                                                'broker': position_broker,
-                                                'broker_label': broker_label
-                                            })
-                                    # WARNING THRESHOLD: Approaching stop loss
-                                    elif pnl_percent <= STOP_LOSS_WARNING:
-                                        logger.warning(f"   ⚠️ Approaching protective stop: {symbol} at {pnl_percent*100:.2f}%")
-                                        # Don't exit yet, but log it
-                                    elif self._is_zombie_position(pnl_percent, entry_time_available, position_age_hours):
-                                        # ZOMBIE POSITION DETECTION: Position stuck at ~0% P&L for too long
-                                        # This catches auto-imported positions that mask actual losses
-                                        logger.warning(f"   🧟 ZOMBIE POSITION DETECTED: {symbol} at {pnl_percent:+.2f}% after {position_age_hours:.1f}h | "
-                                                      f"Position stuck at ~0% P&L suggests auto-import masked a losing trade | "
-                                                      f"AGGRESSIVE EXIT to prevent indefinite holding of potential loser")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'Zombie position exit (stuck at {pnl_percent:+.2f}% for {position_age_hours:.1f}h - likely masked loser)',
-                                            'broker': position_broker,
-                                            'broker_label': broker_label
-                                        })
-                                    else:
-                                        # Position has entry price but not at any exit threshold
-                                        # CRITICAL FIX (Jan 19, 2026): Add time-based exits AFTER stop-loss checks
-                                        # Railway Golden Rule #5: Stop-loss > time exit (always)
-                                        # Only check time-based exits if stop-loss didn't trigger
+                                                    # Retry once for catastrophic exits
+                                                    logger.error(f"   🔄 Retrying catastrophic exit (attempt 2/2)...")
+                                                    time.sleep(1)  # Brief pause
 
-                                        # Common holding message (avoid duplication)
-                                        holding_msg = f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)"
+                                                    result = active_broker.place_market_order(
+                                                        symbol=symbol,
+                                                        side='sell',
+                                                        quantity=quantity,
+                                                        size_type='base'
+                                                    )
+                                                    if result and result.get('status') not in ['error', 'unfilled']:
+                                                        order_id = result.get('order_id', 'N/A')
+                                                        logger.error(f"   ✅ CATASTROPHIC EXIT COMPLETE (retry): Order ID {order_id}")
+                                                        exit_success = True
+                                                        if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                            active_broker.position_tracker.track_exit(symbol, quantity)
+                                                    else:
+                                                        error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                        logger.error(f"   ❌ CATASTROPHIC EXIT RETRY FAILED: {error_msg}")
+                                            except Exception as emergency_err:
+                                                logger.error(f"   ❌ CATASTROPHIC EXIT EXCEPTION: {symbol} - {emergency_err}")
+                                                logger.error(f"   Exception type: {type(emergency_err).__name__}")
 
-                                        if entry_time_available:
-                                            # 🚨 COINBASE LOCKDOWN (Jan 2026) - FORCE EXIT AFTER 30 MINUTES
-                                            # Coinbase positions MUST exit within 30 minutes (even if profitable)
-                                            # This prevents holding positions too long and missing exit opportunities
-                                            if 'coinbase' in broker_label.lower():
-                                                position_age_minutes = position_age_hours * MINUTES_PER_HOUR
-                                                if position_age_minutes >= COINBASE_MAX_HOLD_MINUTES:
-                                                    logger.warning(f"   🚨 COINBASE TIME LOCKDOWN: {symbol} held {position_age_minutes:.1f} min (max: {COINBASE_MAX_HOLD_MINUTES})")
-                                                    logger.warning(f"   💥 Force exiting to lock in current P&L: {pnl_percent*100:+.2f}%")
+                                            # Log final status
+                                            if not exit_success:
+                                                logger.error(f"   🛑 CATASTROPHIC EXIT FAILED AFTER 2 ATTEMPTS")
+                                                logger.error(f"   🛑 MANUAL INTERVENTION REQUIRED FOR {symbol}")
+                                                logger.error(f"   🛑 Position may still be open - check broker manually")
+
+                                            # Skip to next position - catastrophic exit overrides all other logic
+                                            continue
+
+                                        # 💎 PROFIT PROTECTION: Never Break Even, Never Loss (Jan 23, 2026)
+                                        # NIJA is for PROFIT ONLY - exit when profit decreases more than 0.5%
+                                        # Fixed 0.5% pullback allowed - exit when profit drops 0.5%+ from previous check
+                                        # Learning and adjusting: allow small pullback but exit on larger decrease
+                                        if PROFIT_PROTECTION_ENABLED:
+                                            previous_profit_pct = pnl_data.get('previous_profit_pct', 0.0)
+
+                                            # Determine minimum profit threshold based on broker
+                                            try:
+                                                broker_type = getattr(active_broker, 'broker_type', None)
+                                            except AttributeError:
+                                                broker_type = None
+
+                                            protection_min_profit = PROFIT_PROTECTION_MIN_PROFIT_KRAKEN if broker_type == BrokerType.KRAKEN else PROFIT_PROTECTION_MIN_PROFIT
+
+                                            # RULE 1: Exit on Profit Decrease > 0.5%
+                                            # If position is profitable AND profit decreases by MORE than 0.5%, exit
+                                            # Hold up to 0.5% pullback, exit when it exceeds
+                                            # Example: 3.0% → 2.9% (0.1% decrease) = HOLD
+                                            #          3.0% → 2.5% (0.5% decrease) = HOLD
+                                            #          3.0% → 2.49% (0.51% decrease) = EXIT
+                                            #          3.0% → 2.4% (0.6% decrease) = EXIT
+                                            if pnl_percent >= protection_min_profit and previous_profit_pct >= protection_min_profit:
+                                                # Calculate decrease from previous profit
+                                                profit_decrease = previous_profit_pct - pnl_percent
+
+                                                # Exit if decrease EXCEEDS 0.5% (> not >=)
+                                                if profit_decrease > PROFIT_PROTECTION_PULLBACK_FIXED:
+                                                    logger.warning(f"   💎 PROFIT PROTECTION: {symbol} profit pullback exceeded")
+                                                    logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
+                                                    logger.warning(f"      Pullback: {profit_decrease*100:.3f}% (max allowed: 0.5%)")
+                                                    logger.warning(f"   🔒 TAKING PROFIT NOW - PULLBACK EXCEEDS 0.5%!")
                                                     positions_to_exit.append({
                                                         'symbol': symbol,
                                                         'quantity': quantity,
-                                                        'reason': f'Coinbase time lockdown (held {position_age_minutes:.1f}min at {pnl_percent*100:+.2f}%)',
+                                                        'reason': f'Profit pullback {profit_decrease*100:.2f}% exceeded 0.5% limit',
                                                         'broker': position_broker,
                                                         'broker_label': broker_label
                                                     })
                                                     continue
 
-                                            # EMERGENCY TIME-BASED EXIT: Force exit ALL positions after 12 hours (FAILSAFE)
-                                            # This is a last-resort failsafe for profitable positions that aren't hitting targets
-                                            if position_age_hours >= MAX_POSITION_HOLD_EMERGENCY:
-                                                logger.error(f"   🚨 EMERGENCY TIME EXIT: {symbol} held for {position_age_hours:.1f} hours (emergency max: {MAX_POSITION_HOLD_EMERGENCY})")
-                                                logger.error(f"   💥 FORCE SELLING to prevent indefinite holding!")
+                                                # Log protection status
+                                                if profit_decrease > 0:
+                                                    cushion = (PROFIT_PROTECTION_PULLBACK_FIXED - profit_decrease) * 100
+                                                    logger.debug(f"   💎 Profit pullback within limit: {symbol} at {pnl_percent*100:+.2f}% (pullback: {profit_decrease*100:.3f}%, cushion: {cushion:.3f}%)")
+                                                else:
+                                                    logger.debug(f"   💎 Profit increasing: {symbol} at {pnl_percent*100:+.2f}% (previous: {previous_profit_pct*100:+.2f}%)")
+
+                                            # RULE 2: Never Break Even Protection
+                                            # If position was profitable above minimum threshold and current profit approaches breakeven, exit immediately
+                                            if PROFIT_PROTECTION_NEVER_BREAKEVEN and previous_profit_pct >= protection_min_profit and pnl_percent < protection_min_profit:
+                                                logger.warning(f"   🚫 NEVER BREAK EVEN: {symbol} approaching breakeven after being profitable")
+                                                logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
+                                                logger.warning(f"   🔒 EXITING NOW - NIJA NEVER BREAKS EVEN!")
                                                 positions_to_exit.append({
                                                     'symbol': symbol,
                                                     'quantity': quantity,
-                                                    'reason': f'EMERGENCY time exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_EMERGENCY}h)',
+                                                    'reason': f'Never break even: was {previous_profit_pct*100:+.2f}%, now {pnl_percent*100:+.2f}%',
                                                     'broker': position_broker,
                                                     'broker_label': broker_label
                                                 })
-                                            # TIME-BASED EXIT: Auto-exit stale positions
-                                            elif position_age_hours >= MAX_POSITION_HOLD_HOURS:
-                                                logger.warning(f"   ⏰ STALE POSITION EXIT: {symbol} held for {position_age_hours:.1f} hours (max: {MAX_POSITION_HOLD_HOURS})")
-                                                positions_to_exit.append({
-                                                    'symbol': symbol,
-                                                    'quantity': quantity,
-                                                    'reason': f'Time-based exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_HOURS}h)',
-                                                    'broker': position_broker,
-                                                    'broker_label': broker_label
-                                                })
-                                            elif position_age_hours >= STALE_POSITION_WARNING_HOURS:
-                                                logger.info(f"   ⚠️ Position aging: {symbol} held for {position_age_hours:.1f} hours")
-                                                logger.info(holding_msg)
-                                            else:
-                                                logger.info(holding_msg)
+                                                continue
+
+                                        # STEPPED PROFIT TAKING - Exit portions at profit targets
+                                        # This locks in gains and frees capital for new opportunities
+                                        # Check targets from highest to lowest
+                                        # FIX #3: Only exit if profit > minimum threshold (spread + fees + buffer)
+                                        # ENHANCEMENT (Jan 19, 2026): Use broker-specific profit targets
+                                        # Different brokers have different fee structures
+                                        # Safely get broker_type, defaulting to generic targets if not available
+                                        try:
+                                            broker_type = getattr(active_broker, 'broker_type', None)
+                                        except AttributeError:
+                                            broker_type = None
+
+                                        if broker_type == BrokerType.KRAKEN:
+                                            profit_targets = PROFIT_TARGETS_KRAKEN
+                                            min_threshold = 0.005  # 0.5% minimum for Kraken (0.36% fees)
+                                        elif broker_type == BrokerType.COINBASE:
+                                            profit_targets = PROFIT_TARGETS_COINBASE
+                                            min_threshold = MIN_PROFIT_THRESHOLD  # 1.6% minimum for Coinbase (1.4% fees)
                                         else:
-                                            logger.info(holding_msg)
-                                    continue  # Continue to next position check
+                                            # Default to Coinbase targets for unknown brokers (conservative)
+                                            profit_targets = PROFIT_TARGETS
+                                            min_threshold = MIN_PROFIT_THRESHOLD
 
-                                # If we got here via break, skip remaining checks
-                                continue
+                                        for target_pct, reason in profit_targets:
+                                            if pnl_percent >= target_pct:
+                                                # Double-check: ensure profit meets minimum threshold
+                                                if pnl_percent >= min_threshold:
+                                                    # 💰 EXPLICIT PROFIT REALIZATION LOG (Management Mode)
+                                                    if managing_only:
+                                                        logger.info(f"   💰 PROFIT REALIZATION (MANAGEMENT MODE): {symbol}")
+                                                        logger.info(f"      Current P&L: +{pnl_percent*100:.2f}%")
+                                                        logger.info(f"      Profit target: +{target_pct*100:.2f}%")
+                                                        logger.info(f"      Reason: {reason}")
+                                                        logger.info(f"      🔥 Proof: Realizing profit even with new entries BLOCKED")
+                                                    else:
+                                                        logger.info(f"   🎯 PROFIT TARGET HIT: {symbol} at +{pnl_percent*100:.2f}% (target: +{target_pct*100}%, min threshold: +{min_threshold*100:.1f}%)")
+                                                    positions_to_exit.append({
+                                                        'symbol': symbol,
+                                                        'quantity': quantity,
+                                                        'reason': f'{reason} hit (actual: +{pnl_percent*100:.2f}%)',
+                                                        'broker': position_broker,
+                                                        'broker_label': broker_label
+                                                    })
+                                                    break  # Exit the for loop, continue to next position
+                                                else:
+                                                    logger.info(f"   ⚠️ Target {target_pct*100}% hit but profit {pnl_percent*100:.2f}% < minimum threshold {min_threshold*100:.1f}% - holding")
+                                        else:
+                                            # No profit target hit, check stop loss (LEGACY FALLBACK)
+                                            # CRITICAL FIX (Jan 19, 2026): Stop-loss checks happen BEFORE time-based exits
+                                            # This ensures losing trades get stopped out immediately, not held for hours
 
-                        except Exception as pnl_err:
-                            logger.debug(f"   Could not calculate P&L for {symbol}: {pnl_err}")
+                                            # CATASTROPHIC STOP LOSS: Force exit at -5% or worse (ABSOLUTE FAILSAFE)
+                                            if pnl_percent <= STOP_LOSS_EMERGENCY:
+                                                if managing_only:
+                                                    logger.warning(f"   💰 LOSS PROTECTION (MANAGEMENT MODE): {symbol}")
+                                                    logger.warning(f"      Current P&L: {pnl_percent*100:.2f}%")
+                                                    logger.warning(f"      Catastrophic stop: {STOP_LOSS_EMERGENCY*100:.0f}%")
+                                                    logger.warning(f"      🔥 Proof: Protecting capital even with new entries BLOCKED")
+                                                else:
+                                                    logger.warning(f"   🛡️ CATASTROPHIC PROTECTIVE EXIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_EMERGENCY*100:.0f}%)")
+                                                logger.warning(f"   💥 PROTECTIVE ACTION: Exiting to prevent severe capital loss")
+                                                positions_to_exit.append({
+                                                    'symbol': symbol,
+                                                    'quantity': quantity,
+                                                    'reason': f'Catastrophic protective exit at {STOP_LOSS_EMERGENCY*100:.0f}% (actual: {pnl_percent*100:.2f}%)',
+                                                    'broker': position_broker,
+                                                    'broker_label': broker_label
+                                                })
+                                            # STANDARD STOP LOSS: Normal stop-loss threshold
+                                            # CRITICAL FIX (Feb 3, 2026): Changed AND to OR - was preventing stops from triggering!
+                                            # BUG: "pnl <= -2% AND pnl <= -0.25%" requires BOTH conditions (creates restrictive zone)
+                                            #      Only triggers if pnl <= -2% (stricter threshold), making -0.25% floor meaningless
+                                            # FIX: "pnl <= -1.5% OR pnl <= -0.05%" triggers when EITHER condition met (proper stop logic)
+                                            #      Now triggers at WHICHEVER threshold is hit first
+                                            # This was causing 80%+ of stop losses to FAIL and positions to keep losing
+                                            elif pnl_percent <= STOP_LOSS_THRESHOLD or pnl_percent <= MIN_LOSS_FLOOR:
+                                                if managing_only:
+                                                    logger.warning(f"   💰 LOSS PROTECTION (MANAGEMENT MODE): {symbol}")
+                                                    logger.warning(f"      Current P&L: {pnl_percent*100:.2f}%")
+                                                    logger.warning(f"      Stop-loss threshold: {STOP_LOSS_THRESHOLD*100:.2f}%")
+                                                    logger.warning(f"      🔥 Proof: Cutting losses even with new entries BLOCKED")
+                                                else:
+                                                    logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
+                                                # PROFITABILITY GUARD: Verify this is actually a losing position
+                                                if pnl_percent >= 0:
+                                                    logger.error(f"   ❌ PROFITABILITY GUARD: Attempted to stop-loss a WINNING position at +{pnl_percent*100:.2f}%!")
+                                                    logger.error(f"   🛡️ GUARD BLOCKED: Not exiting profitable position")
+                                                else:
+                                                    positions_to_exit.append({
+                                                        'symbol': symbol,
+                                                        'quantity': quantity,
+                                                        'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)',
+                                                        'broker': position_broker,
+                                                        'broker_label': broker_label
+                                                    })
+                                            # WARNING THRESHOLD: Approaching stop loss
+                                            elif pnl_percent <= STOP_LOSS_WARNING:
+                                                logger.warning(f"   ⚠️ Approaching protective stop: {symbol} at {pnl_percent*100:.2f}%")
+                                                # Don't exit yet, but log it
+                                            elif self._is_zombie_position(pnl_percent, entry_time_available, position_age_hours):
+                                                # ZOMBIE POSITION DETECTION: Position stuck at ~0% P&L for too long
+                                                # This catches auto-imported positions that mask actual losses
+                                                logger.warning(f"   🧟 ZOMBIE POSITION DETECTED: {symbol} at {pnl_percent:+.2f}% after {position_age_hours:.1f}h | "
+                                                              f"Position stuck at ~0% P&L suggests auto-import masked a losing trade | "
+                                                              f"AGGRESSIVE EXIT to prevent indefinite holding of potential loser")
+                                                positions_to_exit.append({
+                                                    'symbol': symbol,
+                                                    'quantity': quantity,
+                                                    'reason': f'Zombie position exit (stuck at {pnl_percent:+.2f}% for {position_age_hours:.1f}h - likely masked loser)',
+                                                    'broker': position_broker,
+                                                    'broker_label': broker_label
+                                                })
+                                            else:
+                                                # Position has entry price but not at any exit threshold
+                                                # CRITICAL FIX (Jan 19, 2026): Add time-based exits AFTER stop-loss checks
+                                                # Railway Golden Rule #5: Stop-loss > time exit (always)
+                                                # Only check time-based exits if stop-loss didn't trigger
 
-                    # Log if no entry price available - this helps debug why positions aren't taking profit
-                    if not entry_price_available:
-                        logger.warning(f"   ⚠️ No entry price tracked for {symbol} - attempting auto-import")
+                                                # Common holding message (avoid duplication)
+                                                holding_msg = f"   📊 Holding {symbol}: P&L {pnl_percent:+.2f}% (no exit threshold reached)"
 
-                        # ✅ FIX 1: AUTO-IMPORTED POSITION EXIT SUPPRESSION FIX
-                        # Auto-import orphaned positions with aggressive exit parameters
-                        # These positions are likely losers and should be exited aggressively
-                        auto_import_success = False
-                        real_entry_price = None
+                                                if entry_time_available:
+                                                    # 🚨 COINBASE LOCKDOWN (Jan 2026) - FORCE EXIT AFTER 30 MINUTES
+                                                    # Coinbase positions MUST exit within 30 minutes (even if profitable)
+                                                    # This prevents holding positions too long and missing exit opportunities
+                                                    if 'coinbase' in broker_label.lower():
+                                                        position_age_minutes = position_age_hours * MINUTES_PER_HOUR
+                                                        if position_age_minutes >= COINBASE_MAX_HOLD_MINUTES:
+                                                            logger.warning(f"   🚨 COINBASE TIME LOCKDOWN: {symbol} held {position_age_minutes:.1f} min (max: {COINBASE_MAX_HOLD_MINUTES})")
+                                                            logger.warning(f"   💥 Force exiting to lock in current P&L: {pnl_percent*100:+.2f}%")
+                                                            positions_to_exit.append({
+                                                                'symbol': symbol,
+                                                                'quantity': quantity,
+                                                                'reason': f'Coinbase time lockdown (held {position_age_minutes:.1f}min at {pnl_percent*100:+.2f}%)',
+                                                                'broker': position_broker,
+                                                                'broker_label': broker_label
+                                                            })
+                                                            continue
 
-                        # Try to get real entry price from broker API
-                        if active_broker and hasattr(active_broker, 'get_real_entry_price'):
-                            try:
-                                real_entry_price = active_broker.get_real_entry_price(symbol)
-                                if real_entry_price and real_entry_price > 0:
-                                    logger.info(f"   ✅ Real entry price fetched: ${real_entry_price:.2f}")
-                            except Exception as fetch_err:
-                                logger.debug(f"   Could not fetch real entry price: {fetch_err}")
+                                                    # EMERGENCY TIME-BASED EXIT: Force exit ALL positions after 12 hours (FAILSAFE)
+                                                    # This is a last-resort failsafe for profitable positions that aren't hitting targets
+                                                    if position_age_hours >= MAX_POSITION_HOLD_EMERGENCY:
+                                                        logger.error(f"   🚨 EMERGENCY TIME EXIT: {symbol} held for {position_age_hours:.1f} hours (emergency max: {MAX_POSITION_HOLD_EMERGENCY})")
+                                                        logger.error(f"   💥 FORCE SELLING to prevent indefinite holding!")
+                                                        positions_to_exit.append({
+                                                            'symbol': symbol,
+                                                            'quantity': quantity,
+                                                            'reason': f'EMERGENCY time exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_EMERGENCY}h)',
+                                                            'broker': position_broker,
+                                                            'broker_label': broker_label
+                                                        })
+                                                    # TIME-BASED EXIT: Auto-exit stale positions
+                                                    elif position_age_hours >= MAX_POSITION_HOLD_HOURS:
+                                                        logger.warning(f"   ⏰ STALE POSITION EXIT: {symbol} held for {position_age_hours:.1f} hours (max: {MAX_POSITION_HOLD_HOURS})")
+                                                        positions_to_exit.append({
+                                                            'symbol': symbol,
+                                                            'quantity': quantity,
+                                                            'reason': f'Time-based exit (held {position_age_hours:.1f}h, max {MAX_POSITION_HOLD_HOURS}h)',
+                                                            'broker': position_broker,
+                                                            'broker_label': broker_label
+                                                        })
+                                                    elif position_age_hours >= STALE_POSITION_WARNING_HOURS:
+                                                        logger.info(f"   ⚠️ Position aging: {symbol} held for {position_age_hours:.1f} hours")
+                                                        logger.info(holding_msg)
+                                                    else:
+                                                        logger.info(holding_msg)
+                                                else:
+                                                    logger.info(holding_msg)
+                                            continue  # Continue to next position check
 
-                        # If real entry cannot be fetched, use safety default
-                        if not real_entry_price or real_entry_price <= 0:
-                            # SAFETY DEFAULT: Assume entry was higher than current by multiplier
-                            # This creates immediate negative P&L to trigger aggressive exits
-                            real_entry_price = current_price * SAFETY_DEFAULT_ENTRY_MULTIPLIER
-                            logger.warning(f"   ⚠️ Using safety default entry price: ${real_entry_price:.2f} (current * {SAFETY_DEFAULT_ENTRY_MULTIPLIER})")
-                            logger.warning(f"   🔴 This position will be flagged as losing and exited aggressively")
-
-                        if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
-                            try:
-                                # Calculate position size
-                                size_usd = quantity * current_price
-
-                                # Track the position with real or estimated entry price
-                                # Set aggressive exit parameters for auto-imported positions
-                                auto_import_success = active_broker.position_tracker.track_entry(
-                                    symbol=symbol,
-                                    entry_price=real_entry_price,
-                                    quantity=quantity,
-                                    size_usd=size_usd,
-                                    strategy="AUTO_IMPORTED"
-                                )
-
-                                if auto_import_success:
-                                    # Compute real PnL immediately
-                                    immediate_pnl = ((current_price - real_entry_price) / real_entry_price) * 100
-                                    logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${real_entry_price:.2f}")
-                                    logger.info(f"   💰 Immediate P&L: {immediate_pnl:+.2f}%")
-                                    logger.info(f"   🔴 Aggressive exits enabled: force_stop_loss=True, max_loss_pct=1.5%")
-
-                                    # AUTO-IMPORTED LOSERS ARE EXITED FIRST
-                                    # If position is immediately losing, queue it for exit NOW (not next cycle!)
-                                    if immediate_pnl < 0:
-                                        logger.warning(f"   🚨 AUTO-IMPORTED LOSER: {symbol} at {immediate_pnl:.2f}%")
-                                        logger.warning(f"   💥 Queuing for IMMEDIATE EXIT THIS CYCLE")
-                                        positions_to_exit.append({
-                                            'symbol': symbol,
-                                            'quantity': quantity,
-                                            'reason': f'Auto-imported losing position ({immediate_pnl:+.2f}%)',
-                                            'broker': position_broker,
-                                            'broker_label': broker_label
-                                        })
-                                        # Skip all remaining logic for this position since it's queued for exit
+                                        # If we got here via break, skip remaining checks
                                         continue
 
-                                    logger.info(f"      Position now tracked - will use profit targets in next cycle")
-                                    logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0) | "
-                                              f"⚠️  WARNING: This position may have been losing before auto-import! | "
-                                              f"Position now tracked - will evaluate exit in next cycle")
+                                except Exception as pnl_err:
+                                    logger.debug(f"   Could not calculate P&L for {symbol}: {pnl_err}")
 
-                                    # CRITICAL FIX: Don't mark as just_auto_imported to allow stop-loss to execute
-                                    # Auto-imported positions should NOT skip stop-loss checks!
-                                    # Only skip profit-taking logic to avoid premature exits
-                                    just_auto_imported = False  # Changed from True - stop-loss must execute!
+                            # Log if no entry price available - this helps debug why positions aren't taking profit
+                            if not entry_price_available:
+                                logger.warning(f"   ⚠️ No entry price tracked for {symbol} - attempting auto-import")
 
-                                    # Re-fetch position data to get accurate tracking info
-                                    # This ensures control flow variables reflect actual state
+                                # ✅ FIX 1: AUTO-IMPORTED POSITION EXIT SUPPRESSION FIX
+                                # Auto-import orphaned positions with aggressive exit parameters
+                                # These positions are likely losers and should be exited aggressively
+                                auto_import_success = False
+                                real_entry_price = None
+
+                                # Try to get real entry price from broker API
+                                if active_broker and hasattr(active_broker, 'get_real_entry_price'):
                                     try:
-                                        tracked_position = active_broker.position_tracker.get_position(symbol)
-                                        if tracked_position:
-                                            entry_price_available = True
+                                        real_entry_price = active_broker.get_real_entry_price(symbol)
+                                        if real_entry_price and real_entry_price > 0:
+                                            logger.info(f"   ✅ Real entry price fetched: ${real_entry_price:.2f}")
+                                    except Exception as fetch_err:
+                                        logger.debug(f"   Could not fetch real entry price: {fetch_err}")
 
-                                            # Get entry time from newly tracked position
-                                            entry_time = tracked_position.get('first_entry_time')
-                                            if entry_time:
-                                                try:
-                                                    entry_dt = datetime.fromisoformat(entry_time)
-                                                    now = datetime.now()
-                                                    position_age_hours = (now - entry_dt).total_seconds() / 3600
-                                                    entry_time_available = True
-                                                except Exception:
-                                                    # Just imported, so age should be ~0
-                                                    entry_time_available = True
-                                                    position_age_hours = 0
+                                # If real entry cannot be fetched, use safety default
+                                if not real_entry_price or real_entry_price <= 0:
+                                    # SAFETY DEFAULT: Assume entry was higher than current by multiplier
+                                    # This creates immediate negative P&L to trigger aggressive exits
+                                    real_entry_price = current_price * SAFETY_DEFAULT_ENTRY_MULTIPLIER
+                                    logger.warning(f"   ⚠️ Using safety default entry price: ${real_entry_price:.2f} (current * {SAFETY_DEFAULT_ENTRY_MULTIPLIER})")
+                                    logger.warning(f"   🔴 This position will be flagged as losing and exited aggressively")
 
-                                            logger.info(f"      Position verified in tracker - aggressive exits disabled")
-                                    except Exception as verify_err:
-                                        logger.warning(f"      Could not verify imported position: {verify_err}")
-                                        # Still mark as available since track_entry succeeded
-                                        entry_price_available = True
-                                else:
-                                    logger.error(f"   ❌ Auto-import failed for {symbol} - will use fallback exit logic")
-                            except Exception as import_err:
-                                logger.error(f"   ❌ Error auto-importing {symbol}: {import_err}")
-                                logger.error(f"      Will use fallback exit logic")
+                                if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                    try:
+                                        # Calculate position size
+                                        size_usd = quantity * current_price
 
-                        # If auto-import failed or not available, use fallback logic
-                        if not auto_import_success:
-                            logger.warning(f"      💡 Auto-import unavailable - using fallback exit logic")
+                                        # Track the position with real or estimated entry price
+                                        # Set aggressive exit parameters for auto-imported positions
+                                        auto_import_success = active_broker.position_tracker.track_entry(
+                                            symbol=symbol,
+                                            entry_price=real_entry_price,
+                                            quantity=quantity,
+                                            size_usd=size_usd,
+                                            strategy="AUTO_IMPORTED"
+                                        )
 
-                            # CRITICAL FIX: For positions without entry price, use technical indicators
-                            # to determine if position is weakening (RSI < 52, price < EMA9)
-                            # This conservative exit strategy prevents holding potentially losing positions
+                                        if auto_import_success:
+                                            # Compute real PnL immediately
+                                            immediate_pnl = ((current_price - real_entry_price) / real_entry_price) * 100
+                                            logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${real_entry_price:.2f}")
+                                            logger.info(f"   💰 Immediate P&L: {immediate_pnl:+.2f}%")
+                                            logger.info(f"   🔴 Aggressive exits enabled: force_stop_loss=True, max_loss_pct=1.5%")
 
-                            # Check if position was entered recently (less than 1 hour ago)
-                            # If not, it's likely an old position that should be exited
-                            if entry_time_available:
-                                # We have time but no price - unusual, but use time-based exit
-                                if position_age_hours >= MAX_POSITION_HOLD_HOURS:
-                                    logger.warning(f"   ⏰ FALLBACK TIME EXIT: {symbol} held {position_age_hours:.1f}h (max: {MAX_POSITION_HOLD_HOURS}h)")
+                                            # AUTO-IMPORTED LOSERS ARE EXITED FIRST
+                                            # If position is immediately losing, queue it for exit NOW (not next cycle!)
+                                            if immediate_pnl < 0:
+                                                logger.warning(f"   🚨 AUTO-IMPORTED LOSER: {symbol} at {immediate_pnl:.2f}%")
+                                                logger.warning(f"   💥 Queuing for IMMEDIATE EXIT THIS CYCLE")
+                                                positions_to_exit.append({
+                                                    'symbol': symbol,
+                                                    'quantity': quantity,
+                                                    'reason': f'Auto-imported losing position ({immediate_pnl:+.2f}%)',
+                                                    'broker': position_broker,
+                                                    'broker_label': broker_label
+                                                })
+                                                # Skip all remaining logic for this position since it's queued for exit
+                                                continue
+
+                                            logger.info(f"      Position now tracked - will use profit targets in next cycle")
+                                            logger.info(f"   ✅ AUTO-IMPORTED: {symbol} @ ${current_price:.2f} (P&L will start from $0) | "
+                                                      f"⚠️  WARNING: This position may have been losing before auto-import! | "
+                                                      f"Position now tracked - will evaluate exit in next cycle")
+
+                                            # CRITICAL FIX: Don't mark as just_auto_imported to allow stop-loss to execute
+                                            # Auto-imported positions should NOT skip stop-loss checks!
+                                            # Only skip profit-taking logic to avoid premature exits
+                                            just_auto_imported = False  # Changed from True - stop-loss must execute!
+
+                                            # Re-fetch position data to get accurate tracking info
+                                            # This ensures control flow variables reflect actual state
+                                            try:
+                                                tracked_position = active_broker.position_tracker.get_position(symbol)
+                                                if tracked_position:
+                                                    entry_price_available = True
+
+                                                    # Get entry time from newly tracked position
+                                                    entry_time = tracked_position.get('first_entry_time')
+                                                    if entry_time:
+                                                        try:
+                                                            entry_dt = datetime.fromisoformat(entry_time)
+                                                            now = datetime.now()
+                                                            position_age_hours = (now - entry_dt).total_seconds() / 3600
+                                                            entry_time_available = True
+                                                        except Exception:
+                                                            # Just imported, so age should be ~0
+                                                            entry_time_available = True
+                                                            position_age_hours = 0
+
+                                                    logger.info(f"      Position verified in tracker - aggressive exits disabled")
+                                            except Exception as verify_err:
+                                                logger.warning(f"      Could not verify imported position: {verify_err}")
+                                                # Still mark as available since track_entry succeeded
+                                                entry_price_available = True
+                                        else:
+                                            logger.error(f"   ❌ Auto-import failed for {symbol} - will use fallback exit logic")
+                                    except Exception as import_err:
+                                        logger.error(f"   ❌ Error auto-importing {symbol}: {import_err}")
+                                        logger.error(f"      Will use fallback exit logic")
+
+                                # If auto-import failed or not available, use fallback logic
+                                if not auto_import_success:
+                                    logger.warning(f"      💡 Auto-import unavailable - using fallback exit logic")
+
+                                    # CRITICAL FIX: For positions without entry price, use technical indicators
+                                    # to determine if position is weakening (RSI < 52, price < EMA9)
+                                    # This conservative exit strategy prevents holding potentially losing positions
+
+                                    # Check if position was entered recently (less than 1 hour ago)
+                                    # If not, it's likely an old position that should be exited
+                                    if entry_time_available:
+                                        # We have time but no price - unusual, but use time-based exit
+                                        if position_age_hours >= MAX_POSITION_HOLD_HOURS:
+                                            logger.warning(f"   ⏰ FALLBACK TIME EXIT: {symbol} held {position_age_hours:.1f}h (max: {MAX_POSITION_HOLD_HOURS}h)")
+                                            positions_to_exit.append({
+                                                'symbol': symbol,
+                                                'quantity': quantity,
+                                                'reason': f'Time-based exit without entry price (held {position_age_hours:.1f}h)',
+                                                'broker': position_broker,
+                                                'broker_label': broker_label
+                                            })
+                                            continue
+                                    else:
+                                        # No entry time AND no entry price - this is an orphaned position
+                                        # These are likely old positions from before tracking was implemented
+                                        # Be conservative: exit if position shows any signs of weakness
+                                        logger.warning(f"   ⚠️ ORPHANED POSITION: {symbol} has no entry price or time tracking")
+                                        logger.warning(f"      This position will be exited aggressively to prevent losses")
+
+                            # Get market data for analysis (use cached method to prevent rate limiting)
+                            candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
+                            if not candles or len(candles) < MIN_CANDLES_REQUIRED:
+                                logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles, need {MIN_CANDLES_REQUIRED})")
+                                # CRITICAL: Exit positions we can't analyze to prevent blind holding
+                                logger.info(f"   🔴 NO DATA EXIT: {symbol} (cannot analyze market)")
+                                positions_to_exit.append({
+                                    'symbol': symbol,
+                                    'quantity': quantity,
+                                    'reason': 'Insufficient market data for analysis',
+                                    'broker': position_broker,
+                                    'broker_label': broker_label
+                                })
+                                continue
+
+                            # Convert to DataFrame
+                            df = pd.DataFrame(candles)
+
+                            # CRITICAL: Ensure numeric types for OHLCV data
+                            for col in ['open', 'high', 'low', 'close', 'volume']:
+                                if col in df.columns:
+                                    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+                            # Calculate indicators for exit signal detection
+                            logger.debug(f"   DEBUG candle types → close={type(df['close'].iloc[-1])}, open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}")
+                            indicators = self.apex.calculate_indicators(df)
+                            if not indicators:
+                                # Can't analyze - exit to prevent blind holding
+                                logger.warning(f"   ⚠️ No indicators for {symbol} - exiting")
+                                positions_to_exit.append({
+                                    'symbol': symbol,
+                                    'quantity': quantity,
+                                    'reason': 'No indicators available',
+                                    'broker': position_broker,
+                                    'broker_label': broker_label
+                                })
+                                continue
+
+                            # CRITICAL: Skip ALL exits for positions that were just auto-imported this cycle
+                            # These positions have entry_price = current_price (P&L = $0), so evaluating them
+                            # for ANY exit signals would defeat the purpose of auto-import
+                            # Let them develop P&L for at least one full cycle before applying ANY exit rules
+                            # This guard is placed early to protect against both orphaned and momentum-based exits
+                            if just_auto_imported:
+                                logger.info(f"   ⏭️  SKIPPING EXITS: {symbol} was just auto-imported this cycle")
+                                logger.info(f"      Will evaluate exit signals in next cycle after P&L develops")
+                                logger.info(f"      🔍 Note: If this position shows 0% P&L for multiple cycles, it may be a masked loser")
+                                continue
+
+                            # MOMENTUM-BASED PROFIT TAKING (for positions without entry price)
+                            # When we don't have entry price, use price momentum and trend reversal signals
+                            # This helps lock in gains on strong moves and cut losses on weak positions
+
+                            rsi = scalar(indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI)
+
+                            # CRITICAL FIX (Jan 16, 2026): ORPHANED POSITION PROTECTION
+                            # Positions without entry prices are more likely to be losing trades
+                            # Apply ULTRA-AGGRESSIVE exits to prevent holding losers
+                            if not entry_price_available:
+                                # For orphaned positions, exit on ANY weakness signal
+                                # This includes: RSI < 52 (below neutral), price below any EMA, or any downtrend
+
+                                # Get EMAs for trend analysis
+                                ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
+                                ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
+
+                                # Exit if RSI below 52 (slightly below neutral) - indicates weakening momentum
+                                if rsi < 52:
+                                    logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (RSI={rsi:.1f} < 52, no entry price)")
+                                    logger.warning(f"      Exiting aggressively to prevent holding potential loser")
                                     positions_to_exit.append({
                                         'symbol': symbol,
                                         'quantity': quantity,
-                                        'reason': f'Time-based exit without entry price (held {position_age_hours:.1f}h)',
+                                        'reason': f'Orphaned position with weak RSI ({rsi:.1f}) - preventing loss',
                                         'broker': position_broker,
                                         'broker_label': broker_label
                                     })
                                     continue
-                            else:
-                                # No entry time AND no entry price - this is an orphaned position
-                                # These are likely old positions from before tracking was implemented
-                                # Be conservative: exit if position shows any signs of weakness
-                                logger.warning(f"   ⚠️ ORPHANED POSITION: {symbol} has no entry price or time tracking")
-                                logger.warning(f"      This position will be exited aggressively to prevent losses")
 
-                    # Get market data for analysis (use cached method to prevent rate limiting)
-                    candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
-                    if not candles or len(candles) < MIN_CANDLES_REQUIRED:
-                        logger.warning(f"   ⚠️ Insufficient data for {symbol} ({len(candles) if candles else 0} candles, need {MIN_CANDLES_REQUIRED})")
-                        # CRITICAL: Exit positions we can't analyze to prevent blind holding
-                        logger.info(f"   🔴 NO DATA EXIT: {symbol} (cannot analyze market)")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': 'Insufficient market data for analysis',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                        continue
+                                # Exit if price is below EMA9 (short-term weakness)
+                                if current_price < ema9:
+                                    logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (price ${current_price:.2f} < EMA9 ${ema9:.2f})")
+                                    logger.warning(f"      Exiting aggressively to prevent holding potential loser")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Orphaned position below EMA9 - preventing loss',
+                                        'broker': position_broker,
+                                        'broker_label': broker_label
+                                    })
+                                    continue
 
-                    # Convert to DataFrame
-                    df = pd.DataFrame(candles)
+                                # If orphaned position made it here, it's showing strength - still monitor closely
+                                logger.info(f"   ✅ ORPHANED POSITION SHOWING STRENGTH: {symbol} (RSI={rsi:.1f}, price above EMA9)")
+                                logger.info(f"      Will monitor with lenient criteria to allow P&L development (exit only on extreme RSI with confirmation)")
 
-                    # CRITICAL: Ensure numeric types for OHLCV data
-                    for col in ['open', 'high', 'low', 'close', 'volume']:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                            # PROFITABILITY FIX (Jan 28, 2026): REMOVE UNPROFITABLE RSI-ONLY EXITS
+                            # Previous logic was exiting on RSI signals without verifying profitability
+                            # This caused "buying low, selling low" and "buying high, selling high" scenarios
+                            #
+                            # KEY INSIGHT: RSI overbought/oversold indicates MOMENTUM, not profitability
+                            # - Position can be overbought (RSI > 55) but still losing money
+                            # - Position can be oversold (RSI < 45) but still making money
+                            #
+                            # NEW STRATEGY: For orphaned positions that passed aggressive checks (RSI >= 52, price >= EMA9)
+                            # use EXTREME signals only to allow positions to develop proper P&L:
+                            # - Only exit on VERY overbought (RSI > 70) with confirmed weakness (price < EMA9)
+                            # - Only exit on VERY oversold (RSI < 30) with confirmed downtrend (price < EMA21)
+                            # - Always verify price action confirms the RSI signal before exit
+                            #
+                            # This prevents premature exits and lets positions develop proper P&L
 
-                    # Calculate indicators for exit signal detection
-                    logger.debug(f"   DEBUG candle types → close={type(df['close'].iloc[-1])}, open={type(df['open'].iloc[-1])}, volume={type(df['volume'].iloc[-1])}")
-                    indicators = self.apex.calculate_indicators(df)
-                    if not indicators:
-                        # Can't analyze - exit to prevent blind holding
-                        logger.warning(f"   ⚠️ No indicators for {symbol} - exiting")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': 'No indicators available',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                        continue
+                            # EXTREME overbought (RSI > 70) with momentum weakening - likely reversal
+                            # Only exit if price is also below EMA9 (confirming momentum loss)
+                            if rsi > 70:
+                                ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
+                                if current_price < ema9:
+                                    logger.info(f"   📈 EXTREME OVERBOUGHT + REVERSAL: {symbol} (RSI={rsi:.1f}, price<EMA9)")
+                                    logger.info(f"      Exiting to protect against sharp reversal from overbought")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Extreme overbought reversal (RSI={rsi:.1f}, price<EMA9)',
+                                        'broker': position_broker,
+                                        'broker_label': broker_label
+                                    })
+                                    continue
+                                else:
+                                    logger.info(f"   📊 {symbol} very overbought (RSI={rsi:.1f}) but still strong (price>EMA9) - HOLDING")
+                                    continue
 
-                    # CRITICAL: Skip ALL exits for positions that were just auto-imported this cycle
-                    # These positions have entry_price = current_price (P&L = $0), so evaluating them
-                    # for ANY exit signals would defeat the purpose of auto-import
-                    # Let them develop P&L for at least one full cycle before applying ANY exit rules
-                    # This guard is placed early to protect against both orphaned and momentum-based exits
-                    if just_auto_imported:
-                        logger.info(f"   ⏭️  SKIPPING EXITS: {symbol} was just auto-imported this cycle")
-                        logger.info(f"      Will evaluate exit signals in next cycle after P&L develops")
-                        logger.info(f"      🔍 Note: If this position shows 0% P&L for multiple cycles, it may be a masked loser")
-                        continue
+                            # REMOVED (Jan 28, 2026): Moderate RSI exits (RSI 45-55, RSI 50+) were too aggressive
+                            # These exits were triggering without profit verification, causing:
+                            # - Selling winners too early (RSI 50-55 exits at small gains)
+                            # - Selling losers too late (RSI 45-50 exits after significant losses)
+                            # Result: "Buying low, selling low" and minimal profits
+                            #
+                            # Now only extreme RSI levels (>70, <30) with confirming signals trigger exits
+                            # This allows positions to develop proper P&L before exiting
 
-                    # MOMENTUM-BASED PROFIT TAKING (for positions without entry price)
-                    # When we don't have entry price, use price momentum and trend reversal signals
-                    # This helps lock in gains on strong moves and cut losses on weak positions
+                            # EXTREME oversold (RSI < 30) with continued weakness - likely further decline
+                            # Only exit if price is also below EMA21 (confirming downtrend)
+                            if rsi < 30:
+                                ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
+                                if current_price < ema21:
+                                    logger.info(f"   📉 EXTREME OVERSOLD + DOWNTREND: {symbol} (RSI={rsi:.1f}, price<EMA21)")
+                                    logger.info(f"      Exiting to prevent further losses in confirmed downtrend")
+                                    positions_to_exit.append({
+                                        'symbol': symbol,
+                                        'quantity': quantity,
+                                        'reason': f'Extreme oversold downtrend (RSI={rsi:.1f}, price<EMA21)',
+                                        'broker': position_broker,
+                                        'broker_label': broker_label
+                                    })
+                                    continue
+                                else:
+                                    logger.info(f"   📊 {symbol} very oversold (RSI={rsi:.1f}) but bouncing (price>EMA21) - HOLDING for recovery")
+                                    continue
 
-                    rsi = scalar(indicators.get('rsi', pd.Series()).iloc[-1] if 'rsi' in indicators else DEFAULT_RSI)
+                            # Check for weak market conditions (exit signal)
+                            # This protects capital even without knowing entry price
+                            allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
 
-                    # CRITICAL FIX (Jan 16, 2026): ORPHANED POSITION PROTECTION
-                    # Positions without entry prices are more likely to be losing trades
-                    # Apply ULTRA-AGGRESSIVE exits to prevent holding losers
-                    if not entry_price_available:
-                        # For orphaned positions, exit on ANY weakness signal
-                        # This includes: RSI < 52 (below neutral), price below any EMA, or any downtrend
+                            # AGGRESSIVE: If market conditions deteriorate, exit immediately
+                            if not allow_trade:
+                                logger.info(f"   ⚠️ Market conditions weak: {market_reason}")
+                                logger.info(f"   💰 MARKING {symbol} for concurrent exit")
+                                positions_to_exit.append({
+                                    'symbol': symbol,
+                                    'quantity': quantity,
+                                    'reason': market_reason,
+                                    'broker': position_broker,
+                                    'broker_label': broker_label
+                                })
+                                continue
 
-                        # Get EMAs for trend analysis
-                        ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
-                        ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
+                            # If we get here, position passes all checks - keep it
+                            logger.info(f"   ✅ {symbol} passing all checks (RSI={rsi:.1f}, trend={trend})")
 
-                        # Exit if RSI below 52 (slightly below neutral) - indicates weakening momentum
-                        if rsi < 52:
-                            logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (RSI={rsi:.1f} < 52, no entry price)")
-                            logger.warning(f"      Exiting aggressively to prevent holding potential loser")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': f'Orphaned position with weak RSI ({rsi:.1f}) - preventing loss',
-                                'broker': position_broker,
-                                'broker_label': broker_label
-                            })
-                            continue
+                        except Exception as e:
+                            logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
 
-                        # Exit if price is below EMA9 (short-term weakness)
-                        if current_price < ema9:
-                            logger.warning(f"   🚨 ORPHANED POSITION EXIT: {symbol} (price ${current_price:.2f} < EMA9 ${ema9:.2f})")
-                            logger.warning(f"      Exiting aggressively to prevent holding potential loser")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': f'Orphaned position below EMA9 - preventing loss',
-                                'broker': position_broker,
-                                'broker_label': broker_label
-                            })
-                            continue
-
-                        # If orphaned position made it here, it's showing strength - still monitor closely
-                        logger.info(f"   ✅ ORPHANED POSITION SHOWING STRENGTH: {symbol} (RSI={rsi:.1f}, price above EMA9)")
-                        logger.info(f"      Will monitor with lenient criteria to allow P&L development (exit only on extreme RSI with confirmation)")
-
-                    # PROFITABILITY FIX (Jan 28, 2026): REMOVE UNPROFITABLE RSI-ONLY EXITS
-                    # Previous logic was exiting on RSI signals without verifying profitability
-                    # This caused "buying low, selling low" and "buying high, selling high" scenarios
-                    #
-                    # KEY INSIGHT: RSI overbought/oversold indicates MOMENTUM, not profitability
-                    # - Position can be overbought (RSI > 55) but still losing money
-                    # - Position can be oversold (RSI < 45) but still making money
-                    #
-                    # NEW STRATEGY: For orphaned positions that passed aggressive checks (RSI >= 52, price >= EMA9)
-                    # use EXTREME signals only to allow positions to develop proper P&L:
-                    # - Only exit on VERY overbought (RSI > 70) with confirmed weakness (price < EMA9)
-                    # - Only exit on VERY oversold (RSI < 30) with confirmed downtrend (price < EMA21)
-                    # - Always verify price action confirms the RSI signal before exit
-                    #
-                    # This prevents premature exits and lets positions develop proper P&L
-
-                    # EXTREME overbought (RSI > 70) with momentum weakening - likely reversal
-                    # Only exit if price is also below EMA9 (confirming momentum loss)
-                    if rsi > 70:
-                        ema9 = indicators.get('ema_9', pd.Series()).iloc[-1] if 'ema_9' in indicators else current_price
-                        if current_price < ema9:
-                            logger.info(f"   📈 EXTREME OVERBOUGHT + REVERSAL: {symbol} (RSI={rsi:.1f}, price<EMA9)")
-                            logger.info(f"      Exiting to protect against sharp reversal from overbought")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': f'Extreme overbought reversal (RSI={rsi:.1f}, price<EMA9)',
-                                'broker': position_broker,
-                                'broker_label': broker_label
-                            })
-                            continue
-                        else:
-                            logger.info(f"   📊 {symbol} very overbought (RSI={rsi:.1f}) but still strong (price>EMA9) - HOLDING")
-                            continue
-
-                    # REMOVED (Jan 28, 2026): Moderate RSI exits (RSI 45-55, RSI 50+) were too aggressive
-                    # These exits were triggering without profit verification, causing:
-                    # - Selling winners too early (RSI 50-55 exits at small gains)
-                    # - Selling losers too late (RSI 45-50 exits after significant losses)
-                    # Result: "Buying low, selling low" and minimal profits
-                    #
-                    # Now only extreme RSI levels (>70, <30) with confirming signals trigger exits
-                    # This allows positions to develop proper P&L before exiting
-
-                    # EXTREME oversold (RSI < 30) with continued weakness - likely further decline
-                    # Only exit if price is also below EMA21 (confirming downtrend)
-                    if rsi < 30:
-                        ema21 = indicators.get('ema_21', pd.Series()).iloc[-1] if 'ema_21' in indicators else current_price
-                        if current_price < ema21:
-                            logger.info(f"   📉 EXTREME OVERSOLD + DOWNTREND: {symbol} (RSI={rsi:.1f}, price<EMA21)")
-                            logger.info(f"      Exiting to prevent further losses in confirmed downtrend")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': f'Extreme oversold downtrend (RSI={rsi:.1f}, price<EMA21)',
-                                'broker': position_broker,
-                                'broker_label': broker_label
-                            })
-                            continue
-                        else:
-                            logger.info(f"   📊 {symbol} very oversold (RSI={rsi:.1f}) but bouncing (price>EMA21) - HOLDING for recovery")
-                            continue
-
-                    # Check for weak market conditions (exit signal)
-                    # This protects capital even without knowing entry price
-                    allow_trade, trend, market_reason = self.apex.check_market_filter(df, indicators)
-
-                    # AGGRESSIVE: If market conditions deteriorate, exit immediately
-                    if not allow_trade:
-                        logger.info(f"   ⚠️ Market conditions weak: {market_reason}")
-                        logger.info(f"   💰 MARKING {symbol} for concurrent exit")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': market_reason,
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                        continue
-
-                    # If we get here, position passes all checks - keep it
-                    logger.info(f"   ✅ {symbol} passing all checks (RSI={rsi:.1f}, trend={trend})")
-
-                except Exception as e:
-                    logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
-
-                # Rate limiting: Add delay after each position check to prevent 429 errors
-                # Skip delay after the last position
-                if position_idx < len(current_positions) - 1:
-                    jitter = random.uniform(0, 0.05)  # 0-50ms jitter
-                    time.sleep(POSITION_CHECK_DELAY + jitter)
-
-            # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
-            # Position cap set to 8 maximum concurrent positions
-            if len(current_positions) > MAX_POSITIONS_ALLOWED and len(positions_to_exit) < (len(current_positions) - MAX_POSITIONS_ALLOWED):
-                logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - MAX_POSITIONS_ALLOWED - len(positions_to_exit)} more positions")
-
-                # Identify positions not yet marked for exit
-                symbols_to_exit = {p['symbol'] for p in positions_to_exit}
-                remaining_positions = [p for p in current_positions if p.get('symbol') not in symbols_to_exit]
-
-                # Sort by USD value (smallest first - easiest to exit and lowest capital impact)
-                # CRITICAL FIX: Add None-check safety guard for price fetching in sort key
-                def get_position_value(p):
-                    """Calculate position value with None-check safety."""
-                    symbol = p.get('symbol', '')
-                    quantity = p.get('quantity', 0)
-                    price = active_broker.get_current_price(symbol)
-                    # Return 0 if price is None to sort invalid positions first
-                    return quantity * (price if price is not None else 0)
-
-                remaining_sorted = sorted(remaining_positions, key=get_position_value)
-
-                # Force-sell smallest positions to get under cap
-                positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
-                for pos_idx, pos in enumerate(remaining_sorted[:positions_needed]):
-                    symbol = pos.get('symbol')
-                    quantity = pos.get('quantity', 0)
-                    try:
-                        price = active_broker.get_current_price(symbol)
-
-                        # CRITICAL FIX: Add None-check safety guard
-                        # Prevents ghost positions from invalid price fetches
-                        if price is None or price == 0:
-                            logger.error(f"   ❌ Price fetch failed for {symbol} — symbol mismatch")
-                            logger.error(f"   💡 This position may be unmanageable due to incorrect broker symbol format")
-                            logger.warning(f"   🔴 FORCE-EXIT anyway: {symbol} (price unknown)")
-                            positions_to_exit.append({
-                                'symbol': symbol,
-                                'quantity': quantity,
-                                'reason': 'Over position cap (price fetch failed - symbol mismatch)',
-                                'broker': position_broker,
-                                'broker_label': broker_label
-                            })
-                            continue
-
-                        value = quantity * price
-                        logger.warning(f"   🔴 FORCE-EXIT to meet cap: {symbol} (${value:.2f})")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': f'Over position cap (${value:.2f})',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-                    except Exception as price_err:
-                        # Still add even if price fetch fails
-                        logger.warning(f"   ⚠️ Could not get price for {symbol}: {price_err}")
-                        positions_to_exit.append({
-                            'symbol': symbol,
-                            'quantity': quantity,
-                            'reason': 'Over position cap',
-                            'broker': position_broker,
-                            'broker_label': broker_label
-                        })
-
-                    # Rate limiting: Add delay after each price check (except last one)
-                    if pos_idx < positions_needed - 1:
+                    # Rate limiting: Add delay after each position check to prevent 429 errors
+                    # Skip delay after the last position
+                    if position_idx < len(current_positions) - 1:
                         jitter = random.uniform(0, 0.05)  # 0-50ms jitter
                         time.sleep(POSITION_CHECK_DELAY + jitter)
 
-            # CRITICAL FIX: Now sell ALL positions concurrently (not one at a time)
-            if positions_to_exit:
-                logger.info(f"")
-                logger.info(f"🔴 CONCURRENT EXIT: Selling {len(positions_to_exit)} positions NOW")
-                logger.info(f"="*80)
+                # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
+                # Position cap set to 8 maximum concurrent positions
+                if len(current_positions) > MAX_POSITIONS_ALLOWED and len(positions_to_exit) < (len(current_positions) - MAX_POSITIONS_ALLOWED):
+                    logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - MAX_POSITIONS_ALLOWED - len(positions_to_exit)} more positions")
 
-                # Track sell results to provide accurate summary
-                successful_sells = []
-                failed_sells = []
+                    # Identify positions not yet marked for exit
+                    symbols_to_exit = {p['symbol'] for p in positions_to_exit}
+                    remaining_positions = [p for p in current_positions if p.get('symbol') not in symbols_to_exit]
 
-                for i, pos_data in enumerate(positions_to_exit, 1):
-                    symbol = pos_data['symbol']
-                    quantity = pos_data['quantity']
-                    reason = pos_data['reason']
-                    # CRITICAL FIX (Jan 24, 2026): Use the correct broker for each position
-                    exit_broker = pos_data.get('broker', active_broker)
-                    exit_broker_label = pos_data.get('broker_label', 'UNKNOWN')
+                    # Sort by USD value (smallest first - easiest to exit and lowest capital impact)
+                    # CRITICAL FIX: Add None-check safety guard for price fetching in sort key
+                    def get_position_value(p):
+                        """Calculate position value with None-check safety."""
+                        symbol = p.get('symbol', '')
+                        quantity = p.get('quantity', 0)
+                        price = active_broker.get_current_price(symbol)
+                        # Return 0 if price is None to sort invalid positions first
+                        return quantity * (price if price is not None else 0)
 
-                    logger.info(f"[{i}/{len(positions_to_exit)}] Selling {symbol} on {exit_broker_label} ({reason})")
+                    remaining_sorted = sorted(remaining_positions, key=get_position_value)
 
-                    # CRITICAL FIX (Jan 10, 2026): Validate symbol before placing order
-                    # Prevents "ProductID is invalid" errors
-                    if not symbol or not isinstance(symbol, str):
-                        logger.error(f"  ❌ SKIPPING: Invalid symbol (value: {symbol}, type: {type(symbol)})")
-                        # Store descriptive string for logging - will be displayed in summary
-                        failed_sells.append(f"INVALID_SYMBOL({symbol})")
-                        continue
+                    # Force-sell smallest positions to get under cap
+                    positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
+                    for pos_idx, pos in enumerate(remaining_sorted[:positions_needed]):
+                        symbol = pos.get('symbol')
+                        quantity = pos.get('quantity', 0)
+                        try:
+                            price = active_broker.get_current_price(symbol)
 
-                    try:
-                        # 🚨 COINBASE LOCKDOWN (Jan 2026) - FORCE LIQUIDATE MODE
-                        # Use force_liquidate for Coinbase sells to bypass ALL validation
-                        # This ensures stop-losses and profit-taking ALWAYS execute
-                        is_coinbase = 'coinbase' in exit_broker_label.lower()
-                        use_force_liquidate = is_coinbase and ('lockdown' in reason.lower() or 'loss' in reason.lower() or 'stop' in reason.lower())
-
-                        if use_force_liquidate:
-                            logger.info(f"  🛡️ PROTECTIVE MODE: Using force_liquidate for Coinbase exit")
-
-                        result = exit_broker.place_market_order(
-                            symbol=symbol,
-                            side='sell',
-                            quantity=quantity,
-                            size_type='base',
-                            force_liquidate=use_force_liquidate,  # Bypass ALL validation for Coinbase protective exits
-                            ignore_balance=use_force_liquidate,   # Skip balance checks
-                            ignore_min_trade=use_force_liquidate  # Skip minimum trade size checks
-                        )
-
-                        # Handle dust positions separately from actual failures
-                        if result and result.get('status') == 'skipped_dust':
-                            logger.info(f"  💨 {symbol} SKIPPED (dust position - too small to sell)")
-                            logger.info(f"     Will automatically retry in 24h if position grows")
-                            # Mark as unsellable for 24h retry window
-                            self.unsellable_positions[symbol] = time.time()
-                            # Don't add to failed_sells - this is expected behavior for dust
-                            continue
-
-                        if result and result.get('status') not in ['error', 'unfilled']:
-                            logger.info(f"  ✅ {symbol} SOLD successfully on {exit_broker_label}!")
-                            # ✅ FIX #3: EXPLICIT SELL CONFIRMATION LOG
-                            # If this was a stop-loss exit, log it clearly
-                            if 'stop loss' in reason.lower():
-                                logger.info(f"  ✅ SOLD {symbol} @ market due to stop loss")
-                            # Track the exit in position tracker (use the correct broker)
-                            if hasattr(exit_broker, 'position_tracker') and exit_broker.position_tracker:
-                                exit_broker.position_tracker.track_exit(symbol, quantity)
-                            # Remove from unsellable dict if it was there (position grew and became sellable)
-                            if symbol in self.unsellable_positions:
-                                del self.unsellable_positions[symbol]
-                            successful_sells.append(symbol)
-                        else:
-                            error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
-                            error_code = result.get('error') if result else None
-                            logger.error(f"  ❌ {symbol} sell failed: {error_msg}")
-                            logger.error(f"     Full result: {result}")
-                            failed_sells.append(symbol)
-
-                            # CRITICAL FIX (Jan 10, 2026): Handle INVALID_SYMBOL errors
-                            # These indicate the symbol format is wrong or the product doesn't exist
-                            is_invalid_symbol = (
-                                error_code == 'INVALID_SYMBOL' or
-                                'INVALID_SYMBOL' in str(error_msg) or
-                                'invalid symbol' in str(error_msg).lower()
-                            )
-                            if is_invalid_symbol:
-                                logger.error(f"     ⚠️ Symbol {symbol} is invalid or unsupported")
-                                logger.error(f"     💡 This position will be skipped for 24 hours")
-                                self.unsellable_positions[symbol] = time.time()
+                            # CRITICAL FIX: Add None-check safety guard
+                            # Prevents ghost positions from invalid price fetches
+                            if price is None or price == 0:
+                                logger.error(f"   ❌ Price fetch failed for {symbol} — symbol mismatch")
+                                logger.error(f"   💡 This position may be unmanageable due to incorrect broker symbol format")
+                                logger.warning(f"   🔴 FORCE-EXIT anyway: {symbol} (price unknown)")
+                                positions_to_exit.append({
+                                    'symbol': symbol,
+                                    'quantity': quantity,
+                                    'reason': 'Over position cap (price fetch failed - symbol mismatch)',
+                                    'broker': position_broker,
+                                    'broker_label': broker_label
+                                })
                                 continue
 
-                            # If it's a dust/too-small position, mark it as unsellable to prevent infinite retries
-                            # Check both error code and message for robustness
-                            is_size_error = (
-                                error_code == 'INVALID_SIZE' or
-                                'INVALID_SIZE' in str(error_msg) or
-                                'too small' in str(error_msg).lower() or
-                                'minimum' in str(error_msg).lower()
+                            value = quantity * price
+                            logger.warning(f"   🔴 FORCE-EXIT to meet cap: {symbol} (${value:.2f})")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': f'Over position cap (${value:.2f})',
+                                'broker': position_broker,
+                                'broker_label': broker_label
+                            })
+                        except Exception as price_err:
+                            # Still add even if price fetch fails
+                            logger.warning(f"   ⚠️ Could not get price for {symbol}: {price_err}")
+                            positions_to_exit.append({
+                                'symbol': symbol,
+                                'quantity': quantity,
+                                'reason': 'Over position cap',
+                                'broker': position_broker,
+                                'broker_label': broker_label
+                            })
+
+                        # Rate limiting: Add delay after each price check (except last one)
+                        if pos_idx < positions_needed - 1:
+                            jitter = random.uniform(0, 0.05)  # 0-50ms jitter
+                            time.sleep(POSITION_CHECK_DELAY + jitter)
+
+                # CRITICAL FIX: Now sell ALL positions concurrently (not one at a time)
+                if positions_to_exit:
+                    logger.info(f"")
+                    logger.info(f"🔴 CONCURRENT EXIT: Selling {len(positions_to_exit)} positions NOW")
+                    logger.info(f"="*80)
+
+                    # Track sell results to provide accurate summary
+                    successful_sells = []
+                    failed_sells = []
+
+                    for i, pos_data in enumerate(positions_to_exit, 1):
+                        symbol = pos_data['symbol']
+                        quantity = pos_data['quantity']
+                        reason = pos_data['reason']
+                        # CRITICAL FIX (Jan 24, 2026): Use the correct broker for each position
+                        exit_broker = pos_data.get('broker', active_broker)
+                        exit_broker_label = pos_data.get('broker_label', 'UNKNOWN')
+
+                        logger.info(f"[{i}/{len(positions_to_exit)}] Selling {symbol} on {exit_broker_label} ({reason})")
+
+                        # CRITICAL FIX (Jan 10, 2026): Validate symbol before placing order
+                        # Prevents "ProductID is invalid" errors
+                        if not symbol or not isinstance(symbol, str):
+                            logger.error(f"  ❌ SKIPPING: Invalid symbol (value: {symbol}, type: {type(symbol)})")
+                            # Store descriptive string for logging - will be displayed in summary
+                            failed_sells.append(f"INVALID_SYMBOL({symbol})")
+                            continue
+
+                        try:
+                            # 🚨 COINBASE LOCKDOWN (Jan 2026) - FORCE LIQUIDATE MODE
+                            # Use force_liquidate for Coinbase sells to bypass ALL validation
+                            # This ensures stop-losses and profit-taking ALWAYS execute
+                            is_coinbase = 'coinbase' in exit_broker_label.lower()
+                            use_force_liquidate = is_coinbase and ('lockdown' in reason.lower() or 'loss' in reason.lower() or 'stop' in reason.lower())
+
+                            if use_force_liquidate:
+                                logger.info(f"  🛡️ PROTECTIVE MODE: Using force_liquidate for Coinbase exit")
+
+                            result = exit_broker.place_market_order(
+                                symbol=symbol,
+                                side='sell',
+                                quantity=quantity,
+                                size_type='base',
+                                force_liquidate=use_force_liquidate,  # Bypass ALL validation for Coinbase protective exits
+                                ignore_balance=use_force_liquidate,   # Skip balance checks
+                                ignore_min_trade=use_force_liquidate  # Skip minimum trade size checks
                             )
-                            if is_size_error:
-                                logger.warning(f"     💡 Position {symbol} is too small to sell via API - marking as dust")
-                                logger.warning(f"     💡 Will retry after 24 hours in case position grows")
+
+                            # Handle dust positions separately from actual failures
+                            if result and result.get('status') == 'skipped_dust':
+                                logger.info(f"  💨 {symbol} SKIPPED (dust position - too small to sell)")
+                                logger.info(f"     Will automatically retry in 24h if position grows")
+                                # Mark as unsellable for 24h retry window
                                 self.unsellable_positions[symbol] = time.time()
-                    except Exception as sell_err:
-                        logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
-                        logger.error(f"     Error type: {type(sell_err).__name__}")
-                        logger.error(f"     Traceback: {traceback.format_exc()}")
-                        # Convert symbol to string for consistent logging - prevents join() errors
-                        failed_sells.append(str(symbol) if symbol else "UNKNOWN_SYMBOL")
+                                # Don't add to failed_sells - this is expected behavior for dust
+                                continue
 
-                    # Rate limiting: Add delay after each sell order (except the last one)
-                    if i < len(positions_to_exit):
-                        jitter = random.uniform(0, 0.1)  # 0-100ms jitter
-                        time.sleep(SELL_ORDER_DELAY + jitter)
+                            if result and result.get('status') not in ['error', 'unfilled']:
+                                logger.info(f"  ✅ {symbol} SOLD successfully on {exit_broker_label}!")
+                                # ✅ FIX #3: EXPLICIT SELL CONFIRMATION LOG
+                                # If this was a stop-loss exit, log it clearly
+                                if 'stop loss' in reason.lower():
+                                    logger.info(f"  ✅ SOLD {symbol} @ market due to stop loss")
+                                # Track the exit in position tracker (use the correct broker)
+                                if hasattr(exit_broker, 'position_tracker') and exit_broker.position_tracker:
+                                    exit_broker.position_tracker.track_exit(symbol, quantity)
+                                # Remove from unsellable dict if it was there (position grew and became sellable)
+                                if symbol in self.unsellable_positions:
+                                    del self.unsellable_positions[symbol]
+                                successful_sells.append(symbol)
+                            else:
+                                error_msg = result.get('error', result.get('message', 'Unknown')) if result else 'No response'
+                                error_code = result.get('error') if result else None
+                                logger.error(f"  ❌ {symbol} sell failed: {error_msg}")
+                                logger.error(f"     Full result: {result}")
+                                failed_sells.append(symbol)
 
-                logger.info(f"="*80)
-                # CRITICAL FIX (Jan 22, 2026): Provide accurate exit summary with success/failure counts
-                # Previous version logged "positions processed" which was misleading - users thought all sells succeeded
-                logger.info(f"🔴 CONCURRENT EXIT SUMMARY:")
-                logger.info(f"   ✅ Successfully sold: {len(successful_sells)} positions")
-                if successful_sells:
-                    logger.info(f"      {', '.join(successful_sells)}")
-                logger.info(f"   ❌ Failed to sell: {len(failed_sells)} positions")
-                if failed_sells:
-                    logger.error(f"      {', '.join(failed_sells)}")
-                    logger.error(f"   🚨 WARNING: {len(failed_sells)} position(s) still open on exchange!")
-                    logger.error(f"   💡 Check Coinbase manually and retry or sell manually if needed")
-                logger.info(f"="*80)
-                logger.info(f"")
+                                # CRITICAL FIX (Jan 10, 2026): Handle INVALID_SYMBOL errors
+                                # These indicate the symbol format is wrong or the product doesn't exist
+                                is_invalid_symbol = (
+                                    error_code == 'INVALID_SYMBOL' or
+                                    'INVALID_SYMBOL' in str(error_msg) or
+                                    'invalid symbol' in str(error_msg).lower()
+                                )
+                                if is_invalid_symbol:
+                                    logger.error(f"     ⚠️ Symbol {symbol} is invalid or unsupported")
+                                    logger.error(f"     💡 This position will be skipped for 24 hours")
+                                    self.unsellable_positions[symbol] = time.time()
+                                    continue
 
-            # CRITICAL FIX: Ensure position management errors don't crash the entire cycle
-            # If exit logic fails, log the error but continue to allow next cycle to retry
+                                # If it's a dust/too-small position, mark it as unsellable to prevent infinite retries
+                                # Check both error code and message for robustness
+                                is_size_error = (
+                                    error_code == 'INVALID_SIZE' or
+                                    'INVALID_SIZE' in str(error_msg) or
+                                    'too small' in str(error_msg).lower() or
+                                    'minimum' in str(error_msg).lower()
+                                )
+                                if is_size_error:
+                                    logger.warning(f"     💡 Position {symbol} is too small to sell via API - marking as dust")
+                                    logger.warning(f"     💡 Will retry after 24 hours in case position grows")
+                                    self.unsellable_positions[symbol] = time.time()
+                        except Exception as sell_err:
+                            logger.error(f"  ❌ {symbol} exception during sell: {sell_err}")
+                            logger.error(f"     Error type: {type(sell_err).__name__}")
+                            logger.error(f"     Traceback: {traceback.format_exc()}")
+                            # Convert symbol to string for consistent logging - prevents join() errors
+                            failed_sells.append(str(symbol) if symbol else "UNKNOWN_SYMBOL")
+
+                        # Rate limiting: Add delay after each sell order (except the last one)
+                        if i < len(positions_to_exit):
+                            jitter = random.uniform(0, 0.1)  # 0-100ms jitter
+                            time.sleep(SELL_ORDER_DELAY + jitter)
+
+                    logger.info(f"="*80)
+                    # CRITICAL FIX (Jan 22, 2026): Provide accurate exit summary with success/failure counts
+                    # Previous version logged "positions processed" which was misleading - users thought all sells succeeded
+                    logger.info(f"🔴 CONCURRENT EXIT SUMMARY:")
+                    logger.info(f"   ✅ Successfully sold: {len(successful_sells)} positions")
+                    if successful_sells:
+                        logger.info(f"      {', '.join(successful_sells)}")
+                    logger.info(f"   ❌ Failed to sell: {len(failed_sells)} positions")
+                    if failed_sells:
+                        logger.error(f"      {', '.join(failed_sells)}")
+                        logger.error(f"   🚨 WARNING: {len(failed_sells)} position(s) still open on exchange!")
+                        logger.error(f"   💡 Check Coinbase manually and retry or sell manually if needed")
+                    logger.info(f"="*80)
+                    logger.info(f"")
+
+                # CRITICAL FIX: Ensure position management errors don't crash the entire cycle
+                # If exit logic fails, log the error but continue to allow next cycle to retry
             except Exception as exit_err:
                 logger.error("=" * 80)
                 logger.error("🚨 POSITION MANAGEMENT ERROR")
