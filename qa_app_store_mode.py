@@ -8,7 +8,7 @@ This ensures the app is safe for App Store review and meets all requirements.
 
 Usage:
     python qa_app_store_mode.py              # Run quick tests
-    python qa_app_store_mode.py --full       # Run all 22+ tests
+    python qa_app_store_mode.py --full       # Run all 19 tests
     python qa_app_store_mode.py --verbose    # Detailed output
 
 Environment:
@@ -625,7 +625,7 @@ def main():
     parser.add_argument(
         '--full',
         action='store_true',
-        help='Run full test suite (all 22+ tests)'
+        help='Run full test suite (all 19 tests)'
     )
     parser.add_argument(
         '--verbose', '-v',

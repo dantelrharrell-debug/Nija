@@ -88,7 +88,7 @@ export APP_STORE_MODE=true
 python qa_app_store_mode.py --full
 ```
 
-**Expected Result**: All 22 tests pass, confirming no real trading is possible during review.
+**Expected Result**: All 19 tests pass, confirming no real trading is possible during review.
 
 ### Documentation
 
