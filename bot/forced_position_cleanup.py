@@ -509,7 +509,7 @@ class ForcedPositionCleanup:
                 symbol = dust_pos['symbol']
                 broker = broker_positions_map.get(symbol)
                 if broker:
-                    account_id = f"user_{user_id}_{broker.broker_type.value if hasattr(broker, 'broker_type') else 'unknown'}"
+                    account_id = self._get_account_id(user_id, broker)
                     success, failed = self.execute_cleanup([dust_pos], broker, account_id, is_startup)
                     dust_closed_total += success
         
@@ -554,7 +554,7 @@ class ForcedPositionCleanup:
                 symbol = cap_pos['symbol']
                 broker = broker_positions_map.get(symbol)
                 if broker:
-                    account_id = f"user_{user_id}_{broker.broker_type.value if hasattr(broker, 'broker_type') else 'unknown'}"
+                    account_id = self._get_account_id(user_id, broker)
                     success, failed = self.execute_cleanup([cap_pos], broker, account_id, is_startup)
                     cap_closed_total += success
         else:
@@ -582,26 +582,32 @@ class ForcedPositionCleanup:
         logger.info(f"")
         
         # Return results for each broker (for compatibility with existing summary)
+        # Note: To avoid double-counting, we only report dust_closed and cap_closed once
         results = []
+        totals_reported = False  # Flag to ensure totals reported only once
+        
         for broker_type, broker in user_broker_dict.items():
             if broker and broker.connected:
-                account_id = f"user_{user_id}_{broker_type.value}"
+                account_id = self._get_account_id(user_id, broker)
                 # Note: We already did cleanup above, so just report final state
                 try:
                     final_positions = broker.get_positions()
                     results.append({
                         'account_id': account_id,
                         'user_id': user_id,
-                        'initial_positions': total_user_positions,  # User total, not broker
-                        'dust_closed': dust_closed_total if broker_type == list(user_broker_dict.keys())[0] else 0,  # Report once
-                        'cap_closed': cap_closed_total if broker_type == list(user_broker_dict.keys())[0] else 0,  # Report once
-                        'final_positions': len(final_positions),  # Per broker
+                        'user_total_initial': total_user_positions,  # Total across all brokers (for context)
+                        'initial_positions': len(final_positions),  # Current count for this broker
+                        'dust_closed': dust_closed_total if not totals_reported else 0,  # Report once
+                        'cap_closed': cap_closed_total if not totals_reported else 0,  # Report once
+                        'final_positions': len(final_positions),  # Current count for this broker
                         'status': 'cleaned'
                     })
+                    totals_reported = True  # Mark totals as reported
                 except Exception:
                     results.append({
                         'account_id': account_id,
                         'user_id': user_id,
+                        'user_total_initial': total_user_positions,
                         'initial_positions': 0,
                         'dust_closed': 0,
                         'cap_closed': 0,
@@ -610,6 +616,20 @@ class ForcedPositionCleanup:
                     })
         
         return results
+    
+    def _get_account_id(self, user_id: str, broker) -> str:
+        """
+        Helper to construct account ID from user_id and broker.
+        
+        Args:
+            user_id: User identifier
+            broker: Broker instance
+            
+        Returns:
+            Account ID string (e.g., "user_user123_coinbase")
+        """
+        broker_type_str = broker.broker_type.value if hasattr(broker, 'broker_type') else 'unknown'
+        return f"user_{user_id}_{broker_type_str}"
 
     def cleanup_single_account(self,
                                broker,
