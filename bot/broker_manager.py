@@ -8302,6 +8302,16 @@ class BrokerManager:
         """Get list of connected broker names"""
         return [b.broker_type.value for b in self.brokers.values() if b.connected]
 
+    def get_all_brokers(self) -> Dict[BrokerType, 'BaseBroker']:
+        """
+        Get all broker objects managed by this BrokerManager.
+        
+        Returns:
+            Dict[BrokerType, BaseBroker]: Dictionary mapping broker types to broker instances.
+            Returns a copy to prevent external modification of internal state.
+        """
+        return self.brokers.copy()
+
 # Global instance
 broker_manager = BrokerManager()
 
