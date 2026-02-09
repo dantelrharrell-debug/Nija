@@ -32,6 +32,14 @@ from pathlib import Path
 # Add bot directory to path
 sys.path.insert(0, str(Path(__file__).parent / 'bot'))
 
+try:
+    from safety_controller import SafetyController, TradingMode
+    SAFETY_CONTROLLER_AVAILABLE = True
+except ImportError:
+    SAFETY_CONTROLLER_AVAILABLE = False
+    SafetyController = None
+    TradingMode = None
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -197,7 +205,7 @@ class AppStoreModeQA:
         """Test 3: SafetyController can be imported"""
         def test():
             try:
-                from bot.safety_controller import SafetyController, TradingMode
+                from safety_controller import SafetyController, TradingMode
                 has_app_store = hasattr(TradingMode, 'APP_STORE')
                 return has_app_store, "TradingMode.APP_STORE enum exists"
             except ImportError as e:
@@ -209,7 +217,7 @@ class AppStoreModeQA:
         """Test 4: SafetyController detects APP_STORE mode"""
         def test():
             try:
-                from bot.safety_controller import SafetyController, TradingMode
+                from safety_controller import SafetyController, TradingMode
                 controller = SafetyController()
                 mode = controller.get_current_mode()
                 is_app_store = mode == TradingMode.APP_STORE
@@ -223,7 +231,7 @@ class AppStoreModeQA:
         """Test 5: Trading is disabled in APP_STORE mode"""
         def test():
             try:
-                from bot.safety_controller import SafetyController
+                from safety_controller import SafetyController
                 controller = SafetyController()
                 allowed, reason = controller.is_trading_allowed()
                 return not allowed, f"Trading allowed={allowed}, Reason: {reason}"
@@ -236,7 +244,7 @@ class AppStoreModeQA:
         """Test 6: Simulator trades are allowed"""
         def test():
             try:
-                from bot.safety_controller import SafetyController
+                from safety_controller import SafetyController
                 controller = SafetyController()
                 simulator_allowed = controller.is_simulator_allowed()
                 return simulator_allowed, f"Simulator allowed: {simulator_allowed}"
@@ -261,7 +269,7 @@ class AppStoreModeQA:
         """Test 8: API response includes APP_STORE_MODE flags"""
         def test():
             try:
-                from bot.safety_controller import SafetyController
+                from safety_controller import SafetyController
                 controller = SafetyController()
                 status = controller.get_status_summary()
                 
@@ -423,7 +431,7 @@ class AppStoreModeQA:
             # In APP_STORE mode, dashboards should be visible
             # This is a structural check - actual runtime test would require server
             try:
-                from bot.safety_controller import SafetyController
+                from safety_controller import SafetyController
                 controller = SafetyController()
                 
                 # Dashboard visibility is not blocked by APP_STORE mode
@@ -438,7 +446,7 @@ class AppStoreModeQA:
         """Test 16: DRY_RUN mode still works independently"""
         def test():
             try:
-                from bot.safety_controller import TradingMode
+                from safety_controller import TradingMode
                 # Verify DRY_RUN mode exists and is separate from APP_STORE
                 has_dry_run = hasattr(TradingMode, 'DRY_RUN')
                 has_app_store = hasattr(TradingMode, 'APP_STORE')
@@ -499,7 +507,9 @@ class AppStoreModeQA:
             
             content = readme.read_text()
             has_app_store = 'APP_STORE_MODE' in content or 'App Store' in content
-            return has_app_store, "APP_STORE_MODE mentioned in README"
+            if not has_app_store:
+                return False, "README.md doesn't mention App Store or APP_STORE_MODE"
+            return True, "README.md mentions App Store mode"
         
         self._run_test("README.md mentions App Store mode", test)
     
@@ -507,7 +517,7 @@ class AppStoreModeQA:
         """Test 20: Verify no path to live trading exists"""
         def test():
             try:
-                from bot.safety_controller import SafetyController
+                from safety_controller import SafetyController
                 controller = SafetyController()
                 
                 # In APP_STORE mode, trading must be disabled
@@ -555,7 +565,7 @@ class AppStoreModeQA:
         """Test 22: Emergency stop overrides APP_STORE mode"""
         def test():
             try:
-                from bot.safety_controller import SafetyController
+                from safety_controller import SafetyController
                 controller = SafetyController()
                 
                 # Emergency stop should work in any mode

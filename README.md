@@ -64,6 +64,40 @@ python bot/dashboard_server.py
 
 ---
 
+## 📱 **App Store Mode** (iOS/Android Submission)
+
+**For App Store and Google Play reviewers**
+
+NIJA includes a special `APP_STORE_MODE` for safe app store submissions:
+
+### What is APP_STORE_MODE?
+
+When `APP_STORE_MODE=true`:
+- ✅ **All dashboards and metrics visible** (read-only demonstration)
+- ❌ **Trade execution completely disabled** (no real trading possible)
+- ⚠️ **Risk disclosures prominently displayed** (compliance with app store policies)
+- 🎭 **Simulator/sandbox trades available** (demonstrate functionality safely)
+
+### For App Reviewers
+
+```bash
+# Configuration for review
+export APP_STORE_MODE=true
+
+# Run verification tests
+python qa_app_store_mode.py --full
+```
+
+**Expected Result**: All 22 tests pass, confirming no real trading is possible during review.
+
+### Documentation
+
+- 📖 [APP_STORE_SUBMISSION_GUIDE.md](APP_STORE_SUBMISSION_GUIDE.md) - Complete submission process
+- 📋 [REVIEWER_EXPERIENCE_MAP.md](REVIEWER_EXPERIENCE_MAP.md) - What reviewers will see
+- 🔍 [qa_app_store_mode.py](qa_app_store_mode.py) - Automated verification tests
+
+---
+
 ## 🛡️ **NEW: Advanced Risk Management System** (February 8, 2026)
 
 **Making NIJA Structurally Safe, Capital-Efficient, and Risk-Contained**
