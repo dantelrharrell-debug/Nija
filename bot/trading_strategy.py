@@ -3158,24 +3158,26 @@ class TradingStrategy:
             
             if hasattr(self, 'forced_cleanup') and self.forced_cleanup and (run_startup_cleanup or run_periodic_cleanup):
                 cleanup_reason = "STARTUP" if run_startup_cleanup else f"PERIODIC (cycle {self.cycle_count})"
-                logger.info(f"")
-                logger.info(f"🧹 FORCED CLEANUP TRIGGERED: {cleanup_reason}")
+                logger.warning(f"")
+                logger.warning(f"🧹 FORCED CLEANUP TRIGGERED: {cleanup_reason}")
+                logger.warning(f"   Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.warning(f"   Interval: Every {FORCED_CLEANUP_INTERVAL} cycles (~{FORCED_CLEANUP_INTERVAL * 2.5:.0f} minutes)")
                 try:
                     if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
                         # Run cleanup across all accounts
-                        summary = self.forced_cleanup.cleanup_all_accounts(self.multi_account_manager)
-                        logger.info(f"   ✅ Cleanup complete: Reduced positions by {summary['reduction']}")
+                        summary = self.forced_cleanup.cleanup_all_accounts(self.multi_account_manager, is_startup=run_startup_cleanup)
+                        logger.warning(f"   ✅ Cleanup complete: Reduced positions by {summary['reduction']}")
                     else:
                         # Single account mode - just cleanup platform
                         logger.info(f"   Running single-account cleanup...")
                         if active_broker:
-                            result = self.forced_cleanup.cleanup_single_account(active_broker, "platform")
-                            logger.info(f"   ✅ Cleanup complete: {result['initial_positions']} → {result['final_positions']}")
+                            result = self.forced_cleanup.cleanup_single_account(active_broker, "platform", is_startup=run_startup_cleanup)
+                            logger.warning(f"   ✅ Cleanup complete: {result['initial_positions']} → {result['final_positions']}")
                 except Exception as cleanup_err:
                     logger.error(f"   ❌ Forced cleanup failed: {cleanup_err}")
                     import traceback
                     logger.error(traceback.format_exc())
-                logger.info(f"")
+                logger.warning(f"")
 
             # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
             # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.

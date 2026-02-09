@@ -447,7 +447,7 @@ class ForcedPositionCleanup:
                 failed += 1
         
         logger.warning(f"")
-        logger.warning(f"🧹 CLEANUP COMPLETE: {account_id}")
+        logger.warning(f"🧹 Cleanup executed: {account_id}")
         logger.warning(f"   Successful: {successful}")
         logger.warning(f"   Failed: {failed}")
         logger.warning(f"")
@@ -544,7 +544,7 @@ class ForcedPositionCleanup:
         logger.info(f"   📊 Active Positions (after dust cleanup): {current_count}")
         
         if current_count > self.max_positions:
-            logger.warning(f"   🔒 Position cap exceeded: {current_count}/{self.max_positions}")
+            logger.warning(f"   🔒 USER cap exceeded: {current_count}/{self.max_positions}")
             
             # Identify positions to close to meet cap
             cap_excess_positions = self.identify_cap_excess_positions(non_dust_positions)
@@ -579,6 +579,8 @@ class ForcedPositionCleanup:
         logger.info(f"      Dust closed: {dust_closed_total}")
         logger.info(f"      Cap excess closed: {cap_closed_total}")
         logger.info(f"      Final: {final_count} positions")
+        if dust_closed_total > 0 or cap_closed_total > 0:
+            logger.warning(f"      🧹 Cleanup executed for user {user_id}")
         logger.info(f"")
         
         # Return results for each broker (for compatibility with existing summary)
@@ -792,7 +794,7 @@ class ForcedPositionCleanup:
         
         logger.warning("")
         logger.warning("=" * 70)
-        logger.warning("🧹 CLEANUP SUMMARY - ALL ACCOUNTS")
+        logger.warning("🧹 Cleanup executed - ALL ACCOUNTS")
         logger.warning("=" * 70)
         logger.warning(f"   Accounts processed: {len(results)}")
         logger.warning(f"   Initial total positions: {total_initial}")
