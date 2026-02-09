@@ -134,23 +134,25 @@ class ContinuousExitEnforcer:
         logger.info("Starting continuous position monitoring loop...")
         
         check_count = 0
+        sleep_interval = min(10, self.check_interval // 2) if self.check_interval >= 2 else 1
+        checks_per_interval = max(1, self.check_interval // sleep_interval)
         
         while not self._stop_event.is_set():
             try:
                 check_count += 1
                 
                 # Run position check every interval
-                if check_count % (self.check_interval // 10) == 0:  # Check every interval
+                if check_count % checks_per_interval == 0:  # Check every interval
                     self._check_and_enforce_positions()
                 
                 # Sleep in small increments to allow quick shutdown
-                time.sleep(10)
+                time.sleep(sleep_interval)
                 
             except Exception as e:
                 logger.error(f"Error in continuous exit enforcer: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
-                time.sleep(10)  # Brief pause before retrying
+                time.sleep(sleep_interval)  # Brief pause before retrying
     
     def _check_and_enforce_positions(self):
         """
