@@ -1,9 +1,16 @@
 {
+  "user_id": "user_daivon_frazier",
   "name": "Daivon Frazier",
   "broker": "kraken",
   "role": "user",
   "enabled": true,
   "independent_trading": true,
   "risk_multiplier": 1.0,
-  "disabled_symbols": ["XRP-USD"]
+  "disabled_symbols": ["XRP-USD"],
+  "position_limits": {
+    "max_positions": 8,
+    "dust_threshold_usd": 1.00,
+    "auto_enforce": true,
+    "include_existing_holdings": true
+  }
 }

@@ -596,6 +596,357 @@ async def get_performance(
 
 
 # ========================================
+# Position Reduction Endpoints
+# ========================================
+
+class PositionComplianceResponse(BaseModel):
+    """Response model for position compliance check"""
+    success: bool
+    user_id: str
+    broker_type: str
+    current_positions: int
+    max_positions: int
+    dust_positions: int
+    excess_positions: int
+    compliant: bool
+    preview: Optional[Dict] = None
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+class PositionReductionResponse(BaseModel):
+    """Response model for position reduction"""
+    success: bool
+    user_id: str
+    broker_type: str
+    initial_positions: int
+    final_positions: int
+    closed_positions: int
+    breakdown: Dict
+    outcomes: Dict
+    capital_impact: Dict
+    dry_run: bool = False
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+class AdminEnforceAllResponse(BaseModel):
+    """Response model for admin enforce all users"""
+    success: bool
+    total_users: int
+    users_processed: int
+    total_positions_closed: int
+    results: List[Dict]
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+# Import position reduction engine
+try:
+    from bot.user_position_reduction_engine import UserPositionReductionEngine
+    from bot.multi_account_broker_manager import MultiAccountBrokerManager
+    from bot.portfolio_state import PortfolioStateManager
+    
+    # Initialize global instances (lazy initialization)
+    _reduction_engine = None
+    
+    def get_reduction_engine():
+        """Get or create position reduction engine instance"""
+        global _reduction_engine
+        if _reduction_engine is None:
+            # Get broker and portfolio managers from environment
+            broker_mgr = MultiAccountBrokerManager()
+            portfolio_mgr = PortfolioStateManager()
+            
+            _reduction_engine = UserPositionReductionEngine(
+                multi_account_broker_manager=broker_mgr,
+                portfolio_state_manager=portfolio_mgr,
+                trade_ledger=None  # Optional
+            )
+        return _reduction_engine
+        
+except ImportError as e:
+    logger.warning(f"Position reduction imports not available: {e}")
+    def get_reduction_engine():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Position reduction feature not available"
+        )
+
+
+@app.get("/api/v1/users/{user_id}/position-compliance", response_model=PositionComplianceResponse)
+async def get_position_compliance(
+    user_id: str,
+    broker_type: str = "kraken",
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Get position compliance status for a user.
+    
+    Shows current position count, dust positions, excess positions,
+    and what would be closed if enforcement runs.
+    
+    This is a read-only endpoint that doesn't modify positions.
+    """
+    try:
+        # Verify user has permission
+        if current_user != user_id and current_user != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this user's compliance"
+            )
+        
+        engine = get_reduction_engine()
+        
+        # Get current positions
+        positions = engine.get_user_positions(user_id, broker_type)
+        current_count = len(positions)
+        
+        # Identify what would be closed
+        dust = engine.identify_dust_positions(positions)
+        remaining = [p for p in positions if p['size_usd'] >= engine.dust_threshold_usd]
+        excess = engine.identify_cap_excess_positions(remaining)
+        
+        # Check compliance
+        compliant = (
+            len(dust) == 0 and
+            len(remaining) <= engine.max_positions
+        )
+        
+        return PositionComplianceResponse(
+            success=True,
+            user_id=user_id,
+            broker_type=broker_type,
+            current_positions=current_count,
+            max_positions=engine.max_positions,
+            dust_positions=len(dust),
+            excess_positions=len(excess),
+            compliant=compliant,
+            preview={
+                'dust_positions': [
+                    {'symbol': p['symbol'], 'size_usd': p['size_usd'], 'pnl_pct': p['pnl_pct']}
+                    for p in dust
+                ],
+                'excess_positions': [
+                    {'symbol': p['symbol'], 'size_usd': p['size_usd'], 'pnl_pct': p['pnl_pct']}
+                    for p in excess
+                ]
+            }
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking compliance for {user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error checking compliance: {str(e)}"
+        )
+
+
+@app.post("/api/v1/users/{user_id}/reduce-positions", response_model=PositionReductionResponse)
+async def reduce_user_positions(
+    user_id: str,
+    broker_type: str = "kraken",
+    max_positions: Optional[int] = None,
+    dust_threshold_usd: Optional[float] = None,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Manually trigger position reduction for a user.
+    
+    This will actually close positions to enforce limits.
+    Returns list of closed positions with outcomes.
+    """
+    try:
+        # Verify user has permission
+        if current_user != user_id and current_user != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to reduce this user's positions"
+            )
+        
+        engine = get_reduction_engine()
+        
+        # Execute reduction
+        result = engine.reduce_user_positions(
+            user_id=user_id,
+            broker_type=broker_type,
+            dry_run=False,
+            max_positions=max_positions,
+            dust_threshold_usd=dust_threshold_usd
+        )
+        
+        return PositionReductionResponse(
+            success=True,
+            user_id=result['user_id'],
+            broker_type=result['broker_type'],
+            initial_positions=result['initial_positions'],
+            final_positions=result['final_positions'],
+            closed_positions=result['closed_positions'],
+            breakdown=result['breakdown'],
+            outcomes=result['outcomes'],
+            capital_impact=result['capital_impact'],
+            dry_run=result.get('dry_run', False)
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reducing positions for {user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reducing positions: {str(e)}"
+        )
+
+
+@app.get("/api/v1/users/{user_id}/reduction-preview", response_model=PositionReductionResponse)
+async def preview_position_reduction(
+    user_id: str,
+    broker_type: str = "kraken",
+    max_positions: Optional[int] = None,
+    dust_threshold_usd: Optional[float] = None,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Preview position reduction for a user (dry-run).
+    
+    Shows what positions would be closed without actually closing them.
+    This is a safe read-only operation.
+    """
+    try:
+        # Verify user has permission
+        if current_user != user_id and current_user != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this user's reduction preview"
+            )
+        
+        engine = get_reduction_engine()
+        
+        # Run preview (dry-run)
+        result = engine.preview_reduction(
+            user_id=user_id,
+            broker_type=broker_type,
+            max_positions=max_positions,
+            dust_threshold_usd=dust_threshold_usd
+        )
+        
+        return PositionReductionResponse(
+            success=True,
+            user_id=result['user_id'],
+            broker_type=result['broker_type'],
+            initial_positions=result['initial_positions'],
+            final_positions=result['final_positions'],
+            closed_positions=result['closed_positions'],
+            breakdown=result['breakdown'],
+            outcomes=result['outcomes'],
+            capital_impact=result['capital_impact'],
+            dry_run=True
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error previewing reduction for {user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error previewing reduction: {str(e)}"
+        )
+
+
+@app.post("/api/v1/admin/enforce-all-users", response_model=AdminEnforceAllResponse)
+async def enforce_all_users(
+    broker_type: str = "kraken",
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Admin endpoint to trigger position enforcement across ALL users.
+    
+    This requires admin privileges.
+    Returns summary of actions taken per user.
+    """
+    try:
+        # Verify admin permission
+        if current_user != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin privileges required"
+            )
+        
+        # Load user configs
+        import json
+        import os
+        
+        config_dir = os.path.join(os.path.dirname(__file__), 'config', 'users')
+        user_configs = []
+        
+        if os.path.exists(config_dir):
+            for filename in os.listdir(config_dir):
+                if filename.endswith('.json'):
+                    filepath = os.path.join(config_dir, filename)
+                    try:
+                        with open(filepath, 'r') as f:
+                            config = json.load(f)
+                            if 'user_id' not in config:
+                                config['user_id'] = filename.replace('.json', '')
+                            user_configs.append(config)
+                    except Exception as e:
+                        logger.warning(f"Failed to load config {filename}: {e}")
+        
+        engine = get_reduction_engine()
+        results = []
+        total_closed = 0
+        
+        # Process each user
+        for config in user_configs:
+            if not config.get('enabled', False):
+                continue
+            
+            user_id = config.get('user_id')
+            user_broker_type = config.get('broker', config.get('broker_type', broker_type))
+            
+            try:
+                result = engine.reduce_user_positions(
+                    user_id=user_id,
+                    broker_type=user_broker_type,
+                    dry_run=False
+                )
+                
+                results.append({
+                    'user_id': user_id,
+                    'success': True,
+                    'closed_positions': result.get('closed_positions', 0),
+                    'initial_positions': result.get('initial_positions', 0),
+                    'final_positions': result.get('final_positions', 0)
+                })
+                
+                total_closed += result.get('closed_positions', 0)
+            
+            except Exception as e:
+                logger.error(f"Error enforcing for {user_id}: {e}")
+                results.append({
+                    'user_id': user_id,
+                    'success': False,
+                    'error': str(e)
+                })
+        
+        return AdminEnforceAllResponse(
+            success=True,
+            total_users=len(user_configs),
+            users_processed=len(results),
+            total_positions_closed=total_closed,
+            results=results
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in admin enforce all: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error enforcing all users: {str(e)}"
+        )
+
+
+# ========================================
 # Main Entry Point
 # ========================================
 

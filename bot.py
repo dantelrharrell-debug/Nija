@@ -825,6 +825,49 @@ def _run_bot_startup_and_trading():
 
             logger.info("=" * 70)
 
+            # ═══════════════════════════════════════════════════════════════════════
+            # POSITION REDUCTION ENFORCER STARTUP
+            # ═══════════════════════════════════════════════════════════════════════
+            # Start background position enforcer to automatically clean up
+            # dust positions and enforce position caps across all users
+            try:
+                logger.info("=" * 70)
+                logger.info("🧹 STARTING POSITION REDUCTION ENFORCER")
+                logger.info("=" * 70)
+                
+                from bot.continuous_position_enforcer import create_position_enforcer
+                
+                # Get managers from strategy if available
+                broker_mgr = getattr(strategy, 'multi_account_manager', None)
+                portfolio_mgr = getattr(strategy, 'portfolio_manager', None)
+                trade_ledger = getattr(strategy, 'trade_ledger', None)
+                
+                if broker_mgr:
+                    # Create and start enforcer
+                    position_enforcer = create_position_enforcer(
+                        broker_manager=broker_mgr,
+                        portfolio_manager=portfolio_mgr,
+                        trade_ledger=trade_ledger,
+                        check_interval=300,  # 5 minutes
+                        max_positions=8,
+                        dust_threshold_usd=1.00,
+                        auto_start=True  # Start immediately
+                    )
+                    
+                    logger.info("✅ Position enforcer started in background")
+                    logger.info("   Check interval: 5 minutes (300 seconds)")
+                    logger.info("   Max positions per user: 8")
+                    logger.info("   Dust threshold: $1.00 USD")
+                    logger.info("=" * 70)
+                else:
+                    logger.warning("⚠️  Multi-account manager not available - position enforcer disabled")
+                    logger.warning("   Position enforcer requires multi-account support")
+            
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to start position enforcer: {e}")
+                logger.warning("   Trading will continue without automatic position reduction")
+                logger.warning("   Manual position reduction via API endpoints still available")
+
             # Check if we should use independent multi-broker trading mode
             use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
 
