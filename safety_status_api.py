@@ -145,6 +145,8 @@ def get_safety_status():
             'requires_risk_acknowledgment': risk_ack['required_for_live'],
             'risk_acknowledged': risk_ack['acknowledged'],
             'ui_indicators': display_config['ui_indicators'],
+            'app_store_mode': safety.is_app_store_mode(),
+            'simulator_allowed': safety.is_simulator_allowed(),
             'timestamp': datetime.utcnow().isoformat()
         }
         
@@ -410,6 +412,25 @@ def get_mode_display_config(mode: str, has_credentials: bool, emergency_stop: bo
                 'allow_toggle': False,
                 'banner_text': '🎭 SIMULATION MODE - NO REAL TRADES',
                 'banner_color': 'orange'
+            }
+        }
+    
+    elif mode == 'app_store':
+        return {
+            'message': '📱 APP STORE REVIEW MODE',
+            'status_message': 'Read-only demonstration mode for App Store reviewers. All dashboards visible, trade buttons disabled.',
+            'idle_message': 'Demo mode active. Real trading disabled. Simulator/sandbox trades available.',
+            'ui_indicators': {
+                'show_simulation_banner': False,
+                'show_app_store_banner': True,
+                'show_emergency_banner': False,
+                'status_color': 'purple',
+                'status_dot': 'purple',
+                'allow_toggle': False,
+                'banner_text': '📱 APP STORE REVIEW MODE - READ-ONLY DEMO',
+                'banner_color': 'purple',
+                'trade_buttons_disabled': True,
+                'simulator_enabled': True
             }
         }
     

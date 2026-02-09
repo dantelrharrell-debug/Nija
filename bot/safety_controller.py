@@ -32,6 +32,7 @@ class TradingMode(Enum):
     """Trading mode states for NIJA bot"""
     DISABLED = "disabled"           # Trading completely disabled (default)
     MONITOR = "monitor"             # Monitor mode - no trades, display data only
+    APP_STORE = "app_store"         # App Store review mode - read-only dashboards, no trades
     DRY_RUN = "dry_run"            # Simulate trades, no real orders
     HEARTBEAT = "heartbeat"         # Single verification trade, then exit
     LIVE = "live"                   # Live trading with real money
@@ -78,7 +79,23 @@ class SafetyController:
             self._log_state_change("EMERGENCY_STOP file detected - trading disabled")
             return
             
-        # Check #2: Dry-run simulator mode (for App Store reviewers)
+        # Check #2: App Store review mode (second highest priority)
+        app_store_mode = os.getenv('APP_STORE_MODE', 'false').lower() in ('true', '1', 'yes')
+        if app_store_mode:
+            self._mode = TradingMode.APP_STORE
+            logger.info("=" * 70)
+            logger.info("📱 APP STORE REVIEW MODE ACTIVE")
+            logger.info("=" * 70)
+            logger.info("   FOR APP STORE SUBMISSION AND REVIEW")
+            logger.info("   All dashboards visible (read-only)")
+            logger.info("   Trade execution buttons DISABLED")
+            logger.info("   Risk disclosures prominently displayed")
+            logger.info("   Simulator/sandbox trades ENABLED")
+            logger.info("=" * 70)
+            self._log_state_change("APP_STORE_MODE enabled - read-only demo mode")
+            return
+            
+        # Check #3: Dry-run simulator mode (for App Store reviewers)
         dry_run_mode = os.getenv('DRY_RUN_MODE', 'false').lower() in ('true', '1', 'yes')
         if dry_run_mode:
             self._mode = TradingMode.DRY_RUN
@@ -92,7 +109,7 @@ class SafetyController:
             self._log_state_change("DRY_RUN_MODE enabled - simulated trading only")
             return
             
-        # Check #3: Heartbeat verification mode (single test trade)
+        # Check #4: Heartbeat verification mode (single test trade)
         heartbeat_mode = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
         if heartbeat_mode:
             self._mode = TradingMode.HEARTBEAT
@@ -223,6 +240,9 @@ class SafetyController:
         if self._mode == TradingMode.MONITOR:
             return False, "Monitor mode - set LIVE_CAPITAL_VERIFIED=true to enable trading"
             
+        if self._mode == TradingMode.APP_STORE:
+            return False, "App Store review mode - trade execution disabled (read-only demo)"
+            
         if self._mode == TradingMode.DRY_RUN:
             return True, "Dry-run mode - simulated trades only (no real orders)"
             
@@ -307,8 +327,31 @@ class SafetyController:
             'emergency_stop_active': self._emergency_stop_active,
             'credentials_configured': self._credentials_configured,
             'last_state_change': self._last_state_change,
-            'state_change_count': len(self._state_change_history)
+            'state_change_count': len(self._state_change_history),
+            'app_store_mode': self._mode == TradingMode.APP_STORE,
+            'simulator_allowed': self._mode in (TradingMode.DRY_RUN, TradingMode.APP_STORE)
         }
+    
+    def is_app_store_mode(self) -> bool:
+        """
+        Check if currently in App Store review mode.
+        
+        Returns:
+            bool: True if in APP_STORE mode
+        """
+        return self._mode == TradingMode.APP_STORE
+    
+    def is_simulator_allowed(self) -> bool:
+        """
+        Check if simulator/sandbox trades are allowed.
+        
+        In APP_STORE mode, simulator trades are enabled to demonstrate functionality.
+        In DRY_RUN mode, simulated trades are also enabled.
+        
+        Returns:
+            bool: True if simulator trades are allowed
+        """
+        return self._mode in (TradingMode.DRY_RUN, TradingMode.APP_STORE)
         
     def log_status(self):
         """Log current safety status to logger"""

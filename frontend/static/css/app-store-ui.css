@@ -96,6 +96,13 @@
     color: white;
 }
 
+.app-store-banner,
+.app-store-mode-banner {
+    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+    color: white;
+    border-left: 4px solid #a78bfa;
+}
+
 .setup-banner {
     background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
     color: white;
@@ -367,4 +374,94 @@
     .banner-subtitle {
         font-size: 0.85rem;
     }
+}
+
+/* ========================================
+   APP_STORE_MODE Specific Styles
+   ======================================== */
+
+/* Disabled trade buttons in APP_STORE_MODE */
+button.app-store-disabled,
+.trade-button.app-store-disabled,
+.execute-button.app-store-disabled {
+    opacity: 0.5;
+    cursor: not-allowed !important;
+    background: #94a3b8 !important;
+    position: relative;
+}
+
+button.app-store-disabled::after {
+    content: '🔒';
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    font-size: 0.9rem;
+}
+
+/* App Store review mode banner */
+.app-store-mode-banner {
+    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+    color: white;
+    padding: 20px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    border-left: 4px solid #a78bfa;
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+}
+
+.app-store-mode-banner .banner-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+}
+
+.app-store-mode-banner .banner-icon {
+    font-size: 2.5rem;
+    line-height: 1;
+}
+
+.app-store-mode-banner .banner-text {
+    flex: 1;
+}
+
+.app-store-mode-banner strong {
+    display: block;
+    font-size: 1.3rem;
+    margin-bottom: 8px;
+}
+
+.app-store-mode-banner p {
+    margin: 5px 0;
+    font-size: 0.95rem;
+    opacity: 0.95;
+}
+
+/* Purple status dot for APP_STORE mode */
+.status-indicator-dot.purple {
+    background: #8b5cf6;
+}
+
+/* Risk disclosure prominence in APP_STORE_MODE */
+.risk-disclosure-prominent {
+    background: rgba(239, 68, 68, 0.1);
+    border: 2px solid #ef4444;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+}
+
+.risk-disclosure-prominent h3 {
+    color: #ef4444;
+    margin-top: 0;
+}
+
+.risk-disclosure-prominent ul {
+    margin: 10px 0;
+    padding-left: 20px;
+}
+
+.risk-disclosure-prominent li {
+    margin: 8px 0;
+    color: var(--text-primary);
 }
