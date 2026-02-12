@@ -196,6 +196,84 @@ Per the design philosophy: **Discipline, not aggression.**
 
 ---
 
+## 🔒 **RISK FREEZE POLICY** (February 12, 2026)
+
+**Institutional-Grade Risk Governance - How Real Trading Systems Stay Profitable**
+
+From this point forward:
+- ❌ **No new risk rules** without approval
+- ❌ **No tuning limits live** without validation
+- ❌ **No "just one more safeguard"** without testing
+
+### The RISK FREEZE Commitment
+
+> All risk parameter changes MUST be:
+> 1. ✅ **Backtested** (minimum 3 months historical data)
+> 2. ✅ **Simulated** (minimum 2 weeks paper trading)
+> 3. ✅ **Versioned** (documented in risk configuration versions)
+> 4. ✅ **Explicitly approved** (Technical Lead + Risk Manager + Strategy Developer)
+
+### What This Means
+
+**Protected Parameters:**
+- Position sizing rules (min/max position size)
+- Stop-loss calculations and distances
+- Take-profit levels and percentages
+- Daily loss limits & maximum drawdown
+- Exposure limits & leverage limits
+- All risk management logic
+
+**Enforcement:**
+- 🔒 Pre-commit hooks detect risk parameter changes
+- 🚨 Runtime guard validates configurations
+- 📊 Version control tracks all changes
+- 🔍 Audit trail requires approval signatures
+
+### Quick Reference
+
+```python
+# All risk configs are versioned and frozen
+from bot.risk_freeze_guard import get_risk_freeze_guard
+from bot.risk_config_versions import get_version_manager
+
+# Load approved risk configuration
+version_manager = get_version_manager()
+active_params = version_manager.get_active_parameters()
+
+# Validate no unauthorized changes
+guard = get_risk_freeze_guard()
+guard.validate_config(current_config)  # Raises violation if changed
+```
+
+### Emergency Override
+
+For **critical situations only** (exchange rule changes, regulatory compliance):
+
+```python
+# Declare emergency (requires post-emergency approval within 48h)
+guard.declare_emergency_override(
+    reason="Exchange margin requirement changed",
+    authorized_by="Technical Lead",
+    parameters_changed=['max_leverage']
+)
+```
+
+### Documentation
+
+📚 **[RISK_FREEZE_POLICY.md](RISK_FREEZE_POLICY.md)** - Complete policy document including:
+- Full approval process (6 steps)
+- Emergency exception procedures
+- Version history and change tracking
+- Philosophy and rationale
+- Compliance monitoring
+
+**Current Version:** RISK_CONFIG_v1.0.0 (Baseline - Frozen)
+
+> **"This is how real trading systems stay profitable long-term."**  
+> _— NIJA Risk Management Team_
+
+---
+
 ## 👥 **User Status Summary** (February 7, 2026)
 
 **Monitor All Users with One Clean Report**
