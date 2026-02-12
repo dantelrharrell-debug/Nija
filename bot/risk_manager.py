@@ -100,10 +100,11 @@ class AdaptiveRiskManager:
     def __init__(self, min_position_pct=0.02, max_position_pct=0.25,
                  max_total_exposure=0.60, use_exchange_profiles=False,
                  pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None,
-                 max_portfolio_volatility=0.04):
+                 max_portfolio_volatility=0.04,
+                 soft_position_limit_pct=0.04, hard_position_limit_pct=0.05):
         """
         Initialize Adaptive Risk Manager - OPTIMIZED FOR HIGH WIN RATE v7.5
-        Updated Jan 30, 2026: Optimized for small capital fast-frequency trading
+        Updated Feb 12, 2026: Added soft/hard position limit enforcement
 
         Args:
             min_position_pct: Minimum position size as % of account (default 2% - conservative for weak trends)
@@ -114,6 +115,8 @@ class AdaptiveRiskManager:
             min_free_reserve_pct: Minimum free balance % to maintain in PRO MODE (default 15%)
             tier_lock: If set, locks risk to specific tier limits (e.g., 'SAVER', 'INVESTOR')
             max_portfolio_volatility: Maximum portfolio volatility (default 4% = 0.04) - CRITICAL for aggressive sizing
+            soft_position_limit_pct: Soft limit for single position (default 4% = 0.04) - triggers warning and size reduction
+            hard_position_limit_pct: Hard limit for single position (default 5% = 0.05) - blocks new positions
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
@@ -122,6 +125,11 @@ class AdaptiveRiskManager:
         self.min_free_reserve_pct = min_free_reserve_pct
         self.tier_lock = tier_lock  # NEW: Tier locking for PRO MODE
         self.max_portfolio_volatility = max_portfolio_volatility  # NEW: Volatility exposure cap
+        
+        # SOFT + HARD ENFORCEMENT (Feb 12, 2026)
+        # Provides flexibility with discipline
+        self.soft_position_limit_pct = soft_position_limit_pct  # Warning at 4%
+        self.hard_position_limit_pct = hard_position_limit_pct  # Block at 5%
 
         # Track recent trades for streak analysis
         self.recent_trades: List[Dict] = []
@@ -322,6 +330,67 @@ class AdaptiveRiskManager:
         else:
             return 1.0, "MEDIUM"
             return 1.0, "MEDIUM_VOLATILITY"
+
+    def check_position_limits(self, position_pct: float, symbol: str = None) -> Tuple[bool, float, Dict]:
+        """
+        Check soft and hard position limits with enforcement
+        
+        SOFT + HARD ENFORCEMENT (Feb 12, 2026):
+        - Soft warning at 4% → reduce position size by 50%
+        - Hard block at 5% → no new positions
+        
+        This provides flexibility without breaking discipline.
+        
+        Args:
+            position_pct: Proposed position size as % of portfolio
+            symbol: Optional symbol for logging
+            
+        Returns:
+            Tuple of (allowed, adjusted_pct, enforcement_info)
+            - allowed: True if position can be opened, False if hard blocked
+            - adjusted_pct: Adjusted position size (may be reduced if soft limit triggered)
+            - enforcement_info: Dictionary with enforcement details
+        """
+        enforcement_info = {
+            'original_pct': position_pct,
+            'adjusted_pct': position_pct,
+            'soft_limit_triggered': False,
+            'hard_limit_triggered': False,
+            'enforcement_action': 'none'
+        }
+        
+        symbol_str = f" for {symbol}" if symbol else ""
+        
+        # HARD LIMIT: 5% - Absolute block
+        if position_pct > self.hard_position_limit_pct:
+            enforcement_info['hard_limit_triggered'] = True
+            enforcement_info['enforcement_action'] = 'blocked'
+            logger.warning(
+                f"🚫 HARD LIMIT BLOCK{symbol_str}: "
+                f"Position {position_pct*100:.2f}% exceeds hard limit {self.hard_position_limit_pct*100:.0f}%. "
+                f"NO NEW POSITIONS ALLOWED."
+            )
+            return False, 0.0, enforcement_info
+        
+        # SOFT LIMIT: 4% - Warning and reduction
+        if position_pct > self.soft_position_limit_pct:
+            enforcement_info['soft_limit_triggered'] = True
+            enforcement_info['enforcement_action'] = 'reduced'
+            
+            # Reduce position size by 50%
+            adjusted_pct = position_pct * 0.5
+            enforcement_info['adjusted_pct'] = adjusted_pct
+            enforcement_info['reduction_factor'] = 0.5
+            
+            logger.warning(
+                f"⚠️ SOFT LIMIT WARNING{symbol_str}: "
+                f"Position {position_pct*100:.2f}% exceeds soft limit {self.soft_position_limit_pct*100:.0f}%. "
+                f"REDUCING position size by 50% to {adjusted_pct*100:.2f}%"
+            )
+            return True, adjusted_pct, enforcement_info
+        
+        # Within limits - no action needed
+        return True, position_pct, enforcement_info
 
     def calculate_position_size(self, account_balance: float, adx: float,
                                signal_strength: int = 3, ai_confidence: float = 0.5,
@@ -726,6 +795,36 @@ class AdaptiveRiskManager:
                 final_pct = tier_floor
                 breakdown['tier_floor_enforced'] = True
                 breakdown['low_capital_protection_active'] = True
+
+        # ==============================================================================
+        # SOFT + HARD POSITION LIMIT ENFORCEMENT (Feb 12, 2026)
+        # ==============================================================================
+        # Check individual position size limits BEFORE applying to portfolio
+        # This provides graduated enforcement:
+        # - Soft warning at 4% → reduce position size by 50%
+        # - Hard block at 5% → reject position entirely
+        # ==============================================================================
+        symbol = breakdown.get('symbol', None)  # Get symbol if provided
+        allowed, adjusted_pct, limit_info = self.check_position_limits(final_pct, symbol=symbol)
+        
+        if not allowed:
+            # Hard limit triggered - block position
+            breakdown['position_blocked'] = True
+            breakdown['block_reason'] = 'hard_position_limit'
+            breakdown['limit_enforcement'] = limit_info
+            logger.error(
+                f"❌ POSITION BLOCKED: Exceeds hard limit of {self.hard_position_limit_pct*100:.0f}%"
+            )
+            return 0.0, breakdown
+        
+        if limit_info['soft_limit_triggered']:
+            # Soft limit triggered - reduce size
+            logger.info(
+                f"📉 SOFT LIMIT: Reducing position from {final_pct*100:.2f}% to {adjusted_pct*100:.2f}%"
+            )
+            final_pct = adjusted_pct
+            breakdown['soft_limit_applied'] = True
+            breakdown['limit_enforcement'] = limit_info
 
         # OPTIMIZED: Check total exposure limit with safety buffer
         # Previous limit (80%) was too high, allowing overexposure

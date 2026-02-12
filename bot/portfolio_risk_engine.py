@@ -122,6 +122,7 @@ class PortfolioRiskEngine:
     def __init__(self, config: Dict = None):
         """
         Initialize Portfolio Risk Engine
+        Updated Feb 12, 2026: Added soft/hard sector limit enforcement
         
         Args:
             config: Configuration dictionary
@@ -130,9 +131,14 @@ class PortfolioRiskEngine:
         
         # Risk parameters
         self.max_total_exposure = self.config.get('max_total_exposure', 0.80)  # 80% max
-        self.max_correlation_group_exposure = self.config.get('max_correlation_group_exposure', 0.30)  # 30% max
+        self.max_correlation_group_exposure = self.config.get('max_correlation_group_exposure', 0.30)  # 30% max (LEGACY)
         self.correlation_threshold = self.config.get('correlation_threshold', 0.7)  # 0.7+ is high correlation
         self.min_diversification_ratio = self.config.get('min_diversification_ratio', 1.5)
+        
+        # SOFT + HARD SECTOR LIMITS (Feb 12, 2026)
+        # Provides graduated enforcement for sector concentration
+        self.soft_sector_limit_pct = self.config.get('soft_sector_limit_pct', 0.15)  # 15% soft warning
+        self.hard_sector_limit_pct = self.config.get('hard_sector_limit_pct', 0.20)  # 20% hard block
         
         # Correlation calculation parameters
         self.correlation_lookback = self.config.get('correlation_lookback', 100)  # periods
@@ -145,16 +151,34 @@ class PortfolioRiskEngine:
         self.price_history: Dict[str, pd.Series] = {}  # symbol -> price series
         self.last_correlation_update = None
         
+        # Sector exposure tracking (GLOBAL - across all brokers)
+        self.sector_exposure: Dict[str, float] = {}  # sector_name -> total_usd_exposure
+        
         # Performance tracking
         self.risk_metrics_history: List[PortfolioRiskMetrics] = []
+        
+        # Load crypto sector taxonomy
+        try:
+            from crypto_sector_taxonomy import get_sector, get_sector_name, CryptoSector
+            self.get_sector = get_sector
+            self.get_sector_name = get_sector_name
+            self.crypto_sector_enum = CryptoSector
+            self.sector_taxonomy_loaded = True
+            logger.info("✅ Cryptocurrency sector taxonomy loaded")
+        except ImportError as e:
+            logger.warning(f"⚠️ Could not load crypto sector taxonomy: {e}")
+            self.sector_taxonomy_loaded = False
         
         logger.info("=" * 70)
         logger.info("🛡️  Portfolio Risk Engine Initialized")
         logger.info("=" * 70)
         logger.info(f"Max Total Exposure: {self.max_total_exposure*100:.0f}%")
-        logger.info(f"Max Corr. Group Exposure: {self.max_correlation_group_exposure*100:.0f}%")
+        logger.info(f"Max Corr. Group Exposure: {self.max_correlation_group_exposure*100:.0f}% (legacy)")
+        logger.info(f"Soft Sector Limit: {self.soft_sector_limit_pct*100:.0f}% (warning + reduce)")
+        logger.info(f"Hard Sector Limit: {self.hard_sector_limit_pct*100:.0f}% (block)")
         logger.info(f"Correlation Threshold: {self.correlation_threshold}")
         logger.info(f"Min Diversification Ratio: {self.min_diversification_ratio}")
+        logger.info(f"Sector Taxonomy: {'ENABLED' if self.sector_taxonomy_loaded else 'DISABLED'}")
         logger.info("=" * 70)
     
     def add_position(
@@ -347,6 +371,116 @@ class PortfolioRiskEngine:
                     position.correlation_group = group_name
                     break
     
+    def check_sector_limits(
+        self,
+        symbol: str,
+        position_size_usd: float,
+        portfolio_value: float
+    ) -> Tuple[bool, float, Dict]:
+        """
+        Check soft and hard sector concentration limits
+        
+        SOFT + HARD ENFORCEMENT (Feb 12, 2026):
+        - Soft warning at 15% sector exposure → reduce new position size by 50%
+        - Hard block at 20% sector exposure → no new sector entries
+        
+        Args:
+            symbol: Trading pair symbol
+            position_size_usd: Proposed position size in USD
+            portfolio_value: Total portfolio value in USD
+            
+        Returns:
+            Tuple of (allowed, adjusted_size_usd, enforcement_info)
+            - allowed: True if position can be opened, False if hard blocked
+            - adjusted_size_usd: Adjusted position size (may be reduced)
+            - enforcement_info: Dictionary with enforcement details
+        """
+        enforcement_info = {
+            'original_size_usd': position_size_usd,
+            'adjusted_size_usd': position_size_usd,
+            'sector': None,
+            'sector_name': None,
+            'current_sector_exposure_pct': 0.0,
+            'projected_sector_exposure_pct': 0.0,
+            'soft_limit_triggered': False,
+            'hard_limit_triggered': False,
+            'enforcement_action': 'none'
+        }
+        
+        # Skip if sector taxonomy not loaded
+        if not self.sector_taxonomy_loaded:
+            return True, position_size_usd, enforcement_info
+        
+        if portfolio_value <= 0:
+            return True, position_size_usd, enforcement_info
+        
+        # Get sector for this symbol
+        try:
+            sector = self.get_sector(symbol)
+            sector_name = self.get_sector_name(sector)
+            enforcement_info['sector'] = sector.value
+            enforcement_info['sector_name'] = sector_name
+        except Exception as e:
+            logger.warning(f"Could not determine sector for {symbol}: {e}")
+            return True, position_size_usd, enforcement_info
+        
+        # Calculate current sector exposure
+        current_sector_exposure_usd = 0.0
+        for pos_symbol, position in self.positions.items():
+            try:
+                pos_sector = self.get_sector(pos_symbol)
+                if pos_sector == sector:
+                    current_sector_exposure_usd += position.size_usd
+            except:
+                continue
+        
+        current_sector_exposure_pct = current_sector_exposure_usd / portfolio_value
+        projected_sector_exposure_usd = current_sector_exposure_usd + position_size_usd
+        projected_sector_exposure_pct = projected_sector_exposure_usd / portfolio_value
+        
+        enforcement_info['current_sector_exposure_pct'] = current_sector_exposure_pct
+        enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
+        
+        # HARD LIMIT: 20% - Absolute block
+        if projected_sector_exposure_pct > self.hard_sector_limit_pct:
+            enforcement_info['hard_limit_triggered'] = True
+            enforcement_info['enforcement_action'] = 'blocked'
+            logger.warning(
+                f"🚫 HARD SECTOR LIMIT BLOCK for {symbol} ({sector_name}): "
+                f"Projected {projected_sector_exposure_pct*100:.1f}% exceeds hard limit "
+                f"{self.hard_sector_limit_pct*100:.0f}%. NO NEW ENTRIES IN THIS SECTOR."
+            )
+            return False, 0.0, enforcement_info
+        
+        # SOFT LIMIT: 15% - Warning and reduction
+        if projected_sector_exposure_pct > self.soft_sector_limit_pct:
+            enforcement_info['soft_limit_triggered'] = True
+            enforcement_info['enforcement_action'] = 'reduced'
+            
+            # Reduce position size by 50%
+            adjusted_size_usd = position_size_usd * 0.5
+            adjusted_projected_pct = (current_sector_exposure_usd + adjusted_size_usd) / portfolio_value
+            enforcement_info['adjusted_size_usd'] = adjusted_size_usd
+            enforcement_info['reduction_factor'] = 0.5
+            enforcement_info['adjusted_projected_pct'] = adjusted_projected_pct
+            
+            logger.warning(
+                f"⚠️ SOFT SECTOR LIMIT WARNING for {symbol} ({sector_name}): "
+                f"Projected {projected_sector_exposure_pct*100:.1f}% exceeds soft limit "
+                f"{self.soft_sector_limit_pct*100:.0f}%. "
+                f"REDUCING position size by 50%: ${position_size_usd:,.2f} → ${adjusted_size_usd:,.2f} "
+                f"(new projected: {adjusted_projected_pct*100:.1f}%)"
+            )
+            return True, adjusted_size_usd, enforcement_info
+        
+        # Within limits - no action needed
+        logger.debug(
+            f"✅ Sector limit check passed for {symbol} ({sector_name}): "
+            f"Current {current_sector_exposure_pct*100:.1f}%, "
+            f"Projected {projected_sector_exposure_pct*100:.1f}%"
+        )
+        return True, position_size_usd, enforcement_info
+    
     def get_correlation(self, symbol1: str, symbol2: str) -> Optional[float]:
         """
         Get correlation between two symbols
@@ -375,6 +509,7 @@ class PortfolioRiskEngine:
     ) -> bool:
         """
         Check if adding a new position would violate risk limits
+        Updated Feb 12, 2026: Added sector limit enforcement
         
         Args:
             new_position: Position to check
@@ -396,7 +531,28 @@ class PortfolioRiskEngine:
             )
             return False
         
-        # Check correlation group exposure
+        # CHECK SECTOR LIMITS (NEW - Feb 12, 2026)
+        # This enforces soft/hard sector concentration limits
+        allowed, adjusted_size, sector_info = self.check_sector_limits(
+            new_position.symbol,
+            new_position.size_usd,
+            portfolio_value
+        )
+        
+        if not allowed:
+            logger.warning(f"❌ Position rejected by sector limit enforcement")
+            return False
+        
+        # If sector limit triggered size reduction, update the position
+        if adjusted_size != new_position.size_usd:
+            logger.info(
+                f"📉 Sector limit reduced position: "
+                f"${new_position.size_usd:,.2f} → ${adjusted_size:,.2f}"
+            )
+            new_position.size_usd = adjusted_size
+            new_position.pct_of_portfolio = adjusted_size / portfolio_value
+        
+        # Check correlation group exposure (LEGACY - kept for backwards compatibility)
         if new_position.correlation_group:
             group_exposure = sum(
                 p.size_usd for p in self.positions.values()
