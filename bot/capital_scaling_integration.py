@@ -33,7 +33,7 @@ try:
     )
     from autonomous_scaling_engine import (
         AutonomousScalingEngine,
-        AutoScalingConfig,
+        AutonomousScalingConfig,
         MarketRegime
     )
     from performance_attribution import (
@@ -54,7 +54,7 @@ except ImportError:
         )
         from bot.autonomous_scaling_engine import (
             AutonomousScalingEngine,
-            AutoScalingConfig,
+            AutonomousScalingConfig,
             MarketRegime
         )
         from bot.performance_attribution import (
