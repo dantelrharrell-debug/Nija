@@ -128,8 +128,8 @@ class AdaptiveRiskManager:
         
         # SOFT + HARD ENFORCEMENT (Feb 12, 2026)
         # Provides flexibility with discipline
-        self.soft_position_limit_pct = soft_position_limit_pct  # Warning at 4%
-        self.hard_position_limit_pct = hard_position_limit_pct  # Block at 5%
+        self.soft_position_limit_pct = soft_position_limit_pct  # Default 4% - triggers warning and size reduction
+        self.hard_position_limit_pct = hard_position_limit_pct  # Default 5% - blocks position entirely
 
         # Track recent trades for streak analysis
         self.recent_trades: List[Dict] = []
