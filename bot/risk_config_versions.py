@@ -10,7 +10,7 @@ Date: February 12, 2026
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -178,7 +178,7 @@ class RiskConfigVersionManager:
         
         config = RiskConfigVersion(
             version=version,
-            date=datetime.utcnow().isoformat(),
+            date=datetime.now(timezone.utc).isoformat(),
             author=author,
             status='proposed',
             changes=changes,

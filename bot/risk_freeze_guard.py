@@ -15,7 +15,7 @@ import logging
 import json
 import hashlib
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger("nija.risk_freeze_guard")
@@ -39,7 +39,7 @@ class EmergencyOverride:
         self.reason = reason
         self.authorized_by = authorized_by
         self.parameters_changed = parameters_changed
-        self.timestamp = timestamp or datetime.utcnow().isoformat()
+        self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
     
     def to_dict(self) -> Dict:
         return {
@@ -118,7 +118,8 @@ class RiskFreezeGuard:
         self._load_baseline()
         self._load_emergency_log()
         
-        logger.info("🔒 Risk Freeze Guard initialized")
+        # Display runtime banner for operator awareness
+        self._display_risk_freeze_banner()
     
     def _load_baseline(self):
         """Load baseline risk configuration"""
@@ -146,6 +147,41 @@ class RiskFreezeGuard:
                 logger.info(f"Loaded {len(self.emergency_overrides)} emergency overrides")
             except Exception as e:
                 logger.error(f"Failed to load emergency log: {e}")
+    
+    def _display_risk_freeze_banner(self):
+        """Display RISK FREEZE banner for operator awareness"""
+        # Get current version from version manager
+        try:
+            from bot.risk_config_versions import get_version_manager
+            version_manager = get_version_manager()
+            active_version = version_manager.get_active_version()
+            
+            if active_version:
+                version_str = active_version.version
+            else:
+                version_str = "v1.0.0 (baseline)"
+        except Exception:
+            version_str = "v1.0.0 (baseline)"
+        
+        # Display banner
+        banner_lines = [
+            "",
+            "=" * 80,
+            "🔒 RISK FREEZE ACTIVE".center(80),
+            "",
+            f"Configuration: {version_str}".center(80),
+            "Changes require versioned approval".center(80),
+            "",
+            "See RISK_FREEZE_POLICY.md for details".center(80),
+            "=" * 80,
+            ""
+        ]
+        
+        for line in banner_lines:
+            logger.info(line)
+        
+        # Also log single-line version for easy parsing
+        logger.info(f"🔒 RISK FREEZE ACTIVE — Config {version_str} — Changes require versioned approval")
     
     def _save_emergency_log(self):
         """Save emergency override log"""
@@ -345,7 +381,7 @@ class RiskFreezeGuard:
         lines = [
             "Risk Freeze Guard - Activity Report",
             "=" * 80,
-            f"Generated: {datetime.utcnow().isoformat()}",
+            f"Generated: {datetime.now(timezone.utc).isoformat()}",
             "",
             f"Baseline Config Hash: {self.baseline_hash[:16] if self.baseline_hash else 'None'}",
             f"Emergency Overrides: {len(self.emergency_overrides)}",

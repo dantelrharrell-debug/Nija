@@ -21,11 +21,11 @@
     "period_start": "2025-11-12",
     "period_end": "2026-02-12",
     "win_rate": 0.6,
-    "max_drawdown": 0.11,
+    "max_drawdown": 0.09,
     "sharpe_ratio": 1.85,
     "total_return": 0.52,
     "total_trades": 287,
-    "conclusion": "APPROVED - Win rate +3%, drawdown -1%, Sharpe +0.10"
+    "conclusion": "APPROVED - Win rate +3%, drawdown improved to 9%, Sharpe +0.10"
   },
   "paper_trading": {
     "period_start": "2026-01-29",
