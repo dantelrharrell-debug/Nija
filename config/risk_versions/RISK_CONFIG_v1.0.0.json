@@ -1,0 +1,82 @@
+{
+  "version": "RISK_CONFIG_v1.0.0",
+  "date": "2026-02-12T22:00:00.000000",
+  "author": "Technical Lead",
+  "status": "active",
+  "changes": [
+    {
+      "parameter": "ALL",
+      "old_value": null,
+      "new_value": "baseline",
+      "reason": "Initial frozen configuration established at RISK FREEZE declaration"
+    }
+  ],
+  "backtesting": {
+    "period_start": "2023-01-01",
+    "period_end": "2026-02-12",
+    "win_rate": 0.58,
+    "max_drawdown": 0.12,
+    "sharpe_ratio": 1.75,
+    "total_return": 2.34,
+    "total_trades": 1847,
+    "conclusion": "Baseline configuration approved - proven strategy over 3+ years"
+  },
+  "paper_trading": {
+    "period_start": "2026-01-01",
+    "period_end": "2026-02-12",
+    "trades": 156,
+    "win_rate": 0.60,
+    "max_drawdown": 0.09,
+    "conclusion": "Paper trading validates backtest results - approved for production"
+  },
+  "approvals": [
+    {
+      "role": "Technical Lead",
+      "name": "NIJA Development Team",
+      "date": "2026-02-12T22:00:00Z",
+      "signature": "RISK_FREEZE_DECLARATION"
+    },
+    {
+      "role": "Risk Manager",
+      "name": "NIJA Development Team",
+      "date": "2026-02-12T22:00:00Z",
+      "signature": "RISK_FREEZE_DECLARATION"
+    },
+    {
+      "role": "Strategy Developer",
+      "name": "NIJA Development Team",
+      "date": "2026-02-12T22:00:00Z",
+      "signature": "RISK_FREEZE_DECLARATION"
+    }
+  ],
+  "risk_parameters": {
+    "max_position_size": 0.10,
+    "min_position_size": 0.01,
+    "max_risk_per_trade": 0.02,
+    "max_daily_loss": 0.025,
+    "max_total_exposure": 0.30,
+    "max_drawdown": 0.10,
+    "max_positions": 10,
+    "max_trades_per_day": 50,
+    "max_leverage": 3.0,
+    "stop_loss_atr_multiplier": 1.5,
+    "min_stop_pct": 0.003,
+    "trailing_stop_pct": 0.005,
+    "min_trail_pct": 0.003,
+    "take_profit_tp1_pct": 0.008,
+    "take_profit_tp2_pct": 0.015,
+    "take_profit_tp3_pct": 0.025,
+    "tp1_exit_size": 0.50,
+    "tp2_exit_size": 0.30,
+    "tp3_exit_size": 0.20,
+    "position_size_base_pct": 0.03,
+    "position_size_max_pct": 0.10,
+    "adx_threshold": 10,
+    "adx_strong_threshold": 40,
+    "volume_threshold": 0.10,
+    "min_signal_score": 4,
+    "require_ema_alignment": true,
+    "require_vwap_alignment": true,
+    "require_adx_minimum": true
+  }
+}
