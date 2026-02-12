@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎯 NIJA Operator Dashboard & Readiness Cheat Sheet</title>
+    <style>
+        :root {
+            --emergency-red: #dc2626;
+            --warning-orange: #ea580c;
+            --success-green: #16a34a;
+            --info-blue: #2563eb;
+            --purple: #8b5cf6;
+            --bg-dark: #1f2937;
+            --bg-light: #f9fafb;
+            --border-color: #e5e7eb;
+            --text-dark: #111827;
+            --text-light: #6b7280;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.5;
+            color: var(--text-dark);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 10px;
+            font-size: 13px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+            color: white;
+            padding: 15px 25px;
+            border-bottom: 4px solid var(--emergency-red);
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 5px;
+        }
+
+        .header .subtitle {
+            color: #9ca3af;
+            font-size: 0.95em;
+        }
+
+        .content {
+            padding: 20px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .section {
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            background: white;
+        }
+
+        .section.emergency {
+            border-color: var(--emergency-red);
+            background: #fef2f2;
+        }
+
+        .section.warning {
+            border-color: var(--warning-orange);
+            background: #fff7ed;
+        }
+
+        .section.success {
+            border-color: var(--success-green);
+            background: #f0fdf4;
+        }
+
+        .section.info {
+            border-color: var(--info-blue);
+            background: #eff6ff;
+        }
+
+        .section.purple {
+            border-color: var(--purple);
+            background: #faf5ff;
+        }
+
+        .section-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-title .emoji {
+            font-size: 1.3em;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+            margin-top: 8px;
+        }
+
+        th {
+            background: var(--bg-light);
+            padding: 6px 8px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        td {
+            padding: 5px 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 0.9em;
+        }
+
+        .metric-label {
+            color: var(--text-light);
+        }
+
+        .metric-value {
+            font-weight: bold;
+        }
+
+        .code {
+            background: #1f2937;
+            color: #10b981;
+            padding: 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            margin: 6px 0;
+            overflow-x: auto;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: bold;
+            margin: 2px;
+        }
+
+        .badge.red { background: var(--emergency-red); color: white; }
+        .badge.orange { background: var(--warning-orange); color: white; }
+        .badge.green { background: var(--success-green); color: white; }
+        .badge.blue { background: var(--info-blue); color: white; }
+        .badge.purple { background: var(--purple); color: white; }
+
+        .critical-value {
+            font-weight: bold;
+            color: var(--emergency-red);
+        }
+
+        .footer {
+            background: var(--bg-light);
+            padding: 10px 20px;
+            text-align: center;
+            color: var(--text-light);
+            font-size: 0.85em;
+            border-top: 1px solid var(--border-color);
+        }
+
+        ul {
+            margin-left: 15px;
+            font-size: 0.9em;
+        }
+
+        li {
+            margin: 3px 0;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        .two-col {
+            grid-column: span 2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 NIJA Operator Dashboard & Readiness Cheat Sheet</h1>
+            <div class="subtitle">Mission Control • Version 7.2.0 • Target Response: &lt;30 seconds • Updated: February 2026</div>
+        </div>
+
+        <div class="content">
+            <!-- Emergency Section -->
+            <div class="grid">
+                <div class="section emergency full-width">
+                    <div class="section-title">
+                        <span class="emoji">🚨</span>
+                        <span>EMERGENCY KILL SWITCH (Priority #1)</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                        <div>
+                            <strong>CLI (Fastest - &lt;5s)</strong>
+                            <div class="code">python emergency_kill_switch.py activate emergency</div>
+                        </div>
+                        <div>
+                            <strong>File System (&lt;10s)</strong>
+                            <div class="code">touch EMERGENCY_STOP</div>
+                        </div>
+                        <div>
+                            <strong>API (&lt;10s)</strong>
+                            <div class="code">curl -X POST http://localhost:5000/api/emergency/kill-switch/activate</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 8px; font-weight: bold; color: var(--emergency-red);">
+                        ⚠️ WHEN TO USE: Uncontrolled losses, API errors, suspicious activity, system malfunction
+                    </div>
+                </div>
+            </div>
+
+            <!-- Guardrails & Limits Grid -->
+            <div class="grid">
+                <!-- Position Limits -->
+                <div class="section warning">
+                    <div class="section-title">
+                        <span class="emoji">🔒</span>
+                        <span>Position Limits (FROZEN)</span>
+                    </div>
+                    <table>
+                        <tr>
+                            <th>Limit Type</th>
+                            <th>Value</th>
+                            <th>Bypasable?</th>
+                        </tr>
+                        <tr>
+                            <td>Max Positions</td>
+                            <td class="critical-value">7-8</td>
+                            <td><span class="badge red">NO</span></td>
+                        </tr>
+                        <tr>
+                            <td>Min Position %</td>
+                            <td>2% of account</td>
+                            <td><span class="badge green">Layer 1</span></td>
+                        </tr>
+                        <tr>
+                            <td>Max Position %</td>
+                            <td>10% of account</td>
+                            <td><span class="badge green">Layer 2</span></td>
+                        </tr>
+                        <tr>
+                            <td>Absolute % Cap</td>
+                            <td class="critical-value">15%</td>
+                            <td><span class="badge red">NO</span></td>
+                        </tr>
+                        <tr>
+                            <td>Absolute $ Cap</td>
+                            <td class="critical-value">$10,000</td>
+                            <td><span class="badge red">NO</span></td>
+                        </tr>
+                        <tr>
+                            <td>Dust Threshold</td>
+                            <td>&lt;$1.00</td>
+                            <td><span class="badge blue">Auto-ignore</span></td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Tier Configuration -->
+                <div class="section info">
+                    <div class="section-title">
+                        <span class="emoji">📊</span>
+                        <span>Tier Limits</span>
+                    </div>
+                    <table>
+                        <tr>
+                            <th>Tier</th>
+                            <th>Capital Range</th>
+                            <th>Risk/Trade</th>
+                            <th>Max Pos</th>
+                        </tr>
+                        <tr>
+                            <td><strong>STARTER</strong></td>
+                            <td>$50-$99</td>
+                            <td>2-5%</td>
+                            <td>3</td>
+                        </tr>
+                        <tr>
+                            <td><strong>SAVER</strong></td>
+                            <td>$100-$249</td>
+                            <td>2-8%</td>
+                            <td>4</td>
+                        </tr>
+                        <tr>
+                            <td><strong>INVESTOR</strong></td>
+                            <td>$250-$999</td>
+                            <td>2-10%</td>
+                            <td>5</td>
+                        </tr>
+                        <tr>
+                            <td><strong>INCOME</strong></td>
+                            <td>$1K-$4.9K</td>
+                            <td>2-12%</td>
+                            <td>6</td>
+                        </tr>
+                        <tr>
+                            <td><strong>LIVABLE</strong></td>
+                            <td>$5K-$24.9K</td>
+                            <td>2-15%</td>
+                            <td>7</td>
+                        </tr>
+                        <tr>
+                            <td><strong>BALLER</strong></td>
+                            <td>$25K+</td>
+                            <td>2-25%</td>
+                            <td>8</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Circuit Breakers -->
+                <div class="section emergency">
+                    <div class="section-title">
+                        <span class="emoji">⚡</span>
+                        <span>Circuit Breakers</span>
+                    </div>
+                    <table>
+                        <tr>
+                            <th>Alert Type</th>
+                            <th>Threshold</th>
+                            <th>Auto-Action</th>
+                        </tr>
+                        <tr>
+                            <td>Order Stuck</td>
+                            <td>5 min</td>
+                            <td>Optional @15min</td>
+                        </tr>
+                        <tr>
+                            <td>Adoption Rate</td>
+                            <td>80%</td>
+                            <td>Configurable</td>
+                        </tr>
+                        <tr>
+                            <td>Platform Exposure</td>
+                            <td>30% (45% max)</td>
+                            <td>Block new</td>
+                        </tr>
+                        <tr>
+                            <td>Daily Loss Limit</td>
+                            <td>Per tier</td>
+                            <td><span class="badge red">Kill Switch</span></td>
+                        </tr>
+                        <tr>
+                            <td>Position Cap</td>
+                            <td>7-8 positions</td>
+                            <td><span class="badge red">Blocked</span></td>
+                        </tr>
+                        <tr>
+                            <td>Account Drawdown</td>
+                            <td>8%</td>
+                            <td>Halt 24h</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Performance Metrics & Market Filters -->
+            <div class="grid">
+                <!-- Performance Metrics -->
+                <div class="section success">
+                    <div class="section-title">
+                        <span class="emoji">📈</span>
+                        <span>Performance Metrics</span>
+                    </div>
+                    <strong>8 Key Command Center Metrics:</strong>
+                    <ol style="font-size: 0.85em; margin-left: 20px; margin-top: 5px;">
+                        <li><strong>Equity Curve:</strong> Portfolio value, 24h change</li>
+                        <li><strong>Risk Heat:</strong> 0-100 score, drawdown %</li>
+                        <li><strong>Trade Quality:</strong> 0-100, win rate, profit factor</li>
+                        <li><strong>Signal Accuracy:</strong> Success rate, false positives</li>
+                        <li><strong>Slippage:</strong> BPS, USD impact</li>
+                        <li><strong>Fee Impact:</strong> Total fees, % of profit</li>
+                        <li><strong>Strategy Efficiency:</strong> Trades/day, capital utilization</li>
+                        <li><strong>Capital Growth Velocity:</strong> Annualized rate</li>
+                    </ol>
+                    <div style="margin-top: 8px;">
+                        <strong>Start Dashboard:</strong>
+                        <div class="code">python bot/dashboard_server.py
+# Access: http://localhost:5001/command-center</div>
+                    </div>
+                </div>
+
+                <!-- Market Quality Filters -->
+                <div class="section purple">
+                    <div class="section-title">
+                        <span class="emoji">🔍</span>
+                        <span>Market Quality Filters</span>
+                    </div>
+                    <table>
+                        <tr>
+                            <th>Filter</th>
+                            <th>Threshold</th>
+                            <th>Purpose</th>
+                        </tr>
+                        <tr>
+                            <td>ADX</td>
+                            <td>&lt;20</td>
+                            <td>Weak trend (choppy)</td>
+                        </tr>
+                        <tr>
+                            <td>Min Volume</td>
+                            <td>50% of 20-MA</td>
+                            <td>Liquidity check</td>
+                        </tr>
+                        <tr>
+                            <td>Candle Start</td>
+                            <td>First 30s</td>
+                            <td>Avoid early volatility</td>
+                        </tr>
+                        <tr>
+                            <td>Max Spread</td>
+                            <td>10 BPS</td>
+                            <td>Slippage control</td>
+                        </tr>
+                        <tr>
+                            <td>Low Volatility</td>
+                            <td>ATR &lt;0.1% price</td>
+                            <td>Movement filter</td>
+                        </tr>
+                        <tr>
+                            <td>Flash Crash</td>
+                            <td>15% in 5min</td>
+                            <td>Halt 15min</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Scaling Logic -->
+                <div class="section info">
+                    <div class="section-title">
+                        <span class="emoji">📊</span>
+                        <span>Scaling Logic (Greenlight)</span>
+                    </div>
+                    <strong>Unlock Tier 2 Requirements (ALL):</strong>
+                    <div class="metric">
+                        <span class="metric-label">Net Profit:</span>
+                        <span class="metric-value">≥ $50</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">ROI:</span>
+                        <span class="metric-value">≥ 5%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Win Rate:</span>
+                        <span class="metric-value">≥ 45%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Max Drawdown:</span>
+                        <span class="metric-value">≤ 15%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Trade Count:</span>
+                        <span class="metric-value">≥ 50 trades</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Time Period:</span>
+                        <span class="metric-value">≥ 24 hours</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Kill Switches:</span>
+                        <span class="metric-value">0 triggers</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Daily Limits:</span>
+                        <span class="metric-value">0 hits</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Position Rejects:</span>
+                        <span class="metric-value">≤ 5%</span>
+                    </div>
+                    <div style="margin-top: 8px;">
+                        <div class="code">python generate_greenlight_report.py --user john_smith</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Status & Monitoring Commands -->
+            <div class="grid">
+                <!-- Status Commands -->
+                <div class="section info two-col">
+                    <div class="section-title">
+                        <span class="emoji">⚙️</span>
+                        <span>Status & Diagnostic Commands</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.85em;">
+                        <div>
+                            <strong>Overall Status:</strong>
+                            <div class="code">python check_profit_status.py --detailed</div>
+                            <strong>Capital Capacity:</strong>
+                            <div class="code">python calculate_capital_capacity.py</div>
+                            <strong>Safe Trade Size:</strong>
+                            <div class="code">python calculate_safe_trade_size.py</div>
+                            <strong>Diagnose Kraken:</strong>
+                            <div class="code">python diagnose_kraken_trading.py</div>
+                            <strong>Profitability Analysis:</strong>
+                            <div class="code">python analyze_profitability.py</div>
+                        </div>
+                        <div>
+                            <strong>Analytics Report:</strong>
+                            <div class="code">python generate_analytics_report.py --detailed</div>
+                            <strong>Paper Trading:</strong>
+                            <div class="code">python paper_trading_manager.py --report</div>
+                            <strong>Greenlight Report:</strong>
+                            <div class="code">python generate_greenlight_report.py</div>
+                            <strong>User Status:</strong>
+                            <div class="code">python user_status_summary.py --detailed</div>
+                            <strong>Profitability Audit:</strong>
+                            <div class="code">python profitability_audit_report.py</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- API Endpoints -->
+                <div class="section success">
+                    <div class="section-title">
+                        <span class="emoji">🌐</span>
+                        <span>Real-Time API Endpoints</span>
+                    </div>
+                    <table>
+                        <tr>
+                            <th>Endpoint</th>
+                            <th>Port</th>
+                            <th>Purpose</th>
+                        </tr>
+                        <tr>
+                            <td>/api/last-trade</td>
+                            <td>5001</td>
+                            <td>Last evaluated trade</td>
+                        </tr>
+                        <tr>
+                            <td>/api/health</td>
+                            <td>5001</td>
+                            <td>System health check</td>
+                        </tr>
+                        <tr>
+                            <td>/api/dry-run-status</td>
+                            <td>5001</td>
+                            <td>Trading mode status</td>
+                        </tr>
+                        <tr>
+                            <td>/api/emergency/kill-switch/status</td>
+                            <td>5000</td>
+                            <td>Kill switch state</td>
+                        </tr>
+                        <tr>
+                            <td>/api/performance/status</td>
+                            <td>5000</td>
+                            <td>Performance metrics</td>
+                        </tr>
+                        <tr>
+                            <td>/api/graduation/status</td>
+                            <td>5000</td>
+                            <td>Tier progression</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Trade Veto Reasons & Exit Reasons -->
+            <div class="grid">
+                <!-- Trade Veto Reasons -->
+                <div class="section warning">
+                    <div class="section-title">
+                        <span class="emoji">🚫</span>
+                        <span>Trade Veto Reasons</span>
+                    </div>
+                    <ul>
+                        <li>❌ Position cap reached (7/7 or 8/8 positions)</li>
+                        <li>❌ Insufficient balance (&lt; minimum required)</li>
+                        <li>❌ Daily loss limit reached (tier-specific)</li>
+                        <li>❌ Kill switch active (emergency halt)</li>
+                        <li>❌ Market quality filters failed (choppy/low volume)</li>
+                        <li>❌ Risk limits exceeded (drawdown &gt; 8%)</li>
+                        <li>❌ LIVE_CAPITAL_VERIFIED not set</li>
+                        <li>❌ Revenge trading detected (position size &gt; 2x avg)</li>
+                        <li>❌ Excessive frequency (&gt;10 trades/hour)</li>
+                        <li>❌ Overconcentration (&gt;50% in single asset)</li>
+                    </ul>
+                </div>
+
+                <!-- Entry Reasons -->
+                <div class="section success">
+                    <div class="section-title">
+                        <span class="emoji">📥</span>
+                        <span>Entry Reasons (11 Types)</span>
+                    </div>
+                    <ul style="columns: 2;">
+                        <li>rsi_9_oversold (RSI_9 &lt; 30)</li>
+                        <li>rsi_14_oversold (RSI_14 &lt; 30)</li>
+                        <li>dual_rsi_oversold (Both &lt; 30)</li>
+                        <li>rsi_divergence</li>
+                        <li>tradingview_buy_signal</li>
+                        <li>tradingview_sell_signal</li>
+                        <li>market_readiness_passed</li>
+                        <li>strong_momentum</li>
+                        <li>manual_entry</li>
+                        <li>heartbeat_trade</li>
+                        <li>unknown (fallback)</li>
+                    </ul>
+                </div>
+
+                <!-- Exit Reasons -->
+                <div class="section purple">
+                    <div class="section-title">
+                        <span class="emoji">📤</span>
+                        <span>Exit Reasons (19 Types)</span>
+                    </div>
+                    <div style="font-size: 0.85em;">
+                        <strong>Profit Targets:</strong>
+                        <ul>
+                            <li>profit_target_1/2/3 (25% each partial)</li>
+                            <li>full_profit_target (100% exit)</li>
+                            <li>trailing_stop_hit</li>
+                        </ul>
+                        <strong>Stop Losses:</strong>
+                        <ul>
+                            <li>stop_loss_hit (hard stop)</li>
+                            <li>time_based_stop (max hold 24h+)</li>
+                            <li>losing_trade_exit (aggressive 15min)</li>
+                        </ul>
+                        <strong>Risk Management:</strong>
+                        <ul>
+                            <li>daily_loss_limit, position_limit_enforcement</li>
+                            <li>kill_switch, liquidate_all</li>
+                        </ul>
+                        <strong>Other:</strong>
+                        <ul>
+                            <li>rsi_overbought, dust_position, zombie_position</li>
+                            <li>adoption_exit, manual_exit, unknown</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Risk Management & Environment Config -->
+            <div class="grid">
+                <!-- Risk Profiles -->
+                <div class="section warning">
+                    <div class="section-title">
+                        <span class="emoji">⚠️</span>
+                        <span>Risk Profiles (Exchange-Specific)</span>
+                    </div>
+                    <table>
+                        <tr>
+                            <th>Profile</th>
+                            <th>Max Leverage</th>
+                            <th>Drawdown Limit</th>
+                            <th>Use Case</th>
+                        </tr>
+                        <tr>
+                            <td>Conservative</td>
+                            <td>1x</td>
+                            <td>5%</td>
+                            <td>Spot trading</td>
+                        </tr>
+                        <tr>
+                            <td>Moderate</td>
+                            <td>2-3x</td>
+                            <td>10%</td>
+                            <td>Low leverage futures</td>
+                        </tr>
+                        <tr>
+                            <td>Aggressive</td>
+                            <td>5x</td>
+                            <td>15%</td>
+                            <td>High leverage (advanced)</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Environment Variables -->
+                <div class="section info">
+                    <div class="section-title">
+                        <span class="emoji">🔧</span>
+                        <span>Critical Environment Variables</span>
+                    </div>
+                    <table>
+                        <tr>
+                            <th>Variable</th>
+                            <th>Purpose</th>
+                            <th>Required</th>
+                        </tr>
+                        <tr>
+                            <td>KRAKEN_PLATFORM_API_KEY</td>
+                            <td>Kraken API access</td>
+                            <td><span class="badge red">YES</span></td>
+                        </tr>
+                        <tr>
+                            <td>KRAKEN_PLATFORM_API_SECRET</td>
+                            <td>Kraken API secret</td>
+                            <td><span class="badge red">YES</span></td>
+                        </tr>
+                        <tr>
+                            <td>LIVE_CAPITAL_VERIFIED</td>
+                            <td>Enable live trading</td>
+                            <td><span class="badge red">YES</span></td>
+                        </tr>
+                        <tr>
+                            <td>DRY_RUN_MODE</td>
+                            <td>Paper trading mode</td>
+                            <td><span class="badge green">Optional</span></td>
+                        </tr>
+                        <tr>
+                            <td>HEARTBEAT_TRADE</td>
+                            <td>Test trade execution</td>
+                            <td><span class="badge green">Optional</span></td>
+                        </tr>
+                        <tr>
+                            <td>LAST_TRADE_API_PORT</td>
+                            <td>API server port</td>
+                            <td><span class="badge blue">5001</span></td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Safety Tests -->
+                <div class="section success">
+                    <div class="section-title">
+                        <span class="emoji">✅</span>
+                        <span>Safety Test Suite</span>
+                    </div>
+                    <strong>Run Before Deployment:</strong>
+                    <div class="code">python test_operational_safety.py  # 7/7 tests must pass
+python test_critical_safety.py
+python test_health_check_system.py
+python test_position_cap_enforcement.py
+python test_risk_freeze.py
+python test_tier_and_risk_changes.py</div>
+                    <strong>Expected Results:</strong>
+                    <ul style="margin-top: 5px;">
+                        <li>All tests PASS ✅</li>
+                        <li>No exceptions or errors</li>
+                        <li>All guardrails functioning</li>
+                        <li>Position caps enforced</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Rapid Fire Commands & Troubleshooting -->
+            <div class="grid">
+                <!-- Rapid Fire -->
+                <div class="section purple full-width">
+                    <div class="section-title">
+                        <span class="emoji">⚡</span>
+                        <span>Rapid Fire Commands (Copy & Paste)</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 0.85em;">
+                        <div>
+                            <strong>Quick Health Check:</strong>
+                            <div class="code">curl http://localhost:5001/api/health | jq</div>
+                            <strong>Kill Switch Status:</strong>
+                            <div class="code">curl http://localhost:5000/api/emergency/kill-switch/status | jq</div>
+                            <strong>Monitor Last Trade:</strong>
+                            <div class="code">watch -n 5 'curl -s http://localhost:5001/api/last-trade | jq .data'</div>
+                        </div>
+                        <div>
+                            <strong>Git Status:</strong>
+                            <div class="code">git --no-pager status && git --no-pager diff</div>
+                            <strong>View Logs:</strong>
+                            <div class="code">tail -f logs/nija.log</div>
+                            <strong>Run All Safety Tests:</strong>
+                            <div class="code">python test_operational_safety.py && \
+python test_critical_safety.py</div>
+                        </div>
+                        <div>
+                            <strong>Start Bot:</strong>
+                            <div class="code">./start.sh</div>
+                            <strong>Restart Bot:</strong>
+                            <div class="code">./restart_nija.sh</div>
+                            <strong>Test API:</strong>
+                            <div class="code">python bot/last_trade_api.py</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Troubleshooting Checklist -->
+            <div class="grid">
+                <div class="section emergency full-width">
+                    <div class="section-title">
+                        <span class="emoji">🐛</span>
+                        <span>Troubleshooting Checklist</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; font-size: 0.9em;">
+                        <div>
+                            <strong>Bot Won't Start:</strong>
+                            <ul>
+                                <li>☐ Check API keys set</li>
+                                <li>☐ Verify API permissions</li>
+                                <li>☐ Review error logs</li>
+                                <li>☐ Check network connectivity</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <strong>No Trades Executing:</strong>
+                            <ul>
+                                <li>☐ Look for TRADE VETO logs</li>
+                                <li>☐ Check veto reasons</li>
+                                <li>☐ Verify LIVE_CAPITAL_VERIFIED=true</li>
+                                <li>☐ Ensure min balance ($25+)</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <strong>Heartbeat Trade Fails:</strong>
+                            <ul>
+                                <li>☐ Account has $25+ balance</li>
+                                <li>☐ API has order permission</li>
+                                <li>☐ Check API error in logs</li>
+                                <li>☐ Verify exchange connectivity</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <strong>API Not Responding:</strong>
+                            <ul>
+                                <li>☐ Port 5001 exposed</li>
+                                <li>☐ API server started</li>
+                                <li>☐ Firewall allows port</li>
+                                <li>☐ Check process running</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Emergency Protocol -->
+            <div class="grid">
+                <div class="section emergency full-width">
+                    <div class="section-title">
+                        <span class="emoji">🚨</span>
+                        <span>EMERGENCY PROTOCOL (Memorize This!)</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; font-weight: bold; text-align: center;">
+                        <div style="background: white; padding: 10px; border-radius: 8px; border: 2px solid var(--emergency-red);">
+                            <div style="font-size: 2em; color: var(--emergency-red);">1️⃣</div>
+                            <div>ACTIVATE KILL SWITCH</div>
+                            <div style="font-size: 0.8em; color: var(--text-light);">Immediately</div>
+                        </div>
+                        <div style="background: white; padding: 10px; border-radius: 8px; border: 2px solid var(--warning-orange);">
+                            <div style="font-size: 2em; color: var(--warning-orange);">2️⃣</div>
+                            <div>REVIEW LOGS</div>
+                            <div style="font-size: 0.8em; color: var(--text-light);">tail -f logs/nija.log</div>
+                        </div>
+                        <div style="background: white; padding: 10px; border-radius: 8px; border: 2px solid var(--info-blue);">
+                            <div style="font-size: 2em; color: var(--info-blue);">3️⃣</div>
+                            <div>CHECK POSITIONS</div>
+                            <div style="font-size: 0.8em; color: var(--text-light);">Via broker UI</div>
+                        </div>
+                        <div style="background: white; padding: 10px; border-radius: 8px; border: 2px solid var(--purple);">
+                            <div style="font-size: 2em; color: var(--purple);">4️⃣</div>
+                            <div>FOLLOW PROCEDURES</div>
+                            <div style="font-size: 0.8em; color: var(--text-light);">OPERATIONAL_SAFETY_PROCEDURES.md</div>
+                        </div>
+                        <div style="background: white; padding: 10px; border-radius: 8px; border: 2px solid var(--success-green);">
+                            <div style="font-size: 2em; color: var(--success-green);">5️⃣</div>
+                            <div>VERIFY & DEACTIVATE</div>
+                            <div style="font-size: 0.8em; color: var(--text-light);">Only after resolved</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px; padding: 10px; background: white; border-radius: 8px; text-align: center; font-size: 1.1em; color: var(--emergency-red);">
+                        <strong>⚠️ REMEMBER:</strong> In ANY emergency, activate kill switch FIRST, investigate SECOND!
+                    </div>
+                </div>
+            </div>
+
+            <!-- Key Documentation -->
+            <div class="grid">
+                <div class="section info full-width">
+                    <div class="section-title">
+                        <span class="emoji">📚</span>
+                        <span>Key Documentation Files</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; font-size: 0.85em;">
+                        <div>
+                            <strong>Core Guides:</strong>
+                            <ul>
+                                <li>README.md</li>
+                                <li>QUICK_REFERENCE.md</li>
+                                <li>START_HERE.md</li>
+                                <li>GETTING_STARTED.md</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <strong>Safety & Operations:</strong>
+                            <ul>
+                                <li>OPERATIONAL_SAFETY_PROCEDURES.md</li>
+                                <li>EMERGENCY_KILL_SWITCH_QUICK_REF.md</li>
+                                <li>HARD_CONTROLS.md</li>
+                                <li>INSTITUTIONAL_GUARDRAILS.md</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <strong>Trading & Strategy:</strong>
+                            <ul>
+                                <li>APEX_V71_DOCUMENTATION.md</li>
+                                <li>APEX_STRATEGY_README.md</li>
+                                <li>BROKER_INTEGRATION_GUIDE.md</li>
+                                <li>TRADINGVIEW_SETUP.md</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <strong>Analytics & Monitoring:</strong>
+                            <ul>
+                                <li>ANALYTICS_QUICK_REFERENCE.md</li>
+                                <li>COMMAND_CENTER_README.md</li>
+                                <li>KPI_DASHBOARD_GUIDE.md</li>
+                                <li>PERFORMANCE_DASHBOARD.md</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <strong>🎯 NIJA Trading Systems</strong> • Version 7.2.0 • February 2026 • 
+            <strong>In emergency: ACTIVATE KILL SWITCH FIRST!</strong> • 
+            Review <code>OPERATIONAL_SAFETY_PROCEDURES.md</code> for detailed protocols
+        </div>
+    </div>
+</body>
+</html>
