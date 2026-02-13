@@ -37,5 +37,6 @@ RUN chmod +x /app/docker-entrypoint.sh
 # Run with entrypoint for database initialization
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# Default command: Run FastAPI with Uvicorn
-CMD ["uvicorn", "fastapi_backend:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Default command: Run mobile backend server with Socket.IO support
+# For WebSocket support, use eventlet worker
+CMD ["gunicorn", "mobile_backend_server:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--worker-class", "eventlet", "--timeout", "120"]
