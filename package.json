@@ -28,7 +28,8 @@
     "@capacitor/push-notifications": "^5.1.0",
     "@capacitor/network": "^5.0.6",
     "@capacitor/device": "^5.0.6",
-    "@capacitor/browser": "^5.1.0"
+    "@capacitor/browser": "^5.1.0",
+    "@capacitor-community/in-app-purchases": "^6.0.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^5.7.0"
