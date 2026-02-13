@@ -148,6 +148,13 @@ class MonetizationEngine:
     SaaS Monetization Engine
 
     Manages subscriptions, billing, and revenue tracking for the NIJA platform.
+    
+    Features:
+    - Stripe subscription management
+    - In-app purchase (IAP) integration for iOS/Android
+    - Usage tracking and limits enforcement
+    - Trial period management
+    - Revenue analytics
     """
 
     # Default tier pricing
@@ -542,6 +549,62 @@ class MonetizationEngine:
             'average_revenue_per_user': float(total_mrr / len(self._subscriptions)) if self._subscriptions else 0,
             'timestamp': datetime.now().isoformat()
         }
+
+    def create_or_update_subscription_from_iap(self,
+                                               user_id: str,
+                                               tier: SubscriptionTier,
+                                               interval: BillingInterval,
+                                               platform: str,
+                                               transaction_id: str,
+                                               original_transaction_id: str,
+                                               expires_date: datetime,
+                                               is_trial: bool = False,
+                                               receipt_data: Optional[str] = None) -> Subscription:
+        """
+        Create or update subscription from in-app purchase (iOS/Android).
+        
+        Args:
+            user_id: User identifier
+            tier: Subscription tier
+            interval: Billing interval
+            platform: Platform (ios/android)
+            transaction_id: Transaction ID from app store
+            original_transaction_id: Original transaction ID
+            expires_date: Subscription expiration date
+            is_trial: Whether this is a trial subscription
+            receipt_data: Receipt data for verification
+            
+        Returns:
+            Subscription object
+        """
+        logger.info(f"Creating/updating IAP subscription for user {user_id}: {tier.value} ({platform})")
+        
+        # Calculate period start
+        period_start = datetime.utcnow()
+        period_end = expires_date
+        
+        # Create subscription object
+        subscription = Subscription(
+            user_id=user_id,
+            tier=tier,
+            interval=interval,
+            status='active' if not is_trial else 'trialing',
+            current_period_start=period_start,
+            current_period_end=period_end,
+            trial_end=expires_date if is_trial else None,
+            stripe_subscription_id=f"{platform}_{transaction_id}",
+            stripe_customer_id=f"{platform}_{user_id}"
+        )
+        
+        # Store in memory (TODO: persist to database)
+        self._subscriptions[user_id] = subscription
+        
+        # TODO: Store receipt data for future verification
+        # TODO: Sync with Stripe if using unified billing
+        
+        logger.info(f"IAP subscription created for user {user_id}, expires: {expires_date.isoformat()}")
+        
+        return subscription
 
     def handle_stripe_webhook(self, event_type: str, event_data: Dict[str, Any]) -> None:
         """
