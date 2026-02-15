@@ -3664,9 +3664,8 @@ class TradingStrategy:
                 # Position cap set to 8 maximum concurrent positions
                 positions_over_cap = len(current_positions) - MAX_POSITIONS_ALLOWED
                 
-                # INVARIANT VALIDATION: Ensure position count and excess are valid
+                # INVARIANT VALIDATION: Ensure position count is valid
                 assert len(current_positions) >= 0, f"INVARIANT VIOLATION: Position count is negative: {len(current_positions)}"
-                assert positions_over_cap >= -MAX_POSITIONS_ALLOWED, f"INVARIANT VIOLATION: Invalid excess calculation: {positions_over_cap}"
                 
                 # CRITICAL: Check for forced unwind mode (per-user emergency exit)
                 # When enabled, ALL positions are closed immediately regardless of P&L
