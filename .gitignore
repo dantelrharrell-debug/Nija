@@ -166,6 +166,7 @@ COMMIT*.md
 *_SUMMARY*.md
 *_REPORT*.md
 SOLUTION*.md
+!IMPLEMENTATION_SUMMARY_DRY_RUN_MODE.md  # Keep dry-run mode implementation summary
 IMPLEMENTATION*.md
 !IMPLEMENTATION_COMPLETE_IMPROVEMENTS.md  # Keep improvements summary
 !IMPLEMENTATION_SUMMARY_PAPER_ANALYTICS.md  # Keep paper analytics summary
