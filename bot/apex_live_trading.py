@@ -244,12 +244,12 @@ class ApexLiveTrader:
         Fee-Aware Profitability Mode - Stepped exits adjusted for exchange fees
 
         Exit Schedule (assuming ~1.4% round-trip fees for Coinbase):
-        - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (PROFITABLE)
-        - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees (PROFITABLE)
-        - Exit 25% at 3.0% gross profit → ~1.6% NET profit after fees (PROFITABLE)
-        - Exit 50% at 4.0% gross profit → ~2.6% NET profit after fees (PROFITABLE)
+        - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (meets criteria)
+        - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees (meets criteria)
+        - Exit 25% at 3.0% gross profit → ~1.6% NET profit after fees (meets criteria)
+        - Exit 50% at 4.0% gross profit → ~2.6% NET profit after fees (meets criteria)
 
-        This dramatically reduces average hold time while ensuring ALL exits are NET PROFITABLE.
+        This dramatically reduces average hold time while ensuring all exits meet net profitability criteria.
 
         Args:
             symbol: Trading symbol
@@ -303,7 +303,7 @@ class ApexLiveTrader:
                 logger.info(f"✅ FEE-AWARE profit exit triggered: {symbol} {side}")
                 logger.info(f"  Gross profit: {gross_profit_pct*100:.2f}% ≥ {gross_threshold*100:.1f}% threshold")
                 logger.info(f"  Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
-                logger.info(f"  NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
+                logger.info(f"  NET profit: ~{expected_net_pct*100:.1f}% (meets profit criteria)")
                 logger.info(f"  Exiting: {exit_pct*100:.0f}% of position")
 
                 remaining_pct = position.get('remaining_pct', 1.0) * (1.0 - exit_pct)
