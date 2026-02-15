@@ -4,7 +4,7 @@
 
 **Status:** ✅ **COMPLETE - All 6 GO CONDITIONS Implemented**
 
-NIJA is a cryptocurrency trading platform with institutional-grade safety controls specifically designed for Apple App Store compliance.
+NIJA is a cryptocurrency trading platform with advanced safety controls specifically designed for Apple App Store compliance.
 
 ---
 
