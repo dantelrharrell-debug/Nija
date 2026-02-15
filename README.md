@@ -98,11 +98,43 @@ python qa_app_store_mode.py --full
 
 ---
 
-## 📊 **NEW: Institutional-Grade Features** (February 2026)
+## 💰 Pricing & Support
+
+### Subscription Plans
+
+NIJA offers flexible subscription tiers to fit your trading needs:
+
+- **Free Tier** ($0/month): Paper trading only, perfect for learning
+- **Basic Tier** ($49/month): Live trading with core features
+- **Pro Tier** ($149/month): Advanced AI features + 14-day free trial
+- **Enterprise Tier** ($499/month): White-label + dedicated support
+
+📄 **Full Pricing Details**: See [PRICING.md](PRICING.md) for complete tier comparison, features, and refund policy.
+
+### Customer Support
+
+We're here to help you succeed:
+
+- **Email Support**: support@nija-trading.com
+- **Technical Issues**: technical@nija-trading.com
+- **Billing Questions**: billing@nija-trading.com
+- **Emergency Support**: Available 24/7 for Pro & Enterprise tiers
+
+📞 **Full Support Information**: See [SUPPORT.md](SUPPORT.md) for response times, channels, and community resources.
+
+### Legal Documents
+
+- **Terms of Service**: [TERMS_OF_SERVICE.md](TERMS_OF_SERVICE.md)
+- **Privacy Policy**: [PRIVACY_POLICY.md](PRIVACY_POLICY.md)
+- **Risk Disclosure**: [RISK_DISCLOSURE.md](RISK_DISCLOSURE.md)
+
+---
+
+## 📊 **NEW: Advanced Compliance Features** (February 2026)
 
 **Making NIJA Investment-Ready with Professional Reporting and Compliance**
 
-NIJA now includes institutional-grade compliance features that separate validation, performance tracking, and marketing layers with appropriate disclaimers.
+NIJA now includes advanced compliance features that separate validation, performance tracking, and marketing layers with appropriate disclaimers.
 
 ### Key Features
 
@@ -680,7 +712,7 @@ Real-time account status display:
 
 **NIJA has evolved into a complete multi-strategy fund infrastructure.**
 
-Three new institutional-grade systems transform NIJA from a single-strategy bot into a professional fund management platform:
+Three new advanced systems transform NIJA from a single-strategy bot into a professional fund management platform:
 
 ### 1️⃣ Capital Scaling Framework - Self-Adjusting Compounding Engine
 
@@ -1677,7 +1709,7 @@ This balance snapshot represents a **verified success point** in the startup seq
 - ⚡ **24/7 Autonomous Operation**: Self-healing, auto-scaling, and continuous market scanning
 - 👥 **Multi-User Platform**: Secure layered architecture with user-specific permissions and encrypted API keys
 
-NIJA isn't just a bot—it's a complete algorithmic trading framework designed for professional-grade systematic trading with institutional-quality risk management.
+NIJA isn't just a bot—it's a complete algorithmic trading framework designed for professional systematic trading with comprehensive risk management.
 
 ## 🆕 Layered Architecture (v2.0)
 
@@ -1819,7 +1851,7 @@ See Emergency Procedures: [EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)
 
 ## 🎯 What Makes NIJA Unique?
 
-NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic trading platform** that combines institutional-grade risk management with cutting-edge AI technology. Here's what sets NIJA apart:
+NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic trading platform** that combines advanced risk management with cutting-edge AI technology. Here's what sets NIJA apart:
 
 ### 🌐 Multi-Asset, Multi-Exchange Trading
 - **Cryptocurrency Trading**: 732+ trading pairs across Coinbase, OKX, Binance, and Kraken
@@ -1865,7 +1897,7 @@ NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic
 - **Compound Optimization**: Automatic profit reinvestment with capital scaling
 - **From Crypto to Stocks**: Expand to traditional markets without code changes
 
-**Bottom Line**: NIJA is a production-ready, institutional-quality trading platform that brings hedge fund-level technology to individual traders. It's designed for serious algorithmic traders who want complete control, transparency, and scalability.
+**Bottom Line**: NIJA is a production-ready trading platform designed for serious algorithmic traders who want complete control, transparency, and scalability.
 
 ---
 
