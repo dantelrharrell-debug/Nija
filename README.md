@@ -98,6 +98,94 @@ python qa_app_store_mode.py --full
 
 ---
 
+## 📊 **NEW: Institutional-Grade Features** (February 2026)
+
+**Making NIJA Investment-Ready with Professional Reporting and Compliance**
+
+NIJA now includes institutional-grade compliance features that separate validation, performance tracking, and marketing layers with appropriate disclaimers.
+
+### Key Features
+
+**1️⃣ Explicit Validation Disclaimer**
+```
+╔════════════════════════════════════════════════════════════════════════════╗
+║                      MATHEMATICAL VALIDATION ONLY                          ║
+║          DOES NOT REPRESENT HISTORICAL OR FORWARD PERFORMANCE              ║
+╚════════════════════════════════════════════════════════════════════════════╝
+```
+Automatically displayed in all logs, reports, and outputs.
+
+**2️⃣ Three-Layer Architecture**
+- **Validation Layer** - Mathematical strategy validation (backtesting)
+- **Performance Tracking Layer** - Real-time trade and P&L tracking
+- **Marketing Layer** - Investor-ready reports with full disclaimers
+
+**3️⃣ Statistical Reporting Module**
+
+Comprehensive statistics for professional analysis:
+- ✅ Win rate over last 100 trades
+- ✅ Maximum drawdown calculation
+- ✅ Rolling expectancy (expected profit per trade)
+- ✅ Equity curve generation (exportable as CSV)
+
+### Quick Start
+
+```python
+from bot.institutional_disclaimers import print_validation_banner
+from bot.performance_tracking_layer import get_performance_tracking_layer
+from bot.statistical_reporting_module import get_statistical_reporting_module
+
+# Display disclaimer
+print_validation_banner()
+
+# Initialize performance tracking
+perf = get_performance_tracking_layer()
+perf.set_initial_balance(10000.0)
+
+# Record trades
+perf.record_trade('BTC-USD', 'APEX_V71', 'buy', 45000, 46000, 0.1, 100, 2)
+
+# Generate reports
+module = get_statistical_reporting_module()
+module.print_summary()
+exports = module.export_all_reports()
+```
+
+### Command-Line Reporting
+
+```bash
+# Print statistical summary
+python bot/statistical_reporting_module.py --summary
+
+# Export all reports
+python bot/statistical_reporting_module.py --export --output-dir ./reports
+```
+
+### Generated Reports
+
+- **Comprehensive JSON Report** - Complete statistical analysis
+- **Investor-Ready Reports** - JSON and TXT formats with disclaimers
+- **Equity Curve CSV** - Account value progression for charting
+- **Performance Statistics** - Win rate, drawdown, expectancy
+
+### Documentation
+
+📚 See **[INSTITUTIONAL_GRADE_FEATURES.md](INSTITUTIONAL_GRADE_FEATURES.md)** for:
+- Complete usage guide
+- Integration examples
+- Report generation
+- Best practices
+- Compliance benefits
+
+### Integration Example
+
+```python
+# Complete integration example available in:
+python bot/institutional_grade_integration_example.py
+```
+
+---
+
 ## 🛡️ **NEW: Advanced Risk Management System** (February 8, 2026)
 
 **Making NIJA Structurally Safe, Capital-Efficient, and Risk-Contained**
