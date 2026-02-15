@@ -27,7 +27,21 @@ def display_feature_flag_banner():
     
     This provides immediate visibility into the bot's configuration.
     """
-    # Display institutional disclaimer first
+    import os
+    
+    # Check for dry-run mode FIRST and display banner if enabled
+    dry_run_str = os.getenv("DRY_RUN_MODE", "false").lower()
+    dry_run_mode = dry_run_str in ("true", "1", "yes")
+    
+    if dry_run_mode:
+        # Import and display dry-run banner
+        try:
+            from bot.dry_run_engine import print_dry_run_startup_banner
+            print_dry_run_startup_banner()
+        except ImportError:
+            logger.warning("⚠️ Could not import dry_run_engine for banner display")
+    
+    # Display institutional disclaimer
     print_validation_banner()
     
     logger.info("=" * 70)
@@ -36,6 +50,9 @@ def display_feature_flag_banner():
     
     # Import and check all feature flags
     flags = {}
+    
+    # Dry-Run Mode (Paper Trading)
+    flags['Dry-Run Mode (Paper Trading)'] = dry_run_mode
     
     # Profit Confirmation Feature
     try:
@@ -72,10 +89,19 @@ def display_feature_flag_banner():
     except (ImportError, AttributeError):
         flags['Fee-Aware Profit Calculations'] = False
     
-    # Display results
+    # Display results with special highlighting for dry-run mode
     for feature_name, is_enabled in flags.items():
-        status_icon = "✅" if is_enabled else "⚪"
-        status_text = "ENABLED" if is_enabled else "DISABLED"
+        if feature_name == 'Dry-Run Mode (Paper Trading)':
+            # Special formatting for dry-run mode
+            if is_enabled:
+                status_icon = "🟡"
+                status_text = "ENABLED (SIMULATION)"
+            else:
+                status_icon = "⚪"
+                status_text = "DISABLED (LIVE)"
+        else:
+            status_icon = "✅" if is_enabled else "⚪"
+            status_text = "ENABLED" if is_enabled else "DISABLED"
         logger.info(f"   {status_icon} {feature_name}: {status_text}")
     
     enabled_count = sum(1 for v in flags.values() if v)

@@ -166,6 +166,7 @@ COMMIT*.md
 *_SUMMARY*.md
 *_REPORT*.md
 SOLUTION*.md
+!IMPLEMENTATION_SUMMARY_DRY_RUN_MODE.md  # Keep dry-run mode implementation summary
 IMPLEMENTATION*.md
 !IMPLEMENTATION_COMPLETE_IMPROVEMENTS.md  # Keep improvements summary
 !IMPLEMENTATION_SUMMARY_PAPER_ANALYTICS.md  # Keep paper analytics summary
@@ -362,6 +363,7 @@ example_*.py
 !example_usage.py  # Keep example usage
 !example_user_management_integration.py  # Keep example integration
 !test_mvp_components.py  # Keep MVP test suite
+!test_dry_run_mode.py  # Keep dry-run mode test (operational test)
 test_*.py
 !bot/test_*.py  # Keep bot tests
 !bot/tests/test_*.py  # Keep bot/tests directory tests

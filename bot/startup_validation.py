@@ -204,7 +204,7 @@ def validate_trading_mode() -> StartupValidationResult:
     """
     Validate that trading mode (testing vs. live) is intentionally set.
     
-    Risk: Multiple mode flags exist (PAPER_MODE, LIVE_CAPITAL_VERIFIED, etc.)
+    Risk: Multiple mode flags exist (PAPER_MODE, LIVE_CAPITAL_VERIFIED, DRY_RUN_MODE, etc.)
     making it unclear whether the bot is in testing or live mode. Accidental
     live trading can occur if flags are misconfigured.
     
@@ -212,6 +212,10 @@ def validate_trading_mode() -> StartupValidationResult:
         StartupValidationResult with validation findings
     """
     result = StartupValidationResult()
+    
+    # Check DRY_RUN_MODE flag (takes priority - safest mode)
+    dry_run_str = os.getenv("DRY_RUN_MODE", "false").lower()
+    dry_run_mode = dry_run_str in ("true", "1", "yes")
     
     # Check PAPER_MODE flag (default to false for consistency)
     paper_mode_str = os.getenv("PAPER_MODE", "false").lower()
@@ -222,6 +226,16 @@ def validate_trading_mode() -> StartupValidationResult:
     live_verified = live_verified_str in ("true", "1", "yes")
     
     # Check if mode flags are contradictory
+    if dry_run_mode and live_verified:
+        result.add_risk(
+            StartupRisk.MODE_AMBIGUOUS,
+            "CONTRADICTORY: Both DRY_RUN_MODE=true and LIVE_CAPITAL_VERIFIED=true are set"
+        )
+        result.add_warning(
+            "⚠️  MODE CONFLICT: DRY_RUN_MODE and LIVE_CAPITAL_VERIFIED both enabled. "
+            "DRY_RUN_MODE takes priority (simulation mode)."
+        )
+    
     if paper_mode and live_verified:
         result.add_risk(
             StartupRisk.MODE_AMBIGUOUS,
@@ -232,8 +246,14 @@ def validate_trading_mode() -> StartupValidationResult:
             "This is contradictory. Bot behavior may be unpredictable."
         )
     
-    # Determine actual mode
-    if live_verified:
+    # Determine actual mode (priority: DRY_RUN > LIVE > PAPER)
+    if dry_run_mode:
+        result.add_info("🟡 DRY RUN MODE: DRY_RUN_MODE=true (SAFEST - Full simulation)")
+        result.add_info(
+            "✅ SIMULATION ONLY: All exchanges in dry-run mode. "
+            "No real orders will be placed. No real money at risk."
+        )
+    elif live_verified:
         result.add_info("🔴 LIVE TRADING MODE: LIVE_CAPITAL_VERIFIED=true")
         result.add_warning(
             "⚠️  LIVE TRADING ENABLED: Real money at risk. "
@@ -245,11 +265,12 @@ def validate_trading_mode() -> StartupValidationResult:
         # Neither flag is explicitly set - ambiguous
         result.add_risk(
             StartupRisk.MODE_AMBIGUOUS,
-            "Trading mode is AMBIGUOUS - neither PAPER_MODE nor LIVE_CAPITAL_VERIFIED explicitly set"
+            "Trading mode is AMBIGUOUS - no mode flags explicitly set"
         )
         result.add_warning(
             "⚠️  MODE UNCLEAR: Trading mode not explicitly configured. "
-            "Set PAPER_MODE=true for testing or LIVE_CAPITAL_VERIFIED=true for live trading."
+            "Set DRY_RUN_MODE=true for full simulation, PAPER_MODE=true for testing, "
+            "or LIVE_CAPITAL_VERIFIED=true for live trading."
         )
     
     # Additional mode flags for context
