@@ -290,16 +290,34 @@ is_truthy() {
     [ "$val" = "true" ] || [ "$val" = "1" ] || [ "$val" = "yes" ]
 }
 
-# Check mode flags
+# Check mode flags (DRY_RUN takes highest priority)
+DRY_RUN_MODE_VAL="${DRY_RUN_MODE:-false}"
 PAPER_MODE_VAL="${PAPER_MODE:-false}"
 LIVE_CAPITAL_VERIFIED_VAL="${LIVE_CAPITAL_VERIFIED:-false}"
 
+echo "   DRY_RUN_MODE: ${DRY_RUN_MODE_VAL}"
 echo "   PAPER_MODE: ${PAPER_MODE_VAL}"
 echo "   LIVE_CAPITAL_VERIFIED: ${LIVE_CAPITAL_VERIFIED_VAL}"
 echo ""
 
-# Determine actual mode and warn accordingly
-if is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}"; then
+# Determine actual mode and warn accordingly (DRY_RUN > LIVE > PAPER)
+if is_truthy "${DRY_RUN_MODE_VAL}"; then
+    echo "   🟡 MODE: DRY RUN (FULL SIMULATION)"
+    echo "   ✅ SAFEST MODE - No real orders on any exchange"
+    echo "   ✅ All exchanges in simulation mode"
+    echo "   ✅ No real money at risk"
+    echo "   ✅ All trading is simulated in-memory"
+    echo ""
+    echo "   This mode is perfect for:"
+    echo "      • Testing strategy logic"
+    echo "      • Validating exchange configurations"
+    echo "      • Reviewing startup banners and validation"
+    echo "      • Operator sign-off before going live"
+    echo ""
+    echo "   To enable live trading after validation:"
+    echo "      export DRY_RUN_MODE=false"
+    echo "      export LIVE_CAPITAL_VERIFIED=true"
+elif is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}"; then
     echo "   🔴 MODE: LIVE TRADING"
     echo "   ⚠️  REAL MONEY AT RISK"
     echo "   ⚠️  This bot will execute real trades with real capital"
@@ -307,17 +325,21 @@ if is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}"; then
     echo ""
     echo "   To disable live trading:"
     echo "      export LIVE_CAPITAL_VERIFIED=false"
+    echo ""
+    echo "   To test safely first:"
+    echo "      export DRY_RUN_MODE=true"
 elif is_truthy "${PAPER_MODE_VAL}"; then
     echo "   📝 MODE: PAPER TRADING"
     echo "   ℹ️  Simulated trading only, no real money"
-else
+else:
     echo "   ⚠️  MODE: UNCLEAR"
-    echo "   ⚠️  Neither PAPER_MODE nor LIVE_CAPITAL_VERIFIED explicitly set"
+    echo "   ⚠️  No mode flags explicitly set"
     echo "   ⚠️  Bot behavior may be unpredictable"
     echo ""
     echo "   Recommended: Set one of the following:"
-    echo "      export PAPER_MODE=true          # For testing"
-    echo "      export LIVE_CAPITAL_VERIFIED=true  # For live trading"
+    echo "      export DRY_RUN_MODE=true           # For full simulation (safest)"
+    echo "      export PAPER_MODE=true             # For paper trading"
+    echo "      export LIVE_CAPITAL_VERIFIED=true  # For live trading (use with caution)"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

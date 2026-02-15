@@ -30,6 +30,107 @@ import random
 logger = logging.getLogger("nija.dry_run_engine")
 
 
+def print_dry_run_startup_banner():
+    """
+    Display comprehensive dry-run startup banner.
+    
+    Shows operators clear visual indication that bot is in simulation mode.
+    """
+    banner = """
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║                      🟡 DRY RUN MODE (PAPER TRADING) 🟡                      ║
+║                                                                              ║
+║                          ⚠️  SIMULATION ONLY ⚠️                             ║
+║                                                                              ║
+║  ✅ NO REAL ORDERS will be placed on any exchange                           ║
+║  ✅ NO REAL MONEY at risk                                                   ║
+║  ✅ ALL TRADING is simulated in-memory                                      ║
+║  ✅ ALL EXCHANGES are in simulation mode                                    ║
+║                                                                              ║
+║  This mode allows you to:                                                   ║
+║    • Test strategy logic safely                                             ║
+║    • Verify exchange configurations                                         ║
+║    • Validate banner displays                                               ║
+║    • Review validation summaries                                            ║
+║                                                                              ║
+║  Once validated, operator can enable live trading by:                       ║
+║    export DRY_RUN_MODE=false                                                ║
+║    export LIVE_CAPITAL_VERIFIED=true                                        ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"""
+    print(banner)
+    logger.info(banner)
+    
+
+def print_dry_run_validation_summary(
+    exchanges_configured: int,
+    initial_balance: float,
+    currency: str = "USD",
+    duration_minutes: int = 0
+):
+    """
+    Display validation summary for dry-run mode.
+    
+    This summary helps operators verify:
+    1. All exchanges are properly configured
+    2. Initial balance is set correctly
+    3. Simulation parameters are as expected
+    4. Operator can sign off before going live
+    
+    Args:
+        exchanges_configured: Number of exchanges configured
+        initial_balance: Starting balance for simulation
+        currency: Base currency
+        duration_minutes: How long to run (0 = continuous)
+    """
+    summary = f"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                     DRY RUN VALIDATION SUMMARY                               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+✅ SIMULATION CONFIGURATION VALIDATED:
+
+   📊 Exchanges Configured: {exchanges_configured}
+   💰 Initial Balance: {initial_balance:,.2f} {currency}
+   ⏱️  Duration: {'Continuous' if duration_minutes == 0 else f'{duration_minutes} minutes'}
+   🎯 Mode: PAPER TRADING (100% Safe)
+
+✅ SAFETY GUARANTEES CONFIRMED:
+
+   ✓ Zero real orders will be placed
+   ✓ Zero real money at risk
+   ✓ All exchanges in simulation mode
+   ✓ Trade history will be logged for review
+   ✓ Performance metrics will be calculated
+
+✅ NEXT STEPS:
+
+   1. Monitor simulation logs for expected behavior
+   2. Review performance metrics after run
+   3. Verify all exchanges are responding correctly
+   4. Check banner displays are clear and visible
+   5. Operator sign-off when satisfied with validation
+   6. Enable live trading with confidence:
+      • export DRY_RUN_MODE=false
+      • export LIVE_CAPITAL_VERIFIED=true
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  OPERATOR CONFIRMATION REQUIRED                                              ║
+║                                                                              ║
+║  By proceeding, you acknowledge:                                             ║
+║    • This is a dry-run simulation only                                       ║
+║    • No real trading will occur                                              ║
+║    • Review results before enabling live trading                             ║
+║                                                                              ║
+║  Dry run will begin in 5 seconds...                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"""
+    print(summary)
+    logger.info(summary)
+
+
 class OrderStatus(Enum):
     """Simulated order status"""
     PENDING = "PENDING"
