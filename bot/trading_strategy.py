@@ -1677,7 +1677,8 @@ class TradingStrategy:
                         size_usd = current_price * quantity
                     
                     # 🔒 CAPITAL PROTECTION: Entry price must NEVER default to 0 - fail adoption if missing
-                    if entry_price == 0 or entry_price is None:
+                    # Note: pos.get('entry_price', 0.0) returns 0.0 if key is missing or value is None
+                    if entry_price == 0 or entry_price <= 0:
                         logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE")
                         logger.error(f"   ❌ Position adoption FAILED - entry price is MANDATORY")
                         continue  # Skip this position - do not adopt without entry price

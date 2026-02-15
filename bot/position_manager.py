@@ -200,8 +200,9 @@ class PositionManager:
                 pos['current_price'] = current_price
 
                 # 🔒 CAPITAL PROTECTION: Entry price must NEVER be 0 - fail validation if missing
+                # Note: pos.get('entry_price', 0) returns 0 if key is missing or conversion fails
                 entry_price = float(pos.get('entry_price', 0))
-                if entry_price == 0 or entry_price is None:
+                if entry_price == 0 or entry_price <= 0:
                     logger.error(f"  ✗ {symbol}: CAPITAL PROTECTION - NO ENTRY PRICE - removing position")
                     continue
                 
