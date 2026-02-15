@@ -853,8 +853,12 @@ In case of translation, the English version of these Terms controls.
 For questions about these Terms, please contact:
 
 **NIJA Support**  
-Email: support@nija.com  
-Legal Inquiries: legal@nija.com
+Email: support@nija-trading.com  
+Legal Inquiries: legal@nija-trading.com  
+Technical Support: technical@nija-trading.com  
+Billing Questions: billing@nija-trading.com
+
+For comprehensive support options and response times, see our [Customer Support](SUPPORT.md) page.
 
 **Mailing Address**:  
 [Company Legal Name]  

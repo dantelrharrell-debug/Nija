@@ -246,9 +246,12 @@ We are not liable for failures due to circumstances beyond our control.
 
 For questions about these Terms:
 
-**Email**: legal@nija.app
-**Website**: https://nija.app/terms
-**Support**: https://nija.app/support
+**General Support:** support@nija-trading.com  
+**Legal Inquiries:** legal@nija-trading.com  
+**Technical Support:** technical@nija-trading.com  
+**Billing Questions:** billing@nija-trading.com
+
+For comprehensive support options and response times, see our [Customer Support](../SUPPORT.md) page.
 
 ## 20. Acknowledgment
 

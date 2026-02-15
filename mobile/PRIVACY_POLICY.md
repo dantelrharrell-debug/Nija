@@ -159,9 +159,11 @@ Continued use of the Services after changes constitutes acceptance of the update
 
 If you have questions about this Privacy Policy or our data practices, please contact us:
 
-**Email**: privacy@nija.app
-**Website**: https://nija.app/privacy
-**Mail**: NIJA Privacy Team, [Address to be added]
+**Privacy Questions:** privacy@nija-trading.com  
+**General Support:** support@nija-trading.com  
+**Data Requests:** data@nija-trading.com
+
+For comprehensive support options, see our [Customer Support](../SUPPORT.md) page.
 
 ## Compliance
 
@@ -174,8 +176,8 @@ We comply with:
 
 ## Data Protection Officer
 
-For GDPR-related inquiries, contact our Data Protection Officer:
-**Email**: dpo@nija.app
+For GDPR-related inquiries, contact our Data Protection Officer:  
+**Email:** dpo@nija-trading.com
 
 ---
 

@@ -199,9 +199,11 @@ Your continued use after changes indicates acceptance of the updated policy.
 
 If you have questions about this Privacy Policy, please contact us:
 
-**Email:** privacy@nija.trading  
-**Support:** support@nija.trading  
-**Website:** https://nija.trading/privacy
+**Privacy Questions:** privacy@nija-trading.com  
+**General Support:** support@nija-trading.com  
+**Data Requests:** data@nija-trading.com
+
+For comprehensive support options, see our [Customer Support](SUPPORT.md) page.
 
 ## App Store Compliance Statement
 
