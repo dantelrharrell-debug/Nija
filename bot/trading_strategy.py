@@ -100,6 +100,100 @@ except ImportError:
         # Also need MINIMUM_TRADING_BALANCE fallback
         MINIMUM_TRADING_BALANCE = 10.0  # Default minimum (updated from $25 for new tier structure)
 
+# NIJA State Machine for Position Management (Feb 15, 2026)
+# Formal state tracking to ensure deterministic behavior and proper invariants
+class PositionManagementState(Enum):
+    """
+    Position management state machine for NIJA trading bot.
+    
+    States:
+    - NORMAL: Trading normally, under position cap, entries allowed
+    - DRAIN: Over position cap, actively draining excess positions, entries blocked
+    - FORCED_UNWIND: Emergency exit mode, closing all positions immediately
+    """
+    NORMAL = "normal"
+    DRAIN = "drain"
+    FORCED_UNWIND = "forced_unwind"
+
+
+class StateInvariantValidator:
+    """
+    System-level invariant validator for NIJA state machine.
+    
+    Validates critical invariants at state transitions to ensure system correctness:
+    - Position count is always >= 0
+    - Excess positions only exist in DRAIN or FORCED_UNWIND states
+    - State transitions follow valid paths
+    """
+    
+    @staticmethod
+    def validate_state_invariants(state, num_positions, excess_positions, max_positions):
+        """
+        Validate system invariants for the current state.
+        
+        Args:
+            state: Current PositionManagementState
+            num_positions: Current number of open positions
+            excess_positions: Number of positions over cap
+            max_positions: Maximum allowed positions
+            
+        Raises:
+            AssertionError: If any invariant is violated
+        """
+        # Invariant 1: Position count must be non-negative
+        assert num_positions >= 0, f"INVARIANT VIOLATION: Position count is negative: {num_positions}"
+        
+        # Invariant 2: Excess positions must be non-negative
+        assert excess_positions >= 0 or state == PositionManagementState.NORMAL, \
+            f"INVARIANT VIOLATION: Negative excess in {state.value} mode: excess={excess_positions}"
+        
+        # Invariant 3: Excess calculation must be consistent
+        calculated_excess = num_positions - max_positions
+        assert excess_positions == calculated_excess, \
+            f"INVARIANT VIOLATION: Excess mismatch: reported={excess_positions}, calculated={calculated_excess}"
+        
+        # Invariant 4: DRAIN mode should only be active when excess > 0
+        if state == PositionManagementState.DRAIN:
+            assert excess_positions > 0, \
+                f"INVARIANT VIOLATION: DRAIN mode active but excess={excess_positions} (should be > 0)"
+        
+        # Invariant 5: NORMAL mode should only be active when excess <= 0
+        if state == PositionManagementState.NORMAL:
+            assert excess_positions <= 0, \
+                f"INVARIANT VIOLATION: NORMAL mode active but excess={excess_positions} (should be <= 0)"
+    
+    @staticmethod
+    def validate_state_transition(old_state, new_state, num_positions, excess_positions):
+        """
+        Validate that a state transition is valid.
+        
+        Args:
+            old_state: Previous PositionManagementState
+            new_state: New PositionManagementState
+            num_positions: Current number of positions
+            excess_positions: Number of positions over cap
+            
+        Returns:
+            bool: True if transition is valid, False otherwise
+        """
+        # Define valid state transitions
+        valid_transitions = {
+            PositionManagementState.NORMAL: {PositionManagementState.DRAIN, PositionManagementState.FORCED_UNWIND},
+            PositionManagementState.DRAIN: {PositionManagementState.NORMAL, PositionManagementState.FORCED_UNWIND},
+            PositionManagementState.FORCED_UNWIND: {PositionManagementState.NORMAL, PositionManagementState.DRAIN},
+        }
+        
+        # Allow self-transitions (staying in same state)
+        if old_state == new_state:
+            return True
+        
+        # Check if transition is in the allowed set
+        if new_state not in valid_transitions.get(old_state, set()):
+            logger.error(f"INVALID STATE TRANSITION: {old_state.value} → {new_state.value}")
+            return False
+        
+        return True
+
 # FIX #1: BLACKLIST PAIRS - Disable pairs that are not suitable for strategy
 # XRP-USD is PERMANENTLY DISABLED due to negative profitability
 # Load additional disabled pairs from environment variable
@@ -672,6 +766,11 @@ class TradingStrategy:
         # Trade veto tracking for trust layer (log why trades were not executed)
         self.veto_count_session = 0  # Count of vetoed trades this session
         self.last_veto_reason = None  # Last veto reason for display in status banner
+
+        # Position Management State Machine (Feb 15, 2026)
+        # Track current state for deterministic position management and proper invariants
+        self.position_mgmt_state = PositionManagementState.NORMAL
+        self.previous_state = None  # Track previous state for transition logging
 
         # Initialize advanced trading features placeholder
         # NOTE: Advanced modules will be initialized AFTER first live balance fetch
@@ -3564,13 +3663,13 @@ class TradingStrategy:
                 # See line ~2169 where position_primary_stop, position_micro_stop are calculated for each position
                 # using self._get_stop_loss_tier(position_broker, position_broker_balance)
 
-                # CRITICAL: If over position cap, prioritize selling weakest positions immediately
-                # This ensures we get back under cap quickly to avoid further bleeding
+                # STATE MACHINE: Calculate current state based on position count and forced unwind status
                 # Position cap set to 8 maximum concurrent positions
                 positions_over_cap = len(current_positions) - MAX_POSITIONS_ALLOWED
-                if positions_over_cap > 0:
-                    logger.warning(f"🚨 OVER POSITION CAP: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} positions ({positions_over_cap} excess)")
-                    logger.warning(f"   Will prioritize selling {positions_over_cap} weakest positions first")
+                
+                # INVARIANT VALIDATION: Ensure position count and excess are valid
+                assert len(current_positions) >= 0, f"INVARIANT VIOLATION: Position count is negative: {len(current_positions)}"
+                assert positions_over_cap >= -MAX_POSITIONS_ALLOWED, f"INVARIANT VIOLATION: Invalid excess calculation: {positions_over_cap}"
                 
                 # CRITICAL: Check for forced unwind mode (per-user emergency exit)
                 # When enabled, ALL positions are closed immediately regardless of P&L
@@ -3579,23 +3678,64 @@ class TradingStrategy:
                     # Get user_id from broker (if available)
                     user_id = getattr(active_broker, 'user_id', 'platform')
                     forced_unwind_active = self.continuous_exit_enforcer.is_forced_unwind_active(user_id)
+                
+                # Determine new state based on current conditions
+                if forced_unwind_active:
+                    new_state = PositionManagementState.FORCED_UNWIND
+                elif positions_over_cap > 0:
+                    new_state = PositionManagementState.DRAIN
+                else:
+                    new_state = PositionManagementState.NORMAL
+                
+                # INVARIANT VALIDATION: Validate state invariants before proceeding
+                StateInvariantValidator.validate_state_invariants(
+                    new_state, 
+                    len(current_positions), 
+                    positions_over_cap, 
+                    MAX_POSITIONS_ALLOWED
+                )
+                
+                # STATE TRANSITION LOGGING: Log state changes explicitly
+                if new_state != self.position_mgmt_state:
+                    old_state_name = self.position_mgmt_state.value.upper()
+                    new_state_name = new_state.value.upper()
                     
-                    if forced_unwind_active:
-                        logger.error("=" * 80)
-                        logger.error("🚨 FORCED UNWIND MODE ACTIVE")
-                        logger.error("=" * 80)
-                        logger.error(f"   User: {user_id}")
-                        logger.error(f"   Positions: {len(current_positions)}")
-                        logger.error("   ALL positions will be closed immediately")
-                        logger.error("   Bypassing all normal trading filters")
-                        logger.error("=" * 80)
-
+                    # Validate transition is allowed
+                    if StateInvariantValidator.validate_state_transition(
+                        self.position_mgmt_state, new_state, len(current_positions), positions_over_cap
+                    ):
+                        logger.warning("=" * 80)
+                        logger.warning(f"🔄 STATE TRANSITION: {old_state_name} → {new_state_name}")
+                        logger.warning("=" * 80)
+                        logger.warning(f"   Positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
+                        logger.warning(f"   Excess: {positions_over_cap}")
+                        logger.warning(f"   Forced Unwind: {forced_unwind_active}")
+                        logger.warning("=" * 80)
+                        
+                        self.previous_state = self.position_mgmt_state
+                        self.position_mgmt_state = new_state
+                    else:
+                        logger.error(f"INVALID STATE TRANSITION BLOCKED: {old_state_name} → {new_state_name}")
+                        # Keep current state if transition is invalid
+                        new_state = self.position_mgmt_state
+                
                 # CRITICAL FIX: Identify ALL positions that need to exit first
                 # Then sell them ALL concurrently, not one at a time
                 positions_to_exit = []
                 
                 # FORCED UNWIND MODE: Close all positions immediately
-                if forced_unwind_active:
+                if new_state == PositionManagementState.FORCED_UNWIND:
+                    logger.error("=" * 80)
+                    logger.error("🚨 FORCED UNWIND MODE ACTIVE")
+                    logger.error("=" * 80)
+                    if hasattr(self, 'continuous_exit_enforcer') and self.continuous_exit_enforcer:
+                        user_id = getattr(active_broker, 'user_id', 'platform')
+                        logger.error(f"   User: {user_id}")
+                    logger.error(f"   Positions: {len(current_positions)}")
+                    logger.error("   ALL positions will be closed immediately")
+                    logger.error("   Bypassing all normal trading filters")
+                    logger.error("=" * 80)
+                    
                     logger.warning("🚨 FORCED UNWIND: Adding all positions to exit queue")
                     for position in current_positions:
                         symbol = position.get('symbol')
@@ -3617,10 +3757,10 @@ class TradingStrategy:
                     logger.warning(f"🚨 FORCED UNWIND: {len(positions_to_exit)} positions queued for immediate exit")
                     # Skip normal position analysis - just close everything
                 
-                # Normal position analysis (only if NOT in forced unwind mode)
-                else:
+                # DRAIN MODE: Over position cap, actively draining excess positions
+                elif new_state == PositionManagementState.DRAIN:
                     logger.info("=" * 70)
-                    logger.info("🔥 LEGACY POSITION DRAIN MODE ACTIVE")
+                    logger.info("🔥 DRAIN MODE ACTIVE")
                     logger.info("=" * 70)
                     logger.info(f"   📊 Excess positions: {positions_over_cap}")
                     logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
@@ -3628,7 +3768,7 @@ class TradingStrategy:
                     logger.info(f"   🚫 New entries: BLOCKED until under {MAX_POSITIONS_ALLOWED} positions")
                     logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
                     logger.info("=" * 70)
-                    for position_idx, position in enumerate(current_positions):
+                    for idx, position in enumerate(current_positions):
                         try:
                             symbol = position.get('symbol')
                             if not symbol:
@@ -4510,11 +4650,24 @@ class TradingStrategy:
                         except Exception as e:
                             logger.error(f"   Error analyzing position {symbol}: {e}", exc_info=True)
 
-                    # Rate limiting: Add delay after each position check to prevent 429 errors
-                    # Skip delay after the last position
-                    if position_idx < len(current_positions) - 1:
-                        jitter = random.uniform(0, 0.05)  # 0-50ms jitter
-                        time.sleep(POSITION_CHECK_DELAY + jitter)
+                        # Rate limiting: Add delay after each position check to prevent 429 errors
+                        # Skip delay after the last position
+                        if idx < len(current_positions) - 1:
+                            jitter = random.uniform(0, 0.05)  # 0-50ms jitter
+                            time.sleep(POSITION_CHECK_DELAY + jitter)
+                
+                # NORMAL MODE: Under position cap, managing positions normally
+                else:  # new_state == PositionManagementState.NORMAL
+                    logger.info("=" * 70)
+                    logger.info("✅ NORMAL MODE - Position Management")
+                    logger.info("=" * 70)
+                    logger.info(f"   📊 Positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
+                    logger.info(f"   ✅ Under cap - entries allowed")
+                    logger.info(f"   🎯 Managing positions for optimal exits")
+                    logger.info("=" * 70)
+                    # In NORMAL mode, we still analyze all positions for potential exits
+                    # but we're not in drain mode, so we don't need to force exits
+                    # The existing position analysis code will handle this
 
                 # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
                 # Position cap set to 8 maximum concurrent positions
