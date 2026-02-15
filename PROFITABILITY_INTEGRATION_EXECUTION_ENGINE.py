@@ -85,7 +85,8 @@ def _validate_profit_taking_configuration(self):
             exchange=broker_name
         )
         
-        logger.info("✅ ExecutionEngine meets profitability requirements under assumed conditions")
+        logger.info("✅ ExecutionEngine meets profitability requirements")
+        logger.info("   (under assumed conditions)")
         
     except ProfitabilityAssertionError as e:
         logger.error("❌ ExecutionEngine PROFITABILITY VALIDATION FAILED")
@@ -160,6 +161,7 @@ class ExecutionEngine:
                 exchange=broker_name
             )
             logger.info("✅ ExecutionEngine meets profitability requirements")
+            logger.info("   (under assumed conditions)")
         except ProfitabilityAssertionError as e:
             logger.error(f"❌ ExecutionEngine validation FAILED: {e}")
             raise

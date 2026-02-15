@@ -167,7 +167,7 @@ class ProfitabilityAssertion:
                 f"Failing targets: {[t['target'] for t in failing_targets]}"
             )
         
-        logger.info(f"   ✅ All profit targets meet mathematical profitability criteria after fees")
+        logger.info(f"   ✅ All profit targets meet criteria after fees")
         
         return {
             'exchange': fee_structure.exchange_name,
@@ -364,7 +364,8 @@ class ProfitabilityAssertion:
             )
         
         logger.info("=" * 70)
-        logger.info("✅ Strategy configuration meets mathematical profitability criteria under assumed win-rate conditions")
+        logger.info("✅ Strategy configuration meets profitability criteria")
+        logger.info("   (based on assumed win-rate conditions)")
         logger.info("=" * 70)
         
         return results

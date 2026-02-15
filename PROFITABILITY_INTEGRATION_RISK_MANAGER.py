@@ -83,7 +83,8 @@ def _validate_risk_reward_configuration(self, exchange='coinbase'):
             exchange=exchange
         )
         
-        logger.info("✅ RiskManager meets profitability requirements under assumed conditions")
+        logger.info("✅ RiskManager meets profitability requirements")
+        logger.info("   (under assumed conditions)")
         
     except ProfitabilityAssertionError as e:
         logger.error("❌ RiskManager PROFITABILITY VALIDATION FAILED")
@@ -167,6 +168,7 @@ class AdaptiveRiskManager:
             )
             
             logger.info("✅ RiskManager meets profitability requirements")
+            logger.info("   (under assumed conditions)")
             
         except ProfitabilityAssertionError as e:
             logger.error(f"❌ RiskManager validation FAILED: {e}")
