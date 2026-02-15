@@ -9,7 +9,7 @@ Logs health status every cycle:
 Starting Balance (24h): $61.20
 Current Balance: $63.38
 Net Change: +$2.18
-Status: PROFITABLE
+Status: POSITIVE
 
 If red (negative) → reduce trading aggression
 If green (positive) → maintain or increase aggression
@@ -32,7 +32,7 @@ class HealthSnapshot:
     starting_balance: float
     current_balance: float
     net_change: float
-    status: str  # "PROFITABLE", "LOSING", or "FLAT"
+    status: str  # "POSITIVE", "NEGATIVE", or "FLAT"
     period_hours: int
 
 
@@ -160,9 +160,9 @@ class NIJAHealthMetric:
         
         # Determine status
         if net_change > 0:
-            status = "PROFITABLE"
+            status = "POSITIVE"
         elif net_change < 0:
-            status = "LOSING"
+            status = "NEGATIVE"
         else:
             status = "FLAT"
         
@@ -202,7 +202,7 @@ class NIJAHealthMetric:
         GUARDRAIL 2: Circuit breaker activation
         If 24h loss >= 3% → PAUSE new entries (exits only)
         """
-        if snapshot.status == "LOSING":
+        if snapshot.status == "NEGATIVE":
             # Calculate how much we're losing
             loss_pct = abs(snapshot.net_change / snapshot.starting_balance * 100) if snapshot.starting_balance > 0 else 0
             
@@ -237,7 +237,7 @@ class NIJAHealthMetric:
                 self.current_aggression_level = self.MINOR_LOSS_AGGRESSION
                 logger.info(f"⚠️  Minor losses: Slight aggression reduction to {self.current_aggression_level*100:.0f}%")
         
-        elif snapshot.status == "PROFITABLE":
+        elif snapshot.status == "POSITIVE":
             # Making money → can be more aggressive
             profit_pct = (snapshot.net_change / snapshot.starting_balance * 100) if snapshot.starting_balance > 0 else 0
             
@@ -357,23 +357,23 @@ class NIJAHealthMetric:
             return {
                 'period_days': days,
                 'snapshots': 0,
-                'profitable_checks': 0,
-                'losing_checks': 0,
+                'positive_checks': 0,
+                'negative_checks': 0,
                 'avg_change': 0.0,
                 'total_change': 0.0,
                 'trend': 'UNKNOWN',
                 'health_score': 0
             }
         
-        profitable = sum(1 for s in recent_snapshots if s.status == "PROFITABLE")
-        losing = sum(1 for s in recent_snapshots if s.status == "LOSING")
+        positive = sum(1 for s in recent_snapshots if s.status == "POSITIVE")
+        negative = sum(1 for s in recent_snapshots if s.status == "NEGATIVE")
         total_change = sum(s.net_change for s in recent_snapshots)
         avg_change = total_change / len(recent_snapshots)
         
         # Determine trend
-        if profitable > losing and total_change > 0:
+        if positive > negative and total_change > 0:
             trend = "IMPROVING"
-        elif losing > profitable and total_change < 0:
+        elif negative > positive and total_change < 0:
             trend = "DECLINING"
         else:
             trend = "MIXED"
@@ -385,9 +385,9 @@ class NIJAHealthMetric:
         else:
             health_score += max(-30, total_change * 5)  # Up to -30 for losses
         
-        if profitable > losing:
+        if positive > negative:
             health_score += 20
-        elif losing > profitable:
+        elif negative > positive:
             health_score -= 20
         
         health_score = max(0, min(100, health_score))
@@ -395,8 +395,8 @@ class NIJAHealthMetric:
         return {
             'period_days': days,
             'snapshots': len(recent_snapshots),
-            'profitable_checks': profitable,
-            'losing_checks': losing,
+            'positive_checks': positive,
+            'negative_checks': negative,
             'avg_change': avg_change,
             'total_change': total_change,
             'trend': trend,
@@ -425,8 +425,8 @@ class NIJAHealthMetric:
         summary = self.get_health_summary(7)
         print(f"\n7-Day Summary:")
         print(f"  Health Checks: {summary['snapshots']}")
-        print(f"  Profitable: {summary['profitable_checks']}")
-        print(f"  Losing: {summary['losing_checks']}")
+        print(f"  Positive: {summary['positive_checks']}")
+        print(f"  Negative: {summary['negative_checks']}")
         print(f"  Total Change: ${summary['total_change']:.2f}")
         print(f"  Trend: {summary['trend']}")
         print(f"  Health Score: {summary['health_score']}/100")

@@ -154,7 +154,7 @@ class ProfitabilityAssertion:
             # Log each failing target
             for target in failing_targets:
                 logger.error(
-                    f"   ❌ UNPROFITABLE TARGET: {target['target']}% "
+                    f"   ❌ TARGET FAILS CRITERIA: {target['target']}% "
                     f"→ Net {target['net_profit']:+.2f}% after fees "
                     f"(Required: ≥{self.requirements.min_net_profit_after_fees}%)"
                 )
@@ -167,7 +167,7 @@ class ProfitabilityAssertion:
                 f"Failing targets: {[t['target'] for t in failing_targets]}"
             )
         
-        logger.info(f"   ✅ All profit targets are profitable after fees")
+        logger.info(f"   ✅ All profit targets meet criteria after fees")
         
         return {
             'exchange': fee_structure.exchange_name,
@@ -364,7 +364,8 @@ class ProfitabilityAssertion:
             )
         
         logger.info("=" * 70)
-        logger.info("✅ STRATEGY CONFIGURATION IS PROFITABLE")
+        logger.info("✅ Strategy configuration meets profitability criteria")
+        logger.info("   (based on assumed win-rate conditions)")
         logger.info("=" * 70)
         
         return results

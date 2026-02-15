@@ -16,12 +16,12 @@ Date: February 2026
 try:
     from profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
     PROFITABILITY_ASSERTION_AVAILABLE = True
-    logger.info("✅ Profitability assertion loaded in RiskManager")
+    logger.info("✅ Profitability validation loaded in RiskManager")
 except ImportError:
     try:
         from bot.profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
         PROFITABILITY_ASSERTION_AVAILABLE = True
-        logger.info("✅ Profitability assertion loaded in RiskManager")
+        logger.info("✅ Profitability validation loaded in RiskManager")
     except ImportError:
         PROFITABILITY_ASSERTION_AVAILABLE = False
         logger.warning("⚠️ Profitability assertion not available in RiskManager")
@@ -83,7 +83,8 @@ def _validate_risk_reward_configuration(self, exchange='coinbase'):
             exchange=exchange
         )
         
-        logger.info("✅ RiskManager R-multiple configuration is PROFITABLE")
+        logger.info("✅ RiskManager meets profitability requirements")
+        logger.info("   (under assumed conditions)")
         
     except ProfitabilityAssertionError as e:
         logger.error("❌ RiskManager PROFITABILITY VALIDATION FAILED")
@@ -166,7 +167,8 @@ class AdaptiveRiskManager:
                 exchange=exchange
             )
             
-            logger.info("✅ RiskManager R-multiples are PROFITABLE")
+            logger.info("✅ RiskManager meets profitability requirements")
+            logger.info("   (under assumed conditions)")
             
         except ProfitabilityAssertionError as e:
             logger.error(f"❌ RiskManager validation FAILED: {e}")
