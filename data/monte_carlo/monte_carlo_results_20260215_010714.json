@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-02-15T01:07:14.997726",
+  "parameters": {
+    "num_simulations": 1000,
+    "num_days": 252,
+    "initial_capital": 100000.0,
+    "mean_return_daily": 0.001,
+    "volatility_daily": 0.02
+  },
+  "results": {
+    "mean_final_capital": 131492.75050322933,
+    "median_final_capital": 128233.0207129598,
+    "std_final_capital": 28591.715424147293,
+    "percentile_5": 89351.05027692733,
+    "percentile_95": 179815.4638640131,
+    "max_drawdown_mean": 15.88537181104727,
+    "max_drawdown_worst": 43.289455463821746,
+    "probability_of_ruin": 0.0
+  }
+}

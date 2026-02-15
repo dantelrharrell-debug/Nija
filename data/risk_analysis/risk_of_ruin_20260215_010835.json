@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-02-15T01:08:35.158988",
+  "parameters": {
+    "win_rate": 0.6,
+    "avg_win": 1.5,
+    "avg_loss": 1.0,
+    "position_size_pct": 0.02,
+    "ruin_threshold_pct": 0.5
+  },
+  "analysis": {
+    "expectancy": 0.4999999999999999,
+    "payoff_ratio": 1.5,
+    "theoretical_ruin_probability": 3.96021280423662e-05,
+    "simulated_ruin_probability": 0.0,
+    "risk_rating": "LOW"
+  },
+  "kelly": {
+    "kelly_criterion_pct": 0.33333333333333326,
+    "kelly_half_pct": 0.16666666666666663,
+    "recommended_position_size_pct": 0.05
+  },
+  "regime_risks": {
+    "bull_market": 0.0,
+    "bear_market": 0.0,
+    "high_volatility": 0.0
+  },
+  "warnings": [
+    "\u26a0\ufe0f Max consecutive losses (19) exceeds threshold (10)"
+  ]
+}
