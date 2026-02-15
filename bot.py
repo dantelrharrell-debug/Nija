@@ -465,6 +465,30 @@ def _run_bot_startup_and_trading():
         logger.info(f"Log file: {LOG_FILE}")
         logger.info(f"Working directory: {os.getcwd()}")
         
+        # ═══════════════════════════════════════════════════════════════════════
+        # CRITICAL: Startup Validation (addresses subtle risks)
+        # ═══════════════════════════════════════════════════════════════════════
+        # Validates:
+        # 1. Git metadata (branch/commit must be known)
+        # 2. Exchange configuration (warns about disabled exchanges)
+        # 3. Trading mode (testing vs. live must be explicit)
+        try:
+            from bot.startup_validation import run_all_validations, display_validation_results
+            validation_result = run_all_validations(git_branch, git_commit)
+            display_validation_results(validation_result)
+            
+            # If critical failure, exit before any trading
+            if validation_result.critical_failure:
+                logger.error("=" * 70)
+                logger.error("❌ STARTUP VALIDATION FAILED - EXITING")
+                logger.error("=" * 70)
+                health_manager.mark_configuration_error(validation_result.failure_reason)
+                _log_exit_point("Startup validation failed", exit_code=1)
+                sys.exit(1)
+        except Exception as e:
+            logger.error(f"⚠️  Startup validation failed to run: {e}", exc_info=True)
+            logger.warning("   Continuing startup without validation (NOT RECOMMENDED)")
+        
         # Display financial disclaimers (App Store compliance)
         try:
             from bot.financial_disclaimers import display_startup_disclaimers, log_compliance_notice

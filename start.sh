@@ -163,6 +163,27 @@ fi
 echo "Branch: ${BRANCH_VAL:-unknown}"
 echo "Commit: ${COMMIT_VAL:-unknown}"
 
+# RISK CHECK: Warn if git metadata is unknown
+if [ "${BRANCH_VAL:-unknown}" = "unknown" ] || [ "${COMMIT_VAL:-unknown}" = "unknown" ]; then
+    echo ""
+    echo "⚠️  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  RISK: Running with UNKNOWN git metadata"
+    echo "⚠️  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  Cannot verify which code version is running!"
+    echo "⚠️  Branch: ${BRANCH_VAL:-unknown}"
+    echo "⚠️  Commit: ${COMMIT_VAL:-unknown}"
+    echo "⚠️  "
+    echo "⚠️  This is DANGEROUS in production - you cannot trace issues to code."
+    echo "⚠️  "
+    echo "⚠️  RECOMMENDED: Set GIT_BRANCH and GIT_COMMIT in your deployment:"
+    echo "⚠️    export GIT_BRANCH=\$(git rev-parse --abbrev-ref HEAD)"
+    echo "⚠️    export GIT_COMMIT=\$(git rev-parse --short HEAD)"
+    echo "⚠️  "
+    echo "⚠️  Or use inject_git_metadata.sh during build process."
+    echo "⚠️  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+fi
+
 # Ensure git info output is flushed
 sleep 0.05
 
@@ -255,6 +276,53 @@ echo "🔧 Trading Guards:"
 echo "   MIN_CASH_TO_BUY=${MIN_CASH_TO_BUY:-5.0}"
 echo "   MINIMUM_TRADING_BALANCE=${MINIMUM_TRADING_BALANCE:-25.0}"
 echo ""
+
+# ═══════════════════════════════════════════════════════════════════════
+# CRITICAL: Trading Mode Verification (Testing vs. Live)
+# ═══════════════════════════════════════════════════════════════════════
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🎯 TRADING MODE VERIFICATION"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Helper function to check if value is truthy (true, 1, yes)
+is_truthy() {
+    local val="${1:-false}"
+    [ "$val" = "true" ] || [ "$val" = "1" ] || [ "$val" = "yes" ]
+}
+
+# Check mode flags
+PAPER_MODE_VAL="${PAPER_MODE:-false}"
+LIVE_CAPITAL_VERIFIED_VAL="${LIVE_CAPITAL_VERIFIED:-false}"
+
+echo "   PAPER_MODE: ${PAPER_MODE_VAL}"
+echo "   LIVE_CAPITAL_VERIFIED: ${LIVE_CAPITAL_VERIFIED_VAL}"
+echo ""
+
+# Determine actual mode and warn accordingly
+if is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}"; then
+    echo "   🔴 MODE: LIVE TRADING"
+    echo "   ⚠️  REAL MONEY AT RISK"
+    echo "   ⚠️  This bot will execute real trades with real capital"
+    echo "   ⚠️  Ensure this is INTENTIONAL"
+    echo ""
+    echo "   To disable live trading:"
+    echo "      export LIVE_CAPITAL_VERIFIED=false"
+elif is_truthy "${PAPER_MODE_VAL}"; then
+    echo "   📝 MODE: PAPER TRADING"
+    echo "   ℹ️  Simulated trading only, no real money"
+else
+    echo "   ⚠️  MODE: UNCLEAR"
+    echo "   ⚠️  Neither PAPER_MODE nor LIVE_CAPITAL_VERIFIED explicitly set"
+    echo "   ⚠️  Bot behavior may be unpredictable"
+    echo ""
+    echo "   Recommended: Set one of the following:"
+    echo "      export PAPER_MODE=true          # For testing"
+    echo "      export LIVE_CAPITAL_VERIFIED=true  # For live trading"
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
 
 # Coinbase credentials are now OPTIONAL (Coinbase disabled Jan 30, 2026)
 # The bot will run with Kraken only
