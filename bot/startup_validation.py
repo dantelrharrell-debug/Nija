@@ -66,6 +66,19 @@ class StartupValidationResult:
         }
 
 
+def _is_git_metadata_unknown(value: str) -> bool:
+    """
+    Helper function to check if git metadata value is unknown.
+    
+    Args:
+        value: Git metadata value (branch or commit)
+        
+    Returns:
+        True if value is unknown or missing, False otherwise
+    """
+    return not value or value == "unknown"
+
+
 def validate_git_metadata(git_branch: str, git_commit: str) -> StartupValidationResult:
     """
     Validate that git branch and commit are known.
@@ -83,7 +96,7 @@ def validate_git_metadata(git_branch: str, git_commit: str) -> StartupValidation
     result = StartupValidationResult()
     
     # Check if branch is unknown
-    if not git_branch or git_branch == "unknown":
+    if _is_git_metadata_unknown(git_branch):
         result.add_risk(
             StartupRisk.GIT_METADATA_UNKNOWN,
             "Git branch is UNKNOWN - cannot verify code version"
@@ -96,7 +109,7 @@ def validate_git_metadata(git_branch: str, git_commit: str) -> StartupValidation
         result.add_info(f"Git branch verified: {git_branch}")
     
     # Check if commit is unknown
-    if not git_commit or git_commit == "unknown":
+    if _is_git_metadata_unknown(git_commit):
         result.add_risk(
             StartupRisk.GIT_METADATA_UNKNOWN,
             "Git commit is UNKNOWN - cannot verify code version"
@@ -109,7 +122,7 @@ def validate_git_metadata(git_branch: str, git_commit: str) -> StartupValidation
         result.add_info(f"Git commit verified: {git_commit}")
     
     # If both are unknown, this is a critical configuration issue
-    if (not git_branch or git_branch == "unknown") and (not git_commit or git_commit == "unknown"):
+    if _is_git_metadata_unknown(git_branch) and _is_git_metadata_unknown(git_commit):
         result.add_warning(
             "CRITICAL: Both branch and commit are unknown. "
             "This bot instance cannot be traced to any specific code version."
@@ -200,11 +213,11 @@ def validate_trading_mode() -> StartupValidationResult:
     """
     result = StartupValidationResult()
     
-    # Check PAPER_MODE flag
-    paper_mode_str = os.getenv("PAPER_MODE", "").lower()
+    # Check PAPER_MODE flag (default to false for consistency)
+    paper_mode_str = os.getenv("PAPER_MODE", "false").lower()
     paper_mode = paper_mode_str in ("true", "1", "yes")
     
-    # Check LIVE_CAPITAL_VERIFIED flag
+    # Check LIVE_CAPITAL_VERIFIED flag (default to false for consistency)
     live_verified_str = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower()
     live_verified = live_verified_str in ("true", "1", "yes")
     

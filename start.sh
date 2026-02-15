@@ -284,6 +284,12 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🎯 TRADING MODE VERIFICATION"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+# Helper function to check if value is truthy (true, 1, yes)
+is_truthy() {
+    local val="${1:-false}"
+    [ "$val" = "true" ] || [ "$val" = "1" ] || [ "$val" = "yes" ]
+}
+
 # Check mode flags
 PAPER_MODE_VAL="${PAPER_MODE:-false}"
 LIVE_CAPITAL_VERIFIED_VAL="${LIVE_CAPITAL_VERIFIED:-false}"
@@ -293,7 +299,7 @@ echo "   LIVE_CAPITAL_VERIFIED: ${LIVE_CAPITAL_VERIFIED_VAL}"
 echo ""
 
 # Determine actual mode and warn accordingly
-if [ "${LIVE_CAPITAL_VERIFIED_VAL}" = "true" ] || [ "${LIVE_CAPITAL_VERIFIED_VAL}" = "1" ] || [ "${LIVE_CAPITAL_VERIFIED_VAL}" = "yes" ]; then
+if is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}"; then
     echo "   🔴 MODE: LIVE TRADING"
     echo "   ⚠️  REAL MONEY AT RISK"
     echo "   ⚠️  This bot will execute real trades with real capital"
@@ -301,7 +307,7 @@ if [ "${LIVE_CAPITAL_VERIFIED_VAL}" = "true" ] || [ "${LIVE_CAPITAL_VERIFIED_VAL
     echo ""
     echo "   To disable live trading:"
     echo "      export LIVE_CAPITAL_VERIFIED=false"
-elif [ "${PAPER_MODE_VAL}" = "true" ] || [ "${PAPER_MODE_VAL}" = "1" ] || [ "${PAPER_MODE_VAL}" = "yes" ]; then
+elif is_truthy "${PAPER_MODE_VAL}"; then
     echo "   📝 MODE: PAPER TRADING"
     echo "   ℹ️  Simulated trading only, no real money"
 else
