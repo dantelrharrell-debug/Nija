@@ -13,6 +13,11 @@ Date: February 7, 2026
 import logging
 from typing import Dict, List, Tuple, Optional
 
+try:
+    from institutional_disclaimers import print_validation_banner
+except ImportError:
+    from bot.institutional_disclaimers import print_validation_banner
+
 logger = logging.getLogger("nija")
 
 
@@ -22,6 +27,9 @@ def display_feature_flag_banner():
     
     This provides immediate visibility into the bot's configuration.
     """
+    # Display institutional disclaimer first
+    print_validation_banner()
+    
     logger.info("=" * 70)
     logger.info("🏁 FEATURE FLAGS STATUS")
     logger.info("=" * 70)
