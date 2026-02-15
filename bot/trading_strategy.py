@@ -9,6 +9,7 @@ from threading import Thread
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 from dotenv import load_dotenv
+from enum import Enum
 import pandas as pd
 
 # Import market filters at module level to avoid repeated imports in loops
