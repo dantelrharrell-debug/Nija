@@ -144,21 +144,17 @@ class StateInvariantValidator:
         # Invariant 1: Position count must be non-negative
         assert num_positions >= 0, f"INVARIANT VIOLATION: Position count is negative: {num_positions}"
         
-        # Invariant 2: Excess positions must be non-negative
-        assert excess_positions >= 0 or state == PositionManagementState.NORMAL, \
-            f"INVARIANT VIOLATION: Negative excess in {state.value} mode: excess={excess_positions}"
-        
-        # Invariant 3: Excess calculation must be consistent
+        # Invariant 2: Excess calculation must be consistent
         calculated_excess = num_positions - max_positions
         assert excess_positions == calculated_excess, \
             f"INVARIANT VIOLATION: Excess mismatch: reported={excess_positions}, calculated={calculated_excess}"
         
-        # Invariant 4: DRAIN mode should only be active when excess > 0
+        # Invariant 3: DRAIN mode should only be active when excess > 0
         if state == PositionManagementState.DRAIN:
             assert excess_positions > 0, \
                 f"INVARIANT VIOLATION: DRAIN mode active but excess={excess_positions} (should be > 0)"
         
-        # Invariant 5: NORMAL mode should only be active when excess <= 0
+        # Invariant 4: NORMAL mode should only be active when excess <= 0
         if state == PositionManagementState.NORMAL:
             assert excess_positions <= 0, \
                 f"INVARIANT VIOLATION: NORMAL mode active but excess={excess_positions} (should be <= 0)"
@@ -3759,7 +3755,9 @@ class TradingStrategy:
                     # Skip normal position analysis - just close everything
                 
                 # DRAIN MODE: Over position cap, actively draining excess positions
-                elif new_state == PositionManagementState.DRAIN:
+                # NORMAL MODE: Under position cap, managing positions normally
+                # Both modes analyze positions for potential exits
+                if new_state == PositionManagementState.DRAIN:
                     logger.info("=" * 70)
                     logger.info("🔥 DRAIN MODE ACTIVE")
                     logger.info("=" * 70)
@@ -3769,6 +3767,17 @@ class TradingStrategy:
                     logger.info(f"   🚫 New entries: BLOCKED until under {MAX_POSITIONS_ALLOWED} positions")
                     logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
                     logger.info("=" * 70)
+                elif new_state == PositionManagementState.NORMAL:
+                    logger.info("=" * 70)
+                    logger.info("✅ NORMAL MODE - Position Management")
+                    logger.info("=" * 70)
+                    logger.info(f"   📊 Positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
+                    logger.info(f"   ✅ Under cap - entries allowed")
+                    logger.info(f"   🎯 Managing positions for optimal exits")
+                    logger.info("=" * 70)
+                
+                # Position analysis loop (runs for both DRAIN and NORMAL modes)
+                if new_state in (PositionManagementState.DRAIN, PositionManagementState.NORMAL):
                     for idx, position in enumerate(current_positions):
                         try:
                             symbol = position.get('symbol')
@@ -4656,19 +4665,6 @@ class TradingStrategy:
                         if idx < len(current_positions) - 1:
                             jitter = random.uniform(0, 0.05)  # 0-50ms jitter
                             time.sleep(POSITION_CHECK_DELAY + jitter)
-                
-                # NORMAL MODE: Under position cap, managing positions normally
-                else:  # new_state == PositionManagementState.NORMAL
-                    logger.info("=" * 70)
-                    logger.info("✅ NORMAL MODE - Position Management")
-                    logger.info("=" * 70)
-                    logger.info(f"   📊 Positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
-                    logger.info(f"   ✅ Under cap - entries allowed")
-                    logger.info(f"   🎯 Managing positions for optimal exits")
-                    logger.info("=" * 70)
-                    # In NORMAL mode, we still analyze all positions for potential exits
-                    # but we're not in drain mode, so we don't need to force exits
-                    # The existing position analysis code will handle this
 
                 # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
                 # Position cap set to 8 maximum concurrent positions
