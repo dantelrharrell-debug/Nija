@@ -606,6 +606,182 @@ class RiskOfRuinEngine:
         logger.info(f"📄 Results exported to: {filepath}")
         
         return str(filepath)
+    
+    def simulate_specific_drawdown(
+        self,
+        drawdown_pct: float,
+        recovery_target_pct: float = 50.0,
+        num_simulations: int = 1000
+    ) -> Dict[str, float]:
+        """
+        Simulate recovery from a specific drawdown percentage
+        
+        This is used by the Capital Throttle to stress test strategy
+        before allowing scaling past capital thresholds.
+        
+        Args:
+            drawdown_pct: Drawdown percentage to simulate (e.g., 25.0 for 25%)
+            recovery_target_pct: Percentage of drawdown to recover (default 50%)
+            num_simulations: Number of simulations to run
+        
+        Returns:
+            Dictionary with simulation results
+        """
+        logger.info(f"🔥 Simulating {drawdown_pct:.1f}% drawdown recovery...")
+        
+        # Starting capital is at drawdown
+        starting_capital = self.params.initial_capital
+        drawdown_capital = starting_capital * (1 - drawdown_pct / 100)
+        recovery_target = starting_capital * (1 - drawdown_pct / 100 * (1 - recovery_target_pct / 100))
+        
+        logger.info(f"   Peak Capital: ${starting_capital:,.2f}")
+        logger.info(f"   Drawdown Capital: ${drawdown_capital:,.2f}")
+        logger.info(f"   Recovery Target: ${recovery_target:,.2f} ({recovery_target_pct:.0f}% recovery)")
+        
+        recovery_successes = 0
+        trades_to_recover = []
+        final_capitals = []
+        
+        for sim in range(num_simulations):
+            capital = drawdown_capital
+            trades = 0
+            
+            # Limit to 1000 trades per simulation
+            for trade_num in range(1000):
+                trades += 1
+                
+                # Calculate risk amount
+                risk_amount = capital * self.params.position_size_pct
+                
+                # Determine win/loss
+                is_win = np.random.random() < self.params.win_rate
+                
+                if is_win:
+                    capital += risk_amount * self.params.avg_win
+                else:
+                    capital -= risk_amount * self.params.avg_loss
+                
+                # Check if recovered to target
+                if capital >= recovery_target:
+                    recovery_successes += 1
+                    trades_to_recover.append(trades)
+                    break
+                
+                # Check if ruined
+                if capital <= drawdown_capital * 0.5:  # Lost 50% from drawdown point
+                    break
+            
+            final_capitals.append(capital)
+        
+        # Calculate statistics
+        recovery_probability = recovery_successes / num_simulations
+        avg_trades_to_recover = np.mean(trades_to_recover) if trades_to_recover else float('inf')
+        median_final_capital = np.median(final_capitals)
+        
+        logger.info(f"   Recovery Probability: {recovery_probability:.2%}")
+        logger.info(f"   Avg Trades to Recover: {avg_trades_to_recover:.0f}")
+        logger.info(f"   Median Final Capital: ${median_final_capital:,.2f}")
+        
+        return {
+            'drawdown_pct': drawdown_pct,
+            'recovery_target_pct': recovery_target_pct,
+            'recovery_probability': recovery_probability,
+            'avg_trades_to_recover': avg_trades_to_recover,
+            'median_final_capital': median_final_capital,
+            'num_simulations': num_simulations,
+            'recovery_successes': recovery_successes
+        }
+    
+    def assess_capital_threshold_risk(
+        self,
+        current_capital: float,
+        threshold_capital: float
+    ) -> Dict[str, float]:
+        """
+        Assess risk of reaching a capital threshold
+        
+        Used to determine if strategy is ready to scale to next capital level.
+        
+        Args:
+            current_capital: Current capital amount
+            threshold_capital: Target threshold to reach
+        
+        Returns:
+            Dictionary with risk assessment
+        """
+        logger.info(f"📊 Assessing risk to reach ${threshold_capital:,.2f}...")
+        
+        # Calculate required growth
+        required_growth_pct = ((threshold_capital - current_capital) / current_capital) * 100
+        
+        logger.info(f"   Current: ${current_capital:,.2f}")
+        logger.info(f"   Target: ${threshold_capital:,.2f}")
+        logger.info(f"   Required Growth: {required_growth_pct:.1f}%")
+        
+        # Simulate growth attempts
+        num_simulations = 1000
+        successes = 0
+        max_drawdowns = []
+        trades_to_target = []
+        
+        for sim in range(num_simulations):
+            capital = current_capital
+            peak = capital
+            max_dd = 0.0
+            trades = 0
+            
+            # Limit to 2000 trades
+            for trade_num in range(2000):
+                trades += 1
+                
+                # Calculate risk amount
+                risk_amount = capital * self.params.position_size_pct
+                
+                # Determine win/loss
+                is_win = np.random.random() < self.params.win_rate
+                
+                if is_win:
+                    capital += risk_amount * self.params.avg_win
+                else:
+                    capital -= risk_amount * self.params.avg_loss
+                
+                # Track drawdown
+                if capital > peak:
+                    peak = capital
+                
+                dd = (peak - capital) / peak * 100
+                max_dd = max(max_dd, dd)
+                
+                # Check if reached threshold
+                if capital >= threshold_capital:
+                    successes += 1
+                    trades_to_target.append(trades)
+                    max_drawdowns.append(max_dd)
+                    break
+                
+                # Check if ruined
+                if capital <= current_capital * 0.5:  # Lost 50%
+                    max_drawdowns.append(max_dd)
+                    break
+        
+        # Calculate statistics
+        success_probability = successes / num_simulations
+        avg_trades = np.mean(trades_to_target) if trades_to_target else float('inf')
+        avg_max_dd = np.mean(max_drawdowns) if max_drawdowns else 0.0
+        
+        logger.info(f"   Success Probability: {success_probability:.2%}")
+        logger.info(f"   Avg Trades to Target: {avg_trades:.0f}")
+        logger.info(f"   Avg Max Drawdown: {avg_max_dd:.1f}%")
+        
+        return {
+            'current_capital': current_capital,
+            'threshold_capital': threshold_capital,
+            'required_growth_pct': required_growth_pct,
+            'success_probability': success_probability,
+            'avg_trades_to_target': avg_trades,
+            'avg_max_drawdown_en_route': avg_max_dd,
+            'num_simulations': num_simulations
+        }
 
 
 def analyze_risk_of_ruin(
