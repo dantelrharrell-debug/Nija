@@ -685,15 +685,15 @@ class TradeDistributionStabilityEngine:
         export_data = {
             'timestamp': result.timestamp,
             'stability': {
-                'is_stable': result.is_stable,
-                'stability_score': result.stability_score,
-                'confidence_level': result.confidence_level
+                'is_stable': bool(result.is_stable),
+                'stability_score': float(result.stability_score),
+                'confidence_level': float(result.confidence_level)
             },
             'tests': {
-                'ks_test': result.ks_test.is_stable,
-                'chi_square_test': result.chi_square_test.is_stable,
-                't_test': result.t_test.is_stable,
-                'variance_test': result.variance_test.is_stable
+                'ks_test': bool(result.ks_test.is_stable),
+                'chi_square_test': bool(result.chi_square_test.is_stable),
+                't_test': bool(result.t_test.is_stable),
+                'variance_test': bool(result.variance_test.is_stable)
             },
             'performance_changes': {
                 'mean_return_change_pct': result.mean_return_change_pct,

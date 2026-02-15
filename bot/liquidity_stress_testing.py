@@ -485,7 +485,7 @@ class LiquidityStressTestEngine:
         avg_degradation = np.mean(degradations) if degradations else 0.0
         
         # Score: 1.0 = no degradation, 0.0 = complete failure
-        resilience_score = max(0.0, 1.0 - (avg_degradation / 50.0))  # Normalize to 50% max degradation
+        resilience_score = max(0.0, min(1.0, 1.0 - (avg_degradation / 50.0)))  # Normalize to 50% max degradation, cap at 1.0
         
         # Build report
         report = LiquidityStressTestReport(
