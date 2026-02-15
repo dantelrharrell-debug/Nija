@@ -16,7 +16,7 @@ Date: February 2026
 try:
     from bot.profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
     PROFITABILITY_ASSERTION_AVAILABLE = True
-    logger.info("✅ Profitability assertion loaded in ExecutionEngine")
+    logger.info("✅ Profitability validation loaded in ExecutionEngine")
 except ImportError:
     PROFITABILITY_ASSERTION_AVAILABLE = False
     logger.warning("⚠️ Profitability assertion not available in ExecutionEngine")
@@ -85,7 +85,7 @@ def _validate_profit_taking_configuration(self):
             exchange=broker_name
         )
         
-        logger.info("✅ ExecutionEngine profit-taking configuration is PROFITABLE")
+        logger.info("✅ ExecutionEngine meets profitability requirements under assumed conditions")
         
     except ProfitabilityAssertionError as e:
         logger.error("❌ ExecutionEngine PROFITABILITY VALIDATION FAILED")
@@ -159,7 +159,7 @@ class ExecutionEngine:
                 primary_target_pct=primary_target_pct,
                 exchange=broker_name
             )
-            logger.info("✅ ExecutionEngine profit-taking is PROFITABLE")
+            logger.info("✅ ExecutionEngine meets profitability requirements")
         except ProfitabilityAssertionError as e:
             logger.error(f"❌ ExecutionEngine validation FAILED: {e}")
             raise

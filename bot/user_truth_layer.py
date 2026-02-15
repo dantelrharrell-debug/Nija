@@ -196,7 +196,7 @@ class UserTruthLayer:
             'losing_days': losing_days,
             'average_daily': avg_daily,
             'truth': truth,
-            'status': 'PROFITABLE' if total_pnl > 0 else 'LOSING'
+            'status': 'POSITIVE' if total_pnl > 0 else 'NEGATIVE'
         }
     
     def get_current_balance_change(self, 
@@ -219,10 +219,10 @@ class UserTruthLayer:
         
         if net_change > 0:
             truth = f"Balance grew by ${net_change:.2f} (+{change_pct:.2f}%)"
-            status = "PROFITABLE"
+            status = "POSITIVE"
         elif net_change < 0:
             truth = f"Balance shrank by ${abs(net_change):.2f} ({change_pct:.2f}%)"
-            status = "LOSING"
+            status = "NEGATIVE"
         else:
             truth = "Balance unchanged (no real growth)"
             status = "FLAT"

@@ -1181,10 +1181,10 @@ class ExecutionEngine:
         - Exit 50% at 3.0% gross profit → ~2.64% NET profit after fees (OPTIMIZED from 2.5%)
 
         COINBASE EXAMPLE (1.4% fees):
-        - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (PROFITABLE)
-        - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees (PROFITABLE)
-        - Exit 25% at 3.0% gross profit → ~1.6% NET profit after fees (PROFITABLE)
-        - Exit 50% at 4.0% gross profit → ~2.6% NET profit after fees (PROFITABLE)
+        - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (meets criteria)
+        - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees (meets criteria)
+        - Exit 25% at 3.0% gross profit → ~1.6% NET profit after fees (meets criteria)
+        - Exit 50% at 4.0% gross profit → ~2.6% NET profit after fees (meets criteria)
 
         This ensures faster profit-taking on low-fee brokers (Kraken, Binance, OKX)
         while maintaining profitability on high-fee brokers (Coinbase).
@@ -1280,8 +1280,8 @@ class ExecutionEngine:
         # For low-fee brokers (Kraken 0.36%, Binance 0.28%, OKX 0.30%)
         # PROFITABILITY FIX (Feb 3, 2026): Widened targets for proper risk/reward
         # CRITICAL: With 1.5% stop-loss, need 3.0%+ average targets for 2:1 risk/reward
-        # Previous: 1.2%/1.7%/2.2%/3.0% = 2.0% avg (only 1.35:1 risk/reward - UNPROFITABLE)
-        # New: 2.0%/2.5%/3.0%/4.0% = 2.9% avg (1.93:1 risk/reward - PROFITABLE at 52%+ win rate)
+        # Previous: 1.2%/1.7%/2.2%/3.0% = 2.0% avg (only 1.35:1 risk/reward - below criteria)
+        # New: 2.0%/2.5%/3.0%/4.0% = 2.9% avg (1.93:1 risk/reward - meets criteria at 52%+ win rate)
         if broker_round_trip_fee <= 0.005:  # <= 0.5% fees (Kraken, Binance, OKX)
             exit_levels = [
                 (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~1.64% NET (wider than 1.2%)
@@ -1320,7 +1320,7 @@ class ExecutionEngine:
                 logger.info(f"   Exit level: {exit_flag} | Exit size: {exit_pct*100:.0f}% of position")
                 logger.info(f"   Current price: ${current_price:.2f} | Entry: ${entry_price:.2f}")
                 logger.info(f"   Broker fees: {broker_round_trip_fee*100:.1f}%")
-                logger.info(f"   NET profit: ~{expected_net_pct*100:.1f}% (PROFITABLE)")
+                logger.info(f"   NET profit: ~{expected_net_pct*100:.1f}% (meets profit criteria)")
                 logger.info(f"   Exiting: {exit_pct*100:.0f}% of position (${exit_size:.2f})")
                 logger.info(f"   Remaining: {(position['remaining_size'] * (1.0 - exit_pct))*100:.0f}% for trailing stop")
 
