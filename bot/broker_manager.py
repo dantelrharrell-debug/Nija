@@ -243,6 +243,11 @@ COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', STANDARD_
 # This prevents trading when API is persistently failing
 BROKER_MAX_CONSECUTIVE_ERRORS = 3
 
+# 🔒 CAPITAL PROTECTION: Balance fetch retry configuration (Feb 2026)
+# Balance fetch must retry exactly 3 times before pausing trading cycle
+# This ensures we never trade with stale or missing balance data
+BALANCE_FETCH_MAX_RETRIES = 3  # Exactly 3 retries as per capital protection requirements
+
 # Kraken startup delay (Jan 17, 2026) - Critical fix for nonce collisions
 # This delay is applied before the first Kraken API call to ensure:
 # - Nonce file exists and is initialized properly
@@ -937,13 +942,15 @@ class CoinbaseBroker(BaseBroker):
             logger.warning("⚠️ RateLimiter not available - using manual delays only")
 
         # Initialize position tracker for profit-based exits
+        # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
             from position_tracker import PositionTracker
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
-            logger.warning(f"⚠️ Position tracker initialization failed: {e}")
-            self.position_tracker = None
+            logger.error(f"❌ CAPITAL PROTECTION: Position tracker initialization FAILED: {e}")
+            logger.error("❌ Position tracker is MANDATORY for capital protection - cannot proceed")
+            raise RuntimeError(f"MANDATORY position_tracker initialization failed: {e}")
 
         # Balance tracking for fail-closed behavior (Jan 19, 2026)
         # When balance fetch fails, preserve last known balance instead of returning 0
@@ -1649,10 +1656,14 @@ class CoinbaseBroker(BaseBroker):
             if verbose:
                 logging.info("💰 Fetching account balance via portfolio breakdown (preferred)...")
 
+            # 🔒 CAPITAL PROTECTION: Use exactly 3 retries for balance fetch operations
             # Use retry logic for portfolio API calls to handle rate limiting
             portfolios_resp = None
             if hasattr(self.client, 'get_portfolios'):
-                portfolios_resp = self._api_call_with_retry(self.client.get_portfolios)
+                portfolios_resp = self._api_call_with_retry(
+                    self.client.get_portfolios,
+                    max_retries=BALANCE_FETCH_MAX_RETRIES
+                )
 
             portfolios = getattr(portfolios_resp, 'portfolios', [])
             if isinstance(portfolios_resp, dict):
@@ -1674,10 +1685,12 @@ class CoinbaseBroker(BaseBroker):
                     portfolio_uuid = default_portfolio.get('uuid', portfolio_uuid)
 
             if default_portfolio and portfolio_uuid:
+                # 🔒 CAPITAL PROTECTION: Use exactly 3 retries for balance fetch operations
                 # Use retry logic for portfolio breakdown API call
                 breakdown_resp = self._api_call_with_retry(
                     self.client.get_portfolio_breakdown,
-                    portfolio_uuid=portfolio_uuid
+                    portfolio_uuid=portfolio_uuid,
+                    max_retries=BALANCE_FETCH_MAX_RETRIES
                 )
                 breakdown = getattr(breakdown_resp, 'breakdown', None)
                 if isinstance(breakdown_resp, dict):
@@ -1824,8 +1837,12 @@ class CoinbaseBroker(BaseBroker):
                 logging.debug("Using cached accounts data")
                 resp = self._accounts_cache
             else:
+                # 🔒 CAPITAL PROTECTION: Use exactly 3 retries for balance fetch operations
                 # Use retry logic for get_accounts API call to handle rate limiting
-                resp = self._api_call_with_retry(self.client.get_accounts)
+                resp = self._api_call_with_retry(
+                    self.client.get_accounts,
+                    max_retries=BALANCE_FETCH_MAX_RETRIES
+                )
                 self._accounts_cache = resp
                 self._accounts_cache_time = time.time()
 
@@ -2032,11 +2049,14 @@ class CoinbaseBroker(BaseBroker):
             balance_data = self._get_account_balance_detailed(verbose=verbose)
 
             if balance_data is None:
+                # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
                 # API call failed - use last known balance if available
                 self._balance_fetch_errors += 1
                 if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
-                    logger.error(f"❌ Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                    self.exit_only_mode = True  # Pause new entries, only allow exits
+                    logger.error(f"❌ CAPITAL PROTECTION: Coinbase balance fetch failed after {self._balance_fetch_errors} retries")
+                    logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
 
                 if self._last_known_balance is not None:
                     logger.warning(f"⚠️ Coinbase balance fetch failed, using last known balance: ${self._last_known_balance:.2f}")
@@ -2067,6 +2087,10 @@ class CoinbaseBroker(BaseBroker):
             self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
             self._balance_fetch_errors = 0
             self._is_available = True
+            # 🔒 CAPITAL PROTECTION: Resume trading if it was paused due to balance errors
+            if self.exit_only_mode:
+                logger.info("✅ Balance fetch successful - resuming normal trading (EXIT-ONLY mode cleared)")
+                self.exit_only_mode = False
 
             return result
 
@@ -2075,7 +2099,9 @@ class CoinbaseBroker(BaseBroker):
             self._balance_fetch_errors += 1
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
-                logger.error(f"❌ Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                self.exit_only_mode = True  # Pause new entries after consecutive errors
+                logger.error(f"❌ CAPITAL PROTECTION: Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
 
             # Return last known balance instead of 0
             if self._last_known_balance is not None:
@@ -6259,11 +6285,14 @@ class KrakenBroker(BaseBroker):
         try:
             if not self.api:
                 # FIX #2: Not connected - log warning and use last known balance
+                # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
                 self._balance_fetch_errors += 1
                 if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
+                    self.exit_only_mode = True  # Pause new entries
                     self.kraken_health = "ERROR"
-                    logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                    logger.error(f"❌ CAPITAL PROTECTION: Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                    logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
 
                 if self._last_known_balance is not None:
                     logger.warning(f"⚠️ Kraken API not connected ({self.account_identifier}), using last known balance: ${self._last_known_balance:.2f}")
@@ -6289,11 +6318,14 @@ class KrakenBroker(BaseBroker):
                 logger.warning(f"⚠️ Kraken API error fetching balance ({self.account_identifier}): {error_msgs}")
 
                 # DO NOT zero balance on one failure
+                # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
                 self._balance_fetch_errors += 1
                 if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                     self._is_available = False
+                    self.exit_only_mode = True  # Pause new entries, only allow exits
                     self.kraken_health = "ERROR"
-                    logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                    logger.error(f"❌ CAPITAL PROTECTION: Kraken balance fetch failed after {self._balance_fetch_errors} retries ({self.account_identifier})")
+                    logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
 
                 if self._last_known_balance is not None:
                     logger.warning(f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}")
@@ -6361,6 +6393,10 @@ class KrakenBroker(BaseBroker):
                 self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
                 self._balance_fetch_errors = 0
                 self._is_available = True
+                # 🔒 CAPITAL PROTECTION: Resume trading if it was paused due to balance errors
+                if self.exit_only_mode:
+                    logger.info(f"✅ Balance fetch successful - resuming normal trading (EXIT-ONLY mode cleared) ({self.account_identifier})")
+                    self.exit_only_mode = False
 
                 # FIX #2: Force Kraken balance cache after success
                 self.balance_cache["kraken"] = total_funds
@@ -6387,12 +6423,15 @@ class KrakenBroker(BaseBroker):
 
         except Exception as e:
             # FIX #2: Log warning and use last known balance on exception
+            # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
             logger.warning(f"⚠️ Exception fetching Kraken balance ({self.account_identifier}): {e}")
             self._balance_fetch_errors += 1
             if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
                 self._is_available = False
+                self.exit_only_mode = True  # Pause new entries after consecutive errors
                 self.kraken_health = "ERROR"
-                logger.error(f"❌ Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                logger.error(f"❌ CAPITAL PROTECTION: Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
 
             # Return last known balance instead of 0
             if self._last_known_balance is not None:

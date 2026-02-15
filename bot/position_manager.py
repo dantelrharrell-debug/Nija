@@ -199,8 +199,13 @@ class PositionManager:
                 current_price = float(market_data['candles'][-1]['close'])
                 pos['current_price'] = current_price
 
-                # Calculate current P&L
+                # 🔒 CAPITAL PROTECTION: Entry price must NEVER be 0 - fail validation if missing
+                # Note: pos.get('entry_price', 0) returns 0 if key is missing or conversion fails
                 entry_price = float(pos.get('entry_price', 0))
+                if entry_price == 0 or entry_price <= 0:
+                    logger.error(f"  ✗ {symbol}: CAPITAL PROTECTION - NO ENTRY PRICE - removing position")
+                    continue
+                
                 # Use helper method for consistent key handling
                 size_usd = self._get_position_size(pos)
 

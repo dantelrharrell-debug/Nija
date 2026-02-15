@@ -1658,8 +1658,11 @@ class TradingStrategy:
             adopted_positions = []
             position_tracker = getattr(broker, 'position_tracker', None)
             
+            # 🔒 CAPITAL PROTECTION: position_tracker is MANDATORY - no silent fallback mode
             if not position_tracker:
-                logger.warning("   ⚠️  No position_tracker found - positions will be managed via direct broker queries")
+                logger.error("   ❌ CAPITAL PROTECTION: position_tracker is MANDATORY but not available")
+                logger.error("   ❌ Cannot adopt positions without position tracking - FAILING ADOPTION")
+                return
             
             for i, pos in enumerate(positions, 1):
                 try:
@@ -1673,23 +1676,25 @@ class TradingStrategy:
                     if size_usd == 0 and current_price > 0 and quantity > 0:
                         size_usd = current_price * quantity
                     
-                    # 🔒 SAFETY GUARDRAIL: If entry price is missing, use safety default
-                    if entry_price == 0:
-                        entry_price = current_price * MISSING_ENTRY_PRICE_MULTIPLIER
-                        logger.warning(f"   [{i}/{positions_found}] ⚠️  {symbol}: Missing entry price - using safety default (${entry_price:.4f})")
+                    # 🔒 CAPITAL PROTECTION: Entry price must NEVER default to 0 - fail adoption if missing
+                    # Note: pos.get('entry_price', 0.0) returns 0.0 if key is missing or value is None
+                    if entry_price == 0 or entry_price <= 0:
+                        logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE")
+                        logger.error(f"   ❌ Position adoption FAILED - entry price is MANDATORY")
+                        continue  # Skip this position - do not adopt without entry price
                     
-                    # Register position in tracker if available
-                    if position_tracker:
-                        success = position_tracker.track_entry(
-                            symbol=symbol,
-                            entry_price=entry_price,
-                            quantity=quantity,
-                            size_usd=size_usd,
-                            strategy="ADOPTED"
-                        )
-                        if not success:
-                            logger.warning(f"   [{i}/{positions_found}] ⚠️  {symbol}: Failed to register in position tracker")
-                            continue
+                    # Register position in tracker (MANDATORY)
+                    success = position_tracker.track_entry(
+                        symbol=symbol,
+                        entry_price=entry_price,
+                        quantity=quantity,
+                        size_usd=size_usd,
+                        strategy="ADOPTED"
+                    )
+                    if not success:
+                        logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} failed position tracker registration")
+                        logger.error(f"   ❌ Position adoption FAILED - tracker registration is MANDATORY")
+                        continue
                     
                     # Position successfully adopted
                     adopted_count += 1
@@ -2649,6 +2654,17 @@ class TradingStrategy:
                 return False, veto_reason
 
             balance = balance_result[0] if balance_result[0] is not None else 0.0
+            
+            # 🔒 CAPITAL PROTECTION: Validate broker data completeness before allowing entries
+            # Balance of 0.0 could indicate incomplete/missing data
+            if balance == 0.0:
+                veto_reason = f"{broker_name.upper()} broker data incomplete: balance is 0.0"
+                logger.warning(f"🚫 CAPITAL PROTECTION: {veto_reason}")
+                logger.info(f"🚫 TRADE VETO: {veto_reason}")
+                self.veto_count_session += 1
+                self.last_veto_reason = veto_reason
+                return False, veto_reason
+            
             broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
             min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
 
@@ -2656,6 +2672,15 @@ class TradingStrategy:
 
             if balance < min_balance:
                 veto_reason = f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+                logger.info(f"🚫 TRADE VETO: {veto_reason}")
+                self.veto_count_session += 1
+                self.last_veto_reason = veto_reason
+                return False, veto_reason
+
+            # 🔒 CAPITAL PROTECTION: Final check - ensure broker has position_tracker
+            if not hasattr(broker, 'position_tracker') or broker.position_tracker is None:
+                veto_reason = f"{broker_name.upper()} broker data incomplete: no position_tracker"
+                logger.error(f"🚫 CAPITAL PROTECTION: {veto_reason}")
                 logger.info(f"🚫 TRADE VETO: {veto_reason}")
                 self.veto_count_session += 1
                 self.last_veto_reason = veto_reason
