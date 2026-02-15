@@ -1572,7 +1572,7 @@ class ExecutionEngine:
                 logger.error(f"   Threshold: {self.MAX_IMMEDIATE_LOSS_PCT*100:.2f}%")
                 logger.error(f"   Position size: ${position_size:.2f}")
                 logger.error("=" * 70)
-                logger.error("   ⚠️ This trade would be immediately unprofitable!")
+                logger.error("   ⚠️ This trade fails mathematical profitability criteria!")
                 logger.error("   ⚠️ Likely due to excessive spread or poor market conditions")
                 logger.error("   ⚠️ Automatically closing position to prevent loss")
                 logger.error("=" * 70)

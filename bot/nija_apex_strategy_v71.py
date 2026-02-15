@@ -280,7 +280,7 @@ class NIJAApexStrategyV71:
             )
             
             logger.info("✅ PROFITABILITY VALIDATION PASSED")
-            logger.info("   Strategy configuration is profitable after fees")
+            logger.info("   Strategy configuration meets mathematical profitability criteria")
             
         except ProfitabilityAssertionError as e:
             logger.error("❌ PROFITABILITY VALIDATION FAILED")

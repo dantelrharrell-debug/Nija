@@ -154,7 +154,7 @@ class ProfitabilityAssertion:
             # Log each failing target
             for target in failing_targets:
                 logger.error(
-                    f"   ❌ UNPROFITABLE TARGET: {target['target']}% "
+                    f"   ❌ TARGET FAILS CRITERIA: {target['target']}% "
                     f"→ Net {target['net_profit']:+.2f}% after fees "
                     f"(Required: ≥{self.requirements.min_net_profit_after_fees}%)"
                 )
