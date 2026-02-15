@@ -455,7 +455,7 @@ class StateMachineStressTester:
                     PortfolioSuperState.NORMAL,
                     "Reset for stress test"
                 )
-            except:
+            except Exception:
                 pass  # May fail if already in normal
             
             # Run test
