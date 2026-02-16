@@ -361,6 +361,108 @@ def get_execution_layer_hardening(
     return _hardening_instance
 
 
+def enforce_execution_layer(
+    symbol: str,
+    side: str,
+    size: float,
+    balance: float,
+    current_positions: List[Dict],
+    broker_type: str = 'coinbase',
+    user_id: Optional[str] = None,
+    force_liquidate: bool = False
+) -> None:
+    """
+    Enforces all execution-layer checks before order placement.
+    
+    This function follows the "Execution Layer is THE LAW" principle.
+    It raises ValueError if any check fails, blocking the order.
+    
+    Checks enforced:
+        1. Tier-based position cap
+        2. Minimum per-position allocation (5-10%)
+        3. Dust prevention (< $1 USD)
+        4. LOW_CAPITAL average position enforcement ($7.50 for accounts < $100)
+    
+    Args:
+        symbol: Trading symbol (e.g., 'BTC-USD')
+        side: Order side ('BUY', 'SELL', 'ENTER', 'EXIT')
+        size: Position size in USD
+        balance: Current account balance in USD
+        current_positions: List of current open positions
+        broker_type: Broker type ('coinbase', 'kraken', etc.)
+        user_id: Optional user identifier
+        force_liquidate: Skip checks for emergency exits
+        
+    Raises:
+        ValueError: If any execution layer check fails
+        
+    Returns:
+        None if all checks pass
+        
+    Example:
+        >>> from bot.execution_layer_hardening import enforce_execution_layer
+        >>> 
+        >>> try:
+        >>>     enforce_execution_layer(
+        >>>         symbol='BTC-USD',
+        >>>         side='BUY',
+        >>>         size=20.0,
+        >>>         balance=500.0,
+        >>>         current_positions=[],
+        >>>         broker_type='coinbase'
+        >>>     )
+        >>>     # All checks passed - proceed with order
+        >>>     api.place_order(order)
+        >>> except ValueError as e:
+        >>>     logger.error(f"Order blocked by execution layer: {e}")
+        >>>     return None
+    """
+    # Get hardening enforcer
+    hardening = get_execution_layer_hardening(broker_type=broker_type)
+    
+    # Validate order against ALL hardening requirements
+    is_valid, error_reason, validation_details = hardening.validate_order_hardening(
+        symbol=symbol,
+        side=side,
+        position_size_usd=size,
+        balance=balance,
+        current_positions=current_positions,
+        user_id=user_id,
+        force_liquidate=force_liquidate
+    )
+    
+    if not is_valid:
+        # Hardening check FAILED - raise ValueError to block order
+        error_msg = (
+            f"EXECUTION LAYER BLOCKED: {error_reason} "
+            f"[Symbol: {symbol}, Side: {side}, Size: ${size:.2f}, Balance: ${balance:.2f}]"
+        )
+        logger.error("=" * 80)
+        logger.error("🛡️ EXECUTION LAYER ENFORCEMENT")
+        logger.error("=" * 80)
+        logger.error(f"Symbol: {symbol}")
+        logger.error(f"Side: {side}")
+        logger.error(f"Position Size: ${size:.2f}")
+        logger.error(f"Balance: ${balance:.2f}")
+        logger.error(f"Current Positions: {len(current_positions)}")
+        logger.error(f"Reason: {error_reason}")
+        logger.error("")
+        logger.error("This order was blocked to prevent:")
+        logger.error("  • Excessive position count (exceeding tier limits)")
+        logger.error("  • Position sizes too small to be profitable")
+        logger.error("  • Dust accumulation and fee bleeding")
+        logger.error("  • Average position size below profitability threshold")
+        logger.error("")
+        logger.error("To fix: Close small positions or increase position size")
+        logger.error("=" * 80)
+        
+        raise ValueError(error_msg)
+    
+    # All checks passed
+    logger.info(f"✅ EXECUTION LAYER: All checks passed for {symbol} ${size:.2f} {side}")
+    return None
+
+
 # Example usage and testing
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
