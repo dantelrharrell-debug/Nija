@@ -222,6 +222,7 @@ class ExecutionLayerHardening:
             can_open, reason, avg_details = self.average_position_monitor.can_open_new_position(
                 positions=current_positions,
                 new_position_size=position_size_usd,
+                balance=balance,
                 symbol=symbol,
                 user_id=user_id
             )
@@ -293,6 +294,30 @@ class ExecutionLayerHardening:
                 self.dust_prevention_engine is not None if self.enable_dust_prevention else True,
             ])
         }
+    
+    def consolidate_dust_positions(self, positions: List[Dict]) -> Tuple[List[Dict], Dict]:
+        """
+        Consolidate dust positions by identifying them for closure.
+        
+        This method should be called periodically by the trading system to clean up
+        dust positions (< $1 USD) that are bleeding value through fees.
+        
+        Args:
+            positions: List of current positions with 'symbol', 'size_usd', 'pnl_pct'
+            
+        Returns:
+            Tuple[List[Dict], Dict]: (positions_to_close, consolidation_summary)
+        """
+        if not self.enable_dust_prevention or not self.dust_prevention_engine:
+            return [], {
+                'enabled': False,
+                'dust_positions_found': 0,
+                'positions_to_close': 0,
+                'total_dust_value': 0.0,
+                'reason': 'Dust prevention disabled'
+            }
+        
+        return self.dust_prevention_engine.consolidate_dust_positions(positions)
 
 
 # Singleton instance

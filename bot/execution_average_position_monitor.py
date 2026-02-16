@@ -90,18 +90,26 @@ class ExecutionAveragePositionMonitor:
     # Average position must be at least this multiple of fee threshold
     MIN_AVG_MULTIPLIER = 1.5  # 1.5x fee threshold
     
+    # LOW_CAPITAL mode threshold
+    # For accounts < $100, enforce strict $7.50 minimum average to prevent fee bleed
+    LOW_CAPITAL_THRESHOLD = 100.0  # Balance threshold for LOW_CAPITAL mode
+    LOW_CAPITAL_MIN_AVG = 7.50     # Minimum average position in LOW_CAPITAL mode
+    
     def __init__(self, 
                  broker_type: str = 'coinbase',
-                 enforce_average_check: bool = True):
+                 enforce_average_check: bool = True,
+                 enforce_low_capital_mode: bool = True):
         """
         Initialize the average position monitor.
         
         Args:
             broker_type: Broker type for fee threshold ('coinbase', 'kraken', etc.)
             enforce_average_check: Enable/disable average position checking
+            enforce_low_capital_mode: Enable LOW_CAPITAL mode enforcement (< $100 accounts)
         """
         self.broker_type = broker_type.lower()
         self.enforce_average_check = enforce_average_check
+        self.enforce_low_capital_mode = enforce_low_capital_mode
         self.fee_threshold = self.FEE_THRESHOLD_USD.get(
             self.broker_type,
             self.FEE_THRESHOLD_USD['default']
@@ -112,6 +120,7 @@ class ExecutionAveragePositionMonitor:
         logger.info(f"   Broker: {broker_type}")
         logger.info(f"   Fee threshold: ${self.fee_threshold:.2f}")
         logger.info(f"   Minimum average threshold: ${self.min_avg_threshold:.2f}")
+        logger.info(f"   LOW_CAPITAL mode ($7.50 avg): {enforce_low_capital_mode}")
         logger.info(f"   Enforcement: {enforce_average_check}")
     
     def calculate_average_position_size(self, positions: List[Dict]) -> float:
@@ -181,6 +190,7 @@ class ExecutionAveragePositionMonitor:
         self,
         positions: List[Dict],
         new_position_size: float,
+        balance: float = 0.0,
         symbol: str = "UNKNOWN",
         user_id: Optional[str] = None
     ) -> Tuple[bool, str, Dict]:
@@ -193,6 +203,7 @@ class ExecutionAveragePositionMonitor:
         Args:
             positions: Current open positions
             new_position_size: Proposed new position size in USD
+            balance: Current account balance (for LOW_CAPITAL mode detection)
             symbol: Trading symbol (for logging)
             user_id: Optional user identifier
             
@@ -215,12 +226,26 @@ class ExecutionAveragePositionMonitor:
             # First position
             new_avg = new_position_size
         
+        # Determine effective threshold based on balance (LOW_CAPITAL mode)
+        is_low_capital = balance > 0 and balance < self.LOW_CAPITAL_THRESHOLD
+        effective_threshold = self.min_avg_threshold
+        
+        if is_low_capital and self.enforce_low_capital_mode:
+            # LOW_CAPITAL mode: Use stricter $7.50 minimum
+            effective_threshold = max(self.LOW_CAPITAL_MIN_AVG, self.min_avg_threshold)
+            mode_label = "LOW_CAPITAL"
+        else:
+            mode_label = "STANDARD"
+        
         details = {
             'current_avg_size': current_avg,
             'new_avg_size': new_avg,
             'new_position_size': new_position_size,
             'position_count': position_count,
-            'min_avg_threshold': self.min_avg_threshold,
+            'balance': balance,
+            'is_low_capital_mode': is_low_capital,
+            'mode': mode_label,
+            'min_avg_threshold': effective_threshold,
             'fee_threshold': self.fee_threshold,
             'broker': self.broker_type,
             'symbol': symbol,
@@ -228,19 +253,21 @@ class ExecutionAveragePositionMonitor:
         }
         
         # Check if new average would be below threshold
-        if new_avg < self.min_avg_threshold:
+        if new_avg < effective_threshold:
             reason = (
-                f"New position ${new_position_size:.2f} would reduce average to ${new_avg:.2f}, "
-                f"below minimum ${self.min_avg_threshold:.2f} "
-                f"(current avg: ${current_avg:.2f}, {position_count} positions)"
+                f"[{mode_label}] New position ${new_position_size:.2f} would reduce average to ${new_avg:.2f}, "
+                f"below minimum ${effective_threshold:.2f} "
+                f"(current avg: ${current_avg:.2f}, {position_count} positions, balance: ${balance:.2f})"
             )
             logger.warning(f"❌ EXECUTION LAYER: Average position check failed - {reason}")
             logger.warning(f"   Symbol: {symbol}, User: {user_id or 'unknown'}")
+            if is_low_capital:
+                logger.warning(f"   💡 LOW_CAPITAL mode active - strict $7.50 average enforced to prevent fee bleed")
             return False, reason, details
         
         reason = (
-            f"Average position check passed: new avg ${new_avg:.2f} "
-            f"above threshold ${self.min_avg_threshold:.2f}"
+            f"[{mode_label}] Average position check passed: new avg ${new_avg:.2f} "
+            f"above threshold ${effective_threshold:.2f}"
         )
         logger.debug(f"✅ EXECUTION LAYER: {reason}")
         return True, reason, details
@@ -342,7 +369,8 @@ _monitor_lock = __import__('threading').Lock()
 
 def get_execution_average_position_monitor(
     broker_type: str = 'coinbase',
-    enforce_average_check: bool = True
+    enforce_average_check: bool = True,
+    enforce_low_capital_mode: bool = True
 ) -> ExecutionAveragePositionMonitor:
     """
     Get singleton instance of ExecutionAveragePositionMonitor.
@@ -350,6 +378,7 @@ def get_execution_average_position_monitor(
     Args:
         broker_type: Broker type for fee threshold
         enforce_average_check: Enable/disable average position checking
+        enforce_low_capital_mode: Enable LOW_CAPITAL mode enforcement
         
     Returns:
         ExecutionAveragePositionMonitor instance
@@ -361,7 +390,8 @@ def get_execution_average_position_monitor(
             if _monitor_instance is None:
                 _monitor_instance = ExecutionAveragePositionMonitor(
                     broker_type=broker_type,
-                    enforce_average_check=enforce_average_check
+                    enforce_average_check=enforce_average_check,
+                    enforce_low_capital_mode=enforce_low_capital_mode
                 )
     
     return _monitor_instance
