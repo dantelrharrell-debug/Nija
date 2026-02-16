@@ -6,11 +6,26 @@ set -e
 
 echo "🔍 Injecting Git metadata..."
 
-# Get Git metadata
-export GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-export GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-export GIT_COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-export BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Get Git metadata - use build args if available, otherwise try git commands
+if [ -n "$GIT_BRANCH" ] && [ "$GIT_BRANCH" != "unknown" ]; then
+    echo "Using GIT_BRANCH from build argument: $GIT_BRANCH"
+else
+    export GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+fi
+
+if [ -n "$GIT_COMMIT" ] && [ "$GIT_COMMIT" != "unknown" ]; then
+    echo "Using GIT_COMMIT from build argument: $GIT_COMMIT"
+    export GIT_COMMIT_SHORT="${GIT_COMMIT:0:7}"
+else
+    export GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    export GIT_COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+fi
+
+if [ -n "$BUILD_TIMESTAMP" ] && [ "$BUILD_TIMESTAMP" != "unknown" ]; then
+    echo "Using BUILD_TIMESTAMP from build argument: $BUILD_TIMESTAMP"
+else
+    export BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+fi
 
 echo "📋 Git Branch: $GIT_BRANCH"
 echo "📋 Git Commit: $GIT_COMMIT_SHORT"

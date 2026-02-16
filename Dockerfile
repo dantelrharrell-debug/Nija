@@ -24,8 +24,9 @@ ARG GIT_BRANCH=unknown
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIMESTAMP=unknown
 
-# Inject Git metadata at build time
+# Inject Git metadata at build time (pass build args as env vars)
 RUN echo "Injecting build metadata..." && \
+    GIT_BRANCH="${GIT_BRANCH}" GIT_COMMIT="${GIT_COMMIT}" BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
     bash inject_git_metadata.sh || \
     echo "Warning: Could not inject git metadata (continuing anyway)"
 
