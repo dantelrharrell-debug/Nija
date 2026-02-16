@@ -18,10 +18,14 @@ ARG BUILD_TIMESTAMP=unknown
 
 ### Railway's Default Build Arguments
 
-Railway automatically sets these build arguments based on the Git repository:
+Railway automatically sets these environment variables that can be used as build arguments:
 - `RAILWAY_GIT_BRANCH` - The Git branch being deployed
 - `RAILWAY_GIT_COMMIT_SHA` - The full commit SHA
 - `RAILWAY_GIT_COMMIT_MESSAGE` - The commit message
+- `RAILWAY_DEPLOYMENT_ID` - The deployment ID
+- `RAILWAY_ENVIRONMENT` - The environment name
+
+**Note:** Railway does not provide a built-in `RAILWAY_DEPLOYMENT_TIME` variable. The build timestamp will be generated at build time using the `date` command if not provided.
 
 ### Manual Configuration (Optional)
 
@@ -35,14 +39,15 @@ If you need to manually set build arguments in Railway, you can do so in the `ra
     "dockerfilePath": "Dockerfile",
     "buildArgs": {
       "GIT_BRANCH": "$RAILWAY_GIT_BRANCH",
-      "GIT_COMMIT": "$RAILWAY_GIT_COMMIT_SHA",
-      "BUILD_TIMESTAMP": "$RAILWAY_DEPLOYMENT_TIME"
+      "GIT_COMMIT": "$RAILWAY_GIT_COMMIT_SHA"
     }
   }
 }
 ```
 
-**Note:** Railway V3 build environment should automatically pass these values, so manual configuration is usually not needed.
+**Note:** 
+- Railway V3 build environment should automatically pass these values, so manual configuration is usually not needed.
+- `BUILD_TIMESTAMP` is generated at build time using the `date` command and does not need to be provided as a build argument.
 
 ## Verification
 

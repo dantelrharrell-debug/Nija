@@ -6,8 +6,7 @@
     "dockerfilePath": "Dockerfile",
     "buildArgs": {
       "GIT_BRANCH": "$RAILWAY_GIT_BRANCH",
-      "GIT_COMMIT": "$RAILWAY_GIT_COMMIT_SHA",
-      "BUILD_TIMESTAMP": "$RAILWAY_DEPLOYMENT_TIME"
+      "GIT_COMMIT": "$RAILWAY_GIT_COMMIT_SHA"
     }
   },
   "deploy": {
