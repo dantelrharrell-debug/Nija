@@ -245,12 +245,6 @@ class ExecutionMinimumPositionGate:
             )
             return False, reason
         
-        # Need at least enough for minimum allocation
-        min_allocation = balance * self.MIN_ALLOCATION_PCT
-        if balance < min_allocation / self.MIN_ALLOCATION_PCT:  # i.e., balance < min for 5% allocation
-            reason = f"Balance too low for minimum {self.MIN_ALLOCATION_PCT*100:.0f}% allocation"
-            return False, reason
-        
         return True, f"Balance ${balance:.2f} sufficient for {tier_name} tier trading"
     
     def get_recommended_position_size(self, balance: float) -> Dict:
@@ -322,15 +316,15 @@ if __name__ == "__main__":
     # Test scenarios
     test_cases = [
         # (balance, position_size, expected_valid)
-        (50.0, 2.0, False),    # Below tier minimum ($5)
-        (50.0, 5.0, True),     # At tier minimum
-        (50.0, 10.0, True),    # Above minimum (20% allocation)
-        (100.0, 8.0, False),   # Below 10% minimum allocation
-        (100.0, 10.0, True),   # At tier minimum
+        (50.0, 2.0, False),    # Below tier minimum ($10 for STARTER)
+        (50.0, 10.0, True),    # At tier minimum (STARTER $10)
+        (50.0, 15.0, True),    # Above minimum (30% allocation)
+        (100.0, 8.0, False),   # Below $10 tier minimum (SAVER)
+        (100.0, 10.0, True),   # At tier minimum (SAVER $10)
         (250.0, 15.0, False),  # Below $20 investor minimum
         (250.0, 20.0, True),   # At investor minimum
-        (1000.0, 25.0, False), # Below $30 income minimum
-        (1000.0, 50.0, True),  # Above income minimum (5% allocation)
+        (1000.0, 25.0, False), # Below $50 income minimum (was $30, now tier min is $50)
+        (1000.0, 50.0, True),  # At income minimum (5% allocation)
     ]
     
     print("\n🧪 Testing Minimum Position Size Enforcement:\n")
