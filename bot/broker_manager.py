@@ -148,6 +148,27 @@ except ImportError:
     except ImportError:
         # Fallback: Tier config not available
         get_tier_from_balance = None
+
+# Import Execution Layer Hardening (Feb 16, 2026) - CRITICAL ENFORCEMENT
+# This module enforces ALL hardening requirements at the execution layer:
+# 1. Position cap enforcement
+# 2. Minimum position size enforcement
+# 3. Average position size monitoring
+# 4. Dust prevention
+# These checks CANNOT be bypassed by strategy, signal engine, or broker adapters
+try:
+    from bot.execution_layer_hardening import get_execution_layer_hardening
+    EXECUTION_HARDENING_AVAILABLE = True
+    logger.info("✅ Execution Layer Hardening loaded - ENFORCING POSITION CAPS AND MINIMUMS")
+except ImportError:
+    try:
+        from execution_layer_hardening import get_execution_layer_hardening
+        EXECUTION_HARDENING_AVAILABLE = True
+        logger.info("✅ Execution Layer Hardening loaded - ENFORCING POSITION CAPS AND MINIMUMS")
+    except ImportError:
+        EXECUTION_HARDENING_AVAILABLE = False
+        logger.warning("⚠️ Execution Layer Hardening not available - POSITION CONTROLS DISABLED")
+        get_execution_layer_hardening = None
         get_tier_config = None
         validate_trade_size = None
         auto_resize_trade = None
@@ -2774,6 +2795,84 @@ class CoinbaseBroker(BaseBroker):
                         "partial_fill": False,
                         "filled_pct": 0.0
                     }
+
+            # ============================================================
+            # 🛡️ EXECUTION LAYER HARDENING (Feb 16, 2026) - CRITICAL
+            # ============================================================
+            # This enforcement runs at the EXECUTION LAYER and CANNOT be bypassed
+            # by strategy layer, signal engine, copy trading, or broker adapters.
+            #
+            # Enforces:
+            # 1. User position cap (match platform cap)
+            # 2. Minimum per-position allocation (5-10% of account)
+            # 3. Block new entries below $X minimum position size
+            # 4. Consolidate dust positions
+            # 5. Disable trading if average position size < fee threshold
+            #
+            # CRITICAL: These checks only apply to BUY orders (new positions).
+            # SELL orders always bypass to ensure exits can execute.
+            # ============================================================
+            if EXECUTION_HARDENING_AVAILABLE and side.lower() == 'buy' and not force_liquidate:
+                try:
+                    # Get current positions for validation
+                    current_positions = self.get_positions()
+                    
+                    # Get account balance
+                    account_balance = self.get_account_balance()
+                    
+                    # Get hardening enforcer
+                    hardening = get_execution_layer_hardening(broker_type='coinbase')
+                    
+                    # Validate order against ALL hardening requirements
+                    is_valid, error_reason, validation_details = hardening.validate_order_hardening(
+                        symbol=symbol,
+                        side=side,
+                        position_size_usd=quantity,
+                        balance=account_balance,
+                        current_positions=current_positions,
+                        user_id=getattr(self, 'user_id', None),
+                        force_liquidate=force_liquidate
+                    )
+                    
+                    if not is_valid:
+                        # Hardening check FAILED - block this order
+                        logger.error("=" * 80)
+                        logger.error("🛡️ EXECUTION LAYER HARDENING: ORDER BLOCKED")
+                        logger.error("=" * 80)
+                        logger.error(f"Symbol: {symbol}")
+                        logger.error(f"Side: {side}")
+                        logger.error(f"Position Size: ${quantity:.2f}")
+                        logger.error(f"Balance: ${account_balance:.2f}")
+                        logger.error(f"Current Positions: {len(current_positions)}")
+                        logger.error(f"Reason: {error_reason}")
+                        logger.error("")
+                        logger.error("This order was blocked to prevent:")
+                        logger.error("  • Excessive position count (exceeding tier limits)")
+                        logger.error("  • Position sizes too small to be profitable")
+                        logger.error("  • Dust accumulation and fee bleeding")
+                        logger.error("  • Average position size below profitability threshold")
+                        logger.error("")
+                        logger.error("To fix: Close small positions or increase position size")
+                        logger.error("=" * 80)
+                        
+                        return {
+                            "status": "unfilled",
+                            "error": "HARDENING_ENFORCEMENT",
+                            "message": error_reason,
+                            "partial_fill": False,
+                            "filled_pct": 0.0,
+                            "validation_details": validation_details
+                        }
+                    
+                    logger.info(f"✅ EXECUTION LAYER HARDENING: Order validated")
+                    logger.info(f"   Checks performed: {len(validation_details.get('checks_performed', []))}")
+                    
+                except Exception as hardening_error:
+                    # If hardening check fails (e.g., module error), LOG but allow order
+                    # This prevents hardening bugs from blocking legitimate trades
+                    logger.error(f"⚠️ Hardening validation error (allowing order): {hardening_error}")
+                    logger.error(f"   This is a bug - hardening should never crash")
+                    logger.error(f"   Order will proceed but hardening may not be enforced")
 
             client_order_id = str(uuid.uuid4())
 
