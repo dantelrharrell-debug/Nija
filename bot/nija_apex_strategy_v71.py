@@ -27,15 +27,15 @@ from risk_manager import RiskManager
 from execution_engine import ExecutionEngine
 
 # Import profitability assertion for configuration validation
+# Initialize logger before any imports that might use it
+logger = logging.getLogger("nija")
+
 try:
     from profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
     PROFITABILITY_ASSERTION_AVAILABLE = True
 except ImportError:
     PROFITABILITY_ASSERTION_AVAILABLE = False
     logger.warning("Profitability assertion module not available - configuration validation disabled")
-
-# Initialize logger before any imports that might fail
-logger = logging.getLogger("nija")
 
 # Import exchange capabilities for SHORT entry validation and fee-aware profit targets
 try:

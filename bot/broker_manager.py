@@ -149,6 +149,9 @@ except ImportError:
         # Fallback: Tier config not available
         get_tier_from_balance = None
 
+# Configure logger for broker operations (must be before imports that use it)
+logger = logging.getLogger('nija.broker')
+
 # Import Execution Layer Hardening (Feb 16, 2026) - CRITICAL ENFORCEMENT
 # This module enforces ALL hardening requirements at the execution layer:
 # 1. Position cap enforcement
@@ -172,9 +175,6 @@ except ImportError:
         get_tier_config = None
         validate_trade_size = None
         auto_resize_trade = None
-
-# Configure logger for broker operations
-logger = logging.getLogger('nija.broker')
 
 # Root nija logger for flushing all handlers
 # Child loggers (like 'nija.broker', 'nija.multi_account') propagate to this logger

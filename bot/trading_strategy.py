@@ -12,6 +12,9 @@ from dotenv import load_dotenv
 from enum import Enum
 import pandas as pd
 
+# Initialize logger early to avoid NameError in import fallback handlers
+logger = logging.getLogger("nija")
+
 # Import market filters at module level to avoid repeated imports in loops
 try:
     from market_filters import check_pair_quality
@@ -59,8 +62,6 @@ except ImportError:
             return float(x)
 
 load_dotenv()
-
-logger = logging.getLogger("nija")
 
 # Position adoption safety constants
 # When entry price is missing from exchange, use current_price * this multiplier
