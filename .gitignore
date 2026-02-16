@@ -222,6 +222,7 @@ LOG*.md
 QUICKSTART*.md
 QUICKFIX*.md
 RAILWAY*.md
+!RAILWAY_BUILD_CONFIGURATION.md  # Core Railway build guide
 CONFIGURE*.md
 CONNECT*.md
 ENABLE*.md
