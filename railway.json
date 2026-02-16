@@ -2,7 +2,12 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "buildEnvironment": "V3"
+    "buildEnvironment": "V3",
+    "dockerfilePath": "Dockerfile",
+    "buildArgs": {
+      "GIT_BRANCH": "$RAILWAY_GIT_BRANCH",
+      "GIT_COMMIT": "$RAILWAY_GIT_COMMIT_SHA"
+    }
   },
   "deploy": {
     "startCommand": "bash start.sh",
