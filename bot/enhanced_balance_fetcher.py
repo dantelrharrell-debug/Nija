@@ -15,7 +15,7 @@ Priority: HIGH PRIORITY (Issue #2)
 
 import logging
 import time
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from datetime import datetime
 from threading import Lock
 
@@ -162,7 +162,7 @@ class EnhancedBalanceFetcher:
                 
                 return 0.0
     
-    def get_last_known_balance(self) -> Optional[Dict[str, any]]:
+    def get_last_known_balance(self) -> Optional[Dict[str, Any]]:
         """
         Get information about last known balance.
         

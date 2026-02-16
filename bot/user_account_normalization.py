@@ -15,7 +15,7 @@ Priority: STRUCTURAL (Issue #3)
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from dataclasses import dataclass
 
@@ -247,7 +247,7 @@ class UserAccountNormalization:
             logger.error(f"   ❌ Exception executing action on {action.symbol}: {e}")
             return False, f"Exception: {str(e)}"
     
-    def normalize_account(self, broker) -> Dict[str, any]:
+    def normalize_account(self, broker) -> Dict[str, Any]:
         """
         Execute full normalization pass on account.
         
@@ -322,7 +322,7 @@ class UserAccountNormalization:
 
 def run_normalization_pass(broker,
                           minimum_position_usd: float = MINIMUM_POSITION_USD,
-                          dry_run: bool = True) -> Dict[str, any]:
+                          dry_run: bool = True) -> Dict[str, Any]:
     """
     Convenience function to run normalization pass.
     

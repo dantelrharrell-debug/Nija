@@ -14,7 +14,7 @@ Priority: IMMEDIATE (Issue #1)
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from dataclasses import dataclass
 
@@ -171,7 +171,7 @@ class BrokerDustCleanup:
             logger.error(f"   ❌ Exception closing {dust_pos.symbol}: {e}")
             return False, f"Exception: {str(e)}"
     
-    def cleanup_all_dust(self, broker) -> Dict[str, any]:
+    def cleanup_all_dust(self, broker) -> Dict[str, Any]:
         """
         Find and close all dust positions.
         

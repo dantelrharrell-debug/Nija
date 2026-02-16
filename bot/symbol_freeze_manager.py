@@ -15,7 +15,7 @@ Priority: HIGH PRIORITY (Issue #2)
 """
 
 import logging
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Any
 from datetime import datetime, timedelta
 from threading import Lock
 from dataclasses import dataclass
@@ -309,7 +309,7 @@ class SymbolFreezeManager:
         with self._lock:
             return self._failure_counts.get(symbol, 0)
     
-    def get_stats(self) -> Dict[str, any]:
+    def get_stats(self) -> Dict[str, Any]:
         """
         Get freeze manager statistics.
         
