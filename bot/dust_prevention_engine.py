@@ -573,6 +573,70 @@ class DustPreventionEngine:
         
         return dust_positions
     
+    def consolidate_dust_positions(self, positions: List[Dict]) -> Tuple[List[Dict], Dict]:
+        """
+        Consolidate dust positions by identifying them for closure.
+        
+        This is the primary method for automatic dust consolidation at the execution layer.
+        It returns a list of dust positions that should be closed to free up capital.
+        
+        Args:
+            positions: List of all current positions
+            
+        Returns:
+            Tuple[List[Dict], Dict]: (positions_to_close, consolidation_summary)
+                - positions_to_close: List of dust positions to close
+                - consolidation_summary: Dict with consolidation metrics
+        """
+        if not self.auto_dust_cleanup_enabled:
+            return [], {
+                'enabled': False,
+                'dust_positions_found': 0,
+                'positions_to_close': 0,
+                'total_dust_value': 0.0
+            }
+        
+        dust_positions = self.identify_dust_positions(positions)
+        
+        # All dust positions should be closed
+        positions_to_close = []
+        total_dust_value = 0.0
+        
+        for dust_pos in dust_positions:
+            positions_to_close.append({
+                'symbol': dust_pos['symbol'],
+                'size_usd': dust_pos['size_usd'],
+                'pnl_pct': dust_pos['pnl_pct'],
+                'reason': dust_pos['reason'],
+                'priority': 'HIGH',
+                'cleanup_type': 'DUST_CONSOLIDATION'
+            })
+            total_dust_value += dust_pos['size_usd']
+        
+        consolidation_summary = {
+            'enabled': True,
+            'dust_positions_found': len(dust_positions),
+            'positions_to_close': len(positions_to_close),
+            'total_dust_value': total_dust_value,
+            'dust_threshold_usd': self.dust_threshold_usd,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        if positions_to_close:
+            logger.warning(f"")
+            logger.warning(f"🧹 DUST CONSOLIDATION TRIGGERED")
+            logger.warning(f"   Found {len(dust_positions)} dust positions totaling ${total_dust_value:.2f}")
+            logger.warning(f"   Dust threshold: ${self.dust_threshold_usd:.2f}")
+            logger.warning(f"   Action: Close all dust positions to free capital and avoid fee bleed")
+            logger.warning(f"")
+            
+            for pos in positions_to_close:
+                logger.warning(f"   📌 {pos['symbol']}: ${pos['size_usd']:.2f} - {pos['reason']}")
+        else:
+            logger.info(f"✅ No dust positions found (threshold: ${self.dust_threshold_usd:.2f})")
+        
+        return positions_to_close, consolidation_summary
+    
     def should_allow_new_position(self, current_position_count: int) -> Tuple[bool, str]:
         """
         Check if a new position should be allowed

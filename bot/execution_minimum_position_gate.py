@@ -67,14 +67,19 @@ class ExecutionMinimumPositionGate:
     
     # Absolute minimum position sizes (USD) by tier
     # These ensure positions are large enough to be profitable after fees
+    # NOTE: LOW_CAPITAL mode (< $100) uses average position monitoring instead
     TIER_MINIMUM_USD = {
-        'STARTER': 5.0,    # $5 minimum (Coinbase minimum for profitability)
+        'STARTER': 7.50,   # $7.50 minimum for LOW_CAPITAL mode compatibility
         'SAVER': 10.0,     # $10 minimum (Kraken minimum)
         'INVESTOR': 20.0,  # $20 minimum (better fee efficiency)
         'INCOME': 30.0,    # $30 minimum (optimal fee efficiency)
         'LIVABLE': 50.0,   # $50 minimum (institutional approach)
         'BALLER': 100.0,   # $100 minimum (capital deployment mode)
     }
+    
+    # LOW_CAPITAL mode threshold - accounts below this use $7.50 average enforcement
+    LOW_CAPITAL_THRESHOLD = 100.0  # Balance threshold
+    LOW_CAPITAL_MIN_POSITION = 7.50  # Minimum position size in LOW_CAPITAL mode
     
     # Minimum percentage allocation (of account balance)
     # Prevents spreading capital too thin
@@ -105,6 +110,9 @@ class ExecutionMinimumPositionGate:
         Returns both percentage-based and absolute minimums.
         The final minimum is the LARGER of the two.
         
+        LOW_CAPITAL MODE (< $100): Uses $7.50 minimum instead of tier minimum
+        to prevent fee bleed while allowing trades on small accounts.
+        
         Args:
             balance: Current account balance in USD
             
@@ -113,6 +121,19 @@ class ExecutionMinimumPositionGate:
         """
         tier_name = self._get_tier_name(balance)
         
+        # LOW_CAPITAL mode: Special handling for balances < $100
+        is_low_capital = balance > 0 and balance < self.LOW_CAPITAL_THRESHOLD
+        
+        if is_low_capital:
+            # Use $7.50 minimum for LOW_CAPITAL mode
+            absolute_min = self.LOW_CAPITAL_MIN_POSITION
+            percentage_min_pct = self.MIN_ALLOCATION_PCT
+            percentage_min_usd = balance * percentage_min_pct
+            # Final minimum is LARGER of $7.50 or 5% of balance
+            final_min_usd = max(absolute_min, percentage_min_usd)
+            return final_min_usd, percentage_min_pct, tier_name
+        
+        # Standard mode: Use tier-based minimums
         # Get absolute minimum from tier configuration
         absolute_min = self.TIER_MINIMUM_USD.get(tier_name, MIN_BALANCE_TO_TRADE)
         
@@ -168,18 +189,22 @@ class ExecutionMinimumPositionGate:
             'min_pct': min_pct * 100,
             'actual_pct': actual_pct,
             'tier': tier_name,
+            'is_low_capital_mode': balance > 0 and balance < self.LOW_CAPITAL_THRESHOLD,
             'symbol': symbol,
             'user_id': user_id or 'unknown'
         }
         
         # Check absolute minimum
         if self.enforce_absolute and position_size_usd < min_usd:
+            mode_label = "[LOW_CAPITAL]" if details['is_low_capital_mode'] else ""
             reason = (
-                f"Position size ${position_size_usd:.2f} below tier minimum ${min_usd:.2f} "
+                f"{mode_label} Position size ${position_size_usd:.2f} below minimum ${min_usd:.2f} "
                 f"({tier_name} tier, balance ${balance:.2f})"
             )
             logger.warning(f"❌ EXECUTION LAYER: Minimum position gate enforced - {reason}")
             logger.warning(f"   Symbol: {symbol}, User: {user_id or 'unknown'}")
+            if details['is_low_capital_mode']:
+                logger.warning(f"   💡 LOW_CAPITAL mode active - ${self.LOW_CAPITAL_MIN_POSITION:.2f} minimum to prevent fee bleed")
             return False, reason, details
         
         # Check percentage minimum (5% of account)
