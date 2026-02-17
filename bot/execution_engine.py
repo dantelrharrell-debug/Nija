@@ -892,9 +892,10 @@ class ExecutionEngine:
                     gross_pnl_pct = (exit_price - entry_price) / entry_price
                 else:
                     gross_pnl_pct = (entry_price - exit_price) / entry_price
-                broker_fee = self._get_broker_round_trip_fee()
-                net_pnl_pct = gross_pnl_pct - broker_fee
-                fees_usd = exit_size * broker_fee
+                broker_fee_pct = self._get_broker_round_trip_fee()
+                net_pnl_pct = gross_pnl_pct - broker_fee_pct
+                # exit_size is already in USD (position_size * remaining_size * size_pct)
+                fees_usd = exit_size * broker_fee_pct
             else:
                 gross_pnl_pct = 0
                 net_pnl_pct = 0

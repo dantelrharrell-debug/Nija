@@ -268,7 +268,6 @@ class AdaptiveRiskManager:
         
         now = datetime.now()
         if now < self.cooldown_until:
-            remaining_minutes = (self.cooldown_until - now).total_seconds() / 60
             return True
         else:
             # Cooldown expired - log and clear
