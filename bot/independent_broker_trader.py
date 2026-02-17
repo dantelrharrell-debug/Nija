@@ -530,6 +530,15 @@ class IndependentBrokerTrader:
                                 logger.info(f"   ✅ {broker_name.upper()}: {adoption_status['positions_adopted']} position(s) adopted")
                             else:
                                 logger.error(f"   ❌ {broker_name.upper()}: Adoption failed - {adoption_status.get('error', 'unknown')}")
+                                logger.error(f"   🛑 CRITICAL: HALTING {broker_name.upper()} TRADING")
+                                logger.error(f"   ⚠️  Manual intervention required - positions may be unmanaged")
+                                # Update broker health to failed status
+                                self.update_broker_health(broker_name, 'failed', 
+                                    f'Adoption failed: {adoption_status.get("error", "unknown")}')
+                                # CRITICAL: Skip trading cycle - do NOT continue in MASTER mode
+                                logger.info(f"   ═══════════════════════════════════════════════════════════")
+                                logger.info("")
+                                continue  # Skip to next iteration without executing run_cycle()
                         else:
                             # Fallback for backward compatibility
                             logger.warning(f"   ⚠️  adopt_existing_positions() not available - using legacy method")
@@ -540,7 +549,17 @@ class IndependentBrokerTrader:
                                 logger.info(f"   📊 No open positions")
                     except Exception as pos_err:
                         logger.error(f"   ❌ Position adoption failed: {pos_err}")
-                        logger.error(f"   🔒 GUARDRAIL: This may result in unmanaged positions!")
+                        logger.error(f"   🛑 CRITICAL: HALTING {broker_name.upper()} TRADING")
+                        logger.error(f"   ⚠️  Exception during adoption - manual intervention required")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        # Update broker health to failed status
+                        self.update_broker_health(broker_name, 'failed', 
+                            f'Adoption exception: {str(pos_err)[:100]}')
+                        # CRITICAL: Skip trading cycle - do NOT continue in MASTER mode
+                        logger.info(f"   ═══════════════════════════════════════════════════════════")
+                        logger.info("")
+                        continue  # Skip to next iteration without executing run_cycle()
                     
                     logger.info(f"   📊 Mode: PLATFORM (full strategy execution)")
                     logger.info(f"   🔍 Will scan markets for opportunities")
@@ -687,6 +706,19 @@ class IndependentBrokerTrader:
                             else:
                                 logger.error(f"   ❌ {broker_name}: Adoption failed - {adoption_status.get('error', 'unknown')}")
                                 logger.error(f"   🔒 GUARDRAIL: Positions may exist but are NOT being managed!")
+                                logger.error(f"   🛑 CRITICAL: HALTING {broker_name} TRADING FOR USER {user_id}")
+                                logger.error(f"   ⚠️  Manual intervention required - cannot manage positions")
+                                # Update user broker health to failed status
+                                if user_id not in self.user_broker_health:
+                                    self.user_broker_health[user_id] = {}
+                                self.user_broker_health[user_id][broker_name] = {
+                                    'status': 'failed',
+                                    'error': f'Adoption failed: {adoption_status.get("error", "unknown")}',
+                                    'last_check': datetime.now()
+                                }
+                                # CRITICAL: Skip trading cycle - do NOT continue
+                                logger.info("")
+                                continue  # Skip to next iteration without executing run_cycle()
                             
                             # Additional verification using guardrail
                             if hasattr(self.trading_strategy, 'verify_position_adoption_status'):
@@ -696,6 +728,19 @@ class IndependentBrokerTrader:
                                 )
                                 if not verified:
                                     logger.error(f"   🔒 GUARDRAIL FAILURE: Adoption verification failed for {account_id}")
+                                    logger.error(f"   🛑 CRITICAL: HALTING {broker_name} TRADING FOR USER {user_id}")
+                                    logger.error(f"   ⚠️  Manual intervention required - verification failed")
+                                    # Update user broker health to failed status
+                                    if user_id not in self.user_broker_health:
+                                        self.user_broker_health[user_id] = {}
+                                    self.user_broker_health[user_id][broker_name] = {
+                                        'status': 'failed',
+                                        'error': 'Adoption verification failed',
+                                        'last_check': datetime.now()
+                                    }
+                                    # CRITICAL: Skip trading cycle - do NOT continue
+                                    logger.info("")
+                                    continue  # Skip to next iteration without executing run_cycle()
                         else:
                             # Fallback for backward compatibility (should not happen with new code)
                             logger.warning(f"   ⚠️  adopt_existing_positions() not available - using legacy method")
@@ -712,8 +757,21 @@ class IndependentBrokerTrader:
                     except Exception as pos_err:
                         logger.error(f"   ❌ {broker_name}: Position adoption failed: {pos_err}")
                         logger.error(f"   🔒 GUARDRAIL: This is a CRITICAL failure - positions may be unmanaged!")
+                        logger.error(f"   🛑 CRITICAL: HALTING {broker_name} TRADING FOR USER {user_id}")
+                        logger.error(f"   ⚠️  Exception during adoption - manual intervention required")
                         import traceback
                         logger.error(traceback.format_exc())
+                        # Update user broker health to failed status
+                        if user_id not in self.user_broker_health:
+                            self.user_broker_health[user_id] = {}
+                        self.user_broker_health[user_id][broker_name] = {
+                            'status': 'failed',
+                            'error': f'Adoption exception: {str(pos_err)[:100]}',
+                            'last_check': datetime.now()
+                        }
+                        # CRITICAL: Skip trading cycle - do NOT continue
+                        logger.info("")
+                        continue  # Skip to next iteration without executing run_cycle()
                     
                     # USER accounts should NEVER generate signals
                     # Users only execute copy trades from master - they don't run strategy themselves
