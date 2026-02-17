@@ -70,9 +70,34 @@ class HealthState:
     total_not_ready_time_seconds: float = 0.0  # Total time in not-ready state
     readiness_state_changes: int = 0  # Count of readiness state transitions
     
+    # Adoption tracking (production observability)
+    adoption_failures: list = None  # List of adoption failure events
+    adoption_failure_count: int = 0  # Total adoption failures
+    last_adoption_failure_time: Optional[float] = None  # Timestamp of last failure
+    
+    # Broker health tracking (production observability)
+    broker_health_status: dict = None  # {broker_name: {status, last_check, error_count}}
+    broker_failures: list = None  # List of broker failure events
+    broker_failure_count: int = 0  # Total broker failures
+    
+    # Trading thread tracking (production observability)
+    trading_threads: dict = None  # {broker_name: {status, last_heartbeat, thread_id}}
+    thread_failures: list = None  # List of thread failure events
+    halted_threads: int = 0  # Count of halted threads
+    
     def __post_init__(self):
         if self.configuration_errors is None:
             self.configuration_errors = []
+        if self.adoption_failures is None:
+            self.adoption_failures = []
+        if self.broker_health_status is None:
+            self.broker_health_status = {}
+        if self.broker_failures is None:
+            self.broker_failures = []
+        if self.trading_threads is None:
+            self.trading_threads = {}
+        if self.thread_failures is None:
+            self.thread_failures = []
 
 
 class HealthCheckManager:
@@ -220,6 +245,195 @@ class HealthCheckManager:
         if enabled:
             self.state.last_trade_time = time.time()
     
+    def record_adoption_failure(self, failure_type: str, user_id: str, error_message: str):
+        """
+        Record an adoption failure (production observability).
+        
+        Args:
+            failure_type: Type of failure (e.g., 'registration', 'broker_auth', 'trading_activation')
+            user_id: User identifier
+            error_message: Description of the failure
+        """
+        failure_event = {
+            'type': failure_type,
+            'user_id': user_id,
+            'error': error_message,
+            'timestamp': time.time(),
+            'timestamp_iso': datetime.utcnow().isoformat()
+        }
+        
+        self.state.adoption_failures.append(failure_event)
+        self.state.adoption_failure_count += 1
+        self.state.last_adoption_failure_time = time.time()
+        
+        # Keep only last 100 failures to prevent memory issues
+        if len(self.state.adoption_failures) > 100:
+            self.state.adoption_failures = self.state.adoption_failures[-100:]
+        
+        logger.error(f"🚨 ADOPTION FAILURE: {failure_type} for user {user_id}: {error_message}")
+    
+    def update_broker_health(self, broker_name: str, status: str, error_message: Optional[str] = None):
+        """
+        Update broker health status (production observability).
+        
+        Args:
+            broker_name: Name of the broker (e.g., 'coinbase', 'kraken')
+            status: Health status ('healthy', 'degraded', 'failed')
+            error_message: Optional error message if status is not healthy
+        """
+        if broker_name not in self.state.broker_health_status:
+            self.state.broker_health_status[broker_name] = {
+                'status': 'unknown',
+                'last_check': None,
+                'error_count': 0,
+                'last_error': None
+            }
+        
+        broker_health = self.state.broker_health_status[broker_name]
+        previous_status = broker_health['status']
+        broker_health['status'] = status
+        broker_health['last_check'] = time.time()
+        
+        if status == 'failed':
+            broker_health['error_count'] += 1
+            broker_health['last_error'] = error_message
+            
+            # Record failure event
+            failure_event = {
+                'broker': broker_name,
+                'error': error_message,
+                'timestamp': time.time(),
+                'timestamp_iso': datetime.utcnow().isoformat()
+            }
+            self.state.broker_failures.append(failure_event)
+            self.state.broker_failure_count += 1
+            
+            # Keep only last 100 failures
+            if len(self.state.broker_failures) > 100:
+                self.state.broker_failures = self.state.broker_failures[-100:]
+            
+            logger.error(f"🚨 BROKER HEALTH FAILED: {broker_name}: {error_message}")
+        elif status == 'degraded':
+            logger.warning(f"⚠️  BROKER HEALTH DEGRADED: {broker_name}: {error_message}")
+        elif previous_status in ['failed', 'degraded'] and status == 'healthy':
+            logger.info(f"✅ BROKER HEALTH RECOVERED: {broker_name}")
+    
+    def update_trading_thread_status(self, broker_name: str, status: str, thread_id: Optional[int] = None):
+        """
+        Update trading thread status (production observability).
+        
+        Args:
+            broker_name: Name of the broker
+            status: Thread status ('running', 'idle', 'halted', 'error')
+            thread_id: Optional thread ID
+        """
+        if broker_name not in self.state.trading_threads:
+            self.state.trading_threads[broker_name] = {
+                'status': 'unknown',
+                'last_heartbeat': None,
+                'thread_id': None,
+                'error_count': 0
+            }
+        
+        thread_info = self.state.trading_threads[broker_name]
+        previous_status = thread_info['status']
+        thread_info['status'] = status
+        thread_info['last_heartbeat'] = time.time()
+        
+        if thread_id is not None:
+            thread_info['thread_id'] = thread_id
+        
+        # Track halted threads
+        halted_count = sum(1 for t in self.state.trading_threads.values() if t['status'] == 'halted')
+        self.state.halted_threads = halted_count
+        
+        if status == 'halted':
+            thread_info['error_count'] += 1
+            
+            # Record thread failure
+            failure_event = {
+                'broker': broker_name,
+                'thread_id': thread_id,
+                'timestamp': time.time(),
+                'timestamp_iso': datetime.utcnow().isoformat()
+            }
+            self.state.thread_failures.append(failure_event)
+            
+            # Keep only last 100 failures
+            if len(self.state.thread_failures) > 100:
+                self.state.thread_failures = self.state.thread_failures[-100:]
+            
+            logger.error(f"🚨 TRADING THREAD HALTED: {broker_name} (thread_id: {thread_id})")
+        elif previous_status == 'halted' and status == 'running':
+            logger.info(f"✅ TRADING THREAD RECOVERED: {broker_name}")
+    
+    def get_critical_status(self) -> Dict[str, Any]:
+        """
+        Get critical status information for production observability.
+        Shows adoption failures, broker health issues, and halted threads in RED.
+        
+        Returns:
+            dict: Critical status with failure indicators
+        """
+        # Recent adoption failures (last 24 hours)
+        cutoff_time = time.time() - 86400
+        recent_adoption_failures = [
+            f for f in self.state.adoption_failures 
+            if f['timestamp'] > cutoff_time
+        ]
+        
+        # Recent broker failures (last 24 hours)
+        recent_broker_failures = [
+            f for f in self.state.broker_failures
+            if f['timestamp'] > cutoff_time
+        ]
+        
+        # Count failed/degraded brokers
+        failed_brokers = [
+            name for name, health in self.state.broker_health_status.items()
+            if health['status'] == 'failed'
+        ]
+        degraded_brokers = [
+            name for name, health in self.state.broker_health_status.items()
+            if health['status'] == 'degraded'
+        ]
+        
+        # Halted threads
+        halted_threads = [
+            name for name, thread in self.state.trading_threads.items()
+            if thread['status'] == 'halted'
+        ]
+        
+        return {
+            'adoption': {
+                'status': 'failed' if recent_adoption_failures else 'healthy',
+                'recent_failures': len(recent_adoption_failures),
+                'total_failures': self.state.adoption_failure_count,
+                'last_failure': (
+                    datetime.fromtimestamp(self.state.last_adoption_failure_time).isoformat()
+                    if self.state.last_adoption_failure_time else None
+                ),
+                'failures': recent_adoption_failures[-10:]  # Last 10 failures
+            },
+            'broker_health': {
+                'status': 'failed' if failed_brokers else ('degraded' if degraded_brokers else 'healthy'),
+                'failed_brokers': failed_brokers,
+                'degraded_brokers': degraded_brokers,
+                'recent_failures': len(recent_broker_failures),
+                'total_failures': self.state.broker_failure_count,
+                'broker_status': self.state.broker_health_status,
+                'failures': recent_broker_failures[-10:]  # Last 10 failures
+            },
+            'trading_threads': {
+                'status': 'halted' if halted_threads else 'running',
+                'halted_threads': halted_threads,
+                'halted_count': len(halted_threads),
+                'thread_status': self.state.trading_threads,
+                'recent_failures': len([f for f in self.state.thread_failures if f['timestamp'] > cutoff_time])
+            },
+            'timestamp': datetime.utcnow().isoformat()
+        }
+    
     def get_liveness_status(self) -> Dict[str, Any]:
         """
         Get liveness probe status.
@@ -297,12 +511,14 @@ class HealthCheckManager:
         """
         liveness = self.get_liveness_status()
         readiness, _ = self.get_readiness_status()
+        critical = self.get_critical_status()
         
         return {
             "service": "NIJA Trading Bot",
             "version": "7.2.0",
             "liveness": liveness,
             "readiness": readiness,
+            "critical_status": critical,
             "operational_state": {
                 "configuration_checked": self._configuration_checked,
                 "error_count": self.state.error_count,
@@ -388,6 +604,26 @@ class HealthCheckManager:
         metrics.append('# HELP nija_error_count_total Total number of errors encountered')
         metrics.append('# TYPE nija_error_count_total counter')
         metrics.append(f'nija_error_count_total {self.state.error_count}')
+        
+        # Adoption failures (production observability)
+        metrics.append('# HELP nija_adoption_failures_total Total number of adoption failures')
+        metrics.append('# TYPE nija_adoption_failures_total counter')
+        metrics.append(f'nija_adoption_failures_total {self.state.adoption_failure_count}')
+        
+        # Broker health (production observability)
+        metrics.append('# HELP nija_broker_failures_total Total number of broker failures')
+        metrics.append('# TYPE nija_broker_failures_total counter')
+        metrics.append(f'nija_broker_failures_total {self.state.broker_failure_count}')
+        
+        failed_brokers_count = sum(1 for h in self.state.broker_health_status.values() if h['status'] == 'failed')
+        metrics.append('# HELP nija_brokers_failed Number of brokers in failed state')
+        metrics.append('# TYPE nija_brokers_failed gauge')
+        metrics.append(f'nija_brokers_failed {failed_brokers_count}')
+        
+        # Trading threads (production observability)
+        metrics.append('# HELP nija_trading_threads_halted Number of halted trading threads')
+        metrics.append('# TYPE nija_trading_threads_halted gauge')
+        metrics.append(f'nija_trading_threads_halted {self.state.halted_threads}')
         
         return '\n'.join(metrics) + '\n'
 
