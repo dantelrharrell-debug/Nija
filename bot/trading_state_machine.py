@@ -112,6 +112,9 @@ class TradingStateMachine:
         # Try to load persisted state, but NEVER start in LIVE_ACTIVE
         self._load_state()
         
+        # Validate state consistency with kill switch
+        self._validate_state_consistency()
+        
         # Log initialization
         logger.info(f"🔒 Trading State Machine initialized in {self._current_state.value} state")
         logger.info(f"📝 State persistence: {self._state_file}")
@@ -173,6 +176,31 @@ class TradingStateMachine:
             logger.debug(f"💾 State persisted: {self._current_state.value}")
         except Exception as e:
             logger.error(f"❌ Error persisting state: {e}")
+            
+    def _validate_state_consistency(self):
+        """
+        Validate state consistency with kill switch.
+        
+        If state is EMERGENCY_STOP but kill switch is not active,
+        log a warning and suggest using safe_restore_trading.py
+        """
+        try:
+            from kill_switch import get_kill_switch
+            kill_switch = get_kill_switch()
+            
+            if self._current_state == TradingState.EMERGENCY_STOP and not kill_switch.is_active():
+                logger.warning("=" * 80)
+                logger.warning("⚠️  STATE INCONSISTENCY DETECTED")
+                logger.warning("=" * 80)
+                logger.warning("State machine is in EMERGENCY_STOP but kill switch is NOT active")
+                logger.warning("This typically happens after kill switch deactivation without state reset")
+                logger.warning("")
+                logger.warning("To restore trading safely:")
+                logger.warning("  python safe_restore_trading.py restore")
+                logger.warning("=" * 80)
+        except Exception as e:
+            # Don't fail initialization if kill switch check fails
+            logger.debug(f"Could not validate state consistency: {e}")
             
     def get_current_state(self) -> TradingState:
         """Get current trading state (thread-safe)"""

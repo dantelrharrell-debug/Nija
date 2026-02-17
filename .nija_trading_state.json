@@ -1,5 +1,5 @@
 {
-  "current_state": "EMERGENCY_STOP",
+  "current_state": "DRY_RUN",
   "history": [
     {
       "from": "OFF",
@@ -12,7 +12,19 @@
       "to": "EMERGENCY_STOP",
       "reason": "Kill switch activated: Test activation",
       "timestamp": "2026-02-04T20:56:56.468392"
+    },
+    {
+      "from": "EMERGENCY_STOP",
+      "to": "OFF",
+      "reason": "Safe recovery: Clearing emergency stop",
+      "timestamp": "2026-02-17T22:01:15.132675"
+    },
+    {
+      "from": "OFF",
+      "to": "DRY_RUN",
+      "reason": "Safe recovery: Enabling simulation mode",
+      "timestamp": "2026-02-17T22:01:15.133111"
     }
   ],
-  "last_updated": "2026-02-04T20:56:56.468401"
+  "last_updated": "2026-02-17T22:01:15.133120"
 }
