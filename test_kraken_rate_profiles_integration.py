@@ -44,8 +44,9 @@ def test_rate_profile_selection():
     from kraken_rate_profiles import get_kraken_rate_profile, KrakenRateMode
 
     test_cases = [
-        (25.0, KrakenRateMode.LOW_CAPITAL, "Low-Capital Rate Profile"),
-        (150.0, KrakenRateMode.STANDARD, "Standard Rate Profile"),
+        (25.0, KrakenRateMode.MICRO_CAP, "Micro-Cap Rate Profile"),
+        (150.0, KrakenRateMode.LOW_CAPITAL, "Low-Capital Rate Profile"),
+        (750.0, KrakenRateMode.STANDARD, "Standard Rate Profile"),
         (1500.0, KrakenRateMode.AGGRESSIVE, "Aggressive Rate Profile"),
     ]
 
@@ -97,14 +98,30 @@ def test_min_interval_calculation():
         KrakenRateMode
     )
 
-    # Test LOW_CAPITAL mode
+    # Test MICRO_CAP mode (new)
+    entry_interval = calculate_min_interval(KrakenAPICategory.ENTRY, KrakenRateMode.MICRO_CAP)
+    monitoring_interval = calculate_min_interval(KrakenAPICategory.MONITORING, KrakenRateMode.MICRO_CAP)
+
+    if entry_interval == 30.0:
+        print(f"✅ MICRO_CAP entry interval: {entry_interval}s")
+    else:
+        print(f"❌ MICRO_CAP entry interval: Expected 30.0s, got {entry_interval}s")
+        return False
+
+    if monitoring_interval == 60.0:
+        print(f"✅ MICRO_CAP monitoring interval: {monitoring_interval}s")
+    else:
+        print(f"❌ MICRO_CAP monitoring interval: Expected 60.0s, got {monitoring_interval}s")
+        return False
+
+    # Test LOW_CAPITAL mode (updated from 3s to 10s)
     entry_interval = calculate_min_interval(KrakenAPICategory.ENTRY, KrakenRateMode.LOW_CAPITAL)
     monitoring_interval = calculate_min_interval(KrakenAPICategory.MONITORING, KrakenRateMode.LOW_CAPITAL)
 
-    if entry_interval == 3.0:
+    if entry_interval == 10.0:
         print(f"✅ LOW_CAPITAL entry interval: {entry_interval}s")
     else:
-        print(f"❌ LOW_CAPITAL entry interval: Expected 3.0s, got {entry_interval}s")
+        print(f"❌ LOW_CAPITAL entry interval: Expected 10.0s, got {entry_interval}s")
         return False
 
     if monitoring_interval == 30.0:
