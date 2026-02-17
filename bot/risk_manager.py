@@ -271,9 +271,8 @@ class AdaptiveRiskManager:
             remaining_minutes = (self.cooldown_until - now).total_seconds() / 60
             return True
         else:
-            # Cooldown expired
-            if self.cooldown_until is not None:  # Only log if transitioning from cooldown
-                logger.info(f"✅ Cooldown expired - trading resumed")
+            # Cooldown expired - log and clear
+            logger.info(f"✅ Cooldown expired - trading resumed")
             self.cooldown_until = None
             return False
     

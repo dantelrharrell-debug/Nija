@@ -444,8 +444,8 @@ class TradeExpectancyValidator:
                 'warning': f"Need {self.MIN_TRADES_FOR_PROJECTIONS - len(self.completed_trades)} more trades before ROI projections"
             }
         
-        # Calculate from last 100 trades
-        trades = self.completed_trades[-self.MIN_TRADES_FOR_PROJECTIONS:]
+        # Calculate from completed trades (already limited to last 100)
+        trades = self.completed_trades
         wins = [t for t in trades if t['win']]
         losses = [t for t in trades if not t['win']]
         
