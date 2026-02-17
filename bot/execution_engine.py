@@ -140,6 +140,21 @@ except ImportError:
     TRADE_LEDGER_ENABLED = False
     logger.warning("⚠️ Trade ledger database not available")
 
+# Import Recovery Controller for capital-first safety (NEW - Feb 2026)
+try:
+    from bot.recovery_controller import get_recovery_controller
+    RECOVERY_CONTROLLER_AVAILABLE = True
+    logger.info("✅ Recovery Controller loaded - Capital-first safety layer active")
+except ImportError:
+    try:
+        from recovery_controller import get_recovery_controller
+        RECOVERY_CONTROLLER_AVAILABLE = True
+        logger.info("✅ Recovery Controller loaded - Capital-first safety layer active")
+    except ImportError:
+        RECOVERY_CONTROLLER_AVAILABLE = False
+        logger.warning("⚠️ Recovery Controller not available - safety layer disabled")
+        get_recovery_controller = None
+
 # Import custom exceptions for safety checks
 try:
     from bot.exceptions import (
@@ -546,6 +561,26 @@ class ExecutionEngine:
             Position dictionary or None if failed
         """
         try:
+            # ✅ LAYER 0: RECOVERY CONTROLLER - Capital-first safety layer
+            # This is the AUTHORITATIVE control layer that sits above everything
+            # Checks BEFORE any other validation
+            if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
+                recovery_controller = get_recovery_controller()
+                can_trade, reason = recovery_controller.can_trade("entry")
+                
+                if not can_trade:
+                    logger.error("=" * 80)
+                    logger.error("🛡️  RECOVERY CONTROLLER BLOCKED ENTRY")
+                    logger.error("=" * 80)
+                    logger.error(f"   Symbol: {symbol}")
+                    logger.error(f"   Side: {side}")
+                    logger.error(f"   Position Size: ${position_size:.2f}")
+                    logger.error(f"   Reason: {reason}")
+                    logger.error(f"   Controller State: {recovery_controller.current_state.value}")
+                    logger.error(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
+                    logger.error("=" * 80)
+                    return None
+            
             # ✅ CRITICAL SAFETY CHECK #1: LIVE CAPITAL VERIFIED
             # This is the MASTER kill-switch that prevents accidental live trading
             # Check BEFORE any trade execution
@@ -863,6 +898,23 @@ class ExecutionEngine:
             True if successful, False otherwise
         """
         try:
+            # ✅ LAYER 0: RECOVERY CONTROLLER - Check if exits are allowed
+            if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
+                recovery_controller = get_recovery_controller()
+                can_trade, trade_reason = recovery_controller.can_trade("exit")
+                
+                if not can_trade:
+                    logger.error("=" * 80)
+                    logger.error("🛡️  RECOVERY CONTROLLER BLOCKED EXIT")
+                    logger.error("=" * 80)
+                    logger.error(f"   Symbol: {symbol}")
+                    logger.error(f"   Exit Reason: {reason}")
+                    logger.error(f"   Controller Reason: {trade_reason}")
+                    logger.error(f"   State: {recovery_controller.current_state.value}")
+                    logger.error("=" * 80)
+                    # In EMERGENCY_HALT, even exits are blocked
+                    return False
+            
             # FIX #1: Check if position is already being closed
             with self._closing_lock:
                 if symbol in self.closing_positions:
