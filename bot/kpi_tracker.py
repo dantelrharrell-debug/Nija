@@ -425,8 +425,6 @@ class KPITracker:
         logger.info(f"   Net Profit: ${latest.net_profit:,.2f}")
         logger.info(f"   ROI: {latest.roi_percentage:.2f}%")
         logger.info("=" * 80)
-        
-        return snapshot
     
     def _calculate_max_drawdown(self, lookback: Optional[int] = None) -> float:
         """

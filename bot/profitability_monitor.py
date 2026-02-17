@@ -287,7 +287,7 @@ class ProfitabilityMonitor:
         total_fees = sum(t.fees for t in trades)
         net_pnl = sum(t.net_pnl for t in trades)
         
-        # Calculate Maximum Drawdown
+        # Calculate Maximum Drawdown in dollars
         # Track cumulative P&L and find worst peak-to-trough decline
         max_drawdown = 0.0
         if trades:
@@ -301,7 +301,7 @@ class ProfitabilityMonitor:
                 if cumulative_pnl > peak:
                     peak = cumulative_pnl
                 
-                # Calculate current drawdown from peak
+                # Calculate current drawdown from peak (in dollars)
                 drawdown = peak - cumulative_pnl
                 
                 # Track maximum drawdown
