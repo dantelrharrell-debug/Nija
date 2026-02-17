@@ -1757,9 +1757,21 @@ class TradingStrategy:
             
             # 🔒 CAPITAL PROTECTION: position_tracker is MANDATORY - no silent fallback mode
             if not position_tracker:
-                logger.error("   ❌ CAPITAL PROTECTION: position_tracker is MANDATORY but not available")
+                error_msg = "position_tracker is MANDATORY but not available"
+                logger.error(f"   ❌ CAPITAL PROTECTION: {error_msg}")
                 logger.error("   ❌ Cannot adopt positions without position tracking - FAILING ADOPTION")
-                return
+                logger.error("   🛑 TRADING MUST BE HALTED - manual intervention required")
+                return {
+                    'success': False,
+                    'positions_found': positions_found,
+                    'positions_adopted': 0,
+                    'adoption_time': adoption_start.isoformat(),
+                    'broker_name': broker_name,
+                    'account_id': account_id,
+                    'error': error_msg,
+                    'positions': [],
+                    'critical': True  # Flag for critical failure requiring immediate halt
+                }
             
             for i, pos in enumerate(positions, 1):
                 try:
