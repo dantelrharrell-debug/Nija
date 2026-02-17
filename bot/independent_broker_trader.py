@@ -91,6 +91,9 @@ STARTUP_DELAY_MIN = 30.0  # Minimum delay before first trading cycle (seconds)
 STARTUP_DELAY_MAX = 60.0  # Maximum delay before first trading cycle (seconds)
 BROKER_STAGGER_DELAY = 10.0  # Delay between starting each broker thread (seconds)
 
+# Error message truncation length for health status tracking
+MAX_ERROR_MESSAGE_LENGTH = 100  # Maximum length for error messages stored in health status
+
 
 class IndependentBrokerTrader:
     """
@@ -555,7 +558,7 @@ class IndependentBrokerTrader:
                         logger.error(traceback.format_exc())
                         # Update broker health to failed status
                         self.update_broker_health(broker_name, 'failed', 
-                            f'Adoption exception: {str(pos_err)[:100]}')
+                            f'Adoption exception: {str(pos_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
                         # CRITICAL: Skip trading cycle - do NOT continue in MASTER mode
                         logger.info(f"   ═══════════════════════════════════════════════════════════")
                         logger.info("")
@@ -581,7 +584,7 @@ class IndependentBrokerTrader:
 
                     # Update health status
                     self.update_broker_health(broker_name, 'degraded',
-                                             f'Trading error: {str(trading_err)[:100]}')
+                                             f'Trading error: {str(trading_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
 
                     # Continue to next cycle - don't let one broker's failure stop everything
                     logger.info(f"   ⚠️  {broker_name} will retry next cycle")
@@ -595,7 +598,7 @@ class IndependentBrokerTrader:
                 # Catch-all for any unexpected errors
                 logger.error(f"❌ {broker_name} CRITICAL ERROR in trading loop: {outer_err}")
                 self.update_broker_health(broker_name, 'failed',
-                                         f'Critical error: {str(outer_err)[:100]}')
+                                         f'Critical error: {str(outer_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
 
                 # Wait before retry
                 stop_flag.wait(60)
@@ -765,7 +768,7 @@ class IndependentBrokerTrader:
                             self.user_broker_health[user_id] = {}
                         self.user_broker_health[user_id][broker_name] = {
                             'status': 'failed',
-                            'error': f'Adoption exception: {str(pos_err)[:100]}',
+                            'error': f'Adoption exception: {str(pos_err)[:MAX_ERROR_MESSAGE_LENGTH]}',
                             'last_check': datetime.now()
                         }
                         # CRITICAL: Skip trading cycle - do NOT continue
@@ -803,7 +806,7 @@ class IndependentBrokerTrader:
                         self.user_broker_health[user_id] = {}
                     self.user_broker_health[user_id][broker_name] = {
                         'status': 'degraded',
-                        'error': f'Trading error: {str(trading_err)[:100]}',
+                        'error': f'Trading error: {str(trading_err)[:MAX_ERROR_MESSAGE_LENGTH]}',
                         'last_check': datetime.now()
                     }
 
@@ -822,7 +825,7 @@ class IndependentBrokerTrader:
                     self.user_broker_health[user_id] = {}
                 self.user_broker_health[user_id][broker_name] = {
                     'status': 'failed',
-                    'error': f'Critical error: {str(outer_err)[:100]}',
+                    'error': f'Critical error: {str(outer_err)[:MAX_ERROR_MESSAGE_LENGTH]}',
                     'last_check': datetime.now()
                 }
 
