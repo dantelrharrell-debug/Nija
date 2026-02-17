@@ -32,7 +32,8 @@ logger = logging.getLogger("nija.kraken_rate_profiles")
 class KrakenRateMode(Enum):
     """Kraken API rate limiting modes"""
     STANDARD = "standard"           # Normal mode for larger accounts ($100+)
-    LOW_CAPITAL = "low_capital"     # Conservative mode for small accounts ($20-$100)
+    LOW_CAPITAL = "low_capital"     # Conservative mode for small accounts ($100-$500)
+    MICRO_CAP = "micro_cap"         # Ultra-conservative mode for micro accounts ($20-$100)
     AGGRESSIVE = "aggressive"        # High-frequency mode for professional accounts ($1000+)
 
 
@@ -105,29 +106,29 @@ KRAKEN_RATE_PROFILES = {
         },
     },
 
-    # LOW-CAPITAL MODE: Conservative for small accounts $20-$100
+    # LOW-CAPITAL MODE: Conservative for small accounts $100-$500
     # - Minimizes API calls to reduce "overhead cost"
     # - Prioritizes trade execution over frequent monitoring
     # - Suitable for accounts where API costs matter
     KrakenRateMode.LOW_CAPITAL: {
         'name': 'Low-Capital Rate Profile',
-        'description': 'Conservative mode for $20-$100 small accounts',
-        'min_account_balance': 20.0,
-        'max_account_balance': 100.0,
+        'description': 'Conservative mode for $100-$500 small accounts',
+        'min_account_balance': 100.0,
+        'max_account_balance': 500.0,
 
         # Entry operations (AddOrder buy): 0 points
-        # No rate limiting needed (free on Kraken)
+        # Slowed to 10s to reduce churn
         'entry': {
-            'min_interval_seconds': 3.0,  # 3 seconds between entry orders
-            'max_per_minute': 20,          # Up to 20 entries/minute
+            'min_interval_seconds': 10.0,  # 10 seconds between entry orders (reduced churn)
+            'max_per_minute': 6,           # Up to 6 entries/minute
             'api_cost_points': 0,          # Free on Kraken
         },
 
         # Exit operations (AddOrder sell): 0 points
-        # No rate limiting needed (free on Kraken)
+        # Slowed to 10s to match entry cadence
         'exit': {
-            'min_interval_seconds': 3.0,  # 3 seconds between exit orders
-            'max_per_minute': 20,          # Up to 20 exits/minute
+            'min_interval_seconds': 10.0,  # 10 seconds between exit orders (reduced churn)
+            'max_per_minute': 6,           # Up to 6 exits/minute
             'api_cost_points': 0,          # Free on Kraken
         },
 
@@ -161,6 +162,78 @@ KRAKEN_RATE_PROFILES = {
             'cache_ttl_seconds': 60,        # 60 second cache
             'skip_pre_trade_balance': False, # Still check balance before trades
             'batch_queries': True,           # Batch multiple queries when possible
+        },
+    },
+
+    # MICRO_CAP MODE: Ultra-conservative for $20-$100 micro accounts
+    # - Maximum capital preservation with minimal churn
+    # - Single position focus with strict risk management
+    # - 30-second entry interval to prevent overtrading
+    # - Designed for sustainable $50 account growth
+    KrakenRateMode.MICRO_CAP: {
+        'name': 'Micro-Cap Rate Profile',
+        'description': 'Ultra-conservative mode for $20-$100 micro accounts',
+        'min_account_balance': 20.0,
+        'max_account_balance': 100.0,
+
+        # Entry operations (AddOrder buy): 0 points
+        # 30-second interval for deliberate, high-confidence entries only
+        'entry': {
+            'min_interval_seconds': 30.0,  # 30 seconds between entry orders (prevent churn)
+            'max_per_minute': 2,           # Max 2 entries/minute
+            'api_cost_points': 0,          # Free on Kraken
+        },
+
+        # Exit operations (AddOrder sell): 0 points
+        # Fast exits for profit-taking and stop losses
+        'exit': {
+            'min_interval_seconds': 5.0,   # 5 seconds between exit orders (fast exits OK)
+            'max_per_minute': 12,          # Up to 12 exits/minute
+            'api_cost_points': 0,          # Free on Kraken
+        },
+
+        # Monitoring operations (Balance, TradeBalance): 1 point each
+        # Very conservative monitoring to save API budget
+        'monitoring': {
+            'min_interval_seconds': 60.0,  # 60 seconds between balance checks
+            'max_per_minute': 1,            # Max 1 balance check/minute
+            'api_cost_points': 1,           # 1 point per check
+        },
+
+        # Query operations (QueryOrders, OpenOrders): 1-2 points
+        # Minimal queries for micro accounts
+        'query': {
+            'min_interval_seconds': 30.0,  # 30 seconds between queries
+            'max_per_minute': 2,            # Max 2 queries/minute
+            'api_cost_points': 1,           # 1-2 points per query
+        },
+
+        # Overall API budget management
+        'budget': {
+            'total_points_per_minute': 15,  # Kraken Tier 0 limit
+            'reserve_points': 7,             # Keep 7 points reserve (47%)
+            'monitoring_budget_pct': 0.15,   # 15% of budget for monitoring
+            'query_budget_pct': 0.85,        # 85% of budget for queries
+        },
+
+        # Micro account optimizations
+        'optimizations': {
+            'cache_balance': True,           # Cache balance for 90s
+            'cache_ttl_seconds': 90,         # 90 second cache (longer than low-cap)
+            'skip_pre_trade_balance': False, # Always check balance (critical for micro)
+            'batch_queries': True,           # Batch multiple queries when possible
+        },
+
+        # Micro-cap specific constraints
+        'micro_cap_rules': {
+            'max_concurrent_positions': 1,   # Only 1 position at a time
+            'position_size_usd': 20.0,       # Fixed $20 position size
+            'profit_target_pct': 2.0,        # 2% profit target ($0.40 on $20)
+            'stop_loss_pct': 1.0,            # 1% stop loss ($0.20 on $20)
+            'allow_dca': False,              # No adding to positions
+            'stale_order_timeout_seconds': 120,  # Cancel orders after 2 minutes
+            'high_confidence_only': True,    # Only take high-confidence signals
+            'min_quality_score': 0.75,       # Minimum 75% quality score for entry
         },
     },
 
@@ -238,6 +311,9 @@ def get_kraken_rate_profile(
     # Auto-select mode based on account balance if provided
     if account_balance is not None:
         if account_balance < 100.0:
+            mode = KrakenRateMode.MICRO_CAP
+            logger.info(f"Auto-selected MICRO_CAP mode for ${account_balance:.2f} balance")
+        elif account_balance < 500.0:
             mode = KrakenRateMode.LOW_CAPITAL
             logger.info(f"Auto-selected LOW_CAPITAL mode for ${account_balance:.2f} balance")
         elif account_balance < 1000.0:
