@@ -4199,6 +4199,17 @@ class AlpacaBroker(BaseBroker):
         else:
             self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
 
+        # Initialize position tracker for profit-based exits
+        # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
+        try:
+            from bot.position_tracker import PositionTracker
+            self.position_tracker = PositionTracker(storage_file="data/positions.json")
+            logger.info("✅ Position tracker initialized for profit-based exits")
+        except Exception as e:
+            logger.error(f"❌ CAPITAL PROTECTION: Position tracker initialization FAILED: {e}")
+            logger.error("❌ Position tracker is MANDATORY for capital protection - cannot proceed")
+            raise RuntimeError(f"MANDATORY position_tracker initialization failed: {e}")
+
     @property
     def client(self):
         """Alias for self.api to maintain consistency with other brokers"""
@@ -4648,6 +4659,17 @@ class BinanceBroker(BaseBroker):
     def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         super().__init__(BrokerType.BINANCE, account_type=account_type, user_id=user_id)
         self.client = None
+
+        # Initialize position tracker for profit-based exits
+        # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
+        try:
+            from bot.position_tracker import PositionTracker
+            self.position_tracker = PositionTracker(storage_file="data/positions.json")
+            logger.info("✅ Position tracker initialized for profit-based exits")
+        except Exception as e:
+            logger.error(f"❌ CAPITAL PROTECTION: Position tracker initialization FAILED: {e}")
+            logger.error("❌ Position tracker is MANDATORY for capital protection - cannot proceed")
+            raise RuntimeError(f"MANDATORY position_tracker initialization failed: {e}")
 
     def connect(self) -> bool:
         """
@@ -5355,6 +5377,17 @@ class KrakenBroker(BaseBroker):
         # Will be set during connect() based on account balance
         self._kraken_rate_mode = None  # KrakenRateMode enum
         self._kraken_rate_profile = None  # Rate profile dict
+
+        # Initialize position tracker for profit-based exits
+        # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
+        try:
+            from bot.position_tracker import PositionTracker
+            self.position_tracker = PositionTracker(storage_file="data/positions.json")
+            logger.info("✅ Position tracker initialized for profit-based exits")
+        except Exception as e:
+            logger.error(f"❌ CAPITAL PROTECTION: Position tracker initialization FAILED: {e}")
+            logger.error("❌ Position tracker is MANDATORY for capital protection - cannot proceed")
+            raise RuntimeError(f"MANDATORY position_tracker initialization failed: {e}")
 
     def _initialize_kraken_market_data(self):
         """
@@ -7686,6 +7719,17 @@ class OKXBroker(BaseBroker):
         self._last_known_balance = None  # Last successful balance fetch
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
+
+        # Initialize position tracker for profit-based exits
+        # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
+        try:
+            from bot.position_tracker import PositionTracker
+            self.position_tracker = PositionTracker(storage_file="data/positions.json")
+            logger.info("✅ Position tracker initialized for profit-based exits")
+        except Exception as e:
+            logger.error(f"❌ CAPITAL PROTECTION: Position tracker initialization FAILED: {e}")
+            logger.error("❌ Position tracker is MANDATORY for capital protection - cannot proceed")
+            raise RuntimeError(f"MANDATORY position_tracker initialization failed: {e}")
 
     def connect(self) -> bool:
         """
