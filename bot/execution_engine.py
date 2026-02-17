@@ -884,8 +884,27 @@ class ExecutionEngine:
             # Calculate exit size
             exit_size = position['position_size'] * position['remaining_size'] * size_pct
 
-            # Log exit attempt
-            logger.info(f"Executing exit: {symbol} {size_pct*100:.0f}% @ {exit_price:.2f} - {reason}")
+            # Calculate P&L for logging
+            entry_price = position.get('entry_price', 0)
+            side = position.get('side', 'long')
+            if entry_price > 0:
+                if side == 'long':
+                    gross_pnl_pct = (exit_price - entry_price) / entry_price
+                else:
+                    gross_pnl_pct = (entry_price - exit_price) / entry_price
+                broker_fee_pct = self._get_broker_round_trip_fee()
+                net_pnl_pct = gross_pnl_pct - broker_fee_pct
+                # exit_size is already in USD (position_size * remaining_size * size_pct)
+                fees_usd = exit_size * broker_fee_pct
+            else:
+                gross_pnl_pct = 0
+                net_pnl_pct = 0
+                fees_usd = 0
+
+            # Log exit attempt with explicit fees and net P&L
+            logger.info(f"Executing exit: {symbol} {size_pct*100:.0f}% @ ${exit_price:.2f} - {reason}")
+            if entry_price > 0:
+                logger.info(f"   Gross P&L: {gross_pnl_pct*100:+.2f}% | Fees: ${fees_usd:.2f} | NET P&L: {net_pnl_pct*100:+.2f}%")
 
             # FIX #1: Lock this symbol as being closed before submitting order
             with self._closing_lock:
@@ -964,6 +983,23 @@ class ExecutionEngine:
                             logger.warning(f"Could not close position in ledger: {e}")
 
                     logger.info(f"✅ TRADE COMPLETE: {symbol}")
+                    
+                    # Calculate and log explicit P&L with fees
+                    entry_price = position.get('entry_price', 0)
+                    if entry_price > 0:
+                        if side == 'long':
+                            gross_profit_pct = (exit_price - entry_price) / entry_price
+                        else:
+                            gross_profit_pct = (entry_price - exit_price) / entry_price
+                        broker_fee_pct = self._get_broker_round_trip_fee()
+                        net_profit_pct = gross_profit_pct - broker_fee_pct
+                        fees_paid_usd = position_size_usd * broker_fee_pct
+                        net_profit_usd = position_size_usd * net_profit_pct
+                        
+                        logger.info(f"   📊 P&L Summary:")
+                        logger.info(f"      Gross P&L: {gross_profit_pct*100:+.2f}% (${position_size_usd * gross_profit_pct:+.2f})")
+                        logger.info(f"      Fees Paid: {broker_fee_pct*100:.2f}% (${fees_paid_usd:.2f})")
+                        logger.info(f"      NET P&L:   {net_profit_pct*100:+.2f}% (${net_profit_usd:+.2f})")
                     
                     # Log profit confirmation if profit logger available
                     if self.profit_logger:
