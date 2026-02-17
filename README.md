@@ -167,6 +167,78 @@ python3 live_balance_audit.py
 
 ---
 
+## 🚀 **Go Live: DRY_RUN → LIVE Mode Transition** (February 17, 2026)
+
+**Safely transition from simulation to live trading with automated validation**
+
+NIJA includes a comprehensive go-live system that validates all requirements before enabling real-money trading.
+
+### Quick Start
+
+```bash
+# Step 1: Check current status
+python go_live.py --status
+
+# Step 2: Run all pre-flight checks
+python go_live.py --check
+
+# Step 3: Activate live mode (after checks pass)
+python go_live.py --activate
+
+# Step 4: Start trading
+./start.sh
+```
+
+### What Gets Validated
+
+The `go_live.py` script performs **10 critical checks**:
+
+1. ✅ **DRY_RUN_MODE** - Disabled (not in simulation)
+2. ✅ **LIVE_CAPITAL_VERIFIED** - Enabled (safety lock released)
+3. ✅ **Broker Health** - All brokers green (no failures)
+4. ✅ **Adoption Failures** - None detected
+5. ✅ **Trading Threads** - No halted threads
+6. ✅ **Capital Safety** - Thresholds satisfied (20% buffer)
+7. ✅ **Multi-Account Isolation** - System operational
+8. ✅ **Recovery Mechanisms** - Circuit breakers configured
+9. ✅ **API Credentials** - Configured and valid
+10. ✅ **Emergency Stops** - None active
+
+### Observability Dashboard Integration
+
+Monitor system health in real-time:
+
+```bash
+# Open production observability dashboard
+open NIJA_PRODUCTION_OBSERVABILITY_DASHBOARD.html
+
+# Shows broker health, adoption failures, halted threads
+# Auto-refreshes every 5 seconds
+# Failed states shown in RED immediately
+```
+
+### Safety Features
+
+- **Automatic validation** - Won't activate if any checks fail
+- **Clear remediation** - Provides fix instructions for failures
+- **Multi-account isolation** - One account failure never affects others
+- **Circuit breakers** - Automatic recovery after 5 failures
+- **Capital safety buffers** - 20% buffer maintained
+- **Emergency stop** - Create `EMERGENCY_STOP` file to halt immediately
+
+### Documentation
+
+📚 **Complete Guide**: See [GO_LIVE_GUIDE.md](GO_LIVE_GUIDE.md) for:
+- Detailed check descriptions
+- Troubleshooting common issues
+- Environment configuration
+- Emergency procedures
+- Best practices and safety reminders
+
+⚠️ **IMPORTANT**: Always test in DRY_RUN mode first. Start with small capital. Monitor actively.
+
+---
+
 ## 📱 **App Store Mode** (iOS/Android Submission)
 
 **For App Store and Google Play reviewers**
@@ -4319,6 +4391,16 @@ python3 diagnose_profitability_now.py
    - Multi-user configuration
    - Platform and user accounts
    - Deployment to Railway/Render
+
+15. **[GO_LIVE_GUIDE.md](GO_LIVE_GUIDE.md)** 🚀 **GO LIVE CHECKLIST** ⭐ **NEW**
+   - **Automated go-live validation** with `go_live.py` script
+   - **Pre-flight checks**: DRY_RUN → LIVE mode transition
+   - **System health validation**: Broker status, thread monitoring, capital safety
+   - **Observability integration**: Dashboard monitoring, alert verification
+   - **Multi-account isolation checks**: Account health, recovery mechanisms
+   - **Emergency procedures**: Immediate stop methods, safety protocols
+   - **Best practices**: Testing, monitoring, scaling up safely
+   - **Command-line tool**: `python go_live.py --check|--activate|--status`
 
 ### Core Playbooks & Guides
 
