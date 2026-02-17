@@ -60,9 +60,13 @@ def format_order_id(order_id: str, max_length: int = 12) -> str:
     Returns:
         Formatted order ID string
     """
-    if len(order_id) > max_length:
-        return order_id[:max_length] + '...'
-    return order_id
+    if not order_id:
+        return "UNKNOWN"
+    
+    order_id_str = str(order_id)
+    if len(order_id_str) > max_length:
+        return order_id_str[:max_length] + '...'
+    return order_id_str
 
 
 def get_all_open_orders(adapter) -> list:
