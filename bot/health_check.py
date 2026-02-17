@@ -16,7 +16,7 @@ import os
 import time
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, Optional, Any
 from dataclasses import dataclass, asdict
@@ -259,7 +259,7 @@ class HealthCheckManager:
             'user_id': user_id,
             'error': error_message,
             'timestamp': time.time(),
-            'timestamp_iso': datetime.utcnow().isoformat()
+            'timestamp_iso': datetime.now(timezone.utc).isoformat()
         }
         
         self.state.adoption_failures.append(failure_event)
@@ -303,7 +303,7 @@ class HealthCheckManager:
                 'broker': broker_name,
                 'error': error_message,
                 'timestamp': time.time(),
-                'timestamp_iso': datetime.utcnow().isoformat()
+                'timestamp_iso': datetime.now(timezone.utc).isoformat()
             }
             self.state.broker_failures.append(failure_event)
             self.state.broker_failure_count += 1
@@ -355,7 +355,7 @@ class HealthCheckManager:
                 'broker': broker_name,
                 'thread_id': thread_id,
                 'timestamp': time.time(),
-                'timestamp_iso': datetime.utcnow().isoformat()
+                'timestamp_iso': datetime.now(timezone.utc).isoformat()
             }
             self.state.thread_failures.append(failure_event)
             
@@ -431,7 +431,7 @@ class HealthCheckManager:
                 'thread_status': self.state.trading_threads,
                 'recent_failures': len([f for f in self.state.thread_failures if f['timestamp'] > cutoff_time])
             },
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
     
     def get_liveness_status(self) -> Dict[str, Any]:
@@ -450,7 +450,7 @@ class HealthCheckManager:
             "status": "alive",
             "uptime_seconds": self.state.uptime_seconds,
             "last_heartbeat": datetime.fromtimestamp(self.state.last_heartbeat).isoformat(),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     
     def get_readiness_status(self) -> tuple[Dict[str, Any], int]:
@@ -487,7 +487,7 @@ class HealthCheckManager:
                 "active_positions": self.state.active_positions,
                 "last_trade": datetime.fromtimestamp(self.state.last_trade_time).isoformat() if self.state.last_trade_time else None
             },
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         # Add error information if present
