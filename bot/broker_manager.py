@@ -4202,7 +4202,7 @@ class AlpacaBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
-            from bot.position_tracker import PositionTracker
+            from position_tracker import PositionTracker
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
@@ -4663,7 +4663,7 @@ class BinanceBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
-            from bot.position_tracker import PositionTracker
+            from position_tracker import PositionTracker
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
@@ -5381,7 +5381,7 @@ class KrakenBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
-            from bot.position_tracker import PositionTracker
+            from position_tracker import PositionTracker
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
@@ -7723,7 +7723,7 @@ class OKXBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
-            from bot.position_tracker import PositionTracker
+            from position_tracker import PositionTracker
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
