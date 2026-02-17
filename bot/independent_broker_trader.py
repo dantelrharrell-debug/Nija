@@ -58,6 +58,7 @@ import time
 import logging
 import random
 import threading
+import traceback
 from typing import Dict, List, Optional, Set
 from datetime import datetime
 
@@ -551,7 +552,6 @@ class IndependentBrokerTrader:
                         logger.error(f"   ❌ Position adoption failed: {pos_err}")
                         logger.error(f"   🛑 CRITICAL: HALTING {broker_name.upper()} TRADING")
                         logger.error(f"   ⚠️  Exception during adoption - manual intervention required")
-                        import traceback
                         logger.error(traceback.format_exc())
                         # Update broker health to failed status
                         self.update_broker_health(broker_name, 'failed', 
@@ -759,7 +759,6 @@ class IndependentBrokerTrader:
                         logger.error(f"   🔒 GUARDRAIL: This is a CRITICAL failure - positions may be unmanaged!")
                         logger.error(f"   🛑 CRITICAL: HALTING {broker_name} TRADING FOR USER {user_id}")
                         logger.error(f"   ⚠️  Exception during adoption - manual intervention required")
-                        import traceback
                         logger.error(traceback.format_exc())
                         # Update user broker health to failed status
                         if user_id not in self.user_broker_health:
