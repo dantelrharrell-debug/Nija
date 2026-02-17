@@ -1003,12 +1003,13 @@ def get_kpi_tracker(initial_capital: float = 1000.0, reset: bool = False) -> KPI
 _kpi_tracker: Optional[KPITracker] = None
 
 
-def get_kpi_tracker(initial_capital: float = 10000.0) -> KPITracker:
+def get_kpi_tracker(initial_capital: float = 10000.0, reset: bool = False) -> KPITracker:
     """
     Get or create global KPI tracker instance
     
     Args:
         initial_capital: Starting capital (only used on first creation)
+        reset: Force reset and create new instance
         
     Returns:
         KPITracker instance
@@ -1016,7 +1017,6 @@ def get_kpi_tracker(initial_capital: float = 10000.0) -> KPITracker:
     global _kpi_tracker
     
     if _kpi_tracker is None or reset:
-    if _kpi_tracker is None:
         _kpi_tracker = KPITracker(initial_capital=initial_capital)
     
     return _kpi_tracker
