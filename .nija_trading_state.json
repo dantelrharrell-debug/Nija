@@ -2,29 +2,23 @@
   "current_state": "DRY_RUN",
   "history": [
     {
-      "from": "OFF",
-      "to": "DRY_RUN",
-      "reason": "Test",
-      "timestamp": "2026-02-03T03:53:47.326144"
-    },
-    {
       "from": "DRY_RUN",
       "to": "EMERGENCY_STOP",
-      "reason": "Kill switch activated: Test activation",
-      "timestamp": "2026-02-04T20:56:56.468392"
+      "reason": "Kill switch test",
+      "timestamp": "2026-02-17T22:05:00.000000"
     },
     {
       "from": "EMERGENCY_STOP",
       "to": "OFF",
       "reason": "Safe recovery: Clearing emergency stop",
-      "timestamp": "2026-02-17T22:01:15.132675"
+      "timestamp": "2026-02-17T22:03:29.367510"
     },
     {
       "from": "OFF",
       "to": "DRY_RUN",
       "reason": "Safe recovery: Enabling simulation mode",
-      "timestamp": "2026-02-17T22:01:15.133111"
+      "timestamp": "2026-02-17T22:03:29.367853"
     }
   ],
-  "last_updated": "2026-02-17T22:01:15.133120"
+  "last_updated": "2026-02-17T22:03:29.367860"
 }
