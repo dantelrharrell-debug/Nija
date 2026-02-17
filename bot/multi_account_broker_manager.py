@@ -33,6 +33,16 @@ except ImportError:
         CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker
     )
 
+# Import account isolation manager for failure isolation
+try:
+    from bot.account_isolation_manager import get_isolation_manager, FailureType
+except ImportError:
+    try:
+        from account_isolation_manager import get_isolation_manager, FailureType
+    except ImportError:
+        get_isolation_manager = None
+        FailureType = None
+
 logger = logging.getLogger('nija.multi_account')
 
 # Root nija logger for flushing all handlers
@@ -121,6 +131,16 @@ class MultiAccountBrokerManager:
         except ImportError:
             logger.warning("⚠️ Portfolio state module not available")
             self.portfolio_manager = None
+
+        # ISOLATION MANAGER: Initialize account isolation manager for failure isolation
+        # This ensures one account failure can NEVER affect another account
+        self.isolation_manager = None
+        if get_isolation_manager is not None:
+            try:
+                self.isolation_manager = get_isolation_manager()
+                logger.info("✅ Account isolation manager initialized - failure isolation active")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not initialize isolation manager: {e}")
 
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
@@ -240,7 +260,10 @@ class MultiAccountBrokerManager:
 
     def add_user_broker(self, user_id: str, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
-        Add a broker for a user account.
+        Add a broker for a user account with complete isolation.
+        
+        ISOLATION GUARANTEE: Failures in this operation will NOT affect other accounts.
+        Each user account operates independently with its own error handling.
 
         Args:
             user_id: User identifier (e.g., 'tania_gilbert')
@@ -250,6 +273,19 @@ class MultiAccountBrokerManager:
             BaseBroker instance (even if not connected) or None if broker type unsupported
         """
         try:
+            # Register account with isolation manager before operation
+            if self.isolation_manager:
+                self.isolation_manager.register_account('user', user_id, broker_type.value)
+                
+                # Check if account can execute operations (circuit breaker check)
+                can_execute, reason = self.isolation_manager.can_execute_operation(
+                    'user', user_id, broker_type.value
+                )
+                if not can_execute:
+                    logger.warning(f"⚠️  Cannot add broker for {user_id}/{broker_type.value}: {reason}")
+                    # Return None but don't count as failure - account is quarantined
+                    return None
+            
             broker = None
 
             if broker_type == BrokerType.KRAKEN:
@@ -265,22 +301,79 @@ class MultiAccountBrokerManager:
             connection_key = (user_id, broker_type)
             self._all_user_brokers[connection_key] = broker
 
-            # Connect the broker
-            if broker.connect():
-                if user_id not in self.user_brokers:
-                    self.user_brokers[user_id] = {}
+            # Connect the broker (wrapped in isolation)
+            connect_start = time.time()
+            try:
+                if broker.connect():
+                    if user_id not in self.user_brokers:
+                        self.user_brokers[user_id] = {}
 
-                self.user_brokers[user_id][broker_type] = broker
-                # Note: Success/failure messages are logged by the caller (connect_users_from_config)
-                # which has access to user.name for more user-friendly messages
-            else:
-                # Connection failed, but return broker object so caller can check credentials_configured
-                pass  # Caller will log appropriate message
+                    self.user_brokers[user_id][broker_type] = broker
+                    
+                    # Record success with isolation manager
+                    if self.isolation_manager:
+                        operation_time_ms = (time.time() - connect_start) * 1000
+                        self.isolation_manager.record_success(
+                            'user', user_id, broker_type.value, operation_time_ms
+                        )
+                    
+                    # Note: Success/failure messages are logged by the caller (connect_users_from_config)
+                    # which has access to user.name for more user-friendly messages
+                else:
+                    # Connection failed - determine failure type and record
+                    if self.isolation_manager:
+                        # Check if it's an authentication error
+                        if not broker.credentials_configured:
+                            failure_type = FailureType.AUTHENTICATION_ERROR if FailureType else None
+                        else:
+                            failure_type = FailureType.NETWORK_ERROR if FailureType else None
+                        
+                        if failure_type:
+                            self.isolation_manager.record_failure(
+                                'user', user_id, broker_type.value,
+                                Exception("Connection failed"),
+                                failure_type
+                            )
+                    # Caller will log appropriate message
+                    pass
+                    
+            except Exception as connect_error:
+                # Connection attempt raised an exception - record failure
+                logger.error(f"❌ Exception connecting {broker_type.value} for {user_id}: {connect_error}")
+                
+                if self.isolation_manager:
+                    # Determine failure type from exception
+                    error_str = str(connect_error).lower()
+                    if 'auth' in error_str or 'credential' in error_str or 'permission' in error_str:
+                        failure_type = FailureType.AUTHENTICATION_ERROR if FailureType else None
+                    elif 'rate' in error_str or 'limit' in error_str:
+                        failure_type = FailureType.RATE_LIMIT_ERROR if FailureType else None
+                    elif 'network' in error_str or 'connection' in error_str or 'timeout' in error_str:
+                        failure_type = FailureType.NETWORK_ERROR if FailureType else None
+                    else:
+                        failure_type = FailureType.UNKNOWN_ERROR if FailureType else None
+                    
+                    if failure_type:
+                        self.isolation_manager.record_failure(
+                            'user', user_id, broker_type.value,
+                            connect_error,
+                            failure_type
+                        )
 
             return broker
 
         except Exception as e:
+            # Top-level exception handler - ensures this account failure doesn't affect others
             logger.error(f"❌ Error adding user broker {broker_type.value} for {user_id}: {e}")
+            logger.error(f"   ISOLATION: This failure is contained to {user_id} only")
+            
+            if self.isolation_manager and FailureType:
+                self.isolation_manager.record_failure(
+                    'user', user_id, broker_type.value,
+                    e,
+                    FailureType.UNKNOWN_ERROR
+                )
+            
             return None
 
     def get_platform_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
@@ -490,7 +583,9 @@ class MultiAccountBrokerManager:
 
     def get_user_balance(self, user_id: str, broker_type: Optional[BrokerType] = None) -> float:
         """
-        Get user account balance.
+        Get user account balance with isolation guarantee.
+        
+        ISOLATION GUARANTEE: Balance fetch failures for one account will NOT affect other accounts.
 
         Args:
             user_id: User identifier
@@ -506,20 +601,79 @@ class MultiAccountBrokerManager:
             if not broker:
                 return 0.0
 
-            # CRITICAL FIX (Jan 19, 2026): Use cached balance for Kraken to prevent repeated API calls
-            if broker_type == BrokerType.KRAKEN:
-                return self._get_cached_balance('user', user_id, broker_type, broker)
+            # Check isolation manager before fetching balance
+            if self.isolation_manager:
+                can_execute, reason = self.isolation_manager.can_execute_operation(
+                    'user', user_id, broker_type.value
+                )
+                if not can_execute:
+                    logger.debug(f"Cannot fetch balance for {user_id}/{broker_type.value}: {reason}")
+                    return 0.0
 
-            return broker.get_account_balance()
+            try:
+                # CRITICAL FIX (Jan 19, 2026): Use cached balance for Kraken to prevent repeated API calls
+                if broker_type == BrokerType.KRAKEN:
+                    balance = self._get_cached_balance('user', user_id, broker_type, broker)
+                else:
+                    balance = broker.get_account_balance()
+                
+                # Record success with isolation manager
+                if self.isolation_manager:
+                    self.isolation_manager.record_success('user', user_id, broker_type.value)
+                
+                return balance
+                
+            except Exception as e:
+                logger.error(f"❌ Error fetching balance for {user_id}/{broker_type.value}: {e}")
+                logger.error(f"   ISOLATION: This failure is contained to {user_id} only")
+                
+                # Record failure with isolation manager
+                if self.isolation_manager and FailureType:
+                    self.isolation_manager.record_failure(
+                        'user', user_id, broker_type.value,
+                        e,
+                        FailureType.BALANCE_ERROR
+                    )
+                
+                return 0.0
 
-        # Total across all user brokers
+        # Total across all user brokers (isolation applied per broker)
         total = 0.0
         for broker_type, broker in user_brokers.items():
             if broker.connected:
-                if broker_type == BrokerType.KRAKEN:
-                    total += self._get_cached_balance('user', user_id, broker_type, broker)
-                else:
-                    total += broker.get_account_balance()
+                # Check isolation for this specific broker
+                can_execute = True
+                if self.isolation_manager:
+                    can_execute, _ = self.isolation_manager.can_execute_operation(
+                        'user', user_id, broker_type.value
+                    )
+                
+                if can_execute:
+                    try:
+                        if broker_type == BrokerType.KRAKEN:
+                            total += self._get_cached_balance('user', user_id, broker_type, broker)
+                        else:
+                            total += broker.get_account_balance()
+                        
+                        # Record success
+                        if self.isolation_manager:
+                            self.isolation_manager.record_success('user', user_id, broker_type.value)
+                            
+                    except Exception as e:
+                        # Log error but continue with other brokers (isolation guarantee)
+                        logger.error(f"❌ Error fetching balance for {user_id}/{broker_type.value}: {e}")
+                        logger.error(f"   ISOLATION: Continuing with other brokers")
+                        
+                        if self.isolation_manager and FailureType:
+                            self.isolation_manager.record_failure(
+                                'user', user_id, broker_type.value,
+                                e,
+                                FailureType.BALANCE_ERROR
+                            )
+                        
+                        # Continue to next broker - don't let one failure stop others
+                        continue
+        
         return total
 
     def update_user_portfolio(self, user_id: str, broker_type: BrokerType) -> Optional[any]:
