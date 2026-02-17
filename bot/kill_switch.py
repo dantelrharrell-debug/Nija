@@ -203,7 +203,7 @@ To resume trading:
             
             # Also transition state machine to EMERGENCY_STOP
             try:
-                from bot.trading_state_machine import get_state_machine, TradingState
+                from trading_state_machine import get_state_machine, TradingState
                 state_machine = get_state_machine()
                 state_machine.transition_to(
                     TradingState.EMERGENCY_STOP,
@@ -211,6 +211,7 @@ To resume trading:
                 )
             except Exception as e:
                 logger.error(f"❌ Error transitioning state machine: {e}")
+                # Continue anyway - kill switch is still active
                 
     def deactivate(self, reason: str = "Manual deactivation"):
         """
@@ -254,7 +255,7 @@ To resume trading:
             
             # Also transition state machine back to OFF to prevent inconsistent state
             try:
-                from bot.trading_state_machine import get_state_machine, TradingState
+                from trading_state_machine import get_state_machine, TradingState
                 state_machine = get_state_machine()
                 current_state = state_machine.get_current_state()
                 
