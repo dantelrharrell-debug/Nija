@@ -68,6 +68,16 @@ try:
 except ImportError:
     from broker_manager import BrokerType
 
+# Import account isolation manager for failure isolation
+try:
+    from bot.account_isolation_manager import get_isolation_manager, FailureType
+except ImportError:
+    try:
+        from account_isolation_manager import get_isolation_manager, FailureType
+    except ImportError:
+        get_isolation_manager = None
+        FailureType = None
+
 # LEGACY: Import copy trade engine for checking if copy trading is active
 # NOTE: Copy trading is deprecated. This import is kept for backward compatibility.
 # Expected: ImportError (module doesn't exist) - system uses independent trading
@@ -134,10 +144,22 @@ class IndependentBrokerTrader:
         self.active_trading_threads: Set[str] = set()
         self.active_threads_lock = threading.Lock()
 
+        # ISOLATION MANAGER: Initialize account isolation manager for failure isolation
+        # This ensures one account failure can NEVER affect another account
+        self.isolation_manager = None
+        if get_isolation_manager is not None:
+            try:
+                self.isolation_manager = get_isolation_manager()
+                logger.info("   ✅ Account isolation manager enabled - thread-level failure isolation active")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Could not initialize isolation manager: {e}")
+
         logger.info("=" * 70)
         logger.info("🔒 INDEPENDENT BROKER TRADER INITIALIZED")
         if multi_account_manager:
             logger.info("   ✅ Multi-account support enabled (user trading)")
+        if self.isolation_manager:
+            logger.info("   🛡️  Account isolation manager active")
         logger.info("=" * 70)
 
     def _get_platform_broker_source(self):
@@ -581,6 +603,32 @@ class IndependentBrokerTrader:
                 except Exception as trading_err:
                     logger.error(f"❌ {broker_name} trading cycle failed: {trading_err}")
                     logger.error(f"   Error type: {type(trading_err).__name__}")
+                    logger.error(f"   ISOLATION: This failure is contained to {broker_name} only")
+
+                    # Record failure with isolation manager
+                    if self.isolation_manager and FailureType:
+                        # Determine failure type
+                        error_str = str(trading_err).lower()
+                        if 'api' in error_str:
+                            failure_type = FailureType.API_ERROR
+                        elif 'auth' in error_str or 'credential' in error_str:
+                            failure_type = FailureType.AUTHENTICATION_ERROR
+                        elif 'rate' in error_str or 'limit' in error_str:
+                            failure_type = FailureType.RATE_LIMIT_ERROR
+                        elif 'execution' in error_str or 'order' in error_str:
+                            failure_type = FailureType.EXECUTION_ERROR
+                        elif 'position' in error_str:
+                            failure_type = FailureType.POSITION_ERROR
+                        elif 'network' in error_str or 'timeout' in error_str:
+                            failure_type = FailureType.NETWORK_ERROR
+                        else:
+                            failure_type = FailureType.UNKNOWN_ERROR
+                        
+                        self.isolation_manager.record_failure(
+                            'platform', 'platform', broker_name,
+                            trading_err,
+                            failure_type
+                        )
 
                     # Update health status
                     self.update_broker_health(broker_name, 'degraded',
@@ -595,8 +643,19 @@ class IndependentBrokerTrader:
                 stop_flag.wait(150)
 
             except Exception as outer_err:
-                # Catch-all for any unexpected errors
+                # Catch-all for any unexpected errors - ultimate isolation boundary
                 logger.error(f"❌ {broker_name} CRITICAL ERROR in trading loop: {outer_err}")
+                logger.error(f"   ISOLATION GUARANTEE: This will NOT affect other brokers")
+                logger.error(traceback.format_exc())
+                
+                # Record critical failure with isolation manager
+                if self.isolation_manager and FailureType:
+                    self.isolation_manager.record_failure(
+                        'platform', 'platform', broker_name,
+                        outer_err,
+                        FailureType.UNKNOWN_ERROR
+                    )
+                
                 self.update_broker_health(broker_name, 'failed',
                                          f'Critical error: {str(outer_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
 
@@ -800,6 +859,32 @@ class IndependentBrokerTrader:
                 except Exception as trading_err:
                     logger.error(f"❌ {broker_name} (USER) trading cycle failed: {trading_err}")
                     logger.error(f"   Error type: {type(trading_err).__name__}")
+                    logger.error(f"   ISOLATION: This failure is contained to {user_id} only")
+
+                    # Record failure with isolation manager
+                    if self.isolation_manager and FailureType:
+                        # Determine failure type
+                        error_str = str(trading_err).lower()
+                        if 'api' in error_str:
+                            failure_type = FailureType.API_ERROR
+                        elif 'auth' in error_str or 'credential' in error_str:
+                            failure_type = FailureType.AUTHENTICATION_ERROR
+                        elif 'rate' in error_str or 'limit' in error_str:
+                            failure_type = FailureType.RATE_LIMIT_ERROR
+                        elif 'execution' in error_str or 'order' in error_str:
+                            failure_type = FailureType.EXECUTION_ERROR
+                        elif 'position' in error_str:
+                            failure_type = FailureType.POSITION_ERROR
+                        elif 'network' in error_str or 'timeout' in error_str:
+                            failure_type = FailureType.NETWORK_ERROR
+                        else:
+                            failure_type = FailureType.UNKNOWN_ERROR
+                        
+                        self.isolation_manager.record_failure(
+                            'user', user_id, broker_type.value,
+                            trading_err,
+                            failure_type
+                        )
 
                     # Update health status
                     if user_id not in self.user_broker_health:
@@ -819,8 +904,19 @@ class IndependentBrokerTrader:
                 stop_flag.wait(150)
 
             except Exception as outer_err:
-                # Catch-all for any unexpected errors
+                # Catch-all for any unexpected errors - ultimate isolation boundary
                 logger.error(f"❌ {broker_name} (USER) CRITICAL ERROR in trading loop: {outer_err}")
+                logger.error(f"   ISOLATION GUARANTEE: This will NOT affect other users or platform")
+                logger.error(traceback.format_exc())
+                
+                # Record critical failure with isolation manager
+                if self.isolation_manager and FailureType:
+                    self.isolation_manager.record_failure(
+                        'user', user_id, broker_type.value,
+                        outer_err,
+                        FailureType.UNKNOWN_ERROR
+                    )
+                
                 if user_id not in self.user_broker_health:
                     self.user_broker_health[user_id] = {}
                 self.user_broker_health[user_id][broker_name] = {
