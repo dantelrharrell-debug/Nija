@@ -495,6 +495,55 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             logger.error(f"Error in revenue_metrics: {e}")
             return jsonify({'error': 'Failed to retrieve revenue metrics'}), 500
 
+    # Production observability endpoints
+    @app.route('/api/founder/critical-status', methods=['GET'])
+    def critical_status():
+        """Get critical status (adoption failures, broker health, trading threads)"""
+        try:
+            from bot.health_check import get_health_manager
+            health_mgr = get_health_manager()
+            status = health_mgr.get_critical_status()
+            return jsonify(status)
+        except Exception as e:
+            logger.error(f"Error in critical_status: {e}")
+            return jsonify({'error': 'Failed to retrieve critical status'}), 500
+    
+    @app.route('/api/founder/adoption-failures', methods=['GET'])
+    def adoption_failures():
+        """Get adoption failure history"""
+        try:
+            from bot.health_check import get_health_manager
+            health_mgr = get_health_manager()
+            status = health_mgr.get_critical_status()
+            return jsonify(status['adoption'])
+        except Exception as e:
+            logger.error(f"Error in adoption_failures: {e}")
+            return jsonify({'error': 'Failed to retrieve adoption failures'}), 500
+    
+    @app.route('/api/founder/broker-health', methods=['GET'])
+    def broker_health_status():
+        """Get broker health status"""
+        try:
+            from bot.health_check import get_health_manager
+            health_mgr = get_health_manager()
+            status = health_mgr.get_critical_status()
+            return jsonify(status['broker_health'])
+        except Exception as e:
+            logger.error(f"Error in broker_health_status: {e}")
+            return jsonify({'error': 'Failed to retrieve broker health'}), 500
+    
+    @app.route('/api/founder/trading-threads', methods=['GET'])
+    def trading_threads_status():
+        """Get trading thread status"""
+        try:
+            from bot.health_check import get_health_manager
+            health_mgr = get_health_manager()
+            status = health_mgr.get_critical_status()
+            return jsonify(status['trading_threads'])
+        except Exception as e:
+            logger.error(f"Error in trading_threads_status: {e}")
+            return jsonify({'error': 'Failed to retrieve trading thread status'}), 500
+
     return app
 
 
