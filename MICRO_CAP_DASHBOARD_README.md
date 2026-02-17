@@ -1,5 +1,9 @@
 # NIJA MICRO_CAP Production Readiness Dashboard
 
+## Screenshot
+
+![NIJA MICRO_CAP Dashboard](https://github.com/user-attachments/assets/e16de079-2089-4bc0-9aef-22f6bd97d92c)
+
 ## Overview
 
 The **NIJA MICRO_CAP Production Readiness Dashboard** is a real-time monitoring interface designed specifically for tracking the first 50 trades in MICRO_CAP mode. It provides comprehensive visibility into:
