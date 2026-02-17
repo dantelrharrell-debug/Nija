@@ -110,7 +110,8 @@ def cancel_all_orders(adapter, dry_run: bool = False) -> tuple:
     
     print(f"📋 Found {len(orders)} open order(s):")
     for order in orders:
-        print(f"   • {order['pair']}: {order['type']} {order['volume']:.8f} ({order['ordertype']}) - ID: {order['order_id'][:12]}...")
+        order_id_display = order['order_id'][:12] + '...' if len(order['order_id']) > 12 else order['order_id']
+        print(f"   • {order['pair']}: {order['type']} {order['volume']:.8f} ({order['ordertype']}) - ID: {order_id_display}")
     
     if dry_run:
         print("\n🔍 DRY RUN: Would cancel all orders listed above")
@@ -122,13 +123,14 @@ def cancel_all_orders(adapter, dry_run: bool = False) -> tuple:
     
     for order in orders:
         order_id = order['order_id']
+        order_id_display = order_id[:12] + '...' if len(order_id) > 12 else order_id
         try:
             success = adapter.cancel_order(order_id)
             if success:
-                print(f"   ✅ Cancelled: {order['pair']} (ID: {order_id[:12]}...)")
+                print(f"   ✅ Cancelled: {order['pair']} (ID: {order_id_display})")
                 success_count += 1
             else:
-                print(f"   ❌ Failed to cancel: {order['pair']} (ID: {order_id[:12]}...)")
+                print(f"   ❌ Failed to cancel: {order['pair']} (ID: {order_id_display})")
                 fail_count += 1
             
             # Rate limiting: small delay between cancellations
