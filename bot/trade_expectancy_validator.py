@@ -71,7 +71,12 @@ class TradeExpectancyValidator:
         self.strict_mode = strict_mode
         self.min_r_multiple = self.MIN_R_MULTIPLE_STRICT if strict_mode else self.MIN_R_MULTIPLE_ACCEPTABLE
         
+        # Track real expectancy over 100 trades
+        self.completed_trades = []  # Store trade results
+        self.MIN_TRADES_FOR_PROJECTIONS = 100  # Need 100 trades before ROI projections
+        
         logger.info(f"✅ Trade Expectancy Validator initialized (R-multiple ≥ {self.min_r_multiple})")
+        logger.info(f"   ROI projections will be available after {self.MIN_TRADES_FOR_PROJECTIONS} trades")
     
     def calculate_r_multiple(
         self,
@@ -395,3 +400,98 @@ class TradeExpectancyValidator:
         result['valid'] = r_valid and stop_valid and confirmation_ok
         
         return result
+    
+    def record_completed_trade(self, win: bool, profit_pct: float, risk_pct: float) -> None:
+        """
+        Record a completed trade for expectancy calculation.
+        
+        Args:
+            win: True if trade was profitable, False if loss
+            profit_pct: Profit/loss percentage (e.g., 0.025 for 2.5%)
+            risk_pct: Risk percentage (e.g., 0.006 for 0.6%)
+        """
+        trade = {
+            'win': win,
+            'profit_pct': profit_pct,
+            'risk_pct': risk_pct,
+            'r_multiple': profit_pct / risk_pct if risk_pct != 0 else 0,
+            'timestamp': datetime.now()
+        }
+        
+        self.completed_trades.append(trade)
+        
+        # Keep only last 100 trades for rolling calculation
+        if len(self.completed_trades) > self.MIN_TRADES_FOR_PROJECTIONS:
+            self.completed_trades = self.completed_trades[-self.MIN_TRADES_FOR_PROJECTIONS:]
+        
+        # Log progress
+        if len(self.completed_trades) == self.MIN_TRADES_FOR_PROJECTIONS:
+            logger.info(f"✅ Reached {self.MIN_TRADES_FOR_PROJECTIONS} trades - ROI projections now available!")
+    
+    def get_real_expectancy(self) -> Dict:
+        """
+        Calculate real expectancy from actual trades.
+        
+        Returns:
+            Dict with expectancy metrics or warning if insufficient data
+        """
+        if len(self.completed_trades) < self.MIN_TRADES_FOR_PROJECTIONS:
+            return {
+                'sufficient_data': False,
+                'trades_completed': len(self.completed_trades),
+                'trades_needed': self.MIN_TRADES_FOR_PROJECTIONS - len(self.completed_trades),
+                'warning': f"Need {self.MIN_TRADES_FOR_PROJECTIONS - len(self.completed_trades)} more trades before ROI projections"
+            }
+        
+        # Calculate from last 100 trades
+        trades = self.completed_trades[-self.MIN_TRADES_FOR_PROJECTIONS:]
+        wins = [t for t in trades if t['win']]
+        losses = [t for t in trades if not t['win']]
+        
+        win_rate = len(wins) / len(trades)
+        
+        avg_win = np.mean([t['profit_pct'] for t in wins]) if wins else 0
+        avg_loss = abs(np.mean([t['profit_pct'] for t in losses])) if losses else 0
+        
+        # Expectancy = (Win% × Avg Win) - (Loss% × Avg Loss)
+        expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+        
+        # Average R-multiple
+        avg_r = np.mean([t['r_multiple'] for t in trades])
+        
+        return {
+            'sufficient_data': True,
+            'trades_completed': len(trades),
+            'win_rate': win_rate,
+            'avg_win_pct': avg_win,
+            'avg_loss_pct': avg_loss,
+            'expectancy_pct': expectancy,
+            'avg_r_multiple': avg_r,
+            'total_wins': len(wins),
+            'total_losses': len(losses)
+        }
+    
+    def should_show_roi_projections(self) -> bool:
+        """
+        Check if enough trades completed to show ROI projections.
+        
+        Returns:
+            True if ≥100 trades completed, False otherwise
+        """
+        return len(self.completed_trades) >= self.MIN_TRADES_FOR_PROJECTIONS
+    
+    def get_roi_projection_warning(self) -> str:
+        """
+        Get warning message if ROI projections shown with insufficient data.
+        
+        Returns:
+            Warning message or empty string if sufficient data
+        """
+        if self.should_show_roi_projections():
+            return ""
+        
+        trades_needed = self.MIN_TRADES_FOR_PROJECTIONS - len(self.completed_trades)
+        return (
+            f"⚠️ WARNING: ROI projections require {self.MIN_TRADES_FOR_PROJECTIONS} trades. "
+            f"Only {len(self.completed_trades)} completed. Need {trades_needed} more trades for accurate projections."
+        )

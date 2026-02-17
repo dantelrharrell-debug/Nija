@@ -134,6 +134,12 @@ class AdaptiveRiskManager:
         # Track recent trades for streak analysis
         self.recent_trades: List[Dict] = []
         self.max_trade_history = 20  # Keep last 20 trades
+        
+        # Consecutive loss cooldown (3 losses = 60 min pause)
+        self.consecutive_loss_count = 0
+        self.cooldown_until = None  # datetime when cooldown expires
+        self.COOLDOWN_LOSS_THRESHOLD = 3  # 3 consecutive losses
+        self.COOLDOWN_DURATION_MINUTES = 60  # 60 minute pause
 
         # Current exposure tracking
         self.current_exposure = 0.0
@@ -222,8 +228,68 @@ class AdaptiveRiskManager:
         # Keep only recent trades
         if len(self.recent_trades) > self.max_trade_history:
             self.recent_trades = self.recent_trades[-self.max_trade_history:]
+        
+        # Update consecutive loss counter and trigger cooldown if needed
+        if outcome == 'loss':
+            self.consecutive_loss_count += 1
+            logger.info(f"📉 Loss recorded: consecutive losses = {self.consecutive_loss_count}")
+            
+            # Check if we hit cooldown threshold
+            if self.consecutive_loss_count >= self.COOLDOWN_LOSS_THRESHOLD:
+                self._activate_cooldown()
+        else:
+            # Win or breakeven resets the counter
+            if self.consecutive_loss_count > 0:
+                logger.info(f"✅ Winning trade resets loss streak (was {self.consecutive_loss_count})")
+            self.consecutive_loss_count = 0
 
         logger.debug(f"Trade recorded: {outcome}, PnL: ${pnl:.2f}")
+
+    def _activate_cooldown(self) -> None:
+        """
+        Activate trading cooldown after consecutive losses.
+        """
+        from datetime import timedelta
+        self.cooldown_until = datetime.now() + timedelta(minutes=self.COOLDOWN_DURATION_MINUTES)
+        logger.warning(
+            f"🚨 COOLDOWN ACTIVATED: {self.consecutive_loss_count} consecutive losses detected. "
+            f"Trading paused until {self.cooldown_until.strftime('%H:%M:%S')} ({self.COOLDOWN_DURATION_MINUTES} minutes)"
+        )
+    
+    def is_in_cooldown(self) -> bool:
+        """
+        Check if currently in cooldown period.
+        
+        Returns:
+            True if in cooldown, False otherwise
+        """
+        if self.cooldown_until is None:
+            return False
+        
+        now = datetime.now()
+        if now < self.cooldown_until:
+            remaining_minutes = (self.cooldown_until - now).total_seconds() / 60
+            return True
+        else:
+            # Cooldown expired
+            if self.cooldown_until is not None:  # Only log if transitioning from cooldown
+                logger.info(f"✅ Cooldown expired - trading resumed")
+            self.cooldown_until = None
+            return False
+    
+    def get_cooldown_remaining_minutes(self) -> float:
+        """
+        Get remaining cooldown time in minutes.
+        
+        Returns:
+            Minutes remaining, or 0 if not in cooldown
+        """
+        if not self.is_in_cooldown():
+            return 0.0
+        
+        now = datetime.now()
+        remaining_seconds = (self.cooldown_until - now).total_seconds()
+        return max(0.0, remaining_seconds / 60)
 
     def get_current_streak(self) -> Tuple[str, int]:
         """
@@ -445,6 +511,17 @@ class AdaptiveRiskManager:
             - breakdown_dict: Details of sizing calculations
         """
         breakdown = {}
+        
+        # Check if in cooldown period (3 consecutive losses = 60 min pause)
+        if self.is_in_cooldown():
+            remaining_minutes = self.get_cooldown_remaining_minutes()
+            logger.warning(
+                f"🚨 COOLDOWN ACTIVE: {self.consecutive_loss_count} consecutive losses. "
+                f"Trading paused for {remaining_minutes:.1f} more minutes."
+            )
+            breakdown['cooldown_active'] = True
+            breakdown['cooldown_remaining_minutes'] = remaining_minutes
+            return (0.0, breakdown)  # Return 0 position size during cooldown
 
         # Normalize all numeric inputs to handle tuples/lists
         adx = scalar(adx)

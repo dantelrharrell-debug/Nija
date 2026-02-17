@@ -208,8 +208,8 @@ TAKE_PROFIT = {
             'action': 'tighten_trailing',
         },
     ],
-    'default_target': 0.030,  # 3.0% default if stages not met (OPTIMIZED: was 2.0%)
-    'description': 'Optimized for aggressive profit-taking and capital efficiency',
+    'default_target': 0.025,  # 2.5% default target (OPTIMIZED: reduced from 3.0% for more consistent wins)
+    'description': 'Optimized for aggressive profit-taking with 2.5-3% target range',
 }
 
 TRAILING_STOP = {
