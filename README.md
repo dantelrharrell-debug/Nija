@@ -64,6 +64,54 @@ python bot/dashboard_server.py
 
 ---
 
+## 🔍 **Live Balance Audit** (Execution Hardening Verification)
+
+**Verify NIJA is production-ready with real API connections**
+
+NIJA includes a live balance audit tool that determines whether the system is:
+- **CONFIG-HARDENED**: Has correct settings but can't execute (paper tiger)
+- **EXECUTION-HARDENED**: Can execute trades in production (battle-tested)
+
+### Quick Run
+
+```bash
+python3 live_balance_audit.py
+```
+
+### What It Checks
+
+1. ✅ **Environment Variables** - Are Kraken API credentials configured?
+2. ✅ **API Connection** - Can we connect to the exchange?
+3. ✅ **Balance Access** - Can we fetch live account balance?
+4. ✅ **API Capabilities** - Can we read market data and place orders?
+
+### Possible Verdicts
+
+- **🎯 EXECUTION-HARDENED** (Score ≥75%): Production-ready, all systems operational
+- **⚠️ PARTIALLY HARDENED** (Score 50-74%): Some components work, needs fixes
+- **📝 CONFIG-HARDENED** (Score <50%): Cannot execute trades, credentials missing
+
+### Why This Matters
+
+**CONFIG-HARDENED ❌**
+- Has code but never tested with real API
+- Looks good in demos, fails in production
+- Cannot make money (no connection to exchange)
+
+**EXECUTION-HARDENED ✅**
+- Proven to work with real exchange API
+- Can place real orders with real money
+- Battle-tested in production conditions
+
+### Documentation
+
+- 📖 [LIVE_BALANCE_AUDIT_RESULTS.md](LIVE_BALANCE_AUDIT_RESULTS.md) - Latest audit results and analysis
+- 📋 [LIVE_BALANCE_AUDIT_QUICKSTART.md](LIVE_BALANCE_AUDIT_QUICKSTART.md) - Setup and troubleshooting guide
+
+**Remember:** Only execution-hardening matters in trading. Config-hardening is just theory.
+
+---
+
 ## 📱 **App Store Mode** (iOS/Android Submission)
 
 **For App Store and Google Play reviewers**
