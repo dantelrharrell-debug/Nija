@@ -208,6 +208,9 @@ class ProfitabilityMonitor:
         metrics = self.calculate_metrics()
         self._last_evaluation_trade_count = len(self._trade_history)
         
+        # Calculate max drawdown specifically for last 100 trades
+        metrics_100 = self.calculate_metrics(lookback=100)
+        
         # Determine status
         status = self._determine_status(metrics)
         
@@ -215,6 +218,7 @@ class ProfitabilityMonitor:
         logger.info(f"   Total Trades: {metrics.total_trades}")
         logger.info(f"   Win Rate: {metrics.win_rate:.1f}%")
         logger.info(f"   Expectancy: {metrics.expectancy:.2f}")
+        logger.info(f"   Max Drawdown (last 100 trades): ${metrics_100.max_drawdown:.2f}")
         logger.info(f"   Profit Factor: {metrics.profit_factor:.2f}")
         logger.info(f"   Avg Win/Loss Ratio: {metrics.avg_win_loss_ratio:.2f}")
         logger.info(f"   Net P&L: {metrics.net_pnl:+.2f}")
@@ -283,6 +287,27 @@ class ProfitabilityMonitor:
         total_fees = sum(t.fees for t in trades)
         net_pnl = sum(t.net_pnl for t in trades)
         
+        # Calculate Maximum Drawdown in dollars
+        # Track cumulative P&L and find worst peak-to-trough decline
+        max_drawdown = 0.0
+        if trades:
+            cumulative_pnl = 0.0
+            peak = 0.0
+            
+            for trade in trades:
+                cumulative_pnl += trade.net_pnl
+                
+                # Update peak if we've reached a new high
+                if cumulative_pnl > peak:
+                    peak = cumulative_pnl
+                
+                # Calculate current drawdown from peak (in dollars)
+                drawdown = peak - cumulative_pnl
+                
+                # Track maximum drawdown
+                if drawdown > max_drawdown:
+                    max_drawdown = drawdown
+        
         return PerformanceMetrics(
             total_trades=total_trades,
             winning_trades=winning_trades,
@@ -295,7 +320,8 @@ class ProfitabilityMonitor:
             profit_factor=profit_factor,
             total_pnl=total_pnl,
             total_fees=total_fees,
-            net_pnl=net_pnl
+            net_pnl=net_pnl,
+            max_drawdown=max_drawdown
         )
         
     def _determine_status(self, metrics: PerformanceMetrics) -> PerformanceStatus:

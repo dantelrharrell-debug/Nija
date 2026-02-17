@@ -401,15 +401,54 @@ class KPITracker:
         
         return snapshot
     
-    def _calculate_max_drawdown(self) -> float:
-        """Calculate maximum drawdown from equity curve"""
+    def log_kpi_summary(self):
+        """Log a comprehensive KPI summary to the logger"""
+        if not self.snapshots:
+            logger.info("No KPI data available")
+            return
+        
+        latest = self.snapshots[-1]
+        
+        # Calculate max drawdown for last 100 trades specifically
+        max_dd_100 = self._calculate_max_drawdown(lookback=100)
+        
+        logger.info("=" * 80)
+        logger.info("📊 KPI SUMMARY")
+        logger.info("=" * 80)
+        logger.info(f"   Total Trades: {latest.total_trades}")
+        logger.info(f"   Win Rate: {latest.win_rate:.1f}%")
+        logger.info(f"   Expectancy: ${latest.expectancy:.2f}")
+        logger.info(f"   Max Drawdown (last 100 trades): {max_dd_100:.2f}%")
+        logger.info(f"   Max Drawdown (all): {latest.max_drawdown:.2f}%")
+        logger.info(f"   Profit Factor: {latest.profit_factor:.2f}")
+        logger.info(f"   Sharpe Ratio: {latest.sharpe_ratio:.2f}")
+        logger.info(f"   Net Profit: ${latest.net_profit:,.2f}")
+        logger.info(f"   ROI: {latest.roi_percentage:.2f}%")
+        logger.info("=" * 80)
+    
+    def _calculate_max_drawdown(self, lookback: Optional[int] = None) -> float:
+        """
+        Calculate maximum drawdown from equity curve
+        
+        Args:
+            lookback: Number of most recent equity points to analyze (None = all)
+        
+        Returns:
+            Maximum drawdown percentage
+        """
         if not self.equity_curve or len(self.equity_curve) < 2:
             return 0.0
         
-        max_dd = 0.0
-        peak = self.equity_curve[0]
+        # Use specified lookback or all data
+        equity_data = self.equity_curve[-lookback:] if lookback else self.equity_curve
         
-        for equity in self.equity_curve:
+        if not equity_data:
+            return 0.0
+        
+        max_dd = 0.0
+        peak = equity_data[0]
+        
+        for equity in equity_data:
             if equity > peak:
                 peak = equity
             # Protect against division by zero
@@ -962,12 +1001,13 @@ def get_kpi_tracker(initial_capital: float = 1000.0, reset: bool = False) -> KPI
 _kpi_tracker: Optional[KPITracker] = None
 
 
-def get_kpi_tracker(initial_capital: float = 10000.0) -> KPITracker:
+def get_kpi_tracker(initial_capital: float = 10000.0, reset: bool = False) -> KPITracker:
     """
     Get or create global KPI tracker instance
     
     Args:
         initial_capital: Starting capital (only used on first creation)
+        reset: Force reset and create new instance
         
     Returns:
         KPITracker instance
@@ -975,7 +1015,6 @@ def get_kpi_tracker(initial_capital: float = 10000.0) -> KPITracker:
     global _kpi_tracker
     
     if _kpi_tracker is None or reset:
-    if _kpi_tracker is None:
         _kpi_tracker = KPITracker(initial_capital=initial_capital)
     
     return _kpi_tracker
