@@ -73,6 +73,14 @@ MAX_POSITIONS = 4  # Maximum concurrent positions (UPDATED Jan 30, 2026 for fast
 MAX_POSITION_PCT = 25.0  # Maximum 25% of capital per position (OPTIMIZED for small capital fast-frequency)
 RISK_PER_TRADE = 0.9  # Risk 0.9% per trade (OPTIMIZED for Pro-Level performance)
 
+# CRITICAL: DCA and Multiple Entries (Feb 17, 2026 - ORDER MANAGEMENT FIX)
+# For MICRO_CAP accounts, we DISABLE:
+# - DCA (Dollar Cost Averaging)
+# - Multiple concurrent entries on same symbol
+# Reason: Order fragmentation kills performance in micro accounts
+ENABLE_DCA = False  # DISABLED for micro capital (prevents averaging down)
+ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol max
+
 # ============================================================================
 # RISK MANAGEMENT
 # ============================================================================
@@ -247,6 +255,8 @@ MICRO_CAPITAL_CONFIG = {
     'max_positions': MAX_POSITIONS,
     'max_position_pct': MAX_POSITION_PCT,
     'risk_per_trade': RISK_PER_TRADE,
+    'enable_dca': ENABLE_DCA,  # ADDED: Feb 17, 2026
+    'allow_multiple_entries_same_symbol': ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL,  # ADDED: Feb 17, 2026
     
     # Risk management
     'daily_max_loss': DAILY_MAX_LOSS,
@@ -345,6 +355,8 @@ def get_environment_variables(equity: Optional[float] = None) -> Dict[str, str]:
         'MAX_CONCURRENT_POSITIONS': str(dynamic_config.get('max_positions', MAX_POSITIONS)),
         'MAX_POSITION_PCT': str(MAX_POSITION_PCT),
         'RISK_PER_TRADE': str(dynamic_config.get('risk_per_trade', RISK_PER_TRADE)),
+        'ENABLE_DCA': str(ENABLE_DCA).lower(),  # ADDED: Feb 17, 2026
+        'ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL': str(ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL).lower(),  # ADDED: Feb 17, 2026
         
         'DAILY_MAX_LOSS': str(DAILY_MAX_LOSS),
         'MAX_DRAWDOWN': str(MAX_DRAWDOWN),
