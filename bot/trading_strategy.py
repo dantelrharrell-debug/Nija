@@ -46,6 +46,21 @@ except ImportError:
     except ImportError:
         TradeQualityGate = None
 
+# Import Recovery Controller for capital-first safety (NEW - Feb 2026)
+try:
+    from recovery_controller import get_recovery_controller
+    RECOVERY_CONTROLLER_AVAILABLE = True
+    logger.info("✅ Recovery Controller loaded - Capital-first safety layer active")
+except ImportError:
+    try:
+        from bot.recovery_controller import get_recovery_controller
+        RECOVERY_CONTROLLER_AVAILABLE = True
+        logger.info("✅ Recovery Controller loaded - Capital-first safety layer active")
+    except ImportError:
+        RECOVERY_CONTROLLER_AVAILABLE = False
+        logger.warning("⚠️ Recovery Controller not available - safety layer disabled")
+        get_recovery_controller = None
+
 # Import scalar helper for indicator conversions
 try:
     from indicators import scalar
@@ -3194,6 +3209,43 @@ class TradingStrategy:
         """
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
+
+        # ✅ LAYER 0: RECOVERY CONTROLLER - Capital-first safety check
+        # This is the AUTHORITATIVE control layer that sits above all other safety checks
+        if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
+            recovery_controller = get_recovery_controller()
+            
+            # Update capital safety assessment if we have balance info
+            if active_broker and hasattr(active_broker, 'get_balance'):
+                try:
+                    balance_result = active_broker.get_balance()
+                    if balance_result and not balance_result[1]:  # No error
+                        current_balance = balance_result[0]
+                        # Count current positions
+                        position_count = len(self.execution_engine.positions) if self.execution_engine else 0
+                        
+                        # Update capital safety assessment
+                        recovery_controller.assess_capital_safety(
+                            current_balance=current_balance,
+                            position_count=position_count
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not update capital safety: {e}")
+            
+            # Check if trading is allowed
+            can_trade_entry, reason = recovery_controller.can_trade("entry")
+            
+            if not can_trade_entry:
+                logger.warning("=" * 80)
+                logger.warning("🛡️  RECOVERY CONTROLLER: ENTRIES BLOCKED")
+                logger.warning("=" * 80)
+                logger.warning(f"   Reason: {reason}")
+                logger.warning(f"   State: {recovery_controller.current_state.value}")
+                logger.warning(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
+                logger.warning(f"   Mode: Position management only (exits/stops)")
+                logger.warning("=" * 80)
+                # Force user mode to block new entries but allow position management
+                user_mode = True
 
         # CRITICAL SAFETY CHECK: Verify trading is allowed before ANY operations
         if self.safety:
