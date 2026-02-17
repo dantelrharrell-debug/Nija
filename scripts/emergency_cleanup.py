@@ -39,6 +39,7 @@ from broker_dust_cleanup import BrokerDustCleanup
 
 # Constants
 DUST_THRESHOLD_USD = 1.00  # Positions below this are considered dust
+RATE_LIMIT_DELAY_SECONDS = 0.1  # Delay between API calls to avoid rate limiting
 
 
 def print_banner(message: str):
@@ -46,6 +47,22 @@ def print_banner(message: str):
     print("\n" + "=" * 80)
     print(f"  {message}")
     print("=" * 80 + "\n")
+
+
+def format_order_id(order_id: str, max_length: int = 12) -> str:
+    """
+    Format an order ID for display, truncating if too long.
+    
+    Args:
+        order_id: The order ID to format
+        max_length: Maximum length before truncation
+        
+    Returns:
+        Formatted order ID string
+    """
+    if len(order_id) > max_length:
+        return order_id[:max_length] + '...'
+    return order_id
 
 
 def get_all_open_orders(adapter) -> list:
@@ -110,7 +127,7 @@ def cancel_all_orders(adapter, dry_run: bool = False) -> tuple:
     
     print(f"📋 Found {len(orders)} open order(s):")
     for order in orders:
-        order_id_display = order['order_id'][:12] + '...' if len(order['order_id']) > 12 else order['order_id']
+        order_id_display = format_order_id(order['order_id'])
         print(f"   • {order['pair']}: {order['type']} {order['volume']:.8f} ({order['ordertype']}) - ID: {order_id_display}")
     
     if dry_run:
@@ -123,7 +140,7 @@ def cancel_all_orders(adapter, dry_run: bool = False) -> tuple:
     
     for order in orders:
         order_id = order['order_id']
-        order_id_display = order_id[:12] + '...' if len(order_id) > 12 else order_id
+        order_id_display = format_order_id(order_id)
         try:
             success = adapter.cancel_order(order_id)
             if success:
@@ -133,8 +150,8 @@ def cancel_all_orders(adapter, dry_run: bool = False) -> tuple:
                 print(f"   ❌ Failed to cancel: {order['pair']} (ID: {order_id_display})")
                 fail_count += 1
             
-            # Rate limiting: small delay between cancellations
-            time.sleep(0.1)
+            # Rate limiting: delay between cancellations to avoid hitting API limits
+            time.sleep(RATE_LIMIT_DELAY_SECONDS)
         
         except Exception as e:
             print(f"   ❌ Error cancelling {order['pair']}: {e}")
