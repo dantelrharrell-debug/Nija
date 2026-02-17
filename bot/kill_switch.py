@@ -203,7 +203,7 @@ To resume trading:
             
             # Also transition state machine to EMERGENCY_STOP
             try:
-                from bot.trading_state_machine import get_state_machine, TradingState
+                from trading_state_machine import get_state_machine, TradingState
                 state_machine = get_state_machine()
                 state_machine.transition_to(
                     TradingState.EMERGENCY_STOP,
@@ -211,6 +211,7 @@ To resume trading:
                 )
             except Exception as e:
                 logger.error(f"❌ Error transitioning state machine: {e}")
+                # Continue anyway - kill switch is still active
                 
     def deactivate(self, reason: str = "Manual deactivation"):
         """
@@ -251,6 +252,24 @@ To resume trading:
             logger.warning("=" * 80)
             logger.warning("⚠️  System can resume trading, but manual verification recommended")
             logger.warning("=" * 80)
+            
+            # Also transition state machine back to OFF to prevent inconsistent state
+            try:
+                from trading_state_machine import get_state_machine, TradingState
+                state_machine = get_state_machine()
+                current_state = state_machine.get_current_state()
+                
+                # Only transition if currently in EMERGENCY_STOP
+                if current_state == TradingState.EMERGENCY_STOP:
+                    state_machine.transition_to(
+                        TradingState.OFF,
+                        f"Kill switch deactivated: {reason}"
+                    )
+                    logger.info("✅ State machine transitioned to OFF")
+                    logger.info("💡 Use safe_restore_trading.py to enable trading safely")
+            except Exception as e:
+                logger.error(f"⚠️  Could not transition state machine: {e}")
+                logger.error("   Please use safe_restore_trading.py to restore trading state")
             
     def is_active(self) -> bool:
         """

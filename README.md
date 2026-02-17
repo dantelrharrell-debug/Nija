@@ -8,6 +8,61 @@
 > **⚠️ Breaking Changes in v7.2.0:** NIJA now supports **independent trading only**. The copy-trading system has been removed. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 > **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
 
+## 🛡️ **Safe Trading Recovery** (February 2026)
+
+**Safely restore trading after emergency stops without risking capital**
+
+After an emergency stop or system restart, use the safe recovery tool to restore trading operations in a controlled, zero-risk manner.
+
+### Quick Start
+
+```bash
+# 1. Check current trading state
+python safe_restore_trading.py status
+
+# 2. Restore to safe DRY_RUN mode (simulation only, no capital risk)
+python safe_restore_trading.py restore
+
+# 3. Test bot behavior in DRY_RUN mode, then manually enable LIVE when ready
+```
+
+### Key Safety Features
+
+- ✅ **Never auto-enables LIVE trading** - Always starts in safe DRY_RUN mode
+- ✅ **Detects state inconsistencies** - Identifies when kill switch and state machine are out of sync
+- ✅ **User confirmation required** - No automatic state changes
+- ✅ **Complete audit trail** - All state transitions are logged
+- ✅ **Validates before restoration** - Ensures kill switch is deactivated first
+
+### When to Use
+
+- Trading state is stuck in `EMERGENCY_STOP`
+- Kill switch was activated and then deactivated
+- Bot won't start trading after restart
+- Before deploying to production (verify safe state first)
+- Want to test bot behavior without capital risk
+
+### Commands
+
+| Command | Purpose | Safety Level |
+|---------|---------|--------------|
+| `status` | Check trading state and detect issues | Read-only ✅ |
+| `restore` | Restore to DRY_RUN (simulation) mode | Safe - No capital risk ✅ |
+| `reset` | Reset to OFF (disable all trading) | Safe - Stops all trading ✅ |
+
+### Documentation
+
+📚 **[SAFE_RECOVERY_GUIDE.md](SAFE_RECOVERY_GUIDE.md)** - Complete recovery guide with:
+- Detailed command explanations
+- Common scenarios and solutions
+- Troubleshooting steps
+- State machine flow diagrams
+- Best practices
+
+**Important**: This tool never enables LIVE trading automatically. Manual activation via UI/API is always required.
+
+---
+
 ## 🎯 **NEW: NIJA Control Center** (February 7, 2026)
 
 **Your Unified Operational Command Center**
