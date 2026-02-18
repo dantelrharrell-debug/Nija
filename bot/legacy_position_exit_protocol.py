@@ -238,6 +238,48 @@ class LegacyPositionExitProtocol:
         threshold = balance * self.dust_threshold_pct
         return max(threshold, 1.0)  # Minimum $1
     
+    def _get_min_notional(self, symbol: str, account_id: Optional[str] = None) -> float:
+        """
+        Get minimum notional size for a symbol/exchange.
+        
+        Args:
+            symbol: Trading symbol (e.g., BTC-USD)
+            account_id: Account ID (for exchange-specific minimums)
+            
+        Returns:
+            Minimum notional size in USD
+        """
+        # Exchange-specific minimums (from NIJA codebase patterns)
+        # See: bot/minimum_notional_guard.py, bot/capital_tier_scaling.py
+        
+        # Try to get broker-specific minimum
+        try:
+            if hasattr(self.broker, 'get_min_notional'):
+                min_notional = self.broker.get_min_notional(symbol)
+                if min_notional and min_notional > 0:
+                    return float(min_notional)
+        except:
+            pass
+        
+        # Fallback to exchange defaults based on broker type
+        try:
+            broker_type = getattr(self.broker, 'name', 'unknown').lower()
+            
+            # Exchange minimums from codebase
+            exchange_minimums = {
+                'kraken': 10.0,
+                'binance': 10.0,
+                'okx': 10.0,
+                'coinbase': 2.0,
+                'alpaca': 1.0
+            }
+            
+            return exchange_minimums.get(broker_type, 5.0)  # Default $5
+            
+        except:
+            # Safe default
+            return 5.0
+    
     def _get_positions(self, account_id: Optional[str] = None) -> List[Dict]:
         """Get all positions for account"""
         try:
@@ -530,6 +572,7 @@ class LegacyPositionExitProtocol:
                     exits['over_cap_closed'] += 1
         
         # Rule 3: Legacy positions - gradual 25% unwind
+        # NEW REQUIREMENT: Do NOT allow 25% unwind to violate min notional size
         for pos_info in classified['legacy_non_compliant']:
             if not pos_info.is_dust and pos_info.unwind_progress < 1.0:
                 # Calculate amount to unwind this cycle
@@ -537,9 +580,54 @@ class LegacyPositionExitProtocol:
                 to_unwind = min(remaining, self.unwind_pct_per_cycle)
                 
                 unwind_size_usd = pos_info.size_usd * to_unwind
+                remaining_after_unwind = pos_info.size_usd * (1 - to_unwind)
+                
+                # Get minimum notional size for this symbol/exchange
+                min_notional = self._get_min_notional(pos_info.symbol, account_id)
+                
+                # Check if remaining position would violate minimum notional
+                if remaining_after_unwind < min_notional and remaining_after_unwind > 0:
+                    logger.warning(f"⚠️  Unwind would violate min notional for {pos_info.symbol}")
+                    logger.warning(f"   Remaining after {to_unwind*100:.0f}% unwind: ${remaining_after_unwind:.2f}")
+                    logger.warning(f"   Minimum notional required: ${min_notional:.2f}")
+                    
+                    # Strategy: Close entire position instead of partial unwind
+                    if remaining < 0.5:  # If < 50% remains, close everything
+                        logger.info(f"   Closing entire position instead (less than 50% remains)")
+                        
+                        if not self.dry_run:
+                            try:
+                                if account_id:
+                                    self.broker.close_position(pos_info.symbol, account_id)
+                                else:
+                                    self.broker.close_position(pos_info.symbol)
+                                
+                                # Mark as fully unwound
+                                self.state.position_unwind_state[pos_info.symbol] = {
+                                    'progress': 1.0,
+                                    'cycle': pos_info.unwind_cycle + 1
+                                }
+                                
+                                exits['legacy_unwound'] += 1
+                                self.metrics.legacy_positions_unwound += 1
+                                self.metrics.total_positions_cleaned += 1
+                                self.metrics.capital_freed_usd += pos_info.size_usd
+                                
+                                logger.info(f"✅ Position {pos_info.symbol} fully closed (min notional enforcement)")
+                            except Exception as e:
+                                logger.error(f"Failed to close legacy position {pos_info.symbol}: {e}")
+                        else:
+                            exits['legacy_unwound'] += 1
+                    else:
+                        # Skip this cycle - wait for next cycle when remaining is smaller
+                        logger.info(f"   Skipping unwind this cycle (would violate min notional)")
+                        logger.info(f"   Will attempt again in next cycle")
+                    
+                    continue  # Skip to next position
                 
                 logger.info(f"🔄 Unwinding legacy position: {pos_info.symbol}")
                 logger.info(f"   Current: ${pos_info.size_usd:.2f}, Unwinding: {to_unwind*100:.0f}% (${unwind_size_usd:.2f})")
+                logger.info(f"   Remaining after unwind: ${remaining_after_unwind:.2f} (min notional: ${min_notional:.2f})")
                 logger.info(f"   Cycle: {pos_info.unwind_cycle + 1}/4, Progress: {(pos_info.unwind_progress + to_unwind)*100:.0f}%")
                 
                 if not self.dry_run:
