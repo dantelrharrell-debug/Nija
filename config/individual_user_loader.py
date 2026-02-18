@@ -27,6 +27,17 @@ import logging
 from typing import Dict, List, Optional
 from pathlib import Path
 
+# Import environment detection
+try:
+    from config.environment import is_production_environment
+except ImportError:
+    try:
+        from .environment import is_production_environment
+    except ImportError:
+        # Fallback if environment detection not available
+        def is_production_environment():
+            return False
+
 logger = logging.getLogger("nija.individual_user_loader")
 
 
