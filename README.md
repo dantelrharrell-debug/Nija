@@ -8,6 +8,47 @@
 > **⚠️ Breaking Changes in v7.2.0:** NIJA now supports **independent trading only**. The copy-trading system has been removed. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 > **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
 
+---
+
+## 🎯 **NEW: Institutional Validation Framework** (February 2026)
+
+**Prove Edge Before Scaling Capital**
+
+Real funds build in this order:
+1. **Alpha Discovery** ✅
+2. **Statistical Validation** ✅ (Sharpe ≥ 1.0 after costs)
+3. **Regime Testing** ✅ (Works in bull/bear/sideways)
+4. **Monte Carlo Stress** ✅ (Survives adverse scenarios)
+5. **Then capital scaling** (already built)
+6. **Then risk throttles** (already built)
+
+NIJA now includes the missing validation framework (steps 1-4) that must be proven BEFORE activating capital scaling.
+
+### Quick Start
+
+```bash
+# Validate strategy edge before deployment
+python prove_edge.py --simulate --num-trades 500
+
+# Validate with real trade history
+python prove_edge.py --trades trade_history.csv --report validation.html
+
+# If all 4 steps pass → Ready to activate capital scaling
+# If any step fails → Fix strategy first
+```
+
+### Philosophy
+
+> **If Sharpe < 1 after realistic costs, you don't scale.**
+
+This framework prevents deploying capital to unproven strategies.
+
+📚 **[INSTITUTIONAL_VALIDATION.md](INSTITUTIONAL_VALIDATION.md)** - Complete validation guide  
+📚 **[ENTRY_DISCIPLINE_GUIDE.md](ENTRY_DISCIPLINE_GUIDE.md)** - Entry discipline integration  
+📚 **[IMPLEMENTATION_COMPLETE_INSTITUTIONAL_SEQUENCE.md](IMPLEMENTATION_COMPLETE_INSTITUTIONAL_SEQUENCE.md)** - Full explanation
+
+---
+
 ## 🛡️ **Safe Trading Recovery** (February 2026)
 
 **Safely restore trading after emergency stops without risking capital**
