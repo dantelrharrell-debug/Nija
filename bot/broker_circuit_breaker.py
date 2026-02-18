@@ -111,14 +111,15 @@ class BrokerCircuitBreaker:
         elif self.state == CircuitState.HALF_OPEN:
             self.health_state = BrokerHealthState.DEGRADED
         else:  # CLOSED
-            # Check recent failure rate
-            if self.total_calls > 0:
+            # Check recent failure rate only if we have enough calls
+            if self.total_calls >= 10:
                 failure_rate = self.total_failures / self.total_calls
                 if failure_rate > 0.3:  # More than 30% failures
                     self.health_state = BrokerHealthState.DEGRADED
                 else:
                     self.health_state = BrokerHealthState.HEALTHY
             else:
+                # Not enough data, default to healthy if circuit is closed
                 self.health_state = BrokerHealthState.HEALTHY
     
     def _should_allow_request(self) -> bool:
@@ -161,7 +162,10 @@ class BrokerCircuitBreaker:
                 self.state = CircuitState.CLOSED
                 self.success_count = 0
                 self.last_state_change = datetime.now()
+                # Reset health to healthy when circuit closes
+                self.health_state = BrokerHealthState.HEALTHY
         
+        # Update health state for all cases
         self._update_health_state()
     
     def _record_failure(self, error: Exception):

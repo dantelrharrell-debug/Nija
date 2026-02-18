@@ -18,6 +18,19 @@ import traceback
 import uuid
 import threading
 
+# Import circuit breaker for API reliability
+try:
+    from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState
+    CIRCUIT_BREAKER_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_circuit_breaker import get_circuit_breaker, BrokerHealthState
+        CIRCUIT_BREAKER_AVAILABLE = True
+    except ImportError:
+        CIRCUIT_BREAKER_AVAILABLE = False
+        BrokerHealthState = None
+        get_circuit_breaker = None
+
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
 # Note: The flag name is specific to clarify we're checking for timeout exception classes,
@@ -522,6 +535,48 @@ class BaseBroker(ABC):
         self.credentials_configured = False  # Track if credentials were provided
         self.last_connection_error = None  # Track last connection error for troubleshooting
         self.exit_only_mode = False  # Default: not in exit-only mode (can be overridden by subclasses)
+        
+        # Initialize circuit breaker for this broker
+        if CIRCUIT_BREAKER_AVAILABLE:
+            broker_name = f"{broker_type.value}_{account_type.value}"
+            if user_id:
+                broker_name = f"{broker_name}_{user_id}"
+            self.circuit_breaker = get_circuit_breaker(broker_name)
+        else:
+            self.circuit_breaker = None
+    
+    def get_broker_health_state(self) -> Optional[str]:
+        """
+        Get current broker health state.
+        
+        Returns:
+            str: Health state ('healthy', 'degraded', 'offline') or None if unavailable
+        """
+        if self.circuit_breaker:
+            return self.circuit_breaker.get_health_state().value
+        return None
+    
+    def is_trading_allowed(self) -> bool:
+        """
+        Check if trading is allowed based on broker health.
+        
+        Returns:
+            bool: True if trading allowed, False if broker offline
+        """
+        if self.circuit_breaker:
+            return self.circuit_breaker.is_trading_allowed()
+        return self.connected  # Fallback to connection state
+    
+    def get_circuit_breaker_status(self) -> Optional[Dict]:
+        """
+        Get circuit breaker status for monitoring.
+        
+        Returns:
+            dict: Status information or None if unavailable
+        """
+        if self.circuit_breaker:
+            return self.circuit_breaker.get_status()
+        return None
 
     @abstractmethod
     def connect(self) -> bool:
@@ -562,6 +617,27 @@ class BaseBroker(ABC):
             force_liquidate: Bypass ALL validation (EMERGENCY ONLY)
         """
         pass
+    
+    def _call_with_circuit_breaker(self, func: callable, *args, **kwargs):
+        """
+        Execute broker API call with circuit breaker protection.
+        
+        Args:
+            func: Function to call
+            *args: Positional arguments for function
+            **kwargs: Keyword arguments for function
+        
+        Returns:
+            Result from function
+        
+        Raises:
+            Exception: If circuit is open or call fails
+        """
+        if self.circuit_breaker:
+            return self.circuit_breaker.call_with_circuit_breaker(func, *args, **kwargs)
+        else:
+            # No circuit breaker, call directly
+            return func(*args, **kwargs)
 
     def close_position(self, symbol: str, base_size: Optional[float] = None, **kwargs) -> Dict:
         """Default implementation calls place_market_order. Brokers can override."""
