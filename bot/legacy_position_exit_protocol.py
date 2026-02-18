@@ -109,6 +109,113 @@ class LegacyPositionExitProtocol:
         logger.info(f"   Stale Order Age: {stale_order_minutes} minutes")
         logger.info(f"   Gradual Unwind: {gradual_unwind_pct * 100:.0f}% per cycle over {unwind_cycles} cycles")
     
+    # ========================================================================
+    # BROKER ADAPTER METHODS (Handle missing methods gracefully)
+    # ========================================================================
+    
+    def _get_current_price(self, symbol: str) -> Optional[float]:
+        """
+        Get current price for symbol, handling various broker implementations.
+        
+        Args:
+            symbol: Trading symbol
+        
+        Returns:
+            Current price or None if unavailable
+        """
+        try:
+            # Try get_current_price if available
+            if hasattr(self.broker, 'get_current_price'):
+                return self.broker.get_current_price(symbol)
+            
+            # Try getting from market data
+            if hasattr(self.broker, 'get_market_data'):
+                market_data = self.broker.get_market_data(symbol, timeframe='1m', limit=1)
+                if market_data and len(market_data) > 0:
+                    return float(market_data.iloc[-1]['close'])
+            
+            # Fallback: get from open positions
+            positions = self.broker.get_open_positions()
+            for pos in positions:
+                if pos.get('symbol') == symbol:
+                    return pos.get('current_price')
+            
+            return None
+        except Exception as e:
+            logger.warning(f"Could not get price for {symbol}: {e}")
+            return None
+    
+    def _get_account_balance(self, user_id: Optional[str] = None) -> float:
+        """
+        Get account balance, handling various return formats.
+        
+        Args:
+            user_id: Optional user ID
+        
+        Returns:
+            Account balance in USD
+        """
+        try:
+            balance_data = self.broker.get_account_balance()
+            
+            # Handle dict return
+            if isinstance(balance_data, dict):
+                return float(balance_data.get('available', 0) or balance_data.get('total', 0) or 0)
+            
+            # Handle float return
+            return float(balance_data)
+        except Exception as e:
+            logger.error(f"Could not get account balance: {e}")
+            return 0.0
+    
+    def _get_open_orders(self, user_id: Optional[str] = None) -> List[Dict]:
+        """
+        Get open orders, with fallback if method not available.
+        
+        Args:
+            user_id: Optional user ID
+        
+        Returns:
+            List of open orders
+        """
+        try:
+            if hasattr(self.broker, 'get_open_orders'):
+                return self.broker.get_open_orders(user_id=user_id) or []
+            
+            logger.warning("Broker does not support get_open_orders")
+            return []
+        except Exception as e:
+            logger.error(f"Could not get open orders: {e}")
+            return []
+    
+    def _close_position(self, symbol: str, quantity: float, order_type: str = 'market') -> bool:
+        """
+        Close position, handling various broker implementations.
+        
+        Args:
+            symbol: Trading symbol
+            quantity: Quantity to close
+            order_type: Order type (market or limit)
+        
+        Returns:
+            True if successful
+        """
+        try:
+            # Try close_position if available
+            if hasattr(self.broker, 'close_position'):
+                return self.broker.close_position(symbol=symbol, quantity=quantity, order_type=order_type)
+            
+            # Fallback: use place_market_order with sell side
+            if hasattr(self.broker, 'place_market_order'):
+                result = self.broker.place_market_order(symbol=symbol, side='sell', size=quantity)
+                return result is not None
+            
+            logger.error(f"Broker does not support position closing for {symbol}")
+            return False
+        except Exception as e:
+            logger.error(f"Could not close position {symbol}: {e}")
+            return False
+    
     def _load_state(self) -> Dict:
         """Load protocol state from disk"""
         try:
@@ -197,7 +304,7 @@ class LegacyPositionExitProtocol:
         
         # 3. Cannot fetch current price
         try:
-            current_price = self.broker.get_current_price(symbol)
+            current_price = self._get_current_price(symbol)
             if current_price is None or current_price <= 0:
                 logger.warning(f"❌ ZOMBIE: Cannot fetch price for {symbol}")
                 return PositionCategory.ZOMBIE_LEGACY
@@ -333,7 +440,7 @@ class LegacyPositionExitProtocol:
         
         try:
             # Get all open orders from broker
-            open_orders = self.broker.get_open_orders(user_id=user_id)
+            open_orders = self._get_open_orders(user_id=user_id)
             
             if not open_orders:
                 logger.info("✅ No open orders to clean up")
@@ -515,7 +622,7 @@ class LegacyPositionExitProtocol:
             logger.info(f"   🧟 Exiting zombie: {symbol}")
             
             # Try market exit once
-            success = self.broker.close_position(
+            success = self._close_position(
                 symbol=symbol,
                 quantity=position.get('quantity'),
                 order_type='market'
@@ -552,7 +659,7 @@ class LegacyPositionExitProtocol:
             size_usd = position.get('size_usd', 0) or position.get('usd_value', 0)
             logger.info(f"   💨 Exiting dust: {symbol} (${size_usd:.2f})")
             
-            success = self.broker.close_position(
+            success = self._close_position(
                 symbol=symbol,
                 quantity=position.get('quantity'),
                 order_type='market'
@@ -585,7 +692,7 @@ class LegacyPositionExitProtocol:
             pnl_pct = position.get('pnl_pct', 0)
             logger.info(f"   ⚠️  Exiting legacy (over-cap): {symbol} (${size_usd:.2f}, P&L: {pnl_pct:.2f}%)")
             
-            success = self.broker.close_position(
+            success = self._close_position(
                 symbol=symbol,
                 quantity=position.get('quantity'),
                 order_type='market'
@@ -640,7 +747,7 @@ class LegacyPositionExitProtocol:
             logger.info(f"   ⏳ Unwinding legacy: {symbol} (Cycle {current_cycle + 1}/{self.unwind_cycles}, {close_pct * 100:.0f}%)")
             logger.info(f"      Current: ${size_usd * remaining_pct:.2f}, Closing: ${size_usd * remaining_pct * close_pct:.2f}")
             
-            success = self.broker.close_position(
+            success = self._close_position(
                 symbol=symbol,
                 quantity=close_qty,
                 order_type='market'
@@ -701,8 +808,8 @@ class LegacyPositionExitProtocol:
         try:
             # Get current state
             positions = self.broker.get_open_positions(user_id=user_id)
-            open_orders = self.broker.get_open_orders(user_id=user_id)
-            account_balance = self.broker.get_account_balance(user_id=user_id)
+            open_orders = self._get_open_orders(user_id=user_id)
+            account_balance = self._get_account_balance(user_id=user_id)
             
             # Check 1: Position count ≤ cap
             position_count = len(positions)
@@ -817,7 +924,7 @@ class LegacyPositionExitProtocol:
         try:
             # Get current account data
             positions = self.broker.get_open_positions(user_id=user_id)
-            account_balance = self.broker.get_account_balance(user_id=user_id)
+            account_balance = self._get_account_balance(user_id=user_id)
             
             logger.info(f"📊 Current State:")
             logger.info(f"   Account Balance: ${account_balance:.2f}")

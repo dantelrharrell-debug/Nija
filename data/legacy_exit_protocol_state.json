@@ -1,0 +1,55 @@
+{
+  "account_state": "NEEDS_CLEANUP",
+  "classified_positions": {
+    "BTC-USD": {
+      "category": "STRATEGY_ALIGNED",
+      "position": {
+        "symbol": "BTC-USD",
+        "size_usd": 1000.0,
+        "quantity": 0.02,
+        "pnl_pct": 5.0
+      },
+      "exit_strategy": "EMERGENCY_STOP",
+      "classified_at": "2026-02-18T22:16:04.600422"
+    },
+    "DUST-USD": {
+      "category": "ZOMBIE_LEGACY",
+      "position": {
+        "symbol": "DUST-USD",
+        "size_usd": 0.5,
+        "quantity": 1.0,
+        "pnl_pct": 0.0
+      },
+      "exit_strategy": "MARKET_IMMEDIATE",
+      "classified_at": "2026-02-18T22:16:04.600443"
+    }
+  },
+  "unwind_progress": {
+    "LEGACY-USD": {
+      "cycle": 2,
+      "remaining_pct": 0.5625,
+      "started_at": "2026-02-18T22:16:04.595298",
+      "last_cycle_at": "2026-02-18T22:16:04.595714"
+    },
+    "BAD2-USD": {
+      "cycle": 1,
+      "remaining_pct": 0.75,
+      "started_at": "2026-02-18T22:16:04.596422",
+      "last_cycle_at": "2026-02-18T22:16:04.596457"
+    },
+    "GOOD-USD": {
+      "cycle": 1,
+      "remaining_pct": 0.75,
+      "started_at": "2026-02-18T22:16:04.596714",
+      "last_cycle_at": "2026-02-18T22:16:04.596751"
+    }
+  },
+  "last_cleanup_run": "2026-02-18T22:16:04.601425",
+  "cleanup_metrics": {
+    "total_positions_cleaned": 12,
+    "zombie_positions_closed": 6,
+    "legacy_positions_unwound": 3,
+    "stale_orders_cancelled": 6,
+    "capital_freed_usd": 525.0
+  }
+}
