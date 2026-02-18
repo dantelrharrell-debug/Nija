@@ -143,6 +143,7 @@ class LegacyPositionExitProtocol:
                  max_positions: int = 8,
                  order_stale_minutes: int = 30,
                  unwind_pct_per_cycle: float = 0.25,  # 25% per cycle
+                 max_unwind_cycles: int = 4,  # NEW: Convergence guarantee
                  dry_run: bool = False,
                  execution_mode: ExecutionMode = ExecutionMode.FULL,
                  data_dir: str = "./data"):
@@ -155,6 +156,7 @@ class LegacyPositionExitProtocol:
             max_positions: Maximum allowed positions
             order_stale_minutes: Minutes before order considered stale
             unwind_pct_per_cycle: Percentage to unwind per cycle (default 25%)
+            max_unwind_cycles: Maximum cycles before force close (default 4)
             dry_run: If True, log actions but don't execute
             execution_mode: Platform-first, user-background, or full
             data_dir: Directory for state persistence
@@ -164,6 +166,7 @@ class LegacyPositionExitProtocol:
         self.max_positions = max_positions
         self.order_stale_minutes = order_stale_minutes
         self.unwind_pct_per_cycle = unwind_pct_per_cycle
+        self.max_unwind_cycles = max_unwind_cycles  # NEW: Convergence guarantee
         self.dry_run = dry_run
         self.execution_mode = execution_mode
         
@@ -182,6 +185,7 @@ class LegacyPositionExitProtocol:
         logger.info(f"   Dust Threshold: {dust_threshold_pct*100}% of account balance")
         logger.info(f"   Max Positions: {max_positions}")
         logger.info(f"   Unwind Rate: {unwind_pct_per_cycle*100}% per cycle")
+        logger.info(f"   Max Unwind Cycles: {max_unwind_cycles} (convergence guarantee)")
         logger.info(f"   Execution Mode: {execution_mode.value}")
         logger.info(f"   Dry Run: {dry_run}")
     
@@ -621,10 +625,47 @@ class LegacyPositionExitProtocol:
         # Rule 3: Legacy positions - gradual 25% unwind with intelligent escalation
         # NEW REQUIREMENT: Do NOT allow 25% unwind to violate min notional size
         # NEW REQUIREMENT: Escalate intelligently when positions are stuck
+        # NEW REQUIREMENT: Convergence guarantee - force close after max_cycles
         for pos_info in classified['legacy_non_compliant']:
             if not pos_info.is_dust and pos_info.unwind_progress < 1.0:
                 # Calculate amount to unwind this cycle
                 remaining = 1.0 - pos_info.unwind_progress
+                
+                # CONVERGENCE GUARANTEE: Force close after max_cycles
+                if pos_info.unwind_cycle >= self.max_unwind_cycles:
+                    logger.warning(f"🟡 CONVERGENCE GUARANTEE: {pos_info.symbol} at max cycles ({self.max_unwind_cycles})")
+                    logger.warning(f"   Force closing remaining {remaining*100:.1f}% to guarantee convergence")
+                    
+                    # Force close entire remaining position
+                    if not self.dry_run:
+                        try:
+                            if account_id:
+                                self.broker.close_position(pos_info.symbol, account_id)
+                            else:
+                                self.broker.close_position(pos_info.symbol)
+                            
+                            # Mark as fully unwound
+                            self.state.position_unwind_state[pos_info.symbol] = {
+                                'progress': 1.0,
+                                'cycle': pos_info.unwind_cycle + 1,
+                                'failed_attempts': 0,
+                                'escalation_level': pos_info.escalation_level,
+                                'convergence_forced': True
+                            }
+                            
+                            exits['legacy_unwound'] += 1
+                            self.metrics.legacy_positions_unwound += 1
+                            self.metrics.total_positions_cleaned += 1
+                            self.metrics.capital_freed_usd += pos_info.size_usd
+                            
+                            logger.info(f"✅ Position {pos_info.symbol} force closed (convergence guarantee)")
+                        except Exception as e:
+                            logger.error(f"Failed to force close {pos_info.symbol}: {e}")
+                            self._record_failed_attempt(pos_info.symbol, account_id, reason="convergence_force_failed")
+                    else:
+                        exits['legacy_unwound'] += 1
+                    
+                    continue  # Move to next position
                 
                 # INTELLIGENT ESCALATION: Adjust unwind percentage based on escalation level
                 if pos_info.escalation_level == 0:
