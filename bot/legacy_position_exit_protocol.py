@@ -86,8 +86,28 @@ class CleanupMetrics:
     cleanup_progress_pct: float = 0.0
     positions_remaining: int = 0
     zombie_count: int = 0
-    escalated_positions: int = 0  # NEW: Count of escalated positions
-    stuck_positions: int = 0  # NEW: Positions that failed multiple times
+    escalated_positions: int = 0  # Count of escalated positions
+    stuck_positions: int = 0  # Positions that failed multiple times
+    legacy_count: int = 0  # NEW: Count of legacy positions
+    over_cap_count: int = 0  # NEW: Count of over-cap positions
+    cleanup_risk_index: float = 0.0  # NEW: Operational risk score
+    
+    def calculate_risk_index(self):
+        """
+        Calculate Cleanup Risk Index - operational metric that matters.
+        
+        Formula: zombie_count * 3 + legacy_count * 2 + over_cap_count * 1
+        
+        Higher scores indicate higher cleanup urgency:
+        - Zombies: 3x multiplier (highest risk - can't trade)
+        - Legacy: 2x multiplier (medium risk - non-compliant)
+        - Over-cap: 1x multiplier (lower risk - exceeds limit)
+        """
+        self.cleanup_risk_index = (
+            self.zombie_count * 3 +
+            self.legacy_count * 2 +
+            self.over_cap_count * 1
+        )
 
 
 @dataclass
@@ -423,6 +443,19 @@ class LegacyPositionExitProtocol:
         logger.info(f"   Category A (Strategy-Aligned): {len(classified['strategy_aligned'])} positions")
         logger.info(f"   Category B (Legacy Non-Compliant): {len(classified['legacy_non_compliant'])} positions")
         logger.info(f"   Category C (Zombie): {len(classified['zombie'])} positions")
+        
+        # Update metrics
+        self.metrics.zombie_count = len(classified['zombie'])
+        self.metrics.legacy_count = len(classified['legacy_non_compliant'])
+        
+        # Calculate over-cap count
+        total_positions = len(classified['strategy_aligned']) + len(classified['legacy_non_compliant'])
+        self.metrics.over_cap_count = max(0, total_positions - self.max_positions)
+        
+        # Calculate risk index
+        self.metrics.calculate_risk_index()
+        
+        logger.info(f"🎯 Cleanup Risk Index: {self.metrics.cleanup_risk_index:.1f}")
         
         return classified
     
@@ -775,13 +808,29 @@ class LegacyPositionExitProtocol:
         self.metrics.positions_remaining = len(positions)
         self.metrics.zombie_count = zombie_count
         
+        # Count legacy positions
+        legacy_count = 0
+        for pos in positions:
+            pos_info = self.classify_position(pos, balance)
+            if pos_info.category == PositionCategory.LEGACY_NON_COMPLIANT:
+                legacy_count += 1
+        self.metrics.legacy_count = legacy_count
+        
+        # Calculate over-cap count
+        self.metrics.over_cap_count = max(0, len(positions) - self.max_positions)
+        
+        # Calculate risk index
+        self.metrics.calculate_risk_index()
+        
         # Determine state
         if all(checks.values()):
             state = CleanState.CLEAN
             logger.info("✅ ACCOUNT STATE: CLEAN")
+            logger.info(f"   Cleanup Risk Index: {self.metrics.cleanup_risk_index:.1f}")
         else:
             state = CleanState.NEEDS_CLEANUP
             logger.info("⚠️  ACCOUNT STATE: NEEDS CLEANUP")
+            logger.info(f"   Cleanup Risk Index: {self.metrics.cleanup_risk_index:.1f} (Risk breakdown: {zombie_count} zombies × 3, {legacy_count} legacy × 2, {self.metrics.over_cap_count} over-cap × 1)")
         
         return state
     

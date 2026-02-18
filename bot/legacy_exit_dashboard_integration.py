@@ -104,7 +104,10 @@ def get_metrics():
                 'legacy_positions_unwound': metrics.legacy_positions_unwound,
                 'stale_orders_cancelled': metrics.stale_orders_cancelled,
                 'escalated_positions': metrics.escalated_positions,
-                'stuck_positions': metrics.stuck_positions
+                'stuck_positions': metrics.stuck_positions,
+                'legacy_count': metrics.legacy_count,
+                'over_cap_count': metrics.over_cap_count,
+                'cleanup_risk_index': metrics.cleanup_risk_index
             },
             'timestamp': datetime.now().isoformat()
         })
