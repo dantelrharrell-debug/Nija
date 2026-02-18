@@ -89,6 +89,25 @@ except ImportError:
         ENTRY_VALIDATOR_AVAILABLE = False
         logger.warning("⚠️ Deterministic entry validator not available")
 
+try:
+    from risk_containment_layer import (
+        get_risk_containment_layer,
+        apply_risk_containment,
+        RiskContainmentLayer
+    )
+    RISK_CONTAINMENT_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.risk_containment_layer import (
+            get_risk_containment_layer,
+            apply_risk_containment,
+            RiskContainmentLayer
+        )
+        RISK_CONTAINMENT_AVAILABLE = True
+    except ImportError:
+        RISK_CONTAINMENT_AVAILABLE = False
+        logger.warning("⚠️ Risk containment layer not available")
+
 
 class TierAwarePositionManager:
     """
@@ -103,6 +122,7 @@ class TierAwarePositionManager:
         self.tier_hierarchy = None
         self.compression_engine = None
         self.entry_validator = None
+        self.risk_containment = None
         
         # Initialize components
         if TIER_HIERARCHY_AVAILABLE:
@@ -116,6 +136,10 @@ class TierAwarePositionManager:
         if ENTRY_VALIDATOR_AVAILABLE:
             self.entry_validator = get_entry_validator()
             logger.info("✅ Deterministic entry validator integrated")
+        
+        if RISK_CONTAINMENT_AVAILABLE:
+            self.risk_containment = get_risk_containment_layer()
+            logger.info("✅ Risk containment layer integrated")
         
         # Track current state
         self.last_balance = 0.0
@@ -169,28 +193,67 @@ class TierAwarePositionManager:
     
     def calculate_tier_aware_position_size(self, balance: float, 
                                           current_position_count: int,
-                                          signal_quality: float = 75.0) -> float:
+                                          signal_quality: float = 75.0,
+                                          stop_loss_pct: Optional[float] = None,
+                                          apply_risk_control: bool = True) -> Tuple[float, Dict]:
         """
-        Calculate position size using tier-aware logic.
+        Calculate position size using tier-aware logic WITH risk containment.
         
         Args:
             balance: Current account balance
             current_position_count: Number of open positions
             signal_quality: Quality score of signal (0-100)
+            stop_loss_pct: Stop loss as decimal (0.05 = 5%), if None uses tier default
+            apply_risk_control: Whether to apply risk containment (default True)
             
         Returns:
-            Position size in USD
+            Tuple of (position_size, calculation_details)
         """
         if not self.tier_hierarchy:
             # Fallback: simple percentage
-            return balance * 0.10
+            return (balance * 0.10, {'fallback': True})
         
-        # Get target size from tier hierarchy
+        # Get tier name
+        tier_name = self.tier_hierarchy.get_tier_from_balance(balance).value
+        
+        # Get target size from tier hierarchy (concentration-based)
         target_size = self.tier_hierarchy.calculate_target_position_size(
             balance, current_position_count
         )
         
-        return target_size
+        details = {
+            'tier': tier_name,
+            'tier_target_size': target_size,
+            'tier_target_pct': (target_size / balance * 100) if balance > 0 else 0
+        }
+        
+        # Apply risk containment if enabled
+        if apply_risk_control and self.risk_containment:
+            risk_calc = self.risk_containment.calculate_risk_adjusted_position_size(
+                balance=balance,
+                tier_name=tier_name,
+                requested_size=target_size,
+                stop_loss_pct=stop_loss_pct
+            )
+            
+            final_size = risk_calc.risk_adjusted_size
+            
+            details['risk_containment_applied'] = True
+            details['risk_adjusted_size'] = final_size
+            details['actual_risk_pct'] = risk_calc.actual_risk_pct * 100
+            details['max_risk_pct'] = risk_calc.max_risk_pct * 100
+            details['stop_loss_pct'] = risk_calc.stop_loss_pct * 100
+            details['size_reduced'] = risk_calc.size_reduced
+            
+            if risk_calc.size_reduced:
+                details['reduction_reason'] = risk_calc.reduction_reason
+                logger.warning(f"⚠️ RISK CONTAINMENT: Position size reduced from "
+                             f"${target_size:.2f} to ${final_size:.2f}")
+        else:
+            final_size = target_size
+            details['risk_containment_applied'] = False
+        
+        return (final_size, details)
     
     def validate_new_position(self, balance: float, 
                              current_position_count: int,
@@ -408,15 +471,23 @@ def get_tier_position_limits(balance: float) -> Tuple[int, int]:
     return (optimal, maximum)
 
 
-def calculate_tier_position_size(balance: float, current_positions: int) -> float:
+def calculate_tier_position_size(balance: float, current_positions: int,
+                                stop_loss_pct: Optional[float] = None) -> Tuple[float, Dict]:
     """
-    Calculate position size using tier-aware logic.
+    Calculate position size using tier-aware logic WITH risk containment.
+    
+    Args:
+        balance: Account balance
+        current_positions: Number of open positions
+        stop_loss_pct: Stop loss as decimal (0.05 = 5%), optional
     
     Returns:
-        Position size in USD
+        Tuple of (position_size, calculation_details)
     """
     manager = get_tier_aware_position_manager()
-    return manager.calculate_tier_aware_position_size(balance, current_positions)
+    return manager.calculate_tier_aware_position_size(
+        balance, current_positions, stop_loss_pct=stop_loss_pct
+    )
 
 
 if __name__ == "__main__":
