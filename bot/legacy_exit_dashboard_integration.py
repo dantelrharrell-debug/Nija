@@ -294,6 +294,107 @@ def register_legacy_exit_routes(app):
     logger.info("   POST /api/legacy-exit/run")
 
 
+@legacy_exit_bp.route('/capital-lock/status', methods=['GET'])
+def get_capital_lock_status():
+    """
+    GET /api/legacy-exit/capital-lock/status
+    
+    Get capital minimum lock status (LAYER 3: Dashboard Display)
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "account_id": "user123",
+            "balance_usd": 75.50,
+            "trading_mode": "COPY_ONLY",
+            "can_trade_independently": false,
+            "can_copy_trade": true,
+            "display_color": "orange",
+            "urgency": "warning",
+            "message": "Copy-Only Mode - Need $24.50 more for independent trading",
+            "restrictions": {
+                "layer1_thread_creation": false,
+                "layer2_order_execution": true,
+                "layer3_ui_display": true
+            },
+            "enforcement": {
+                "layer1": "Thread creation prevented",
+                "layer2": "Copy trades allowed, independent blocked",
+                "layer3": "Displaying restriction in UI"
+            }
+        }
+    }
+    """
+    try:
+        from bot.capital_minimum_lock import CapitalMinimumLock
+        from bot.broker_integration import get_broker
+        
+        account_id = request.args.get('account_id')
+        broker_name = request.args.get('broker', 'coinbase')
+        
+        broker = get_broker(broker_name)
+        capital_lock = CapitalMinimumLock(broker)
+        
+        # Layer 3: Get dashboard flag
+        dashboard_flag = capital_lock.get_dashboard_flag(account_id)
+        
+        # Add enforcement explanation
+        dashboard_flag['enforcement'] = {
+            'layer1': 'Thread creation prevented' if not dashboard_flag['can_trade_independently'] else 'Thread creation allowed',
+            'layer2': 'Copy trades allowed, independent blocked' if dashboard_flag['trading_mode'] == 'COPY_ONLY' else 
+                     ('All trades blocked' if dashboard_flag['trading_mode'] == 'DISABLED' else 'All trades allowed'),
+            'layer3': 'Displaying restriction in UI'
+        }
+        
+        # Add downgrade log
+        dashboard_flag['recent_downgrades'] = capital_lock.get_downgrade_log()[-5:]
+        
+        return jsonify({
+            'success': True,
+            'data': dashboard_flag,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting capital lock status: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@legacy_exit_bp.route('/capital-lock/enforcement', methods=['GET'])
+def get_enforcement_summary():
+    """
+    GET /api/legacy-exit/capital-lock/enforcement
+    
+    Get three-layer enforcement summary.
+    """
+    try:
+        from bot.capital_minimum_lock import CapitalMinimumLock
+        from bot.broker_integration import get_broker
+        
+        broker_name = request.args.get('broker', 'coinbase')
+        broker = get_broker(broker_name)
+        capital_lock = CapitalMinimumLock(broker)
+        
+        summary = capital_lock.get_enforcement_summary()
+        
+        return jsonify({
+            'success': True,
+            'data': summary,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting enforcement summary: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 def add_legacy_metrics_to_dashboard(dashboard_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Add legacy exit metrics to existing dashboard data.

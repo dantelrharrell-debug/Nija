@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Capital Minimum Lock System
-============================
+Capital Minimum Lock System - Three-Layer Enforcement
+======================================================
 
 Enforces minimum capital requirements for independent trading.
 Accounts under $100 are restricted to copy-only mode.
 
-NEW REQUIREMENT (Step 4):
-- Accounts under $100 → copy-only mode
-- Disable independent trading for micro accounts
-- Micro accounts distort everything
+NEW REQUIREMENT: Enforce at three layers to prevent API circumvention:
+1. Thread Creation Layer - Block independent trading thread startup
+2. Order Execution Layer - Block order execution for non-copy trades
+3. Dashboard Display Flag - Show restriction in UI
+
+Accounts under $100 → copy-only mode (prevents micro account distortion)
 
 Integrates with existing capital tier system (bot/capital_tier_scaling.py).
 """
@@ -17,6 +19,8 @@ Integrates with existing capital tier system (bot/capital_tier_scaling.py).
 import logging
 from typing import Dict, Optional, Tuple
 from enum import Enum
+from datetime import datetime
+from threading import Lock
 
 logger = logging.getLogger("nija.capital_lock")
 
@@ -32,6 +36,11 @@ class CapitalMinimumLock:
     """
     Enforces minimum capital requirements for trading modes.
     
+    THREE-LAYER ENFORCEMENT:
+    1. Thread Creation - prevent_thread_creation()
+    2. Order Execution - validate_order_execution()
+    3. Dashboard Display - get_dashboard_flag()
+    
     Rules:
     - Accounts >= $100: Independent trading allowed
     - Accounts < $100: Copy-only mode (no independent trading)
@@ -44,14 +53,20 @@ class CapitalMinimumLock:
     
     def __init__(self, broker_integration):
         """
-        Initialize capital minimum lock system.
+        Initialize capital minimum lock system with three-layer enforcement.
         
         Args:
             broker_integration: Broker integration instance
         """
         self.broker = broker_integration
+        self._lock = Lock()  # Thread safety for mode changes
+        self._mode_cache = {}  # Cache for account modes
+        self._downgrade_log = []  # Track downgrades
         
-        logger.info("🔒 CAPITAL MINIMUM LOCK SYSTEM INITIALIZED")
+        logger.info("🔒 CAPITAL MINIMUM LOCK SYSTEM INITIALIZED (3-LAYER ENFORCEMENT)")
+        logger.info(f"   Layer 1: Thread Creation Prevention")
+        logger.info(f"   Layer 2: Order Execution Blocking")
+        logger.info(f"   Layer 3: Dashboard Display Flags")
         logger.info(f"   Independent Trading Minimum: ${self.MINIMUM_INDEPENDENT_CAPITAL:.2f}")
         logger.info(f"   Copy Trading Minimum: ${self.MINIMUM_COPY_CAPITAL:.2f}")
     
@@ -88,12 +103,178 @@ class CapitalMinimumLock:
         """
         balance = self.get_account_balance(account_id)
         
+        # Check cache first
+        previous_mode = self._mode_cache.get(account_id)
+        
+        # Determine current mode
         if balance >= self.MINIMUM_INDEPENDENT_CAPITAL:
-            return TradingMode.INDEPENDENT
+            current_mode = TradingMode.INDEPENDENT
         elif balance >= self.MINIMUM_COPY_CAPITAL:
-            return TradingMode.COPY_ONLY
+            current_mode = TradingMode.COPY_ONLY
         else:
-            return TradingMode.DISABLED
+            current_mode = TradingMode.DISABLED
+        
+        # Log downgrade if mode changed
+        if previous_mode and previous_mode != current_mode:
+            if current_mode.value < previous_mode.value:  # Downgrade
+                account_name = account_id or 'PLATFORM'
+                logger.warning(f"🔴 Account {account_name} downgraded to {current_mode.value} due to capital threshold")
+                logger.warning(f"   Balance: ${balance:.2f}, Required: ${self.MINIMUM_INDEPENDENT_CAPITAL:.2f}")
+                
+                # Record downgrade
+                self._downgrade_log.append({
+                    'account_id': account_name,
+                    'from_mode': previous_mode.value,
+                    'to_mode': current_mode.value,
+                    'balance': balance,
+                    'timestamp': datetime.now().isoformat()
+                })
+        
+        # Update cache
+        self._mode_cache[account_id] = current_mode
+        
+        return current_mode
+    
+    # =========================================================================
+    # LAYER 1: THREAD CREATION PREVENTION
+    # =========================================================================
+    
+    def prevent_thread_creation(self, account_id: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        LAYER 1: Prevent independent trading threads from starting.
+        
+        Call this BEFORE creating any independent trading thread.
+        
+        Args:
+            account_id: Account ID (None for platform account)
+            
+        Returns:
+            Tuple of (can_start_thread: bool, reason: str)
+        """
+        balance = self.get_account_balance(account_id)
+        mode = self.get_trading_mode(account_id)
+        
+        account_name = account_id or 'PLATFORM'
+        
+        if mode == TradingMode.INDEPENDENT:
+            logger.info(f"✅ [LAYER 1] Thread creation allowed for {account_name} (${balance:.2f})")
+            return True, f"Independent trading allowed"
+        elif mode == TradingMode.COPY_ONLY:
+            logger.warning(f"🚫 [LAYER 1] Thread creation BLOCKED for {account_name}")
+            logger.warning(f"   Reason: COPY_ONLY mode (balance ${balance:.2f} < ${self.MINIMUM_INDEPENDENT_CAPITAL:.2f})")
+            return False, f"Copy-only mode: independent trading requires ${self.MINIMUM_INDEPENDENT_CAPITAL:.2f}"
+        else:
+            logger.error(f"🔴 [LAYER 1] Thread creation BLOCKED for {account_name}")
+            logger.error(f"   Reason: DISABLED (balance ${balance:.2f} < ${self.MINIMUM_COPY_CAPITAL:.2f})")
+            return False, f"Trading disabled: minimum ${self.MINIMUM_COPY_CAPITAL:.2f} required"
+    
+    # =========================================================================
+    # LAYER 2: ORDER EXECUTION BLOCKING
+    # =========================================================================
+    
+    def validate_order_execution(self, account_id: Optional[str] = None, 
+                                  is_copy_trade: bool = False,
+                                  order_details: Optional[Dict] = None) -> Tuple[bool, str]:
+        """
+        LAYER 2: Block order execution for non-copy trades.
+        
+        Call this BEFORE executing any order.
+        
+        Args:
+            account_id: Account ID (None for platform account)
+            is_copy_trade: True if this is a copy trade
+            order_details: Optional order details for logging
+            
+        Returns:
+            Tuple of (allowed: bool, reason: str)
+        """
+        balance = self.get_account_balance(account_id)
+        mode = self.get_trading_mode(account_id)
+        
+        account_name = account_id or 'PLATFORM'
+        order_type = "COPY" if is_copy_trade else "INDEPENDENT"
+        
+        # Platform account always allowed
+        if account_id is None:
+            logger.debug(f"✅ [LAYER 2] Order execution allowed for PLATFORM")
+            return True, "Platform account - no restrictions"
+        
+        # Check mode
+        if mode == TradingMode.DISABLED:
+            logger.error(f"🔴 [LAYER 2] Order execution BLOCKED for {account_name}")
+            logger.error(f"   Order type: {order_type}")
+            logger.error(f"   Reason: DISABLED (balance ${balance:.2f} < ${self.MINIMUM_COPY_CAPITAL:.2f})")
+            if order_details:
+                logger.error(f"   Order details: {order_details}")
+            return False, f"Trading disabled: balance ${balance:.2f} < ${self.MINIMUM_COPY_CAPITAL:.2f}"
+        
+        if mode == TradingMode.COPY_ONLY and not is_copy_trade:
+            logger.warning(f"🚫 [LAYER 2] Order execution BLOCKED for {account_name}")
+            logger.warning(f"   Order type: {order_type}")
+            logger.warning(f"   Reason: COPY_ONLY mode (balance ${balance:.2f} < ${self.MINIMUM_INDEPENDENT_CAPITAL:.2f})")
+            if order_details:
+                logger.warning(f"   Blocked order: {order_details}")
+            return False, f"Copy-only mode: independent trading requires ${self.MINIMUM_INDEPENDENT_CAPITAL:.2f} (current: ${balance:.2f})"
+        
+        logger.debug(f"✅ [LAYER 2] Order execution allowed for {account_name} ({order_type})")
+        return True, "Order allowed"
+    
+    # =========================================================================
+    # LAYER 3: DASHBOARD DISPLAY FLAG
+    # =========================================================================
+    
+    def get_dashboard_flag(self, account_id: Optional[str] = None) -> Dict:
+        """
+        LAYER 3: Get restriction flag for dashboard display.
+        
+        Use this to show restriction status in UI.
+        
+        Args:
+            account_id: Account ID (None for platform account)
+            
+        Returns:
+            Dict with dashboard display information
+        """
+        balance = self.get_account_balance(account_id)
+        mode = self.get_trading_mode(account_id)
+        
+        can_independent, independent_reason = self.can_trade_independently(account_id)
+        can_copy, copy_reason = self.can_copy_trade(account_id)
+        
+        # Determine display color and urgency
+        if mode == TradingMode.DISABLED:
+            display_color = "red"
+            urgency = "critical"
+            message = f"Trading Disabled - Minimum ${self.MINIMUM_COPY_CAPITAL:.2f} required"
+        elif mode == TradingMode.COPY_ONLY:
+            display_color = "orange"
+            urgency = "warning"
+            message = f"Copy-Only Mode - Need ${self.MINIMUM_INDEPENDENT_CAPITAL - balance:.2f} more for independent trading"
+        else:
+            display_color = "green"
+            urgency = "normal"
+            message = "Independent Trading Enabled"
+        
+        return {
+            'account_id': account_id or 'platform',
+            'balance_usd': balance,
+            'trading_mode': mode.value,
+            'can_trade_independently': can_independent,
+            'can_copy_trade': can_copy,
+            'display_color': display_color,
+            'urgency': urgency,
+            'message': message,
+            'capital_needed_for_independent': max(0, self.MINIMUM_INDEPENDENT_CAPITAL - balance),
+            'restrictions': {
+                'layer1_thread_creation': can_independent,
+                'layer2_order_execution': can_independent or (mode == TradingMode.COPY_ONLY),
+                'layer3_ui_display': True  # Always show
+            }
+        }
+    
+    # =========================================================================
+    # EXISTING METHODS (kept for backward compatibility)
+    # =========================================================================
     
     def can_trade_independently(self, account_id: Optional[str] = None) -> Tuple[bool, str]:
         """
@@ -210,6 +391,36 @@ class CapitalMinimumLock:
         
         logger.info(f"{status}: {trade_type} trade for account {account_id or 'platform'}")
         logger.info(f"   Reason: {reason}")
+    
+    def get_downgrade_log(self) -> list:
+        """
+        Get list of all account downgrades.
+        
+        Returns:
+            List of downgrade events with timestamps
+        """
+        return self._downgrade_log
+    
+    def get_enforcement_summary(self) -> Dict:
+        """
+        Get summary of three-layer enforcement status.
+        
+        Returns:
+            Dict with enforcement statistics
+        """
+        return {
+            'enforcement_layers': {
+                'layer1_thread_creation': 'Active',
+                'layer2_order_execution': 'Active',
+                'layer3_dashboard_display': 'Active'
+            },
+            'thresholds': {
+                'independent_trading': self.MINIMUM_INDEPENDENT_CAPITAL,
+                'copy_trading': self.MINIMUM_COPY_CAPITAL
+            },
+            'downgrade_count': len(self._downgrade_log),
+            'recent_downgrades': self._downgrade_log[-5:] if self._downgrade_log else []
+        }
 
 
 def enforce_capital_minimum(func):
