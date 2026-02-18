@@ -1,0 +1,21 @@
+{
+  "total_signals": 2,
+  "total_accepted": 1,
+  "total_rejected": 1,
+  "rejection_reasons": {
+    "DUPLICATE_ENTRY": 1
+  },
+  "signal_triggers": {
+    "RSI_OVERSOLD": {
+      "count": 2,
+      "accepted": 1,
+      "wins": 1,
+      "losses": 0
+    }
+  },
+  "quality_distribution": {
+    "GOOD": 2
+  },
+  "win_loss_by_trigger": {},
+  "avg_confidence_by_outcome": {}
+}
