@@ -27,6 +27,17 @@ import logging
 from typing import Dict, List, Optional
 from pathlib import Path
 
+# Import environment detection
+try:
+    from config.environment import is_production_environment
+except ImportError:
+    try:
+        from .environment import is_production_environment
+    except ImportError:
+        # Fallback if environment detection not available
+        def is_production_environment():
+            return False
+
 logger = logging.getLogger("nija.individual_user_loader")
 
 
@@ -354,12 +365,15 @@ class IndividualUserConfigLoader:
 _individual_user_config_loader = None
 
 
-def get_individual_user_config_loader(hard_fail: bool = True, require_api_keys: bool = True) -> IndividualUserConfigLoader:
+def get_individual_user_config_loader(hard_fail: bool = None, require_api_keys: bool = True) -> IndividualUserConfigLoader:
     """
     Get global individual user config loader instance.
 
     Args:
-        hard_fail: If True, raises exception if required users are missing
+        hard_fail: If True, raises exception if required users are missing.
+                   If None (default), automatically determined based on environment:
+                   - Production: hard_fail=True (strict validation required)
+                   - Development: hard_fail=False (lenient for local testing)
         require_api_keys: If True (with hard_fail), also requires API keys to be set
 
     Returns:
@@ -371,6 +385,12 @@ def get_individual_user_config_loader(hard_fail: bool = True, require_api_keys: 
     """
     global _individual_user_config_loader
     if _individual_user_config_loader is None:
+        # Auto-detect environment if not explicitly specified
+        if hard_fail is None:
+            hard_fail = is_production_environment()
+            if hard_fail:
+                logger.info("🔒 Production environment detected - enforcing strict user credential validation")
+        
         _individual_user_config_loader = IndividualUserConfigLoader()
         _individual_user_config_loader.load_all_users(hard_fail=hard_fail, require_api_keys=require_api_keys)
     return _individual_user_config_loader
