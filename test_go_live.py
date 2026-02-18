@@ -182,6 +182,79 @@ def test_multi_account_isolation_check():
         return False
 
 
+def test_kraken_credentials_check():
+    """Test Kraken credentials check"""
+    print("\nTesting Kraken credentials check...")
+    try:
+        from go_live import GoLiveValidator
+        
+        # Test with no credentials (should fail for platform, pass for users)
+        validator = GoLiveValidator()
+        validator._check_credentials_configured()
+        
+        platform_check = [c for c in validator.checks if c.name == "Kraken Platform Account Check"][0]
+        user_check = [c for c in validator.checks if c.name == "Kraken User Accounts Check"][0]
+        
+        assert platform_check.passed == False, "No Kraken credentials should fail"
+        assert user_check.passed == True, "No user accounts is informational only"
+        print("✅ Kraken credentials check works without credentials")
+        
+        # Test with platform credentials
+        os.environ['KRAKEN_PLATFORM_API_KEY'] = 'test_key'
+        os.environ['KRAKEN_PLATFORM_API_SECRET'] = 'test_secret'
+        validator2 = GoLiveValidator()
+        validator2._check_credentials_configured()
+        
+        platform_check2 = [c for c in validator2.checks if c.name == "Kraken Platform Account Check"][0]
+        assert platform_check2.passed == True, "With credentials should pass"
+        print("✅ Kraken platform credentials check passed")
+        
+        # Test with user credentials
+        os.environ['KRAKEN_USER_DAIVON_API_KEY'] = 'daivon_key'
+        os.environ['KRAKEN_USER_DAIVON_API_SECRET'] = 'daivon_secret'
+        validator3 = GoLiveValidator()
+        validator3._check_credentials_configured()
+        
+        user_check3 = [c for c in validator3.checks if c.name == "Kraken User Accounts Check"][0]
+        assert "Daivon" in user_check3.message, "Daivon should be listed"
+        print("✅ Kraken user credentials check passed")
+        
+        # Clean up
+        del os.environ['KRAKEN_PLATFORM_API_KEY']
+        del os.environ['KRAKEN_PLATFORM_API_SECRET']
+        del os.environ['KRAKEN_USER_DAIVON_API_KEY']
+        del os.environ['KRAKEN_USER_DAIVON_API_SECRET']
+        
+        return True
+    except Exception as e:
+        print(f"❌ Kraken credentials check test failed: {e}")
+        # Clean up on failure
+        for key in ['KRAKEN_PLATFORM_API_KEY', 'KRAKEN_PLATFORM_API_SECRET', 
+                    'KRAKEN_USER_DAIVON_API_KEY', 'KRAKEN_USER_DAIVON_API_SECRET']:
+            if key in os.environ:
+                del os.environ[key]
+        return False
+
+
+def test_kraken_connectivity_check():
+    """Test Kraken connectivity check"""
+    print("\nTesting Kraken connectivity check...")
+    try:
+        from go_live import GoLiveValidator
+        
+        validator = GoLiveValidator()
+        validator._check_kraken_connectivity()
+        
+        # Should have a Kraken connection check
+        conn_check = [c for c in validator.checks if "Kraken" in c.name and "Connection" in c.name]
+        assert len(conn_check) > 0, "Should have Kraken connection check"
+        print(f"✅ Kraken connectivity check completed: {conn_check[0].message}")
+        return True
+    except Exception as e:
+        print(f"❌ Kraken connectivity check test failed: {e}")
+        return False
+
+
 def run_all_tests():
     """Run all tests"""
     print("=" * 80)
@@ -196,6 +269,8 @@ def run_all_tests():
         ("Emergency Stop Check", test_emergency_stop_check),
         ("Capital Safety Check", test_capital_safety_check),
         ("Multi-Account Isolation Check", test_multi_account_isolation_check),
+        ("Kraken Credentials Check", test_kraken_credentials_check),
+        ("Kraken Connectivity Check", test_kraken_connectivity_check),
     ]
     
     results = []
