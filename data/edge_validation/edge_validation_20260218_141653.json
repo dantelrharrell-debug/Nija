@@ -1,0 +1,43 @@
+{
+  "status": "unproven",
+  "overall_sharpe": 4.111854000785901,
+  "sharpe_after_costs": -0.06948490180032303,
+  "in_sample_sharpe": 0.0,
+  "out_sample_sharpe": 0.0,
+  "oos_efficiency": 0.0,
+  "walk_forward_passed": true,
+  "parameter_stability": 0.8,
+  "monte_carlo_passed": true,
+  "probability_of_ruin": 0.0,
+  "validation_timestamp": "2026-02-18T14:16:53.562881",
+  "total_trades": 200,
+  "validation_message": "\u274c EDGE UNPROVEN - Sharpe -0.07 (need \u22651.0) - DO NOT SCALE",
+  "ready_to_scale": false,
+  "bull_performance": {
+    "regime_name": "bull",
+    "num_trades": 89,
+    "win_rate": 0.4606741573033708,
+    "avg_return": 0.003151874280316883,
+    "sharpe_ratio": 2.3625398870557297,
+    "max_drawdown": -0.08697538285910046,
+    "total_return": 0.2973346287243783
+  },
+  "bear_performance": {
+    "regime_name": "bear",
+    "num_trades": 62,
+    "win_rate": 0.532258064516129,
+    "avg_return": 0.005958924481705752,
+    "sharpe_ratio": 4.658819338441343,
+    "max_drawdown": -0.0626300567749149,
+    "total_return": 0.4272229895009596
+  },
+  "sideways_performance": {
+    "regime_name": "sideways",
+    "num_trades": 49,
+    "win_rate": 0.5714285714285714,
+    "avg_return": 0.008971781286128341,
+    "sharpe_ratio": 6.736530544093442,
+    "max_drawdown": -0.07491531170083014,
+    "total_return": 0.5324591539147807
+  }
+}
