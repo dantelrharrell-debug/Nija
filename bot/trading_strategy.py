@@ -1650,6 +1650,10 @@ class TradingStrategy:
             
         adoption_start = datetime.now()
         
+        # Initialize failed_positions list before any try/except blocks
+        # This ensures we can track failures throughout the adoption process
+        failed_positions = []
+        
         try:
             logger.info("")
             logger.info("═" * 70)
@@ -1683,7 +1687,8 @@ class TradingStrategy:
                         'broker_name': broker_name,
                         'account_id': account_id,
                         'error': error_msg,
-                        'positions': []
+                        'positions': [],
+                        'failed_positions': failed_positions
                     }
                     
                 positions_found = len(positions) if positions else 0
@@ -1744,7 +1749,8 @@ class TradingStrategy:
                         'broker_name': broker_name,
                         'account_id': account_id,
                         'open_orders_count': open_orders_count,
-                        'positions': []
+                        'positions': [],
+                        'failed_positions': failed_positions
                     }
                 
             except Exception as fetch_err:
@@ -1758,7 +1764,8 @@ class TradingStrategy:
                     'broker_name': broker_name,
                     'account_id': account_id,
                     'error': error_msg,
-                    'positions': []
+                    'positions': [],
+                    'failed_positions': failed_positions
                 }
             
             # ═══════════════════════════════════════════════════════════════
@@ -1785,6 +1792,7 @@ class TradingStrategy:
                     'account_id': account_id,
                     'error': error_msg,
                     'positions': [],
+                    'failed_positions': failed_positions,
                     'critical': True  # Flag for critical failure requiring immediate halt
                 }
             
@@ -1997,7 +2005,8 @@ class TradingStrategy:
                 'broker_name': broker_name,
                 'account_id': account_id,
                 'error': error_msg,
-                'positions': []
+                'positions': [],
+                'failed_positions': failed_positions
             }
 
     def verify_position_adoption_status(self, account_id: str, broker_name: str) -> bool:
