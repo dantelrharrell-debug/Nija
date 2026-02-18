@@ -105,17 +105,15 @@ class PositionCapEnforcer:
                 try:
                     price = self.broker.get_current_price(symbol)
 
-                    # CRITICAL FIX: Add None-check safety guard
-                    # Prevents counting positions with invalid price fetches
-                    if price is None:
-                        logger.error(f"❌ Price fetch failed for {symbol} — symbol mismatch")
-                        logger.error(f"   💡 This position cannot be valued due to incorrect broker symbol format")
-                        # CRITICAL: Still count position even if price fetch fails (use fallback price)
-                        # This prevents ghost positions from being invisible
-                        price = 1.0  # Fallback for counting purposes
-                        logger.warning(f"   Using fallback price $1.00 for counting position")
-                    elif price <= 0:
-                        price = 1.0  # Fallback if price unavailable
+                    # CRITICAL FIX: Block valuation if price fetch fails
+                    # Institutional systems NEVER use arbitrary fallback prices
+                    if price is None or price <= 0:
+                        logger.error(f"❌ CRITICAL: Cannot value position {symbol} — price fetch failed")
+                        logger.error(f"   💡 Trading PAUSED for this symbol until price available")
+                        logger.error(f"   💡 Position exists but cannot be valued - BLOCKING VALUATION")
+                        # CRITICAL: Do NOT count positions we cannot value
+                        # This prevents trading on fake data
+                        continue
 
                     usd_value = balance * price
 
@@ -141,19 +139,13 @@ class PositionCapEnforcer:
                         'usd_value': usd_value
                     })
                 except Exception as e:
-                    logger.warning(f"Could not fetch price for {symbol}: {e}")
-                    # CRITICAL: Still count position even if price fetch fails (use fallback price)
-                    # This prevents rate limiting from causing undercounting
-                    usd_value = balance * 1.0  # Conservative $1 estimate
-                    if balance > 0.001:  # Only skip true dust
-                        logger.warning(f"⚠️ RATE LIMITED: Counting {symbol} with fallback price (balance={balance})")
-                        result.append({
-                            'symbol': symbol,
-                            'currency': currency,
-                            'balance': balance,
-                            'price': 1.0,  # Fallback
-                            'usd_value': usd_value
-                        })
+                    # CRITICAL: Block valuation if price fetch fails
+                    # Never use arbitrary fallback prices
+                    logger.error(f"❌ CRITICAL: Cannot value position {symbol}: {e}")
+                    logger.error(f"   💡 Trading PAUSED for this symbol until price available")
+                    logger.error(f"   💡 Position exists but cannot be valued - BLOCKING VALUATION")
+                    # Do NOT count positions we cannot value
+                    continue
             
             # Log summary
             if dust_count > 0 or blacklisted_count > 0:
@@ -239,57 +231,91 @@ class PositionCapEnforcer:
         """
         Enforce position cap by auto-selling excess positions.
         
-        Strategy:
-        1. Sort positions by USD value (largest first)
-        2. Keep top N positions (largest holdings)
-        3. Liquidate remaining positions (smallest holdings)
-        4. Block new entries until normalized
-
+        CRITICAL INSTITUTIONAL-GRADE ENFORCEMENT:
+        1. Fetch current positions
+        2. If over cap, liquidate excess
+        3. RE-FETCH positions to verify closure
+        4. RE-RUN until compliant
+        5. HALT TRADING if not compliant after max attempts
+        
         Returns:
             (success: bool, result_dict with counts and actions)
         """
         logger.info(f"🔍 ENFORCE: Checking position cap (max={self.max_positions})...")
+        
+        max_enforcement_cycles = 3  # Maximum re-enforcement attempts
+        
+        for cycle in range(1, max_enforcement_cycles + 1):
+            logger.info(f"\n{'='*70}")
+            logger.info(f"ENFORCEMENT CYCLE {cycle}/{max_enforcement_cycles}")
+            logger.info(f"{'='*70}")
+            
+            positions = self.get_current_positions()
+            current_count = len(positions)
 
+            logger.info(f"   Current positions: {current_count} (after blacklist filtering)")
+
+            if current_count <= self.max_positions:
+                logger.info(f"✅ COMPLIANT: {current_count}/{self.max_positions} positions (under cap)")
+                return True, {
+                    'current_count': current_count,
+                    'max_allowed': self.max_positions,
+                    'excess': 0,
+                    'sold': 0,
+                    'status': 'compliant',
+                    'cycles': cycle
+                }
+
+            # Over cap: liquidate excess
+            excess = current_count - self.max_positions
+            logger.warning(f"🚨 VIOLATION: {excess} positions over cap! Auto-liquidating...")
+            logger.warning(f"   Strategy: KEEP {self.max_positions} largest, SELL {excess} smallest")
+
+            ranked = self.rank_positions_for_liquidation(positions)
+            sold_count = 0
+
+            for i, pos in enumerate(ranked[:excess]):
+                logger.info(f"\nLiquidating position {i+1}/{excess}...")
+                if self.sell_position(pos):
+                    sold_count += 1
+                    import time
+                    time.sleep(1)  # Rate-limit API calls
+                else:
+                    logger.error(f"❌ Failed to liquidate {pos['symbol']} — enforcement incomplete")
+
+            logger.info(f"\n{'='*70}")
+            logger.info(f"CYCLE {cycle} SUMMARY: Liquidated {sold_count}/{excess} positions")
+            logger.info(f"{'='*70}")
+            
+            # CRITICAL: Wait for orders to settle before re-checking
+            logger.info(f"⏳ Waiting 3s for orders to settle...")
+            import time
+            time.sleep(3)
+            
+            # RE-FETCH positions to verify compliance
+            logger.info(f"🔄 RE-FETCHING positions to verify compliance...")
+            
+        # If we reach here, enforcement failed after max cycles
         positions = self.get_current_positions()
-        current_count = len(positions)
-
-        logger.info(f"   Current positions: {current_count} (after blacklist filtering)")
-
-        if current_count <= self.max_positions:
-            logger.info(f"✅ Under cap (no action needed)")
-            return True, {
-                'current_count': current_count,
-                'max_allowed': self.max_positions,
-                'excess': 0,
-                'sold': 0,
-                'status': 'compliant'
-            }
-
-        # Over cap: liquidate excess
-        excess = current_count - self.max_positions
-        logger.warning(f"🚨 OVER CAP by {excess} positions! Auto-liquidating...")
-        logger.warning(f"   Strategy: KEEP {self.max_positions} largest, SELL {excess} smallest")
-
-        ranked = self.rank_positions_for_liquidation(positions)
-        sold_count = 0
-
-        for i, pos in enumerate(ranked[:excess]):
-            logger.info(f"\nSelling position {i+1}/{excess}...")
-            if self.sell_position(pos):
-                sold_count += 1
-                import time
-                time.sleep(1)  # Rate-limit API calls
-
-        logger.info(f"\n" + "="*70)
-        logger.info(f"ENFORCER SUMMARY: Sold {sold_count}/{excess} excess positions")
-        logger.info(f"="*70)
-
-        return sold_count == excess, {
-            'current_count': current_count,
+        final_count = len(positions)
+        
+        logger.error(f"\n{'='*70}")
+        logger.error(f"🚨 CRITICAL FAILURE: Position cap enforcement FAILED")
+        logger.error(f"   Initial positions: {current_count}")
+        logger.error(f"   Final positions: {final_count}")
+        logger.error(f"   Max allowed: {self.max_positions}")
+        logger.error(f"   Cycles attempted: {max_enforcement_cycles}")
+        logger.error(f"{'='*70}")
+        logger.error(f"🛑 TRADING HALTED until manual intervention")
+        
+        return False, {
+            'current_count': final_count,
             'max_allowed': self.max_positions,
-            'excess': excess,
+            'excess': final_count - self.max_positions if final_count > self.max_positions else 0,
             'sold': sold_count,
-            'status': 'enforced' if sold_count == excess else 'partial'
+            'status': 'failed_enforcement',
+            'cycles': max_enforcement_cycles,
+            'trading_halted': True
         }
 
 

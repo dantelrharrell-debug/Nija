@@ -224,14 +224,35 @@ class ContinuousExitEnforcer:
         """
         try:
             # Sort positions by USD value (smallest first)
-            # Use safe fallback for missing or invalid prices
+            # CRITICAL: Block valuation if price is missing
             def get_position_value(p):
                 quantity = p.get('quantity', 0)
                 price = p.get('price', 0)
-                # Treat missing/zero prices as 0 to sort them first
-                return quantity * (price if price and price > 0 else 0)
+                # CRITICAL: Cannot value positions without valid price
+                if not price or price <= 0:
+                    logger.error(f"❌ CRITICAL: Cannot value position {p.get('symbol')} - no price available")
+                    return None  # Mark as unvaluable
+                return quantity * price
             
-            sorted_positions = sorted(positions, key=get_position_value)
+            # Filter out positions we cannot value
+            valuable_positions = []
+            unvaluable_symbols = []
+            for pos in positions:
+                value = get_position_value(pos)
+                if value is None:
+                    unvaluable_symbols.append(pos.get('symbol', 'unknown'))
+                else:
+                    valuable_positions.append((pos, value))
+            
+            # Log unvaluable positions
+            if unvaluable_symbols:
+                logger.error(f"🛑 Cannot enforce cap: {len(unvaluable_symbols)} positions lack pricing:")
+                for sym in unvaluable_symbols:
+                    logger.error(f"   - {sym}: TRADING PAUSED until price available")
+                # Continue with valuable positions only
+            
+            # Sort valuable positions by value
+            sorted_positions = [pos for pos, _ in sorted(valuable_positions, key=lambda x: x[1])]
             
             # Close smallest positions
             closed_count = 0
