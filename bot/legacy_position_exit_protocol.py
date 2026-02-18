@@ -71,6 +71,8 @@ class PositionInfo:
     is_over_cap: bool = False
     unwind_progress: float = 0.0  # 0.0 to 1.0 (0% to 100%)
     unwind_cycle: int = 0  # Which cycle of unwinding (1-4)
+    failed_attempts: int = 0  # NEW: Track failed cleanup attempts
+    escalation_level: int = 0  # NEW: 0=normal, 1=aggressive, 2=force
 
 
 @dataclass
@@ -84,6 +86,8 @@ class CleanupMetrics:
     cleanup_progress_pct: float = 0.0
     positions_remaining: int = 0
     zombie_count: int = 0
+    escalated_positions: int = 0  # NEW: Count of escalated positions
+    stuck_positions: int = 0  # NEW: Positions that failed multiple times
 
 
 @dataclass
@@ -93,10 +97,16 @@ class ProtocolState:
     execution_mode: str
     platform_clean: bool
     users_cleanup_progress: Dict[str, float]  # user_id -> progress (0.0-1.0)
-    position_unwind_state: Dict[str, Dict]  # symbol -> {cycle, progress}
+    position_unwind_state: Dict[str, Dict]  # symbol -> {cycle, progress, failed_attempts, escalation_level}
     total_cycles_completed: int
     metrics: Dict
     account_state: str  # CLEAN or NEEDS_CLEANUP
+    escalation_alerts: List[Dict] = None  # NEW: Track escalation events
+    
+    def __post_init__(self):
+        """Initialize escalation_alerts if None"""
+        if self.escalation_alerts is None:
+            self.escalation_alerts = []
 
 
 class LegacyPositionExitProtocol:
@@ -345,6 +355,8 @@ class LegacyPositionExitProtocol:
         unwind_state = self.state.position_unwind_state.get(symbol, {})
         unwind_progress = unwind_state.get('progress', 0.0)
         unwind_cycle = unwind_state.get('cycle', 0)
+        failed_attempts = unwind_state.get('failed_attempts', 0)
+        escalation_level = unwind_state.get('escalation_level', 0)
         
         # Determine category
         if is_zombie:
@@ -352,8 +364,8 @@ class LegacyPositionExitProtocol:
         elif is_dust:
             # Dust positions are legacy (will be closed immediately)
             category = PositionCategory.LEGACY_NON_COMPLIANT
-        elif unwind_progress > 0:
-            # Already unwinding = legacy
+        elif unwind_progress > 0 or failed_attempts > 0:
+            # Already unwinding or has failed attempts = legacy
             category = PositionCategory.LEGACY_NON_COMPLIANT
         else:
             # For now, assume positions are strategy-aligned unless marked otherwise
@@ -371,7 +383,9 @@ class LegacyPositionExitProtocol:
             is_dust=is_dust,
             is_over_cap=False,  # Will be set in Phase 3
             unwind_progress=unwind_progress,
-            unwind_cycle=unwind_cycle
+            unwind_cycle=unwind_cycle,
+            failed_attempts=failed_attempts,
+            escalation_level=escalation_level
         )
     
     def phase1_classify_positions(self, account_id: Optional[str] = None) -> Dict[str, List[PositionInfo]]:
@@ -571,13 +585,27 @@ class LegacyPositionExitProtocol:
                 else:
                     exits['over_cap_closed'] += 1
         
-        # Rule 3: Legacy positions - gradual 25% unwind
+        # Rule 3: Legacy positions - gradual 25% unwind with intelligent escalation
         # NEW REQUIREMENT: Do NOT allow 25% unwind to violate min notional size
+        # NEW REQUIREMENT: Escalate intelligently when positions are stuck
         for pos_info in classified['legacy_non_compliant']:
             if not pos_info.is_dust and pos_info.unwind_progress < 1.0:
                 # Calculate amount to unwind this cycle
                 remaining = 1.0 - pos_info.unwind_progress
-                to_unwind = min(remaining, self.unwind_pct_per_cycle)
+                
+                # INTELLIGENT ESCALATION: Adjust unwind percentage based on escalation level
+                if pos_info.escalation_level == 0:
+                    # Normal: 25% per cycle
+                    to_unwind = min(remaining, self.unwind_pct_per_cycle)
+                    escalation_strategy = "NORMAL (25% unwind)"
+                elif pos_info.escalation_level == 1:
+                    # Aggressive: 50% per cycle (after 2 failed attempts)
+                    to_unwind = min(remaining, 0.50)
+                    escalation_strategy = "AGGRESSIVE (50% unwind)"
+                else:
+                    # Force: 100% immediate close (after 4 failed attempts)
+                    to_unwind = remaining
+                    escalation_strategy = "FORCE (100% close)"
                 
                 unwind_size_usd = pos_info.size_usd * to_unwind
                 remaining_after_unwind = pos_info.size_usd * (1 - to_unwind)
@@ -592,8 +620,9 @@ class LegacyPositionExitProtocol:
                     logger.warning(f"   Minimum notional required: ${min_notional:.2f}")
                     
                     # Strategy: Close entire position instead of partial unwind
-                    if remaining < 0.5:  # If < 50% remains, close everything
-                        logger.info(f"   Closing entire position instead (less than 50% remains)")
+                    if remaining < 0.5 or pos_info.escalation_level >= 2:
+                        # If < 50% remains OR force escalation, close everything
+                        logger.info(f"   Closing entire position (escalation: {escalation_strategy})")
                         
                         if not self.dry_run:
                             try:
@@ -605,7 +634,9 @@ class LegacyPositionExitProtocol:
                                 # Mark as fully unwound
                                 self.state.position_unwind_state[pos_info.symbol] = {
                                     'progress': 1.0,
-                                    'cycle': pos_info.unwind_cycle + 1
+                                    'cycle': pos_info.unwind_cycle + 1,
+                                    'failed_attempts': 0,  # Reset on success
+                                    'escalation_level': pos_info.escalation_level
                                 }
                                 
                                 exits['legacy_unwound'] += 1
@@ -613,30 +644,44 @@ class LegacyPositionExitProtocol:
                                 self.metrics.total_positions_cleaned += 1
                                 self.metrics.capital_freed_usd += pos_info.size_usd
                                 
-                                logger.info(f"✅ Position {pos_info.symbol} fully closed (min notional enforcement)")
+                                logger.info(f"✅ Position {pos_info.symbol} fully closed (min notional + escalation)")
                             except Exception as e:
                                 logger.error(f"Failed to close legacy position {pos_info.symbol}: {e}")
+                                self._record_failed_attempt(pos_info.symbol, account_id)
                         else:
                             exits['legacy_unwound'] += 1
                     else:
                         # Skip this cycle - wait for next cycle when remaining is smaller
                         logger.info(f"   Skipping unwind this cycle (would violate min notional)")
                         logger.info(f"   Will attempt again in next cycle")
+                        self._record_failed_attempt(pos_info.symbol, account_id, reason="min_notional_violation")
                     
                     continue  # Skip to next position
                 
-                logger.info(f"🔄 Unwinding legacy position: {pos_info.symbol}")
+                # Log unwinding with escalation level
+                logger.info(f"🔄 Unwinding legacy position: {pos_info.symbol} [{escalation_strategy}]")
                 logger.info(f"   Current: ${pos_info.size_usd:.2f}, Unwinding: {to_unwind*100:.0f}% (${unwind_size_usd:.2f})")
                 logger.info(f"   Remaining after unwind: ${remaining_after_unwind:.2f} (min notional: ${min_notional:.2f})")
                 logger.info(f"   Cycle: {pos_info.unwind_cycle + 1}/4, Progress: {(pos_info.unwind_progress + to_unwind)*100:.0f}%")
                 
+                if pos_info.failed_attempts > 0:
+                    logger.warning(f"   ⚠️  Failed attempts: {pos_info.failed_attempts}, Escalation level: {pos_info.escalation_level}")
+                
                 if not self.dry_run:
                     try:
-                        # Partial close
-                        if account_id:
-                            self.broker.close_position_partial(pos_info.symbol, to_unwind, account_id)
+                        # Partial or full close based on escalation
+                        if to_unwind >= 1.0:
+                            # Force close entire position
+                            if account_id:
+                                self.broker.close_position(pos_info.symbol, account_id)
+                            else:
+                                self.broker.close_position(pos_info.symbol)
                         else:
-                            self.broker.close_position_partial(pos_info.symbol, to_unwind)
+                            # Partial close
+                            if account_id:
+                                self.broker.close_position_partial(pos_info.symbol, to_unwind, account_id)
+                            else:
+                                self.broker.close_position_partial(pos_info.symbol, to_unwind)
                         
                         # Update unwind state
                         new_progress = pos_info.unwind_progress + to_unwind
@@ -644,7 +689,9 @@ class LegacyPositionExitProtocol:
                         
                         self.state.position_unwind_state[pos_info.symbol] = {
                             'progress': new_progress,
-                            'cycle': new_cycle
+                            'cycle': new_cycle,
+                            'failed_attempts': 0,  # Reset on success
+                            'escalation_level': pos_info.escalation_level
                         }
                         
                         exits['legacy_unwound'] += 1
@@ -656,6 +703,7 @@ class LegacyPositionExitProtocol:
                             self.metrics.total_positions_cleaned += 1
                     except Exception as e:
                         logger.error(f"Failed to unwind legacy position {pos_info.symbol}: {e}")
+                        self._record_failed_attempt(pos_info.symbol, account_id)
                 else:
                     exits['legacy_unwound'] += 1
         
@@ -852,3 +900,83 @@ class LegacyPositionExitProtocol:
         if self.execution_mode == ExecutionMode.PLATFORM_FIRST:
             return self.state.platform_clean
         return True
+    
+    def _record_failed_attempt(self, symbol: str, account_id: Optional[str] = None, reason: str = "unknown"):
+        """
+        Record a failed cleanup attempt and escalate if needed.
+        
+        Escalation levels:
+        - 0-1 attempts: Normal (25% unwind)
+        - 2-3 attempts: Aggressive (50% unwind)
+        - 4+ attempts: Force (100% close)
+        
+        Args:
+            symbol: Position symbol
+            account_id: Account ID (for logging)
+            reason: Reason for failure
+        """
+        # Get current state
+        unwind_state = self.state.position_unwind_state.get(symbol, {
+            'progress': 0.0,
+            'cycle': 0,
+            'failed_attempts': 0,
+            'escalation_level': 0
+        })
+        
+        # Increment failed attempts
+        failed_attempts = unwind_state.get('failed_attempts', 0) + 1
+        
+        # Determine escalation level based on failed attempts
+        if failed_attempts <= 1:
+            escalation_level = 0  # Normal
+        elif failed_attempts <= 3:
+            escalation_level = 1  # Aggressive
+        else:
+            escalation_level = 2  # Force
+        
+        # Update state
+        unwind_state['failed_attempts'] = failed_attempts
+        unwind_state['escalation_level'] = escalation_level
+        self.state.position_unwind_state[symbol] = unwind_state
+        
+        # Log escalation
+        if escalation_level > unwind_state.get('escalation_level', 0):
+            escalation_msg = {
+                'symbol': symbol,
+                'account_id': account_id or 'platform',
+                'failed_attempts': failed_attempts,
+                'escalation_level': escalation_level,
+                'reason': reason,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            if not hasattr(self.state, 'escalation_alerts') or self.state.escalation_alerts is None:
+                self.state.escalation_alerts = []
+            
+            self.state.escalation_alerts.append(escalation_msg)
+            
+            # Update metrics
+            self.metrics.escalated_positions = len([
+                s for s, state in self.state.position_unwind_state.items()
+                if state.get('escalation_level', 0) > 0
+            ])
+            
+            if failed_attempts >= 4:
+                self.metrics.stuck_positions = len([
+                    s for s, state in self.state.position_unwind_state.items()
+                    if state.get('failed_attempts', 0) >= 4
+                ])
+            
+            logger.warning(f"🚨 ESCALATION ALERT: {symbol}")
+            logger.warning(f"   Failed attempts: {failed_attempts}")
+            logger.warning(f"   Escalation level: {escalation_level} ({['NORMAL', 'AGGRESSIVE', 'FORCE'][escalation_level]})")
+            logger.warning(f"   Reason: {reason}")
+        
+        # Save state
+        self._save_state()
+    
+    def get_escalation_alerts(self) -> List[Dict]:
+        """Get all escalation alerts"""
+        if not hasattr(self.state, 'escalation_alerts') or self.state.escalation_alerts is None:
+            return []
+        return self.state.escalation_alerts

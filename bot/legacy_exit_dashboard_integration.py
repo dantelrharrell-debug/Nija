@@ -73,7 +73,9 @@ def get_metrics():
             "total_positions_cleaned": 6,
             "zombie_positions_closed": 1,
             "legacy_positions_unwound": 3,
-            "stale_orders_cancelled": 5
+            "stale_orders_cancelled": 5,
+            "escalated_positions": 1,
+            "stuck_positions": 0
         },
         "timestamp": "2026-02-18T22:00:00"
     }
@@ -100,7 +102,9 @@ def get_metrics():
                 'total_positions_cleaned': metrics.total_positions_cleaned,
                 'zombie_positions_closed': metrics.zombie_positions_closed,
                 'legacy_positions_unwound': metrics.legacy_positions_unwound,
-                'stale_orders_cancelled': metrics.stale_orders_cancelled
+                'stale_orders_cancelled': metrics.stale_orders_cancelled,
+                'escalated_positions': metrics.escalated_positions,
+                'stuck_positions': metrics.stuck_positions
             },
             'timestamp': datetime.now().isoformat()
         })
