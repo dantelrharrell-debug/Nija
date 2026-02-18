@@ -1797,6 +1797,40 @@ class TradingStrategy:
                     
                     # Calculate size in USD
                     size_usd = pos.get('size_usd', pos.get('usd_value', 0.0))
+                    
+                    # 🔧 FIX: Handle unknown asset pairs with fallback price fetching
+                    if current_price == 0 or current_price is None:
+                        logger.warning(f"   [{i}/{positions_found}] ⚠️  {symbol} has no current_price - attempting price fetch")
+                        try:
+                            # Try to fetch price from broker
+                            if broker and hasattr(broker, 'get_current_price'):
+                                fetched_price = broker.get_current_price(symbol)
+                                if fetched_price and fetched_price > 0:
+                                    current_price = fetched_price
+                                    logger.info(f"   [{i}/{positions_found}] ✅ {symbol} price fetched: ${current_price:.4f}")
+                                else:
+                                    logger.error(f"   [{i}/{positions_found}] ❌ {symbol} price fetch failed")
+                                    logger.error(f"   ❌ UNKNOWN ASSET PAIR: Cannot value position")
+                                    # Mark as zombie position for manual review
+                                    logger.error(f"   🧟 MARKING AS ZOMBIE: Position requires manual intervention")
+                                    logger.error(f"   💡 Recommendation: Force close via broker or verify symbol mapping")
+                                    failed_positions.append({
+                                        'symbol': symbol,
+                                        'reason': 'UNKNOWN_ASSET_PAIR',
+                                        'detail': 'Price fetch failed - cannot value position'
+                                    })
+                                    continue  # Skip adoption - cannot value this position
+                        except Exception as price_err:
+                            logger.error(f"   [{i}/{positions_found}] ❌ {symbol} price fetch error: {price_err}")
+                            logger.error(f"   🧟 MARKING AS ZOMBIE: Position requires manual intervention")
+                            failed_positions.append({
+                                'symbol': symbol,
+                                'reason': 'PRICE_FETCH_ERROR',
+                                'detail': str(price_err)
+                            })
+                            continue  # Skip adoption - cannot value this position
+                    
+                    # Recalculate size_usd with current_price if needed
                     if size_usd == 0 and current_price > 0 and quantity > 0:
                         size_usd = current_price * quantity
                     
@@ -1805,6 +1839,12 @@ class TradingStrategy:
                     if entry_price == 0 or entry_price <= 0:
                         logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE")
                         logger.error(f"   ❌ Position adoption FAILED - entry price is MANDATORY")
+                        logger.error(f"   💡 Recommendation: Verify position history or manually set entry price")
+                        failed_positions.append({
+                            'symbol': symbol,
+                            'reason': 'MISSING_ENTRY_PRICE',
+                            'detail': 'Entry price is 0 or missing - required for P&L tracking'
+                        })
                         continue  # Skip this position - do not adopt without entry price
                     
                     # Register position in tracker (MANDATORY)
@@ -1818,6 +1858,11 @@ class TradingStrategy:
                     if not success:
                         logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} failed position tracker registration")
                         logger.error(f"   ❌ Position adoption FAILED - tracker registration is MANDATORY")
+                        failed_positions.append({
+                            'symbol': symbol,
+                            'reason': 'TRACKER_REGISTRATION_FAILED',
+                            'detail': 'Position tracker rejected entry - may be duplicate or invalid'
+                        })
                         continue
                     
                     # Position successfully adopted
@@ -1843,6 +1888,12 @@ class TradingStrategy:
                         
                 except Exception as pos_err:
                     logger.error(f"   [{i}/{positions_found}] ❌ Failed to adopt position: {pos_err}")
+                    pos_symbol = pos.get('symbol', 'UNKNOWN') if isinstance(pos, dict) else 'UNKNOWN'
+                    failed_positions.append({
+                        'symbol': pos_symbol,
+                        'reason': 'EXCEPTION',
+                        'detail': str(pos_err)
+                    })
                     continue
             
             # ═══════════════════════════════════════════════════════════════
@@ -1874,6 +1925,7 @@ class TradingStrategy:
                 'broker_name': broker_name,
                 'account_id': account_id,
                 'positions': adopted_positions,
+                'failed_positions': failed_positions,  # Track failures for diagnostics
                 'adoption_completed': True  # 🔒 GUARDRAIL FLAG
             }
             self.position_adoption_status[adoption_key] = adoption_status
@@ -1887,6 +1939,35 @@ class TradingStrategy:
                 logger.warning(f"   Found: {positions_found} positions")
                 logger.warning(f"   Adopted: {adopted_count} positions")
                 logger.warning(f"   Failed: {positions_found - adopted_count} positions")
+                logger.warning("")
+                logger.warning("   📋 FAILURE BREAKDOWN:")
+                if failed_positions:
+                    # Group failures by reason
+                    failure_counts = {}
+                    for failure in failed_positions:
+                        reason = failure.get('reason', 'UNKNOWN')
+                        if reason not in failure_counts:
+                            failure_counts[reason] = []
+                        failure_counts[reason].append(failure)
+                    
+                    # Log each failure reason with details
+                    for reason, failures in failure_counts.items():
+                        logger.warning(f"   ❌ {reason}: {len(failures)} position(s)")
+                        for failure in failures:
+                            symbol = failure.get('symbol', 'UNKNOWN')
+                            detail = failure.get('detail', 'No detail')
+                            logger.warning(f"      • {symbol}: {detail}")
+                else:
+                    logger.warning("   ⚠️  No failure details recorded")
+                logger.warning("")
+                logger.warning("   💡 RECOMMENDATIONS:")
+                if any(f.get('reason') == 'UNKNOWN_ASSET_PAIR' for f in failed_positions):
+                    logger.warning("   • Review symbol mappings for unknown asset pairs")
+                    logger.warning("   • Consider force closing zombie positions manually")
+                if any(f.get('reason') == 'MISSING_ENTRY_PRICE' for f in failed_positions):
+                    logger.warning("   • Verify broker position history for entry prices")
+                if any(f.get('reason') == 'TRACKER_REGISTRATION_FAILED' for f in failed_positions):
+                    logger.warning("   • Check for duplicate positions in tracker")
             else:
                 logger.info("✅ ADOPTION COMPLETE:")
                 logger.info(f"   All {adopted_count} position(s) successfully adopted")
