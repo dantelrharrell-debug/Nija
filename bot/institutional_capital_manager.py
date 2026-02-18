@@ -178,12 +178,12 @@ class InstitutionalCapitalManager:
         logger.info("=" * 80)
         logger.info(f"Base Capital: ${base_capital:,.2f}")
         logger.info(f"Current Tier: {current_tier}")
-        logger.info(f"Correlation Compression: {'ENABLED' if config.enable_correlation_compression else 'DISABLED'}")
-        logger.info(f"Liquidity Gating: {'ENABLED' if config.enable_liquidity_gating else 'DISABLED'}")
-        logger.info(f"Drawdown Throttle: {'ENABLED' if config.enable_drawdown_throttle else 'DISABLED'}")
-        logger.info(f"Performance Scaling: {'ENABLED' if config.enable_performance_scaling else 'DISABLED'}")
-        logger.info(f"Volatility Adjustment: {'ENABLED' if config.enable_volatility_adjustment else 'DISABLED'}")
-        logger.info(f"Capital Preservation: {'ENABLED' if config.enable_capital_preservation else 'DISABLED'}")
+        logger.info(f"Correlation Compression: {'ENABLED' if self.config.enable_correlation_compression else 'DISABLED'}")
+        logger.info(f"Liquidity Gating: {'ENABLED' if self.config.enable_liquidity_gating else 'DISABLED'}")
+        logger.info(f"Drawdown Throttle: {'ENABLED' if self.config.enable_drawdown_throttle else 'DISABLED'}")
+        logger.info(f"Performance Scaling: {'ENABLED' if self.config.enable_performance_scaling else 'DISABLED'}")
+        logger.info(f"Volatility Adjustment: {'ENABLED' if self.config.enable_volatility_adjustment else 'DISABLED'}")
+        logger.info(f"Capital Preservation: {'ENABLED' if self.config.enable_capital_preservation else 'DISABLED'}")
         logger.info("=" * 80)
     
     def calculate_position_size(
@@ -453,6 +453,9 @@ class InstitutionalCapitalManager:
         if self.metrics.peak_capital > 0:
             self.metrics.drawdown_pct = ((self.metrics.peak_capital - current_capital) / 
                                          self.metrics.peak_capital * 100)
+        
+        # Update throttle level based on new drawdown
+        self._calculate_drawdown_throttle()
         
         # Update other metrics
         self.metrics.portfolio_correlation = portfolio_correlation
