@@ -25,6 +25,17 @@ import logging
 from typing import Dict, List, Optional
 from pathlib import Path
 
+# Import environment detection
+try:
+    from config.environment import is_production_environment
+except ImportError:
+    try:
+        from .environment import is_production_environment
+    except ImportError:
+        # Fallback if environment detection not available
+        def is_production_environment():
+            return False
+
 logger = logging.getLogger("nija.yaml_user_loader")
 
 
@@ -215,6 +226,7 @@ class YamlUserConfigLoader:
                             logger.info(f"   ⚪ {user_config.name} ({user_config.broker}) - DISABLED")
                     else:
                         logger.warning(f"   ⚠️  {user_config.name} ({user_config.broker}) - INVALID/PLACEHOLDER CREDENTIALS")
+                        # In hard_fail mode, invalid credentials for expected users is an error
                         if hard_fail and user_id in self.EXPECTED_USERS:
                             invalid_users.append((user_id, "Invalid or placeholder credentials"))
                 else:
@@ -361,12 +373,15 @@ class YamlUserConfigLoader:
 _yaml_user_config_loader = None
 
 
-def get_yaml_user_config_loader(hard_fail: bool = False) -> YamlUserConfigLoader:
+def get_yaml_user_config_loader(hard_fail: bool = None) -> YamlUserConfigLoader:
     """
     Get global YAML user config loader instance.
 
     Args:
-        hard_fail: If True, raises exception if expected users are missing
+        hard_fail: If True, raises exception if expected users are missing.
+                   If None (default), automatically determined based on environment:
+                   - Production: hard_fail=True (strict validation required)
+                   - Development: hard_fail=False (lenient for local testing)
 
     Returns:
         YamlUserConfigLoader instance
@@ -377,6 +392,12 @@ def get_yaml_user_config_loader(hard_fail: bool = False) -> YamlUserConfigLoader
     """
     global _yaml_user_config_loader
     if _yaml_user_config_loader is None:
+        # Auto-detect environment if not explicitly specified
+        if hard_fail is None:
+            hard_fail = is_production_environment()
+            if hard_fail:
+                logger.info("🔒 Production environment detected - enforcing strict user credential validation")
+        
         _yaml_user_config_loader = YamlUserConfigLoader()
         _yaml_user_config_loader.load_all_users(hard_fail=hard_fail)
     return _yaml_user_config_loader
