@@ -434,6 +434,7 @@ def enforce_capital_minimum(func):
             pass
     """
     def wrapper(self, *args, **kwargs):
+        """Wrapper function that enforces capital minimum before executing trade."""
         # Extract account_id from kwargs or args
         account_id = kwargs.get('account_id')
         if not account_id and len(args) > 2:
@@ -475,6 +476,12 @@ class CapitalMinimumAwareTrading:
     """
     
     def __init__(self, broker_integration):
+        """
+        Initialize capital minimum aware trading.
+        
+        Args:
+            broker_integration: Broker integration instance
+        """
         self.broker = broker_integration
         self.capital_lock = CapitalMinimumLock(broker_integration)
     

@@ -292,8 +292,8 @@ class LegacyPositionExitProtocol:
                 min_notional = self.broker.get_min_notional(symbol)
                 if min_notional and min_notional > 0:
                     return float(min_notional)
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Could not get min_notional from broker for {symbol}: {e}")
         
         # Fallback to exchange defaults based on broker type
         try:
@@ -310,8 +310,9 @@ class LegacyPositionExitProtocol:
             
             return exchange_minimums.get(broker_type, 5.0)  # Default $5
             
-        except:
+        except Exception as e:
             # Safe default
+            logger.debug(f"Could not determine broker type for min notional: {e}")
             return 5.0
     
     def _get_positions(self, account_id: Optional[str] = None) -> List[Dict]:
@@ -490,8 +491,9 @@ class LegacyPositionExitProtocol:
             order_time_str = order.get('created_at', order.get('timestamp', ''))
             try:
                 order_time = datetime.fromisoformat(order_time_str.replace('Z', '+00:00'))
-            except:
+            except (ValueError, AttributeError, TypeError) as e:
                 # If can't parse, assume stale
+                logger.debug(f"Could not parse order timestamp '{order_time_str}': {e}")
                 order_time = datetime.min
             
             if order_time < stale_cutoff:
@@ -830,7 +832,9 @@ class LegacyPositionExitProtocol:
                 order_time = datetime.fromisoformat(order_time_str.replace('Z', '+00:00'))
                 if order_time < stale_cutoff:
                     stale_orders += 1
-            except:
+            except (ValueError, AttributeError, TypeError) as e:
+                # If can't parse timestamp, count as stale
+                logger.debug(f"Could not parse order timestamp '{order_time_str}': {e}")
                 stale_orders += 1
         
         # Verification checks
