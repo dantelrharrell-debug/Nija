@@ -14,11 +14,34 @@ Pre-flight Checks:
     1. DRY_RUN_MODE is disabled
     2. LIVE_CAPITAL_VERIFIED can be enabled
     3. All brokers show green (healthy)
-    4. No adoption failures
-    5. No halted threads
-    6. Capital safety thresholds satisfied
-    7. Multi-account isolation healthy
-    8. Recovery checks operational
+    4. Kraken platform account configured and connected
+    5. Kraken user accounts configured (optional)
+    6. No adoption failures
+    7. No halted threads
+    8. Capital safety thresholds satisfied
+    9. Multi-account isolation healthy
+    10. Recovery checks operational
+
+Kraken Configuration Steps:
+    1. Configure Platform account first:
+       - Set KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET
+       - Verify connection: python go_live.py --check
+    
+    2. Configure individual user accounts (optional):
+       - Set KRAKEN_USER_DAIVON_API_KEY, KRAKEN_USER_DAIVON_API_SECRET
+       - Set KRAKEN_USER_TANIA_API_KEY, KRAKEN_USER_TANIA_API_SECRET
+       - Add more users following same pattern
+    
+    3. Set LIVE_CAPITAL_VERIFIED=true in production
+    
+    4. Activate: python go_live.py --activate
+    
+    5. Monitor logs:
+       - First 30 minutes: Continuous monitoring
+       - Next 24 hours: Hourly checks
+       - Ensure positions adopted correctly
+       - Check tier floors, forced cleanup, risk management
+       - Validate user accounts follow independent trading rules
 
 Safety:
     - Will NOT activate live mode if any checks fail
@@ -26,7 +49,7 @@ Safety:
     - Logs all checks for audit trail
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 2.0
 Date: February 17, 2026
 """
 
@@ -89,6 +112,7 @@ class GoLiveValidator:
         self._check_multi_account_isolation()
         self._check_recovery_mechanisms()
         self._check_credentials_configured()
+        self._check_kraken_connectivity()
         self._check_emergency_stops()
         
         # Print results
@@ -377,29 +401,162 @@ class GoLiveValidator:
     
     def _check_credentials_configured(self):
         """Check that API credentials are configured"""
-        # Check for Coinbase credentials
-        api_key = os.getenv('COINBASE_API_KEY', '')
-        api_secret = os.getenv('COINBASE_API_SECRET', '')
+        # Check for Kraken Platform account credentials (recommended)
+        kraken_platform_key = os.getenv('KRAKEN_PLATFORM_API_KEY', '')
+        kraken_platform_secret = os.getenv('KRAKEN_PLATFORM_API_SECRET', '')
         
-        has_credentials = bool(api_key and api_secret)
+        # Check for legacy Kraken credentials (fallback)
+        kraken_legacy_key = os.getenv('KRAKEN_API_KEY', '')
+        kraken_legacy_secret = os.getenv('KRAKEN_API_SECRET', '')
         
-        if not has_credentials:
+        # Check for Kraken user accounts
+        kraken_user_daivon_key = os.getenv('KRAKEN_USER_DAIVON_API_KEY', '')
+        kraken_user_daivon_secret = os.getenv('KRAKEN_USER_DAIVON_API_SECRET', '')
+        
+        kraken_user_tania_key = os.getenv('KRAKEN_USER_TANIA_API_KEY', '')
+        kraken_user_tania_secret = os.getenv('KRAKEN_USER_TANIA_API_SECRET', '')
+        
+        # Check for Coinbase credentials (optional, now secondary)
+        coinbase_api_key = os.getenv('COINBASE_API_KEY', '')
+        coinbase_api_secret = os.getenv('COINBASE_API_SECRET', '')
+        
+        # Kraken Platform account check
+        has_kraken_platform = bool(kraken_platform_key and kraken_platform_secret)
+        has_kraken_legacy = bool(kraken_legacy_key and kraken_legacy_secret)
+        has_kraken = has_kraken_platform or has_kraken_legacy
+        
+        if not has_kraken:
             self.checks.append(CheckResult(
-                name="API Credentials Check",
+                name="Kraken Platform Account Check",
                 passed=False,
-                message="Coinbase API credentials not found in environment",
-                remediation="Set COINBASE_API_KEY and COINBASE_API_SECRET in .env file",
+                message="Kraken platform account credentials not found in environment",
+                remediation="Set KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET in .env file",
                 critical=True
             ))
             self.critical_failures += 1
         else:
-            # Don't log actual credentials, just confirm they exist
+            cred_type = "Platform" if has_kraken_platform else "Legacy"
             self.checks.append(CheckResult(
-                name="API Credentials Check",
+                name="Kraken Platform Account Check",
                 passed=True,
-                message="API credentials configured ✅",
+                message=f"Kraken {cred_type} account credentials configured ✅",
                 critical=True
             ))
+        
+        # Kraken User accounts check (informational)
+        configured_users = []
+        if kraken_user_daivon_key and kraken_user_daivon_secret:
+            configured_users.append("Daivon")
+        if kraken_user_tania_key and kraken_user_tania_secret:
+            configured_users.append("Tania Gilbert")
+        
+        if configured_users:
+            self.checks.append(CheckResult(
+                name="Kraken User Accounts Check",
+                passed=True,
+                message=f"Kraken user accounts configured: {', '.join(configured_users)} ✅",
+                critical=False
+            ))
+        else:
+            self.checks.append(CheckResult(
+                name="Kraken User Accounts Check",
+                passed=True,
+                message="No user accounts configured (platform-only trading)",
+                remediation="Optional: Add KRAKEN_USER_* credentials in .env for multi-user trading",
+                critical=False
+            ))
+        
+        # Coinbase check (now optional/informational)
+        has_coinbase = bool(coinbase_api_key and coinbase_api_secret)
+        if has_coinbase:
+            self.checks.append(CheckResult(
+                name="Coinbase Account Check",
+                passed=True,
+                message="Coinbase credentials configured (secondary broker) ✅",
+                critical=False
+            ))
+    
+    def _check_kraken_connectivity(self):
+        """Check Kraken platform and user account connectivity"""
+        try:
+            from bot.broker_manager import BrokerType, get_broker_manager
+            
+            broker_mgr = get_broker_manager()
+            
+            # Test Kraken platform connection
+            try:
+                # Access Kraken broker from brokers dict
+                kraken_broker = broker_mgr.brokers.get(BrokerType.KRAKEN)
+                
+                if kraken_broker and kraken_broker.connect():
+                    self.checks.append(CheckResult(
+                        name="Kraken Platform Connection",
+                        passed=True,
+                        message="Kraken platform account connection successful ✅",
+                        critical=True
+                    ))
+                elif not kraken_broker:
+                    self.checks.append(CheckResult(
+                        name="Kraken Platform Connection",
+                        passed=False,
+                        message="Kraken broker not initialized in broker manager",
+                        remediation="Ensure Kraken broker is configured and added to broker manager on startup",
+                        critical=False
+                    ))
+                    self.warnings += 1
+                else:
+                    self.checks.append(CheckResult(
+                        name="Kraken Platform Connection",
+                        passed=False,
+                        message="Unable to connect to Kraken platform account",
+                        remediation="Verify KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET are correct. Check Kraken API status.",
+                        critical=True
+                    ))
+                    self.critical_failures += 1
+            except Exception as e:
+                self.checks.append(CheckResult(
+                    name="Kraken Platform Connection",
+                    passed=False,
+                    message=f"Kraken platform connection error: {str(e)}",
+                    remediation="Check Kraken API credentials and network connectivity",
+                    critical=False
+                ))
+                self.warnings += 1
+            
+            # Test user account connections (informational)
+            user_accounts = []
+            for user_prefix in ['DAIVON', 'TANIA']:
+                api_key = os.getenv(f'KRAKEN_USER_{user_prefix}_API_KEY', '')
+                if api_key:
+                    user_accounts.append(user_prefix.capitalize())
+            
+            if user_accounts:
+                self.checks.append(CheckResult(
+                    name="Kraken User Accounts Status",
+                    passed=True,
+                    message=f"User accounts ready for independent trading: {', '.join(user_accounts)} ✅",
+                    remediation="Verify each user account has correct API credentials in .env",
+                    critical=False
+                ))
+                
+        except ImportError:
+            self.checks.append(CheckResult(
+                name="Kraken Platform Connection",
+                passed=False,
+                message="Unable to import broker_manager module",
+                remediation="Ensure bot/broker_manager.py is available",
+                critical=False
+            ))
+            self.warnings += 1
+        except Exception as e:
+            self.checks.append(CheckResult(
+                name="Kraken Platform Connection",
+                passed=False,
+                message=f"Error checking Kraken connectivity: {str(e)}",
+                remediation="Check logs for details. Ensure Kraken broker integration is configured.",
+                critical=False
+            ))
+            self.warnings += 1
     
     def _check_emergency_stops(self):
         """Check that no emergency stops are active"""
@@ -521,6 +678,25 @@ class GoLiveValidator:
         logger.info("  • Review the position manager and risk settings")
         logger.info("  • Start with small position sizes initially")
         logger.info("  • Keep the EMERGENCY_STOP file ready if needed")
+        logger.info("")
+        logger.info("📊 MONITORING SCHEDULE (First 24 Hours):")
+        logger.info("  • First 30 minutes: Continuous monitoring")
+        logger.info("    - Verify positions are adopted correctly")
+        logger.info("    - Check tier floors are enforced")
+        logger.info("    - Monitor forced cleanup execution")
+        logger.info("    - Validate risk management thresholds")
+        logger.info("  • After 30 minutes: Hourly monitoring for 24 hours")
+        logger.info("    - Check position status and P&L")
+        logger.info("    - Verify user accounts follow independent trading rules")
+        logger.info("    - Review API rate limiting and broker health")
+        logger.info("    - Monitor capital allocation across accounts")
+        logger.info("")
+        logger.info("🔍 KEY METRICS TO MONITOR:")
+        logger.info("  • Position adoption rate (should be 100%)")
+        logger.info("  • Tier floor compliance (no trades below minimum)")
+        logger.info("  • Forced cleanup execution (logs should show cleanup runs)")
+        logger.info("  • Risk per trade (should match tier configuration)")
+        logger.info("  • User account independence (no trade copying)")
         logger.info("")
         
         return True
