@@ -171,6 +171,17 @@ class StatusAlerter:
                 message=f"⚠️  No brokers configured",
                 details={}
             ))
+        
+        # Check 6: Position cap exceeded
+        position_count = user.get('position_count', 0)
+        max_positions = user.get('max_positions', 8)  # Default cap
+        if position_count > max_positions:
+            self.alerts.append(Alert(
+                level='critical',
+                user_id=user_id,
+                message=f"🔒 Position cap exceeded: {position_count}/{max_positions}",
+                details={'position_count': position_count, 'max_positions': max_positions}
+            ))
     
     def _check_platform(self, overview: Dict):
         """Check platform-wide metrics"""

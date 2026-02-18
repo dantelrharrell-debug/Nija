@@ -203,6 +203,35 @@ class ForcedPositionCleanup:
         # Default: cancel if enabled and not in selective mode
         return True
     
+    def _log_cap_violation_alert(self, user_id: str, current_count: int, max_positions: int):
+        """
+        Log cap violation alert for monitoring systems.
+        
+        Args:
+            user_id: User identifier
+            current_count: Current position count
+            max_positions: Maximum allowed positions
+        """
+        alert_data = {
+            'timestamp': datetime.now().isoformat(),
+            'alert_type': 'POSITION_CAP_VIOLATION',
+            'severity': 'CRITICAL',
+            'user_id': user_id,
+            'current_count': current_count,
+            'max_positions': max_positions,
+            'excess_count': current_count - max_positions
+        }
+        
+        # Log as JSON for easy parsing by monitoring systems
+        logger.error(f"🚨 CAP_VIOLATION_ALERT: {alert_data}")
+        
+        # Also log human-readable format
+        logger.error(f"   User: {user_id}")
+        logger.error(f"   Current Positions: {current_count}")
+        logger.error(f"   Maximum Allowed: {max_positions}")
+        logger.error(f"   Excess: {current_count - max_positions}")
+        logger.error(f"   Action: Cleanup engine will attempt to reduce positions")
+    
     def identify_dust_positions(self, positions: List[Dict]) -> List[Dict]:
         """
         Identify all positions below dust threshold.
@@ -516,20 +545,43 @@ class ForcedPositionCleanup:
         # Step 3: Refresh positions after dust cleanup
         all_user_positions = []
         broker_positions_map = {}
+        refresh_failures = []  # Track broker refresh failures
         
         for broker_type, broker in user_broker_dict.items():
             if not broker or not broker.connected:
+                logger.warning(f"   ⚠️  {broker_type.value} broker not connected - skipping refresh")
+                refresh_failures.append(broker_type.value)
                 continue
                 
             try:
                 positions = broker.get_positions()
+                if positions is None:
+                    logger.error(f"   ❌ {broker_type.value} returned None for positions - broker may be disconnected")
+                    refresh_failures.append(broker_type.value)
+                    continue
+                    
+                if not isinstance(positions, list):
+                    logger.error(f"   ❌ {broker_type.value} returned invalid positions type: {type(positions)}")
+                    refresh_failures.append(broker_type.value)
+                    continue
+                    
                 for pos in positions:
                     symbol = pos.get('symbol', '')
                     if symbol:
                         all_user_positions.append(pos)
                         broker_positions_map[symbol] = broker
+                    else:
+                        logger.warning(f"   ⚠️  Position from {broker_type.value} has no symbol - skipping")
+                        
+                logger.debug(f"   ✅ {broker_type.value}: Refreshed {len(positions)} position(s)")
             except Exception as e:
-                logger.warning(f"   ⚠️ Failed to refresh positions from {broker_type.value}: {e}")
+                logger.error(f"   ❌ Failed to refresh positions from {broker_type.value}: {e}")
+                refresh_failures.append(broker_type.value)
+        
+        # Log refresh failures if any
+        if refresh_failures:
+            logger.warning(f"   ⚠️  Position refresh failed for {len(refresh_failures)} broker(s): {', '.join(refresh_failures)}")
+            logger.warning(f"   ⚠️  Cap enforcement may be incomplete - retry recommended")
         
         # Filter out dust from cap check
         non_dust_positions = [
@@ -545,6 +597,8 @@ class ForcedPositionCleanup:
         
         if current_count > self.max_positions:
             logger.warning(f"   🔒 USER cap exceeded: {current_count}/{self.max_positions}")
+            # Log alert for monitoring systems
+            self._log_cap_violation_alert(user_id, current_count, self.max_positions)
             
             # Identify positions to close to meet cap
             cap_excess_positions = self.identify_cap_excess_positions(non_dust_positions)
@@ -562,14 +616,25 @@ class ForcedPositionCleanup:
         
         # Step 5: Final position count for this user
         all_user_positions_final = []
+        final_refresh_failures = []
+        
         for broker_type, broker in user_broker_dict.items():
             if not broker or not broker.connected:
+                logger.warning(f"   ⚠️  {broker_type.value} not connected for final verification")
+                final_refresh_failures.append(broker_type.value)
                 continue
+                
             try:
                 positions = broker.get_positions()
+                if positions is None:
+                    logger.error(f"   ❌ {broker_type.value} returned None in final count")
+                    final_refresh_failures.append(broker_type.value)
+                    continue
+                    
                 all_user_positions_final.extend(positions)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"   ❌ Final position count failed for {broker_type.value}: {e}")
+                final_refresh_failures.append(broker_type.value)
         
         final_count = len(all_user_positions_final)
         
@@ -577,8 +642,20 @@ class ForcedPositionCleanup:
         if final_count > self.max_positions:
             logger.error(f"   ❌ SAFETY VIOLATION: User {user_id} final count {final_count} exceeds cap {self.max_positions}")
             logger.error(f"      This should never happen - per-user cleanup failed!")
+            
+            # Provide diagnostic information
+            if refresh_failures or final_refresh_failures:
+                logger.error(f"   ⚠️  POSSIBLE CAUSE: Some brokers failed to refresh positions")
+                all_failures = set(refresh_failures + final_refresh_failures)
+                logger.error(f"      Failed brokers: {', '.join(all_failures)}")
+                logger.error(f"   💡 RECOMMENDATION: Retry cleanup or manually verify these brokers")
+            else:
+                logger.error(f"   ⚠️  POSSIBLE CAUSE: Position close operations failed")
+                logger.error(f"   💡 RECOMMENDATION: Check broker API status and retry cleanup")
         else:
             logger.info(f"   ✅ SAFETY VERIFIED: User {user_id} final count {final_count} ≤ cap {self.max_positions}")
+            if final_refresh_failures:
+                logger.warning(f"   ⚠️  Note: Some brokers failed final verification: {', '.join(final_refresh_failures)}")
         
         logger.info(f"")
         logger.info(f"   👤 USER {user_id} SUMMARY:")
