@@ -43,6 +43,16 @@ except ImportError:
     from bot.risk_alarm_system import get_risk_alarm_system
     from bot.performance_tracking_service import get_tracking_service
 
+try:
+    from risk_dashboard import register_risk_dashboard_routes
+    _HAS_RISK_DASHBOARD = True
+except ImportError:
+    try:
+        from bot.risk_dashboard import register_risk_dashboard_routes
+        _HAS_RISK_DASHBOARD = True
+    except ImportError:
+        _HAS_RISK_DASHBOARD = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -322,6 +332,13 @@ def create_kpi_dashboard_api(app: Flask = None) -> Flask:
                 'error': str(e)
             }), 500
     
+    # Register real-time risk dashboard routes (VaR + exposure + alarms)
+    if _HAS_RISK_DASHBOARD:
+        try:
+            register_risk_dashboard_routes(app)
+        except Exception as _e:
+            logger.warning("Could not register risk dashboard routes: %s", _e)
+
     logger.info("✅ KPI Dashboard API routes registered")
     return app
 
