@@ -19,8 +19,8 @@ from unittest.mock import Mock, MagicMock, patch
 import pandas as pd
 from datetime import datetime
 
-# Add bot directory to path
-sys.path.insert(0, str(Path(__file__).parent / 'bot'))
+# Ensure project root is on path for bot package imports
+sys.path.insert(0, str(Path(__file__).parent))
 
 from bot.legacy_position_exit_protocol import (
     LegacyPositionExitProtocol,
@@ -262,6 +262,252 @@ class TestIntegration(unittest.TestCase):
         self.assertIn('LUNA-USD', LegacyPositionExitProtocol.HIGH_EXPOSURE_ASSETS)
 
 
+# ---------------------------------------------------------------------------
+# Tests for the three new institutional risk intelligence features
+# ---------------------------------------------------------------------------
+
+from bot.risk_intelligence import (
+    CorrelationExposureController,
+    VolatilityPositionCapper,
+    DrawdownCircuitBreaker,
+    RiskIntelligenceSystem,
+    create_risk_intelligence_system,
+    _get_asset_group,
+)
+
+
+class TestCorrelationExposureController(unittest.TestCase):
+    """Feature 1 — Correlation-Aware Exposure Control"""
+
+    def setUp(self):
+        self.controller = CorrelationExposureController(max_group_exposure_pct=0.40)
+
+    def test_allows_position_under_group_cap(self):
+        """Position that keeps group exposure under 40% should be approved."""
+        approved, details = self.controller.check(
+            symbol='BTC-USD',
+            proposed_size_usd=300.0,
+            current_positions=[],
+            account_balance=10_000.0,
+        )
+        self.assertTrue(approved)
+        self.assertEqual(details['correlation_group'], 'BTC_RELATED')
+
+    def test_blocks_position_exceeding_group_cap(self):
+        """Position that pushes group over 40% should be rejected."""
+        existing = [
+            {'symbol': 'DOGE-USD', 'size_usd': 2_000.0},
+            {'symbol': 'SHIB-USD', 'size_usd': 1_500.0},
+        ]
+        # Adding 1000 PEPE brings MEME_COINS to (2000+1500+1000)/10000 = 45% → reject
+        approved, details = self.controller.check(
+            symbol='PEPE-USD',
+            proposed_size_usd=1_000.0,
+            current_positions=existing,
+            account_balance=10_000.0,
+        )
+        self.assertFalse(approved)
+        self.assertIn('rejection_reason', details)
+        self.assertEqual(details['correlation_group'], 'MEME_COINS')
+
+    def test_asset_group_detection(self):
+        """_get_asset_group should categorise well-known assets."""
+        self.assertEqual(_get_asset_group('BTC-USD'), 'BTC_RELATED')
+        self.assertEqual(_get_asset_group('PEPE-USD'), 'MEME_COINS')
+        self.assertEqual(_get_asset_group('SOL-USD'), 'LAYER1')
+        self.assertEqual(_get_asset_group('UNKNOWN-XYZ'), 'OTHER')
+
+    def test_different_groups_do_not_interfere(self):
+        """Exposure in one group should not block entry in another group."""
+        existing = [
+            {'symbol': 'DOGE-USD', 'size_usd': 3_500.0},  # 35% MEME_COINS
+        ]
+        # BTC-USD is in BTC_RELATED — should be approved regardless
+        approved, _ = self.controller.check(
+            symbol='BTC-USD',
+            proposed_size_usd=1_000.0,
+            current_positions=existing,
+            account_balance=10_000.0,
+        )
+        self.assertTrue(approved)
+
+
+class TestVolatilityPositionCapper(unittest.TestCase):
+    """Feature 2 — Volatility-Adjusted Position Caps"""
+
+    def setUp(self):
+        self.capper = VolatilityPositionCapper()
+
+    def _make_df(self, atr_ratio: float = 1.0, periods: int = 50):
+        """Build a synthetic OHLCV DataFrame with a given ATR ratio.
+
+        The *last* ``atr_lookback`` candles have a range that is ``atr_ratio``
+        times the range of the earlier candles, producing a measurable
+        current-vs-average ATR difference.
+        """
+        import pandas as pd
+        lookback = self.capper.atr_lookback  # default 14
+        normal_range = 5.0
+        high_range = normal_range * atr_ratio
+        # First (periods - lookback) candles: normal; last lookback: high_range
+        ranges = [normal_range] * (periods - lookback) + [high_range] * lookback
+        close = [100.0] * periods
+        high_prices = [c + r / 2 for c, r in zip(close, ranges)]
+        low_prices = [c - r / 2 for c, r in zip(close, ranges)]
+        return pd.DataFrame({
+            'open': close,
+            'high': high_prices,
+            'low': low_prices,
+            'close': close,
+        })
+
+    def test_normal_volatility_no_cap(self):
+        """Normal volatility should return 1.0× multiplier."""
+        df = self._make_df(atr_ratio=1.0)
+        multiplier, regime = self.capper.get_size_multiplier('BTC-USD', df)
+        self.assertEqual(regime, 'NORMAL')
+        self.assertEqual(multiplier, 1.0)
+
+    def test_extreme_high_volatility_caps_position(self):
+        """Extreme volatility (ATR >> average) should reduce the position-size multiplier."""
+        # Use a very high ratio so recent ATR dwarfs the long-run average,
+        # pushing the multiplier below 1.0 regardless of exact regime bucket.
+        df = self._make_df(atr_ratio=35.0)
+        multiplier, regime = self.capper.get_size_multiplier('BTC-USD', df)
+        self.assertIn(regime, ('EXTREME_HIGH', 'HIGH'), msg=f"Unexpected regime: {regime}")
+        self.assertLess(multiplier, 1.0, msg=f"Expected cap < 1.0 but got {multiplier}")
+
+    def test_apply_cap_reduces_size_in_high_vol(self):
+        """apply_cap should return a smaller size during high volatility."""
+        df = self._make_df(atr_ratio=2.0)  # HIGH regime
+        capped_size, details = self.capper.apply_cap('BTC-USD', 1_000.0, df)
+        self.assertLessEqual(capped_size, 1_000.0)
+        self.assertIn('regime', details)
+        self.assertIn('multiplier', details)
+
+    def test_no_df_returns_normal_regime(self):
+        """Without a DataFrame the capper should default to NORMAL (1.0×)."""
+        multiplier, regime = self.capper.get_size_multiplier('BTC-USD', df=None)
+        self.assertEqual(regime, 'NORMAL')
+        self.assertEqual(multiplier, 1.0)
+
+
+class TestDrawdownCircuitBreaker(unittest.TestCase):
+    """Feature 3 — Portfolio-Level Drawdown Circuit Breaker"""
+
+    def setUp(self):
+        # Remove any persisted drawdown state to ensure tests start fresh
+        state_file = Path(__file__).parent / 'data' / 'drawdown_protection.json'
+        if state_file.exists():
+            state_file.unlink()
+        self.breaker = DrawdownCircuitBreaker(base_capital=10_000.0)
+
+    def test_allows_trading_at_peak(self):
+        """No drawdown → trading should be allowed."""
+        can_trade, reason = self.breaker.can_trade()
+        self.assertTrue(can_trade)
+
+    def test_halts_trading_at_deep_drawdown(self):
+        """20%+ drawdown should trigger the circuit breaker halt."""
+        self.breaker.update(7_900.0)  # 21% drawdown
+        can_trade, reason = self.breaker.can_trade()
+        self.assertFalse(can_trade)
+        self.assertIn('HALT', reason.upper() + 'CIRCUIT BREAKER')
+
+    def test_drawdown_pct_calculation(self):
+        """Drawdown percentage should be accurate."""
+        self.breaker.update(9_000.0)  # 10% drawdown
+        pct = self.breaker.get_drawdown_pct()
+        self.assertAlmostEqual(pct, 10.0, places=1)
+
+    def test_multiplier_reduces_with_drawdown(self):
+        """Position size multiplier should decrease as drawdown deepens."""
+        self.breaker.update(9_400.0)  # 6% drawdown → CAUTION
+        mult_caution = self.breaker.get_position_size_multiplier()
+        self.breaker.update(8_800.0)  # 12% drawdown → WARNING
+        mult_warning = self.breaker.get_position_size_multiplier()
+        self.assertLess(mult_warning, mult_caution)
+
+    def test_get_status_structure(self):
+        """get_status should return expected keys."""
+        status = self.breaker.get_status()
+        for key in ('peak_capital', 'current_capital', 'drawdown_pct',
+                    'can_trade', 'reason', 'position_size_multiplier'):
+            self.assertIn(key, status)
+
+
+class TestRiskIntelligenceSystem(unittest.TestCase):
+    """Unified RiskIntelligenceSystem integration tests"""
+
+    def setUp(self):
+        self.ris = create_risk_intelligence_system(base_capital=10_000.0)
+
+    def test_can_open_position_normal_conditions(self):
+        """Under normal conditions new positions should be approved."""
+        allowed, reason = self.ris.can_open_position(
+            symbol='BTC-USD',
+            proposed_size_usd=500.0,
+            current_positions=[],
+            account_balance=10_000.0,
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(reason, 'ok')
+
+    def test_circuit_breaker_blocks_on_deep_drawdown(self):
+        """Circuit breaker should block after deep drawdown."""
+        self.ris.update_capital(7_000.0)  # 30% drawdown
+        allowed, reason = self.ris.can_open_position(
+            symbol='ETH-USD',
+            proposed_size_usd=200.0,
+            current_positions=[],
+            account_balance=7_000.0,
+        )
+        self.assertFalse(allowed)
+        self.assertIn('CircuitBreaker', reason)
+
+    def test_correlation_control_blocks_overexposed_group(self):
+        """Correlation control should block when group exposure is too high."""
+        # Use a fresh system with cleared disk state
+        state_file = Path(__file__).parent / 'data' / 'drawdown_protection.json'
+        if state_file.exists():
+            state_file.unlink()
+        ris = create_risk_intelligence_system(base_capital=10_000.0)
+        existing = [
+            {'symbol': 'DOGE-USD', 'size_usd': 2_500.0},
+            {'symbol': 'SHIB-USD', 'size_usd': 2_000.0},
+        ]
+        # Adding PEPE: (2500+2000+1000)/10000 = 55% → MEME_COINS over 40% cap
+        allowed, reason = ris.can_open_position(
+            symbol='PEPE-USD',
+            proposed_size_usd=1_000.0,
+            current_positions=existing,
+            account_balance=10_000.0,
+        )
+        self.assertFalse(allowed)
+        self.assertIn('CorrelationControl', reason)
+
+    def test_adjusted_size_applies_volatility_and_drawdown(self):
+        """get_adjusted_position_size should return metadata for both caps."""
+        size, meta = self.ris.get_adjusted_position_size(
+            symbol='ETH-USD',
+            base_size_usd=1_000.0,
+        )
+        self.assertIn('volatility_cap', meta)
+        self.assertIn('drawdown_multiplier', meta)
+        self.assertGreater(size, 0)
+
+    def test_factory_creates_correct_instance(self):
+        """create_risk_intelligence_system should return RiskIntelligenceSystem."""
+        system = create_risk_intelligence_system(
+            base_capital=5_000.0,
+            config={'max_group_exposure_pct': 0.30},
+        )
+        self.assertIsInstance(system, RiskIntelligenceSystem)
+        self.assertEqual(
+            system.correlation_controller.max_group_exposure_pct, 0.30
+        )
+
+
 def run_tests():
     """Run all tests"""
     loader = unittest.TestLoader()
@@ -271,6 +517,10 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestHighExposureMonitoring))
     suite.addTests(loader.loadTestsFromTestCase(TestRiskIntelligenceGate))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
+    suite.addTests(loader.loadTestsFromTestCase(TestCorrelationExposureController))
+    suite.addTests(loader.loadTestsFromTestCase(TestVolatilityPositionCapper))
+    suite.addTests(loader.loadTestsFromTestCase(TestDrawdownCircuitBreaker))
+    suite.addTests(loader.loadTestsFromTestCase(TestRiskIntelligenceSystem))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

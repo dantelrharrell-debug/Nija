@@ -51,5 +51,21 @@
     "legacy_positions_unwound": 3,
     "stale_orders_cancelled": 6,
     "capital_freed_usd": 525.0
-  }
+  },
+  "high_exposure_assets_tracked": [
+    "PEPE-USD",
+    "SHIB-USD"
+  ],
+  "high_exposure_alerts": [
+    {
+      "type": "OVERSIZED_HIGH_EXPOSURE",
+      "severity": "CRITICAL",
+      "symbol": "PEPE-USD",
+      "size_usd": 1500.0,
+      "pct_of_account": 15.0,
+      "message": "PEPE-USD is 15.0% of account (>10% threshold)",
+      "recommendation": "Consider reducing position size or setting tighter stop-loss",
+      "timestamp": "2026-02-19T15:05:49.775403"
+    }
+  ]
 }
