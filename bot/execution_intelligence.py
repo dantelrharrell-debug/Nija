@@ -176,6 +176,9 @@ class SlippageModeler:
         self.historical_slippage: Dict[str, List[float]] = {}
         logger.info("✅ Slippage Modeler initialized")
 
+    # Minimum historical samples needed to blend into predictions
+    MIN_HISTORICAL_SAMPLES = 10
+
     def predict_slippage(
         self,
         market_data: MarketMicrostructure,
@@ -185,6 +188,9 @@ class SlippageModeler:
     ) -> SlippageEstimate:
         """
         Predict slippage for a given order.
+
+        Blends model-based predictions with historical observations when
+        enough data is available, improving accuracy over time.
 
         Args:
             market_data: Current market microstructure
@@ -218,14 +224,31 @@ class SlippageModeler:
         # Calculate volatility factor (higher vol = more slippage)
         volatility_factor = market_data.volatility * 0.1
 
-        # Total expected slippage
-        expected_slippage = base_slippage + size_factor + spread_factor + depth_factor + volatility_factor
+        # Model-based expected slippage
+        model_slippage = base_slippage + size_factor + spread_factor + depth_factor + volatility_factor
 
-        # Worst case (95th percentile)
-        worst_case = expected_slippage + (2 * model['variance'])
+        # Blend with historical data when enough observations exist.
+        # Weight shifts from model-heavy (10 samples) toward 50/50 (60+ samples).
+        symbol = market_data.symbol
+        hist_data = self.historical_slippage.get(symbol, [])
+        if len(hist_data) >= self.MIN_HISTORICAL_SAMPLES:
+            recent = hist_data[-self.MIN_HISTORICAL_SAMPLES:]
+            hist_avg = max(0.0, statistics.mean(recent))  # negative = favorable, cap at 0
+            hist_weight = min(0.5, len(hist_data) / 120.0)
+            expected_slippage = (1.0 - hist_weight) * model_slippage + hist_weight * hist_avg
+            # Worst case: 95th-percentile of historical data (or model fallback)
+            sorted_hist = sorted(hist_data)
+            p95_idx = max(0, int(len(sorted_hist) * 0.95) - 1)
+            worst_case = max(sorted_hist[p95_idx], expected_slippage + model['variance'])
+            # Higher confidence because we have real observations
+            base_confidence = min(0.95, 0.9 + hist_weight * 0.1)
+        else:
+            expected_slippage = model_slippage
+            worst_case = expected_slippage + (2 * model['variance'])
+            base_confidence = 0.9
 
-        # Calculate confidence based on data quality
-        confidence = 0.9  # High confidence in our model
+        # Adjust confidence for data quality
+        confidence = base_confidence
         if market_data.volume_24h < 100000:  # Low volume = less confident
             confidence *= 0.7
         if relevant_depth == 0:  # No depth data = less confident
@@ -241,7 +264,8 @@ class SlippageModeler:
 
         logger.debug(f"Slippage prediction for {market_data.symbol}: "
                     f"expected={expected_slippage*100:.3f}%, "
-                    f"worst_case={worst_case*100:.3f}%")
+                    f"worst_case={worst_case*100:.3f}%, "
+                    f"historical_samples={len(hist_data)}")
 
         return SlippageEstimate(
             expected_slippage_pct=expected_slippage,
@@ -548,19 +572,28 @@ class ExecutionIntelligence:
         if market_data.volatility > 0.02:  # >2% volatility
             return MarketCondition.VOLATILE
 
-        # Low liquidity
+        # Low liquidity or wide spread
         if market_data.volume_24h < 100000:  # <$100k daily volume
             return MarketCondition.ILLIQUID
 
-        # Wide spread
         if market_data.spread_pct > 0.003:  # >0.3% spread
             return MarketCondition.ILLIQUID
 
-        # Normal conditions
+        # Calm: very low volatility with no liquidity concerns
         if market_data.volatility < 0.005:  # <0.5% volatility
             return MarketCondition.CALM
-        else:
-            return MarketCondition.RANGING
+
+        # Trending: significant order-book depth imbalance signals directional pressure.
+        # A 50%+ imbalance (one side >2x the other) in liquid, non-calm markets
+        # indicates buying or selling momentum rather than sideways chop.
+        if market_data.bid_depth > 0 and market_data.ask_depth > 0:
+            deeper = max(market_data.bid_depth, market_data.ask_depth)
+            shallower = min(market_data.bid_depth, market_data.ask_depth)
+            depth_imbalance = (deeper - shallower) / deeper
+            if depth_imbalance > 0.5:
+                return MarketCondition.TRENDING
+
+        return MarketCondition.RANGING
 
     def optimize_execution(
         self,
