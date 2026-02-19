@@ -245,6 +245,15 @@ except ImportError:
         class OrderRejectedError(ExecutionError):
             pass
 
+# Import DelistedAssetRegistry for persistent tracking of invalid/delisted symbols
+try:
+    from bot.delisted_asset_registry import get_delisted_asset_registry
+except ImportError:
+    try:
+        from delisted_asset_registry import get_delisted_asset_registry
+    except ImportError:
+        get_delisted_asset_registry = None
+
 # Balance threshold constants
 # Note: Gap between PROTECTION and TRADING thresholds allows small account operation:
 #   - PROTECTION ($0.50): Absolute minimum to allow bot to start (hard requirement)
@@ -1007,7 +1016,18 @@ class CoinbaseBroker(BaseBroker):
         self.client = None
         self.portfolio_uuid = None
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
-        self._invalid_symbols_cache = set()  # Cache for known invalid/delisted symbols (CRITICAL FIX Jan 11, 2026)
+        self._invalid_symbols_cache = set()  # In-memory fast-lookup; backed by DelistedAssetRegistry
+
+        # Persistent registry for delisted/invalid symbols (survives restarts)
+        self._delisted_registry = get_delisted_asset_registry() if get_delisted_asset_registry else None
+        if self._delisted_registry:
+            # Pre-populate in-memory cache from persisted registry
+            self._invalid_symbols_cache = set(self._delisted_registry.all_symbols().keys())
+            if self._invalid_symbols_cache:
+                logging.info(
+                    f"DelistedAssetRegistry: pre-loaded {len(self._invalid_symbols_cache)} "
+                    "cached invalid symbol(s) from disk"
+                )
 
         # Cache for account data to prevent redundant API calls during initialization
         # NOTE: These caches are only accessed during bot startup in the main thread,
@@ -4111,6 +4131,9 @@ class CoinbaseBroker(BaseBroker):
                 if is_invalid_symbol:
                     # CRITICAL FIX (Jan 11, 2026): Cache invalid symbol to prevent future API calls
                     self._invalid_symbols_cache.add(symbol)
+                    # Persist to disk so the symbol is remembered across restarts
+                    if self._delisted_registry:
+                        self._delisted_registry.register(symbol)
                     logging.debug(f"⚠️  Invalid/delisted symbol: {symbol} - cached and skipping")
                     return []  # Return empty to signal "no data" without counting as error
 
