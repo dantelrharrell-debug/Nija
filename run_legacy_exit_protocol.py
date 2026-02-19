@@ -1,323 +1,254 @@
 #!/usr/bin/env python3
 """
-Legacy Position Exit Protocol - Command Line Interface
-=======================================================
-
-Run the 4-phase legacy position exit protocol from command line.
-
-Usage:
-	# Quick verification (no changes)
-	python run_legacy_exit_protocol.py --verify-only
-
-	# Full cleanup (platform first)
-	python run_legacy_exit_protocol.py --broker coinbase
-
-	# Dry run (log actions without executing)
-	python run_legacy_exit_protocol.py --dry-run
-
-	# Run specific phase only
-	python run_legacy_exit_protocol.py --phase 2  # Order cleanup only
-
-	# User background mode
-	python run_legacy_exit_protocol.py --mode user-background --user-id USER123
-
-Options:
-	--broker BROKER        Broker name (coinbase, kraken, binance)
-	--verify-only          Run verification only (Phase 4)
-	--dry-run             Log actions without executing
-	--phase N             Run specific phase only (1-4)
-	--mode MODE           Execution mode (platform-first, user-background, full)
-	--user-id ID          User account ID (for user-background mode)
-	--account-id ID       Account ID to clean
+Run Legacy Position Exit Protocol
+=================================
+Backward-compatible CLI that works with both legacy and new protocol APIs.
 """
 
 import argparse
+import inspect
 import json
 import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 
-# Setup logging
 logging.basicConfig(
-	level=logging.INFO,
-	format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("nija.legacy_exit_cli")
 
 
-def setup_broker_integration(broker_name: str):
-	"""
-	Setup broker integration.
+def get_broker_adapter(broker_name: str, dry_run: bool = False):
+    try:
+        from bot.broker_integration import get_broker as _get_broker
 
-	Args:
-		broker_name: Name of broker (coinbase, kraken, binance)
+        return _get_broker(broker_name)
+    except Exception:
+        try:
+            from bot.broker_integration import get_broker_integration as _get_broker_integration
 
-	Returns:
-		Broker integration instance
-	"""
-	try:
-		from bot.broker_integration import get_broker
-		broker = get_broker(broker_name)
-		logger.info(f"✅ Connected to {broker_name}")
-		return broker
-	except ImportError as e:
-		logger.error(f"Failed to import broker integration: {e}")
-		logger.error("Make sure you're running from the repository root")
-		sys.exit(1)
-	except Exception as e:
-		logger.error(f"Failed to connect to broker: {e}")
-		sys.exit(1)
+            return _get_broker_integration(broker_name, dry_run=dry_run)
+        except Exception as exc:
+            logger.error(f"Failed to initialize broker integration: {exc}")
+            raise
 
 
-def run_verification_only(protocol):
-	"""Run verification only (Phase 4)"""
-	logger.info("=" * 80)
-	logger.info("VERIFICATION ONLY MODE")
-	logger.info("=" * 80)
+def get_protocol_classes():
+    from bot.legacy_position_exit_protocol import LegacyPositionExitProtocol
 
-	state = protocol.verify_only()
-	metrics = protocol.get_metrics()
+    execution_mode = None
+    account_state = None
 
-	print("\n" + "=" * 80)
-	print("VERIFICATION RESULTS")
-	print("=" * 80)
-	print(f"Account State: {state.value}")
-	print(f"Positions Remaining: {metrics.positions_remaining}")
-	print(f"Zombie Count: {metrics.zombie_count}")
-	print(f"Cleanup Progress: {metrics.cleanup_progress_pct:.1f}%")
-	print(f"Capital Freed (Total): ${metrics.capital_freed_usd:.2f}")
-	print("=" * 80)
+    try:
+        from bot.legacy_position_exit_protocol import ExecutionMode as _execution_mode
 
-	return state.value == "CLEAN"
+        execution_mode = _execution_mode
+    except Exception:
+        execution_mode = None
 
+    try:
+        from bot.legacy_position_exit_protocol import AccountState as _account_state
 
-def run_specific_phase(protocol, phase: int, account_id=None):
-	"""Run a specific phase only"""
-	logger.info("=" * 80)
-	logger.info(f"RUNNING PHASE {phase} ONLY")
-	logger.info("=" * 80)
+        account_state = _account_state
+    except Exception:
+        account_state = None
 
-	if phase == 1:
-		classified = protocol.phase1_classify_positions(account_id)
-		print("\n" + "=" * 80)
-		print("PHASE 1 RESULTS: POSITION CLASSIFICATION")
-		print("=" * 80)
-		print(f"Strategy-Aligned: {len(classified['strategy_aligned'])}")
-		print(f"Legacy Non-Compliant: {len(classified['legacy_non_compliant'])}")
-		print(f"Zombie: {len(classified['zombie'])}")
-		print("=" * 80)
-
-	elif phase == 2:
-		orders_cancelled, capital_freed = protocol.phase2_order_cleanup(account_id)
-		print("\n" + "=" * 80)
-		print("PHASE 2 RESULTS: ORDER CLEANUP")
-		print("=" * 80)
-		print(f"Orders Cancelled: {orders_cancelled}")
-		print(f"Capital Freed: ${capital_freed:.2f}")
-		print("=" * 80)
-
-	elif phase == 3:
-		# Need classification first
-		classified = protocol.phase1_classify_positions(account_id)
-		exits = protocol.phase3_controlled_exit(classified, account_id)
-		print("\n" + "=" * 80)
-		print("PHASE 3 RESULTS: CONTROLLED EXIT")
-		print("=" * 80)
-		print(f"Dust Closed: {exits['dust_closed']}")
-		print(f"Over-Cap Closed: {exits['over_cap_closed']}")
-		print(f"Legacy Unwound: {exits['legacy_unwound']}")
-		print(f"Zombie Closed: {exits['zombie_closed']}")
-		print("=" * 80)
-
-	elif phase == 4:
-		state = protocol.phase4_verify_clean_state(account_id)
-		print("\n" + "=" * 80)
-		print("PHASE 4 RESULTS: VERIFICATION")
-		print("=" * 80)
-		print(f"Account State: {state.value}")
-		print("=" * 80)
-
-	else:
-		logger.error(f"Invalid phase: {phase}. Must be 1-4.")
-		sys.exit(1)
+    return LegacyPositionExitProtocol, execution_mode, account_state
 
 
-def run_full_protocol(protocol, account_id=None):
-	"""Run all 4 phases"""
-	results = protocol.run_full_protocol(account_id)
+def build_protocol(args, broker, protocol_cls, execution_mode_cls):
+    sig = inspect.signature(protocol_cls.__init__)
+    params = sig.parameters
 
-	print("\n" + "=" * 80)
-	print("FULL PROTOCOL RESULTS")
-	print("=" * 80)
-	print(f"Account: {results['account_id']}")
-	print(f"Execution Mode: {results['execution_mode']}")
-	print(f"Elapsed Time: {results['elapsed_seconds']:.2f}s")
-	print()
-	print("PHASE 1 (Classification):")
-	print(f"  Strategy-Aligned: {results['phases']['phase1']['strategy_aligned']}")
-	print(f"  Legacy Non-Compliant: {results['phases']['phase1']['legacy_non_compliant']}")
-	print(f"  Zombie: {results['phases']['phase1']['zombie']}")
-	print()
-	print("PHASE 2 (Order Cleanup):")
-	print(f"  Orders Cancelled: {results['phases']['phase2']['orders_cancelled']}")
-	print(f"  Capital Freed: ${results['phases']['phase2']['capital_freed_usd']:.2f}")
-	print()
-	print("PHASE 3 (Controlled Exit):")
-	print(f"  Dust Closed: {results['phases']['phase3']['dust_closed']}")
-	print(f"  Over-Cap Closed: {results['phases']['phase3']['over_cap_closed']}")
-	print(f"  Legacy Unwound: {results['phases']['phase3']['legacy_unwound']}")
-	print(f"  Zombie Closed: {results['phases']['phase3']['zombie_closed']}")
-	print()
-	print("PHASE 4 (Verification):")
-	print(f"  State: {results['phases']['phase4']['state']}")
-	print(f"  Positions Remaining: {results['phases']['phase4']['positions_remaining']}")
-	print(f"  Zombie Count: {results['phases']['phase4']['zombie_count']}")
-	print()
-	print("TOTAL METRICS:")
-	print(f"  Total Positions Cleaned: {results['metrics']['total_positions_cleaned']}")
-	print(f"  Zombie Positions Closed: {results['metrics']['zombie_positions_closed']}")
-	print(f"  Legacy Positions Unwound: {results['metrics']['legacy_positions_unwound']}")
-	print(f"  Stale Orders Cancelled: {results['metrics']['stale_orders_cancelled']}")
-	print(f"  Capital Freed: ${results['metrics']['capital_freed_usd']:.2f}")
-	print(f"  Cleanup Progress: {results['metrics']['cleanup_progress_pct']:.1f}%")
-	print("=" * 80)
+    kwargs = {"broker_integration": broker}
 
-	# Save results to file
-	results_dir = Path("./data")
-	results_dir.mkdir(exist_ok=True)
+    if "position_tracker" in params:
+        try:
+            from bot.position_tracker import PositionTracker
 
-	results_file = results_dir / f"legacy_exit_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-	with open(results_file, 'w') as f:
-		json.dump(results, f, indent=2)
+            kwargs["position_tracker"] = PositionTracker(storage_file="data/positions.json")
+        except Exception as exc:
+            logger.warning(f"PositionTracker unavailable, continuing without it: {exc}")
 
-	print(f"\n📄 Results saved to: {results_file}")
+    if "max_positions" in params:
+        kwargs["max_positions"] = args.max_positions
 
-	return results['state'] == "CLEAN"
+    if "dust_threshold_pct" in params:
+        kwargs["dust_threshold_pct"] = args.dust_threshold_pct
+    if "dust_pct_threshold" in params:
+        kwargs["dust_pct_threshold"] = args.dust_threshold_pct
+
+    if "stale_order_minutes" in params:
+        kwargs["stale_order_minutes"] = args.stale_minutes
+
+    if "dry_run" in params:
+        kwargs["dry_run"] = args.dry_run
+
+    if "data_dir" in params:
+        kwargs["data_dir"] = "./data"
+
+    if execution_mode_cls and "execution_mode" in params:
+        mode_map = {
+            "platform-first": execution_mode_cls.PLATFORM_FIRST,
+            "user-background": execution_mode_cls.USER_BACKGROUND,
+            "full": execution_mode_cls.FULL,
+        }
+        kwargs["execution_mode"] = mode_map[args.mode]
+
+    return protocol_cls(**kwargs)
+
+
+def normalize_state_value(state):
+    if hasattr(state, "value"):
+        return state.value
+    return str(state)
+
+
+def verify_only(protocol, account_id):
+    if hasattr(protocol, "verify_only"):
+        state = protocol.verify_only(account_id) if account_id else protocol.verify_only()
+        return normalize_state_value(state)
+
+    state, _diagnostics = protocol.verify_clean_state(user_id=account_id)
+    return normalize_state_value(state)
+
+
+def run_phase(protocol, phase: int, account_id, broker):
+    if hasattr(protocol, "phase1_classify_positions"):
+        if phase == 1:
+            result = protocol.phase1_classify_positions(account_id)
+            logger.info(f"Phase 1 complete: {len(result.get('strategy_aligned', []))} strategy-aligned")
+            return True
+        if phase == 2:
+            cancelled, freed = protocol.phase2_order_cleanup(account_id)
+            logger.info(f"Phase 2 complete: cancelled={cancelled}, freed=${freed:.2f}")
+            return True
+        if phase == 3:
+            classified = protocol.phase1_classify_positions(account_id)
+            result = protocol.phase3_controlled_exit(classified, account_id)
+            logger.info(f"Phase 3 complete: processed={sum(result.values()) if result else 0}")
+            return True
+        if phase == 4:
+            state = protocol.phase4_verify_clean_state(account_id)
+            logger.info(f"Phase 4 complete: state={normalize_state_value(state)}")
+            return True
+        return False
+
+    positions = broker.get_open_positions(user_id=account_id)
+    balance = broker.get_account_balance(user_id=account_id)
+
+    if phase == 1:
+        classified = protocol.classify_all_positions(positions, balance)
+        logger.info(f"Phase 1 complete: classified={len(classified)}")
+        return True
+    if phase == 2:
+        cancelled, freed = protocol.cancel_stale_orders(user_id=account_id)
+        logger.info(f"Phase 2 complete: cancelled={cancelled}, freed=${freed:.2f}")
+        return True
+    if phase == 3:
+        classified = protocol.classify_all_positions(positions, balance)
+        result = protocol.execute_controlled_exits(classified, balance)
+        successful = sum(1 for v in result.values() if v)
+        logger.info(f"Phase 3 complete: successful={successful}/{len(result)}")
+        return True
+    if phase == 4:
+        state, _diagnostics = protocol.verify_clean_state(user_id=account_id)
+        logger.info(f"Phase 4 complete: state={normalize_state_value(state)}")
+        return True
+
+    return False
+
+
+def run_full(protocol, account_id):
+    results = protocol.run_full_protocol(account_id) if account_id else protocol.run_full_protocol()
+
+    data_dir = Path("./data")
+    data_dir.mkdir(exist_ok=True)
+    result_file = data_dir / f"legacy_exit_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+    with open(result_file, "w") as handle:
+        json.dump(results, handle, indent=2, default=str)
+
+    logger.info(f"Results saved to {result_file}")
+
+    if isinstance(results, dict):
+        if "state" in results:
+            return str(results["state"]).upper() == "CLEAN"
+        if "success" in results:
+            return bool(results["success"])
+
+    return True
 
 
 def main():
-	parser = argparse.ArgumentParser(
-		description='Legacy Position Exit Protocol CLI',
-		formatter_class=argparse.RawDescriptionHelpFormatter,
-		epilog="""
-Examples:
-  # Quick verification
-  python run_legacy_exit_protocol.py --verify-only
+    parser = argparse.ArgumentParser(description="Run Legacy Position Exit Protocol")
 
-  # Full cleanup with Coinbase
-  python run_legacy_exit_protocol.py --broker coinbase
+    parser.add_argument("--broker", default="coinbase", help="Broker name")
+    parser.add_argument("--max-positions", type=int, default=8, help="Maximum positions")
+    parser.add_argument("--dust-pct", type=float, default=0.01, help="Dust threshold ratio (legacy arg)")
+    parser.add_argument(
+        "--dust-threshold-pct",
+        type=float,
+        default=None,
+        help="Dust threshold ratio (new arg)",
+    )
+    parser.add_argument("--stale-minutes", type=int, default=30, help="Stale order age in minutes")
+    parser.add_argument("--user-id", type=str, default=None, help="User account ID")
+    parser.add_argument("--account-id", type=str, default=None, help="Account ID")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate actions")
+    parser.add_argument("--verify-only", action="store_true", help="Run verification only")
+    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4], help="Run one phase")
+    parser.add_argument(
+        "--mode",
+        choices=["platform-first", "user-background", "full"],
+        default="platform-first",
+        help="Execution mode for new protocol API",
+    )
 
-  # Dry run (no actual trades)
-  python run_legacy_exit_protocol.py --dry-run --broker coinbase
+    args = parser.parse_args()
+    args.dust_threshold_pct = args.dust_threshold_pct if args.dust_threshold_pct is not None else args.dust_pct
 
-  # Run order cleanup only
-  python run_legacy_exit_protocol.py --phase 2 --broker coinbase
+    account_id = args.account_id or args.user_id
 
-  # Platform-first mode
-  python run_legacy_exit_protocol.py --mode platform-first --broker coinbase
-		"""
-	)
+    logger.info("=" * 80)
+    logger.info("LEGACY POSITION EXIT PROTOCOL")
+    logger.info("=" * 80)
+    logger.info(f"Broker: {args.broker}")
+    logger.info(f"Dry Run: {args.dry_run}")
+    logger.info(f"Mode: {args.mode}")
 
-	parser.add_argument('--broker', type=str, default='coinbase',
-						help='Broker name (coinbase, kraken, binance)')
-	parser.add_argument('--verify-only', action='store_true',
-						help='Run verification only (no changes)')
-	parser.add_argument('--dry-run', action='store_true',
-						help='Log actions without executing')
-	parser.add_argument('--phase', type=int, choices=[1, 2, 3, 4],
-						help='Run specific phase only (1-4)')
-	parser.add_argument('--mode', type=str,
-						choices=['platform-first', 'user-background', 'full'],
-						default='platform-first',
-						help='Execution mode')
-	parser.add_argument('--user-id', type=str,
-						help='User account ID (for user-background mode)')
-	parser.add_argument('--account-id', type=str,
-						help='Account ID to clean')
-	parser.add_argument('--dust-threshold-pct', type=float, default=0.01,
-						help='Dust threshold as percentage of account balance (default: 0.01 = 1%%)')
-	parser.add_argument('--max-positions', type=int, default=8,
-						help='Maximum allowed positions (default: 8)')
+    try:
+        protocol_cls, execution_mode_cls, account_state_cls = get_protocol_classes()
+        broker = get_broker_adapter(args.broker, dry_run=args.dry_run)
+        protocol = build_protocol(args, broker, protocol_cls, execution_mode_cls)
 
-	args = parser.parse_args()
+        if args.verify_only:
+            state_value = verify_only(protocol, account_id)
+            logger.info(f"Verification state: {state_value}")
+            clean_value = "CLEAN"
+            if account_state_cls and hasattr(account_state_cls, "CLEAN"):
+                clean_value = normalize_state_value(account_state_cls.CLEAN)
+            return 0 if state_value == clean_value else 1
 
-	# Print header
-	print("=" * 80)
-	print("LEGACY POSITION EXIT PROTOCOL")
-	print("=" * 80)
-	print(f"Broker: {args.broker}")
-	print(f"Mode: {args.mode}")
-	print(f"Dry Run: {args.dry_run}")
-	if args.verify_only:
-		print("Mode: VERIFICATION ONLY")
-	elif args.phase:
-		print(f"Mode: PHASE {args.phase} ONLY")
-	else:
-		print("Mode: FULL PROTOCOL")
-	print("=" * 80)
-	print()
+        if args.phase:
+            ok = run_phase(protocol, args.phase, account_id, broker)
+            return 0 if ok else 1
 
-	# Setup broker
-	broker = setup_broker_integration(args.broker)
+        success = run_full(protocol, account_id)
+        return 0 if success else 1
 
-	# Import protocol
-	try:
-		from bot.legacy_position_exit_protocol import (
-			ExecutionMode,
-			LegacyPositionExitProtocol,
-		)
-	except ImportError:
-		logger.error("Failed to import LegacyPositionExitProtocol")
-		logger.error("Make sure you're running from the repository root")
-		sys.exit(1)
+    except KeyboardInterrupt:
+        logger.warning("Interrupted by user")
+        return 1
+    except Exception as exc:
+        logger.error(f"Protocol execution failed: {exc}")
+        import traceback
 
-	# Map mode string to enum
-	mode_map = {
-		'platform-first': ExecutionMode.PLATFORM_FIRST,
-		'user-background': ExecutionMode.USER_BACKGROUND,
-		'full': ExecutionMode.FULL
-	}
-	execution_mode = mode_map[args.mode]
-
-	# Initialize protocol
-	protocol = LegacyPositionExitProtocol(
-		broker_integration=broker,
-		dust_threshold_pct=args.dust_threshold_pct,
-		max_positions=args.max_positions,
-		dry_run=args.dry_run,
-		execution_mode=execution_mode
-	)
-
-	# Determine account_id
-	account_id = args.account_id or args.user_id
-
-	# Execute
-	try:
-		if args.verify_only:
-			success = run_verification_only(protocol)
-		elif args.phase:
-			run_specific_phase(protocol, args.phase, account_id)
-			success = True
-		else:
-			success = run_full_protocol(protocol, account_id)
-
-		if success:
-			logger.info("✅ Protocol completed successfully")
-			sys.exit(0)
-
-		logger.warning("⚠️  Protocol completed with warnings")
-		sys.exit(0)
-
-	except KeyboardInterrupt:
-		logger.info("\n⚠️  Protocol interrupted by user")
-		sys.exit(1)
-	except Exception as e:
-		logger.error(f"❌ Protocol failed: {e}")
-		import traceback
-		traceback.print_exc()
-		sys.exit(1)
+        traceback.print_exc()
+        return 1
 
 
-if __name__ == '__main__':
-	main()
+if __name__ == "__main__":
+    sys.exit(main())
