@@ -536,6 +536,123 @@ class PortfolioVaRMonitor:
 
 
 # ---------------------------------------------------------------------------
+# VaR Breach Auto-Size Reducer
+# ---------------------------------------------------------------------------
+
+class VaRAutoSizeReducer:
+    """
+    Automatically reduces new-position sizing when a VaR limit is breached.
+
+    Registers a breach callback with a :class:`PortfolioVaRMonitor` instance
+    and exposes :meth:`get_size_multiplier` so position-sizing logic can query
+    the current reduction factor.
+
+    Reduction schedule (configurable):
+    - No active breach → multiplier = 1.0  (no reduction)
+    - 95 % VaR breached → multiplier = *multiplier_on_95_breach* (default 0.75)
+    - 99 % VaR breached → multiplier = *multiplier_on_99_breach* (default 0.50)
+
+    The multiplier resets to 1.0 after *recovery_cycles* consecutive monitoring
+    cycles without a new breach.
+    """
+
+    def __init__(
+        self,
+        var_monitor: "PortfolioVaRMonitor",
+        multiplier_on_95_breach: float = 0.75,
+        multiplier_on_99_breach: float = 0.50,
+        recovery_cycles: int = 5,
+    ) -> None:
+        """
+        Args:
+            var_monitor: The :class:`PortfolioVaRMonitor` to subscribe to.
+            multiplier_on_95_breach: Position-size multiplier applied when the
+                95 % VaR limit is breached (0 < value ≤ 1).
+            multiplier_on_99_breach: Position-size multiplier applied when the
+                99 % VaR limit is breached (0 < value ≤ 1).
+            recovery_cycles: Number of clean monitoring cycles (no breach)
+                required before the multiplier resets to 1.0.
+        """
+        self._multiplier_95 = multiplier_on_95_breach
+        self._multiplier_99 = multiplier_on_99_breach
+        self._recovery_cycles = recovery_cycles
+
+        self._current_multiplier: float = 1.0
+        self._clean_cycles: int = 0
+        self._lock = threading.Lock()
+
+        var_monitor.add_breach_callback(self._on_breach)
+        logger.info(
+            "✅ VaRAutoSizeReducer attached "
+            f"(95%%→{multiplier_on_95_breach:.0%}, 99%%→{multiplier_on_99_breach:.0%}, "
+            f"recovery={recovery_cycles} cycles)"
+        )
+
+    # ------------------------------------------------------------------
+    # Breach callback
+    # ------------------------------------------------------------------
+
+    def _on_breach(self, breach: "VaRBreach") -> None:
+        """Called by :class:`PortfolioVaRMonitor` on every VaR breach event."""
+        with self._lock:
+            if breach.confidence_level == "99%":
+                new_mult = self._multiplier_99
+            else:
+                new_mult = self._multiplier_95
+            # Always take the more restrictive of the current value and the new one
+            self._current_multiplier = min(self._current_multiplier, new_mult)
+            self._clean_cycles = 0  # Reset recovery counter
+        logger.warning(
+            "⚠️  VaRAutoSizeReducer: size multiplier set to %.2f "
+            "(breach confidence=%s, method=%s)",
+            self._current_multiplier,
+            breach.confidence_level,
+            breach.method,
+        )
+
+    # ------------------------------------------------------------------
+    # Recovery tick – call once per monitoring cycle when no breach fires
+    # ------------------------------------------------------------------
+
+    def record_clean_cycle(self) -> None:
+        """
+        Signal that a monitoring cycle completed without a new VaR breach.
+
+        After *recovery_cycles* consecutive clean calls the multiplier
+        resets to 1.0.
+        """
+        with self._lock:
+            self._clean_cycles += 1
+            if self._clean_cycles >= self._recovery_cycles and self._current_multiplier < 1.0:
+                self._current_multiplier = 1.0
+                self._clean_cycles = 0
+                logger.info("✅ VaRAutoSizeReducer: size multiplier restored to 1.0 (recovery complete)")
+
+    # ------------------------------------------------------------------
+    # Query
+    # ------------------------------------------------------------------
+
+    def get_size_multiplier(self) -> float:
+        """
+        Return the current position-size multiplier (0 < value ≤ 1.0).
+
+        Multiply the raw desired position size by this value before placing.
+        """
+        with self._lock:
+            return self._current_multiplier
+
+    def get_status(self) -> Dict:
+        """Return a status snapshot as a plain dict."""
+        with self._lock:
+            return {
+                "size_multiplier": self._current_multiplier,
+                "clean_cycles": self._clean_cycles,
+                "recovery_cycles_needed": self._recovery_cycles,
+                "reduction_active": self._current_multiplier < 1.0,
+            }
+
+
+# ---------------------------------------------------------------------------
 # Module-level singleton
 # ---------------------------------------------------------------------------
 

@@ -37,6 +37,7 @@ class TradingTier(Enum):
     INCOME = "INCOME"
     LIVABLE = "LIVABLE"
     BALLER = "BALLER"
+    INCUBATION = "INCUBATION"  # Disciplined incubation mode (spot-only, conservative)
 
 
 @dataclass
@@ -169,6 +170,25 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
         max_positions=8,
         description="Capital deployment mode (institutional behavior)",
         min_visible_size=100.0
+    ),
+    # Disciplined incubation mode:
+    # - Spot trading only (no shorts/futures)
+    # - 0.5%–1% risk per trade
+    # - Max 5–8 concurrent positions
+    # - 40% max correlation group cap
+    # - ATR-adjusted sizing active
+    # - VaR breach auto-size reduction
+    # - Drawdown circuit breaker enforced
+    TradingTier.INCUBATION: TierConfig(
+        name="INCUBATION",
+        capital_min=5000.0,
+        capital_max=float('inf'),
+        risk_per_trade_pct=(0.5, 1.0),
+        trade_size_min=25.0,
+        trade_size_max=500.0,
+        max_positions=8,
+        description="Disciplined incubation mode: spot-only, conservative sizing, full risk controls",
+        min_visible_size=25.0
     ),
 }
 
