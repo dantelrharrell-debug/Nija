@@ -163,6 +163,120 @@ class TestSlippageModeler(unittest.TestCase):
         expected_slippage = (50025.0 - 50000.0) / 50000.0
         self.assertAlmostEqual(slippage, expected_slippage, places=6)
 
+    def test_historical_blending_improves_prediction(self):
+        """Test that historical slippage data is blended into predictions."""
+        symbol = 'ETH-USD'
+        self.market_data = MarketMicrostructure(
+            symbol=symbol,
+            bid=3000.0,
+            ask=3003.0,
+            spread_pct=0.001,
+            volume_24h=5000000.0,
+            bid_depth=100000.0,
+            ask_depth=120000.0,
+            volatility=0.015,
+            price=3001.5,
+            timestamp=time.time()
+        )
+
+        # Prediction before any historical data
+        estimate_cold = self.modeler.predict_slippage(
+            market_data=self.market_data,
+            order_size_usd=1000.0,
+            side='buy',
+            market_condition=MarketCondition.CALM
+        )
+
+        # Inject a large number of very-low slippage observations
+        very_low_slippage = 0.00005  # 0.005%
+        for _ in range(20):
+            self.modeler.historical_slippage.setdefault(symbol, []).append(very_low_slippage)
+
+        estimate_warm = self.modeler.predict_slippage(
+            market_data=self.market_data,
+            order_size_usd=1000.0,
+            side='buy',
+            market_condition=MarketCondition.CALM
+        )
+
+        # Historical data (very low slippage) should pull the estimate down
+        self.assertLess(estimate_warm.expected_slippage_pct, estimate_cold.expected_slippage_pct)
+        # Confidence should be at least as high with historical data
+        self.assertGreaterEqual(estimate_warm.confidence, estimate_cold.confidence)
+
+    def test_historical_worst_case_uses_percentile(self):
+        """Test that worst-case slippage uses 95th-percentile of historical data."""
+        symbol = 'SOL-USD'
+        self.market_data = MarketMicrostructure(
+            symbol=symbol,
+            bid=100.0,
+            ask=100.1,
+            spread_pct=0.001,
+            volume_24h=5000000.0,
+            bid_depth=100000.0,
+            ask_depth=120000.0,
+            volatility=0.01,
+            price=100.05,
+            timestamp=time.time()
+        )
+
+        # Build a history with one extreme outlier
+        low = [0.001] * 19
+        high = [0.05]  # outlier at the top (95th-percentile or beyond)
+        self.modeler.historical_slippage[symbol] = low + high
+
+        estimate = self.modeler.predict_slippage(
+            market_data=self.market_data,
+            order_size_usd=1000.0,
+            side='buy',
+            market_condition=MarketCondition.CALM
+        )
+
+        # worst_case must be at least as large as the expected value
+        self.assertGreaterEqual(estimate.worst_case_slippage_pct, estimate.expected_slippage_pct)
+
+    def test_insufficient_history_falls_back_to_model(self):
+        """Test that fewer than MIN_HISTORICAL_SAMPLES observations use model only."""
+        symbol = 'LINK-USD'
+        self.market_data = MarketMicrostructure(
+            symbol=symbol,
+            bid=10.0,
+            ask=10.01,
+            spread_pct=0.001,
+            volume_24h=5000000.0,
+            bid_depth=100000.0,
+            ask_depth=120000.0,
+            volatility=0.01,
+            price=10.005,
+            timestamp=time.time()
+        )
+
+        # Only 5 observations — below MIN_HISTORICAL_SAMPLES (10)
+        self.modeler.historical_slippage[symbol] = [0.00001] * 5
+
+        estimate_few = self.modeler.predict_slippage(
+            market_data=self.market_data,
+            order_size_usd=1000.0,
+            side='buy',
+            market_condition=MarketCondition.CALM
+        )
+
+        # Cold-start estimate (no history at all) for comparison
+        self.modeler.historical_slippage.pop(symbol)
+        estimate_cold = self.modeler.predict_slippage(
+            market_data=self.market_data,
+            order_size_usd=1000.0,
+            side='buy',
+            market_condition=MarketCondition.CALM
+        )
+
+        # Both should be identical because history is not used yet
+        self.assertAlmostEqual(
+            estimate_few.expected_slippage_pct,
+            estimate_cold.expected_slippage_pct,
+            places=8
+        )
+
 
 class TestSpreadPredictor(unittest.TestCase):
     """Test spread prediction model."""
@@ -394,6 +508,63 @@ class TestExecutionIntelligence(unittest.TestCase):
         )
         condition = self.ei.classify_market_condition(illiquid_data)
         self.assertEqual(condition, MarketCondition.ILLIQUID)
+
+    def test_classify_trending_market(self):
+        """Test detection of trending market via depth imbalance."""
+        # Bid depth 3x ask depth — strong buy-side pressure → TRENDING
+        trending_data = MarketMicrostructure(
+            symbol='BTC-USD',
+            bid=50000.0,
+            ask=50050.0,
+            spread_pct=0.001,
+            volume_24h=5000000.0,
+            bid_depth=300000.0,   # 3x the ask depth
+            ask_depth=100000.0,
+            volatility=0.01,       # Non-trivial but not volatile
+            price=50025.0,
+            timestamp=time.time()
+        )
+        condition = self.ei.classify_market_condition(trending_data)
+        self.assertEqual(condition, MarketCondition.TRENDING)
+
+        # Symmetric depths → should NOT be TRENDING (RANGING or CALM)
+        balanced_data = MarketMicrostructure(
+            symbol='BTC-USD',
+            bid=50000.0,
+            ask=50050.0,
+            spread_pct=0.001,
+            volume_24h=5000000.0,
+            bid_depth=100000.0,
+            ask_depth=100000.0,
+            volatility=0.01,
+            price=50025.0,
+            timestamp=time.time()
+        )
+        condition = self.ei.classify_market_condition(balanced_data)
+        self.assertNotEqual(condition, MarketCondition.TRENDING)
+
+    def test_trending_market_uses_market_order(self):
+        """Test that trending markets result in market orders (ride momentum)."""
+        trending_data = MarketMicrostructure(
+            symbol='BTC-USD',
+            bid=50000.0,
+            ask=50050.0,
+            spread_pct=0.001,
+            volume_24h=5000000.0,
+            bid_depth=300000.0,
+            ask_depth=100000.0,
+            volatility=0.01,
+            price=50025.0,
+            timestamp=time.time()
+        )
+        plan = self.ei.optimize_execution(
+            symbol='BTC-USD',
+            side='buy',
+            size_usd=1000.0,
+            market_data=trending_data,
+            urgency=0.5
+        )
+        self.assertEqual(plan.order_type, OrderType.MARKET)
 
     def test_optimize_execution(self):
         """Test execution optimization."""
