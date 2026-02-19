@@ -15,12 +15,26 @@ Version: 2.1 (Enhanced for profitability and fee awareness)
 """
 
 import pandas as pd
-from typing import Dict, Tuple, List
+from typing import Dict, Optional, Tuple, List
 from datetime import datetime
 import time
 import logging
 
 logger = logging.getLogger("nija.risk_manager")
+
+# Import Risk Intelligence System (correlation, volatility caps, drawdown breaker)
+try:
+    from risk_intelligence import RiskIntelligenceSystem, create_risk_intelligence_system
+    _HAS_RISK_INTELLIGENCE = True
+except ImportError:
+    try:
+        from bot.risk_intelligence import RiskIntelligenceSystem, create_risk_intelligence_system  # type: ignore
+        _HAS_RISK_INTELLIGENCE = True
+    except ImportError:
+        RiskIntelligenceSystem = None  # type: ignore
+        create_risk_intelligence_system = None  # type: ignore
+        _HAS_RISK_INTELLIGENCE = False
+        logger.warning("⚠️ RiskIntelligenceSystem not available — risk intelligence disabled")
 
 # Import scalar helper for indicator conversions
 try:
@@ -95,16 +109,19 @@ class AdaptiveRiskManager:
     - FEE AWARENESS (NEW - prevents unprofitable small trades)
     - TIER LOCKING (v4.1 - Jan 2026 - enforces tier limits in PRO MODE)
     - EXCHANGE-SPECIFIC PROFILES (OPTIONAL - uses exchange risk profiles if available)
+    - RISK INTELLIGENCE (correlation-aware exposure, volatility caps, drawdown circuit breaker)
     """
 
     def __init__(self, min_position_pct=0.02, max_position_pct=0.25,
                  max_total_exposure=0.60, use_exchange_profiles=False,
                  pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None,
                  max_portfolio_volatility=0.04,
-                 soft_position_limit_pct=0.04, hard_position_limit_pct=0.05):
+                 soft_position_limit_pct=0.04, hard_position_limit_pct=0.05,
+                 risk_intelligence: Optional['RiskIntelligenceSystem'] = None):
         """
         Initialize Adaptive Risk Manager - OPTIMIZED FOR HIGH WIN RATE v7.5
         Updated Feb 12, 2026: Added soft/hard position limit enforcement
+        Updated Feb 19, 2026: Added risk intelligence integration
 
         Args:
             min_position_pct: Minimum position size as % of account (default 2% - conservative for weak trends)
@@ -117,6 +134,8 @@ class AdaptiveRiskManager:
             max_portfolio_volatility: Maximum portfolio volatility (default 4% = 0.04) - CRITICAL for aggressive sizing
             soft_position_limit_pct: Soft limit for single position (default 4% = 0.04) - triggers warning and size reduction
             hard_position_limit_pct: Hard limit for single position (default 5% = 0.05) - blocks new positions
+            risk_intelligence: Optional RiskIntelligenceSystem instance providing correlation-aware
+                exposure control, volatility-adjusted position caps, and drawdown circuit breaker.
         """
         self.min_position_pct = min_position_pct
         self.max_position_pct = max_position_pct
@@ -125,6 +144,9 @@ class AdaptiveRiskManager:
         self.min_free_reserve_pct = min_free_reserve_pct
         self.tier_lock = tier_lock  # NEW: Tier locking for PRO MODE
         self.max_portfolio_volatility = max_portfolio_volatility  # NEW: Volatility exposure cap
+
+        # Risk Intelligence System — correlation, volatility caps, drawdown circuit breaker
+        self.risk_intelligence = risk_intelligence
         
         # SOFT + HARD ENFORCEMENT (Feb 12, 2026)
         # Provides flexibility with discipline
@@ -509,7 +531,17 @@ class AdaptiveRiskManager:
             - breakdown_dict: Details of sizing calculations
         """
         breakdown = {}
-        
+
+        # --- Risk Intelligence: Drawdown Circuit Breaker ---
+        # Check before cooldown so circuit breaker always takes priority.
+        if self.risk_intelligence is not None:
+            can_trade, cb_reason = self.risk_intelligence.circuit_breaker.can_trade()
+            if not can_trade:
+                logger.warning(f"🛑 CIRCUIT BREAKER ACTIVE: {cb_reason}")
+                breakdown['circuit_breaker_active'] = True
+                breakdown['circuit_breaker_reason'] = cb_reason
+                return (0.0, breakdown)
+
         # Check if in cooldown period (3 consecutive losses = 60 min pause)
         if self.is_in_cooldown():
             remaining_minutes = self.get_cooldown_remaining_minutes()
@@ -973,6 +1005,22 @@ class AdaptiveRiskManager:
                 breakdown['rotation_needed'] = position_size - account_balance
                 logger.info(f"   PRO MODE: Need ${position_size:.2f}, have ${account_balance:.2f} free")
                 logger.info(f"   → Rotation needed: ${breakdown['rotation_needed']:.2f}")
+
+        # --- Risk Intelligence: Volatility Cap + Drawdown Multiplier ---
+        if self.risk_intelligence is not None:
+            try:
+                position_size, ri_meta = self.risk_intelligence.get_adjusted_position_size(
+                    symbol=breakdown.get('symbol', 'UNKNOWN'),
+                    base_size_usd=position_size,
+                )
+                breakdown['risk_intelligence'] = {
+                    'volatility_cap': ri_meta.get('volatility_cap', {}),
+                    'drawdown_multiplier': ri_meta.get('drawdown_multiplier', 1.0),
+                    'final_size_usd': ri_meta.get('final_size_usd', position_size),
+                }
+                position_size = scalar(position_size)
+            except Exception as ri_exc:
+                logger.warning(f"RiskIntelligenceSystem adjustment error: {ri_exc}")
 
         # MICRO TRADE PREVENTION: Enforce absolute $1 minimum (lowered from $10 to allow very small accounts)
         # ⚠️ CRITICAL WARNING: Positions under $10 are likely unprofitable due to ~1.4% round-trip fees
