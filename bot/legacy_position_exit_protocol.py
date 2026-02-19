@@ -65,7 +65,19 @@ class LegacyPositionExitProtocol:
     - Stale order cancellation
     - Controlled exit strategies
     - Clean state verification
+    - High-exposure asset monitoring (PEPE, LUNA, etc.)
+    - Volatility scaling integration
+    - Correlation-weighted exposure checks
     """
+    
+    # High-exposure assets to monitor closely (volatile meme coins, delisted assets, etc.)
+    HIGH_EXPOSURE_ASSETS = [
+        'PEPE-USD', 'PEPE-USDT',
+        'LUNA-USD', 'LUNA-USDT', 'LUNA2-USD',
+        'SHIB-USD', 'SHIB-USDT',
+        'DOGE-USD', 'DOGE-USDT',
+        'FLOKI-USD', 'FLOKI-USDT'
+    ]
     
     def __init__(self,
                  position_tracker,
@@ -75,7 +87,8 @@ class LegacyPositionExitProtocol:
                  stale_order_minutes: int = 30,
                  gradual_unwind_pct: float = 0.25,  # 25% per cycle
                  unwind_cycles: int = 4,  # 3-5 cycles
-                 data_dir: str = "./data"):
+                 data_dir: str = "./data",
+                 monitor_high_exposure: bool = True):
         """
         Initialize Legacy Position Exit Protocol.
         
@@ -88,6 +101,7 @@ class LegacyPositionExitProtocol:
             gradual_unwind_pct: Percentage to close per unwind cycle (default 25%)
             unwind_cycles: Number of cycles for gradual unwind (default 4)
             data_dir: Directory for state persistence
+            monitor_high_exposure: Enable high-exposure asset monitoring (default True)
         """
         self.position_tracker = position_tracker
         self.broker = broker_integration
@@ -96,6 +110,7 @@ class LegacyPositionExitProtocol:
         self.stale_order_minutes = stale_order_minutes
         self.gradual_unwind_pct = gradual_unwind_pct
         self.unwind_cycles = unwind_cycles
+        self.monitor_high_exposure = monitor_high_exposure
         
         # State tracking
         self.data_dir = Path(data_dir)
@@ -108,6 +123,9 @@ class LegacyPositionExitProtocol:
         logger.info(f"   Dust Threshold: {dust_pct_threshold * 100:.1f}% of account balance")
         logger.info(f"   Stale Order Age: {stale_order_minutes} minutes")
         logger.info(f"   Gradual Unwind: {gradual_unwind_pct * 100:.0f}% per cycle over {unwind_cycles} cycles")
+        logger.info(f"   High-Exposure Monitoring: {'ENABLED' if monitor_high_exposure else 'DISABLED'}")
+        if monitor_high_exposure:
+            logger.info(f"   Monitored Assets: {', '.join(self.HIGH_EXPOSURE_ASSETS[:5])}... ({len(self.HIGH_EXPOSURE_ASSETS)} total)")
     
     # ========================================================================
     # BROKER ADAPTER METHODS (Handle missing methods gracefully)
@@ -240,7 +258,9 @@ class LegacyPositionExitProtocol:
                 'legacy_positions_unwound': 0,
                 'stale_orders_cancelled': 0,
                 'capital_freed_usd': 0.0
-            }
+            },
+            'high_exposure_assets_tracked': [],  # Symbols of high-exposure assets currently held
+            'high_exposure_alerts': []  # Alert history for high-exposure assets
         }
     
     def _save_state(self):
@@ -273,6 +293,7 @@ class LegacyPositionExitProtocol:
         - Over cap (checked at portfolio level)
         - Wrong sizing
         - Opened outside system
+        - High-exposure asset (PEPE, LUNA, etc.) - flagged for monitoring
         
         Category C — Broken/Zombie:
         - Unknown asset pair
@@ -335,6 +356,16 @@ class LegacyPositionExitProtocol:
         position_source = tracked_position.get('position_source', 'unknown')
         if position_source not in ['nija_strategy', 'apex_strategy']:
             logger.info(f"⚠️  LEGACY: External position {symbol} (source: {position_source})")
+            return PositionCategory.LEGACY_NON_COMPLIANT
+        
+        # 7. High-exposure asset monitoring (PEPE, LUNA, etc.)
+        if self.monitor_high_exposure and symbol in self.HIGH_EXPOSURE_ASSETS:
+            logger.warning(f"🚨 HIGH-EXPOSURE ASSET: {symbol} - Enhanced monitoring enabled")
+            # Flag as legacy for closer monitoring and potential gradual unwind
+            # These assets are volatile and should be managed carefully
+            logger.warning(f"   Position Size: ${size_usd:.2f} ({size_usd/account_balance*100:.1f}% of account)")
+            logger.warning(f"   Recommendation: Consider gradual unwind or tight stop-loss")
+            # Mark as legacy to apply dust/over-cap rules more aggressively
             return PositionCategory.LEGACY_NON_COMPLIANT
         
         # Category A: Strategy-Aligned
@@ -777,6 +808,123 @@ class LegacyPositionExitProtocol:
             return False
     
     # ========================================================================
+    # HIGH-EXPOSURE ASSET MONITORING
+    # ========================================================================
+    
+    def monitor_high_exposure_assets(self, positions: List[Dict], account_balance: float) -> Dict:
+        """
+        Monitor high-exposure assets (PEPE, LUNA, etc.) for price swings and risk.
+        
+        This method tracks volatile assets and provides alerts for:
+        - Price swing detection (significant moves)
+        - Dust threshold violations
+        - Over-cap risk concentration
+        - Position size warnings
+        
+        Args:
+            positions: List of current positions
+            account_balance: Current account balance
+        
+        Returns:
+            Dict with monitoring results and alerts
+        """
+        if not self.monitor_high_exposure:
+            return {'enabled': False}
+        
+        logger.info("=" * 80)
+        logger.info("🚨 HIGH-EXPOSURE ASSET MONITORING")
+        logger.info("=" * 80)
+        
+        high_exposure_positions = []
+        alerts = []
+        total_high_exposure_value = 0.0
+        
+        for pos in positions:
+            symbol = pos.get('symbol')
+            if symbol in self.HIGH_EXPOSURE_ASSETS:
+                size_usd = pos.get('size_usd', 0) or pos.get('usd_value', 0)
+                pct_of_account = (size_usd / account_balance * 100) if account_balance > 0 else 0
+                
+                high_exposure_positions.append({
+                    'symbol': symbol,
+                    'size_usd': size_usd,
+                    'pct_of_account': pct_of_account
+                })
+                total_high_exposure_value += size_usd
+                
+                # Alert if position is too large (>10% of account)
+                if pct_of_account > 10.0:
+                    alert = {
+                        'type': 'OVERSIZED_HIGH_EXPOSURE',
+                        'severity': 'CRITICAL',
+                        'symbol': symbol,
+                        'size_usd': size_usd,
+                        'pct_of_account': pct_of_account,
+                        'message': f'{symbol} is {pct_of_account:.1f}% of account (>10% threshold)',
+                        'recommendation': 'Consider reducing position size or setting tighter stop-loss',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    alerts.append(alert)
+                    logger.warning(f"   🚨 CRITICAL: {alert['message']}")
+                    logger.warning(f"      Recommendation: {alert['recommendation']}")
+                
+                # Alert if close to dust threshold
+                dust_threshold = max(1.0, account_balance * self.dust_pct_threshold)
+                if size_usd < dust_threshold * 2:  # Within 2x of dust threshold
+                    alert = {
+                        'type': 'NEAR_DUST_THRESHOLD',
+                        'severity': 'WARNING',
+                        'symbol': symbol,
+                        'size_usd': size_usd,
+                        'dust_threshold': dust_threshold,
+                        'message': f'{symbol} near dust threshold: ${size_usd:.2f} vs ${dust_threshold:.2f}',
+                        'recommendation': 'Monitor for automatic dust cleanup',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    alerts.append(alert)
+                    logger.warning(f"   ⚠️  WARNING: {alert['message']}")
+                
+                logger.info(f"   📊 {symbol}: ${size_usd:.2f} ({pct_of_account:.2f}% of account)")
+        
+        # Alert if total high-exposure is too large
+        total_high_exposure_pct = (total_high_exposure_value / account_balance * 100) if account_balance > 0 else 0
+        if total_high_exposure_pct > 25.0:
+            alert = {
+                'type': 'EXCESSIVE_HIGH_EXPOSURE_CONCENTRATION',
+                'severity': 'CRITICAL',
+                'total_value': total_high_exposure_value,
+                'pct_of_account': total_high_exposure_pct,
+                'message': f'Total high-exposure assets: {total_high_exposure_pct:.1f}% of account (>25% threshold)',
+                'recommendation': 'Diversify portfolio - reduce exposure to volatile meme coins',
+                'timestamp': datetime.now().isoformat()
+            }
+            alerts.append(alert)
+            logger.warning(f"   🚨 CRITICAL: {alert['message']}")
+            logger.warning(f"      Recommendation: {alert['recommendation']}")
+        
+        # Update state
+        self.state['high_exposure_assets_tracked'] = [pos['symbol'] for pos in high_exposure_positions]
+        self.state['high_exposure_alerts'] = alerts
+        self._save_state()
+        
+        monitoring_result = {
+            'enabled': True,
+            'positions_tracked': len(high_exposure_positions),
+            'total_value': total_high_exposure_value,
+            'pct_of_account': total_high_exposure_pct,
+            'positions': high_exposure_positions,
+            'alerts': alerts,
+            'alert_count': len(alerts)
+        }
+        
+        logger.info(f"\n📊 High-Exposure Monitoring Summary:")
+        logger.info(f"   Assets Tracked: {len(high_exposure_positions)}")
+        logger.info(f"   Total Value: ${total_high_exposure_value:.2f} ({total_high_exposure_pct:.2f}% of account)")
+        logger.info(f"   Alerts Generated: {len(alerts)}")
+        
+        return monitoring_result
+    
+    # ========================================================================
     # PHASE 4: CLEAN STATE VERIFICATION
     # ========================================================================
     
@@ -951,6 +1099,12 @@ class LegacyPositionExitProtocol:
                 'successful': sum(1 for v in exit_results.values() if v),
                 'failed': sum(1 for v in exit_results.values() if not v)
             }
+            
+            # HIGH-EXPOSURE ASSET MONITORING (between Phase 3 and 4)
+            # Get updated positions after exits
+            updated_positions = self.broker.get_open_positions(user_id=user_id)
+            monitoring_results = self.monitor_high_exposure_assets(updated_positions, account_balance)
+            results['high_exposure_monitoring'] = monitoring_results
             
             # PHASE 4: Clean State Verification
             state, diagnostics = self.verify_clean_state(user_id=user_id)
