@@ -368,6 +368,7 @@ example_*.py
 test_*.py
 !bot/test_*.py  # Keep bot tests
 !bot/tests/test_*.py  # Keep bot/tests directory tests
+!bot/tests/test_delisted_asset_registry.py
 !scripts/chaos/test_*.py  # Keep chaos testing scripts
 
 # Temporary text/config files
