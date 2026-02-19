@@ -113,7 +113,11 @@ class RetryHandler:
             '504',
             '429',
             'temporary',
-            'try again'
+            'try again',
+            'remote end closed',   # Kraken RemoteDisconnected (keep-alive reset)
+            'remotedisconnected',  # http.client.RemoteDisconnected
+            'connection reset',    # Cloudflare / TCP reset
+            'broken pipe',         # Broken keep-alive socket
         ]
 
         for keyword in retryable_keywords:
