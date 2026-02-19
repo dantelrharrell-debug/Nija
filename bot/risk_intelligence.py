@@ -561,6 +561,7 @@ class RiskIntelligenceSystem:
         drawdown_config=None,
         volatility_sizer=None,
         portfolio_risk_engine=None,
+        var_size_reducer=None,
     ):
         """
         Args:
@@ -569,6 +570,9 @@ class RiskIntelligenceSystem:
             drawdown_config: Optional ``DrawdownConfig`` for circuit breaker.
             volatility_sizer: Optional ``VolatilityAdaptiveSizer`` instance.
             portfolio_risk_engine: Optional ``PortfolioRiskEngine`` instance.
+            var_size_reducer: Optional ``VaRAutoSizeReducer`` instance.  When
+                provided, its multiplier is applied on top of the volatility cap
+                and drawdown multiplier to auto-reduce sizes on VaR breaches.
         """
         self.correlation_controller = CorrelationExposureController(
             max_group_exposure_pct=max_group_exposure_pct,
@@ -581,10 +585,12 @@ class RiskIntelligenceSystem:
             base_capital=base_capital,
             drawdown_config=drawdown_config,
         )
+        self.var_size_reducer = var_size_reducer
         logger.info(
             "✅ RiskIntelligenceSystem initialized "
             f"(base_capital=${base_capital:,.2f}, "
-            f"max_group={max_group_exposure_pct * 100:.0f}%)"
+            f"max_group={max_group_exposure_pct * 100:.0f}%, "
+            f"var_auto_reduce={'enabled' if var_size_reducer is not None else 'disabled'})"
         )
 
     # ------------------------------------------------------------------
@@ -638,7 +644,8 @@ class RiskIntelligenceSystem:
         df=None,
     ) -> Tuple[float, Dict]:
         """
-        Apply volatility cap and drawdown multiplier to *base_size_usd*.
+        Apply volatility cap, drawdown multiplier, and VaR auto-size reduction
+        to *base_size_usd*.
 
         Args:
             symbol: Trading pair symbol.
@@ -661,11 +668,27 @@ class RiskIntelligenceSystem:
         dd_multiplier = self.circuit_breaker.get_position_size_multiplier()
         final_size = vol_capped * dd_multiplier
 
+        # Apply VaR breach auto-size reduction (if reducer is attached)
+        var_multiplier = 1.0
+        var_status: Dict = {}
+        if self.var_size_reducer is not None:
+            var_multiplier = self.var_size_reducer.get_size_multiplier()
+            var_status = self.var_size_reducer.get_status()
+            if var_multiplier < 1.0:
+                pre_var_size = final_size
+                final_size = final_size * var_multiplier
+                logger.info(
+                    f"🔻 VaR breach multiplier {var_multiplier:.2f}× applied for {symbol}: "
+                    f"${pre_var_size:.2f} → ${final_size:.2f}"
+                )
+
         metadata = {
             "symbol": symbol,
             "base_size_usd": base_size_usd,
             "volatility_cap": vol_details,
             "drawdown_multiplier": dd_multiplier,
+            "var_multiplier": var_multiplier,
+            "var_status": var_status,
             "final_size_usd": final_size,
             "drawdown_status": self.circuit_breaker.get_status(),
             "timestamp": datetime.now().isoformat(),
@@ -681,10 +704,13 @@ class RiskIntelligenceSystem:
 
     def get_full_status(self) -> Dict:
         """Return a full status snapshot of all three controls."""
-        return {
+        status: Dict = {
             "circuit_breaker": self.circuit_breaker.get_status(),
             "timestamp": datetime.now().isoformat(),
         }
+        if self.var_size_reducer is not None:
+            status["var_auto_reduce"] = self.var_size_reducer.get_status()
+        return status
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +722,7 @@ def create_risk_intelligence_system(
     config: Optional[Dict] = None,
     volatility_sizer=None,
     portfolio_risk_engine=None,
+    var_size_reducer=None,
 ) -> RiskIntelligenceSystem:
     """
     Convenience factory for ``RiskIntelligenceSystem``.
@@ -711,6 +738,8 @@ def create_risk_intelligence_system(
 
         volatility_sizer: Optional ``VolatilityAdaptiveSizer``.
         portfolio_risk_engine: Optional ``PortfolioRiskEngine``.
+        var_size_reducer: Optional ``VaRAutoSizeReducer`` for VaR breach
+            auto-size reduction.
 
     Returns:
         Configured ``RiskIntelligenceSystem``.
@@ -735,4 +764,5 @@ def create_risk_intelligence_system(
         drawdown_config=drawdown_config,
         volatility_sizer=volatility_sizer,
         portfolio_risk_engine=portfolio_risk_engine,
+        var_size_reducer=var_size_reducer,
     )

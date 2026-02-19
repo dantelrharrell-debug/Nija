@@ -503,6 +503,29 @@ except ValueError:
     MAX_POSITIONS_ALLOWED = 8  # Default fallback
 logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED}")
 
+# SPOT_ONLY mode: when enabled, all 'enter_short' signals are blocked so the
+# bot only opens long (buy) positions, matching exchange spot-trading semantics.
+# Activate via environment variable: SPOT_ONLY=true
+SPOT_ONLY = os.getenv('SPOT_ONLY', 'false').strip().lower() == 'true'
+if SPOT_ONLY:
+    logger.info("🔒 SPOT_ONLY mode: short-selling disabled – only long positions permitted")
+
+# INCUBATION_MODE: activates the disciplined incubation risk profile.
+# When true, enforces 0.5%–1% risk per trade, max 5–8 positions,
+# 40% correlation cap, ATR-adjusted sizing, VaR auto-size reduction,
+# and the drawdown circuit breaker.
+# Activate via environment variable: INCUBATION_MODE=true
+INCUBATION_MODE = os.getenv('INCUBATION_MODE', 'false').strip().lower() == 'true'
+if INCUBATION_MODE:
+    if not SPOT_ONLY:
+        # Incubation mode always implies spot-only
+        SPOT_ONLY = True
+        logger.info("🐣 INCUBATION_MODE: SPOT_ONLY enforced automatically")
+    # Cap max positions to the incubation ceiling of 8 if the env is not already lower
+    if MAX_POSITIONS_ALLOWED > 8:
+        MAX_POSITIONS_ALLOWED = 8
+        logger.info("🐣 INCUBATION_MODE: MAX_POSITIONS_ALLOWED capped at 8")
+
 # Forced cleanup interval (cycles between cleanup runs)
 # Default: 6 cycles (~15 minutes at 2.5 min/cycle) - For maximum safety optics
 # Can be overridden via FORCED_CLEANUP_INTERVAL environment variable
@@ -5575,6 +5598,15 @@ class TradingStrategy:
 
                             # Execute buy actions
                             if action in ['enter_long', 'enter_short']:
+                                # SPOT_ONLY / INCUBATION_MODE: block short entries
+                                if action == 'enter_short' and SPOT_ONLY:
+                                    filter_stats['no_entry_signal'] += 1
+                                    logger.debug(
+                                        f"   {symbol}: Blocked – SPOT_ONLY mode active "
+                                        f"(short positions not permitted)"
+                                    )
+                                    continue
+
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
