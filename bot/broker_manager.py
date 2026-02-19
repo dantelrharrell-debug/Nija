@@ -123,6 +123,27 @@ except ImportError:
         validate_order_size = None
         KRAKEN_MINIMUM_ORDER_USD = None
 
+# Import Emergency Symbol Resolver for delisted/renamed symbol handling
+try:
+    from bot.emergency_symbol_resolver import (
+        EmergencySymbolResolver, SymbolStatus,
+        DelistedAssetRegistry, is_excluded_from_exposure,
+    )
+    EMERGENCY_RESOLVER_AVAILABLE = True
+except ImportError:
+    try:
+        from emergency_symbol_resolver import (
+            EmergencySymbolResolver, SymbolStatus,
+            DelistedAssetRegistry, is_excluded_from_exposure,
+        )
+        EMERGENCY_RESOLVER_AVAILABLE = True
+    except ImportError:
+        EMERGENCY_RESOLVER_AVAILABLE = False
+        EmergencySymbolResolver = None
+        SymbolStatus = None
+        DelistedAssetRegistry = None
+        is_excluded_from_exposure = None
+
 # Import Kraken Rate Profiles for separate entry/exit API budgets (Jan 23, 2026)
 try:
     from bot.kraken_rate_profiles import (
@@ -5795,6 +5816,25 @@ class KrakenBroker(BaseBroker):
                 # This maintains backward compatibility if krakenex changes its internals
                 logger.warning(f"⚠️  Could not configure HTTP timeout: {e}")
 
+            # Configure HTTP keep-alive / connection reuse to prevent RemoteDisconnected errors.
+            # Kraken's API server may close idle connections; mounting a custom HTTPAdapter with
+            # pool_connections and pool_keepalive ensures the session reuses TCP connections and
+            # reconnects transparently instead of raising RemoteDisconnected.
+            try:
+                import requests
+                from requests.adapters import HTTPAdapter
+
+                _kraken_adapter = HTTPAdapter(
+                    pool_connections=2,
+                    pool_maxsize=4,
+                    max_retries=0,  # Retry logic is handled by our own retry loop
+                )
+                self.api.session.mount("https://", _kraken_adapter)
+                self.api.session.mount("http://", _kraken_adapter)
+                logger.debug(f"✅ HTTP keep-alive adapter configured for {cred_label} (prevents RemoteDisconnected)")
+            except Exception as e:
+                logger.debug(f"⚠️  Could not configure keep-alive adapter: {e}")
+
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
 
@@ -6402,7 +6442,9 @@ class KrakenBroker(BaseBroker):
                         'timeout', 'connection', 'network', 'rate limit',
                         'too many requests', 'service unavailable',
                         '503', '504', '429', '403', 'forbidden',
-                        'too many errors', 'temporary', 'try again'
+                        'too many errors', 'temporary', 'try again',
+                        'remote end closed', 'remotedisconnected',  # keep-alive reset
+                        'connection reset', 'broken pipe',
                     ])
 
                     if is_retryable and attempt < max_attempts:
@@ -6805,6 +6847,10 @@ class KrakenBroker(BaseBroker):
         CRITICAL FIX: Implements proper price fetching with broker-specific symbol translation.
         This prevents ghost positions by ensuring prices can be fetched correctly.
 
+        Extended with Emergency Symbol Resolver: if the primary ticker lookup fails,
+        the resolver tries alternate pair mappings, base/quote inversions, and a USD
+        bridge before classifying the asset as a DelistedAsset (Non-Tradeable Residual).
+
         Args:
             symbol: Trading pair in standard format (e.g., 'BTC-USD', 'ETH-USD', 'DOGE-USD')
 
@@ -6813,6 +6859,7 @@ class KrakenBroker(BaseBroker):
 
         Safety:
             - Uses symbol mapper to convert to Kraken format
+            - Falls back to EmergencySymbolResolver on failure
             - Returns None on failure (not 0.0) for explicit error handling
             - Logs errors with symbol mismatch hints
         """
@@ -6830,9 +6877,8 @@ class KrakenBroker(BaseBroker):
             if convert_to_kraken:
                 kraken_symbol = convert_to_kraken(normalized_symbol)
                 if not kraken_symbol:
-                    logger.error(f"❌ Price fetch failed for {symbol} — Cannot convert to Kraken format")
-                    logger.error(f"   💡 Symbol mismatch: {normalized_symbol} not found in Kraken pairs")
-                    return None
+                    logger.warning(f"⚠️ Price fetch: Cannot convert {symbol} to Kraken format — activating Emergency Resolver")
+                    return self._resolve_price_emergency(symbol)
             else:
                 # Fallback: Manual conversion if symbol mapper not available
                 kraken_symbol = normalized_symbol.replace('-', '').upper()
@@ -6857,22 +6903,70 @@ class KrakenBroker(BaseBroker):
                         logger.debug(f"✅ Price for {symbol}: ${price:.2f}")
                         return price
                     else:
-                        logger.error(f"❌ Price fetch failed for {symbol} — No last trade price in ticker data")
-                        return None
+                        logger.warning(f"⚠️ No last trade price for {symbol} — activating Emergency Resolver")
+                        return self._resolve_price_emergency(symbol)
                 else:
-                    logger.error(f"❌ Price fetch failed for {symbol} — Symbol not found in ticker result")
-                    logger.error(f"   💡 Symbol mismatch: Kraken doesn't recognize '{kraken_symbol}'")
-                    return None
+                    logger.warning(
+                        f"⚠️ {symbol} not found in Kraken ticker ('{kraken_symbol}') "
+                        f"— activating Emergency Resolver"
+                    )
+                    return self._resolve_price_emergency(symbol)
             else:
-                logger.error(f"❌ Price fetch failed for {symbol} — Ticker API error")
+                logger.warning(f"⚠️ Ticker API error for {symbol} — activating Emergency Resolver")
                 if ticker_result and 'error' in ticker_result and ticker_result['error']:
-                    logger.error(f"   API errors: {', '.join(ticker_result['error'])}")
-                return None
+                    logger.warning(f"   API errors: {', '.join(ticker_result['error'])}")
+                return self._resolve_price_emergency(symbol)
 
         except Exception as e:
-            logger.error(f"❌ Price fetch failed for {symbol} — Exception: {e}")
-            logger.error(f"   💡 This may indicate symbol mismatch or API connectivity issues")
+            logger.warning(f"⚠️ Price fetch exception for {symbol}: {e} — activating Emergency Resolver")
+            return self._resolve_price_emergency(symbol)
+
+    def _resolve_price_emergency(self, symbol: str) -> Optional[float]:
+        """
+        Emergency Symbol Resolver — called when the primary price fetch fails.
+
+        Resolution pipeline (in order):
+          1. Alternate pair mapping  (e.g., AUT-USD → AUTUSD, AUTUSDT, …)
+          2. USD bridge valuation    (ASSET → BTC → USD estimate)
+          3. DelistedAsset protocol  (Non-Tradeable Residual classification)
+
+        Args:
+            symbol: Standard format symbol (e.g. "AUT-USD")
+
+        Returns:
+            float price if found via alternate means, or None if unresolvable.
+        """
+        if not EMERGENCY_RESOLVER_AVAILABLE or EmergencySymbolResolver is None:
+            logger.error(f"❌ Price fetch failed for {symbol} — Emergency Resolver unavailable")
             return None
+
+        # Use a per-broker-instance resolver (lazy-init)
+        if not hasattr(self, '_emergency_resolver') or self._emergency_resolver is None:
+            self._emergency_resolver = EmergencySymbolResolver(self.api)
+
+        result = self._emergency_resolver.resolve(symbol)
+
+        if result.price is not None:
+            logger.info(
+                f"🔁 Emergency Resolver succeeded for {symbol}: "
+                f"${result.price:.6f} via {result.status.value} ({result.reason})"
+            )
+            return result.price
+
+        if result.status == SymbolStatus.DELISTED:
+            logger.warning(
+                f"🚫 {symbol} classified as Non-Tradeable Residual (delisted). "
+                f"Excluded from cap count and exposure modeling. "
+                f"Bot will attempt market sell when liquidity appears."
+            )
+            # Log to the delisted registry (already done inside the resolver)
+            return None
+
+        logger.error(
+            f"❌ Emergency Resolver exhausted all options for {symbol} "
+            f"({result.reason}) — returning None"
+        )
+        return None
 
     def force_liquidate(
         self,
