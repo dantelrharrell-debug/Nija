@@ -1,0 +1,9 @@
+{
+  "_comment": "Manual entry price overrides for positions where the exchange does not provide entry price data. Set the entry price (USD) for each symbol so NIJA can adopt and manage these positions. Remove a symbol from this file once it has been exited or its entry price is available from the exchange.",
+  "PLATFORM": {
+    "KAVA-USD": 0.0,
+    "SCRT-USD": 0.0,
+    "USDG-USD": 0.0,
+    "AUT-USD": 0.0
+  }
+}
