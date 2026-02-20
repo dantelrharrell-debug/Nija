@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import logging
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 import signal
 import threading
@@ -458,8 +459,37 @@ def _run_bot_startup_and_trading():
         logger.info("NIJA TRADING BOT - APEX v7.2.0")
         logger.info("NIJA TRADING BOT - APEX v7.2")
         logger.info("🏷 Version: 7.2.0 — Independent Trading Only")
-        logger.info("Branch: %s", git_branch)
-        logger.info("Commit: %s", git_commit)
+        logger.info("Branch:          %s", git_branch)
+        logger.info("Commit:          %s", git_commit)
+
+        # Build timestamp: prefer env var injected by CI/Docker, else record startup time
+        build_timestamp = os.getenv("BUILD_TIMESTAMP") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        logger.info("Build timestamp: %s", build_timestamp)
+
+        # Risk mode: derive human-readable label from RISK_PROFILE env var
+        _risk_profile = os.getenv("RISK_PROFILE", "AUTO").upper()
+        _risk_label_map = {
+            "STARTER":  "small-account / STARTER ($50–$99)",
+            "SAVER":    "small-account / SAVER ($100–$249)",
+            "INVESTOR": "INVESTOR ($250–$999)",
+            "INCOME":   "1K mode / INCOME ($1k–$4.9k)",
+            "LIVABLE":  "LIVABLE ($5k–$24.9k)",
+            "BALLER":   "BALLER ($25k+)",
+            "AUTO":     "AUTO (balance-based tier selection)",
+        }
+        risk_mode_label = _risk_label_map.get(_risk_profile, _risk_profile)
+        logger.info("Risk mode:       %s", risk_mode_label)
+
+        # Max positions and allocation % from env vars
+        try:
+            _max_positions = int(os.getenv("MAX_CONCURRENT_POSITIONS", "5"))
+        except ValueError:
+            _max_positions = 5
+        # MAX_TRADE_PERCENT is a decimal fraction (e.g., 0.10 = 10%)
+        _alloc_pct = float(os.getenv("MAX_TRADE_PERCENT", "0.10")) * 100
+        logger.info("Max positions:   %d", _max_positions)
+        logger.info(f"Allocation %:    {_alloc_pct:.0f}%")
+
         logger.info("=" * 70)
         logger.info(f"Python version: {sys.version.split()[0]}")
         logger.info(f"Log file: {LOG_FILE}")
