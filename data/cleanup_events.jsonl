@@ -3,3 +3,8 @@
 {"timestamp": "2026-02-08T14:22:33.212735", "symbol": "BTC-USD", "cleanup_type": "DUST", "size_usd": 0.85, "pnl_pct": -0.02, "pnl_usd": -0.017, "age_hours": 24.0, "reason": "Dust position ($0.85 < $1.00)"}
 {"timestamp": "2026-02-08T14:22:33.213305", "symbol": "ETH-USD", "cleanup_type": "UNHEALTHY", "size_usd": 45.0, "pnl_pct": -0.025, "pnl_usd": -1.125, "age_hours": 12.0, "reason": "Unhealthy position (score: 25, strong loss, stagnant 8.0h)"}
 {"timestamp": "2026-02-08T14:24:40.399982", "symbol": "DUST-USD", "cleanup_type": "DUST", "size_usd": 0.75, "pnl_pct": -0.01, "pnl_usd": -0.0075, "age_hours": 24.0, "reason": "Test dust cleanup"}
+{"timestamp": "2026-02-20T20:10:25.812196", "symbol": "ETH-USD", "cleanup_type": "DUST", "size_usd": 0.75, "pnl_pct": 0.001, "pnl_usd": 0.00075, "age_hours": 1.000000143611111, "reason": "Dust position ($0.75 < $1.00)"}
+{"timestamp": "2026-02-20T20:10:25.812831", "symbol": "MATIC-USD", "cleanup_type": "DUST", "size_usd": 0.5, "pnl_pct": 0.005, "pnl_usd": 0.0025, "age_hours": 1.000000308611111, "reason": "Dust position ($0.50 < $1.00)"}
+{"timestamp": "2026-02-20T20:10:25.815122", "symbol": "MATIC-USD", "cleanup_type": "DUST", "size_usd": 0.6, "pnl_pct": 0.005, "pnl_usd": 0.003, "age_hours": 1.0000002258333334, "reason": "Dust position ($0.60 < $1.00)"}
+{"timestamp": "2026-02-20T20:10:25.815729", "symbol": "ETH-USD", "cleanup_type": "DUST", "size_usd": 0.8, "pnl_pct": 0.01, "pnl_usd": 0.008, "age_hours": 1.0000000744444444, "reason": "Dust position ($0.80 < $1.00)"}
+{"timestamp": "2026-02-20T20:10:25.816288", "symbol": "SOL-USD", "cleanup_type": "CAP_EXCEEDED", "size_usd": 50.0, "pnl_pct": -0.01, "pnl_usd": -0.5, "age_hours": 3.000000152777778, "reason": "Position cap exceeded (score: 45, losing, active movement)"}
