@@ -24,6 +24,13 @@ ARG GIT_BRANCH=unknown
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIMESTAMP=unknown
 
+# Bake Git metadata into the image as runtime environment variables so
+# the values are available to start.sh and the bot at container startup
+# even when the .git directory is absent (e.g. Docker deployments on Railway/Render).
+ENV GIT_BRANCH=$GIT_BRANCH
+ENV GIT_COMMIT=$GIT_COMMIT
+ENV BUILD_TIMESTAMP=$BUILD_TIMESTAMP
+
 # Inject Git metadata at build time (pass build args as env vars)
 RUN echo "Injecting build metadata..." && \
     GIT_BRANCH="${GIT_BRANCH}" GIT_COMMIT="${GIT_COMMIT}" BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
