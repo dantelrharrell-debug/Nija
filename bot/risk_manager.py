@@ -1353,7 +1353,7 @@ class AdaptiveRiskManager:
         """
         Calculate trailing stop after TP1 is hit
 
-        Uses ATR(14) * 1.5 for trailing distance
+        Uses ATR(14) * 0.75 for trailing distance (tight trail – follows price closely)
 
         Args:
             current_price: Current market price
@@ -1365,7 +1365,7 @@ class AdaptiveRiskManager:
         Returns:
             Trailing stop price
         """
-        trailing_distance = atr * 1.5
+        trailing_distance = atr * 0.75  # 0.75x ATR – tighter trail (follows price closely; was 1.5x)
 
         if side == 'long':
             trailing_stop = current_price - trailing_distance

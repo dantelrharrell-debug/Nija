@@ -447,32 +447,29 @@ PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to 
 # stop losses must be proportionally sized to maintain good risk/reward
 
 # TIER 1: PRIMARY TRADING STOP-LOSS
-# Updated Jan 28, 2026: Tightened stop-losses to -0.5% through -1.0% range
-# Target: Average loss -0.6% per losing trade (ENHANCED_STRATEGY_GUIDE.md line 393)
-# Kraken: With 2.0% profit target, improved risk/reward ratio
-STOP_LOSS_PRIMARY_KRAKEN = -0.008  # -0.8% for Kraken (allows 2.5:1 ratio with 2% profit target - IMPROVED)
-STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.005  # -0.5% minimum (tighter for strong setups with low volatility)
-STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.010  # -1.0% maximum (was -1.2%, tightened for better capital preservation)
+# Locked setting: 3–4% stop loss band (wider than previous ~1% to allow trades more room)
+# Kraken: 3% primary stop within the locked 3-4% band
+STOP_LOSS_PRIMARY_KRAKEN = -0.030  # -3.0% for Kraken (locked 3-4% band)
+STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.030  # -3.0% minimum
+STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.040  # -4.0% maximum
 
-# Coinbase: With 2.5% profit target, improved risk/reward ratio
-STOP_LOSS_PRIMARY_COINBASE = -0.010  # -1.0% primary stop for Coinbase (allows 2.5:1 ratio with 2.5% target - IMPROVED)
-COINBASE_STOP_LOSS_MIN = -0.008  # -0.8% minimum (tighter for strong setups)
-COINBASE_STOP_LOSS_MAX = -0.010  # -1.0% maximum (was -1.5%, tightened for better capital preservation)
+# Coinbase: 3-4% stop loss band
+STOP_LOSS_PRIMARY_COINBASE = -0.030  # -3.0% primary stop for Coinbase (locked 3-4% band)
+COINBASE_STOP_LOSS_MIN = -0.030  # -3.0% minimum
+COINBASE_STOP_LOSS_MAX = -0.040  # -4.0% maximum
 
 # Remove the "exit on ANY loss" requirement - this was causing premature exits
 COINBASE_EXIT_ANY_LOSS = False  # Allow positions to breathe, honor stop loss levels
 COINBASE_MAX_HOLD_MINUTES = 60  # Increased from 30 to 60 minutes (allow time for profit)
 COINBASE_PROFIT_LOCK_ENABLED = True  # Enable aggressive profit-taking on Coinbase
 
-# TIER 2: EMERGENCY MICRO-STOP (Logic failure prevention)
+# TIER 2: EMERGENCY STOP (Logic failure prevention)
 # This is NOT a trading stop - it's a failsafe to prevent logic failures
 # Examples: imported positions without entry price, calculation errors, data corruption
-# Terminology: "Emergency micro-stop to prevent logic failures (not a trading stop)"
-# CRITICAL FIX (Feb 3, 2026): Widened stops for crypto volatility (was -2%, now -1.5%)
-# Crypto markets have 0.3-0.8% normal intraday volatility, -2% was too tight
-STOP_LOSS_MICRO = -0.015  # -1.5% emergency micro-stop (was -2%, too tight for crypto)
-STOP_LOSS_WARNING = -0.012  # -1.2% warn before hitting stop (early warning)
-STOP_LOSS_THRESHOLD = -0.015  # -1.5% primary stop threshold (widened from -2%)
+# Set at the outer edge of the locked 3-4% band to act as a hard backstop
+STOP_LOSS_MICRO = -0.040  # -4.0% emergency backstop (aligned with outer edge of 3-4% band)
+STOP_LOSS_WARNING = -0.030  # -3.0% warn before hitting stop (early warning at inner edge)
+STOP_LOSS_THRESHOLD = -0.040  # -4.0% primary stop threshold (outer edge of locked 3-4% band)
 
 # TIER 3: CATASTROPHIC FAILSAFE
 # Last resort protection - should NEVER be reached in normal operation
@@ -499,13 +496,13 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 # Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
-# Hard cap: never allow more than 8 positions regardless of config (risk management ceiling)
-HARD_MAX_POSITIONS = 8  # Absolute ceiling – never exceed 8 open positions
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '8')
+# Hard cap: never allow more than 5 positions regardless of config (risk management ceiling)
+HARD_MAX_POSITIONS = 5  # Absolute ceiling – never exceed 5 open positions
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '5')
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
-    MAX_POSITIONS_ALLOWED = 8  # Default fallback
+    MAX_POSITIONS_ALLOWED = 5  # Default fallback
 # Enforce hard ceiling
 if MAX_POSITIONS_ALLOWED > HARD_MAX_POSITIONS:
     MAX_POSITIONS_ALLOWED = HARD_MAX_POSITIONS
@@ -530,10 +527,10 @@ if INCUBATION_MODE:
         # Incubation mode always implies spot-only
         SPOT_ONLY = True
         logger.info("🐣 INCUBATION_MODE: SPOT_ONLY enforced automatically")
-    # Cap max positions to the incubation ceiling of 8 if the env is not already lower
-    if MAX_POSITIONS_ALLOWED > 8:
-        MAX_POSITIONS_ALLOWED = 8
-        logger.info("🐣 INCUBATION_MODE: MAX_POSITIONS_ALLOWED capped at 8")
+    # Cap max positions to the incubation ceiling of 5 if the env is not already lower
+    if MAX_POSITIONS_ALLOWED > 5:
+        MAX_POSITIONS_ALLOWED = 5
+        logger.info("🐣 INCUBATION_MODE: MAX_POSITIONS_ALLOWED capped at 5")
 
 # Forced cleanup interval (cycles between cleanup runs)
 # Default: 6 cycles (~15 minutes at 2.5 min/cycle) - For maximum safety optics
@@ -564,13 +561,13 @@ except ValueError:
 # - $100 account: min trade = $15.00 (15% of $100)
 # Minimum $10 per position ensures fee efficiency and meaningful compounding gains
 BASE_MIN_POSITION_SIZE_USD = 10.0  # Floor minimum ($10 - no trade under $10 for fee efficiency)
-DYNAMIC_POSITION_SIZE_PCT = 0.15  # 15% of balance as minimum (OPTION 3)
+DYNAMIC_POSITION_SIZE_PCT = 0.18  # 18% of balance per position (locked setting)
 POSITION_SIZE_WARNING_THRESHOLD_USD = 15.0  # Warn when position is under this amount (near floor)
 
 def get_dynamic_min_position_size(balance: float) -> float:
     """
     Calculate dynamic minimum position size based on account balance.
-    OPTION 3 (BEST LONG-TERM): MIN_TRADE_USD = max(10.00, balance * 0.15)
+    Locked setting: MIN_TRADE_USD = max(10.00, balance * 0.18)
 
     Args:
         balance: Current account balance in USD
@@ -3095,30 +3092,25 @@ class TradingStrategy:
         elif hasattr(broker, '__class__'):
             broker_name = broker.__class__.__name__.lower()
 
-        # Kraken with small balance: Use -0.8% primary stop (conservative)
+        # Kraken with small balance: Use -3.0% primary stop (locked 3-4% band)
         if 'kraken' in broker_name and account_balance < 100:
-            # For small Kraken balances, use conservative -0.8% primary stop
-            # This accounts for spread (0.1%) + fees (0.36%) + slippage (0.1%) + buffer (0.24%)
-            primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -0.8%
-            description = f"Kraken small balance (${account_balance:.2f}): Primary -0.8%, Micro -2.0%, Failsafe -5.0%"
+            primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -3.0%
+            description = f"Kraken small balance (${account_balance:.2f}): Primary -3.0%, Backstop -4.0%, Failsafe -5.0%"
 
-        # Kraken with larger balance: Can use tighter stop
+        # Kraken with larger balance: Use -3.0% minimum (same locked band)
         elif 'kraken' in broker_name:
-            # For larger Kraken balances, use -0.5% minimum (tighter for better capital preservation)
-            primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -0.5%
-            description = f"Kraken (${account_balance:.2f}): Primary -0.5%, Micro -2.0%, Failsafe -5.0%"
+            primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -3.0%
+            description = f"Kraken (${account_balance:.2f}): Primary -3.0%, Backstop -4.0%, Failsafe -5.0%"
 
-        # 🚨 COINBASE TIGHTENED STOP-LOSS (Jan 28, 2026)
-        # Improved to -1.0% max for better capital preservation and risk/reward ratio
+        # 🔒 COINBASE LOCKED STOP-LOSS: 3-4% band for controlled growth
         elif 'coinbase' in broker_name:
-            primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -1.0% (improved from -1.25%)
-            description = f"COINBASE (${account_balance:.2f}): Primary -1.0%, Micro -2.0%, Failsafe -5.0%"
+            primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -3.0%
+            description = f"COINBASE (${account_balance:.2f}): Primary -3.0%, Backstop -4.0%, Failsafe -5.0%"
 
-        # Other exchanges: Use -1.0% primary stop (conservative default)
+        # Other exchanges: Use -3.0% primary stop (locked conservative default)
         else:
-            # Higher fees require wider stop-loss
-            primary_stop = -0.010  # -1.0% for other exchanges
-            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.0%, Micro -2.0%, Failsafe -5.0%"
+            primary_stop = -0.030  # -3.0% for other exchanges
+            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -3.0%, Backstop -4.0%, Failsafe -5.0%"
 
         return (
             primary_stop,           # Tier 1: Primary trading stop
