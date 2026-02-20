@@ -328,9 +328,14 @@ class KillSwitchAutoTrigger:
     - Unexpected balance delta
     """
     
+    # Hard limits — these are the authoritative values for the system
+    HARD_DAILY_LOSS_PCT: float = 3.0        # 3% daily loss → kill switch
+    HARD_WEEKLY_HALF_PCT: float = 8.0       # 8% weekly loss → cut risk in half
+    HARD_WEEKLY_STOP_PCT: float = 10.0      # 10% weekly loss → kill switch
+
     def __init__(
         self,
-        max_daily_loss_pct: float = 10.0,
+        max_daily_loss_pct: float = 3.0,
         max_consecutive_losses: int = 5,
         max_consecutive_api_errors: int = 10,
         max_balance_delta_pct: float = 50.0,
@@ -340,13 +345,15 @@ class KillSwitchAutoTrigger:
         Initialize auto-trigger system.
         
         Args:
-            max_daily_loss_pct: Max % loss before kill switch (default 10%)
+            max_daily_loss_pct: Max % loss before kill switch (default 3%)
             max_consecutive_losses: Max consecutive losses (default 5)
             max_consecutive_api_errors: Max API errors (default 10)
             max_balance_delta_pct: Max unexpected balance change % (default 50%)
             enable_auto_trigger: Enable automatic triggers
         """
         self.max_daily_loss_pct = max_daily_loss_pct
+        self.max_weekly_half_pct = self.HARD_WEEKLY_HALF_PCT    # 8% weekly → halve risk
+        self.max_weekly_stop_pct = self.HARD_WEEKLY_STOP_PCT    # 10% weekly → kill switch
         self.max_consecutive_losses = max_consecutive_losses
         self.max_consecutive_api_errors = max_consecutive_api_errors
         self.max_balance_delta_pct = max_balance_delta_pct
@@ -355,18 +362,24 @@ class KillSwitchAutoTrigger:
         # Track metrics
         self._daily_starting_balance: Optional[float] = None
         self._daily_start_time: Optional[datetime] = None
+        self._weekly_starting_balance: Optional[float] = None
+        self._weekly_start_time: Optional[datetime] = None
+        self._weekly_risk_halved: bool = False
         self._consecutive_losses = 0
         self._consecutive_api_errors = 0
         self._last_known_balance: Optional[float] = None
         
         self._lock = threading.Lock()
         
-        logger.info(
-            f"✅ Kill Switch Auto-Trigger initialized: "
-            f"max_daily_loss={self.max_daily_loss_pct}%, "
-            f"max_consecutive_losses={self.max_consecutive_losses}, "
-            f"enabled={self.enable_auto_trigger}"
-        )
+        logger.info("=" * 70)
+        logger.info("🛡️  HARD RISK LIMITS — KILL SWITCH AUTO-TRIGGER")
+        logger.info("=" * 70)
+        logger.info(f"   📅 Daily Kill Switch  : down {self.max_daily_loss_pct:.0f}% in a day → STOP TRADING")
+        logger.info(f"   📆 Weekly Drawdown    : down {self.max_weekly_half_pct:.0f}% in a week → cut risk in half")
+        logger.info(f"   📆 Weekly Hard Stop   : down {self.max_weekly_stop_pct:.0f}% in a week → STOP TRADING")
+        logger.info(f"   📉 Consecutive Losses : {self.max_consecutive_losses} in a row → STOP TRADING")
+        logger.info(f"   ✅ Auto-trigger       : {'ENABLED' if self.enable_auto_trigger else 'DISABLED'}")
+        logger.info("=" * 70)
     
     def _should_reset_daily_metrics(self) -> bool:
         """Check if daily metrics should reset"""
@@ -376,7 +389,91 @@ class KillSwitchAutoTrigger:
         # Reset if new day
         now = datetime.utcnow()
         return now.date() > self._daily_start_time.date()
-    
+
+    def _should_reset_weekly_metrics(self) -> bool:
+        """Check if weekly metrics should reset (resets at the start of a new ISO week,
+        i.e. when Monday rolls over in UTC)."""
+        if self._weekly_start_time is None:
+            return True
+        now = datetime.utcnow()
+        # isocalendar() returns (ISO year, ISO week number, weekday)
+        # Comparing the first two elements detects a new ISO week (starts Monday)
+        return now.isocalendar()[:2] > self._weekly_start_time.isocalendar()[:2]
+
+    def check_weekly_drawdown(self, current_balance: float) -> Optional[str]:
+        """
+        Check weekly drawdown and return a trigger reason if the hard stop is hit.
+        Sets ``_weekly_risk_halved`` when drawdown crosses the halving threshold.
+
+        Args:
+            current_balance: Current account balance
+
+        Returns:
+            Optional[str]: Trigger reason if hard stop threshold exceeded, else None
+        """
+        with self._lock:
+            # Initialise or reset on a new week.
+            # When the week resets the starting balance is captured and None is returned
+            # (no trigger on the first call of a fresh week — that call just sets the baseline).
+            if self._should_reset_weekly_metrics():
+                self._weekly_starting_balance = current_balance
+                self._weekly_start_time = datetime.utcnow()
+                self._weekly_risk_halved = False
+                logger.debug(f"📊 Weekly metrics reset: starting balance ${current_balance:.2f}")
+                return None
+
+            if self._weekly_starting_balance is None:
+                return None
+
+            weekly_pnl = current_balance - self._weekly_starting_balance
+            weekly_pnl_pct = (weekly_pnl / self._weekly_starting_balance) * 100
+
+            if weekly_pnl_pct > 0:
+                # Recovering — only clear halving flag when P&L is comfortably positive
+                # (must be at least half of the halving threshold away from zero to avoid
+                # rapid toggling when balance hovers near breakeven).
+                if self._weekly_risk_halved and weekly_pnl_pct >= (self.max_weekly_half_pct / 2):
+                    logger.info(f"📈 Weekly P&L +{weekly_pnl_pct:.2f}% — risk-halving cleared")
+                    self._weekly_risk_halved = False
+                return None
+
+            loss_pct = abs(weekly_pnl_pct)
+
+            # Hard stop: >= 10% weekly loss
+            if loss_pct >= self.max_weekly_stop_pct:
+                reason = (
+                    f"Weekly loss limit exceeded: -{loss_pct:.2f}% "
+                    f"(hard stop: -{self.max_weekly_stop_pct:.0f}%) — "
+                    f"Lost ${abs(weekly_pnl):.2f} of ${self._weekly_starting_balance:.2f}"
+                )
+                logger.critical(f"🚨 WEEKLY HARD STOP: {reason}")
+                return reason
+
+            # Soft trigger: >= 8% weekly loss → halve risk
+            if loss_pct >= self.max_weekly_half_pct and not self._weekly_risk_halved:
+                self._weekly_risk_halved = True
+                logger.warning(
+                    f"⚠️  WEEKLY DRAWDOWN LOCK: -{loss_pct:.2f}% this week "
+                    f"(threshold: -{self.max_weekly_half_pct:.0f}%) — "
+                    f"RISK CUT IN HALF for remainder of week"
+                )
+            elif self._weekly_risk_halved:
+                logger.info(
+                    f"📉 Weekly risk-halving active: -{loss_pct:.2f}% this week "
+                    f"(halving at -{self.max_weekly_half_pct:.0f}%)"
+                )
+
+            return None
+
+    def get_weekly_risk_multiplier(self) -> float:
+        """
+        Return position-size multiplier based on weekly drawdown state.
+
+        Returns:
+            0.5 if weekly risk is halved, otherwise 1.0
+        """
+        return 0.5 if self._weekly_risk_halved else 1.0
+
     def check_daily_loss(self, current_balance: float) -> Optional[str]:
         """
         Check if daily loss exceeds threshold.
@@ -409,9 +506,14 @@ class KillSwitchAutoTrigger:
                     f"(max: -{self.max_daily_loss_pct:.0f}%) - "
                     f"Lost ${abs(daily_pnl):.2f} of ${self._daily_starting_balance:.2f}"
                 )
-                logger.critical(f"🚨 {reason}")
+                logger.critical(f"🚨 DAILY KILL SWITCH: {reason}")
                 return reason
-            
+
+            logger.debug(
+                f"📅 Daily P&L: {daily_pnl_pct:+.2f}% "
+                f"(limit: -{self.max_daily_loss_pct:.0f}%, "
+                f"lost ${abs(daily_pnl):.2f} of ${self._daily_starting_balance:.2f})"
+            )
             return None
     
     def record_trade_result(self, is_winner: bool) -> Optional[str]:
@@ -535,8 +637,13 @@ class KillSwitchAutoTrigger:
         if not self.enable_auto_trigger:
             return None
         
-        # Check daily loss
+        # Check daily loss (3% kill switch)
         reason = self.check_daily_loss(current_balance)
+        if reason:
+            return reason
+
+        # Check weekly drawdown (8% → halve risk, 10% → kill switch)
+        reason = self.check_weekly_drawdown(current_balance)
         if reason:
             return reason
         
@@ -582,6 +689,9 @@ class KillSwitchAutoTrigger:
         with self._lock:
             self._daily_starting_balance = None
             self._daily_start_time = None
+            self._weekly_starting_balance = None
+            self._weekly_start_time = None
+            self._weekly_risk_halved = False
             self._consecutive_losses = 0
             self._consecutive_api_errors = 0
             self._last_known_balance = None
@@ -593,7 +703,7 @@ _auto_trigger: Optional[KillSwitchAutoTrigger] = None
 
 
 def get_auto_trigger(
-    max_daily_loss_pct: float = 10.0,
+    max_daily_loss_pct: float = 3.0,
     max_consecutive_losses: int = 5,
     enable_auto_trigger: bool = True
 ) -> KillSwitchAutoTrigger:

@@ -105,21 +105,22 @@ class DynamicLeverageEngine:
         self.config = config or {}
         
         # Leverage limits by mode
+        # NOTE: All modes are hard-capped at 3x per the first-30-day risk policy.
         self.leverage_limits = {
             LeverageMode.CONSERVATIVE: {
                 'min': 1.0,
                 'max': 3.0,
-                'base': 2.0
+                'base': 1.5
             },
             LeverageMode.MODERATE: {
                 'min': 1.0,
-                'max': 5.0,
-                'base': 3.0
+                'max': 3.0,
+                'base': 2.5
             },
             LeverageMode.AGGRESSIVE: {
                 'min': 1.0,
-                'max': 10.0,
-                'base': 5.0
+                'max': 3.0,   # Hard cap: no 10x / 20x — max 3x
+                'base': 3.0
             },
             LeverageMode.DISABLED: {
                 'min': 1.0,
@@ -146,8 +147,16 @@ class DynamicLeverageEngine:
         
         # State
         self.current_state: Optional[LeverageState] = None
-        
-        logger.info(f"DynamicLeverageEngine initialized (mode: {self.mode.value})")
+
+        # Hard maximum across all modes
+        self.HARD_MAX_LEVERAGE = 3.0
+
+        logger.info("=" * 70)
+        logger.info("⚡ DynamicLeverageEngine initialized")
+        logger.info("=" * 70)
+        logger.info(f"   Mode         : {self.mode.value}")
+        logger.info(f"   🔒 Max Leverage: {self.HARD_MAX_LEVERAGE}x (hard cap — no 10x / 20x)")
+        logger.info("=" * 70)
     
     def calculate_leverage(
         self,
@@ -196,13 +205,14 @@ class DynamicLeverageEngine:
         # Calculate final leverage
         leverage = base_leverage * volatility_factor * drawdown_factor * performance_factor * regime_multiplier
         
-        # Clamp to limits
+        # Clamp to mode limits then enforce absolute hard cap (3x)
         leverage = max(min_leverage, min(max_leverage, leverage))
+        leverage = min(leverage, self.HARD_MAX_LEVERAGE)
         
         # Create state
         self.current_state = LeverageState(
             current_leverage=leverage,
-            max_leverage=max_leverage,
+            max_leverage=min(max_leverage, self.HARD_MAX_LEVERAGE),
             mode=self.mode,
             volatility_factor=volatility_factor,
             drawdown_factor=drawdown_factor,
@@ -211,7 +221,7 @@ class DynamicLeverageEngine:
         )
         
         logger.info(
-            f"Dynamic Leverage: {leverage:.2f}x | "
+            f"⚡ Leverage: {leverage:.2f}x (hard cap: {self.HARD_MAX_LEVERAGE}x) | "
             f"Volatility: {volatility_pct*100:.2f}% (factor: {volatility_factor:.2f}) | "
             f"Drawdown: {current_drawdown_pct*100:.2f}% (factor: {drawdown_factor:.2f}) | "
             f"Performance: {performance_factor:.2f}"

@@ -96,6 +96,15 @@ except ImportError:
     STANDARD_MAX_PCT_DIFF = 5.0
     logger.warning("Could not import small account constants from fee_aware_config, using defaults")
 
+# ==============================================================================
+# HARD RISK LIMITS (non-negotiable — applied to every trade)
+# ==============================================================================
+HARD_MAX_RISK_PCT = 0.015        # 1.5% of total equity max risk per trade (aggressive)
+HARD_DAILY_LOSS_PCT = 3.0        # 3% daily loss → daily kill switch fires
+HARD_WEEKLY_HALF_PCT = 8.0       # 8% weekly loss → cut risk in half
+HARD_WEEKLY_STOP_PCT = 10.0      # 10% weekly loss → weekly kill switch fires
+HARD_MAX_LEVERAGE = 3.0          # 3x leverage cap — no 10x / 20x
+
 
 class AdaptiveRiskManager:
     """
@@ -205,6 +214,17 @@ class AdaptiveRiskManager:
             logger.info(f"   Max trades/day: {MAX_TRADES_PER_DAY}")
         else:
             logger.info(f"Adaptive Risk Manager initialized: {min_position_pct*100}%-{max_position_pct*100}% position sizing")
+
+        # ─── HARD LIMITS BANNER (always shown at startup) ───────────────────
+        logger.info("=" * 70)
+        logger.info("🔒 HARD RISK LIMITS (non-negotiable)")
+        logger.info("=" * 70)
+        logger.info(f"   💰 Risk % per trade   : {HARD_MAX_RISK_PCT*100:.1f}% max of total equity (aggressive mode)")
+        logger.info(f"   📅 Daily kill switch  : down {HARD_DAILY_LOSS_PCT:.0f}% in a day → STOP TRADING")
+        logger.info(f"   📆 Weekly drawdown    : down {HARD_WEEKLY_HALF_PCT:.0f}% in a week → cut risk in half")
+        logger.info(f"   📆 Weekly hard stop   : down {HARD_WEEKLY_STOP_PCT:.0f}% in a week → STOP TRADING")
+        logger.info(f"   ⚡ Max leverage       : {HARD_MAX_LEVERAGE:.0f}x (no 10x / 20x)")
+        logger.info("=" * 70)
         
         # Log tier floor configuration at startup for visibility
         if TIER_AWARE_MODE and log_tier_floors is not None:
@@ -950,6 +970,38 @@ class AdaptiveRiskManager:
         breakdown['final_pct'] = final_pct
         breakdown['current_exposure'] = self.current_exposure
         breakdown['max_exposure'] = self.max_total_exposure
+
+        # ==============================================================================
+        # HARD CAP: 1.5% MAX RISK PER TRADE (aggressive mode ceiling)
+        # This is the absolute ceiling — no trade may risk more than 1.5% of equity.
+        # ==============================================================================
+        # Apply weekly risk-halving from kill switch if active
+        try:
+            from kill_switch import get_auto_trigger
+            weekly_multiplier = get_auto_trigger().get_weekly_risk_multiplier()
+        except Exception:
+            weekly_multiplier = 1.0
+
+        effective_max_risk_pct = HARD_MAX_RISK_PCT * weekly_multiplier
+        if final_pct > effective_max_risk_pct:
+            logger.info(
+                f"🔒 HARD CAP: Risk reduced {final_pct*100:.2f}% → {effective_max_risk_pct*100:.2f}% "
+                f"(max {HARD_MAX_RISK_PCT*100:.1f}%"
+                + (f", weekly-halved at {HARD_WEEKLY_HALF_PCT:.0f}% drawdown" if weekly_multiplier < 1.0 else "")
+                + ")"
+            )
+            final_pct = effective_max_risk_pct
+            breakdown['hard_cap_applied'] = True
+        breakdown['hard_max_risk_pct'] = HARD_MAX_RISK_PCT
+        breakdown['weekly_risk_multiplier'] = weekly_multiplier
+        breakdown['effective_max_risk_pct'] = effective_max_risk_pct
+
+        logger.info(
+            f"💰 Risk per trade: {final_pct*100:.2f}% of ${sizing_base:,.2f} equity "
+            f"| Daily limit: -{HARD_DAILY_LOSS_PCT:.0f}% "
+            f"| Weekly limit: -{HARD_WEEKLY_HALF_PCT:.0f}%/halve, -{HARD_WEEKLY_STOP_PCT:.0f}%/stop "
+            f"| Max leverage: {HARD_MAX_LEVERAGE:.0f}x"
+        )
 
         # Calculate position size based on sizing_base (total capital in PRO MODE, free balance otherwise)
         position_size = sizing_base * final_pct
