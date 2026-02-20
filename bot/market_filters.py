@@ -7,11 +7,51 @@ Advanced market filtering to avoid low-quality trading conditions:
 - First seconds of candle filtering
 - News event filtering (skeleton for future implementation)
 - Spread and slippage checks
+- Top-20 high-liquidity symbol filter
 """
 
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+
+# Top 20 high-liquidity Coinbase pairs by 24h volume.
+# Only these symbols are eligible for entry to ensure tight spreads,
+# deep order books, and reliable price action.
+TOP_20_HIGH_LIQUIDITY_SYMBOLS = {
+    "BTC-USD",   # Bitcoin            – #1 by volume on Coinbase
+    "ETH-USD",   # Ethereum           – #2 by volume
+    "SOL-USD",   # Solana             – high-growth L1
+    "DOGE-USD",  # Dogecoin           – high retail volume
+    "ADA-USD",   # Cardano            – blue-chip altcoin
+    "AVAX-USD",  # Avalanche          – high-liquidity L1
+    "LINK-USD",  # Chainlink          – blue-chip DeFi oracle
+    "DOT-USD",   # Polkadot           – interoperability leader
+    "MATIC-USD", # Polygon            – Ethereum L2 leader
+    "LTC-USD",   # Litecoin           – long-established, liquid
+    "UNI-USD",   # Uniswap            – top DeFi DEX token
+    "ATOM-USD",  # Cosmos             – IBC hub leader
+    "AAVE-USD",  # Aave               – top lending protocol
+    "XLM-USD",   # Stellar            – payments network
+    "ALGO-USD",  # Algorand           – institutional-grade L1
+    "NEAR-USD",  # NEAR Protocol      – fast-growing L1
+    "BCH-USD",   # Bitcoin Cash       – long-established fork
+    "FIL-USD",   # Filecoin           – decentralised storage
+    "ICP-USD",   # Internet Computer  – high-volume altcoin
+    "APT-USD",   # Aptos              – high-momentum L1
+}
+
+
+def is_high_liquidity_symbol(symbol: str) -> bool:
+    """
+    Return True if *symbol* is in the top-20 high-liquidity list.
+
+    Args:
+        symbol: Trading pair symbol, e.g. 'BTC-USD'
+
+    Returns:
+        bool: True if symbol is eligible for entry
+    """
+    return symbol in TOP_20_HIGH_LIQUIDITY_SYMBOLS
 
 # Import scalar helper to prevent tuple comparison crashes
 try:

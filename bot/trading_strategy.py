@@ -17,13 +17,16 @@ logger = logging.getLogger("nija")
 
 # Import market filters at module level to avoid repeated imports in loops
 try:
-    from market_filters import check_pair_quality
+    from market_filters import check_pair_quality, is_high_liquidity_symbol, TOP_20_HIGH_LIQUIDITY_SYMBOLS
 except ImportError:
     try:
-        from bot.market_filters import check_pair_quality
+        from bot.market_filters import check_pair_quality, is_high_liquidity_symbol, TOP_20_HIGH_LIQUIDITY_SYMBOLS
     except ImportError:
         # Graceful fallback if market_filters not available
         check_pair_quality = None
+        TOP_20_HIGH_LIQUIDITY_SYMBOLS = set()
+        def is_high_liquidity_symbol(symbol: str) -> bool:  # noqa: E302
+            return True  # Allow all symbols if filter unavailable
 
 # Import Market Readiness Gate for entry quality control
 try:
@@ -496,11 +499,17 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 # Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
+# Hard cap: never allow more than 8 positions regardless of config (risk management ceiling)
+HARD_MAX_POSITIONS = 8  # Absolute ceiling – never exceed 8 open positions
 _max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '8')
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
     MAX_POSITIONS_ALLOWED = 8  # Default fallback
+# Enforce hard ceiling
+if MAX_POSITIONS_ALLOWED > HARD_MAX_POSITIONS:
+    MAX_POSITIONS_ALLOWED = HARD_MAX_POSITIONS
+    logger.info(f"📊 MAX_CONCURRENT_POSITIONS capped at hard limit of {HARD_MAX_POSITIONS}")
 logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED}")
 
 # SPOT_ONLY mode: when enabled, all 'enter_short' signals are blocked so the
@@ -547,25 +556,27 @@ except ValueError:
     FORCED_CLEANUP_AFTER_N_TRADES = None
 
 # OPTION 3 (BEST LONG-TERM): Dynamic minimum based on balance
-# MIN_TRADE_USD = max(2.00, balance * 0.15)
+# MIN_TRADE_USD = max(10.00, balance * 0.15)
 # This scales automatically with account size:
-# - $13 account: min trade = $2.00 (15% would be $1.95)
-# - $20 account: min trade = $3.00 (15% of $20)
-# - $50 account: min trade = $7.50 (15% of $50)
+# - $20 account: min trade = $10.00 (15% would be $3.00, floor enforced)
+# - $50 account: min trade = $10.00 (15% would be $7.50, floor enforced)
+# - $70 account: min trade = $10.50 (15% of $70)
 # - $100 account: min trade = $15.00 (15% of $100)
-BASE_MIN_POSITION_SIZE_USD = 2.0  # Floor minimum ($2 for very small accounts)
+# Minimum $10 per position ensures fee efficiency and meaningful compounding gains
+BASE_MIN_POSITION_SIZE_USD = 10.0  # Floor minimum ($10 - no trade under $10 for fee efficiency)
 DYNAMIC_POSITION_SIZE_PCT = 0.15  # 15% of balance as minimum (OPTION 3)
+POSITION_SIZE_WARNING_THRESHOLD_USD = 15.0  # Warn when position is under this amount (near floor)
 
 def get_dynamic_min_position_size(balance: float) -> float:
     """
     Calculate dynamic minimum position size based on account balance.
-    OPTION 3 (BEST LONG-TERM): MIN_TRADE_USD = max(2.00, balance * 0.15)
+    OPTION 3 (BEST LONG-TERM): MIN_TRADE_USD = max(10.00, balance * 0.15)
 
     Args:
         balance: Current account balance in USD
 
     Returns:
-        Minimum position size in USD
+        Minimum position size in USD (never below $10)
 
     Raises:
         ValueError: If balance is negative
@@ -578,7 +589,7 @@ def get_dynamic_min_position_size(balance: float) -> float:
 # DEPRECATED: Use get_dynamic_min_position_size() instead
 # This constant is maintained for backward compatibility only
 MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_dynamic_min_position_size() instead)
-MIN_BALANCE_TO_TRADE_USD = 2.0  # Minimum account balance to allow trading (lowered from $5 to support small accounts)
+MIN_BALANCE_TO_TRADE_USD = 10.0  # Minimum account balance to allow trading ($10 matches minimum position size)
 
 # FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
 # UPDATE (Jan 22, 2026): Aligned with new tier structure and $10 minimum trade size
@@ -5386,6 +5397,13 @@ class TradingStrategy:
                                 logger.debug(f"   ⛔ SKIPPING {symbol}: Blacklisted pair (spread > profit edge)")
                                 continue
 
+                            # HIGH-LIQUIDITY FILTER - Only trade top 20 pairs by volume
+                            # Ensures tight spreads, deep order books, and reliable price action
+                            if TOP_20_HIGH_LIQUIDITY_SYMBOLS and not is_high_liquidity_symbol(symbol):
+                                logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in top-20 high-liquidity list")
+                                filter_stats['low_quality'] = filter_stats.get('low_quality', 0) + 1
+                                continue
+
                             # WHITELIST CHECK - Only trade whitelisted symbols if whitelist is enabled
                             if WHITELIST_ENABLED:
                                 broker_name = self._get_broker_name(active_broker)
@@ -5658,13 +5676,13 @@ class TradingStrategy:
 
                                 # PROFITABILITY WARNING: Small positions have lower profitability
                                 # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
-                                # DYNAMIC MINIMUM: Position must meet max(2.00, balance * 0.15)
+                                # DYNAMIC MINIMUM: Position must meet max(10.00, balance * 0.15)
                                 if position_size < min_position_size_dynamic:
                                     filter_stats['position_too_small'] += 1
                                     # FIX #3 (Jan 19, 2026): Explicit trade rejection logging
                                     logger.info(f"   ❌ Entry rejected for {symbol}")
                                     logger.info(f"      Reason: Position size ${position_size:.2f} < ${min_position_size_dynamic:.2f} minimum")
-                                    logger.info(f"      💡 Dynamic minimum = max($2.00, ${account_balance:.2f} × 15%) = ${min_position_size_dynamic:.2f}")
+                                    logger.info(f"      💡 Dynamic minimum = max($10.00, ${account_balance:.2f} × 15%) = ${min_position_size_dynamic:.2f}")
                                     logger.info(f"      💡 Small positions face severe fee impact (~1.4% round-trip)")
                                     # Calculate break-even % needed: (fee_dollars / position_size) * 100
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
@@ -5682,14 +5700,8 @@ class TradingStrategy:
                                     logger.info(f"      📊 Current balance: ${account_balance:.2f}")
                                     continue
 
-                                # Warn if position is very small but allowed
-                                elif position_size < 2.0:
-                                    logger.warning(f"   ⚠️  EXTREMELY SMALL POSITION: ${position_size:.2f} - profitability nearly impossible due to fees")
-                                    logger.warning(f"      💡 URGENT: Fund account to $30+ for viable trading")
-                                elif position_size < 5.0:
-                                    logger.warning(f"   ⚠️  VERY SMALL POSITION: ${position_size:.2f} - profitability severely limited by fees")
-                                    logger.warning(f"      💡 Recommended: Fund account to $30+ for better trading results")
-                                elif position_size < 10.0:
+                                # Warn if position is near the minimum but allowed
+                                if position_size < POSITION_SIZE_WARNING_THRESHOLD_USD:
                                     logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
 
                                 # CRITICAL: Verify we're still under position cap before placing order
