@@ -153,10 +153,10 @@ BRANCH_VAL=${GIT_BRANCH}
 COMMIT_VAL=${GIT_COMMIT}
 
 # Populate branch/commit from git if not provided
-if [ -z "$BRANCH_VAL" ] && command -v git >/dev/null 2>&1; then
+if ([ -z "$BRANCH_VAL" ] || [ "$BRANCH_VAL" = "unknown" ]) && command -v git >/dev/null 2>&1; then
     BRANCH_VAL=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 fi
-if [ -z "$COMMIT_VAL" ] && command -v git >/dev/null 2>&1; then
+if ([ -z "$COMMIT_VAL" ] || [ "$COMMIT_VAL" = "unknown" ]) && command -v git >/dev/null 2>&1; then
     COMMIT_VAL=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 fi
 
@@ -331,7 +331,7 @@ elif is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}"; then
 elif is_truthy "${PAPER_MODE_VAL}"; then
     echo "   📝 MODE: PAPER TRADING"
     echo "   ℹ️  Simulated trading only, no real money"
-else:
+else
     echo "   ⚠️  MODE: UNCLEAR"
     echo "   ⚠️  No mode flags explicitly set"
     echo "   ⚠️  Bot behavior may be unpredictable"
