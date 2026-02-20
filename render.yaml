@@ -4,6 +4,13 @@ services:
     env: docker
     dockerfilePath: ./Dockerfile
     dockerCommand: bash start.sh
+    # Bake Git metadata into the Docker image at build time.
+    # Render exposes RENDER_GIT_BRANCH and RENDER_GIT_COMMIT as built-in
+    # variables; the Dockerfile ARG/ENV instructions then bake them as
+    # runtime environment variables so start.sh can read them.
+    dockerBuildArgs:
+      GIT_BRANCH: $RENDER_GIT_BRANCH
+      GIT_COMMIT: $RENDER_GIT_COMMIT
     envVars:
       - key: PORT
         value: 5000
