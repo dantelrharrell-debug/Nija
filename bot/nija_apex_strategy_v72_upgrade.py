@@ -327,8 +327,8 @@ class NIJAApexStrategyV72:
                 'tp4_exit_pct': 0.50,
             }
 
-            # Remaining goes to trailing stop
-            trailing_stop_initial = entry_price + (entry_price * 0.015)  # Start trailing at 1.5%
+            # Remaining goes to trailing stop – start trailing quickly at 1.0% profit
+            trailing_stop_initial = entry_price + (entry_price * 0.010)  # Start trailing at 1.0%
 
         else:  # short
             stop_loss = entry_price + atr_buffer
@@ -344,7 +344,7 @@ class NIJAApexStrategyV72:
                 'tp4_exit_pct': 0.50,
             }
 
-            trailing_stop_initial = entry_price - (entry_price * 0.015)
+            trailing_stop_initial = entry_price - (entry_price * 0.010)  # Start trailing at 1.0%
 
         return {
             'stop_loss': stop_loss,
