@@ -839,6 +839,29 @@ class IndependentBrokerTrader:
                     # This prevents users from making independent trading decisions
                     # Copy trading is handled by the CopyTradeEngine which listens for master signals
 
+                    # Check active_trading flag - if False, skip new entries (recovery mode)
+                    user_config = None
+                    if self.multi_account_manager:
+                        user_config = self.multi_account_manager.user_configs.get(user_id)
+                    if user_config is None:
+                        logger.warning(f"   ⚠️  {broker_name}: no user_config found for {user_id} — defaulting active_trading=True")
+                    is_active_trading = user_config.active_trading if user_config is not None else True
+
+                    if not is_active_trading:
+                        logger.info(f"   ⏸️  {broker_name} (USER): active_trading=false — skipping new entries (recovery mode)")
+                        logger.info(f"   ℹ️  Set 'active_trading': true in user config to re-enable trading")
+                        if user_id not in self.user_broker_health:
+                            self.user_broker_health[user_id] = {}
+                        self.user_broker_health[user_id][broker_name] = {
+                            'status': 'recovery',
+                            'error': None,
+                            'last_check': datetime.now(),
+                            'is_trading': False,
+                            'total_cycles': self.user_broker_health.get(user_id, {}).get(broker_name, {}).get('total_cycles', 0) + 1
+                        }
+                        stop_flag.wait(150)
+                        continue
+
                     # Execute trading cycle for THIS user broker only (thread-safe)
                     # USER accounts ONLY do position management (exits), NOT entry signals
                     logger.info(f"   {broker_name} (USER): Running position management (NO signal generation)...")

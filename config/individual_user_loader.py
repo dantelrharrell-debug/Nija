@@ -55,7 +55,8 @@ class IndividualUserConfig:
         enabled: bool = True,
         copy_from_platform: bool = True,
         risk_multiplier: float = 1.0,
-        independent_trading: bool = False
+        independent_trading: bool = False,
+        active_trading: bool = True
     ):
         """
         Initialize individual user configuration.
@@ -69,6 +70,8 @@ class IndividualUserConfig:
             copy_from_platform: Whether to copy trades from master
             risk_multiplier: Risk multiplier (default: 1.0)
             independent_trading: Whether user should run independent trading thread (default: False)
+            active_trading: Allow new trade entries for this user (default: True). Set False during
+                            recovery to stop new entries while existing positions are closed out.
         """
         self.user_id = user_id
         self.name = name
@@ -78,6 +81,7 @@ class IndividualUserConfig:
         self.copy_from_platform = copy_from_platform
         self.risk_multiplier = risk_multiplier
         self.independent_trading = independent_trading
+        self.active_trading = active_trading
 
         # For compatibility with existing code
         self.account_type = "retail"  # Default to retail
@@ -99,7 +103,8 @@ class IndividualUserConfig:
             enabled=data.get('enabled', True),
             copy_from_platform=data.get('copy_from_platform', True),
             risk_multiplier=data.get('risk_multiplier', 1.0),
-            independent_trading=data.get('independent_trading', False)
+            independent_trading=data.get('independent_trading', False),
+            active_trading=data.get('active_trading', True)
         )
 
     def to_dict(self) -> Dict:
@@ -111,7 +116,8 @@ class IndividualUserConfig:
             'enabled': self.enabled,
             'copy_from_platform': self.copy_from_platform,
             'risk_multiplier': self.risk_multiplier,
-            'independent_trading': self.independent_trading
+            'independent_trading': self.independent_trading,
+            'active_trading': self.active_trading
         }
 
     def has_api_keys(self) -> bool:

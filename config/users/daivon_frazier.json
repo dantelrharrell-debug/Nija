@@ -4,6 +4,7 @@
   "role": "user",
   "enabled": true,
   "independent_trading": true,
+  "active_trading": false,
   "risk_multiplier": 1.0,
   "disabled_symbols": ["XRP-USD"]
 }

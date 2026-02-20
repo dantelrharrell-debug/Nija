@@ -7,6 +7,7 @@
     "enabled": true,
     "copy_from_master": true,
     "independent_trading": true,
+    "active_trading": false,
     "disabled_symbols": ["XRP-USD"],
     "description": "Retail user - Kraken crypto account (independent trading enabled)"
   },
@@ -18,6 +19,7 @@
     "enabled": true,
     "copy_from_master": true,
     "independent_trading": true,
+    "active_trading": false,
     "disabled_symbols": ["XRP-USD"],
     "description": "Retail user - Kraken crypto account (independent trading enabled)"
   }
