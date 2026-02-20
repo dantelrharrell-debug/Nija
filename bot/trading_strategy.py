@@ -564,16 +564,35 @@ BASE_MIN_POSITION_SIZE_USD = 10.0  # Floor minimum ($10 - no trade under $10 for
 DYNAMIC_POSITION_SIZE_PCT = 0.18  # 18% of balance per position (locked setting)
 POSITION_SIZE_WARNING_THRESHOLD_USD = 15.0  # Warn when position is under this amount (near floor)
 
-def get_dynamic_min_position_size(balance: float) -> float:
+# OPTION B: Brokerage-specific minimum trade sizes
+# Any trade that would create a position below this threshold is skipped,
+# preventing dust positions at creation time.
+BROKERAGE_MIN_TRADE_USD: dict = {
+    'coinbase': 10.0,   # Coinbase minimum ($10 for fee efficiency)
+    'kraken':   10.0,   # Kraken exchange minimum ($10 per exchange rules)
+    'binance':  10.0,   # Binance minimum
+    'okx':      10.0,   # OKX minimum
+    'alpaca':   1.0,    # Alpaca minimum (stocks, lower fees)
+}
+
+def get_dynamic_min_position_size(balance: float, broker_name: str = '') -> float:
     """
-    Calculate dynamic minimum position size based on account balance.
-    Locked setting: MIN_TRADE_USD = max(10.00, balance * 0.18)
+    Calculate dynamic minimum position size based on account balance and
+    brokerage-specific minimums (Option B – prevent dust at trade creation).
+
+    Formula: min_trade_usd = max(BASE_MIN_POSITION_SIZE_USD,
+                                 account_balance * min_trade_pct,
+                                 brokerage_minimum)
 
     Args:
         balance: Current account balance in USD
+        broker_name: Name of the active broker (e.g. 'coinbase', 'kraken').
+                     Used to enforce exchange-specific minimum order sizes.
+                     Pass an empty string to use the global floor only.
 
     Returns:
-        Minimum position size in USD (never below $10)
+        Minimum position size in USD (never below BASE_MIN_POSITION_SIZE_USD
+        or the broker's own minimum, whichever is larger)
 
     Raises:
         ValueError: If balance is negative
@@ -581,7 +600,14 @@ def get_dynamic_min_position_size(balance: float) -> float:
     if balance < 0:
         raise ValueError(f"Balance cannot be negative: {balance}")
 
-    return max(BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT)
+    # Look up brokerage-specific minimum (default to BASE_MIN_POSITION_SIZE_USD)
+    brokerage_min = BROKERAGE_MIN_TRADE_USD.get(
+        broker_name.lower() if broker_name else '',
+        BASE_MIN_POSITION_SIZE_USD,
+    )
+
+    # Enforce: max(floor, balance-based dynamic, brokerage minimum)
+    return max(BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
 
 # DEPRECATED: Use get_dynamic_min_position_size() instead
 # This constant is maintained for backward compatibility only
@@ -1546,6 +1572,25 @@ class TradingStrategy:
                 except Exception as cleanup_err:
                     logger.warning(f"⚠️  Failed to initialize forced cleanup: {cleanup_err}")
                     self.forced_cleanup = None
+
+                # Initialize continuous dust monitor (Option A – scheduled dust sweeps)
+                try:
+                    from continuous_dust_monitor import get_continuous_dust_monitor
+                    import os as _os
+                    _dust_interval = float(_os.getenv('DUST_SWEEP_INTERVAL_MINUTES', '30'))
+                    _dust_threshold = float(_os.getenv('DUST_THRESHOLD_USD', '1.00'))
+                    self.continuous_dust_monitor = get_continuous_dust_monitor(
+                        dust_threshold_usd=_dust_threshold,
+                        sweep_interval_minutes=_dust_interval,
+                        dry_run=False,
+                    )
+                    logger.info(
+                        f"🌀 Continuous dust monitor initialized "
+                        f"(threshold=${_dust_threshold:.2f}, interval={_dust_interval:.0f}min)"
+                    )
+                except Exception as _cdm_err:
+                    logger.warning(f"⚠️  Failed to initialize continuous dust monitor: {_cdm_err}")
+                    self.continuous_dust_monitor = None
 
                 # Initialize broker failsafes (hard limits and circuit breakers)
                 # CRITICAL: Use ONLY master balance, not user balances
@@ -3534,6 +3579,34 @@ class TradingStrategy:
                     import traceback
                     logger.error(traceback.format_exc())
                 logger.warning(f"")
+
+            # 🌀 CONTINUOUS DUST MONITOR (Option A): Time-based dust sweep
+            # Checks all accounts every DUST_SWEEP_INTERVAL_MINUTES (default 30 min)
+            # and closes any position < DUST_THRESHOLD_USD. Each action is audit-logged.
+            if hasattr(self, 'continuous_dust_monitor') and self.continuous_dust_monitor:
+                try:
+                    # Build (account_id, broker) list for this cycle
+                    _cdm_brokers = []
+                    if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+                        for _acct_id, _acct_broker in (
+                            self.multi_account_manager.get_all_brokers() or []
+                        ):
+                            _cdm_brokers.append((_acct_id, _acct_broker))
+                    elif active_broker:
+                        _cdm_brokers.append(("platform", active_broker))
+
+                    _cdm_summary = self.continuous_dust_monitor.maybe_sweep(
+                        brokers=_cdm_brokers if _cdm_brokers else None
+                    )
+                    if _cdm_summary is not None:
+                        logger.info(
+                            f"🌀 Dust sweep [{_cdm_summary.sweep_id}]: "
+                            f"found={_cdm_summary.dust_found} "
+                            f"closed={_cdm_summary.dust_closed} "
+                            f"recovered=${_cdm_summary.total_usd_recovered:.4f}"
+                        )
+                except Exception as _cdm_run_err:
+                    logger.warning(f"⚠️  Continuous dust monitor sweep failed: {_cdm_run_err}")
 
             # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
             # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.
@@ -5663,33 +5736,26 @@ class TradingStrategy:
                                         logger.warning(f"   ⚠️ Market readiness re-check error for {symbol}: {readiness_err}")
                                         # Continue with trade if readiness check fails
 
-                                # Calculate dynamic minimum based on account balance (OPTION 3)
-                                min_position_size_dynamic = get_dynamic_min_position_size(account_balance)
+                                # Calculate dynamic minimum based on account balance and
+                                # brokerage-specific minimums (Option B – prevent dust at creation)
+                                broker_name = self._get_broker_name(active_broker)
+                                min_position_size_dynamic = get_dynamic_min_position_size(
+                                    account_balance, broker_name
+                                )
 
                                 # PROFITABILITY WARNING: Small positions have lower profitability
                                 # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
-                                # DYNAMIC MINIMUM: Position must meet max(10.00, balance * 0.15)
+                                # DYNAMIC MINIMUM: Position must meet max(10.00, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
                                 if position_size < min_position_size_dynamic:
                                     filter_stats['position_too_small'] += 1
                                     # FIX #3 (Jan 19, 2026): Explicit trade rejection logging
                                     logger.info(f"   ❌ Entry rejected for {symbol}")
                                     logger.info(f"      Reason: Position size ${position_size:.2f} < ${min_position_size_dynamic:.2f} minimum")
-                                    logger.info(f"      💡 Dynamic minimum = max($10.00, ${account_balance:.2f} × 15%) = ${min_position_size_dynamic:.2f}")
+                                    logger.info(f"      💡 Dynamic minimum = max($10.00, ${account_balance:.2f} × {DYNAMIC_POSITION_SIZE_PCT*100:.0f}%, brokerage_min[{broker_name}]) = ${min_position_size_dynamic:.2f}")
                                     logger.info(f"      💡 Small positions face severe fee impact (~1.4% round-trip)")
                                     # Calculate break-even % needed: (fee_dollars / position_size) * 100
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
                                     logger.info(f"      📊 Would need {breakeven_pct:.1f}% gain just to break even on fees")
-                                    continue
-
-                                # FIX #3 (Jan 20, 2026): Kraken-specific minimum position size check
-                                # Kraken requires larger minimum position size due to fees
-                                broker_name = self._get_broker_name(active_broker)
-                                if broker_name == 'kraken' and position_size < MIN_POSITION_SIZE:
-                                    filter_stats['position_too_small'] += 1
-                                    logger.info(f"   ❌ Entry rejected for {symbol}")
-                                    logger.info(f"      Reason: Kraken position size ${position_size:.2f} < ${MIN_POSITION_SIZE} minimum")
-                                    logger.info(f"      💡 Kraken requires ${MIN_POSITION_SIZE} minimum trade size per exchange rules")
-                                    logger.info(f"      📊 Current balance: ${account_balance:.2f}")
                                     continue
 
                                 # Warn if position is near the minimum but allowed
