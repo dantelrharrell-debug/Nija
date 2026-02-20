@@ -3,8 +3,10 @@ import sys
 import time
 import random
 import queue
+import json
 import logging
 import traceback
+from pathlib import Path
 from threading import Thread
 from typing import Dict, Optional, Tuple
 from datetime import datetime
@@ -1852,6 +1854,22 @@ class TradingStrategy:
             adopted_count = 0
             adopted_positions = []
             position_tracker = getattr(broker, 'position_tracker', None)
+
+            # Load manual entry price overrides from config file (if present)
+            entry_price_overrides = {}
+            try:
+                _overrides_path = Path(__file__).parent.parent / "config" / "entry_price_overrides.json"
+                if _overrides_path.exists():
+                    with open(_overrides_path, 'r') as _f:
+                        _overrides_data = json.load(_f)
+                    # Support per-account overrides keyed by account_id, or a flat symbol→price dict
+                    if account_id in _overrides_data:
+                        entry_price_overrides = _overrides_data[account_id]
+                    elif "ALL" in _overrides_data:
+                        entry_price_overrides = _overrides_data["ALL"]
+                    logger.info(f"   📋 Loaded {len(entry_price_overrides)} manual entry price override(s) for {account_id}")
+            except Exception as _ov_err:
+                logger.warning(f"   ⚠️  Could not load entry price overrides: {_ov_err}")
             
             # 🔒 CAPITAL PROTECTION: position_tracker is MANDATORY - no silent fallback mode
             if not position_tracker:
@@ -1921,15 +1939,21 @@ class TradingStrategy:
                     # 🔒 CAPITAL PROTECTION: Entry price must NEVER default to 0 - fail adoption if missing
                     # Note: pos.get('entry_price', 0.0) returns 0.0 if key is missing or value is None
                     if entry_price == 0 or entry_price <= 0:
-                        logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE")
-                        logger.error(f"   ❌ Position adoption FAILED - entry price is MANDATORY")
-                        logger.error(f"   💡 Recommendation: Verify position history or manually set entry price")
-                        failed_positions.append({
-                            'symbol': symbol,
-                            'reason': 'MISSING_ENTRY_PRICE',
-                            'detail': 'Entry price is 0 or missing - required for P&L tracking'
-                        })
-                        continue  # Skip this position - do not adopt without entry price
+                        # Check for a manual override in config/entry_price_overrides.json
+                        override_price = entry_price_overrides.get(symbol, 0.0)
+                        if override_price and override_price > 0:
+                            logger.info(f"   [{i}/{positions_found}] 📋 {symbol}: Using manual entry price override ${override_price:.4f}")
+                            entry_price = override_price
+                        else:
+                            logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE")
+                            logger.error(f"   ❌ Position adoption FAILED - entry price is MANDATORY")
+                            logger.error(f"   💡 Recommendation: Verify position history or set entry price in config/entry_price_overrides.json")
+                            failed_positions.append({
+                                'symbol': symbol,
+                                'reason': 'MISSING_ENTRY_PRICE',
+                                'detail': 'Entry price is 0 or missing - required for P&L tracking'
+                            })
+                            continue  # Skip this position - do not adopt without entry price
                     
                     # Register position in tracker (MANDATORY)
                     success = position_tracker.track_entry(
