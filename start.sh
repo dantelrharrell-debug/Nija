@@ -149,8 +149,15 @@ fi
 # Ensure all Python test output is flushed before continuing
 sleep 0.05
 
+# Source build-time git metadata written by inject_git_metadata.sh (Docker build)
+# This makes GIT_BRANCH / GIT_COMMIT / GIT_COMMIT_SHORT available when the image
+# was built with proper --build-arg values (e.g. via railway.json buildArgs).
+if [ -f ".env.build" ]; then
+    . .env.build
+fi
+
 BRANCH_VAL=${GIT_BRANCH}
-COMMIT_VAL=${GIT_COMMIT}
+COMMIT_VAL=${GIT_COMMIT_SHORT:-${GIT_COMMIT}}
 
 # Populate branch/commit from git if not provided
 if ([ -z "$BRANCH_VAL" ] || [ "$BRANCH_VAL" = "unknown" ]) && command -v git >/dev/null 2>&1; then
