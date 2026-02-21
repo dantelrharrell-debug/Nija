@@ -144,6 +144,15 @@ class IndependentBrokerTrader:
         self.active_trading_threads: Set[str] = set()
         self.active_threads_lock = threading.Lock()
 
+        # Connection monitor: periodically retries disconnected brokers so that
+        # held trades are automatically released once credentials/funding are fixed.
+        self._connection_monitor_stop = threading.Event()
+        self._connection_monitor_thread: Optional[threading.Thread] = None
+        # How often (seconds) the monitor checks for new connections (default: 5 min)
+        self.connection_monitor_interval: int = int(
+            os.environ.get("NIJA_CONNECTION_RETRY_INTERVAL", "300")
+        )
+
         # ISOLATION MANAGER: Initialize account isolation manager for failure isolation
         # This ensures one account failure can NEVER affect another account
         self.isolation_manager = None
@@ -1191,13 +1200,322 @@ class IndependentBrokerTrader:
         logger.info("")
 
         # Return True if at least one thread was started
-        return total_threads > 0
+        result = total_threads > 0
+
+        # Start the connection monitor so that accounts which couldn't connect
+        # at boot (e.g. platform not live, API keys broken, account unfunded)
+        # are automatically retried.  Once they connect + fund, held trades
+        # will be adopted on the very first trading cycle.
+        self.start_connection_monitor()
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Connection monitor – automatically releases held trades when
+    # platform accounts come online, accounts are funded, or API keys
+    # are fixed.
+    # ------------------------------------------------------------------
+
+    def start_connection_monitor(self):
+        """
+        Start a background thread that periodically retries disconnected
+        platform and user brokers.
+
+        When a previously-failing account successfully reconnects AND has
+        sufficient funds, this monitor starts its trading thread so that
+        any held (pending) positions are immediately adopted and managed.
+        This satisfies the requirement: "Once Platform is live + user
+        accounts funded + API keys fixed, NIJA will automatically process
+        or release held trades."
+        """
+        if self._connection_monitor_thread and self._connection_monitor_thread.is_alive():
+            logger.debug("Connection monitor already running – skipping duplicate start")
+            return
+
+        self._connection_monitor_stop.clear()
+        self._connection_monitor_thread = threading.Thread(
+            target=self._connection_monitor_loop,
+            name="NijaConnectionMonitor",
+            daemon=True,
+        )
+        self._connection_monitor_thread.start()
+        logger.info(
+            f"🔁 Connection monitor started – retrying disconnected accounts every "
+            f"{self.connection_monitor_interval}s"
+        )
+        logger.info(
+            "   ℹ️  Held trades will be released automatically once:"
+        )
+        logger.info("      • Platform account credentials are valid")
+        logger.info("      • User account API keys are fixed")
+        logger.info("      • Accounts have sufficient funds")
+
+    def stop_connection_monitor(self):
+        """Signal the connection monitor to stop."""
+        self._connection_monitor_stop.set()
+        if self._connection_monitor_thread and self._connection_monitor_thread.is_alive():
+            self._connection_monitor_thread.join(timeout=10)
+        logger.info("🔁 Connection monitor stopped")
+
+    def _connection_monitor_loop(self):
+        """
+        Background loop: periodically attempts to reconnect any broker
+        that does not yet have an active trading thread.
+        """
+        logger.info("🔁 Connection monitor loop active")
+
+        while not self._connection_monitor_stop.is_set():
+            # Wait for the configured interval before each retry pass
+            self._connection_monitor_stop.wait(self.connection_monitor_interval)
+            if self._connection_monitor_stop.is_set():
+                break
+
+            try:
+                self._retry_platform_connections()
+            except Exception as e:
+                logger.error(f"❌ Connection monitor (platform) error: {e}")
+                logger.debug(traceback.format_exc())
+
+            try:
+                self._retry_user_connections()
+            except Exception as e:
+                logger.error(f"❌ Connection monitor (users) error: {e}")
+                logger.debug(traceback.format_exc())
+
+        logger.info("🔁 Connection monitor loop exited")
+
+    def _get_broker_balance(self, broker, broker_type, label: str) -> float:
+        """
+        Fetch account balance, using the Coinbase-specific retry helper when
+        appropriate (Coinbase API can return stale $0 immediately after connect).
+
+        Args:
+            broker: Broker instance
+            broker_type: BrokerType enum value
+            label: Human-readable label for log messages
+
+        Returns:
+            float: Current account balance
+        """
+        if broker_type.value == "coinbase":
+            return self._retry_coinbase_balance_if_zero(broker, label)
+        return broker.get_account_balance()
+
+    def _retry_platform_connections(self):
+        """
+        Re-attempt connection and thread startup for platform brokers that
+        are not yet running a trading thread.
+        """
+        broker_source = self._get_platform_broker_source()
+        if not broker_source:
+            return
+
+        for broker_type, broker in broker_source.items():
+            broker_name = broker_type.value
+
+            # Already has an active trading thread – nothing to do
+            with self.active_threads_lock:
+                already_running = broker_name in self.active_trading_threads
+
+            if already_running:
+                continue
+
+            logger.info(
+                f"🔁 Connection monitor: checking PLATFORM {broker_name.upper()} "
+                f"(no trading thread yet)"
+            )
+
+            # Attempt (re)connect if not connected
+            if not broker.connected:
+                logger.info(
+                    f"   🔄 PLATFORM {broker_name.upper()}: not connected – "
+                    f"attempting reconnect (API key may have been fixed)"
+                )
+                try:
+                    broker.connect()
+                except Exception as conn_err:
+                    logger.warning(
+                        f"   ⚠️  PLATFORM {broker_name.upper()} reconnect failed: {conn_err}"
+                    )
+
+            if not broker.connected:
+                logger.info(
+                    f"   ⏳ PLATFORM {broker_name.upper()}: still not connected – "
+                    f"will retry in {self.connection_monitor_interval}s"
+                )
+                continue
+
+            # Check funding
+            try:
+                balance = self._get_broker_balance(
+                    broker, broker_type, f"PLATFORM {broker_name.upper()}"
+                )
+            except Exception as bal_err:
+                logger.warning(
+                    f"   ⚠️  PLATFORM {broker_name.upper()} balance check failed: {bal_err}"
+                )
+                continue
+
+            if balance < MINIMUM_FUNDED_BALANCE:
+                logger.info(
+                    f"   ⏳ PLATFORM {broker_name.upper()}: connected but underfunded "
+                    f"(${balance:.2f} < ${MINIMUM_FUNDED_BALANCE:.2f}) – "
+                    f"will retry in {self.connection_monitor_interval}s"
+                )
+                continue
+
+            # Connected and funded – start trading thread
+            logger.info(
+                f"   ✅ PLATFORM {broker_name.upper()} is now connected and funded "
+                f"(${balance:.2f}) – starting trading thread"
+            )
+            logger.info(
+                f"   🎯 Any held trades for PLATFORM {broker_name.upper()} will be "
+                f"adopted and managed in the first trading cycle"
+            )
+
+            self._start_platform_thread(broker_type, broker)
+
+    def _retry_user_connections(self):
+        """
+        Re-attempt connection and thread startup for user brokers that
+        are not yet running a trading thread.
+
+        This also calls connect_users_from_config() so that the
+        MultiAccountBrokerManager can clear its failure cache and retry
+        accounts whose credentials were recently fixed.
+        """
+        if not self.multi_account_manager:
+            return
+
+        # Re-run config-based user connection (clears failure cache automatically)
+        try:
+            logger.info("🔁 Connection monitor: retrying user account connections…")
+            self.multi_account_manager.connect_users_from_config()
+        except Exception as conn_err:
+            logger.warning(f"   ⚠️  connect_users_from_config() failed: {conn_err}")
+            logger.debug(traceback.format_exc())
+
+        # Walk user brokers and start threads for any that are now connected + funded
+        for user_id, user_brokers in list(self.multi_account_manager.user_brokers.items()):
+            for broker_type, broker in list(user_brokers.items()):
+                broker_name = f"{user_id}_{broker_type.value}"
+
+                # Already has a living trading thread – nothing to do
+                user_threads = self.user_broker_threads.get(user_id, {})
+                existing_thread = user_threads.get(broker_name)
+                if existing_thread is not None and existing_thread.is_alive():
+                    continue
+
+                if not broker.connected:
+                    logger.debug(
+                        f"   ⏳ USER {broker_name}: still not connected – "
+                        f"will retry in {self.connection_monitor_interval}s"
+                    )
+                    continue
+
+                # Check funding
+                try:
+                    balance = self._get_broker_balance(broker, broker_type, f"USER {broker_name}")
+                except Exception as bal_err:
+                    logger.warning(f"   ⚠️  USER {broker_name} balance check failed: {bal_err}")
+                    continue
+
+                if balance < MINIMUM_FUNDED_BALANCE:
+                    logger.info(
+                        f"   ⏳ USER {broker_name}: connected but underfunded "
+                        f"(${balance:.2f}) – will retry in {self.connection_monitor_interval}s"
+                    )
+                    continue
+
+                # Check independent_trading flag
+                user_config = self.multi_account_manager.user_configs.get(user_id)
+                if user_config and not user_config.independent_trading:
+                    logger.debug(
+                        f"   ⏭️  USER {broker_name}: independent_trading not enabled – skipping"
+                    )
+                    continue
+
+                logger.info(
+                    f"   ✅ USER {broker_name} is now connected and funded "
+                    f"(${balance:.2f}) – starting trading thread"
+                )
+                logger.info(
+                    f"   🎯 Any held trades for USER {broker_name} will be "
+                    f"adopted and managed in the first trading cycle"
+                )
+
+                self._start_user_thread(user_id, broker_type, broker)
+
+    def _start_platform_thread(self, broker_type, broker):
+        """
+        Create and start an independent trading thread for a PLATFORM broker.
+        Uses the thread singleton guard to prevent duplicates.
+        """
+        broker_name = broker_type.value
+
+        with self.active_threads_lock:
+            if broker_name in self.active_trading_threads:
+                logger.debug(f"   Trading thread already running for PLATFORM {broker_name.upper()} – skipping")
+                return
+            self.active_trading_threads.add(broker_name)
+
+        stop_flag = threading.Event()
+        self.stop_flags[broker_name] = stop_flag
+
+        thread = threading.Thread(
+            target=self.run_broker_trading_loop,
+            args=(broker_type, broker, stop_flag),
+            name=f"Trader-{broker_name}",
+            daemon=True,
+        )
+        self.broker_threads[broker_name] = thread
+        thread.start()
+
+        logger.info(f"   🚀 PLATFORM {broker_name.upper()} trading thread started (via connection monitor)")
+
+    def _start_user_thread(self, user_id: str, broker_type, broker):
+        """
+        Create and start an independent trading thread for a USER broker.
+        Uses the thread singleton guard to prevent duplicates.
+        """
+        broker_name = f"{user_id}_{broker_type.value}"
+
+        # Initialise tracking dicts for this user if needed
+        if user_id not in self.user_stop_flags:
+            self.user_stop_flags[user_id] = {}
+        if user_id not in self.user_broker_threads:
+            self.user_broker_threads[user_id] = {}
+        if user_id not in self.user_broker_health:
+            self.user_broker_health[user_id] = {}
+
+        existing_thread = self.user_broker_threads[user_id].get(broker_name)
+        if existing_thread is not None and existing_thread.is_alive():
+            logger.debug(f"   Trading thread already running for USER {broker_name} – skipping")
+            return
+
+        stop_flag = threading.Event()
+        self.user_stop_flags[user_id][broker_name] = stop_flag
+
+        thread = threading.Thread(
+            target=self.run_user_broker_trading_loop,
+            args=(user_id, broker_type, broker, stop_flag),
+            name=f"Trader-{broker_name}",
+            daemon=True,
+        )
+        self.user_broker_threads[user_id][broker_name] = thread
+        thread.start()
+
+        logger.info(f"   🚀 USER {broker_name} trading thread started (via connection monitor)")
 
     def stop_all_trading(self):
         """
         Stop all trading threads gracefully (both master and user brokers).
         """
         logger.info("🛑 Stopping all independent trading threads...")
+
+        # Stop connection monitor first so it doesn't start new threads during shutdown
+        self.stop_connection_monitor()
 
         # Signal all PLATFORM broker threads to stop
         for broker_name, stop_flag in self.stop_flags.items():
