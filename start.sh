@@ -324,6 +324,12 @@ if is_truthy "${DRY_RUN_MODE_VAL}"; then
     echo "   To enable live trading after validation:"
     echo "      export DRY_RUN_MODE=false"
     echo "      export LIVE_CAPITAL_VERIFIED=true"
+    echo ""
+    echo "   ℹ️  Multi-exchange trading: verify credentials for each exchange you want:"
+    echo "      KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET  (primary broker)"
+    echo "      OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE         (optional)"
+    echo "      BINANCE_API_KEY / BINANCE_API_SECRET                  (optional)"
+    echo "      ALPACA_API_KEY / ALPACA_API_SECRET                    (optional)"
 elif is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}"; then
     echo "   🔴 MODE: LIVE TRADING"
     echo "   ⚠️  REAL MONEY AT RISK"
@@ -352,6 +358,60 @@ fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
+# ═══════════════════════════════════════════════════════════════════════
+# GUARD 1: Block live trading when git metadata is unknown
+# Untraceable code cannot be audited or safely rolled back.
+# ═══════════════════════════════════════════════════════════════════════
+if is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}" && ! is_truthy "${DRY_RUN_MODE_VAL}"; then
+    if [ "${BRANCH_VAL:-unknown}" = "unknown" ] || [ "${COMMIT_VAL:-unknown}" = "unknown" ]; then
+        if ! is_truthy "${ALLOW_UNTRACEABLE_CODE:-false}"; then
+            echo ""
+            echo "❌ BLOCKED: Live trading requires traceable git metadata."
+            echo "   Branch: ${BRANCH_VAL:-unknown}  Commit: ${COMMIT_VAL:-unknown}"
+            echo ""
+            echo "   Options:"
+            echo "     1. Set git metadata:     bash inject_git_metadata.sh"
+            echo "     2. Test safely first:    export DRY_RUN_MODE=true"
+            echo "     3. Override (emergency): export ALLOW_UNTRACEABLE_CODE=true"
+            echo ""
+            exit 1
+        fi
+        echo "⚠️  WARNING: ALLOW_UNTRACEABLE_CODE=true — git metadata check bypassed"
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+# GUARD 2: Confirm that live trading is intentional
+# ═══════════════════════════════════════════════════════════════════════
+if is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}" && ! is_truthy "${DRY_RUN_MODE_VAL}"; then
+    if is_truthy "${LIVE_TRADING_CONFIRMED:-false}"; then
+        echo "✅ Live trading confirmed (LIVE_TRADING_CONFIRMED=true)"
+    elif [ -t 0 ]; then
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════════════════════╗"
+        echo "║  ⚠️  LIVE TRADING — OPERATOR CONFIRMATION REQUIRED                           ║"
+        echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "   🔴 REAL MONEY AT RISK. Live orders will be placed on exchanges."
+        echo "   Branch: ${BRANCH_VAL:-unknown}  Commit: ${COMMIT_VAL:-unknown}"
+        echo ""
+        read -p "   Type 'yes' to confirm live trading: " -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+            echo "❌ Live trading not confirmed. Exiting."
+            echo "   To test safely: export DRY_RUN_MODE=true"
+            exit 0
+        fi
+        echo "✅ Live trading confirmed by operator."
+    else
+        echo ""
+        echo "❌ BLOCKED: Non-interactive session — cannot prompt for live trading confirmation."
+        echo "   Set LIVE_TRADING_CONFIRMED=true to confirm live trading is intentional."
+        echo "   To test safely: export DRY_RUN_MODE=true"
+        echo ""
+        exit 1
+    fi
+fi
 
 # Coinbase credentials are now OPTIONAL (Coinbase disabled Jan 30, 2026)
 # The bot will run with Kraken only
@@ -373,6 +433,15 @@ fi
 
 # Enforce live mode explicitly
 export PAPER_MODE=false
+
+# Log monitoring guidance — watch for execution errors and trade rejections
+echo ""
+echo "📋 LOG MONITORING: Logs stream to stdout and nija.log"
+echo "   Key patterns to watch:"
+echo "      ❌ ORDER REJECTED / EXECUTION ERROR — trade could not be placed"
+echo "      ⚠️  API ERROR / RATE LIMITED       — connectivity or throttling issues"
+echo "      ⚠️  INSUFFICIENT FUNDS             — balance too low for trade"
+echo ""
 
 echo "🔄 Starting live trading bot..."
 echo "Working directory: $(pwd)"
