@@ -318,6 +318,19 @@ def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationRe
     if mode_result.critical_failure:
         combined.mark_critical_failure(mode_result.failure_reason)
     
+    # 4. Combined check: escalate to critical failure when live trading with unknown git metadata.
+    # Running untraceable code in live mode is prohibited for auditability.
+    live_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes")
+    dry_run = os.getenv("DRY_RUN_MODE", "false").lower() in ("true", "1", "yes")
+    git_unknown = _is_git_metadata_unknown(git_branch) or _is_git_metadata_unknown(git_commit)
+    allow_untraceable = os.getenv("ALLOW_UNTRACEABLE_CODE", "false").lower() in ("true", "1", "yes")
+    if live_verified and not dry_run and git_unknown and not allow_untraceable:
+        combined.mark_critical_failure(
+            "Live trading with unknown git metadata is prohibited. "
+            "Set GIT_BRANCH and GIT_COMMIT (or run inject_git_metadata.sh), "
+            "or use DRY_RUN_MODE=true for safe testing."
+        )
+    
     return combined
 
 
@@ -385,5 +398,13 @@ def display_validation_results(result: StartupValidationResult):
     else:
         logger.info("RESULT: PASSED (No risks or warnings)")
     
+    logger.info("=" * 80)
+    logger.info("")
+    
+    # Log monitoring reminder
+    logger.info("📋 LOG MONITORING: Watch for these patterns in nija.log / stdout:")
+    logger.info("   ❌ ORDER REJECTED / EXECUTION ERROR — trade could not be placed")
+    logger.info("   ⚠️  API ERROR / RATE LIMITED       — connectivity or throttling issues")
+    logger.info("   ⚠️  INSUFFICIENT FUNDS             — balance too low for trade")
     logger.info("=" * 80)
     logger.info("")
