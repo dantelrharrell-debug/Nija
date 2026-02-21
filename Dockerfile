@@ -19,10 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Build arguments for Git metadata
-ARG GIT_BRANCH=unknown
-ARG GIT_COMMIT=unknown
-ARG BUILD_TIMESTAMP=unknown
+# Build arguments for Git metadata (defaults reflect latest release; override via --build-arg at build time)
+ARG GIT_BRANCH=main
+ARG GIT_COMMIT=f9856aa
+ARG BUILD_TIMESTAMP=2026-02-21T04:13:57Z
 
 # Bake Git metadata into the image as runtime environment variables so
 # the values are available to start.sh and the bot at container startup
@@ -31,11 +31,8 @@ ENV GIT_BRANCH=$GIT_BRANCH
 ENV GIT_COMMIT=$GIT_COMMIT
 ENV BUILD_TIMESTAMP=$BUILD_TIMESTAMP
 
-# Inject Git metadata at build time (pass build args as env vars)
-RUN echo "Injecting build metadata..." && \
-    GIT_BRANCH="${GIT_BRANCH}" GIT_COMMIT="${GIT_COMMIT}" BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
-    bash inject_git_metadata.sh || \
-    echo "Warning: Could not inject git metadata (continuing anyway)"
+# Inject Git metadata at build time; script uses set -e so any failure aborts the build
+RUN ./inject_git_metadata.sh
 
 # Create necessary directories and set permissions
 RUN mkdir -p /app/cache /app/data /app/logs && \
