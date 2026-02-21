@@ -6,6 +6,7 @@ This module provides validation for:
 1. Git metadata (branch/commit must be known)
 2. Exchange configuration (clear warnings for disabled exchanges)
 3. Trading mode intentionality (testing vs. live must be explicit)
+4. Account hierarchy (platform credentials must be configured before user credentials)
 """
 
 import os
@@ -22,6 +23,7 @@ class StartupRisk(Enum):
     DISABLED_EXCHANGE_WARNING = "disabled_exchange_warning"
     MODE_AMBIGUOUS = "mode_ambiguous"
     NO_EXCHANGES_ENABLED = "no_exchanges_enabled"
+    PLATFORM_NOT_CONFIGURED_FIRST = "platform_not_configured_first"
 
 
 class StartupValidationResult:
@@ -281,6 +283,61 @@ def validate_trading_mode() -> StartupValidationResult:
     return result
 
 
+def validate_account_hierarchy() -> StartupValidationResult:
+    """
+    Validate that platform account credentials are configured before user accounts.
+
+    Risk: When user accounts have credentials configured but the platform account does
+    not, users temporarily act as primary traders. This breaks the intended account
+    hierarchy and can cause reporting and position-attribution issues.
+
+    Platform account should always be configured first so it acts as the primary
+    account; user accounts are secondary.
+
+    Returns:
+        StartupValidationResult with validation findings
+    """
+    result = StartupValidationResult()
+
+    # Check for Kraken platform credentials
+    kraken_platform_configured = bool(
+        os.getenv("KRAKEN_PLATFORM_API_KEY") and os.getenv("KRAKEN_PLATFORM_API_SECRET")
+    )
+
+    # Detect any Kraken user credentials by scanning environment variables for
+    # the pattern KRAKEN_USER_*_API_KEY (e.g. KRAKEN_USER_DAIVON_API_KEY)
+    kraken_users_configured = [
+        key for key in os.environ
+        if key.startswith("KRAKEN_USER_") and key.endswith("_API_KEY") and os.environ[key]
+    ]
+
+    if kraken_users_configured and not kraken_platform_configured:
+        user_count = len(kraken_users_configured)
+        result.add_risk(
+            StartupRisk.PLATFORM_NOT_CONFIGURED_FIRST,
+            f"Kraken user account(s) configured ({user_count}) but Platform account credentials are missing"
+        )
+        result.add_warning(
+            "⚠️  HIERARCHY ISSUE: Kraken user account(s) are configured but the Platform account "
+            "is NOT. Users will temporarily act as primary traders, which may cause hierarchy "
+            "and reporting issues. Configure Platform account credentials first: "
+            "KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET."
+        )
+        result.add_info(
+            "💡 RECOMMENDATION: Set KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET "
+            "so the Platform account is established before user accounts connect. "
+            "See PLATFORM_ACCOUNT_REQUIRED.md for setup instructions."
+        )
+    elif kraken_platform_configured:
+        result.add_info("✅ Kraken Platform account configured (correct hierarchy: Platform first)")
+        if kraken_users_configured:
+            result.add_info(
+                f"✅ {len(kraken_users_configured)} Kraken user account(s) configured after Platform (correct order)"
+            )
+
+    return result
+
+
 def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationResult:
     """
     Run all startup validations and combine results.
@@ -317,8 +374,16 @@ def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationRe
     combined.info.extend(mode_result.info)
     if mode_result.critical_failure:
         combined.mark_critical_failure(mode_result.failure_reason)
-    
-    # 4. Combined check: escalate to critical failure when live trading with unknown git metadata.
+
+    # 4. Validate account hierarchy (platform credentials must come before user credentials)
+    hierarchy_result = validate_account_hierarchy()
+    combined.risks.extend(hierarchy_result.risks)
+    combined.warnings.extend(hierarchy_result.warnings)
+    combined.info.extend(hierarchy_result.info)
+    if hierarchy_result.critical_failure:
+        combined.mark_critical_failure(hierarchy_result.failure_reason)
+
+    # 5. Combined check: escalate to critical failure when live trading with unknown git metadata.
     # Running untraceable code in live mode is prohibited for auditability.
     live_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes")
     dry_run = os.getenv("DRY_RUN_MODE", "false").lower() in ("true", "1", "yes")
