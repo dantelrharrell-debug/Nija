@@ -1384,8 +1384,24 @@ class IndependentBrokerTrader:
         This also calls connect_users_from_config() so that the
         MultiAccountBrokerManager can clear its failure cache and retry
         accounts whose credentials were recently fixed.
+
+        Platform accounts (Kraken, Alpaca) must be connected before user
+        accounts are reconnected so that users adopt the correct SECONDARY
+        role and "temporarily acting as primary" warnings are eliminated.
         """
         if not self.multi_account_manager:
+            return
+
+        # Enforce Platform-first hierarchy: if Platform brokers are registered
+        # but none are connected yet, defer user reconnection until the next
+        # monitor cycle.  This guarantees Platform is PRIMARY and users are
+        # SECONDARY, removing hierarchy warnings from connect_users_from_config().
+        platform_brokers = self.multi_account_manager.platform_brokers
+        if platform_brokers and not any(b.connected for b in platform_brokers.values()):
+            logger.debug(
+                "Connection monitor: deferring user reconnection — "
+                "waiting for Platform account (Kraken/Alpaca) to connect first"
+            )
             return
 
         # Re-run config-based user connection (clears failure cache automatically)
