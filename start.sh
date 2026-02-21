@@ -167,6 +167,14 @@ if ([ -z "$COMMIT_VAL" ] || [ "$COMMIT_VAL" = "unknown" ]) && command -v git >/d
     COMMIT_VAL=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 fi
 
+# Fallback: use Railway-provided runtime environment variables (always available in Railway deployments)
+if ([ -z "$BRANCH_VAL" ] || [ "$BRANCH_VAL" = "unknown" ]) && [ -n "$RAILWAY_GIT_BRANCH" ]; then
+    BRANCH_VAL="$RAILWAY_GIT_BRANCH"
+fi
+if ([ -z "$COMMIT_VAL" ] || [ "$COMMIT_VAL" = "unknown" ]) && [ -n "$RAILWAY_GIT_COMMIT_SHA" ]; then
+    COMMIT_VAL="${RAILWAY_GIT_COMMIT_SHA:0:7}"
+fi
+
 echo "Branch: ${BRANCH_VAL:-unknown}"
 echo "Commit: ${COMMIT_VAL:-unknown}"
 
