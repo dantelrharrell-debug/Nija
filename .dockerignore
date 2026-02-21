@@ -1,8 +1,8 @@
 __pycache__
 *.pyc
-.git
 .gitignore
 .env
+.env.build
 venv/
 .venv/
 node_modules/
