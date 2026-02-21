@@ -1,0 +1,14 @@
+{
+  "user_id": "normal_trader",
+  "balance": 1000.0,
+  "peak_balance": 1000.0,
+  "daily_pnl": 0.0,
+  "daily_trades": 0,
+  "daily_losses": 0.0,
+  "last_trade_date": null,
+  "weekly_pnl": 0.0,
+  "weekly_start_date": null,
+  "current_drawdown_pct": 0.0,
+  "circuit_breaker_triggered": false,
+  "forced_unwind_active": false
+}

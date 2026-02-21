@@ -12,6 +12,7 @@ Features:
 - Risk level monitoring
 """
 
+import copy
 import os
 import json
 import logging
@@ -24,6 +25,19 @@ logger = logging.getLogger('nija.risk')
 
 # Data directory for risk config files
 _data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+
+# Import account mode manager for per-account dynamic risk routing
+try:
+    from account_mode_manager import get_account_mode_manager
+    _HAS_MODE_MANAGER = True
+except ImportError:
+    try:
+        from bot.account_mode_manager import get_account_mode_manager  # type: ignore
+        _HAS_MODE_MANAGER = True
+    except ImportError:
+        get_account_mode_manager = None  # type: ignore
+        _HAS_MODE_MANAGER = False
+        logger.warning("⚠️ AccountModeManager not available – per-account mode routing disabled")
 
 
 @dataclass
@@ -49,6 +63,9 @@ class UserRiskLimits:
     # Circuit breaker
     circuit_breaker_loss_pct: float = 0.03  # Halt trading at 3% daily loss
 
+    # Per-account mode gate: False when mode blocks new entries (e.g. recovery/paused)
+    allow_new_entries: bool = True
+
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
         return asdict(self)
@@ -56,7 +73,10 @@ class UserRiskLimits:
     @classmethod
     def from_dict(cls, data: Dict) -> 'UserRiskLimits':
         """Create from dictionary."""
-        return cls(**data)
+        # Strip unknown keys so future additions don't break old saved files
+        known = set(cls.__dataclass_fields__.keys())
+        filtered = {k: v for k, v in data.items() if k in known}
+        return cls(**filtered)
 
 
 @dataclass
@@ -206,20 +226,39 @@ class UserRiskManager:
 
     def get_limits(self, user_id: str) -> UserRiskLimits:
         """
-        Get risk limits for a user.
+        Get risk limits for a user, with per-account mode overrides applied.
+
+        The base limits are loaded from the user's risk limits file (or defaults).
+        If the AccountModeManager is available, mode-based overrides are then
+        applied on top of those base limits before returning.
 
         Args:
             user_id: User identifier
 
         Returns:
-            UserRiskLimits: User's risk limits
+            UserRiskLimits: User's effective risk limits (base + mode overrides)
         """
         lock = self._get_user_lock(user_id)
 
         with lock:
             if user_id not in self._user_limits:
                 self._user_limits[user_id] = self._load_limits(user_id)
-            return self._user_limits[user_id]
+            # Work on a shallow copy so mode overrides don't permanently mutate
+            # the cached base limits (allows the mode to change at runtime).
+            limits = copy.copy(self._user_limits[user_id])
+
+        # Apply per-account mode overrides outside the lock to avoid contention
+        if _HAS_MODE_MANAGER:
+            try:
+                mode_manager = get_account_mode_manager()
+                mode = mode_manager.get_mode(user_id)
+                mode_manager.apply_mode_overrides(mode, limits)
+            except Exception as exc:
+                logger.warning(
+                    "Could not apply mode overrides for %s: %s", user_id, exc
+                )
+
+        return limits
 
     def update_limits(self, user_id: str, **kwargs):
         """
@@ -338,11 +377,23 @@ class UserRiskManager:
         Returns:
             (can_trade, error_message)
         """
+        # get_limits() already applies mode overrides (e.g. allow_new_entries=False
+        # for recovery/paused modes) so check it first.
+        limits = self.get_limits(user_id)
+
+        # Per-account mode gate: block new entries when mode disallows them
+        if not limits.allow_new_entries:
+            mode_name = "unknown"
+            if _HAS_MODE_MANAGER:
+                try:
+                    mode_name = get_account_mode_manager().get_mode(user_id).value
+                except Exception:
+                    pass
+            return False, f"New entries blocked by account mode: {mode_name}"
+
         lock = self._get_user_lock(user_id)
 
         with lock:
-            limits = self.get_limits(user_id)
-
             if user_id not in self._user_states:
                 self._user_states[user_id] = self._load_state(user_id)
 

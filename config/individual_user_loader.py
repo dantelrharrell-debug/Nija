@@ -38,6 +38,15 @@ except ImportError:
         def is_production_environment():
             return False
 
+# Import account mode manager for per-account mode registration
+try:
+    from bot.account_mode_manager import get_account_mode_manager
+except ImportError:
+    try:
+        from account_mode_manager import get_account_mode_manager  # type: ignore
+    except ImportError:
+        get_account_mode_manager = None  # type: ignore
+
 logger = logging.getLogger("nija.individual_user_loader")
 
 
@@ -56,7 +65,8 @@ class IndividualUserConfig:
         copy_from_platform: bool = True,
         risk_multiplier: float = 1.0,
         independent_trading: bool = False,
-        active_trading: bool = True
+        active_trading: bool = True,
+        mode: str = "normal"
     ):
         """
         Initialize individual user configuration.
@@ -72,6 +82,9 @@ class IndividualUserConfig:
             independent_trading: Whether user should run independent trading thread (default: False)
             active_trading: Allow new trade entries for this user (default: True). Set False during
                             recovery to stop new entries while existing positions are closed out.
+            mode: Per-account trading mode controlling risk rules (default: 'normal').
+                  Valid values: 'normal', 'recovery', 'conservative', 'aggressive', 'paused'.
+                  Example: 'recovery' stops new entries and reduces position sizes.
         """
         self.user_id = user_id
         self.name = name
@@ -82,6 +95,7 @@ class IndividualUserConfig:
         self.risk_multiplier = risk_multiplier
         self.independent_trading = independent_trading
         self.active_trading = active_trading
+        self.mode = mode
 
         # For compatibility with existing code
         self.account_type = "retail"  # Default to retail
@@ -104,7 +118,8 @@ class IndividualUserConfig:
             copy_from_platform=data.get('copy_from_platform', True),
             risk_multiplier=data.get('risk_multiplier', 1.0),
             independent_trading=data.get('independent_trading', False),
-            active_trading=data.get('active_trading', True)
+            active_trading=data.get('active_trading', True),
+            mode=data.get('mode', 'normal')
         )
 
     def to_dict(self) -> Dict:
@@ -117,7 +132,8 @@ class IndividualUserConfig:
             'copy_from_platform': self.copy_from_platform,
             'risk_multiplier': self.risk_multiplier,
             'independent_trading': self.independent_trading,
-            'active_trading': self.active_trading
+            'active_trading': self.active_trading,
+            'mode': self.mode
         }
 
     def has_api_keys(self) -> bool:
@@ -318,6 +334,17 @@ class IndividualUserConfigLoader:
 
             # Create user config
             user_config = IndividualUserConfig.from_dict(user_id, data)
+
+            # Register the account mode with the global mode manager
+            if get_account_mode_manager is not None:
+                try:
+                    mode_manager = get_account_mode_manager()
+                    mode_manager.load_mode_from_config(user_id, user_config.mode)
+                except Exception as exc:
+                    logger.warning(
+                        "Could not register mode for %s: %s", user_id, exc
+                    )
+
             return user_config
 
         except json.JSONDecodeError as e:
