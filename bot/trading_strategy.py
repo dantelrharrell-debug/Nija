@@ -53,18 +53,19 @@ except ImportError:
 
 # Import Recovery Controller for capital-first safety (NEW - Feb 2026)
 try:
-    from recovery_controller import get_recovery_controller
+    from recovery_controller import get_recovery_controller, FailureState
     RECOVERY_CONTROLLER_AVAILABLE = True
     logger.info("✅ Recovery Controller loaded - Capital-first safety layer active")
 except ImportError:
     try:
-        from bot.recovery_controller import get_recovery_controller
+        from bot.recovery_controller import get_recovery_controller, FailureState
         RECOVERY_CONTROLLER_AVAILABLE = True
         logger.info("✅ Recovery Controller loaded - Capital-first safety layer active")
     except ImportError:
         RECOVERY_CONTROLLER_AVAILABLE = False
         logger.warning("⚠️ Recovery Controller not available - safety layer disabled")
         get_recovery_controller = None
+        FailureState = None
 
 # Import scalar helper for indicator conversions
 try:
@@ -1938,6 +1939,7 @@ class TradingStrategy:
                     
                     # 🔒 CAPITAL PROTECTION: Entry price must NEVER default to 0 - fail adoption if missing
                     # Note: pos.get('entry_price', 0.0) returns 0.0 if key is missing or value is None
+                    recovery_force_close = False  # Flag: trigger immediate market sell after adoption
                     if entry_price == 0 or entry_price <= 0:
                         # Check for a manual override in config/entry_price_overrides.json
                         override_price = entry_price_overrides.get(symbol, 0.0)
@@ -1945,15 +1947,43 @@ class TradingStrategy:
                             logger.info(f"   [{i}/{positions_found}] 📋 {symbol}: Using manual entry price override ${override_price:.4f}")
                             entry_price = override_price
                         else:
-                            logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE")
-                            logger.error(f"   ❌ Position adoption FAILED - entry price is MANDATORY")
-                            logger.error(f"   💡 Recommendation: Verify position history or set entry price in config/entry_price_overrides.json")
-                            failed_positions.append({
-                                'symbol': symbol,
-                                'reason': 'MISSING_ENTRY_PRICE',
-                                'detail': 'Entry price is 0 or missing - required for P&L tracking'
-                            })
-                            continue  # Skip this position - do not adopt without entry price
+                            # ⚡ OPTION A: Recovery Close Without Entry Price
+                            # In recovery mode we do NOT need entry price to close a position.
+                            # We only need it for P&L tracking, profit optimisation, and stop-loss logic.
+                            # For recovery we just liquidate immediately.
+                            in_recovery_mode = False
+                            if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller is not None and FailureState is not None:
+                                try:
+                                    rc = get_recovery_controller()
+                                    in_recovery_mode = rc.current_state == FailureState.RECOVERY
+                                except Exception:
+                                    pass
+
+                            if in_recovery_mode and current_price > 0:
+                                # Recovery override: adopt with current_price as synthetic entry
+                                # and flag position for immediate forced liquidation.
+                                entry_price = current_price
+                                recovery_force_close = True
+                                logger.warning(f"   [{i}/{positions_found}] ⚠️  ENTRY UNKNOWN – RECOVERY FORCED")
+                                logger.warning(f"   [{i}/{positions_found}] 🔄 {symbol}: Adopting with entry_price=current_price=${current_price:.4f} for immediate liquidation")
+                            elif in_recovery_mode and current_price <= 0:
+                                logger.error(f"   [{i}/{positions_found}] ❌ RECOVERY MODE: Cannot liquidate {symbol} - current_price is also unavailable")
+                                failed_positions.append({
+                                    'symbol': symbol,
+                                    'reason': 'MISSING_ENTRY_PRICE',
+                                    'detail': 'Entry price and current price are both unavailable - cannot adopt or liquidate'
+                                })
+                                continue  # Skip - cannot safely liquidate without any price reference
+                            else:
+                                logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE")
+                                logger.error(f"   ❌ Position adoption FAILED - entry price is MANDATORY")
+                                logger.error(f"   💡 Recommendation: Verify position history or set entry price in config/entry_price_overrides.json")
+                                failed_positions.append({
+                                    'symbol': symbol,
+                                    'reason': 'MISSING_ENTRY_PRICE',
+                                    'detail': 'Entry price is 0 or missing - required for P&L tracking'
+                                })
+                                continue  # Skip this position - do not adopt without entry price
                     
                     # Register position in tracker (MANDATORY)
                     success = position_tracker.track_entry(
@@ -1973,6 +2003,20 @@ class TradingStrategy:
                         })
                         continue
                     
+                    # ⚡ RECOVERY MODE: Immediately market-sell positions adopted without known entry
+                    if recovery_force_close:
+                        logger.warning(f"   [{i}/{positions_found}] 🚨 RECOVERY LIQUIDATION: Immediately market-selling {symbol}")
+                        try:
+                            if hasattr(broker, 'close_position'):
+                                broker.close_position(symbol, quantity=quantity)
+                            elif hasattr(broker, 'place_market_order'):
+                                broker.place_market_order(symbol, side='sell', quantity=quantity)
+                            else:
+                                logger.error(f"   [{i}/{positions_found}] ❌ Cannot liquidate {symbol}: broker has no close_position or place_market_order")
+                            logger.info(f"   [{i}/{positions_found}] ✅ RECOVERY SELL submitted for {symbol}")
+                        except Exception as liq_err:
+                            logger.error(f"   [{i}/{positions_found}] ❌ Recovery liquidation FAILED for {symbol}: {liq_err}")
+
                     # Position successfully adopted
                     adopted_count += 1
                     
@@ -1988,7 +2032,8 @@ class TradingStrategy:
                         'current_price': current_price,
                         'quantity': quantity,
                         'size_usd': size_usd,
-                        'pnl_pct': pnl_pct
+                        'pnl_pct': pnl_pct,
+                        'recovery_force_close': recovery_force_close
                     }
                     adopted_positions.append(position_summary)
                     
