@@ -1085,6 +1085,8 @@ class MultiAccountBrokerManager:
                 logger.warning(f"   Platform {broker_type.value.upper()} account is NOT connected")
                 logger.warning("   🔧 RECOMMENDATION: Configure Platform account credentials first")
                 logger.warning(f"      Platform should be PRIMARY, users should be SECONDARY")
+                logger.warning("   ⚠️  HIERARCHY ISSUE: User is temporarily acting as primary — this may cause")
+                logger.warning("      hierarchy and reporting issues until the Platform account is configured.")
                 logger.warning("=" * 70)
                 # Allow connection to proceed for non-Kraken brokers - user may want standalone trading
                 # But log the warning so they know this is not the ideal setup
@@ -1102,7 +1104,7 @@ class MultiAccountBrokerManager:
             if platform_connected:
                 logger.info(f"   ✅ Platform {broker_type.value.upper()} is connected (correct priority)")
             else:
-                logger.info(f"   ⚠️  Platform {broker_type.value.upper()} is NOT connected (user will be primary)")
+                logger.info(f"   ⚠️  Platform {broker_type.value.upper()} is NOT connected (user will be primary — hierarchy issue)")
             # Flush to ensure this message appears before connection attempt logs
             # CRITICAL FIX: Must flush the root 'nija' logger's handlers, not the child logger's
             # Child loggers (like 'nija.multi_account', 'nija.broker') propagate to parent but
