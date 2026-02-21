@@ -294,12 +294,18 @@ def validate_account_hierarchy() -> StartupValidationResult:
     Platform account should always be configured first so it acts as the primary
     account; user accounts are secondary.
 
+    Brokers checked:
+      - Kraken: platform = KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET
+                users   = KRAKEN_USER_*_API_KEY
+      - Alpaca:  platform = ALPACA_API_KEY + ALPACA_API_SECRET   (optional broker)
+                users   = ALPACA_USER_*_API_KEY
+
     Returns:
         StartupValidationResult with validation findings
     """
     result = StartupValidationResult()
 
-    # Check for Kraken platform credentials
+    # ── Kraken ────────────────────────────────────────────────────────────────
     kraken_platform_configured = bool(
         os.getenv("KRAKEN_PLATFORM_API_KEY") and os.getenv("KRAKEN_PLATFORM_API_SECRET")
     )
@@ -333,6 +339,41 @@ def validate_account_hierarchy() -> StartupValidationResult:
         if kraken_users_configured:
             result.add_info(
                 f"✅ {len(kraken_users_configured)} Kraken user account(s) configured after Platform (correct order)"
+            )
+
+    # ── Alpaca (optional broker) ───────────────────────────────────────────────
+    # Platform credentials: ALPACA_API_KEY + ALPACA_API_SECRET
+    # User credentials:     ALPACA_USER_*_API_KEY  (e.g. ALPACA_USER_TANIA_API_KEY)
+    alpaca_platform_configured = bool(
+        os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET")
+    )
+
+    alpaca_users_configured = [
+        key for key in os.environ
+        if key.startswith("ALPACA_USER_") and key.endswith("_API_KEY") and os.environ[key]
+    ]
+
+    if alpaca_users_configured and not alpaca_platform_configured:
+        user_count = len(alpaca_users_configured)
+        result.add_risk(
+            StartupRisk.PLATFORM_NOT_CONFIGURED_FIRST,
+            f"Alpaca user account(s) configured ({user_count}) but Platform account credentials are missing"
+        )
+        result.add_warning(
+            "⚠️  HIERARCHY ISSUE: Alpaca user account(s) are configured but the Platform account "
+            "is NOT. Users will temporarily act as primary traders, which may cause hierarchy "
+            "and reporting issues. Configure Platform account credentials first: "
+            "ALPACA_API_KEY and ALPACA_API_SECRET."
+        )
+        result.add_info(
+            "💡 RECOMMENDATION: Set ALPACA_API_KEY and ALPACA_API_SECRET "
+            "so the Alpaca Platform account is established before user accounts connect."
+        )
+    elif alpaca_platform_configured:
+        result.add_info("✅ Alpaca Platform account configured (correct hierarchy: Platform first)")
+        if alpaca_users_configured:
+            result.add_info(
+                f"✅ {len(alpaca_users_configured)} Alpaca user account(s) configured after Platform (correct order)"
             )
 
     return result

@@ -1326,6 +1326,196 @@ class MultiAccountBrokerManager:
 
         return connected_users
 
+    def verify_account_hierarchy(self) -> Dict:
+        """
+        Verify that Platform accounts are PRIMARY and User accounts are SECONDARY.
+
+        After the Kraken Platform account is configured:
+        - All users adopt positions from the Platform correctly.
+        - "Temporarily acting as primary" warnings are eliminated.
+        - Unified reporting and capital protection are fully enabled.
+        - Missing entry prices are automatically fetched from trade history
+          via the Platform broker's get_real_entry_price() method.
+
+        Returns:
+            dict with keys:
+              'platform_is_primary'   – True when at least one Platform broker is connected.
+              'users_are_secondary'   – True when every connected user broker has a
+                                        corresponding Platform broker (no user is acting
+                                        as primary).
+              'hierarchy_valid'       – True when both conditions above are met.
+              'entry_price_fetch_enabled' – True when at least one Platform broker
+                                           supports get_real_entry_price() (capital
+                                           protection alignment is fully active).
+              'hierarchy_issues'      – List of strings describing any violations found.
+              'platform_brokers'      – Dict mapping broker name → connection status.
+              'user_brokers'          – Dict mapping broker name → number of connected users.
+        """
+        issues: list = []
+
+        # ── 1. Platform PRIMARY check ──────────────────────────────────────────
+        platform_status: Dict[str, bool] = {}
+        for broker_type, broker in self._platform_brokers.items():
+            platform_status[broker_type.value.upper()] = broker.connected
+
+        platform_is_primary = any(platform_status.values()) if platform_status else False
+
+        if not platform_is_primary:
+            issues.append(
+                "No Platform broker is connected. "
+                "Configure Platform credentials first so Platform is PRIMARY. "
+                "See PLATFORM_ACCOUNT_REQUIRED.md for setup instructions."
+            )
+
+        # ── 2. User SECONDARY check ────────────────────────────────────────────
+        # A user is "temporarily acting as primary" when their broker type has no
+        # corresponding connected Platform broker.
+        user_broker_summary: Dict[str, int] = {}
+        users_are_secondary = True
+
+        for user_id, brokers in self.user_brokers.items():
+            for broker_type, broker in brokers.items():
+                if not broker.connected:
+                    continue
+                name = broker_type.value.upper()
+                user_broker_summary[name] = user_broker_summary.get(name, 0) + 1
+                platform_broker = self._platform_brokers.get(broker_type)
+                if platform_broker is None or not platform_broker.connected:
+                    users_are_secondary = False
+                    # Build broker-specific credential guidance
+                    if name == "KRAKEN":
+                        cred_hint = "KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET"
+                    elif name == "ALPACA":
+                        cred_hint = "ALPACA_API_KEY / ALPACA_API_SECRET"
+                    elif name == "COINBASE":
+                        cred_hint = "COINBASE_API_KEY / COINBASE_API_SECRET"
+                    elif name == "OKX":
+                        cred_hint = "OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE"
+                    else:
+                        cred_hint = f"{name}_PLATFORM_API_KEY / {name}_PLATFORM_API_SECRET"
+                    issues.append(
+                        f"User account on {name} is temporarily acting as primary — "
+                        f"Platform {name} account is not connected. "
+                        f"Configure {cred_hint} "
+                        f"to restore correct hierarchy."
+                    )
+
+        # ── 3. Entry-price auto-fetch (capital protection alignment) ──────────
+        entry_price_fetch_enabled = any(
+            hasattr(broker, 'get_real_entry_price')
+            for broker in self._platform_brokers.values()
+            if broker.connected
+        )
+        if platform_is_primary and not entry_price_fetch_enabled:
+            issues.append(
+                "Platform broker is connected but does not expose get_real_entry_price(). "
+                "Missing entry prices cannot be auto-fetched from trade history."
+            )
+
+        hierarchy_valid = platform_is_primary and users_are_secondary
+
+        # ── 4. Log results ─────────────────────────────────────────────────────
+        logger.info("=" * 70)
+        logger.info("🔍 ACCOUNT HIERARCHY VERIFICATION")
+        logger.info("=" * 70)
+        logger.info("🎯 PLATFORM accounts are PRIMARY - User accounts are SECONDARY")
+        logger.info("")
+
+        logger.info("🔷 PLATFORM ACCOUNTS (PRIMARY):")
+        if platform_status:
+            for name, connected in platform_status.items():
+                status = "✅ CONNECTED (PRIMARY)" if connected else "❌ NOT CONNECTED"
+                logger.info(f"   • {name}: {status}")
+        else:
+            logger.warning("   ⚠️  No platform brokers registered")
+
+        logger.info("")
+        logger.info("👤 USER ACCOUNTS (SECONDARY):")
+        if user_broker_summary:
+            for name, count in user_broker_summary.items():
+                platform_ok = platform_status.get(name, False)
+                role = "SECONDARY ✅" if platform_ok else "⚠️  TEMPORARILY ACTING AS PRIMARY"
+                logger.info(f"   • {name}: {count} user(s) — {role}")
+        else:
+            logger.info("   ⚪ No connected user accounts")
+
+        logger.info("")
+        if entry_price_fetch_enabled:
+            logger.info(
+                "✅ Entry price auto-fetch ENABLED — missing entry prices will be "
+                "retrieved from trade history (capital protection ALIGNED)"
+            )
+        elif platform_is_primary:
+            logger.warning(
+                "⚠️  Entry price auto-fetch NOT available on connected Platform broker"
+            )
+        else:
+            logger.info(
+                "ℹ️  Entry price auto-fetch requires a connected Platform broker. "
+                "Configure Platform account to enable capital protection alignment."
+            )
+
+        logger.info("")
+        if hierarchy_valid:
+            logger.info("✅ HIERARCHY VALID: Platform is PRIMARY, all users are SECONDARY")
+        else:
+            logger.warning("⚠️  HIERARCHY ISSUE DETECTED:")
+            for issue in issues:
+                logger.warning(f"   • {issue}")
+            logger.info("")
+            logger.info("💡 NEXT STEPS:")
+            # Identify which brokers are missing a Platform account
+            missing_platform_brokers = [
+                name for name, count in user_broker_summary.items()
+                if not platform_status.get(name, False)
+            ]
+            step = 1
+            for broker_name in missing_platform_brokers:
+                if broker_name == "KRAKEN":
+                    logger.info(
+                        f"   {step}. Configure the Kraken Platform account: "
+                        "KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET"
+                    )
+                elif broker_name == "ALPACA":
+                    logger.info(
+                        f"   {step}. Configure the Alpaca Platform account: "
+                        "ALPACA_API_KEY + ALPACA_API_SECRET "
+                        "(optionally set ALPACA_PAPER=true for paper trading)"
+                    )
+                else:
+                    logger.info(
+                        f"   {step}. Configure the {broker_name} Platform account credentials"
+                    )
+                step += 1
+            if not missing_platform_brokers:
+                logger.info(
+                    f"   {step}. Configure the Platform account credentials for your broker"
+                )
+                step += 1
+            logger.info(
+                f"   {step}. Restart the bot — Platform will become PRIMARY and users SECONDARY"
+            )
+            step += 1
+            logger.info(
+                f"   {step}. NIJA will automatically fetch missing entry prices from trade history"
+            )
+            step += 1
+            logger.info(
+                f"   {step}. Position adoption will be fully aligned with capital protection rules"
+            )
+
+        logger.info("=" * 70)
+
+        return {
+            'platform_is_primary': platform_is_primary,
+            'users_are_secondary': users_are_secondary,
+            'hierarchy_valid': hierarchy_valid,
+            'entry_price_fetch_enabled': entry_price_fetch_enabled,
+            'hierarchy_issues': issues,
+            'platform_brokers': platform_status,
+            'user_brokers': user_broker_summary,
+        }
+
     def audit_user_accounts(self):
         """
         Audit and log all user accounts with broker status.

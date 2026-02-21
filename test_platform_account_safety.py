@@ -549,6 +549,202 @@ def test_logging_and_metrics():
     return True
 
 
+def test_verify_account_hierarchy():
+    """
+    Test 8: Account Hierarchy Verification (verify_account_hierarchy)
+
+    Validates that MultiAccountBrokerManager.verify_account_hierarchy() correctly
+    identifies:
+      - Platform accounts as PRIMARY
+      - User accounts as SECONDARY
+      - "Temporarily acting as primary" situations
+      - Entry-price auto-fetch capability (capital protection alignment)
+    """
+    logger.info("=" * 70)
+    logger.info("TEST 8: Account Hierarchy Verification")
+    logger.info("=" * 70)
+
+    import sys
+    import os
+    import types
+
+    # ── Build a minimal stub for the manager so we can test verify_account_hierarchy
+    #    without importing the full broker stack (which requires live credentials).
+    class _StubBroker:
+        def __init__(self, connected=True, has_entry_price_fetch=True):
+            self.connected = connected
+            self.value = "stub"
+            if has_entry_price_fetch:
+                self.get_real_entry_price = lambda symbol: 1234.56
+
+    class _StubBrokerType:
+        def __init__(self, name):
+            self.value = name
+
+    # Import only the method logic by subclassing MultiAccountBrokerManager
+    # with a minimal __init__ that avoids the real broker connections.
+    multi_account_dir = os.path.join(bot_dir, "multi_account_broker_manager.py")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("multi_account_broker_manager", multi_account_dir)
+    mabm_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mabm_module)
+    MultiAccountBrokerManager = mabm_module.MultiAccountBrokerManager
+
+    # ── Scenario A: No Platform, one User (hierarchy violation) ────────────────
+    logger.info("\nScenario A: No Platform, one User → hierarchy issue expected")
+    mgr = object.__new__(MultiAccountBrokerManager)
+    mgr._platform_brokers = {}
+    kraken_key = _StubBrokerType("kraken")
+    user_stub = _StubBroker(connected=True)
+    mgr.user_brokers = {"user_001": {kraken_key: user_stub}}
+    result = mgr.verify_account_hierarchy()
+
+    assert not result['platform_is_primary'], "Platform should NOT be primary (none connected)"
+    assert not result['hierarchy_valid'], "Hierarchy should be invalid"
+    assert len(result['hierarchy_issues']) > 0, "Should have at least one hierarchy issue"
+    assert not result['entry_price_fetch_enabled'], "Entry-price fetch should be disabled"
+    logger.info("  ✓ Hierarchy correctly flagged as invalid (no Platform)")
+
+    # ── Scenario B: Platform connected, no Users (valid) ───────────────────────
+    logger.info("\nScenario B: Platform connected, no Users → hierarchy valid")
+    mgr2 = object.__new__(MultiAccountBrokerManager)
+    platform_stub = _StubBroker(connected=True, has_entry_price_fetch=True)
+    mgr2._platform_brokers = {kraken_key: platform_stub}
+    mgr2.user_brokers = {}
+    result2 = mgr2.verify_account_hierarchy()
+
+    assert result2['platform_is_primary'], "Platform should be PRIMARY"
+    assert result2['users_are_secondary'], "users_are_secondary should be True (no users)"
+    assert result2['hierarchy_valid'], "Hierarchy should be valid"
+    assert result2['entry_price_fetch_enabled'], "Entry-price fetch should be enabled"
+    assert result2['hierarchy_issues'] == [], "Should have no hierarchy issues"
+    logger.info("  ✓ Hierarchy valid — Platform PRIMARY, no Users")
+
+    # ── Scenario C: Platform + User, both on same broker (correct setup) ──────
+    logger.info("\nScenario C: Platform + User, same broker → hierarchy valid")
+    mgr3 = object.__new__(MultiAccountBrokerManager)
+    platform_stub3 = _StubBroker(connected=True, has_entry_price_fetch=True)
+    mgr3._platform_brokers = {kraken_key: platform_stub3}
+    user_stub3 = _StubBroker(connected=True)
+    mgr3.user_brokers = {"user_daivon": {kraken_key: user_stub3}}
+    result3 = mgr3.verify_account_hierarchy()
+
+    assert result3['platform_is_primary'], "Platform should be PRIMARY"
+    assert result3['users_are_secondary'], "User should be SECONDARY"
+    assert result3['hierarchy_valid'], "Hierarchy should be valid"
+    assert result3['entry_price_fetch_enabled'], "Entry-price fetch should be enabled"
+    assert result3['hierarchy_issues'] == [], "Should have no hierarchy issues"
+    logger.info("  ✓ Full hierarchy valid — Platform PRIMARY, User SECONDARY")
+
+    # ── Scenario D: Platform connected but lacks get_real_entry_price ──────────
+    logger.info("\nScenario D: Platform connected, no entry-price fetch method")
+    mgr4 = object.__new__(MultiAccountBrokerManager)
+    platform_stub4 = _StubBroker(connected=True, has_entry_price_fetch=False)
+    mgr4._platform_brokers = {kraken_key: platform_stub4}
+    mgr4.user_brokers = {}
+    result4 = mgr4.verify_account_hierarchy()
+
+    assert result4['platform_is_primary'], "Platform should be PRIMARY"
+    assert not result4['entry_price_fetch_enabled'], "Entry-price fetch should be disabled"
+    assert len(result4['hierarchy_issues']) == 1, "Should have one issue (no entry-price fetch)"
+    logger.info("  ✓ Entry-price fetch absence correctly detected")
+
+    logger.info("\n✅ Account hierarchy verification test passed!")
+    logger.info("")
+    return True
+
+
+def test_alpaca_hierarchy_validation():
+    """
+    Test 9: Alpaca hierarchy validation (startup_validation.validate_account_hierarchy)
+
+    Verifies that validate_account_hierarchy() detects the ALPACA hierarchy violation
+    (user credentials configured without the Platform account) and correctly confirms
+    the valid setup when the Platform account is present.
+    """
+    logger.info("=" * 70)
+    logger.info("TEST 9: Alpaca Hierarchy Validation")
+    logger.info("=" * 70)
+
+    import os
+    import importlib.util
+
+    # Import startup_validation fresh so env-var changes take effect
+    sv_path = os.path.join(bot_dir, "startup_validation.py")
+    spec = importlib.util.spec_from_file_location("startup_validation", sv_path)
+    sv_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sv_module)
+    validate_account_hierarchy = sv_module.validate_account_hierarchy
+    StartupRisk = sv_module.StartupRisk
+
+    def _with_env(overrides, func):
+        """Run func with temporary env overrides, then restore."""
+        original = {}
+        for k, v in overrides.items():
+            original[k] = os.environ.get(k)
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        try:
+            return func()
+        finally:
+            for k, v in original.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    # ── Scenario A: Alpaca user configured, NO Alpaca Platform → risk ─────────
+    logger.info("\nScenario A: Alpaca user set, no Alpaca Platform → hierarchy risk")
+    env_a = {
+        "ALPACA_API_KEY": None,
+        "ALPACA_API_SECRET": None,
+        "ALPACA_USER_TANIA_API_KEY": "fake-user-key",
+    }
+    result_a = _with_env(env_a, validate_account_hierarchy)
+    risk_types_a = [r[0] for r in result_a.risks]
+    assert StartupRisk.PLATFORM_NOT_CONFIGURED_FIRST in risk_types_a, \
+        "Should flag PLATFORM_NOT_CONFIGURED_FIRST risk for Alpaca"
+    assert any("Alpaca" in w for w in result_a.warnings), \
+        "Should warn about Alpaca hierarchy issue"
+    logger.info("  ✓ Hierarchy risk correctly flagged (Alpaca user without Platform)")
+
+    # ── Scenario B: Alpaca Platform configured, no users → valid ─────────────
+    logger.info("\nScenario B: Alpaca Platform set, no users → no risk")
+    env_b = {
+        "ALPACA_API_KEY": "fake-platform-key",
+        "ALPACA_API_SECRET": "fake-platform-secret",
+        "ALPACA_USER_TANIA_API_KEY": None,
+    }
+    result_b = _with_env(env_b, validate_account_hierarchy)
+    risk_types_b = [r[0] for r in result_b.risks]
+    assert StartupRisk.PLATFORM_NOT_CONFIGURED_FIRST not in risk_types_b, \
+        "Should NOT flag risk when Alpaca Platform is configured"
+    assert any("Alpaca Platform account configured" in info for info in result_b.info), \
+        "Should confirm Alpaca Platform is configured"
+    logger.info("  ✓ No hierarchy risk when Alpaca Platform is PRIMARY")
+
+    # ── Scenario C: Platform + User both configured → valid, correct order ────
+    logger.info("\nScenario C: Alpaca Platform + User both set → valid hierarchy")
+    env_c = {
+        "ALPACA_API_KEY": "fake-platform-key",
+        "ALPACA_API_SECRET": "fake-platform-secret",
+        "ALPACA_USER_TANIA_API_KEY": "fake-user-key",
+    }
+    result_c = _with_env(env_c, validate_account_hierarchy)
+    risk_types_c = [r[0] for r in result_c.risks]
+    assert StartupRisk.PLATFORM_NOT_CONFIGURED_FIRST not in risk_types_c, \
+        "Should NOT flag risk when Platform is configured first"
+    assert any("Alpaca user account(s) configured after Platform" in info for info in result_c.info), \
+        "Should confirm correct order"
+    logger.info("  ✓ Platform + User hierarchy confirmed as valid")
+
+    logger.info("\n✅ Alpaca hierarchy validation test passed!")
+    logger.info("")
+    return True
+
+
 def main():
     """Run all PLATFORM account safety tests."""
     logger.info("")
@@ -556,7 +752,7 @@ def main():
     logger.info("║" + " " * 15 + "PLATFORM ACCOUNT SAFETY TESTS" + " " * 24 + "║")
     logger.info("╚" + "=" * 68 + "╝")
     logger.info("")
-    
+
     tests = [
         ("Position Cap Enforcement", test_position_cap_enforcement),
         ("Dust Cleanup", test_dust_cleanup),
@@ -565,6 +761,8 @@ def main():
         ("Position Tracker Adoption", test_position_tracker_adoption),
         ("Multi-Position Simulation", test_multi_position_simulation),
         ("Logging and Metrics", test_logging_and_metrics),
+        ("Account Hierarchy Verification", test_verify_account_hierarchy),
+        ("Alpaca Hierarchy Validation", test_alpaca_hierarchy_validation),
     ]
     
     passed = 0
@@ -598,6 +796,8 @@ def main():
         logger.info("  ✓ Broker error handling")
         logger.info("  ✓ Position tracking and adoption")
         logger.info("  ✓ Comprehensive logging")
+        logger.info("  ✓ Account hierarchy verification (Platform PRIMARY, Users SECONDARY)")
+        logger.info("  ✓ Alpaca hierarchy validation (Platform before Users)")
         logger.info("")
         return 0
     else:
