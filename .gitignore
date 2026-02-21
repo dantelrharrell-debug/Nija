@@ -75,7 +75,9 @@ data/kraken_nonce_*.txt
 # User management data files (test data, should not be committed)
 data/pnl_test_*.json
 data/risk_state_test_*.json
+data/risk_state_*.json
 data/risk_limits_test_*.json
+data/risk_limits_*.json
 data/webhook_config_test_*.json
 
 # Capital Scaling Engine data files (runtime state, should not be committed)
