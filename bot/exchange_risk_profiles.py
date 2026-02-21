@@ -249,6 +249,15 @@ def _get_kraken_profile() -> Dict:
         'reliability_score': 0.92,  # Very reliable
         'liquidity_tier': 'medium-high',  # Good liquidity
         'execution_speed': 'medium',  # Medium speed
+
+        # Dust Prevention (Kraken minimum effective order ≈ $10)
+        # dust_prevention_enabled: gate applied at order creation AND position opening
+        'dust_prevention_enabled': True,   # Block new orders AND position opens below threshold
+        'dust_threshold_usd': 10.00,       # Positions < $10 are considered dust and blocked/swept
+        'min_order_value_usd': 10.00,      # Hard minimum notional for any new Kraken order
+        # auto_dust_sweep_enabled: picked up by ContinuousDustMonitor (sweep_interval_minutes=30)
+        'auto_dust_sweep_enabled': True,   # Enable periodic dust sweep (every 30 min by default)
+        'base_currency': 'ZUSD',           # Kraken internal USD denomination for recovered funds
     }
 
 

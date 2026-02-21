@@ -108,9 +108,16 @@ class KrakenConfig:
     short_rsi_max: float = 80.0  # Short in extreme overbought
 
     # Position sizing (can use smaller positions profitably)
-    min_position_usd: float = 5.0  # $5 minimum (fees only ~$0.02)
+    min_position_usd: float = 10.0  # $10 minimum (raised to prevent dust; Kraken effective min)
     recommended_min_usd: float = 10.0  # $10+ recommended
     min_balance_to_trade: float = 25.0  # $25 minimum - optimized for small accounts with low fees
+
+    # Dust prevention — block orders that would create sub-threshold residual balances
+    dust_prevention_enabled: bool = True   # Enforce minimum order value gate
+    dust_threshold_usd: float = 10.00     # Positions below $10 are treated as dust
+    min_order_value_usd: float = 10.00    # Hard minimum for any new Kraken order
+    auto_dust_sweep_enabled: bool = True  # Periodic automatic dust sweep
+    base_currency: str = "ZUSD"           # Kraken internal USD denomination
 
     # Order type preferences
     prefer_limit_orders: bool = True  # Use limit orders for best fees
