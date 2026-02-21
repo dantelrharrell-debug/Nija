@@ -549,6 +549,111 @@ def test_logging_and_metrics():
     return True
 
 
+def test_verify_account_hierarchy():
+    """
+    Test 8: Account Hierarchy Verification (verify_account_hierarchy)
+
+    Validates that MultiAccountBrokerManager.verify_account_hierarchy() correctly
+    identifies:
+      - Platform accounts as PRIMARY
+      - User accounts as SECONDARY
+      - "Temporarily acting as primary" situations
+      - Entry-price auto-fetch capability (capital protection alignment)
+    """
+    logger.info("=" * 70)
+    logger.info("TEST 8: Account Hierarchy Verification")
+    logger.info("=" * 70)
+
+    import sys
+    import os
+    import types
+
+    # ── Build a minimal stub for the manager so we can test verify_account_hierarchy
+    #    without importing the full broker stack (which requires live credentials).
+    class _StubBroker:
+        def __init__(self, connected=True, has_entry_price_fetch=True):
+            self.connected = connected
+            self.value = "stub"
+            if has_entry_price_fetch:
+                self.get_real_entry_price = lambda symbol: 1234.56
+
+    class _StubBrokerType:
+        def __init__(self, name):
+            self.value = name
+
+    # Import only the method logic by subclassing MultiAccountBrokerManager
+    # with a minimal __init__ that avoids the real broker connections.
+    multi_account_dir = os.path.join(bot_dir, "multi_account_broker_manager.py")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("multi_account_broker_manager", multi_account_dir)
+    mabm_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mabm_module)
+    MultiAccountBrokerManager = mabm_module.MultiAccountBrokerManager
+
+    # ── Scenario A: No Platform, one User (hierarchy violation) ────────────────
+    logger.info("\nScenario A: No Platform, one User → hierarchy issue expected")
+    mgr = object.__new__(MultiAccountBrokerManager)
+    mgr._platform_brokers = {}
+    kraken_key = _StubBrokerType("kraken")
+    user_stub = _StubBroker(connected=True)
+    mgr.user_brokers = {"user_001": {kraken_key: user_stub}}
+    result = mgr.verify_account_hierarchy()
+
+    assert not result['platform_is_primary'], "Platform should NOT be primary (none connected)"
+    assert not result['hierarchy_valid'], "Hierarchy should be invalid"
+    assert len(result['hierarchy_issues']) > 0, "Should have at least one hierarchy issue"
+    assert not result['entry_price_fetch_enabled'], "Entry-price fetch should be disabled"
+    logger.info("  ✓ Hierarchy correctly flagged as invalid (no Platform)")
+
+    # ── Scenario B: Platform connected, no Users (valid) ───────────────────────
+    logger.info("\nScenario B: Platform connected, no Users → hierarchy valid")
+    mgr2 = object.__new__(MultiAccountBrokerManager)
+    platform_stub = _StubBroker(connected=True, has_entry_price_fetch=True)
+    mgr2._platform_brokers = {kraken_key: platform_stub}
+    mgr2.user_brokers = {}
+    result2 = mgr2.verify_account_hierarchy()
+
+    assert result2['platform_is_primary'], "Platform should be PRIMARY"
+    assert result2['users_are_secondary'], "users_are_secondary should be True (no users)"
+    assert result2['hierarchy_valid'], "Hierarchy should be valid"
+    assert result2['entry_price_fetch_enabled'], "Entry-price fetch should be enabled"
+    assert result2['hierarchy_issues'] == [], "Should have no hierarchy issues"
+    logger.info("  ✓ Hierarchy valid — Platform PRIMARY, no Users")
+
+    # ── Scenario C: Platform + User, both on same broker (correct setup) ──────
+    logger.info("\nScenario C: Platform + User, same broker → hierarchy valid")
+    mgr3 = object.__new__(MultiAccountBrokerManager)
+    platform_stub3 = _StubBroker(connected=True, has_entry_price_fetch=True)
+    mgr3._platform_brokers = {kraken_key: platform_stub3}
+    user_stub3 = _StubBroker(connected=True)
+    mgr3.user_brokers = {"user_daivon": {kraken_key: user_stub3}}
+    result3 = mgr3.verify_account_hierarchy()
+
+    assert result3['platform_is_primary'], "Platform should be PRIMARY"
+    assert result3['users_are_secondary'], "User should be SECONDARY"
+    assert result3['hierarchy_valid'], "Hierarchy should be valid"
+    assert result3['entry_price_fetch_enabled'], "Entry-price fetch should be enabled"
+    assert result3['hierarchy_issues'] == [], "Should have no hierarchy issues"
+    logger.info("  ✓ Full hierarchy valid — Platform PRIMARY, User SECONDARY")
+
+    # ── Scenario D: Platform connected but lacks get_real_entry_price ──────────
+    logger.info("\nScenario D: Platform connected, no entry-price fetch method")
+    mgr4 = object.__new__(MultiAccountBrokerManager)
+    platform_stub4 = _StubBroker(connected=True, has_entry_price_fetch=False)
+    mgr4._platform_brokers = {kraken_key: platform_stub4}
+    mgr4.user_brokers = {}
+    result4 = mgr4.verify_account_hierarchy()
+
+    assert result4['platform_is_primary'], "Platform should be PRIMARY"
+    assert not result4['entry_price_fetch_enabled'], "Entry-price fetch should be disabled"
+    assert len(result4['hierarchy_issues']) == 1, "Should have one issue (no entry-price fetch)"
+    logger.info("  ✓ Entry-price fetch absence correctly detected")
+
+    logger.info("\n✅ Account hierarchy verification test passed!")
+    logger.info("")
+    return True
+
+
 def main():
     """Run all PLATFORM account safety tests."""
     logger.info("")
@@ -556,7 +661,7 @@ def main():
     logger.info("║" + " " * 15 + "PLATFORM ACCOUNT SAFETY TESTS" + " " * 24 + "║")
     logger.info("╚" + "=" * 68 + "╝")
     logger.info("")
-    
+
     tests = [
         ("Position Cap Enforcement", test_position_cap_enforcement),
         ("Dust Cleanup", test_dust_cleanup),
@@ -565,6 +670,7 @@ def main():
         ("Position Tracker Adoption", test_position_tracker_adoption),
         ("Multi-Position Simulation", test_multi_position_simulation),
         ("Logging and Metrics", test_logging_and_metrics),
+        ("Account Hierarchy Verification", test_verify_account_hierarchy),
     ]
     
     passed = 0
@@ -598,6 +704,7 @@ def main():
         logger.info("  ✓ Broker error handling")
         logger.info("  ✓ Position tracking and adoption")
         logger.info("  ✓ Comprehensive logging")
+        logger.info("  ✓ Account hierarchy verification (Platform PRIMARY, Users SECONDARY)")
         logger.info("")
         return 0
     else:
