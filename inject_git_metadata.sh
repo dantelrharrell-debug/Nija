@@ -6,9 +6,12 @@ set -e
 
 echo "🔍 Injecting Git metadata..."
 
-# Get Git metadata - use build args if available, otherwise try git commands
+# Get Git metadata - priority: explicit build args > Railway env vars > git commands
 if [ -n "$GIT_BRANCH" ] && [ "$GIT_BRANCH" != "unknown" ]; then
     echo "Using GIT_BRANCH from build argument: $GIT_BRANCH"
+elif [ -n "$RAILWAY_GIT_BRANCH" ]; then
+    export GIT_BRANCH="$RAILWAY_GIT_BRANCH"
+    echo "Using GIT_BRANCH from Railway environment: $GIT_BRANCH"
 else
     export GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 fi
@@ -16,6 +19,10 @@ fi
 if [ -n "$GIT_COMMIT" ] && [ "$GIT_COMMIT" != "unknown" ]; then
     echo "Using GIT_COMMIT from build argument: $GIT_COMMIT"
     export GIT_COMMIT_SHORT="${GIT_COMMIT:0:7}"
+elif [ -n "$RAILWAY_GIT_COMMIT_SHA" ]; then
+    export GIT_COMMIT="$RAILWAY_GIT_COMMIT_SHA"
+    export GIT_COMMIT_SHORT="${RAILWAY_GIT_COMMIT_SHA:0:7}"
+    echo "Using GIT_COMMIT from Railway environment: $GIT_COMMIT_SHORT"
 else
     export GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
     export GIT_COMMIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
