@@ -2007,13 +2007,20 @@ class TradingStrategy:
                     if recovery_force_close:
                         logger.warning(f"   [{i}/{positions_found}] 🚨 RECOVERY LIQUIDATION: Immediately market-selling {symbol}")
                         try:
+                            _recovery_sell_submitted = False
                             if hasattr(broker, 'close_position'):
                                 broker.close_position(symbol, quantity=quantity)
+                                _recovery_sell_submitted = True
                             elif hasattr(broker, 'place_market_order'):
                                 broker.place_market_order(symbol, side='sell', quantity=quantity)
+                                _recovery_sell_submitted = True
                             else:
                                 logger.error(f"   [{i}/{positions_found}] ❌ Cannot liquidate {symbol}: broker has no close_position or place_market_order")
-                            logger.info(f"   [{i}/{positions_found}] ✅ RECOVERY SELL submitted for {symbol}")
+                            if _recovery_sell_submitted:
+                                logger.info(f"   [{i}/{positions_found}] ✅ RECOVERY SELL submitted for {symbol}")
+                                # Remove from tracker immediately — position quantity is now 0 after liquidation
+                                position_tracker.track_exit(symbol)
+                                logger.info(f"   [{i}/{positions_found}] 🧹 {symbol} removed from position tracker (CLOSED_RECOVERY)")
                         except Exception as liq_err:
                             logger.error(f"   [{i}/{positions_found}] ❌ Recovery liquidation FAILED for {symbol}: {liq_err}")
 
