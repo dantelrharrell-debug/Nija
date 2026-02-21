@@ -28,5 +28,20 @@
     "total_capital_reclaimed": 52.65,
     "avg_position_size": 34.18333333333333,
     "total_pnl_from_cleanup": -0.48575
+  },
+  "2026-02-21": {
+    "date": "2026-02-21",
+    "dust_positions_removed": 4,
+    "dust_capital_reclaimed": 2.6500000000000004,
+    "cap_exceeded_removals": 1,
+    "cap_exceeded_capital": 50.0,
+    "unhealthy_removals": 0,
+    "unhealthy_capital": 0.0,
+    "stagnant_removals": 0,
+    "stagnant_capital": 0.0,
+    "total_removals": 5,
+    "total_capital_reclaimed": 52.65,
+    "avg_position_size": 34.18333333333333,
+    "total_pnl_from_cleanup": -0.48575
   }
 }
