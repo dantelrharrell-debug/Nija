@@ -192,8 +192,12 @@ class RecoveryController:
                     
                     logger.info(f"📂 Recovery state loaded from {self._state_file}")
                     
-                    # If we're in a critical state, ensure trading is disabled
-                    if self._current_state in [FailureState.SAFE_MODE, FailureState.EMERGENCY_HALT]:
+                    # If we're in a restricted state, ensure trading is disabled
+                    if self._current_state in [
+                        FailureState.RECOVERY,
+                        FailureState.SAFE_MODE,
+                        FailureState.EMERGENCY_HALT
+                    ]:
                         self._trading_enabled = False
                         logger.warning(f"⚠️  Trading disabled due to state: {self._current_state.value}")
         except Exception as e:
@@ -202,6 +206,28 @@ class RecoveryController:
             self._current_state = FailureState.NORMAL
             self._trading_enabled = False
             self._safe_mode = False
+        
+        # ── Config-based RECOVERY activation ──────────────────────────────────
+        # If the RECOVERY_MODE environment variable is set to a truthy value,
+        # force the controller into RECOVERY state regardless of persisted state.
+        #
+        # Setting RECOVERY_MODE=true in .env puts the bot directly into a
+        # limited-operations mode where new trade entries are blocked and only
+        # position exits are allowed.  This is the config-based way to guarantee
+        # RECOVERY state at startup.
+        #
+        # Note: "Trading globally disabled" (trading_enabled=False in NORMAL state)
+        # is intentionally DISTINCT from RECOVERY state.  Only this flag (or an
+        # explicit call to force_recovery_mode()) activates RECOVERY.
+        recovery_mode_env = os.getenv("RECOVERY_MODE", "").strip().lower()
+        if recovery_mode_env in ("true", "1", "yes"):
+            logger.warning("=" * 70)
+            logger.warning("🔴 RECOVERY_MODE env var detected — forcing RECOVERY state")
+            logger.warning("=" * 70)
+            self._current_state = FailureState.RECOVERY
+            self._trading_enabled = False
+            self._safe_mode = True
+            self._log_state_change("RECOVERY_MODE env var active at startup")
     
     def _save_state(self):
         """Persist recovery state"""
@@ -584,6 +610,52 @@ class RecoveryController:
             
             logger.info(f"🔄 Failure count reset: {old_count} → 0")
             self._log_state_change("Failure count manually reset")
+            self._save_state()
+    
+    def force_recovery_mode(self, reason: str = "Manual recovery mode activation") -> None:
+        """
+        Force the controller into RECOVERY state, bypassing normal transition rules.
+        
+        This provides a programmatic way to hard-set RECOVERY state without
+        waiting for the FSM to arrive there through valid failure-driven
+        transitions.  The equivalent runtime expression would be::
+        
+            recovery_controller._current_state = FailureState.RECOVERY
+        
+        Use this when you need to guarantee RECOVERY state at startup without
+        waiting for the FSM to arrive there through valid transitions.
+        
+        Distinct from simply calling ``disable_trading()``:
+        - ``disable_trading()`` sets *trading_enabled = False* in whatever the
+          current FSM state is (e.g. NORMAL) and produces the log line
+          "Trading globally disabled".
+        - ``force_recovery_mode()`` changes the FSM **state itself** to RECOVERY,
+          which is visible in status checks and triggers the "ENTRY UNKNOWN –
+          RECOVERY FORCED" path in the trading strategy.
+        
+        Args:
+            reason: Human-readable reason for the forced activation.
+        """
+        with self._lock:
+            old_state = self._current_state
+            self._current_state = FailureState.RECOVERY
+            self._trading_enabled = False
+            self._safe_mode = True
+            self._last_transition_time = datetime.now()
+            self._state_entry_time = datetime.now()
+            
+            logger.warning("=" * 70)
+            logger.warning(f"🔴 RECOVERY MODE FORCED: {old_state.value} → recovery")
+            logger.warning("=" * 70)
+            logger.warning(f"   Reason:          {reason}")
+            logger.warning(f"   Trading Enabled: {self._trading_enabled}")
+            logger.warning(f"   Safe Mode:       {self._safe_mode}")
+            logger.warning("   ⚠️  ENTRY UNKNOWN – RECOVERY FORCED")
+            logger.warning("=" * 70)
+            
+            self._log_state_change(
+                f"Recovery mode forced from {old_state.value}: {reason}"
+            )
             self._save_state()
     
     def get_status(self) -> Dict:
