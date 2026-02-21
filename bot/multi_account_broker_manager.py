@@ -1382,10 +1382,21 @@ class MultiAccountBrokerManager:
                 platform_broker = self._platform_brokers.get(broker_type)
                 if platform_broker is None or not platform_broker.connected:
                     users_are_secondary = False
+                    # Build broker-specific credential guidance
+                    if name == "KRAKEN":
+                        cred_hint = "KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET"
+                    elif name == "ALPACA":
+                        cred_hint = "ALPACA_API_KEY / ALPACA_API_SECRET"
+                    elif name == "COINBASE":
+                        cred_hint = "COINBASE_API_KEY / COINBASE_API_SECRET"
+                    elif name == "OKX":
+                        cred_hint = "OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE"
+                    else:
+                        cred_hint = f"{name}_PLATFORM_API_KEY / {name}_PLATFORM_API_SECRET"
                     issues.append(
                         f"User account on {name} is temporarily acting as primary — "
                         f"Platform {name} account is not connected. "
-                        f"Configure KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET "
+                        f"Configure {cred_hint} "
                         f"to restore correct hierarchy."
                     )
 
@@ -1453,18 +1464,44 @@ class MultiAccountBrokerManager:
                 logger.warning(f"   • {issue}")
             logger.info("")
             logger.info("💡 NEXT STEPS:")
+            # Identify which brokers are missing a Platform account
+            missing_platform_brokers = [
+                name for name, count in user_broker_summary.items()
+                if not platform_status.get(name, False)
+            ]
+            step = 1
+            for broker_name in missing_platform_brokers:
+                if broker_name == "KRAKEN":
+                    logger.info(
+                        f"   {step}. Configure the Kraken Platform account: "
+                        "KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET"
+                    )
+                elif broker_name == "ALPACA":
+                    logger.info(
+                        f"   {step}. Configure the Alpaca Platform account: "
+                        "ALPACA_API_KEY + ALPACA_API_SECRET "
+                        "(optionally set ALPACA_PAPER=true for paper trading)"
+                    )
+                else:
+                    logger.info(
+                        f"   {step}. Configure the {broker_name} Platform account credentials"
+                    )
+                step += 1
+            if not missing_platform_brokers:
+                logger.info(
+                    f"   {step}. Configure the Platform account credentials for your broker"
+                )
+                step += 1
             logger.info(
-                "   1. Configure the Kraken Platform account "
-                "(KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET)"
+                f"   {step}. Restart the bot — Platform will become PRIMARY and users SECONDARY"
             )
+            step += 1
             logger.info(
-                "   2. Restart the bot — Platform will become PRIMARY and users SECONDARY"
+                f"   {step}. NIJA will automatically fetch missing entry prices from trade history"
             )
+            step += 1
             logger.info(
-                "   3. NIJA will automatically fetch missing entry prices from trade history"
-            )
-            logger.info(
-                "   4. Position adoption will be fully aligned with capital protection rules"
+                f"   {step}. Position adoption will be fully aligned with capital protection rules"
             )
 
         logger.info("=" * 70)

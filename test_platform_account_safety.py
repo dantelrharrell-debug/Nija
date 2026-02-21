@@ -654,6 +654,97 @@ def test_verify_account_hierarchy():
     return True
 
 
+def test_alpaca_hierarchy_validation():
+    """
+    Test 9: Alpaca hierarchy validation (startup_validation.validate_account_hierarchy)
+
+    Verifies that validate_account_hierarchy() detects the ALPACA hierarchy violation
+    (user credentials configured without the Platform account) and correctly confirms
+    the valid setup when the Platform account is present.
+    """
+    logger.info("=" * 70)
+    logger.info("TEST 9: Alpaca Hierarchy Validation")
+    logger.info("=" * 70)
+
+    import os
+    import importlib.util
+
+    # Import startup_validation fresh so env-var changes take effect
+    sv_path = os.path.join(bot_dir, "startup_validation.py")
+    spec = importlib.util.spec_from_file_location("startup_validation", sv_path)
+    sv_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sv_module)
+    validate_account_hierarchy = sv_module.validate_account_hierarchy
+    StartupRisk = sv_module.StartupRisk
+
+    def _with_env(overrides, func):
+        """Run func with temporary env overrides, then restore."""
+        original = {}
+        for k, v in overrides.items():
+            original[k] = os.environ.get(k)
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        try:
+            return func()
+        finally:
+            for k, v in original.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    # ── Scenario A: Alpaca user configured, NO Alpaca Platform → risk ─────────
+    logger.info("\nScenario A: Alpaca user set, no Alpaca Platform → hierarchy risk")
+    env_a = {
+        "ALPACA_API_KEY": None,
+        "ALPACA_API_SECRET": None,
+        "ALPACA_USER_TANIA_API_KEY": "fake-user-key",
+    }
+    result_a = _with_env(env_a, validate_account_hierarchy)
+    risk_types_a = [r[0] for r in result_a.risks]
+    assert StartupRisk.PLATFORM_NOT_CONFIGURED_FIRST in risk_types_a, \
+        "Should flag PLATFORM_NOT_CONFIGURED_FIRST risk for Alpaca"
+    assert any("Alpaca" in w for w in result_a.warnings), \
+        "Should warn about Alpaca hierarchy issue"
+    logger.info("  ✓ Hierarchy risk correctly flagged (Alpaca user without Platform)")
+
+    # ── Scenario B: Alpaca Platform configured, no users → valid ─────────────
+    logger.info("\nScenario B: Alpaca Platform set, no users → no risk")
+    env_b = {
+        "ALPACA_API_KEY": "fake-platform-key",
+        "ALPACA_API_SECRET": "fake-platform-secret",
+        "ALPACA_USER_TANIA_API_KEY": None,
+    }
+    result_b = _with_env(env_b, validate_account_hierarchy)
+    risk_types_b = [r[0] for r in result_b.risks]
+    assert StartupRisk.PLATFORM_NOT_CONFIGURED_FIRST not in risk_types_b, \
+        "Should NOT flag risk when Alpaca Platform is configured"
+    assert any("Alpaca Platform account configured" in info for info in result_b.info), \
+        "Should confirm Alpaca Platform is configured"
+    logger.info("  ✓ No hierarchy risk when Alpaca Platform is PRIMARY")
+
+    # ── Scenario C: Platform + User both configured → valid, correct order ────
+    logger.info("\nScenario C: Alpaca Platform + User both set → valid hierarchy")
+    env_c = {
+        "ALPACA_API_KEY": "fake-platform-key",
+        "ALPACA_API_SECRET": "fake-platform-secret",
+        "ALPACA_USER_TANIA_API_KEY": "fake-user-key",
+    }
+    result_c = _with_env(env_c, validate_account_hierarchy)
+    risk_types_c = [r[0] for r in result_c.risks]
+    assert StartupRisk.PLATFORM_NOT_CONFIGURED_FIRST not in risk_types_c, \
+        "Should NOT flag risk when Platform is configured first"
+    assert any("Alpaca user account(s) configured after Platform" in info for info in result_c.info), \
+        "Should confirm correct order"
+    logger.info("  ✓ Platform + User hierarchy confirmed as valid")
+
+    logger.info("\n✅ Alpaca hierarchy validation test passed!")
+    logger.info("")
+    return True
+
+
 def main():
     """Run all PLATFORM account safety tests."""
     logger.info("")
@@ -671,6 +762,7 @@ def main():
         ("Multi-Position Simulation", test_multi_position_simulation),
         ("Logging and Metrics", test_logging_and_metrics),
         ("Account Hierarchy Verification", test_verify_account_hierarchy),
+        ("Alpaca Hierarchy Validation", test_alpaca_hierarchy_validation),
     ]
     
     passed = 0
@@ -705,6 +797,7 @@ def main():
         logger.info("  ✓ Position tracking and adoption")
         logger.info("  ✓ Comprehensive logging")
         logger.info("  ✓ Account hierarchy verification (Platform PRIMARY, Users SECONDARY)")
+        logger.info("  ✓ Alpaca hierarchy validation (Platform before Users)")
         logger.info("")
         return 0
     else:
