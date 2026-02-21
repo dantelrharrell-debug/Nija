@@ -7715,6 +7715,113 @@ class KrakenBroker(BaseBroker):
             logging.error(f"Error fetching Kraken positions: {e}")
             return []
 
+    def get_real_entry_price(self, symbol: str) -> Optional[float]:
+        """
+        Get real entry price from Kraken trade history.
+
+        Fetches the most recent buy trades for the given symbol and returns
+        the volume-weighted average entry price. This is used to recover
+        entry prices for positions that weren't tracked at entry time.
+
+        Args:
+            symbol: Standard format symbol (e.g., 'BTC-USD', 'ETH-USD')
+
+        Returns:
+            Volume-weighted average entry price if found, None otherwise
+        """
+        if not self.api:
+            logger.debug(f"Cannot get entry price for {symbol}: Kraken API not connected")
+            return None
+
+        try:
+            # Convert standard symbol to Kraken pair format for filtering
+            kraken_pair = None
+            if convert_to_kraken is not None:
+                kraken_pair = convert_to_kraken(symbol)
+            else:
+                logger.debug(f"Symbol mapper unavailable for {symbol}; will match by currency code in trade history")
+
+            logger.debug(f"Fetching Kraken trade history for {symbol} (pair: {kraken_pair}) to recover entry price...")
+
+            # Fetch recent closed trade history from Kraken
+            # TradesHistory returns up to 50 most recent trades (oldest first by default)
+            history_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+            response = self._kraken_private_call('TradesHistory', category=history_category)
+
+            if not response or 'result' not in response:
+                logger.debug(f"No trade history response for {symbol}")
+                return None
+
+            if response.get('error'):
+                error_msgs = ', '.join(response['error'])
+                logger.warning(f"Kraken TradesHistory error for {symbol}: {error_msgs}")
+                return None
+
+            trades = response['result'].get('trades', {})
+            if not trades:
+                logger.debug(f"No trade history found for {symbol}")
+                return None
+
+            # Build a set of Kraken pair representations to match against
+            # Kraken may return the pair in multiple formats (e.g., XXBTZUSD or XBTUSD)
+            symbol_currency = symbol.replace('-USD', '').replace('-USDT', '')
+            match_pairs = set()
+            if kraken_pair:
+                match_pairs.add(kraken_pair.upper())
+            # Add common Kraken variants so we don't miss trades
+            match_pairs.add(f"X{symbol_currency}ZUSD")
+            match_pairs.add(f"{symbol_currency}USD")
+            match_pairs.add(f"X{symbol_currency}ZUSDT")
+            match_pairs.add(f"{symbol_currency}USDT")
+            # Also try the wsname format (e.g., BTC/USD)
+            match_pairs.add(f"{symbol_currency}/USD")
+            match_pairs.add(f"{symbol_currency}/USDT")
+
+            # Collect all BUY trades for this symbol (most recent first matters for ordering)
+            buy_trades = []
+            for trade_id, trade in trades.items():
+                trade_pair = trade.get('pair', '').upper()
+                trade_type = trade.get('type', '').lower()
+
+                if trade_type != 'buy':
+                    continue
+
+                # Check if this trade is for our symbol
+                pair_matches = (
+                    trade_pair in match_pairs
+                    or symbol_currency.upper() in trade_pair
+                )
+                if not pair_matches:
+                    continue
+
+                try:
+                    price = float(trade.get('price', 0))
+                    vol = float(trade.get('vol', 0))
+                    trade_time = float(trade.get('time', 0))
+                    if price > 0 and vol > 0:
+                        buy_trades.append((trade_time, price, vol))
+                except (ValueError, TypeError):
+                    continue
+
+            if not buy_trades:
+                logger.debug(f"No BUY trades found for {symbol} in Kraken trade history")
+                return None
+
+            # Sort by time descending (most recent first) and compute VWAP of all found buys
+            buy_trades.sort(key=lambda t: t[0], reverse=True)
+            total_vol = sum(vol for _, _, vol in buy_trades)
+            vwap = sum(price * vol for _, price, vol in buy_trades) / total_vol
+
+            logger.info(
+                f"✅ Kraken historical entry price for {symbol}: ${vwap:.4f} "
+                f"(VWAP of {len(buy_trades)} buy trade(s))"
+            )
+            return vwap
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch Kraken entry price for {symbol}: {e}")
+            return None
+
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """
         Get historical candle data from Kraken.

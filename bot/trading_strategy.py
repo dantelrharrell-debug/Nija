@@ -1946,7 +1946,18 @@ class TradingStrategy:
                         if override_price and override_price > 0:
                             logger.info(f"   [{i}/{positions_found}] 📋 {symbol}: Using manual entry price override ${override_price:.4f}")
                             entry_price = override_price
-                        else:
+                        elif broker and hasattr(broker, 'get_real_entry_price'):
+                            # 🔍 AUTOMATIC HISTORICAL PRICE FETCH: Try to retrieve entry price
+                            # directly from broker trade history (avoids manual JSON entry)
+                            try:
+                                historical_price = broker.get_real_entry_price(symbol)
+                                if historical_price and historical_price > 0:
+                                    logger.info(f"   [{i}/{positions_found}] 🔍 {symbol}: Auto-fetched historical entry price ${historical_price:.4f} from broker")
+                                    entry_price = historical_price
+                            except Exception as _hist_err:
+                                logger.debug(f"   [{i}/{positions_found}] Historical price fetch failed for {symbol}: {_hist_err}")
+
+                        if entry_price == 0 or entry_price <= 0:
                             # ⚡ OPTION A: Recovery Close Without Entry Price
                             # In recovery mode we do NOT need entry price to close a position.
                             # We only need it for P&L tracking, profit optimisation, and stop-loss logic.
