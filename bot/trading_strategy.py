@@ -6,6 +6,7 @@ import queue
 import json
 import logging
 import traceback
+import collections
 from pathlib import Path
 from threading import Thread
 from typing import Dict, Optional, Tuple
@@ -844,6 +845,11 @@ class TradingStrategy:
         # Track current state for deterministic position management and proper invariants
         self.position_mgmt_state = PositionManagementState.NORMAL
         self.previous_state = None  # Track previous state for transition logging
+
+        # Scan cycle latency tracking
+        # Stores recent total cycle durations (seconds) to compute a moving average.
+        # Uses a fixed-length deque so memory stays bounded regardless of runtime.
+        self._cycle_durations = collections.deque(maxlen=20)  # rolling window of 20 cycles
 
         # Initialize advanced trading features placeholder
         # NOTE: Advanced modules will be initialized AFTER first live balance fetch
@@ -3513,6 +3519,9 @@ class TradingStrategy:
         # Log mode for clarity
         mode_label = "USER (position management only)" if user_mode else "MASTER (full strategy)"
         logger.info(f"🔄 Trading cycle mode: {mode_label}")
+
+        # ⏱️ Scan-cycle timing: record overall start time
+        cycle_start_time = time.time()
         
         # Display user status banner (trust layer feature)
         self._display_user_status_banner(broker=active_broker)
@@ -3840,6 +3849,9 @@ class TradingStrategy:
                 logger.warning("⚠️ Strategy not loaded - position management may be limited")
                 logger.warning("   Will attempt to close positions but cannot open new ones")
 
+            # ⏱️ Sub-step 1: Balance update
+            balance_start_time = time.time()
+
             # FIX #1: Update portfolio state from broker data
             # Get detailed balance including crypto holdings
             # PRO MODE: Also calculate total capital (free balance + position values)
@@ -3966,6 +3978,12 @@ class TradingStrategy:
 
             # Small delay after balance check to avoid rapid-fire API calls
             time.sleep(0.5)
+
+            balance_duration = time.time() - balance_start_time
+            logger.info(f"⏱️  [TIMING] Balance update: {balance_duration:.2f}s")
+
+            # ⏱️ Sub-step 2: Position update
+            positions_start_time = time.time()
 
             # CRITICAL FIX: Wrap position management in try-except to ensure it ALWAYS runs
             # Previous bug: Any exception in position fetching would skip ALL exit logic
@@ -5219,6 +5237,12 @@ class TradingStrategy:
                 # Don't return - allow cycle to continue and try new entries
                 # This ensures the bot keeps running even if exit logic fails
 
+            positions_duration = time.time() - positions_start_time
+            logger.info(f"⏱️  [TIMING] Position update: {positions_duration:.2f}s")
+
+            # ⏱️ Sub-step 3: Entry scan
+            entry_start_time = time.time()
+
             # STEP 2: Look for new entry opportunities (only if entries allowed)
             # USER accounts NEVER generate entry signals - they receive signals via CopyTradeEngine
             # Only MASTER accounts scan markets and generate buy signals
@@ -6097,6 +6121,19 @@ class TradingStrategy:
 
                 reason_str = ", ".join(reasons) if reasons else "Unknown reason"
                 logger.info(f"   Skipping new entries: {reason_str}")
+
+            entry_duration = time.time() - entry_start_time
+            logger.info(f"⏱️  [TIMING] Entry scan: {entry_duration:.2f}s")
+
+            # ⏱️ Overall cycle duration + moving average
+            cycle_total_duration = time.time() - cycle_start_time
+            self._cycle_durations.append(cycle_total_duration)
+            cycle_duration_average = sum(self._cycle_durations) / len(self._cycle_durations)
+            logger.info(
+                f"⏱️  [TIMING] Cycle total: {cycle_total_duration:.2f}s  |  "
+                f"Moving avg ({len(self._cycle_durations)} cycles): {cycle_duration_average:.2f}s  |  "
+                f"balance={balance_duration:.2f}s  positions={positions_duration:.2f}s  entry={entry_duration:.2f}s"
+            )
 
             # Increment cycle counter for warmup tracking
             self.cycle_count += 1
