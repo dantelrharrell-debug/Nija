@@ -6,16 +6,17 @@ The `clean_kraken.py` script performs a complete cleanup of a Kraken trading acc
 
 ## What It Does
 
-The script performs three main steps:
+The script performs four main steps:
 
 1. **Cancel All Open Orders** - Removes all pending orders from the Kraken order book
-2. **Force-Sell All Positions** - Executes market sell orders for all cryptocurrency holdings
-3. **Verify Cleanup** - Confirms that held in open orders = $0.00
+2. **Force-Sell All Positions** - Executes market sell orders for all cryptocurrency holdings above Kraken's $10 minimum
+3. **Sweep Dust** - Converts residual small balances (below the $10 market-order minimum) to USD using Kraken's ConvertFunds endpoint, with a standard market-order fallback
+4. **Verify Cleanup** - Confirms that held in open orders = $0.00
 
 ### Features
 
 - ✅ **Dry-Run Mode**: Preview actions without executing any trades
-- ✅ **Dust Exclusion**: Automatically ignores positions below $1.00 USD value
+- ✅ **Dust Sweep**: Automatically converts sub-minimum balances to USD via ConvertFunds
 - ✅ **Smart Symbol Conversion**: Handles various Kraken asset naming conventions
 - ✅ **Rate Limiting**: Respects Kraken API rate limits to avoid errors
 - ✅ **Comprehensive Error Handling**: Gracefully handles API failures
@@ -109,7 +110,8 @@ python scripts/clean_kraken.py
    • BTC: 0.02000000 @ $45000.00 = $900.00
    • SOL: 10.00000000 @ $100.00 = $1000.00
 
-🗑️  Found 1 dust position(s) (below $1.00) - will be ignored:
+⏭️  Found 2 small position(s) (below $10.00) - will be handled by dust sweep:
+   • XRP: 3.00000000 = $5.23
    • SHIB: 12345.00000000 = $0.12
 
 🔴 Force-selling all positions...
@@ -120,21 +122,35 @@ python scripts/clean_kraken.py
    🔴 Selling SOL: 10.00000000 ($1000.00)...
       ✅ SOLD: SOL (Order ID: 5678901234...)
 
-📊 Sell Summary: 3 succeeded, 0 failed, 1 dust ignored
+📊 Sell Summary: 3 succeeded, 0 failed, 2 deferred to dust sweep
+
+================================================================================
+  STEP 3: Sweep Dust Positions
+================================================================================
+
+🧹 Found 2 residual position(s) to sweep:
+   • [SMALL] XRP: 3.00000000 = $5.2300
+   • [DUST] SHIB: 12345.00000000 = $0.1200
+
+🧹 Converting residual positions to USD...
+   🧹 Sweeping XRP: 3.00000000 (≈$5.2300)...
+      ✅ CONVERTED via ConvertFunds: XRP → USD (ref: ABCD1234...)
+   🧹 Sweeping SHIB: 12345.00000000 (≈$0.1200)...
+      ✅ CONVERTED via ConvertFunds: SHIB → USD (ref: EFGH5678...)
+
+📊 Dust Sweep Summary: 2 swept, 0 failed
 
 ⏳ Waiting 5 seconds for orders to settle...
 
 ================================================================================
-  STEP 3: Verify Cleanup
+  STEP 4: Verify Cleanup
 ================================================================================
 
 ✅ Open orders: 0
-✅ Only 1 dust position(s) remain (all < $1.00):
-   • SHIB: 12345.00000000 = $0.12
+✅ Crypto balances: 0
 
 ================================================================================
   ✅ CLEANUP SUCCESSFUL - Held in open orders: $0.00
-  (Dust positions below $1.00 are ignored)
 ================================================================================
 
 💰 Final USD/USDT Balance: $4384.56
@@ -142,28 +158,26 @@ python scripts/clean_kraken.py
 ✅ Account is ready for restart with clean state
 ```
 
-## What Happens to Dust?
+## How Dust Is Swept
 
-**Dust positions** are cryptocurrency holdings with a total USD value below $1.00. These are:
+**Dust positions** are cryptocurrency holdings too small for a regular Kraken market order (below the $10.00 minimum).  After the main sell step the script runs a dedicated sweep:
 
-- ✅ **Automatically excluded** from selling
-- ✅ **Ignored in position counting**
-- ✅ **Safe to leave in account**
+1. **ConvertFunds** (primary) – Kraken's native asset-conversion endpoint that has no minimum order size, converting the asset directly to USD (ZUSD).
+2. **Market order** (fallback) – if ConvertFunds is unavailable or unsupported for a given asset, the script attempts a standard market sell order.
 
-Why? Kraken has a minimum order cost of $10.00. Attempting to sell dust would fail and waste API calls.
+Any position that cannot be swept by either method is reported as failed and will remain in the account.
 
 ## Edge Cases & Troubleshooting
 
-### Positions Too Small to Sell
+### ConvertFunds Not Supported
 
-Some positions may be above the dust threshold ($1.00) but below Kraken's minimum order cost ($10.00):
+Some assets may not be eligible for ConvertFunds conversion.  In that case you will see:
 
 ```
-⚠️  Skipping XRP: $5.23 < $10.00 minimum
-    This position is too small to sell on Kraken (will remain as dust)
+⚠️  ConvertFunds declined (EOrder:Invalid pair) – trying market order…
 ```
 
-These positions cannot be sold on Kraken due to exchange minimums. They will remain in your account but won't affect trading.
+The script will then attempt a regular market order.  If that also fails (e.g., below the $10 minimum), the position will remain and be flagged as failed.
 
 ### API Permission Errors
 
@@ -183,7 +197,7 @@ Fix:
 
 The script includes built-in rate limiting:
 - 0.1 second delay between order cancellations
-- 0.2 second delay between sell orders
+- 0.2 second delay between sell / sweep orders
 
 If you still hit rate limits, the script will show the error. Wait a few minutes and retry.
 
@@ -203,8 +217,8 @@ This is safe - the script will skip assets it cannot price to avoid errors.
 The script includes multiple safety checks:
 
 1. **Dry-run mode** - Test before executing
-2. **Dust exclusion** - Won't attempt to sell unprofitable positions
-3. **Minimum validation** - Respects Kraken's $10.00 minimum order cost
+2. **Dust sweep** - Recovers sub-minimum balances via ConvertFunds instead of ignoring them
+3. **Minimum validation** - Respects Kraken's $10.00 minimum for regular market orders
 4. **Error handling** - Continues on individual failures
 5. **Rate limiting** - Avoids API throttling
 6. **Verification step** - Confirms cleanup success
@@ -215,9 +229,10 @@ Once cleanup is successful:
 
 1. ✅ All open orders are cancelled
 2. ✅ All significant positions are sold
-3. ✅ Account shows $0.00 held in open orders
-4. ✅ USD/USDT balance reflects proceeds from sales
-5. ✅ Ready to restart bot with clean state
+3. ✅ Dust positions are swept to USD via ConvertFunds
+4. ✅ Account shows $0.00 held in open orders
+5. ✅ USD/USDT balance reflects proceeds from sales
+6. ✅ Ready to restart bot with clean state
 
 You can now proceed to **Step 3: Restart with clean state** as outlined in your restart guide.
 
@@ -236,11 +251,11 @@ If you encounter issues:
 - **Language**: Python 3.11+
 - **Dependencies**: krakenex, pykrakenapi (in requirements.txt)
 - **Rate Limits**: 15 requests/second (private endpoints)
-- **Dust Threshold**: $1.00 USD
-- **Minimum Order**: $10.00 USD (Kraken limit)
+- **Dust Threshold**: $1.00 USD (label only; all balances are swept)
+- **Minimum Order**: $10.00 USD (Kraken limit for regular market orders; bypassed via ConvertFunds)
 
 ---
 
 **Created**: 2026-01-23
-**Version**: 1.0
+**Version**: 2.0
 **Part of**: NIJA Trading Bot - Kraken Integration
