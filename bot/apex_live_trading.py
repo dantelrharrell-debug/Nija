@@ -364,6 +364,8 @@ class ApexLiveTrader:
 
         try:
             while True:
+                start = time.perf_counter()
+
                 # Update balance
                 balance = self.broker_manager.get_total_balance()
                 self.strategy.update_balance(balance)
@@ -373,6 +375,9 @@ class ApexLiveTrader:
 
                 # Scan for new entries
                 self.scan_for_entries()
+
+                duration = time.perf_counter() - start
+                logger.info(f"Scan cycle: {duration:.4f}s")
 
                 # Log status
                 logger.info(f"Status: Balance=${balance:,.2f}, "
