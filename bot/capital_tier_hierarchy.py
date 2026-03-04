@@ -248,16 +248,25 @@ class CapitalTierHierarchy:
         
         logger.info("📊 Capital Tier Hierarchy initialized - Position architecture active")
     
-    def get_tier_from_balance(self, balance: float) -> CapitalTier:
+    def get_tier_from_balance(self, balance: float, is_platform: bool = False) -> CapitalTier:
         """
         Determine capital tier from current balance.
-        
+
+        IMPORTANT: Platform accounts always use BALLER tier regardless of balance,
+        matching the behaviour in tier_config.get_tier_from_balance(is_platform=True).
+
         Args:
             balance: Current account balance in USD
-            
+            is_platform: If True, forces BALLER tier (platform account override)
+
         Returns:
             CapitalTier enum value
         """
+        # Platform accounts always get the highest (BALLER) tier
+        if is_platform:
+            logger.info(f"🎯 Platform account: Using BALLER tier (balance: ${balance:.2f})")
+            return CapitalTier.BALLER
+
         for tier, rules in TIER_POSITION_RULES.items():
             if rules.balance_min <= balance <= rules.balance_max:
                 return tier
@@ -269,14 +278,18 @@ class CapitalTierHierarchy:
         # If balance exceeds all tiers, use BALLER
         return CapitalTier.BALLER
     
-    def update_balance(self, balance: float) -> None:
+    def update_balance(self, balance: float, is_platform: bool = False) -> None:
         """
         Update current balance and tier.
         Logs tier changes.
+
+        Args:
+            balance: Current account balance in USD
+            is_platform: If True, forces BALLER tier (platform account override)
         """
         previous_tier = self.current_tier
         self.last_balance = balance
-        self.current_tier = self.get_tier_from_balance(balance)
+        self.current_tier = self.get_tier_from_balance(balance, is_platform=is_platform)
         self.current_rules = TIER_POSITION_RULES[self.current_tier]
         
         # Log tier changes
@@ -285,32 +298,34 @@ class CapitalTierHierarchy:
         elif not previous_tier:
             logger.info(f"📊 Initial tier: {self.current_tier.value} (balance: ${balance:.2f})")
     
-    def get_max_positions(self, balance: float) -> int:
+    def get_max_positions(self, balance: float, is_platform: bool = False) -> int:
         """
         Get HARD LIMIT on maximum concurrent positions for current balance.
         
         Args:
             balance: Current account balance
+            is_platform: If True, forces BALLER tier (platform account override)
             
         Returns:
             Maximum number of concurrent positions allowed
         """
-        tier = self.get_tier_from_balance(balance)
+        tier = self.get_tier_from_balance(balance, is_platform=is_platform)
         rules = TIER_POSITION_RULES[tier]
         return rules.max_positions
     
-    def get_optimal_position_count(self, balance: float) -> int:
+    def get_optimal_position_count(self, balance: float, is_platform: bool = False) -> int:
         """
         Get OPTIMAL number of positions for current balance.
         This may be less than max_positions for small balances within a tier.
         
         Args:
             balance: Current account balance
+            is_platform: If True, forces BALLER tier (platform account override)
             
         Returns:
             Optimal number of concurrent positions
         """
-        tier = self.get_tier_from_balance(balance)
+        tier = self.get_tier_from_balance(balance, is_platform=is_platform)
         rules = TIER_POSITION_RULES[tier]
         return rules.calculate_optimal_position_count(balance)
     
@@ -347,7 +362,7 @@ class CapitalTierHierarchy:
         return target_size
     
     def validate_new_position(self, balance: float, current_position_count: int, 
-                            proposed_size_usd: float) -> Tuple[bool, str, str]:
+                            proposed_size_usd: float, is_platform: bool = False) -> Tuple[bool, str, str]:
         """
         Validate if a new position can be opened.
         
@@ -355,6 +370,7 @@ class CapitalTierHierarchy:
             balance: Current account balance
             current_position_count: Number of currently open positions
             proposed_size_usd: Proposed size of new position in USD
+            is_platform: If True, forces BALLER tier (platform account override)
             
         Returns:
             Tuple of (is_valid, rejection_code, rejection_message)
@@ -365,7 +381,7 @@ class CapitalTierHierarchy:
             - POSITION_TOO_SMALL: Position size below tier minimum
             - POSITION_TOO_LARGE: Position size exceeds 80% of balance
         """
-        tier = self.get_tier_from_balance(balance)
+        tier = self.get_tier_from_balance(balance, is_platform=is_platform)
         rules = TIER_POSITION_RULES[tier]
         
         # Check 1: Position count limit
@@ -455,22 +471,22 @@ def get_capital_tier_hierarchy() -> CapitalTierHierarchy:
 # CONVENIENCE FUNCTIONS
 # ============================================================================
 
-def get_max_positions_for_balance(balance: float) -> int:
+def get_max_positions_for_balance(balance: float, is_platform: bool = False) -> int:
     """Get maximum positions allowed for a given balance"""
     hierarchy = get_capital_tier_hierarchy()
-    return hierarchy.get_max_positions(balance)
+    return hierarchy.get_max_positions(balance, is_platform=is_platform)
 
 
-def get_optimal_positions_for_balance(balance: float) -> int:
+def get_optimal_positions_for_balance(balance: float, is_platform: bool = False) -> int:
     """Get optimal position count for a given balance"""
     hierarchy = get_capital_tier_hierarchy()
-    return hierarchy.get_optimal_position_count(balance)
+    return hierarchy.get_optimal_position_count(balance, is_platform=is_platform)
 
 
-def validate_position_entry(balance: float, current_positions: int, size_usd: float) -> Tuple[bool, str, str]:
+def validate_position_entry(balance: float, current_positions: int, size_usd: float, is_platform: bool = False) -> Tuple[bool, str, str]:
     """Validate if a position can be opened"""
     hierarchy = get_capital_tier_hierarchy()
-    return hierarchy.validate_new_position(balance, current_positions, size_usd)
+    return hierarchy.validate_new_position(balance, current_positions, size_usd, is_platform=is_platform)
 
 
 if __name__ == "__main__":
