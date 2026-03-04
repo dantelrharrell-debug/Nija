@@ -215,9 +215,15 @@ class PaperTradingGraduationSystem:
             - Uses pre-validated self.user_file path
             - File path was validated in __init__
         """
-    Manages user progression from paper trading to live trading.
-    Implements safety checks and gradual capital unlocking.
-    """
+        if self.user_file.exists():
+            try:
+                with open(self.user_file, 'r') as f:
+                    data = json.load(f)
+                return GraduationProgress(**data)
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.error(f"Error loading graduation data for {self.user_id}: {e}")
+                return self._create_new_progress()
+        return self._create_new_progress()
 
     # Graduation Requirements
     MIN_DAYS_PAPER_TRADING = 30
@@ -436,46 +442,6 @@ class PaperTradingGraduationSystem:
             "criteria_met": self.progress.criteria_met,
             "all_criteria_met": all(self.progress.criteria_met.values())
         }
-                    return GraduationProgress(
-                        user_id=data['user_id'],
-                        trading_mode=TradingMode(data['trading_mode']),
-                        status=GraduationStatus(data['status']),
-                        paper_trading_start_date=data['paper_trading_start_date'],
-                        days_in_paper_trading=data['days_in_paper_trading'],
-                        total_paper_trades=data['total_paper_trades'],
-                        winning_trades=data['winning_trades'],
-                        losing_trades=data['losing_trades'],
-                        win_rate=data['win_rate'],
-                        total_pnl=data['total_pnl'],
-                        max_drawdown=data['max_drawdown'],
-                        average_position_size=data['average_position_size'],
-                        risk_score=data['risk_score'],
-                        criteria_met=data['criteria_met'],
-                        criteria_not_met=data['criteria_not_met'],
-                        graduation_date=data.get('graduation_date'),
-                        live_trading_enabled_date=data.get('live_trading_enabled_date')
-                    )
-            except Exception as e:
-                logger.error(f"Error loading graduation progress: {e}")
-
-        # Create new progress for new user
-        return GraduationProgress(
-            user_id=self.user_id,
-            trading_mode=TradingMode.PAPER,
-            status=GraduationStatus.NOT_ELIGIBLE,
-            paper_trading_start_date=datetime.utcnow().isoformat(),
-            days_in_paper_trading=0,
-            total_paper_trades=0,
-            winning_trades=0,
-            losing_trades=0,
-            win_rate=0.0,
-            total_pnl=0.0,
-            max_drawdown=0.0,
-            average_position_size=0.0,
-            risk_score=0.0,
-            criteria_met=[],
-            criteria_not_met=[]
-        )
 
     def _save_progress(self):
         """Save graduation progress to disk"""

@@ -244,35 +244,8 @@ def main():
     except Exception as exc:
         logger.error(f"Protocol execution failed: {exc}")
         import traceback
-
-Command-line interface to execute the Legacy Position Exit Protocol.
-
-Usage:
-    python run_legacy_exit_protocol.py [options]
-
-Options:
-    --broker BROKER         Broker name (coinbase, kraken, alpaca) [default: coinbase]
-    --max-positions N       Maximum positions allowed [default: 8]
-    --dust-pct PCT         Dust threshold as % of account [default: 0.01]
-    --stale-minutes MIN    Minutes before order is stale [default: 30]
-    --user-id ID           User ID for multi-account (optional)
-    --dry-run              Simulate without executing trades
-    --phase PHASE          Run specific phase only (1, 2, 3, 4, or 'all') [default: all]
-    --verify-only          Only run Phase 4 verification
-
-Examples:
-    # Run full protocol on Coinbase
-    python run_legacy_exit_protocol.py --broker coinbase
-    
-    # Verify clean state only
-    python run_legacy_exit_protocol.py --verify-only
-    
-    # Run Phase 2 (order cleanup) only
-    python run_legacy_exit_protocol.py --phase 2
-    
-    # Dry run with custom settings
-    python run_legacy_exit_protocol.py --max-positions 10 --dust-pct 0.02 --dry-run
-"""
+        traceback.print_exc()
+        return 1
 
 import sys
 import os
@@ -431,6 +404,5 @@ def main():
         return 1
 
 
-if __name__ == "__main__":
 if __name__ == '__main__':
     sys.exit(main())
