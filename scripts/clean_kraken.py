@@ -4,8 +4,9 @@ Clean Kraken Account - Step 1: Cancel all orders and force-sell all positions
 
 This script performs a complete cleanup of a Kraken account:
 1. Cancel all open orders
-2. Force-sell all crypto positions (excluding dust)
-3. Verify that held in open orders = $0.00
+2. Force-sell all crypto positions
+3. Sweep dust (convert small residual balances to USD via ConvertFunds)
+4. Verify that held in open orders = $0.00
 
 Usage:
     python scripts/clean_kraken.py [--dry-run]
@@ -313,12 +314,15 @@ def force_sell_all_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False
     """
     Force-sell all crypto positions using market orders.
 
+    Positions above Kraken's $10 minimum are sold immediately via market order.
+    Positions below that threshold are left for the dust sweep step.
+
     Args:
         adapter: KrakenBrokerAdapter instance
         dry_run: If True, only show what would be sold
 
     Returns:
-        Tuple of (success_count, fail_count, dust_count)
+        Tuple of (success_count, fail_count, skipped_count)
     """
     print_banner("STEP 2: Force-Sell All Positions")
 
@@ -328,15 +332,15 @@ def force_sell_all_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False
         print("✅ No crypto balances found - nothing to sell")
         return (0, 0, 0)
 
-    # Separate dust from sellable positions
+    # Separate positions into sellable (above Kraken minimum) and small (below minimum, handled by dust sweep)
     sellable = []
-    dust = []
+    too_small = []
 
     for bal in balances:
-        if bal['usd_value'] < DUST_THRESHOLD_USD:
-            dust.append(bal)
-        else:
+        if bal['usd_value'] >= KRAKEN_MIN_ORDER_COST:
             sellable.append(bal)
+        else:
+            too_small.append(bal)
 
     # Show positions
     if sellable:
@@ -344,18 +348,18 @@ def force_sell_all_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False
         for bal in sellable:
             print(f"   • {bal['currency']}: {bal['balance']:.8f} @ ${bal['current_price']:.2f} = ${bal['usd_value']:.2f}")
 
-    if dust:
-        print(f"\n🗑️  Found {len(dust)} dust position(s) (below ${DUST_THRESHOLD_USD}) - will be ignored:")
-        for bal in dust:
+    if too_small:
+        print(f"\n⏭️  Found {len(too_small)} small position(s) (below ${KRAKEN_MIN_ORDER_COST:.2f}) - will be handled by dust sweep:")
+        for bal in too_small:
             print(f"   • {bal['currency']}: {bal['balance']:.8f} = ${bal['usd_value']:.4f}")
 
     if not sellable:
-        print(f"\n✅ No positions above ${DUST_THRESHOLD_USD} to sell")
-        return (0, 0, len(dust))
+        print(f"\n✅ No positions above ${KRAKEN_MIN_ORDER_COST:.2f} to sell via market order")
+        return (0, 0, len(too_small))
 
     if dry_run:
         print(f"\n🔍 DRY RUN: Would sell {len(sellable)} position(s) listed above")
-        return (len(sellable), 0, len(dust))
+        return (len(sellable), 0, len(too_small))
 
     print("\n🔴 Force-selling all positions...")
     success_count = 0
@@ -365,13 +369,6 @@ def force_sell_all_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False
         currency = bal['currency']
         balance = bal['balance']
         usd_value = bal['usd_value']
-
-        # Check if order meets Kraken minimum
-        if usd_value < KRAKEN_MIN_ORDER_COST:
-            print(f"   ⚠️  Skipping {currency}: ${usd_value:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
-            print(f"       This position is too small to sell on Kraken (will remain as dust)")
-            fail_count += 1
-            continue
 
         try:
             # Construct symbol in standard format (e.g., BTC-USD)
@@ -407,8 +404,115 @@ def force_sell_all_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False
             print(f"   ❌ Error selling {currency}: {e}")
             fail_count += 1
 
-    print(f"\n📊 Sell Summary: {success_count} succeeded, {fail_count} failed, {len(dust)} dust ignored")
-    return (success_count, fail_count, len(dust))
+    print(f"\n📊 Sell Summary: {success_count} succeeded, {fail_count} failed, {len(too_small)} deferred to dust sweep")
+    return (success_count, fail_count, len(too_small))
+
+
+def sweep_dust_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False) -> Tuple[int, int]:
+    """
+    Sweep all remaining dust and small positions by converting them to USD.
+
+    Uses Kraken's ConvertFunds endpoint which can handle amounts below the
+    regular $10 minimum order cost.  Falls back to a standard market order
+    for any assets that ConvertFunds does not support.
+
+    Args:
+        adapter: KrakenBrokerAdapter instance
+        dry_run: If True, only show what would be converted
+
+    Returns:
+        Tuple of (success_count, fail_count)
+    """
+    print_banner("STEP 3: Sweep Dust Positions")
+
+    balances = get_all_crypto_balances(adapter)
+
+    if not balances:
+        print("✅ No crypto balances remaining - nothing to sweep")
+        return (0, 0)
+
+    print(f"🧹 Found {len(balances)} residual position(s) to sweep:")
+    for bal in balances:
+        label = "DUST" if bal['usd_value'] < DUST_THRESHOLD_USD else "SMALL"
+        print(f"   • [{label}] {bal['currency']}: {bal['balance']:.8f} = ${bal['usd_value']:.4f}")
+
+    if dry_run:
+        print(f"\n🔍 DRY RUN: Would convert {len(balances)} position(s) to USD")
+        return (len(balances), 0)
+
+    print("\n🧹 Converting residual positions to USD...")
+    success_count = 0
+    fail_count = 0
+
+    for bal in balances:
+        currency = bal['currency']
+        asset = bal.get('asset', currency)   # Kraken-internal asset code (e.g., 'XXBT', 'ADA')
+        balance = bal['balance']
+        usd_value = bal['usd_value']
+
+        if not asset:
+            print(f"   ⚠️  Skipping {currency}: no Kraken asset code found")
+            fail_count += 1
+            continue
+
+        print(f"   🧹 Sweeping {currency}: {balance:.8f} (≈${usd_value:.4f})...")
+
+        converted = False
+
+        # ── Method 1: Kraken ConvertFunds (handles sub-minimum amounts) ──────
+        try:
+            result = adapter._kraken_api_call('ConvertFunds', {
+                'from_asset': asset,
+                'to_asset': 'ZUSD',
+                'from_amount': str(balance),
+            })
+
+            errors = result.get('error', []) if result else ['No response']
+            if result and not errors and 'result' in result:
+                order_id = result['result'].get('order_id', 'N/A')
+                print(f"      ✅ CONVERTED via ConvertFunds: {currency} → USD"
+                      f" (ref: {str(order_id)[:12]}...)")
+                success_count += 1
+                converted = True
+            else:
+                error_str = ', '.join(errors) if isinstance(errors, list) else str(errors)
+                print(f"      ⚠️  ConvertFunds declined ({error_str}) – trying market order…")
+
+        except Exception as exc:
+            print(f"      ⚠️  ConvertFunds raised an error ({exc}) – trying market order…")
+
+        # ── Method 2: Standard market sell (fallback) ─────────────────────────
+        if not converted:
+            try:
+                symbol = f"{currency}-USD"
+                sell_result = adapter.place_market_order(
+                    symbol=symbol,
+                    side='sell',
+                    size=balance,
+                    size_type='base',
+                )
+
+                if sell_result and sell_result.get('status') not in ['error', 'skipped']:
+                    order_id = sell_result.get('order_id', 'N/A')
+                    print(f"      ✅ SOLD via market order: {currency}"
+                          f" (Order ID: {str(order_id)[:12]}...)")
+                    success_count += 1
+                    converted = True
+                else:
+                    error = (sell_result.get('error', 'Unknown error')
+                             if sell_result else 'No response')
+                    print(f"      ❌ FAILED: {currency} – {error}")
+                    fail_count += 1
+
+            except Exception as exc:
+                print(f"      ❌ Error sweeping {currency}: {exc}")
+                fail_count += 1
+
+        # Small delay between API calls to respect rate limits
+        time.sleep(0.2)
+
+    print(f"\n📊 Dust Sweep Summary: {success_count} swept, {fail_count} failed")
+    return (success_count, fail_count)
 
 
 def verify_cleanup(adapter: KrakenBrokerAdapter) -> bool:
@@ -418,7 +522,7 @@ def verify_cleanup(adapter: KrakenBrokerAdapter) -> bool:
     Returns:
         True if account is clean, False otherwise
     """
-    print_banner("STEP 3: Verify Cleanup")
+    print_banner("STEP 4: Verify Cleanup")
 
     # Check open orders
     orders = get_all_open_orders(adapter)
@@ -518,8 +622,11 @@ def main():
         # Step 1: Cancel all open orders
         cancel_success, cancel_fail = cancel_all_orders(adapter, dry_run=args.dry_run)
 
-        # Step 2: Force-sell all positions
-        sell_success, sell_fail, dust_count = force_sell_all_positions(adapter, dry_run=args.dry_run)
+        # Step 2: Force-sell all positions above Kraken's minimum order cost
+        sell_success, sell_fail, small_count = force_sell_all_positions(adapter, dry_run=args.dry_run)
+
+        # Step 3: Sweep remaining dust and sub-minimum positions
+        sweep_success, sweep_fail = sweep_dust_positions(adapter, dry_run=args.dry_run)
 
         if args.dry_run:
             print_banner("DRY RUN COMPLETE")
@@ -529,11 +636,11 @@ def main():
             return
 
         # Small delay for orders to settle
-        if sell_success > 0:
+        if sell_success > 0 or sweep_success > 0:
             print("\n⏳ Waiting 5 seconds for orders to settle...")
             time.sleep(5)
 
-        # Step 3: Verify cleanup
+        # Step 4: Verify cleanup
         success = verify_cleanup(adapter)
 
         # Show final balance

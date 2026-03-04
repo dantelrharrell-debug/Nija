@@ -623,15 +623,8 @@ def get_risk_alarm_system(reset: bool = False) -> RiskAlarmSystem:
     global _risk_alarm_system
     
     if _risk_alarm_system is None or reset:
-    Proactive risk monitoring and alarm system
-    
-    Responsibilities:
-    - Monitor KPIs against risk thresholds
-    - Trigger alarms when thresholds breached
-    - Log and persist alarms
-    - Provide alarm history
-    - Support multiple notification channels
-    """
+        _risk_alarm_system = RiskAlarmSystem()
+    return _risk_alarm_system
     
     def __init__(
         self,
