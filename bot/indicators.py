@@ -708,20 +708,31 @@ def calculate_multi_indicator_score(df):
         'breakdown': breakdown
     }
 
-def check_no_trade_zones(df, rsi):
+def check_no_trade_zones(df, rsi, avg_volume=None):
     """
     Check if we're in a NO-TRADE ZONE
+
+    Args:
+        df: OHLCV DataFrame
+        rsi: RSI Series
+        avg_volume: Pre-computed 20-period average volume (optional).
+            Pass this when the caller already holds the value to avoid
+            a redundant rolling-mean computation.
 
     Returns: (is_no_trade_zone, reason)
     """
     # NO-TRADE ZONE LOGIC
     current_rsi = rsi.iloc[-1]
-    current_volume = df['volume'].iloc[-1]
-    avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
-    high = df['high'].iloc[-1]
-    low = df['low'].iloc[-1]
-    open_ = df['open'].iloc[-1]
-    close = df['close'].iloc[-1]
+    # Batch all last-row column accesses into a single row lookup
+    last_row = df.iloc[-1]
+    current_volume = last_row['volume']
+    high = last_row['high']
+    low = last_row['low']
+    open_ = last_row['open']
+    close = last_row['close']
+    # Compute avg_volume only when the caller hasn't already done so
+    if avg_volume is None:
+        avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
     wick_size = max(high - close, close - low)
     body_size = abs(close - open_)
     # Prevent division by zero when candle has no body
@@ -782,9 +793,10 @@ def calculate_indicators(df):
     prev_rsi = rsi.iloc[-2]
     current_volume = df['volume'].iloc[-1]
     prev_2_volume = df['volume'].iloc[-2] + df['volume'].iloc[-3]
+    avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
 
-    # Check no-trade zones
-    is_no_trade, reason = check_no_trade_zones(df, rsi)
+    # Check no-trade zones, passing pre-computed avg_volume to avoid recomputation
+    is_no_trade, reason = check_no_trade_zones(df, rsi, avg_volume=avg_volume)
 
     # ═══════════════════════════════════════════════════════════
     # NIJA LONG ENTRY CONDITIONS (Scored 1-5, need 2+ for entry)
