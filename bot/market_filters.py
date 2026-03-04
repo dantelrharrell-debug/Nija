@@ -454,13 +454,20 @@ def check_pair_quality(symbol, bid_price, ask_price, volume_24h=None, atr_pct=No
         }
     """
     if disabled_pairs is None:
-        disabled_pairs = []
+        disabled_pairs_set = set()
+    elif not isinstance(disabled_pairs, (set, frozenset)):
+        # Convert list/tuple to set for O(1) membership testing.
+        # check_pair_quality is called for every market on each scan cycle,
+        # so avoiding O(n) list traversal here is important at scale.
+        disabled_pairs_set = set(disabled_pairs)
+    else:
+        disabled_pairs_set = disabled_pairs
 
     reasons_passed = []
     reasons_failed = []
 
     # Check if pair is disabled/blacklisted
-    if symbol in disabled_pairs:
+    if symbol in disabled_pairs_set:
         reasons_failed.append(f'Pair {symbol} is blacklisted/disabled')
         return {
             'quality_acceptable': False,
