@@ -24,7 +24,10 @@ def run_live_trading():
     try:
         strategy = TradingStrategy()
         while True:
+            start = time.perf_counter()
             strategy.run_trading_cycle()
+            duration = time.perf_counter() - start
+            logger.info(f"Scan cycle: {duration:.4f}s")
             time.sleep(150)
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)

@@ -44,7 +44,10 @@ def run_live_trading(client):
             logger.debug(f"[DEBUG] Main loop iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"[DEBUG] Main loop iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             try:
+                start = time.perf_counter()
                 strategy.run_trading_cycle()
+                duration = time.perf_counter() - start
+                logger.info(f"Scan cycle: {duration:.4f}s")
                 logger.debug(f"[DEBUG] Main loop iteration finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
                 print(f"[DEBUG] Main loop iteration finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             except Exception as e:
