@@ -24,6 +24,39 @@ class RetryHandler:
     - API rate limit detection
     """
 
+    # Keywords that indicate a transient, retryable error.
+    # Defined at class level to avoid re-creating the tuple on every _is_retryable() call.
+    _RETRYABLE_KEYWORDS = (
+        'timeout',
+        'connection',
+        'network',
+        'rate limit',
+        'too many requests',
+        'too many errors',      # Coinbase-specific rate limiting message
+        'service unavailable',
+        '503',
+        '504',
+        '429',
+        'temporary',
+        'try again',
+        'remote end closed',    # Kraken RemoteDisconnected (keep-alive reset)
+        'remotedisconnected',   # http.client.RemoteDisconnected
+        'connection reset',     # Cloudflare / TCP reset
+        'broken pipe',          # Broken keep-alive socket
+    )
+
+    # Keywords that indicate a permanent, non-retryable error.
+    _NON_RETRYABLE_KEYWORDS = (
+        'invalid',
+        'unauthorized',
+        'not found',
+        'insufficient',
+        'authentication',
+        '400',
+        '401',
+        '404',
+    )
+
     def __init__(self, max_attempts: int = 3, base_delay: float = 2.0):
         """
         Initialize retry handler.
@@ -100,27 +133,8 @@ class RetryHandler:
         """
         error_msg_lower = error_msg.lower()
 
-        # Retryable errors
-        retryable_keywords = [
-            'timeout',
-            'connection',
-            'network',
-            'rate limit',
-            'too many requests',
-            'too many errors',  # Coinbase-specific rate limiting message
-            'service unavailable',
-            '503',
-            '504',
-            '429',
-            'temporary',
-            'try again',
-            'remote end closed',   # Kraken RemoteDisconnected (keep-alive reset)
-            'remotedisconnected',  # http.client.RemoteDisconnected
-            'connection reset',    # Cloudflare / TCP reset
-            'broken pipe',         # Broken keep-alive socket
-        ]
-
-        for keyword in retryable_keywords:
+        # Check retryable keywords (class-level constant, no allocation per call)
+        for keyword in self._RETRYABLE_KEYWORDS:
             if keyword in error_msg_lower:
                 return True
 
@@ -139,19 +153,8 @@ class RetryHandler:
             # Default: treat bare 403 as non-retryable to avoid infinite loops on auth issues
             return False
 
-        # Non-retryable errors
-        non_retryable_keywords = [
-            'invalid',
-            'unauthorized',
-            'not found',
-            'insufficient',
-            'authentication',
-            '400',
-            '401',
-            '404'
-        ]
-
-        for keyword in non_retryable_keywords:
+        # Check non-retryable keywords (class-level constant, no allocation per call)
+        for keyword in self._NON_RETRYABLE_KEYWORDS:
             if keyword in error_msg_lower:
                 return False
 
