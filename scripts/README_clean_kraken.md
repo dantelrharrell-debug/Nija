@@ -13,8 +13,8 @@ python scripts/clean_kraken.py
 ## What It Does
 
 1. Cancels ALL open orders on Kraken
-2. Force-sells ALL crypto positions (market orders)
-3. Ignores dust (positions < $1.00 USD)
+2. Force-sells ALL crypto positions above $10 (market orders)
+3. Sweeps dust – converts residual balances (below $10) to USD via ConvertFunds, with a market-order fallback
 4. Verifies: Held in open orders = $0.00
 
 ## Requirements
@@ -38,7 +38,7 @@ See [KRAKEN_CLEANUP_GUIDE.md](/KRAKEN_CLEANUP_GUIDE.md) for complete documentati
 ## Safety
 
 - ✅ Includes dry-run mode
-- ✅ Excludes dust positions
-- ✅ Respects Kraken minimums
+- ✅ Sweeps dust via ConvertFunds (no minimum required)
+- ✅ Respects Kraken minimums for regular market orders
 - ✅ Rate-limited API calls
 - ✅ Comprehensive error handling

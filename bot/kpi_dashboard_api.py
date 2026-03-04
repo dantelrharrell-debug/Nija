@@ -29,19 +29,22 @@ Version: 1.0
 Date: January 30, 2026
 """
 
-from flask import Flask, jsonify, request
+from flask import Flask, Blueprint, jsonify, request
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from dataclasses import asdict
 import logging
 
 try:
     from kpi_tracker import get_kpi_tracker
     from risk_alarm_system import get_risk_alarm_system
     from performance_tracking_service import get_tracking_service
+    from automated_performance_tracker import get_performance_tracker
 except ImportError:
     from bot.kpi_tracker import get_kpi_tracker
     from bot.risk_alarm_system import get_risk_alarm_system
     from bot.performance_tracking_service import get_tracking_service
+    from bot.automated_performance_tracker import get_performance_tracker
 
 try:
     from risk_dashboard import register_risk_dashboard_routes
@@ -353,25 +356,6 @@ def register_kpi_dashboard_routes(app: Flask):
     create_kpi_dashboard_api(app)
 
 
-if __name__ == '__main__':
-    # Run standalone server for testing
-import logging
-from datetime import datetime
-from typing import Dict, Any, Optional
-from flask import Blueprint, jsonify, request
-from dataclasses import asdict
-
-try:
-    from kpi_tracker import get_kpi_tracker
-    from automated_performance_tracker import get_performance_tracker
-    from risk_alarm_system import get_risk_alarm_system
-except ImportError:
-    from bot.kpi_tracker import get_kpi_tracker
-    from bot.automated_performance_tracker import get_performance_tracker
-    from bot.risk_alarm_system import get_risk_alarm_system
-
-logger = logging.getLogger(__name__)
-
 # Create Flask blueprint
 kpi_dashboard_bp = Blueprint('kpi_dashboard', __name__, url_prefix='/api')
 
@@ -675,13 +659,3 @@ if __name__ == "__main__":
     # NOTE: debug=True is for development/testing only
     # In production, set debug=False for security
     app.run(host='0.0.0.0', port=5000, debug=False)
-    # Create Flask app
-    app = Flask(__name__)
-    CORS(app)  # Enable CORS
-    
-    # Register routes
-    register_kpi_dashboard_routes(app)
-    
-    # Run server
-    logger.info("Starting KPI Dashboard API server...")
-    app.run(host='0.0.0.0', port=5001, debug=True)
