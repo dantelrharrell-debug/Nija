@@ -905,6 +905,9 @@ class TradingStrategy:
                 logger.info("   Broker API calls return mock data")
                 logger.info("=" * 70)
 
+        # Load Capital Growth Ladder config (tier-based fixed trade sizes)
+        self.capital_growth_rules = self._load_capital_growth_rules()
+
         # FIX #1: Initialize portfolio state manager for total equity tracking
         try:
             from portfolio_state import get_portfolio_manager
@@ -2504,6 +2507,86 @@ class TradingStrategy:
         logger.info("   ✅ OTHER BROKERS CONTINUE TRADING INDEPENDENTLY")
         logger.info("   ℹ️  Kraken offline does NOT block Coinbase or other exchanges")
         logger.info("")
+
+    def _load_capital_growth_rules(self) -> dict:
+        """
+        Load Capital Growth Ladder configuration from config/capital_growth_rules.json.
+
+        Defines tier thresholds and fixed trade sizes that scale with account equity:
+          - micro tier:          $0 – micro_max      → micro_trade_size per trade
+          - growth tier:         micro_max – growth_max → growth_trade_size per trade
+          - expansion tier:      growth_max – expansion_max → expansion_trade_size per trade
+          - capital_engine tier: expansion_max+        → capital_engine_trade_size per trade
+
+        Also exposes max_capital_per_trade_pct, which must stay in sync with
+        bot/enhanced_strategy_config.py RISK_CONFIG['max_capital_per_trade_pct'].
+
+        Returns:
+            dict: Parsed growth rules, or sensible defaults if the file is missing/corrupt.
+        """
+        _defaults = {
+            "micro_max": 1000,
+            "growth_max": 5000,
+            "expansion_max": 25000,
+            "micro_trade_size": 5,
+            "growth_trade_size": 25,
+            "expansion_trade_size": 75,
+            "capital_engine_trade_size": 150,
+            "max_capital_per_trade_pct": 5,
+        }
+        _config_path = Path(__file__).parent.parent / "config" / "capital_growth_rules.json"
+        try:
+            if _config_path.exists():
+                with open(_config_path, "r") as _f:
+                    rules = json.load(_f)
+                # Strip comment keys so callers receive only numeric config
+                rules = {k: v for k, v in rules.items() if not k.startswith("_")}
+                logger.info(
+                    "✅ Capital Growth Ladder loaded from %s "
+                    "(micro_max=$%s, growth_max=$%s, expansion_max=$%s, "
+                    "max_capital_per_trade_pct=%s%%)",
+                    _config_path,
+                    rules.get("micro_max", _defaults["micro_max"]),
+                    rules.get("growth_max", _defaults["growth_max"]),
+                    rules.get("expansion_max", _defaults["expansion_max"]),
+                    rules.get("max_capital_per_trade_pct", _defaults["max_capital_per_trade_pct"]),
+                )
+                return {**_defaults, **rules}
+            else:
+                logger.warning(
+                    "⚠️  capital_growth_rules.json not found at %s – using hardcoded defaults",
+                    _config_path,
+                )
+        except Exception as _e:
+            logger.error("❌ Failed to load capital_growth_rules.json: %s – using defaults", _e)
+        return _defaults
+
+    def get_tier_trade_size(self, balance: float) -> float:
+        """
+        Return the fixed trade size (USD) for the current capital tier as defined
+        in capital_growth_rules.json.
+
+        Tier boundaries (all configurable via capital_growth_rules.json):
+          - micro tier:          balance < micro_max          → micro_trade_size
+          - growth tier:         micro_max  ≤ balance < growth_max    → growth_trade_size
+          - expansion tier:      growth_max ≤ balance < expansion_max → expansion_trade_size
+          - capital_engine tier: balance ≥ expansion_max               → capital_engine_trade_size
+
+        Args:
+            balance: Current account balance in USD.
+
+        Returns:
+            float: Recommended fixed trade size for the tier.
+        """
+        rules = self.capital_growth_rules
+        if balance < rules["micro_max"]:
+            return float(rules["micro_trade_size"])
+        elif balance < rules["growth_max"]:
+            return float(rules["growth_trade_size"])
+        elif balance < rules["expansion_max"]:
+            return float(rules["expansion_trade_size"])
+        else:
+            return float(rules["capital_engine_trade_size"])
 
     def _get_profit_targets_for_capital(self, balance: float) -> list:
         """

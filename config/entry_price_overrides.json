@@ -1,11 +1,12 @@
 {
   "_comment": "Manual entry price overrides for positions where the exchange does not provide entry price data. Set the entry price (USD) for each symbol so NIJA can adopt and manage these positions. Remove a symbol from this file once it has been exited or its entry price is available from the exchange.",
+  "_usage": "Keys are account_id values (e.g. 'PLATFORM' for the platform account) or 'ALL' to apply to all accounts. Prices reflect your actual entry price at time of purchase.",
   "PLATFORM": {
     "KAVA-USD": 0.42,
     "SCRT-USD": 0.40,
     "USDG-USD": 1.00,
-    "GOAT-USD": 0.00,
-    "GUN-USD": 0.00,
-    "IN-USD": 0.00
+    "GOAT-USD": 0.0184,
+    "GUN-USD": 0.021,
+    "IN-USD": 0.085
   }
 }
