@@ -523,16 +523,6 @@ class MarketRegimeController:
     def get_history(self) -> list:
         """Return the rolling window of recent :class:`MarketSnapshot` dicts."""
         return [s.to_dict() for s in self._history]
-        # From OHLCV data + precomputed indicators
-        metrics = controller.compute_metrics(df, indicators, volume_24h=1_500_000)
-        controls = controller.classify(metrics)
-
-        # Apply controls in your strategy loop
-        if controls.trade_permission == TradePermission.PAUSED:
-            skip_entry()
-        position_size *= controls.position_size_multiplier
-        time.sleep(controls.scan_frequency_seconds)
-    """
 
     # ------------------------------------------------------------------
     # Default thresholds (all overridable via ``config`` kwarg)
@@ -969,6 +959,9 @@ def get_regime_controller(window_size: int = REGIME_WINDOW_SIZE) -> MarketRegime
     global _controller_instance
     if _controller_instance is None:
         _controller_instance = MarketRegimeController(window_size=window_size)
+    return _controller_instance
+
+
 def get_market_regime_controller(
     config: Optional[Dict] = None,
 ) -> MarketRegimeController:
