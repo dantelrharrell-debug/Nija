@@ -86,6 +86,13 @@ data/drawdown_protection.json
 data/milestones.json
 data/capital_allocation.json
 
+# Intelligence & performance module runtime state (should not be committed)
+data/trade_intelligence_state.json
+data/strategy_performance_state.json
+data/regime_intelligence_state.json
+data/compounding_engine_state.json
+data/performance_reporter_state.json
+
 # Trading state files (runtime state, should not be committed)
 # Daily profit tracking
 data/daily_profit_history.json
