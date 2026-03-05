@@ -1202,29 +1202,21 @@ class TradingStrategy:
             # Add delay between broker connections
             time.sleep(2.0)  # Increased from 0.5s to 2.0s
 
-            # COINBASE DISABLED - User requested to disconnect Coinbase (Jan 30, 2026)
-            # Kraken is now the exclusive primary broker
-            # Coinbase connection code commented out to prevent any Coinbase API usage
-            # Original code preserved below for reference if needed in the future
-            #
-            # # Try to connect Coinbase - PLATFORM ACCOUNT
-            # logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)...")
-            # try:
-            #     coinbase = CoinbaseBroker()
-            #     if coinbase.connect():
-            #         self.broker_manager.add_broker(coinbase)
-            #         # Register in multi_account_manager using proper method to enforce invariant
-            #         self.multi_account_manager.register_platform_broker_instance(BrokerType.COINBASE, coinbase)
-            #         connected_brokers.append("Coinbase")
-            #         logger.info("   ✅ Coinbase MASTER connected")
-            #         logger.info("   ✅ Coinbase registered as PLATFORM broker in multi-account manager")
-            #     else:
-            #         logger.warning("   ⚠️  Coinbase MASTER connection failed")
-            # except Exception as e:
-            #     logger.warning(f"   ⚠️  Coinbase PLATFORM error: {e}")
-            
-            logger.info("📊 Coinbase connection DISABLED - Kraken is the active broker")
-            logger.info("   ℹ️  To re-enable Coinbase, uncomment the connection code in trading_strategy.py")
+            # Try to connect Coinbase - PLATFORM ACCOUNT
+            logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)...")
+            try:
+                coinbase = CoinbaseBroker()
+                if coinbase.connect():
+                    self.broker_manager.add_broker(coinbase)
+                    # Register in multi_account_manager using proper method to enforce invariant
+                    self.multi_account_manager.register_platform_broker_instance(BrokerType.COINBASE, coinbase)
+                    connected_brokers.append("Coinbase")
+                    logger.info("   ✅ Coinbase MASTER connected")
+                    logger.info("   ✅ Coinbase registered as PLATFORM broker in multi-account manager")
+                else:
+                    logger.warning("   ⚠️  Coinbase MASTER connection failed")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Coinbase PLATFORM error: {e}")
 
             # Try to connect OKX - PLATFORM ACCOUNT
             logger.info("📊 Attempting to connect OKX (PLATFORM)...")
@@ -1307,9 +1299,6 @@ class TradingStrategy:
             if connected_brokers or user_brokers:
                 if connected_brokers:
                     logger.info(f"✅ PLATFORM ACCOUNT BROKERS: {', '.join(connected_brokers)}")
-
-                    # Note: Coinbase connection disabled (Jan 30, 2026)
-                    # Warning messages removed - Kraken is now the exclusive primary broker
                 if user_brokers:
                     logger.info(f"👥 USER ACCOUNT BROKERS: {', '.join(user_brokers)}")
 

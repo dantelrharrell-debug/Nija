@@ -1269,34 +1269,6 @@ class CoinbaseBroker(BaseBroker):
 
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API with retry logic"""
-        # ═══════════════════════════════════════════════════════════════════════
-        # CRITICAL: Coinbase is DISABLED in code
-        # ═══════════════════════════════════════════════════════════════════════
-        # This is a hardcoded disable, not a configuration setting.
-        # If Coinbase credentials are provided, they will be IGNORED.
-        # 
-        # RISK: Operators may not realize Coinbase is disabled if they only check
-        # environment variables. This warning ensures visibility.
-        # ═══════════════════════════════════════════════════════════════════════
-        logger.warning("")
-        logger.warning("=" * 70)
-        logger.warning("🚫 COINBASE INTEGRATION IS DISABLED (HARDCODED)")
-        logger.warning("=" * 70)
-        logger.warning("   Coinbase connection is disabled in bot/broker_manager.py")
-        logger.warning("   Even if credentials are configured, they will be IGNORED")
-        logger.warning("   Trading will NOT occur on Coinbase")
-        logger.warning("")
-        logger.warning("   To re-enable Coinbase:")
-        logger.warning("   1. Edit bot/broker_manager.py")
-        logger.warning("   2. Remove the early return in CoinbaseBroker.connect()")
-        logger.warning("   3. Uncomment imports in broker_configs/")
-        logger.warning("=" * 70)
-        logger.warning("")
-        
-        # Note: Code below is preserved for potential future re-enabling
-        return False
-        
-        # Unreachable code below - preserved for potential re-enabling
         try:
             from coinbase.rest import RESTClient
             import os
