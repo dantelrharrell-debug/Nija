@@ -225,7 +225,7 @@ def _regime_config(decision: RegimeDecision) -> Tuple[bool, float, str]:
         RegimeDecision.UNFAVORABLE: (
             False,
             0.0,
-            "Unfavourable market regime — new entries paused",
+            "Unfavorable market regime — new entries paused",
         ),
         RegimeDecision.CRISIS: (
             False,

@@ -5756,21 +5756,43 @@ class TradingStrategy:
                     # MARKET REGIME CONTROLLER — pre-scan meta decision
                     # "Should the bot be trading this cycle at all?"
                     # ═══════════════════════════════════════════════════════
-                    # Begin a fresh per-cycle snapshot for regime aggregation.
-                    # Individual per-symbol indicators are recorded inside the
-                    # symbol loop and the final regime decision is evaluated
-                    # after the loop completes.  The decision is stored so that
-                    # the next cycle can reference it (smoothing + logging).
+                    # The regime controller uses a two-cycle approach to prevent
+                    # whipsaw:
+                    #   1. BEFORE the symbol loop → read the PREVIOUS cycle's
+                    #      regime decision from last_result to gate this cycle's
+                    #      entries.
+                    #   2. AFTER the symbol loop  → evaluate the CURRENT cycle's
+                    #      snapshot and store it for the next cycle.
+                    #
+                    # This means the first cycle always gets the safe default
+                    # (allow entries, 1.0x size), which is intentional: there is
+                    # no prior data to make a blocking decision on.
                     _regime_snapshot = None
                     _regime_result = None
-                    _regime_entries_allowed = True   # default: allow entries
-                    _regime_size_multiplier = 1.0    # default: no size adjustment
+
+                    # Default: allow entries at full size (safe first-cycle default)
+                    _regime_entries_allowed = True
+                    _regime_size_multiplier = 1.0
 
                     if hasattr(self, 'regime_controller') and self.regime_controller is not None:
                         try:
+                            # Step 1: Apply the PREVIOUS cycle's regime decision to this cycle
+                            _prev_result = self.regime_controller.last_result
+                            if _prev_result is not None:
+                                _regime_result = _prev_result
+                                _regime_entries_allowed = _prev_result.allow_new_entries
+                                _regime_size_multiplier = _prev_result.position_size_multiplier
+                                if not _regime_entries_allowed:
+                                    logger.warning(
+                                        f"   🚫 REGIME CONTROLLER (previous cycle): "
+                                        f"{_prev_result.reason} "
+                                        f"(score={_prev_result.smoothed_score:.1f})"
+                                    )
+
+                            # Step 2: Begin a fresh snapshot for THIS cycle's observations
                             _regime_snapshot = self.regime_controller.begin_snapshot()
                         except Exception as regime_init_err:
-                            logger.debug(f"   ⚠️ Regime Controller snapshot init error: {regime_init_err}")
+                            logger.debug(f"   ⚠️ Regime Controller init error: {regime_init_err}")
                             _regime_snapshot = None
 
                     for i, symbol in enumerate(markets_to_scan):
@@ -6076,7 +6098,7 @@ class TradingStrategy:
                                 # the PREVIOUS cycle is used here to gate entries.
                                 if not _regime_entries_allowed:
                                     logger.info(
-                                        f"   🚫 {symbol}: REGIME BLOCK — {_regime_result.reason if _regime_result else 'unfavourable market conditions'}"
+                                        f"   🚫 {symbol}: REGIME BLOCK — {_regime_result.reason if _regime_result else 'unfavorable market conditions'}"
                                     )
                                     filter_stats['market_filter'] += 1
                                     continue
@@ -6401,18 +6423,14 @@ class TradingStrategy:
                     # MARKET REGIME CONTROLLER — post-scan evaluation
                     # ═══════════════════════════════════════════════════════
                     # Evaluate the global regime after all assets have been
-                    # observed.  The result determines whether entries are
-                    # permitted in the NEXT scan cycle (smoothed decision).
+                    # observed.  The result is stored in the controller's
+                    # last_result property and will gate entries in the
+                    # NEXT scan cycle.
                     if _regime_snapshot is not None and hasattr(self, 'regime_controller') and self.regime_controller is not None:
                         try:
-                            _regime_result = self.regime_controller.evaluate(_regime_snapshot)
-                            _regime_entries_allowed = _regime_result.allow_new_entries
-                            _regime_size_multiplier = _regime_result.position_size_multiplier
-                            if not _regime_entries_allowed:
-                                logger.warning(
-                                    f"   🚫 REGIME CONTROLLER: {_regime_result.reason} "
-                                    f"(score={_regime_result.smoothed_score:.1f})"
-                                )
+                            # Evaluate and store — the result is accessible via
+                            # self.regime_controller.last_result in the next cycle
+                            self.regime_controller.evaluate(_regime_snapshot)
                         except Exception as regime_eval_err:
                             logger.debug(f"   ⚠️ Regime Controller evaluation error: {regime_eval_err}")
 
