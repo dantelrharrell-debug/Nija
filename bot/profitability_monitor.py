@@ -97,8 +97,8 @@ class ProfitabilityMonitor:
     
     # Performance thresholds
     MIN_WIN_RATE = 0.35  # 35% minimum win rate
-    MIN_EXPECTANCY = 0.0  # Minimum expectancy (break-even)
-    MIN_PROFIT_FACTOR = 1.0  # Minimum profit factor (break-even)
+    MIN_EXPECTANCY = 0.05  # Minimum expectancy above break-even (was 0.0 = break-even)
+    MIN_PROFIT_FACTOR = 1.1  # Require 10% more in wins than losses (was 1.0 = break-even)
     WARNING_WIN_RATE = 0.40  # Warning threshold
     
     # Auto-downgrade thresholds

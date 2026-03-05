@@ -389,8 +389,49 @@ PROFIT_TARGETS = PROFIT_TARGETS_MEDIUM
 # Different brokers have different fee structures, requiring different profit targets
 # These ensure NET profitability after fees for each broker
 # PHILOSOPHY: "Little loss, major profit" - tight stops, wide profit targets
-# Kraken fees: ~0.52% round-trip (0.26% taker fee x 2 sides)
-# Using 0.6% in calculations for safety margin (includes spread)
+
+# ─── FEE ROUND-TRIP COSTS PER BROKER (entry + exit, including spread) ──────────
+# Coinbase:           1.4%  (0.7% taker × 2 + 0.0% spread accounted in target)
+# Kraken:             0.6%  (0.26% taker × 2 + ~0.1% spread, safety margin added)
+# Binance:            0.2%  (0.1% taker × 2)
+# OKX:                0.2%  (0.1% taker × 2)
+# Alpaca (crypto):    0.3%  (0.15% per side)
+# Others/Unknown:     1.4%  (use Coinbase conservative estimate as fallback)
+# ─────────────────────────────────────────────────────────────────────────────────
+
+# FEE BREAKEVEN THRESHOLD per broker: minimum GROSS profit needed to guarantee a
+# NET profit after fees and spread.  Positions that drop BELOW this threshold after
+# having been ABOVE it trigger an immediate exit to lock in remaining net profit.
+# Values include a 0.2% safety buffer on top of round-trip fees.
+BROKER_FEE_BREAKEVEN = {
+    'coinbase':            0.016,  # 1.6%  = 1.4% fees + 0.2% buffer
+    'kraken':              0.008,  # 0.8%  = 0.6% fees + 0.2% buffer
+    'binance':             0.004,  # 0.4%  = 0.2% fees + 0.2% buffer
+    'okx':                 0.004,  # 0.4%  = 0.2% fees + 0.2% buffer
+    'alpaca':              0.005,  # 0.5%  = 0.3% fees + 0.2% buffer
+    'interactive_brokers': 0.016,  # 1.6%  = conservative fallback
+    'td_ameritrade':       0.016,  # 1.6%  = conservative fallback
+    'tradier':             0.016,  # 1.6%  = conservative fallback
+}
+# Default fee breakeven for any unknown broker (use most conservative value)
+DEFAULT_FEE_BREAKEVEN = 0.016
+
+# PROTECTION MIN PROFIT per broker: the profit level above which the "never break
+# even" and "pullback" protections activate.  These are higher than the fee
+# breakeven to give positions room to develop while still locking in meaningful gains.
+BROKER_PROTECTION_MIN_PROFIT = {
+    'coinbase':            0.020,  # 2.0%  — was PROFIT_PROTECTION_MIN_PROFIT
+    'kraken':              0.010,  # 1.0%  — was PROFIT_PROTECTION_MIN_PROFIT_KRAKEN
+    'binance':             0.006,  # 0.6%  = 0.2% fees + 0.4% net target
+    'okx':                 0.006,  # 0.6%  = 0.2% fees + 0.4% net target
+    'alpaca':              0.008,  # 0.8%  = 0.3% fees + 0.5% net target
+    'interactive_brokers': 0.020,  # 2.0%  = conservative fallback
+    'td_ameritrade':       0.020,  # 2.0%  = conservative fallback
+    'tradier':             0.020,  # 2.0%  = conservative fallback
+}
+DEFAULT_PROTECTION_MIN_PROFIT = 0.020
+
+# Kraken fees: ~0.6% round-trip (0.26% taker fee × 2 sides + ~0.1% spread safety margin)
 PROFIT_TARGETS_KRAKEN = [
     (0.040, "Profit target +4.0% (Net +3.4% after 0.6% fees) - MAJOR PROFIT"),    # Major profit - let winners run
     (0.030, "Profit target +3.0% (Net +2.4% after 0.6% fees) - EXCELLENT"),       # Excellent profit
@@ -413,10 +454,36 @@ PROFIT_TARGETS_COINBASE = [
     (0.016, "Profit target +1.6% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum (emergency only)
 ]
 
+# Binance fees: ~0.2% round-trip (0.1% taker fee x 2 sides)
+# Lower targets still yield meaningful net profit due to cheap fee structure
+PROFIT_TARGETS_BINANCE = [
+    (0.040, "Profit target +4.0% (Net +3.8% after 0.2% fees) - MAJOR PROFIT"),
+    (0.030, "Profit target +3.0% (Net +2.8% after 0.2% fees) - EXCELLENT"),
+    (0.020, "Profit target +2.0% (Net +1.8% after 0.2% fees) - GOOD"),
+    (0.010, "Profit target +1.0% (Net +0.8% after 0.2% fees) - ACCEPTABLE"),
+    (0.004, "Profit target +0.4% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum profit
+]
+
+# OKX fees: ~0.2% round-trip (0.1% taker fee x 2 sides)
+PROFIT_TARGETS_OKX = [
+    (0.040, "Profit target +4.0% (Net +3.8% after 0.2% fees) - MAJOR PROFIT"),
+    (0.030, "Profit target +3.0% (Net +2.8% after 0.2% fees) - EXCELLENT"),
+    (0.020, "Profit target +2.0% (Net +1.8% after 0.2% fees) - GOOD"),
+    (0.010, "Profit target +1.0% (Net +0.8% after 0.2% fees) - ACCEPTABLE"),
+    (0.004, "Profit target +0.4% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum profit
+]
+
+# Alpaca fees: ~0.3% round-trip for crypto (0.15% per side)
+PROFIT_TARGETS_ALPACA = [
+    (0.040, "Profit target +4.0% (Net +3.7% after 0.3% fees) - MAJOR PROFIT"),
+    (0.030, "Profit target +3.0% (Net +2.7% after 0.3% fees) - EXCELLENT"),
+    (0.020, "Profit target +2.0% (Net +1.7% after 0.3% fees) - GOOD"),
+    (0.010, "Profit target +1.0% (Net +0.7% after 0.3% fees) - ACCEPTABLE"),
+    (0.005, "Profit target +0.5% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum profit
+]
+
 # PROFITABILITY FIX (Jan 27, 2026): Updated profit targets to ensure NET gains
 # NIJA is for PROFIT - all targets now ensure positive returns after fees
-# Fee structure: Coinbase 1.4% round-trip, Kraken 0.4% round-trip
-# New targets: Coinbase 2.5%+ (net 1.1%+), Kraken 2.0%+ (net 1.6%+)
 # Risk/Reward: Minimum 2:1 ratio enforced via stop loss sizing
 
 # FIX #3: Minimum Profit Threshold (Updated for new targets)
@@ -4470,13 +4537,20 @@ class TradingStrategy:
                                         if PROFIT_PROTECTION_ENABLED:
                                             previous_profit_pct = pnl_data.get('previous_profit_pct', 0.0)
 
-                                            # Determine minimum profit threshold based on broker
+                                            # Determine per-broker profit thresholds
                                             try:
                                                 broker_type = getattr(active_broker, 'broker_type', None)
                                             except AttributeError:
                                                 broker_type = None
 
-                                            protection_min_profit = PROFIT_PROTECTION_MIN_PROFIT_KRAKEN if broker_type == BrokerType.KRAKEN else PROFIT_PROTECTION_MIN_PROFIT
+                                            # Resolve broker key for threshold lookups (works for ALL brokerages)
+                                            broker_key = broker_type.value if broker_type else ''
+                                            protection_min_profit = BROKER_PROTECTION_MIN_PROFIT.get(
+                                                broker_key, DEFAULT_PROTECTION_MIN_PROFIT
+                                            )
+                                            fee_breakeven_threshold = BROKER_FEE_BREAKEVEN.get(
+                                                broker_key, DEFAULT_FEE_BREAKEVEN
+                                            )
 
                                             # RULE 1: Exit on Profit Decrease > 0.5%
                                             # If position is profitable AND profit decreases by MORE than 0.5%, exit
@@ -4526,28 +4600,66 @@ class TradingStrategy:
                                                 })
                                                 continue
 
+                                            # RULE 3: Fee-Breakeven Guard (applies to ALL brokerages)
+                                            # Protects positions that reached fee-adjusted breakeven but never crossed
+                                            # the higher protection_min_profit threshold.
+                                            # When profit drops BELOW the fee-breakeven level after having been ABOVE
+                                            # it, exit immediately to lock in whatever net profit remains before fees
+                                            # erase it entirely.
+                                            # Example (Coinbase, fee_breakeven=1.6%):
+                                            #   Position peaks at 1.8% (net +0.4%) — below 2% protection threshold
+                                            #   Position falls to 1.4% (net ~0%) → guard fires, exit now
+                                            if (PROFIT_PROTECTION_NEVER_BREAKEVEN
+                                                    and pnl_percent > 0
+                                                    and pnl_percent < fee_breakeven_threshold
+                                                    and previous_profit_pct >= fee_breakeven_threshold):
+                                                logger.warning(f"   💰 FEE BREAKEVEN GUARD ({broker_key or 'unknown'}): {symbol} dropped below fee breakeven")
+                                                logger.warning(f"      Previous profit: {previous_profit_pct*100:+.2f}% → Current: {pnl_percent*100:+.2f}%")
+                                                logger.warning(f"      Fee threshold: {fee_breakeven_threshold*100:.1f}% — exiting to lock in remaining profit!")
+                                                positions_to_exit.append({
+                                                    'symbol': symbol,
+                                                    'quantity': quantity,
+                                                    'reason': (
+                                                        f'Fee breakeven guard ({broker_key}): was {previous_profit_pct*100:+.2f}%, '
+                                                        f'now {pnl_percent*100:+.2f}% (below {fee_breakeven_threshold*100:.1f}% fee threshold)'
+                                                    ),
+                                                    'broker': position_broker,
+                                                    'broker_label': broker_label
+                                                })
+                                                continue
+
                                         # STEPPED PROFIT TAKING - Exit portions at profit targets
                                         # This locks in gains and frees capital for new opportunities
                                         # Check targets from highest to lowest
                                         # FIX #3: Only exit if profit > minimum threshold (spread + fees + buffer)
-                                        # ENHANCEMENT (Jan 19, 2026): Use broker-specific profit targets
-                                        # Different brokers have different fee structures
+                                        # ENHANCEMENT: Use broker-specific profit targets for ALL supported brokers.
+                                        # Each broker has its own fee structure, so targets ensure net profitability.
                                         # Safely get broker_type, defaulting to generic targets if not available
                                         try:
                                             broker_type = getattr(active_broker, 'broker_type', None)
                                         except AttributeError:
                                             broker_type = None
 
-                                        if broker_type == BrokerType.KRAKEN:
+                                        _bkey = broker_type.value if broker_type else ''
+                                        if _bkey == 'kraken':
                                             profit_targets = PROFIT_TARGETS_KRAKEN
-                                            min_threshold = 0.005  # 0.5% minimum for Kraken (0.36% fees)
-                                        elif broker_type == BrokerType.COINBASE:
+                                            min_threshold = BROKER_FEE_BREAKEVEN.get('kraken', DEFAULT_FEE_BREAKEVEN)
+                                        elif _bkey == 'coinbase':
                                             profit_targets = PROFIT_TARGETS_COINBASE
-                                            min_threshold = MIN_PROFIT_THRESHOLD  # 1.6% minimum for Coinbase (1.4% fees)
+                                            min_threshold = BROKER_FEE_BREAKEVEN.get('coinbase', DEFAULT_FEE_BREAKEVEN)
+                                        elif _bkey == 'binance':
+                                            profit_targets = PROFIT_TARGETS_BINANCE
+                                            min_threshold = BROKER_FEE_BREAKEVEN.get('binance', DEFAULT_FEE_BREAKEVEN)
+                                        elif _bkey == 'okx':
+                                            profit_targets = PROFIT_TARGETS_OKX
+                                            min_threshold = BROKER_FEE_BREAKEVEN.get('okx', DEFAULT_FEE_BREAKEVEN)
+                                        elif _bkey == 'alpaca':
+                                            profit_targets = PROFIT_TARGETS_ALPACA
+                                            min_threshold = BROKER_FEE_BREAKEVEN.get('alpaca', DEFAULT_FEE_BREAKEVEN)
                                         else:
-                                            # Default to Coinbase targets for unknown brokers (conservative)
+                                            # Conservative Coinbase targets for any unknown/future broker
                                             profit_targets = PROFIT_TARGETS
-                                            min_threshold = MIN_PROFIT_THRESHOLD
+                                            min_threshold = DEFAULT_FEE_BREAKEVEN
 
                                         for target_pct, reason in profit_targets:
                                             if pnl_percent >= target_pct:
