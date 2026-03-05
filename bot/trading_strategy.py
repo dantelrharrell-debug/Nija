@@ -52,6 +52,19 @@ except ImportError:
     except ImportError:
         TradeQualityGate = None
 
+# Import Market Structure Filter (trend + volume + momentum confirmation)
+try:
+    from market_structure_filter import structure_valid as _structure_valid
+    MARKET_STRUCTURE_FILTER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.market_structure_filter import structure_valid as _structure_valid
+        MARKET_STRUCTURE_FILTER_AVAILABLE = True
+    except ImportError:
+        MARKET_STRUCTURE_FILTER_AVAILABLE = False
+        _structure_valid = None
+        logger.warning("⚠️ Market Structure Filter not available - HH/HL + volume + momentum check disabled")
+
 # Import Recovery Controller for capital-first safety (NEW - Feb 2026)
 try:
     from recovery_controller import get_recovery_controller, FailureState
@@ -5867,6 +5880,24 @@ class TradingStrategy:
                                 except Exception as readiness_err:
                                     logger.debug(f"   ⚠️ Market readiness check error for {symbol}: {readiness_err}")
                                     # Continue with analysis if readiness check fails
+
+                            # ═══════════════════════════════════════════════════════
+                            # MARKET STRUCTURE FILTER (Higher High/Low + Volume + RSI)
+                            # ═══════════════════════════════════════════════════════
+                            # Entry allowed only when trend, volume expansion, AND
+                            # momentum all confirm.  Prevents buying fake breakouts.
+                            if MARKET_STRUCTURE_FILTER_AVAILABLE and _structure_valid is not None:
+                                try:
+                                    if not _structure_valid(df):
+                                        logger.debug(
+                                            f"   ⛔ {symbol}: Market structure filter blocked entry "
+                                            f"(HH/HL trend, volume expansion, or RSI momentum not confirmed)"
+                                        )
+                                        filter_stats['market_filter'] += 1
+                                        continue
+                                except Exception as structure_err:
+                                    logger.debug(f"   ⚠️ Market structure check error for {symbol}: {structure_err}")
+                                    # Continue with analysis if structure check fails
 
                             # Analyze for entry
                             # CRITICAL: Use broker-specific balance for position sizing
