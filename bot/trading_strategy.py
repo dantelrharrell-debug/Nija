@@ -18,6 +18,32 @@ import pandas as pd
 # Initialize logger early to avoid NameError in import fallback handlers
 logger = logging.getLogger("nija")
 
+# Import entry guardrails (correlation, liquidity, latency)
+try:
+    from entry_guardrails import (
+        PortfolioCorrelationFilter,
+        LiquidityFilter,
+        ExchangeLatencyGuard,
+        run_all_guardrails,
+    )
+    _ENTRY_GUARDRAILS_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.entry_guardrails import (
+            PortfolioCorrelationFilter,
+            LiquidityFilter,
+            ExchangeLatencyGuard,
+            run_all_guardrails,
+        )
+        _ENTRY_GUARDRAILS_AVAILABLE = True
+    except ImportError:
+        PortfolioCorrelationFilter = None  # type: ignore
+        LiquidityFilter = None  # type: ignore
+        ExchangeLatencyGuard = None  # type: ignore
+        run_all_guardrails = None  # type: ignore
+        _ENTRY_GUARDRAILS_AVAILABLE = False
+        logger.warning("⚠️ Entry guardrails not available – correlation/liquidity/latency checks disabled")
+
 # Import market filters at module level to avoid repeated imports in loops
 try:
     from market_filters import check_pair_quality, is_high_liquidity_symbol, TOP_20_HIGH_LIQUIDITY_SYMBOLS
@@ -946,6 +972,26 @@ class TradingStrategy:
         except ImportError:
             logger.warning("⚠️ Forced stop-loss module not available")
             self.forced_stop_loss = None
+
+        # Initialize entry guardrails (correlation, liquidity, latency)
+        if _ENTRY_GUARDRAILS_AVAILABLE:
+            try:
+                self.correlation_filter = PortfolioCorrelationFilter()
+                self.liquidity_filter = LiquidityFilter()
+                self.latency_guard = ExchangeLatencyGuard()
+                logger.info(
+                    "✅ Entry guardrails initialized – "
+                    "correlation/liquidity/latency checks active"
+                )
+            except Exception as _eg_err:
+                logger.warning(f"⚠️ Failed to initialize entry guardrails: {_eg_err}")
+                self.correlation_filter = None
+                self.liquidity_filter = None
+                self.latency_guard = None
+        else:
+            self.correlation_filter = None
+            self.liquidity_filter = None
+            self.latency_guard = None
 
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
         # NEW (Jan 16, 2026): Track with timestamps to allow retry after timeout
@@ -3047,7 +3093,16 @@ class TradingStrategy:
                 return cached_data
 
         # Cache miss or expired - fetch fresh data
+        _t0 = time.perf_counter()
         candles = active_broker.get_candles(symbol, timeframe, count)
+        _elapsed_ms = (time.perf_counter() - _t0) * 1_000
+
+        # Feed latency sample into the exchange latency guard (if available)
+        if getattr(self, 'latency_guard', None) is not None:
+            try:
+                self.latency_guard.record_latency(_elapsed_ms)
+            except Exception:
+                pass  # Non-fatal
 
         # Cache the result (even if empty, to avoid repeated failed requests)
         self.candle_cache[cache_key] = (current_time, candles)
@@ -6355,6 +6410,58 @@ class TradingStrategy:
                                     else:
                                         logger.warning(f"   ⚠️ Cannot rotate: {rotate_reason}")
                                         continue  # Skip this trade if rotation not allowed
+
+                                # ═══════════════════════════════════════════════════════
+                                # ENTRY GUARDRAILS — correlation / liquidity / latency
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    _ENTRY_GUARDRAILS_AVAILABLE
+                                    and run_all_guardrails is not None
+                                    and getattr(self, 'correlation_filter', None) is not None
+                                    and getattr(self, 'liquidity_filter', None) is not None
+                                    and getattr(self, 'latency_guard', None) is not None
+                                ):
+                                    try:
+                                        # Feed latest close price into correlation tracker
+                                        _close_price = float(df['close'].iloc[-1])
+                                        self.correlation_filter.update_price(symbol, _close_price)
+
+                                        # Derive market data for liquidity check
+                                        _vol_24h = float(df['volume'].iloc[-1]) * _close_price if 'volume' in df.columns else 0.0
+                                        # Use estimated bid/ask from analysis or fall back to spread estimate
+                                        _est_spread = 0.001  # 0.1 % conservative estimate
+                                        _bid = _close_price * (1 - _est_spread / 2)
+                                        _ask = _close_price * (1 + _est_spread / 2)
+
+                                        # Build list of currently open position symbols
+                                        _open_syms = [
+                                            p.get('symbol', '') for p in current_positions
+                                            if p.get('symbol')
+                                        ]
+
+                                        _guard_passed, _guard_reason = run_all_guardrails(
+                                            correlation_filter=self.correlation_filter,
+                                            liquidity_filter=self.liquidity_filter,
+                                            latency_guard=self.latency_guard,
+                                            candidate_symbol=symbol,
+                                            open_position_symbols=_open_syms,
+                                            volume_24h_usd=_vol_24h,
+                                            bid=_bid,
+                                            ask=_ask,
+                                            position_size_usd=position_size,
+                                        )
+
+                                        if not _guard_passed:
+                                            logger.info(
+                                                f"   🛡️  ENTRY GUARDRAILS blocked {symbol}: {_guard_reason}"
+                                            )
+                                            filter_stats['market_filter'] = filter_stats.get('market_filter', 0) + 1
+                                            continue
+                                    except Exception as _guard_err:
+                                        logger.debug(
+                                            f"   ⚠️ Entry guardrail check error for {symbol}: {_guard_err}"
+                                        )
+                                        # Non-fatal: allow trade if guardrails fail unexpectedly
 
                                 logger.info(f"   🎯 BUY SIGNAL: {symbol} - size=${position_size:.2f} - {analysis.get('reason', '')}")
                                 success = self.apex.execute_action(analysis, symbol)
