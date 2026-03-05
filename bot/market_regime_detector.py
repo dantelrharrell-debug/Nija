@@ -58,12 +58,11 @@ class RegimeDetector:
                 'trailing_stop_distance': 1.5,  # Wider trailing stop (1.5x ATR)
                 'take_profit_multiplier': 1.5,  # Higher profit targets
                 # ADAPTIVE RSI RANGES (MOMENTUM-OPTIMIZED FOR TRENDING MARKETS)
-                # CRITICAL FIX: Wider RSI ranges to capture momentum moves, not just pullbacks
-                # In strong trends, waiting for deep pullbacks (RSI 25-45) causes missed entries
-                # Solution: Allow entries at higher RSI levels to ride momentum
-                'long_rsi_min': 30,   # Allow slightly higher entries for momentum
-                'long_rsi_max': 55,   # WIDENED: Capture momentum entries (was 45)
-                'short_rsi_min': 45,  # WIDENED: Capture momentum entries (was 55)
+                # Trending markets require RSI > 50 to confirm bullish momentum before entry
+                # This ensures entries are made only when trend momentum is clearly established
+                'long_rsi_min': 50,   # RSI > 50 required: confirms bullish trend momentum
+                'long_rsi_max': 70,   # Upper bound to avoid extreme overbought entries
+                'short_rsi_min': 45,  # Short entries when RSI is approaching neutral zone from above
                 'short_rsi_max': 70,  # Allow slightly lower entries for momentum
             },
             MarketRegime.RANGING: {
@@ -85,8 +84,10 @@ class RegimeDetector:
                 'trailing_stop_distance': 2.0,  # Wider trailing stop (2.0x ATR)
                 'take_profit_multiplier': 1.0,  # Normal profit targets
                 # ADAPTIVE RSI RANGES (MAX ALPHA UPGRADE)
-                'long_rsi_min': 30,   # Conservative to avoid whipsaws
-                'long_rsi_max': 40,   # Narrow range for quality entries
+                # Volatile markets require RSI > 60 for higher conviction before entry
+                # In choppy/volatile markets, only strong momentum signals (RSI > 60) are reliable
+                'long_rsi_min': 60,   # RSI > 60 required: high conviction momentum in volatile markets
+                'long_rsi_max': 70,   # Conservative upper bound to avoid extreme overbought entries
                 'short_rsi_min': 60,  # Narrow range for quality entries
                 'short_rsi_max': 70,  # Conservative to avoid whipsaws
             }
@@ -300,9 +301,9 @@ class RegimeDetector:
         Get adaptive RSI ranges based on market regime and trend strength (MAX ALPHA UPGRADE)
 
         This method dynamically adjusts RSI entry ranges based on market conditions:
-        - TRENDING: Tighter ranges (25-45 long, 55-75 short) for high conviction
+        - TRENDING: RSI > 50 required for longs (50-70 range) to confirm bullish momentum
         - RANGING: Wider ranges (20-50 long, 50-80 short) for more opportunities
-        - VOLATILE: Conservative ranges (30-40 long, 60-70 short) to avoid whipsaws
+        - VOLATILE: RSI > 60 required for longs (60-70 range) for high conviction in choppy markets
 
         Optional ADX fine-tuning:
         - Strong trend (ADX > 30): Use slightly tighter ranges for even higher conviction
