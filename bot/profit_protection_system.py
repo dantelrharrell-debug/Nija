@@ -49,8 +49,11 @@ class ProfitProtectionSystem:
         # Break-even trigger (move stop to entry + fees at this profit level)
         self.breakeven_trigger_pct = self.config.get('breakeven_trigger', 0.005)  # 0.5% profit
         
-        # Fee buffer (add to break-even to cover fees)
-        self.fee_buffer_pct = self.config.get('fee_buffer', 0.0015)  # 0.15% (covers typical fees)
+        # Fee buffer added to the break-even stop so the stop price guarantees a
+        # net profit after fees even if hit.  1.8% covers the most expensive broker
+        # (Coinbase 1.4% round-trip) plus a 0.2% spread buffer and 0.2% safety margin.
+        # Callers that know their broker's exact fee can pass a lower value via config.
+        self.fee_buffer_pct = self.config.get('fee_buffer', 0.018)  # 1.8% (was 0.15% — too low)
         
         # Time-based exit (if no movement within X minutes, exit)
         self.stagnation_minutes = self.config.get('stagnation_minutes', 30)
@@ -62,6 +65,7 @@ class ProfitProtectionSystem:
         logger.info("✅ Profit Protection System initialized")
         logger.info(f"   Partial exits: {len(self.exit_schedule)} levels")
         logger.info(f"   Break-even trigger: +{self.breakeven_trigger_pct*100:.2f}%")
+        logger.info(f"   Fee buffer (break-even stop): +{self.fee_buffer_pct*100:.2f}%")
         logger.info(f"   Stagnation timeout: {self.stagnation_minutes} min")
     
     def register_position(self, symbol: str, entry_price: float, entry_time: datetime, initial_size: float):
