@@ -7,12 +7,13 @@ Per-account mode flag system for dynamic risk routing.
 Each account can be assigned a mode that controls its risk behavior,
 following the prop-firm pattern for multi-account routing:
 
-    {"account": "daivon", "mode": "recovery"}
+    {"account": "daivon", "mode": "moderate"}
 
 Available modes:
-- normal      : Standard risk parameters (default)
+- normal      : Unconstrained; user's base limits apply unchanged (legacy)
 - recovery    : Exit-only; no new entries, minimal position exposure
 - conservative: Reduced position sizes and tighter loss limits
+- moderate    : Balanced growth and safety (default)
 - aggressive  : Larger position sizes with relaxed limits (advanced users)
 - paused      : All trading halted (no entries or exits triggered)
 
@@ -39,9 +40,10 @@ class AccountMode(str, Enum):
     Controls which risk rules are applied for a given account.
     String-based enum allows direct JSON serialization / deserialization.
     """
-    NORMAL = "normal"            # Default: standard risk parameters
+    NORMAL = "normal"            # Unconstrained: applies user base limits only (legacy)
     RECOVERY = "recovery"        # Exit-only; no new entries
     CONSERVATIVE = "conservative"  # Reduced exposure, tighter limits
+    MODERATE = "moderate"        # Balanced growth and safety (default)
     AGGRESSIVE = "aggressive"    # Higher exposure (advanced users only)
     PAUSED = "paused"            # All trading halted
 
@@ -83,7 +85,8 @@ class ModeRiskOverrides:
 
 MODE_RULES: Dict[AccountMode, ModeRiskOverrides] = {
     AccountMode.NORMAL: ModeRiskOverrides(
-        # All fields are None → user's base limits apply unchanged
+        # Unconstrained: all fields are None → user's base limits apply unchanged.
+        # Kept for backward compatibility; MODERATE is now the recommended default.
         allow_new_entries=True,
     ),
 
@@ -102,6 +105,17 @@ MODE_RULES: Dict[AccountMode, ModeRiskOverrides] = {
         max_daily_loss_pct=0.03,   # 3% daily loss cap (vs 5%)
         max_drawdown_pct=0.10,     # 10% drawdown limit (vs 15%)
         circuit_breaker_loss_pct=0.02,
+        allow_new_entries=True,
+    ),
+
+    AccountMode.MODERATE: ModeRiskOverrides(
+        # Balanced growth and safety – midpoint between conservative and aggressive
+        max_position_pct=0.20,     # 20% max per position
+        max_open_positions=5,
+        max_daily_loss_pct=0.05,   # 5% daily loss cap
+        max_drawdown_pct=0.15,     # 15% drawdown limit
+        circuit_breaker_loss_pct=0.03,
+        max_daily_trades=20,
         allow_new_entries=True,
     ),
 
@@ -176,7 +190,7 @@ class AccountModeManager:
         else:
             logger.debug("Account mode unchanged: account=%s mode=%s", account, mode.value)
 
-    def get_mode(self, account: str, default: AccountMode = AccountMode.NORMAL) -> AccountMode:
+    def get_mode(self, account: str, default: AccountMode = AccountMode.MODERATE) -> AccountMode:
         """
         Get the current mode for an account.
 
@@ -206,10 +220,10 @@ class AccountModeManager:
             mode = AccountMode(raw_mode.lower())
         except ValueError:
             logger.warning(
-                "⚠️  Unknown mode '%s' for account '%s' – defaulting to normal",
+                "⚠️  Unknown mode '%s' for account '%s' – defaulting to moderate",
                 raw_mode, account
             )
-            mode = AccountMode.NORMAL
+            mode = AccountMode.MODERATE
 
         self.set_mode(account, mode)
         return mode

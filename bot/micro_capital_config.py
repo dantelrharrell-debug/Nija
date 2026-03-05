@@ -227,7 +227,7 @@ DRAWDOWN_HALT_THRESHOLD = 20.0  # % drawdown to halt trading
 
 # Smart Compounding Logic
 ENABLE_PROFIT_COMPOUNDING = True  # Automatically compound profits
-COMPOUNDING_STRATEGY = "aggressive"  # conservative/moderate/aggressive
+COMPOUNDING_STRATEGY = "moderate"  # conservative/moderate/aggressive
 PROFIT_REINVEST_PCT = 90.0  # % of profits to reinvest (90% for micro capital)
 MIN_PROFIT_TO_COMPOUND = 5.0  # Minimum profit to trigger compounding
 
