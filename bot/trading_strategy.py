@@ -81,6 +81,42 @@ except ImportError:
         get_recovery_controller = None
         FailureState = None
 
+# Import Market Regime Controller — meta-layer that answers "Should we trade now?"
+try:
+    from market_regime_controller import get_regime_controller, MarketRegimeController, RegimeDecision
+    REGIME_CONTROLLER_AVAILABLE = True
+    logger.info("✅ Market Regime Controller loaded - trade regime gating active")
+except ImportError:
+    try:
+        from bot.market_regime_controller import get_regime_controller, MarketRegimeController, RegimeDecision
+        REGIME_CONTROLLER_AVAILABLE = True
+        logger.info("✅ Market Regime Controller loaded - trade regime gating active")
+    except ImportError:
+        REGIME_CONTROLLER_AVAILABLE = False
+        logger.warning("⚠️ Market Regime Controller not available - regime gating disabled")
+        get_regime_controller = None
+        MarketRegimeController = None
+        RegimeDecision = None
+
+# Import Risk Budget Engine — risk-first position sizing with performance scaling
+try:
+    from risk_budget_engine import RiskBudgetEngine, RiskBudgetConfig, TradeRecord, OUTCOME_WIN, OUTCOME_LOSS
+    RISK_BUDGET_ENGINE_AVAILABLE = True
+    logger.info("✅ Risk Budget Engine loaded - risk-first position sizing active")
+except ImportError:
+    try:
+        from bot.risk_budget_engine import RiskBudgetEngine, RiskBudgetConfig, TradeRecord, OUTCOME_WIN, OUTCOME_LOSS
+        RISK_BUDGET_ENGINE_AVAILABLE = True
+        logger.info("✅ Risk Budget Engine loaded - risk-first position sizing active")
+    except ImportError:
+        RISK_BUDGET_ENGINE_AVAILABLE = False
+        logger.warning("⚠️ Risk Budget Engine not available - using legacy position sizing")
+        RiskBudgetEngine = None
+        RiskBudgetConfig = None
+        TradeRecord = None
+        OUTCOME_WIN = "win"
+        OUTCOME_LOSS = "loss"
+
 # Import scalar helper for indicator conversions
 try:
     from indicators import scalar
@@ -874,6 +910,32 @@ class TradingStrategy:
                 self.quality_gate = None
         else:
             self.quality_gate = None
+
+        # Initialize Market Regime Controller — meta-layer: "Should we trade now?"
+        if REGIME_CONTROLLER_AVAILABLE and get_regime_controller is not None:
+            try:
+                self.regime_controller = get_regime_controller()
+                # Active snapshot accumulates per-asset observations during each cycle
+                self._regime_snapshot = None
+                logger.info("✅ Market Regime Controller initialized - regime gating active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Market Regime Controller: {e}")
+                self.regime_controller = None
+                self._regime_snapshot = None
+        else:
+            self.regime_controller = None
+            self._regime_snapshot = None
+
+        # Initialize Risk Budget Engine — risk-first position sizing with performance scaling
+        if RISK_BUDGET_ENGINE_AVAILABLE and RiskBudgetEngine is not None:
+            try:
+                self.risk_budget_engine = RiskBudgetEngine()
+                logger.info("✅ Risk Budget Engine initialized - risk-first position sizing active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Risk Budget Engine: {e}")
+                self.risk_budget_engine = None
+        else:
+            self.risk_budget_engine = None
 
         # FIX #2: Initialize forced stop-loss executor
         try:
@@ -5690,6 +5752,49 @@ class TradingStrategy:
                         'cache_hits': 0
                     }
 
+                    # ═══════════════════════════════════════════════════════
+                    # MARKET REGIME CONTROLLER — pre-scan meta decision
+                    # "Should the bot be trading this cycle at all?"
+                    # ═══════════════════════════════════════════════════════
+                    # The regime controller uses a two-cycle approach to prevent
+                    # whipsaw:
+                    #   1. BEFORE the symbol loop → read the PREVIOUS cycle's
+                    #      regime decision from last_result to gate this cycle's
+                    #      entries.
+                    #   2. AFTER the symbol loop  → evaluate the CURRENT cycle's
+                    #      snapshot and store it for the next cycle.
+                    #
+                    # This means the first cycle always gets the safe default
+                    # (allow entries, 1.0x size), which is intentional: there is
+                    # no prior data to make a blocking decision on.
+                    _regime_snapshot = None
+                    _regime_result = None
+
+                    # Default: allow entries at full size (safe first-cycle default)
+                    _regime_entries_allowed = True
+                    _regime_size_multiplier = 1.0
+
+                    if hasattr(self, 'regime_controller') and self.regime_controller is not None:
+                        try:
+                            # Step 1: Apply the PREVIOUS cycle's regime decision to this cycle
+                            _prev_result = self.regime_controller.last_result
+                            if _prev_result is not None:
+                                _regime_result = _prev_result
+                                _regime_entries_allowed = _prev_result.allow_new_entries
+                                _regime_size_multiplier = _prev_result.position_size_multiplier
+                                if not _regime_entries_allowed:
+                                    logger.warning(
+                                        f"   🚫 REGIME CONTROLLER (previous cycle): "
+                                        f"{_prev_result.reason} "
+                                        f"(score={_prev_result.smoothed_score:.1f})"
+                                    )
+
+                            # Step 2: Begin a fresh snapshot for THIS cycle's observations
+                            _regime_snapshot = self.regime_controller.begin_snapshot()
+                        except Exception as regime_init_err:
+                            logger.debug(f"   ⚠️ Regime Controller init error: {regime_init_err}")
+                            _regime_snapshot = None
+
                     for i, symbol in enumerate(markets_to_scan):
                         filter_stats['total'] += 1
                         try:
@@ -5886,18 +5991,55 @@ class TradingStrategy:
                             # ═══════════════════════════════════════════════════════
                             # Entry allowed only when trend, volume expansion, AND
                             # momentum all confirm.  Prevents buying fake breakouts.
+                            _symbol_structure_passed = True  # default
                             if MARKET_STRUCTURE_FILTER_AVAILABLE and _structure_valid is not None:
                                 try:
-                                    if not _structure_valid(df):
+                                    _symbol_structure_passed = _structure_valid(df)
+                                    if not _symbol_structure_passed:
                                         logger.debug(
                                             f"   ⛔ {symbol}: Market structure filter blocked entry "
                                             f"(HH/HL trend, volume expansion, or RSI momentum not confirmed)"
                                         )
                                         filter_stats['market_filter'] += 1
+                                        # Record observation in regime snapshot before skipping
+                                        if _regime_snapshot is not None:
+                                            try:
+                                                _adx_val = float(df['adx'].iloc[-1]) if 'adx' in df.columns else 0.0
+                                                _rsi_val = float(df['rsi'].iloc[-1]) if 'rsi' in df.columns else 50.0
+                                                _atr_val = float(df['atr'].iloc[-1]) if 'atr' in df.columns else 0.0
+                                                _price_val = float(df['close'].iloc[-1]) if len(df) > 0 else 1.0
+                                                _atr_pct = _atr_val / _price_val if _price_val > 0 else 0.0
+                                                self.regime_controller.record_asset(
+                                                    _regime_snapshot,
+                                                    adx=_adx_val,
+                                                    rsi=_rsi_val,
+                                                    structure_passed=False,
+                                                    atr_pct=_atr_pct,
+                                                )
+                                            except Exception:
+                                                pass
                                         continue
                                 except Exception as structure_err:
                                     logger.debug(f"   ⚠️ Market structure check error for {symbol}: {structure_err}")
                                     # Continue with analysis if structure check fails
+
+                            # Record per-symbol observations in regime snapshot (structure passed)
+                            if _regime_snapshot is not None:
+                                try:
+                                    _adx_val = float(df['adx'].iloc[-1]) if 'adx' in df.columns else 0.0
+                                    _rsi_val = float(df['rsi'].iloc[-1]) if 'rsi' in df.columns else 50.0
+                                    _atr_val = float(df['atr'].iloc[-1]) if 'atr' in df.columns else 0.0
+                                    _price_val = float(df['close'].iloc[-1]) if len(df) > 0 else 1.0
+                                    _atr_pct = _atr_val / _price_val if _price_val > 0 else 0.0
+                                    self.regime_controller.record_asset(
+                                        _regime_snapshot,
+                                        adx=_adx_val,
+                                        rsi=_rsi_val,
+                                        structure_passed=_symbol_structure_passed,
+                                        atr_pct=_atr_pct,
+                                    )
+                                except Exception:
+                                    pass
 
                             # Analyze for entry
                             # CRITICAL: Use broker-specific balance for position sizing
@@ -5947,6 +6089,56 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
+
+                                # ═══════════════════════════════════════════════════════
+                                # REGIME CONTROLLER GATE — respect regime decision
+                                # ═══════════════════════════════════════════════════════
+                                # The regime controller evaluates the GLOBAL market
+                                # environment after the scan loop.  Its decision from
+                                # the PREVIOUS cycle is used here to gate entries.
+                                if not _regime_entries_allowed:
+                                    logger.info(
+                                        f"   🚫 {symbol}: REGIME BLOCK — {_regime_result.reason if _regime_result else 'unfavorable market conditions'}"
+                                    )
+                                    filter_stats['market_filter'] += 1
+                                    continue
+
+                                # Apply regime-based position-size multiplier
+                                if _regime_size_multiplier != 1.0 and _regime_size_multiplier > 0:
+                                    _original_size = position_size
+                                    position_size = position_size * _regime_size_multiplier
+                                    logger.info(
+                                        f"   ⚠️  {symbol}: Regime size adjustment "
+                                        f"({_regime_size_multiplier:.2f}x) — "
+                                        f"${_original_size:.2f} → ${position_size:.2f}"
+                                    )
+
+                                # ═══════════════════════════════════════════════════════
+                                # RISK BUDGET ENGINE — risk-first position size override
+                                # ═══════════════════════════════════════════════════════
+                                # When available, use the Risk Budget Engine to compute
+                                # a risk-first position size and cap any oversized signal.
+                                if hasattr(self, 'risk_budget_engine') and self.risk_budget_engine is not None:
+                                    try:
+                                        _entry_price = analysis.get('entry_price', 0.0) or float(df['close'].iloc[-1])
+                                        _stop_price = analysis.get('stop_price', 0.0)
+                                        if _entry_price > 0 and _stop_price > 0 and _stop_price != _entry_price:
+                                            _rb_result = self.risk_budget_engine.calculate_position_size(
+                                                account_balance=account_balance,
+                                                entry_price=_entry_price,
+                                                stop_price=_stop_price,
+                                            )
+                                            _rb_size = _rb_result.get('position_size_usd', position_size)
+                                            # Use whichever is smaller: strategy size or risk-budget size
+                                            if _rb_size < position_size:
+                                                logger.info(
+                                                    f"   💰 {symbol}: Risk Budget Engine capped position "
+                                                    f"${position_size:.2f} → ${_rb_size:.2f} "
+                                                    f"(risk_pct={_rb_result.get('risk_pct', 0):.2%})"
+                                                )
+                                                position_size = _rb_size
+                                    except Exception as rb_err:
+                                        logger.debug(f"   ⚠️ Risk Budget Engine error for {symbol}: {rb_err}")
 
                                 # ═══════════════════════════════════════════════════════
                                 # MARKET READINESS GATE - Re-check with entry score for CAUTIOUS mode
@@ -6227,6 +6419,21 @@ class TradingStrategy:
                     # This ensures we never make requests too quickly in succession
                     # No post-delay needed since pre-delay is more effective at preventing rate limits
 
+                    # ═══════════════════════════════════════════════════════
+                    # MARKET REGIME CONTROLLER — post-scan evaluation
+                    # ═══════════════════════════════════════════════════════
+                    # Evaluate the global regime after all assets have been
+                    # observed.  The result is stored in the controller's
+                    # last_result property and will gate entries in the
+                    # NEXT scan cycle.
+                    if _regime_snapshot is not None and hasattr(self, 'regime_controller') and self.regime_controller is not None:
+                        try:
+                            # Evaluate and store — the result is accessible via
+                            # self.regime_controller.last_result in the next cycle
+                            self.regime_controller.evaluate(_regime_snapshot)
+                        except Exception as regime_eval_err:
+                            logger.debug(f"   ⚠️ Regime Controller evaluation error: {regime_eval_err}")
+
                     # Log filtering summary
                     logger.info(f"   📊 Scan summary: {filter_stats['total']} markets scanned")
                     logger.info(f"      💡 Signals found: {filter_stats['signals_found']}")
@@ -6332,6 +6539,14 @@ class TradingStrategy:
                 self.market_readiness_gate.record_trade_result(pnl_pct)
             except Exception as e:
                 logger.warning(f"Failed to record trade in market readiness gate: {e}")
+
+        # Record with Risk Budget Engine for dynamic performance scaling
+        if hasattr(self, 'risk_budget_engine') and self.risk_budget_engine is not None:
+            try:
+                outcome = OUTCOME_WIN if is_win else OUTCOME_LOSS
+                self.risk_budget_engine.record_trade_outcome(outcome=outcome, pnl=profit_usd)
+            except Exception as e:
+                logger.warning(f"Failed to record trade in risk budget engine: {e}")
 
         # Record with market adaptation for learning
         if hasattr(self, 'market_adapter') and self.market_adapter:
