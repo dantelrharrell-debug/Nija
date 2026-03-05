@@ -6413,7 +6413,7 @@ class TradingStrategy:
 
                                 # ═══════════════════════════════════════════════════════
                                 # ENTRY GUARDRAILS — correlation / liquidity / latency
-                                # ═══════════════════════════════════════════════════════
+                                 # ═══════════════════════════════════════════════════════
                                 if (
                                     _ENTRY_GUARDRAILS_AVAILABLE
                                     and run_all_guardrails is not None
@@ -6426,10 +6426,23 @@ class TradingStrategy:
                                         _close_price = float(df['close'].iloc[-1])
                                         self.correlation_filter.update_price(symbol, _close_price)
 
-                                        # Derive market data for liquidity check
-                                        _vol_24h = float(df['volume'].iloc[-1]) * _close_price if 'volume' in df.columns else 0.0
-                                        # Use estimated bid/ask from analysis or fall back to spread estimate
-                                        _est_spread = 0.001  # 0.1 % conservative estimate
+                                        # Estimate 24-hour USD volume: sum the last 288 candles worth
+                                        # of quote-volume (288 × 5-minute candles = 24 h).
+                                        # The DataFrame holds 100 candles at most; we use all available
+                                        # bars and scale up to 288 to get a conservative 24 h estimate.
+                                        _vol_24h = 0.0
+                                        if 'volume' in df.columns and _close_price > 0:
+                                            _candle_vol_sum = float(df['volume'].sum())
+                                            _n_candles = max(1, len(df))
+                                            # Scale the observed sum to a 24-h window
+                                            _vol_24h = _candle_vol_sum * (_close_price * 288 / _n_candles)
+
+                                        # Use spread from analysis when available; otherwise fall back
+                                        # to a conservative 0.1 % estimate.  This is a known limitation
+                                        # when the broker API does not expose a live order book; callers
+                                        # that have real bid/ask data should pass it explicitly to the
+                                        # LiquidityFilter.check() call instead of using this estimate.
+                                        _est_spread = 0.001  # 0.1 % conservative ceiling
                                         _bid = _close_price * (1 - _est_spread / 2)
                                         _ask = _close_price * (1 + _est_spread / 2)
 
@@ -6455,7 +6468,9 @@ class TradingStrategy:
                                             logger.info(
                                                 f"   🛡️  ENTRY GUARDRAILS blocked {symbol}: {_guard_reason}"
                                             )
-                                            filter_stats['market_filter'] = filter_stats.get('market_filter', 0) + 1
+                                            filter_stats['entry_guardrails'] = (
+                                                filter_stats.get('entry_guardrails', 0) + 1
+                                            )
                                             continue
                                     except Exception as _guard_err:
                                         logger.debug(
@@ -6556,6 +6571,8 @@ class TradingStrategy:
                     logger.info(f"      📊 Market filter: {filter_stats['market_filter']}")
                     logger.info(f"      🚫 No entry signal: {filter_stats['no_entry_signal']}")
                     logger.info(f"      💵 Position too small: {filter_stats['position_too_small']}")
+                    if filter_stats.get('entry_guardrails', 0) > 0:
+                        logger.info(f"      🛡️  Entry guardrails: {filter_stats['entry_guardrails']}")
 
                     # EXPLICIT: Log waiting status when no signals found
                     if filter_stats['signals_found'] == 0:

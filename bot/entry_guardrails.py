@@ -29,7 +29,9 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+
+_T = TypeVar("_T")
 
 import numpy as np
 
@@ -308,8 +310,16 @@ class LiquidityFilter:
         """
         Args:
             min_volume_24h_usd: Minimum acceptable 24 h USD volume (default $1M).
+                This default is calibrated for accounts trading position sizes in
+                the $10–$500 range (STARTER/SAVER tiers).  Larger accounts
+                (INCOME/BALLER tiers) should raise this to $5M–$25M to avoid
+                moving the market with their positions.
             max_spread_bps: Maximum bid-ask spread in basis points (default 50 bps
-                = 0.5 %).
+                = 0.5 %).  This is a *conservative* ceiling; actual top-10
+                liquidity pairs (BTC, ETH, SOL) typically have spreads of 1–5 bps.
+                For pairs not directly observable via the broker API the caller
+                should supply a measured bid/ask rather than rely on the internal
+                0.1 % estimate.
             max_position_volume_fraction: Maximum allowed ratio of proposed position
                 size to 24 h volume (default 5 %).
         """
@@ -451,7 +461,7 @@ class ExchangeLatencyGuard:
         """Record an API round-trip time in milliseconds."""
         self._samples.append(float(latency_ms))
 
-    def measure(self, func, *args, **kwargs):
+    def measure(self, func: "Callable[..., _T]", *args: Any, **kwargs: Any) -> "_T":
         """
         Call ``func(*args, **kwargs)``, record the elapsed time, and return
         the function's result.
