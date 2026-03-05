@@ -229,6 +229,7 @@ SCALPING_CONFIG = {
 RISK_CONFIG = {
     # Per-trade risk limits
     'max_risk_per_trade_pct': 2.0,         # Never risk more than 2% per trade
+    'max_capital_per_trade_pct': 5.0,      # Capital Protection Rule: max 5% of account per trade
     'max_position_size_pct': 20.0,          # Never exceed 20% of capital
     'min_position_size_usd': 2.0,           # Minimum $2 position
 
