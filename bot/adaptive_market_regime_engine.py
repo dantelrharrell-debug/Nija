@@ -467,8 +467,9 @@ class AdaptiveMarketRegimeEngine:
                 'trailing_stop_distance': 2.0,  # Wide stops
                 'take_profit_multiplier': 1.5,  # Higher targets
                 'max_positions': 5,
-                'long_rsi_min': 25,
-                'long_rsi_max': 45,
+                # RSI > 50 required for longs: confirms bullish momentum in trending market (range 50-70)
+                'long_rsi_min': 50,
+                'long_rsi_max': 70,
                 'short_rsi_min': 55,
                 'short_rsi_max': 75,
             },
@@ -478,8 +479,9 @@ class AdaptiveMarketRegimeEngine:
                 'trailing_stop_distance': 1.5,
                 'take_profit_multiplier': 1.2,
                 'max_positions': 4,
-                'long_rsi_min': 25,
-                'long_rsi_max': 50,
+                # RSI > 50 required for longs: confirms bullish momentum in developing trend (range 50-70)
+                'long_rsi_min': 50,
+                'long_rsi_max': 70,
                 'short_rsi_min': 50,
                 'short_rsi_max': 75,
             },
@@ -500,8 +502,9 @@ class AdaptiveMarketRegimeEngine:
                 'trailing_stop_distance': 2.5,  # Very wide stops
                 'take_profit_multiplier': 1.0,
                 'max_positions': 3,
-                'long_rsi_min': 30,
-                'long_rsi_max': 40,
+                # RSI > 60 required for longs: high conviction momentum needed in volatile markets (range 60-70)
+                'long_rsi_min': 60,
+                'long_rsi_max': 70,
                 'short_rsi_min': 60,
                 'short_rsi_max': 70,
             },
