@@ -1250,6 +1250,149 @@ def manage_rule(rule_id: str):
 
 
 # ========================================
+# Portfolio Profit Engine Endpoints
+# ========================================
+
+def _get_ppe():
+    """Return the global PortfolioProfitEngine singleton."""
+    from bot.portfolio_profit_engine import get_portfolio_profit_engine
+    return get_portfolio_profit_engine()
+
+
+@app.route('/api/portfolio/profit', methods=['GET'])
+@require_auth
+def get_portfolio_profit(user_id: str):
+    """
+    GET /api/portfolio/profit
+    Returns the current TOTAL PORTFOLIO PROFIT summary.
+    """
+    try:
+        engine = _get_ppe()
+        summary = engine.get_summary()
+        return jsonify({'success': True, 'data': summary})
+    except Exception as exc:
+        logger.error("Error fetching portfolio profit: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/profit/report', methods=['GET'])
+@require_auth
+def get_portfolio_profit_report(user_id: str):
+    """
+    GET /api/portfolio/profit/report
+    Returns a human-readable portfolio profit report.
+    """
+    try:
+        engine = _get_ppe()
+        report = engine.get_report()
+        return jsonify({'success': True, 'report': report})
+    except Exception as exc:
+        logger.error("Error generating portfolio profit report: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/profit/trades', methods=['GET'])
+@require_auth
+def get_portfolio_trade_log(user_id: str):
+    """
+    GET /api/portfolio/profit/trades?limit=50
+    Returns the most recent trade records captured by the profit engine.
+    """
+    try:
+        limit = int(request.args.get('limit', 50))
+        engine = _get_ppe()
+        trades = engine.get_trade_log(limit=limit)
+        return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
+    except Exception as exc:
+        logger.error("Error fetching portfolio trade log: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/profit/harvest', methods=['POST'])
+@require_auth
+def harvest_portfolio_profit(user_id: str):
+    """
+    POST /api/portfolio/profit/harvest
+    Body (JSON, optional): {"amount": 100.0, "note": "manual harvest"}
+    Harvests (withdraws) accumulated portfolio profits.
+    If "amount" is omitted, all available profit is harvested.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        amount = body.get('amount', None)
+        note = body.get('note', f'Harvested by user {user_id}')
+
+        if amount is not None:
+            amount = float(amount)
+            if amount <= 0:
+                return jsonify({'error': 'amount must be positive'}), 400
+
+        engine = _get_ppe()
+        harvested = engine.harvest_profits(amount=amount, note=note)
+        summary = engine.get_summary()
+
+        logger.info("Profit harvest: user=%s amount=%.2f", user_id, harvested)
+        return jsonify({
+            'success': True,
+            'harvested_usd': harvested,
+            'available_to_harvest': summary['available_to_harvest'],
+            'total_harvested': summary['harvested_profit'],
+        })
+    except Exception as exc:
+        logger.error("Error harvesting profit: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/profit/harvest/log', methods=['GET'])
+@require_auth
+def get_harvest_log(user_id: str):
+    """
+    GET /api/portfolio/profit/harvest/log
+    Returns all harvest events for the current epoch.
+    """
+    try:
+        engine = _get_ppe()
+        log = engine.get_harvest_log()
+        return jsonify({'success': True, 'harvest_log': log, 'count': len(log)})
+    except Exception as exc:
+        logger.error("Error fetching harvest log: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/reset', methods=['POST'])
+@require_auth
+def reset_portfolio(user_id: str):
+    """
+    POST /api/portfolio/reset
+    Body (JSON, optional): {"new_base_capital": 5000.0}
+    Resets the portfolio profit tracker, starting a new epoch.
+    Returns a summary of the completed epoch.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        new_base_capital = float(body.get('new_base_capital', 0.0))
+
+        engine = _get_ppe()
+        old_epoch_summary = engine.reset_portfolio(new_base_capital=new_base_capital)
+
+        logger.info(
+            "Portfolio reset by user=%s, new epoch=%s, base_capital=%.2f",
+            user_id,
+            engine.get_summary()['epoch'],
+            new_base_capital,
+        )
+        return jsonify({
+            'success': True,
+            'message': 'Portfolio reset successfully. New epoch started.',
+            'new_epoch': engine.get_summary()['epoch'],
+            'previous_epoch_summary': old_epoch_summary,
+        })
+    except Exception as exc:
+        logger.error("Error resetting portfolio: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+# ========================================
 # Main Entry Point
 # ========================================
 
@@ -1265,3 +1408,178 @@ if __name__ == '__main__':
         port=port,
         debug=debug
     )
+
+
+# ========================================
+# Self-Learning Strategy Allocator Endpoints
+# ========================================
+
+def _get_sla():
+    """Return the global SelfLearningStrategyAllocator singleton."""
+    from bot.self_learning_strategy_allocator import get_self_learning_allocator
+    return get_self_learning_allocator()
+
+
+@app.route('/api/strategy/allocations', methods=['GET'])
+@require_auth
+def get_strategy_allocations(user_id: str):
+    """
+    GET /api/strategy/allocations
+    Returns current capital allocation weights for all strategies.
+    """
+    try:
+        allocator = _get_sla()
+        return jsonify({'success': True, 'allocations': allocator.get_weights()})
+    except Exception as exc:
+        logger.error("Error fetching strategy allocations: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/strategy/stats', methods=['GET'])
+@require_auth
+def get_strategy_stats(user_id: str):
+    """
+    GET /api/strategy/stats?strategy=ApexTrend
+    Returns performance stats. Omit query param for all strategies.
+    """
+    try:
+        strategy = request.args.get('strategy')
+        allocator = _get_sla()
+        stats = allocator.get_stats(strategy=strategy)
+        return jsonify({'success': True, 'stats': stats})
+    except Exception as exc:
+        logger.error("Error fetching strategy stats: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/strategy/report', methods=['GET'])
+@require_auth
+def get_strategy_allocator_report(user_id: str):
+    """
+    GET /api/strategy/report
+    Returns a human-readable allocation report.
+    """
+    try:
+        allocator = _get_sla()
+        return jsonify({'success': True, 'report': allocator.get_report()})
+    except Exception as exc:
+        logger.error("Error generating strategy report: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/strategy/best', methods=['GET'])
+@require_auth
+def get_best_strategy(user_id: str):
+    """
+    GET /api/strategy/best
+    Returns the name of the highest-weighted strategy.
+    """
+    try:
+        allocator = _get_sla()
+        best = allocator.get_best_strategy()
+        weights = allocator.get_weights()
+        return jsonify({
+            'success': True,
+            'best_strategy': best,
+            'allocation': weights.get(best, 0.0) if best else 0.0,
+        })
+    except Exception as exc:
+        logger.error("Error fetching best strategy: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+# ========================================
+# Smart Drawdown Recovery Endpoints
+# ========================================
+
+def _get_sdr():
+    """Return the global SmartDrawdownRecovery singleton."""
+    from bot.smart_drawdown_recovery import get_smart_drawdown_recovery
+    return get_smart_drawdown_recovery()
+
+
+@app.route('/api/drawdown/status', methods=['GET'])
+@require_auth
+def get_drawdown_status(user_id: str):
+    """
+    GET /api/drawdown/status
+    Returns the current drawdown severity and recovery status.
+    """
+    try:
+        engine = _get_sdr()
+        status = engine.get_status()
+        can_trade, reason = engine.can_trade()
+        status['can_trade'] = can_trade
+        status['can_trade_reason'] = reason
+        return jsonify({'success': True, 'data': status})
+    except Exception as exc:
+        logger.error("Error fetching drawdown status: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/drawdown/report', methods=['GET'])
+@require_auth
+def get_drawdown_report(user_id: str):
+    """
+    GET /api/drawdown/report
+    Returns a human-readable drawdown recovery report.
+    """
+    try:
+        engine = _get_sdr()
+        return jsonify({'success': True, 'report': engine.get_report()})
+    except Exception as exc:
+        logger.error("Error generating drawdown report: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/drawdown/guidance', methods=['GET'])
+@require_auth
+def get_drawdown_guidance(user_id: str):
+    """
+    GET /api/drawdown/guidance
+    Returns current trading guidance: position-size multiplier,
+    profit-lock multiplier, preferred strategies.
+    """
+    try:
+        engine = _get_sdr()
+        guidance = {
+            'severity': engine.get_status()['severity'],
+            'in_recovery_mode': engine.get_status()['in_recovery_mode'],
+            'position_size_multiplier': engine.get_position_size_multiplier(),
+            'profit_lock_multiplier': engine.get_profit_lock_multiplier(),
+            'preferred_strategies': engine.get_preferred_strategies(),
+        }
+        can_trade, reason = engine.can_trade()
+        guidance['can_trade'] = can_trade
+        guidance['can_trade_reason'] = reason
+        return jsonify({'success': True, 'guidance': guidance})
+    except Exception as exc:
+        logger.error("Error fetching drawdown guidance: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/drawdown/capital', methods=['PUT'])
+@require_auth
+def update_drawdown_capital(user_id: str):
+    """
+    PUT /api/drawdown/capital
+    Body: {"current_capital": 4850.0}
+    Sync the drawdown engine with the latest account balance.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        capital = body.get('current_capital')
+        if capital is None:
+            return jsonify({'error': 'current_capital is required'}), 400
+        capital = float(capital)
+        engine = _get_sdr()
+        engine.update_capital(capital)
+        status = engine.get_status()
+        return jsonify({
+            'success': True,
+            'severity': status['severity'],
+            'drawdown_pct': status['drawdown_pct'],
+        })
+    except Exception as exc:
+        logger.error("Error updating drawdown capital: %s", exc)
+        return jsonify({'error': str(exc)}), 500
