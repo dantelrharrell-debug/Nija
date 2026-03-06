@@ -7624,10 +7624,12 @@ class KrakenBroker(BaseBroker):
 
     def get_positions(self) -> List[Dict]:
         """
-        Get open positions (non-zero balances).
+        Get open positions (non-zero balances) enriched with current prices.
 
         Returns:
-            list: List of position dicts with symbol, quantity, currency
+            list: List of position dicts with symbol, quantity, currency,
+                  current_price, and size_usd. Prices are batch-fetched in
+                  a single Ticker API call to minimise rate-limit pressure.
         """
         try:
             if not self.api:
@@ -7643,45 +7645,98 @@ class KrakenBroker(BaseBroker):
                 logging.error(f"Error fetching Kraken positions: {error_msgs}")
                 return []
 
-            if balance and 'result' in balance:
-                result = balance['result']
-                positions = []
+            if not (balance and 'result' in balance):
+                return []
 
-                for asset, amount in result.items():
-                    balance_val = float(amount)
+            result = balance['result']
+            raw_positions = []  # (symbol, currency, balance_val, kraken_pair)
 
-                    # Skip USD/USDT and zero balances
-                    if asset in ['ZUSD', 'USDT'] or balance_val <= 0:
-                        continue
+            for asset, amount in result.items():
+                balance_val = float(amount)
 
-                    # Convert Kraken asset codes to standard format
-                    # XXBT -> BTC, XETH -> ETH, etc.
-                    currency = asset
-                    if currency.startswith('X') and len(currency) == 4:
-                        currency = currency[1:]
-                    if currency == 'XBT':
-                        currency = 'BTC'
+                # Skip USD/USDT and zero balances
+                if asset in ['ZUSD', 'USDT'] or balance_val <= 0:
+                    continue
 
-                    # CRITICAL FIX: Create symbol with dash separator to avoid ambiguity
-                    # This prevents ARBUSD being misinterpreted as ARB-BUSD instead of ARB-USD
-                    # Always use dash separator for Kraken symbols: ARB-USD, ETH-USD, etc.
-                    symbol = f'{currency}-USD'
+                # Convert Kraken asset codes to standard format
+                # XXBT -> BTC, XETH -> ETH, etc.
+                currency = asset
+                if currency.startswith('X') and len(currency) == 4:
+                    currency = currency[1:]
+                if currency == 'XBT':
+                    currency = 'BTC'
 
-                    # CRITICAL FIX: Filter out unsupported symbols before adding to positions
-                    # This prevents orphaned positions from unsupported pairs (e.g., BUSD-based)
-                    if not self.supports_symbol(symbol):
-                        logger.debug(f"⏭️ Skipping unsupported position: {symbol} (balance: {balance_val} {currency})")
-                        continue
+                # CRITICAL FIX: Create symbol with dash separator to avoid ambiguity
+                # This prevents ARBUSD being misinterpreted as ARB-BUSD instead of ARB-USD
+                # Always use dash separator for Kraken symbols: ARB-USD, ETH-USD, etc.
+                symbol = f'{currency}-USD'
 
-                    positions.append({
-                        'symbol': symbol,
-                        'quantity': balance_val,
-                        'currency': currency
-                    })
+                # CRITICAL FIX: Filter out unsupported symbols before adding to positions
+                # This prevents orphaned positions from unsupported pairs (e.g., BUSD-based)
+                if not self.supports_symbol(symbol):
+                    logger.debug(f"⏭️ Skipping unsupported position: {symbol} (balance: {balance_val} {currency})")
+                    continue
 
-                return positions
+                # Determine Kraken pair name for batch Ticker fetch
+                kraken_pair = None
+                if convert_to_kraken is not None:
+                    try:
+                        kraken_pair = convert_to_kraken(symbol)
+                    except Exception:
+                        pass
 
-            return []
+                raw_positions.append((symbol, currency, balance_val, kraken_pair))
+
+            if not raw_positions:
+                return []
+
+            # Batch-fetch current prices for all positions in ONE Ticker API call.
+            # Kraken Ticker accepts a comma-separated list of pairs, so we avoid
+            # N individual per-symbol price calls (each rate-limited at ~5-30s).
+            batch_prices: Dict[str, float] = {}
+            kraken_pairs = [kp for _, _, _, kp in raw_positions if kp]
+            if kraken_pairs:
+                try:
+                    pair_str = ','.join(kraken_pairs)
+                    with suppress_pykrakenapi_prints():
+                        ticker_result = self.api.query_public('Ticker', {'pair': pair_str})
+                    if ticker_result and 'result' in ticker_result:
+                        for pair_key, ticker_data in ticker_result['result'].items():
+                            last_price_arr = ticker_data.get('c', [None])
+                            if last_price_arr and last_price_arr[0]:
+                                try:
+                                    batch_prices[pair_key.upper()] = float(last_price_arr[0])
+                                except (ValueError, TypeError):
+                                    pass
+                except Exception as _ticker_err:
+                    logger.warning(f"Batch Ticker fetch failed, prices will be fetched per-symbol: {_ticker_err}")
+
+            positions = []
+            for symbol, currency, balance_val, kraken_pair in raw_positions:
+                # Look up price from batch result; fall back to individual fetch
+                current_price = 0.0
+                if kraken_pair and kraken_pair.upper() in batch_prices:
+                    current_price = batch_prices[kraken_pair.upper()]
+                elif kraken_pair:
+                    # Fallback: individual price fetch (slower, but correct for edge cases)
+                    try:
+                        fetched = self.get_current_price(symbol)
+                        if fetched and fetched > 0:
+                            current_price = fetched
+                    except Exception:
+                        pass
+
+                size_usd = balance_val * current_price if current_price > 0 else 0.0
+
+                positions.append({
+                    'symbol': symbol,
+                    'quantity': balance_val,
+                    'currency': currency,
+                    'current_price': current_price,
+                    'size_usd': size_usd,
+                })
+
+            return positions
 
         except Exception as e:
             logging.error(f"Error fetching Kraken positions: {e}")
@@ -7793,6 +7848,136 @@ class KrakenBroker(BaseBroker):
         except Exception as e:
             logger.warning(f"Failed to fetch Kraken entry price for {symbol}: {e}")
             return None
+
+    def get_bulk_entry_prices(self, symbols: List[str]) -> Dict[str, float]:
+        """
+        Bulk fetch entry prices from Kraken trade history for multiple symbols at once.
+
+        Fetches paginated TradesHistory once and builds a symbol→VWAP entry price map.
+        Far more efficient than calling get_real_entry_price() individually for each symbol
+        (one API call instead of N calls, each rate-limited at ~30s each).
+
+        Args:
+            symbols: List of standard format symbols (e.g., ['BTC-USD', 'ETH-USD'])
+
+        Returns:
+            Dict mapping symbol -> VWAP entry price from most recent BUY trades.
+            Symbols with no BUY trades found are absent from the dict.
+        """
+        if not self.api or not symbols:
+            return {}
+
+        entry_prices: Dict[str, float] = {}
+
+        try:
+            logger.info(f"   📋 Bulk-fetching entry prices for {len(symbols)} symbols from Kraken trade history...")
+
+            # Build match-pair sets for every requested symbol.
+            # Kraken returns pairs in many formats (e.g. XXBTZUSD, XBTUSD, BTC/USD),
+            # so we pre-build all known variants to avoid per-symbol re-computation.
+            symbol_match_sets: Dict[str, tuple] = {}
+            for symbol in symbols:
+                symbol_currency = symbol.replace('-USD', '').replace('-USDT', '')
+                match_pairs: set = set()
+                if convert_to_kraken is not None:
+                    try:
+                        kraken_pair = convert_to_kraken(symbol)
+                        if kraken_pair:
+                            match_pairs.add(kraken_pair.upper())
+                    except Exception:
+                        pass
+                # Common Kraken pair variants
+                match_pairs.update([
+                    f"X{symbol_currency}ZUSD",
+                    f"{symbol_currency}USD",
+                    f"X{symbol_currency}ZUSDT",
+                    f"{symbol_currency}USDT",
+                    f"{symbol_currency}/USD",
+                    f"{symbol_currency}/USDT",
+                ])
+                symbol_match_sets[symbol] = (symbol_currency, match_pairs)
+
+            # Accumulate BUY trades per symbol across paginated TradesHistory pages.
+            # Kraken returns up to 50 trades per page; we page until we have prices for
+            # all symbols or exhaust available history (up to MAX_PAGES × 50 trades).
+            all_buy_trades: Dict[str, list] = {}   # symbol -> [(trade_time, price, vol)]
+            history_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+            MAX_PAGES = 20  # Up to 1 000 trades — enough for typical account history
+            offset = 0
+            total_trade_count = None  # filled from first response
+
+            for page in range(MAX_PAGES):
+                params = {'ofs': offset} if offset > 0 else {}
+                response = self._kraken_private_call('TradesHistory', params, category=history_category)
+
+                if not response or 'result' not in response:
+                    logger.debug(f"   Bulk fetch: no result on page {page + 1} (offset={offset})")
+                    break
+
+                if response.get('error'):
+                    error_msgs = ', '.join(response['error'])
+                    logger.warning(f"   Bulk fetch TradesHistory error: {error_msgs}")
+                    break
+
+                result = response['result']
+                trades = result.get('trades', {})
+                if total_trade_count is None:
+                    total_trade_count = result.get('count', 0)
+
+                if not trades:
+                    break
+
+                # Match each BUY trade to a requested symbol
+                for _trade_id, trade in trades.items():
+                    if trade.get('type', '').lower() != 'buy':
+                        continue
+
+                    trade_pair = trade.get('pair', '').upper()
+
+                    for symbol, (symbol_currency, match_pairs) in symbol_match_sets.items():
+                        if trade_pair in match_pairs or symbol_currency.upper() in trade_pair:
+                            try:
+                                price = float(trade.get('price', 0))
+                                vol = float(trade.get('vol', 0))
+                                trade_time = float(trade.get('time', 0))
+                                if price > 0 and vol > 0:
+                                    all_buy_trades.setdefault(symbol, []).append((trade_time, price, vol))
+                            except (ValueError, TypeError):
+                                pass
+                            break  # Each trade belongs to at most one symbol
+
+                offset += len(trades)
+
+                # Stop early once we've found prices for every requested symbol
+                if len(all_buy_trades) >= len(symbols):
+                    logger.debug(f"   Bulk fetch: found prices for all {len(symbols)} symbols after {page + 1} page(s)")
+                    break
+
+                # Stop if we've consumed all available trades
+                if total_trade_count is not None and offset >= total_trade_count:
+                    break
+
+            # Compute VWAP per symbol from accumulated BUY trades
+            for symbol, trades_data in all_buy_trades.items():
+                if not trades_data:
+                    continue
+                total_vol = sum(vol for _, _, vol in trades_data)
+                if total_vol > 0:
+                    vwap = sum(price * vol for _, price, vol in trades_data) / total_vol
+                    entry_prices[symbol] = vwap
+                    logger.debug(f"   {symbol}: VWAP entry price ${vwap:.4f} ({len(trades_data)} buy trade(s))")
+
+            found_count = len(entry_prices)
+            missing_count = len(symbols) - found_count
+            logger.info(
+                f"   ✅ Bulk entry prices: {found_count}/{len(symbols)} found"
+                + (f", {missing_count} not found in trade history" if missing_count else "")
+            )
+
+        except Exception as e:
+            logger.warning(f"   Bulk entry price fetch failed: {e}")
+
+        return entry_prices
 
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """

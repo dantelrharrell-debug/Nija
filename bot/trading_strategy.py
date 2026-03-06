@@ -2058,6 +2058,23 @@ class TradingStrategy:
             except Exception as _ov_err:
                 logger.warning(f"   ⚠️  Could not load entry price overrides: {_ov_err}")
             
+            # Pre-fetch entry prices for ALL positions in one bulk API call.
+            # This replaces up to N individual get_real_entry_price() calls (each ~30s rate-limited)
+            # with a single paginated TradesHistory fetch that covers all symbols at once.
+            bulk_entry_prices: Dict[str, float] = {}
+            if positions and hasattr(broker, 'get_bulk_entry_prices'):
+                try:
+                    all_symbols = [p.get('symbol', '') for p in positions if p.get('symbol')]
+                    if all_symbols:
+                        bulk_entry_prices = broker.get_bulk_entry_prices(all_symbols) or {}
+                        if bulk_entry_prices:
+                            logger.info(
+                                f"   📊 Pre-fetched {len(bulk_entry_prices)}/{len(all_symbols)} "
+                                f"entry prices via bulk trade history lookup"
+                            )
+                except Exception as _bulk_err:
+                    logger.debug(f"   Bulk entry price pre-fetch failed: {_bulk_err}")
+
             # 🔒 CAPITAL PROTECTION: position_tracker is MANDATORY - no silent fallback mode
             if not position_tracker:
                 error_msg = "position_tracker is MANDATORY but not available"
