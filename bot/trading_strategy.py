@@ -4575,7 +4575,7 @@ class TradingStrategy:
                                                         position_value_usd=position_value,
                                                         portfolio_total_value_usd=_total_portfolio_value_usd if _total_portfolio_value_usd > 0 else None,
                                                     )
-                                                    for _sell_qty, _rule_reason in _rule_actions:
+                                                    for _sell_qty, _rule_reason, _lock_stable in _rule_actions:
                                                         if _sell_qty > 0:
                                                             positions_to_exit.append({
                                                                 'symbol': symbol,
@@ -4583,6 +4583,7 @@ class TradingStrategy:
                                                                 'reason': _rule_reason,
                                                                 'broker': position_broker,
                                                                 'broker_label': broker_label,
+                                                                'lock_to_stablecoin': _lock_stable,
                                                             })
                                                 except Exception as _re:
                                                     logger.warning(f"   ⚠️ User rules check error for {symbol}: {_re}")
