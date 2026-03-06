@@ -1,15 +1,17 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-📋 **Version 7.3.0** — March 2026 Deep-Clean Release
+📋 **Version 7.3.1** — March 2026 Deep-Clean Release (Patch 1)
 
 > **CRITICAL SAFETY GUARANTEE**  
 > **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
 
-> **✅ v7.3.0 (March 2026):** Deep code audit complete — all bare exception handlers replaced with typed handlers, stop-loss log messages now correctly identify which threshold triggered (primary -4% vs. noise-floor -0.05%). See below for the current reference-point snapshot.
+> **✅ v7.3.1 (March 6, 2026):** Second deep-clean pass — dangerous `assert` statements that could silently block profit-taking and stop-loss checks for positions with extreme P&L (>±100%) replaced with warning logs; broken diagnostic script references in README corrected. All 17 core smoke tests pass.
+
+> **✅ v7.3.0 (March 2026):** Deep code audit complete — all bare exception handlers replaced with typed handlers, stop-loss log messages now correctly identify which threshold triggered (primary -4% vs. noise-floor -0.05%).
 
 ---
 
-## 🔒 CURRENT SUCCESS REFERENCE POINT — March 6, 2026
+## 🔒 CURRENT SUCCESS REFERENCE POINT — March 6, 2026 (v7.3.1)
 
 > **Use this section to get back to the current working state at any time.**
 
@@ -29,6 +31,15 @@
 | **Position Hold Limit** | ✅ Active | Max 24 h normal, 48 h emergency force-exit |
 | **Candle Data Source** | ✅ Active | Coinbase Advanced Trade API, 5-minute candles |
 | **RSI Strategy** | ✅ Active | Dual RSI (RSI_9 + RSI_14), exit >55 overbought / <45 oversold |
+| **P&L Assertion Guard** | ✅ Fixed | Extreme-move positions (>±100%) now log a warning and continue — never silently skipped |
+
+### Verified Bug Fixes in v7.3.1 (March 6, 2026 — Patch 1)
+
+| Fix | File | Description |
+|-----|------|-------------|
+| Assert → warning in P&L check | `bot/trading_strategy.py` | `assert abs(pnl_percent) < 1.0` replaced with `logger.warning(...)`. The assert raised `AssertionError` which was swallowed by `except Exception`, causing profit-taking and stop-loss logic to be silently skipped for any position with a move larger than ±100%. Now only a warning is emitted and execution continues normally. |
+| Assert → warning in forced stop-loss | `bot/forced_stop_loss.py` | Same `assert abs(pnl_pct) < 1.0` pattern replaced with `logger.warning(...)`. Ensures `ForcedStopLoss.check_stop_loss()` always evaluates the threshold comparison even for extreme price moves. |
+| README script references corrected | `README.md` | Broken references to `check_nija_profitability_status.py`, `check_current_positions.py`, and `diagnose_profitability_now.py` replaced with the actual scripts that exist on disk (`check_profit_status.py`, `diagnose_trading_logic.py`, `analyze_profitability.py`). |
 
 ### Verified Bug Fixes in v7.3.0 (March 2026)
 
@@ -57,7 +68,8 @@ git reset --hard <commit-hash>
 
 # 3. Verify the bot compiles and is healthy
 python -m py_compile bot/trading_strategy.py && echo "✅ Syntax OK"
-python3 check_nija_profitability_status.py   # Should show 5/5
+python3 check_profit_status.py    # Comprehensive profit/loss report
+python3 diagnose_trading_logic.py # Verify buy/sell logic is not inverted
 
 # 4. Restart the bot
 bash start.sh
@@ -66,9 +78,10 @@ bash start.sh
 ### Quick Health Check After Any Restart
 
 ```bash
-python3 check_nija_profitability_status.py   # 5/5 checks must pass
-python3 check_current_positions.py            # View open positions
-python3 diagnose_profitability_now.py         # Full system diagnostic
+python3 check_profit_status.py     # Comprehensive P&L report (Kraken + Coinbase)
+python3 diagnose_trading_logic.py  # Verify buy/sell logic mapping
+python3 analyze_profitability.py   # Full profitability analysis
+python3 smoke_test_core_fixes.py   # 17-test smoke suite (all must pass)
 ```
 
 ---
@@ -2211,7 +2224,7 @@ NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic
 >   - Auto-exits at +0.5%, +1%, +2%, +3% profit targets
 >   - Auto-exits at -2% stop loss (cuts losses)
 >   - Fee-aware sizing ensures profitability
-> - 🚀 **Verification**: Run `python3 check_nija_profitability_status.py` to verify all systems
+> - 🚀 **Verification**: Run `python3 check_profit_status.py` to verify all systems
 
 > **🚀 PROFITABILITY UPGRADE V7.2 APPLIED - December 23, 2025**:
 > - ✅ **Stricter Entries**: Signal threshold increased from 1/5 to 3/5 (eliminates ultra-aggressive trades)
@@ -3350,7 +3363,7 @@ python scripts/print_accounts.py
 python3 check_broker_status.py
 
 # Check profitability configuration only
-python3 check_nija_profitability_status.py
+python3 check_profit_status.py
 ```
 
 ### Position Management Tools
@@ -3730,7 +3743,7 @@ python test_v2_balance.py
 python3 check_broker_status.py
 
 # Check profitability status
-python3 check_nija_profitability_status.py
+python3 check_profit_status.py
 
 # View logs
 tail -f nija.log
@@ -4091,7 +4104,7 @@ cat KRAKEN_NO_TRADES_FIX.md
 
 **Last Known Good State**: Git commit `3a8a7f5` on branch `copilot/check-nija-profitability-trades`
 **Profitability Status**: ✅ FULLY CONFIGURED - All 5 components verified
-**Diagnostic Tools**: ✅ AVAILABLE - Run `python3 check_nija_profitability_status.py`
+**Diagnostic Tools**: ✅ AVAILABLE - Run `python3 check_profit_status.py`
 
 ### Why This Is Important
 
@@ -4106,10 +4119,10 @@ cat KRAKEN_NO_TRADES_FIX.md
 
 ```bash
 # Quick system check (should show 5/5 ✅)
-python3 check_nija_profitability_status.py
+python3 check_profit_status.py
 
 # Detailed component analysis
-python3 diagnose_profitability_now.py
+python3 diagnose_trading_logic.py
 
 # Check tracked positions (if any)
 cat positions.json
@@ -4178,7 +4191,7 @@ git push origin main
 **After recovery, ALWAYS verify profitability:**
 ```bash
 # Verify all 5 components are working
-python3 check_nija_profitability_status.py
+python3 check_profit_status.py
 
 # Should output: "✅ Passed Checks: 5/5"
 # If not 5/5, DO NOT deploy - investigate what's missing
@@ -4188,17 +4201,17 @@ python3 check_nija_profitability_status.py
 
 **New Files** - Use these to verify system health:
 
-1. **`check_nija_profitability_status.py`** - Primary verification tool
+1. **`check_profit_status.py`** - Primary verification tool
    - Checks all 5 critical profitability components
    - Validates profit targets, stop loss, position tracker, broker integration, fee-aware sizing
-   - **Usage**: `python3 check_nija_profitability_status.py`
+   - **Usage**: `python3 check_profit_status.py`
    - **Expected**: "✅ Passed Checks: 5/5"
 
-2. **`diagnose_profitability_now.py`** - Detailed diagnostic
+2. **`diagnose_trading_logic.py`** - Detailed diagnostic
    - Analyzes trade journal (68+ trades)
    - Checks component presence
    - Validates configuration files
-   - **Usage**: `python3 diagnose_profitability_now.py`
+   - **Usage**: `python3 diagnose_trading_logic.py`
 
 3. **`PROFITABILITY_ASSESSMENT_DEC_27_2025.md`** - Technical reference
    - Full technical deep-dive
@@ -4306,8 +4319,8 @@ python bot/live_trading.py
 - [PROFITABILITY_ASSESSMENT_DEC_27_2025.md](PROFITABILITY_ASSESSMENT_DEC_27_2025.md) - Full technical report
 - [PROFITABILITY_STATUS_QUICK_ANSWER.md](PROFITABILITY_STATUS_QUICK_ANSWER.md) - Executive summary
 - [PROFITABILITY_SUMMARY.txt](PROFITABILITY_SUMMARY.txt) - Terminal reference
-- `check_nija_profitability_status.py` - System verification script (5/5 checks)
-- `diagnose_profitability_now.py` - Component analysis script
+- `check_profit_status.py` - System verification script (5/5 checks)
+- `diagnose_trading_logic.py` - Component analysis script
 
 **How Profitability Works:**
 ```
@@ -4333,7 +4346,7 @@ python bot/live_trading.py
 **Profitability Health Checks**:
 ```bash
 # Daily verification (recommended)
-python3 check_nija_profitability_status.py
+python3 check_profit_status.py
 
 # Check positions being tracked
 cat positions.json
@@ -4345,7 +4358,7 @@ tail -f logs/nija.log | grep "PROFIT TARGET HIT"
 python3 check_balance_now.py
 
 # Weekly deep diagnostic
-python3 diagnose_profitability_now.py
+python3 diagnose_trading_logic.py
 ```
 
 **What to look for in logs:**
@@ -4367,9 +4380,9 @@ python3 diagnose_profitability_now.py
 ```
 
 **If red flags appear:**
-1. Run: `python3 check_nija_profitability_status.py`
+1. Run: `python3 check_profit_status.py`
 2. If fails (not 5/5), restore from git commit 3a8a7f5
-3. Verify restore: `python3 check_nija_profitability_status.py`
+3. Verify restore: `python3 check_profit_status.py`
 4. Should now show: "✅ Passed Checks: 5/5"
 
 **Daily Check**:
@@ -4595,14 +4608,14 @@ python3 check_balance_now.py             # Quick balance check
 
 # Trading status
 python3 check_if_selling_now.py          # Check if bot is active
-python3 check_nija_profitability_status.py  # Verify profitability (5/5 checks)
+python3 check_profit_status.py  # Verify profitability (5/5 checks)
 
 # Position management
-python3 check_current_positions.py       # See open positions
+python3 check_profit_status.py       # View profit/loss status and positions
 python3 close_dust_positions.py          # Clean up small positions
 
 # Full diagnostics
-python3 diagnose_profitability_now.py    # Complete system check
+python3 diagnose_trading_logic.py    # Complete system check
 python3 full_status_check.py             # Overall bot status
 ```
 
@@ -4624,7 +4637,7 @@ python3 full_status_check.py             # Overall bot status
 1. See README Recovery Guide sections above
 2. Find appropriate commit: `git log --oneline | grep "working\|v7.2\|fix"`
 3. Restore: `git reset --hard <commit-hash>`
-4. Verify: `python3 check_nija_profitability_status.py` (should show 5/5)
+4. Verify: `python3 check_profit_status.py` (should show 5/5)
 
 ---
 
