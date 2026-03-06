@@ -75,6 +75,20 @@ try:
 except ImportError:
     logger.warning("Control Center API not available")
     CONTROL_CENTER_API_AVAILABLE = False
+
+# Import Enhanced Performance Dashboard blueprint
+try:
+    from performance_dashboard_enhanced import create_enhanced_dashboard_blueprint
+    ENHANCED_DASHBOARD_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.performance_dashboard_enhanced import create_enhanced_dashboard_blueprint
+        ENHANCED_DASHBOARD_AVAILABLE = True
+    except ImportError:
+        logger.warning("Enhanced Performance Dashboard not available")
+        ENHANCED_DASHBOARD_AVAILABLE = False
+        create_enhanced_dashboard_blueprint = None
+
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 10  # 10 seconds
 
@@ -2064,11 +2078,22 @@ if __name__ == "__main__":
     else:
         logger.warning("⚠️ Control Center API not available")
 
+    # Register Enhanced Performance Dashboard blueprint
+    if ENHANCED_DASHBOARD_AVAILABLE and create_enhanced_dashboard_blueprint:
+        try:
+            app.register_blueprint(create_enhanced_dashboard_blueprint())
+            logger.info("✅ Enhanced Performance Dashboard routes registered")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not register Enhanced Performance Dashboard: {e}")
+    else:
+        logger.warning("⚠️ Enhanced Performance Dashboard not available")
+
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")
     print("👥 Users Dashboard: http://localhost:5001/users")
     print("⚡ Command Center: http://localhost:5001/command-center")
     print("🎯 Control Center: http://localhost:5001/control-center")
+    print("📈 Performance Dashboard: http://localhost:5001/performance")
     print(f"🔄 Auto-refresh every {AUTO_REFRESH_INTERVAL} seconds")
     print("\nPress Ctrl+C to stop\n")
 
