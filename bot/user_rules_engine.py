@@ -82,6 +82,8 @@ class UserRule:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     # trailing_stop only: highest price seen since rule activation (persisted across restarts)
     peak_price: Optional[float] = None
+    # When True, proceeds from this rule's sale are flagged for conversion to USDC/USDT
+    lock_to_stablecoin: bool = False
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -206,6 +208,7 @@ class UserRulesEngine:
         sell_pct: float,
         symbol: Optional[str] = None,
         rule_id: Optional[str] = None,
+        lock_to_stablecoin: bool = False,
     ) -> UserRule:
         """
         Add a take-profit rule for a user.
@@ -216,6 +219,7 @@ class UserRulesEngine:
             sell_pct: Percentage of position to sell when triggered (1–100).
             symbol: Trading symbol (e.g. '1INCH-USD'). None = all symbols.
             rule_id: Optional explicit rule ID (auto-generated if omitted).
+            lock_to_stablecoin: When True, proceeds are flagged for conversion to USDC/USDT.
 
         Returns:
             The created UserRule.
@@ -235,6 +239,7 @@ class UserRulesEngine:
             trigger_pct=trigger_pct,
             sell_pct=sell_pct,
             symbol=symbol,
+            lock_to_stablecoin=lock_to_stablecoin,
         )
 
         lock = self._get_user_lock(user_id)
@@ -256,6 +261,7 @@ class UserRulesEngine:
         sell_pct: float,
         symbol: Optional[str] = None,
         rule_id: Optional[str] = None,
+        lock_to_stablecoin: bool = False,
     ) -> UserRule:
         """
         Add a stop-loss rule for a user.
@@ -267,6 +273,7 @@ class UserRulesEngine:
             sell_pct: Percentage of position to sell when triggered (1–100).
             symbol: Trading symbol (e.g. 'AI3-USD'). None = all symbols.
             rule_id: Optional explicit rule ID (auto-generated if omitted).
+            lock_to_stablecoin: When True, proceeds are flagged for conversion to USDC/USDT.
 
         Returns:
             The created UserRule.
@@ -286,6 +293,7 @@ class UserRulesEngine:
             trigger_pct=trigger_pct,
             sell_pct=sell_pct,
             symbol=symbol,
+            lock_to_stablecoin=lock_to_stablecoin,
         )
 
         lock = self._get_user_lock(user_id)
@@ -307,6 +315,7 @@ class UserRulesEngine:
         sell_pct: float,
         symbol: Optional[str] = None,
         rule_id: Optional[str] = None,
+        lock_to_stablecoin: bool = False,
     ) -> UserRule:
         """
         Add a trailing-stop rule for a user.
@@ -324,6 +333,7 @@ class UserRulesEngine:
             sell_pct:  Percentage of position to sell when triggered (1–100).
             symbol:    Trading symbol (e.g. 'BTC-USD'). None = all symbols.
             rule_id:   Optional explicit rule ID (auto-generated if omitted).
+            lock_to_stablecoin: When True, proceeds are flagged for conversion to USDC/USDT.
 
         Returns:
             The created UserRule.
@@ -343,6 +353,7 @@ class UserRulesEngine:
             trigger_pct=trail_pct,
             sell_pct=sell_pct,
             symbol=symbol,
+            lock_to_stablecoin=lock_to_stablecoin,
         )
 
         lock = self._get_user_lock(user_id)
@@ -363,6 +374,7 @@ class UserRulesEngine:
         max_portfolio_pct: float,
         symbol: Optional[str] = None,
         rule_id: Optional[str] = None,
+        lock_to_stablecoin: bool = False,
     ) -> UserRule:
         """
         Add a portfolio-rebalance rule for a user.
@@ -377,6 +389,7 @@ class UserRulesEngine:
                                value (e.g. 20.0 = sell if any position grows above 20%).
             symbol:            Trading symbol to constrain.  None = applies to every holding.
             rule_id:           Optional explicit rule ID (auto-generated if omitted).
+            lock_to_stablecoin: When True, proceeds are flagged for conversion to USDC/USDT.
 
         Returns:
             The created UserRule.
@@ -397,6 +410,7 @@ class UserRulesEngine:
             trigger_pct=max_portfolio_pct,
             sell_pct=100.0,   # not used for rebalance; excess is computed automatically
             symbol=symbol,
+            lock_to_stablecoin=lock_to_stablecoin,
         )
 
         lock = self._get_user_lock(user_id)
@@ -484,7 +498,7 @@ class UserRulesEngine:
         current_price: Optional[float] = None,
         position_value_usd: Optional[float] = None,
         portfolio_total_value_usd: Optional[float] = None,
-    ) -> List[Tuple[float, str]]:
+    ) -> List[Tuple[float, str, bool]]:
         """
         Evaluate all applicable rules for a given position and return triggered actions.
 
@@ -508,8 +522,10 @@ class UserRulesEngine:
                                       (required for portfolio-rebalance rules).
 
         Returns:
-            List of (sell_quantity, reason) tuples for each triggered rule.
-            May be empty if no rules are triggered.
+            List of (sell_quantity, reason, lock_to_stablecoin) tuples for each
+            triggered rule.  May be empty if no rules are triggered.
+            ``lock_to_stablecoin`` is True when the rule specifies that proceeds
+            should be converted to USDC/USDT after the sale.
         """
         rules = self.get_rules(user_id, symbol=symbol)
 
@@ -518,7 +534,7 @@ class UserRulesEngine:
         trailing_stop_rules = [r for r in rules if r.rule_type == RULE_TYPE_TRAILING_STOP]
         portfolio_rebalance_rules = [r for r in rules if r.rule_type == RULE_TYPE_PORTFOLIO_REBALANCE]
 
-        actions: List[Tuple[float, str]] = []
+        actions: List[Tuple[float, str, bool]] = []
 
         # ------------------------------------------------------------------
         # 1 & 2: Stop-loss first, then take-profit (simple P&L threshold checks)
@@ -540,7 +556,7 @@ class UserRulesEngine:
                         f"(threshold: +{rule.trigger_pct:.1f}%)"
                     )
                 logger.info("🎯 User rule triggered for %s %s: %s", user_id, symbol, reason)
-                actions.append((qty, reason))
+                actions.append((qty, reason, rule.lock_to_stablecoin))
 
         # ------------------------------------------------------------------
         # 3: Trailing-stop rules — require current_price for peak tracking
@@ -581,7 +597,7 @@ class UserRulesEngine:
                                 "📉 Trailing-stop triggered for %s %s: %s",
                                 user_id, symbol, reason,
                             )
-                            actions.append((qty, reason))
+                            actions.append((qty, reason, rule.lock_to_stablecoin))
                             # Re-arm the trailing stop from current price
                             rule.peak_price = current_price
                             needs_save = True
@@ -627,7 +643,7 @@ class UserRulesEngine:
                             "⚖️  Portfolio rebalance triggered for %s %s: %s",
                             user_id, symbol, reason,
                         )
-                        actions.append((sell_quantity, reason))
+                        actions.append((sell_quantity, reason, rule.lock_to_stablecoin))
                     else:
                         logger.debug(
                             "⚖️  Portfolio rebalance: %s %s — position over limit but "
