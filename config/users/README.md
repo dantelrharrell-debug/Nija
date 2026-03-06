@@ -1,5 +1,43 @@
 # User Configuration Files
 
+## Smart Structure — How Users Connect to NIJA
+
+NIJA runs as a SaaS platform with two account tiers:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              NIJA PLATFORM ACCOUNT LAYER                 │
+│                                                         │
+│  Kraken Account 2  ──  Owner: NIJA  ──  AI engine       │
+│        ↑                                                │
+│   PLATFORM ACCOUNT  (KRAKEN_PLATFORM_API_KEY)           │
+│                                                         │
+│  User connections:    User Kraken ──► API ──► NIJA      │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │  Kraken Account 1 (your personal account)       │    │
+│  │  KRAKEN_USER_YOURNAME_API_KEY                   │    │
+│  ├─────────────────────────────────────────────────┤    │
+│  │  Kraken Account N (any additional user)         │    │
+│  │  KRAKEN_USER_{FIRSTNAME}_API_KEY                │    │
+│  └─────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Kraken Account 2 (NIJA's account)** is the *platform account* — it is NIJA's
+own exchange account and drives the AI trading engine.  It is configured via:
+```
+KRAKEN_PLATFORM_API_KEY=<nija-kraken-api-key>
+KRAKEN_PLATFORM_API_SECRET=<nija-kraken-api-secret>
+```
+
+**Kraken Account 1 (your personal account)** and any additional user accounts
+connect to NIJA by adding an entry to this directory AND setting the matching
+`KRAKEN_USER_{FIRSTNAME}_API_KEY / _SECRET` environment variables.
+
+See `SMART_STRUCTURE_GUIDE.md` in the repository root for the complete setup guide.
+
+---
+
 This directory contains user configuration files organized by account type and brokerage.
 
 ## Configuration Formats
@@ -100,7 +138,10 @@ To create a new user configuration:
 
 - **description** (optional): Human-readable description or notes
 
-## Adding a New User
+## Adding a New User (User Kraken → API → NIJA)
+
+To connect a Kraken account to NIJA (including your own personal account,
+which is *Kraken Account 1* in the Smart Structure):
 
 ### Step 1: Add user to appropriate account type and brokerage file
 
