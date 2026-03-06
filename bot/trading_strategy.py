@@ -2149,9 +2149,13 @@ class TradingStrategy:
                         if override_price and override_price > 0:
                             logger.info(f"   [{i}/{positions_found}] 📋 {symbol}: Using manual entry price override ${override_price:.4f}")
                             entry_price = override_price
+                        elif symbol in bulk_entry_prices and bulk_entry_prices[symbol] > 0:
+                            # Use pre-fetched bulk entry price (one API call for all symbols)
+                            entry_price = bulk_entry_prices[symbol]
+                            logger.info(f"   [{i}/{positions_found}] 🔍 {symbol}: Using bulk-fetched entry price ${entry_price:.4f} from trade history")
                         elif broker and hasattr(broker, 'get_real_entry_price'):
-                            # 🔍 AUTOMATIC HISTORICAL PRICE FETCH: Try to retrieve entry price
-                            # directly from broker trade history (avoids manual JSON entry)
+                            # 🔍 AUTOMATIC HISTORICAL PRICE FETCH: individual fallback for symbols
+                            # missed by the bulk fetch (e.g. due to pagination limits).
                             try:
                                 historical_price = broker.get_real_entry_price(symbol)
                                 if historical_price and historical_price > 0:
