@@ -90,6 +90,18 @@ except ImportError:
     ENHANCED_SCORING_AVAILABLE = False
     logger.warning("Enhanced scoring and regime detection modules not available - using basic scoring")
 
+# Import AI Intelligence Hub (AI Market Regime Detection + Portfolio Risk Engine +
+# Capital Allocation AI).  All three components are optional – the strategy degrades
+# gracefully when any of them is unavailable.
+try:
+    from ai_intelligence_hub import get_ai_intelligence_hub, AIIntelligenceHub
+    AI_HUB_AVAILABLE = True
+except ImportError:
+    AI_HUB_AVAILABLE = False
+    get_ai_intelligence_hub = None  # type: ignore
+    AIIntelligenceHub = None  # type: ignore
+    logger.warning("AI Intelligence Hub not available – running without AI regime / risk / allocation layer")
+
 
 class NIJAApexStrategyV71:
     """
@@ -192,6 +204,22 @@ class NIJAApexStrategyV71:
         # AI Momentum Scoring (optional, skeleton for future)
         self.ai_momentum_enabled = self.config.get('ai_momentum_enabled', False)
 
+        # AI Intelligence Hub: Market Regime Detection + Portfolio Risk Engine +
+        # Capital Allocation AI.  Enabled by default when the module is available.
+        enable_ai_hub = self.config.get('use_ai_intelligence_hub', True)
+        if AI_HUB_AVAILABLE and enable_ai_hub:
+            ai_hub_config = self.config.get('ai_hub_config', {})
+            self.ai_hub = get_ai_intelligence_hub(ai_hub_config)
+            self.use_ai_hub = True
+            logger.info("✅ AI Intelligence Hub: ENABLED (Regime AI + Portfolio Risk + Capital Brain)")
+        else:
+            self.ai_hub = None
+            self.use_ai_hub = False
+            if not AI_HUB_AVAILABLE:
+                logger.warning("⚠️  AI Intelligence Hub not available")
+            else:
+                logger.info("ℹ️  AI Intelligence Hub disabled by configuration")
+
         # PROFITABILITY ASSERTION: Validate strategy configuration (CRITICAL GUARD RAIL)
         # This prevents deployment of unprofitable configurations that would lose money after fees
         # Added as part of profitability assertion pass (Feb 2026)
@@ -230,6 +258,11 @@ class NIJAApexStrategyV71:
         logger.info(f"✅ Position sizing: {self.config.get('min_position_pct', 0.02)*100:.0f}%-{self.config.get('max_position_pct', 0.10)*100:.0f}% (capital efficient)")
         logger.info(f"✅ Confidence threshold: {MIN_CONFIDENCE*100:.0f}% (balanced quality)")
         logger.info(f"✅ Minimum ADX: {self.min_adx} (moderate trend strength)")
+        if self.use_ai_hub:
+            logger.info("✅ AI Intelligence Hub: ENABLED")
+            logger.info("   ├─ AI Market Regime Detection (7-class classifier)")
+            logger.info("   ├─ Portfolio Risk Engine (correlation + VaR)")
+            logger.info("   └─ Capital Allocation AI (dynamic Sharpe-weighted routing)")
         logger.info("=" * 70)
 
     def _validate_profitability_configuration(self):
@@ -1412,6 +1445,46 @@ class NIJAApexStrategyV71:
                             position_size, self.current_regime, score
                         )
 
+                    # ── AI Intelligence Hub ────────────────────────────────
+                    # Evaluate trade through the three AI layers:
+                    #   1. AI Market Regime Detection (7-class classifier)
+                    #   2. Portfolio Risk Engine (correlation-adjusted sizing)
+                    #   3. Capital Allocation AI (Sharpe-weighted capital routing)
+                    if self.use_ai_hub and self.ai_hub is not None:
+                        base_pct = (
+                            position_size / account_balance
+                            if account_balance > 0 else 0.05
+                        )
+                        ai_eval = self.ai_hub.evaluate_trade(
+                            symbol=symbol,
+                            side='long',
+                            df=df,
+                            indicators=indicators,
+                            base_size_pct=base_pct,
+                            portfolio_value=account_balance,
+                        )
+                        if not ai_eval.ai_approved:
+                            logger.info(
+                                "   \U0001f916 AI Hub rejected LONG %s: %s",
+                                symbol, ai_eval.ai_reason
+                            )
+                            return {
+                                'action': 'hold',
+                                'reason': f'AI Hub: {ai_eval.ai_reason}',
+                            }
+                        # Use AI-adjusted position size (correlation + regime)
+                        ai_adjusted_size = ai_eval.correlation_adjusted_size_pct * account_balance
+                        if ai_adjusted_size > 0 and ai_adjusted_size != position_size:
+                            logger.info(
+                                "   \U0001f916 AI Hub adjusted LONG size: $%.2f → $%.2f "
+                                "(regime=%s, score=%.2f)",
+                                position_size, ai_adjusted_size,
+                                ai_eval.regime, ai_eval.ai_score,
+                            )
+                            position_size = ai_adjusted_size
+                        metadata['ai_eval'] = ai_eval.to_dict()
+                    # ──────────────────────────────────────────────────────
+
                     if float(position_size) == 0:
                         return {
                             'action': 'hold',
@@ -1595,6 +1668,46 @@ class NIJAApexStrategyV71:
                         position_size = self.adjust_position_size_for_regime(
                             position_size, self.current_regime, score
                         )
+
+                    # ── AI Intelligence Hub ────────────────────────────────
+                    # Evaluate trade through the three AI layers:
+                    #   1. AI Market Regime Detection (7-class classifier)
+                    #   2. Portfolio Risk Engine (correlation-adjusted sizing)
+                    #   3. Capital Allocation AI (Sharpe-weighted capital routing)
+                    if self.use_ai_hub and self.ai_hub is not None:
+                        base_pct = (
+                            position_size / account_balance
+                            if account_balance > 0 else 0.05
+                        )
+                        ai_eval = self.ai_hub.evaluate_trade(
+                            symbol=symbol,
+                            side='short',
+                            df=df,
+                            indicators=indicators,
+                            base_size_pct=base_pct,
+                            portfolio_value=account_balance,
+                        )
+                        if not ai_eval.ai_approved:
+                            logger.info(
+                                "   \U0001f916 AI Hub rejected SHORT %s: %s",
+                                symbol, ai_eval.ai_reason
+                            )
+                            return {
+                                'action': 'hold',
+                                'reason': f'AI Hub: {ai_eval.ai_reason}',
+                            }
+                        # Use AI-adjusted position size (correlation + regime)
+                        ai_adjusted_size = ai_eval.correlation_adjusted_size_pct * account_balance
+                        if ai_adjusted_size > 0 and ai_adjusted_size != position_size:
+                            logger.info(
+                                "   \U0001f916 AI Hub adjusted SHORT size: $%.2f → $%.2f "
+                                "(regime=%s, score=%.2f)",
+                                position_size, ai_adjusted_size,
+                                ai_eval.regime, ai_eval.ai_score,
+                            )
+                            position_size = ai_adjusted_size
+                        metadata['ai_eval'] = ai_eval.to_dict()
+                    # ──────────────────────────────────────────────────────
 
                     if float(position_size) == 0:
                         return {
