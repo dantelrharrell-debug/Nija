@@ -1106,6 +1106,15 @@ class TradingStrategy:
             logger.info("   Platform account + User accounts trading independently")
             logger.info("=" * 70)
 
+            # Display the Smart Structure hierarchy (Account 2 = NIJA, users connect via API)
+            try:
+                from bot.platform_account_layer import get_platform_account_layer
+                _pal = get_platform_account_layer()
+                _pal.display_hierarchy()
+                _pal.validate()
+            except Exception as _pal_err:
+                logger.debug(f"Platform account layer display skipped: {_pal_err}")
+
             # Use the global singleton instance to ensure failed connection tracking persists
             self.multi_account_manager = multi_account_broker_manager
             self.broker_manager = BrokerManager()  # Keep for backward compatibility
