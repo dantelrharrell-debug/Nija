@@ -420,7 +420,7 @@ def simulate_macro_scenario(
         worst_strategy=worst,
         best_strategy=best,
     )
-    logger.info("Macro scenario '%s': portfolio_impact=%+.2%%", scenario, portfolio_impact)
+    logger.info("Macro scenario '%s': portfolio_impact=%+.2f%%", scenario, portfolio_impact * 100)
     return result
 
 
