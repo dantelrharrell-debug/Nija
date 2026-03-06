@@ -490,7 +490,7 @@ class LegacyPositionExitProtocol:
                 if isinstance(order_time, str):
                     try:
                         order_time = datetime.fromisoformat(order_time.replace('Z', '+00:00'))
-                    except:
+                    except Exception:
                         logger.warning(f"Could not parse order time: {order_time}")
                         continue
                 
@@ -1007,7 +1007,7 @@ class LegacyPositionExitProtocol:
                 if isinstance(order_time, str):
                     try:
                         order_time = datetime.fromisoformat(order_time.replace('Z', '+00:00'))
-                    except:
+                    except Exception:
                         continue
                 
                 if order_time and order_time < stale_cutoff:

@@ -1,12 +1,75 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-📋 **Version 7.2.0**
+📋 **Version 7.3.0** — March 2026 Deep-Clean Release
 
 > **CRITICAL SAFETY GUARANTEE**  
 > **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
 
-> **⚠️ Breaking Changes in v7.2.0:** NIJA now supports **independent trading only**. The copy-trading system has been removed. See [CHANGELOG.md](CHANGELOG.md) for migration details.
-> **📋 Version 7.2.0** — See [CHANGELOG.md](CHANGELOG.md) for breaking changes
+> **✅ v7.3.0 (March 2026):** Deep code audit complete — all bare exception handlers replaced with typed handlers, stop-loss log messages now correctly identify which threshold triggered (primary -4% vs. noise-floor -0.05%). See below for the current reference-point snapshot.
+
+---
+
+## 🔒 CURRENT SUCCESS REFERENCE POINT — March 6, 2026
+
+> **Use this section to get back to the current working state at any time.**
+
+### What Is Working Right Now
+
+| Component | Status | Key Setting |
+|-----------|--------|-------------|
+| **Coinbase Profit Targets** | ✅ Active | 5.0% → 3.5% → 2.5% → 2.0% → 1.6% (fractional format) |
+| **Stop-Loss — Coinbase** | ✅ Active | Primary -3% to -4% band (STOP_LOSS_PRIMARY_COINBASE = -3%) |
+| **Stop-Loss — Noise Floor** | ✅ Active | Exit on any loss > -0.05% (MIN_LOSS_FLOOR = -0.0005) |
+| **Max Open Positions** | ✅ Active | 5 (hard cap, override via MAX_CONCURRENT_POSITIONS env var) |
+| **Market Scan Delay** | ✅ Active | 8.0 s between scans (rate-limit safe) |
+| **Candle Cache TTL** | ✅ Active | 150 s (2.5 min — one full cycle) |
+| **XRP-USD** | ⛔ Disabled | Permanently disabled (net negative performance) |
+| **Emergency Stop** | ✅ Active | Catastrophic exit at -5% (STOP_LOSS_EMERGENCY) |
+| **Profit Protection** | ✅ Active | 2.0% min profit before "never break-even" rule fires |
+| **Position Hold Limit** | ✅ Active | Max 24 h normal, 48 h emergency force-exit |
+| **Candle Data Source** | ✅ Active | Coinbase Advanced Trade API, 5-minute candles |
+| **RSI Strategy** | ✅ Active | Dual RSI (RSI_9 + RSI_14), exit >55 overbought / <45 oversold |
+
+### Verified Bug Fixes in v7.3.0 (March 2026)
+
+| Fix | File | Description |
+|-----|------|-------------|
+| Stop-loss log accuracy | `bot/trading_strategy.py` | Log now reports correct trigger: primary threshold (-4%) or noise floor (-0.05%) — prevents confusion in trade post-mortems |
+| Bare except → typed | `bot/broker_manager.py` | 3 bare `except:` → `except Exception:` (fill-price parsing) |
+| Bare except → typed | `bot/dry_run_engine.py` | 1 bare `except:` → `except Exception:` (state machine import) |
+| Bare except → typed | `bot/legacy_position_exit_protocol.py` | 2 bare `except:` → `except Exception:` (datetime parsing) |
+| Bare except → typed | `bot/advanced_trading_optimizer.py` | 2 bare `except:` → `except Exception:` (component status) |
+| Bare except → typed | `bot/ai_trade_quality_filter.py` | 1 bare `except:` → `except Exception:` (AUC score) |
+| Bare except → typed | `bot/backtest_enhanced_strategy.py` | 1 bare `except:` → `except Exception:` (regime tracking) |
+| Bare except → typed | `bot/dashboard_server.py` | 1 bare `except:` → `except Exception:` (trade timestamp) |
+| Bare except → typed | `bot/monitor_pnl.py` | 1 bare `except:` → `except Exception:` (price fetch) |
+| Bare except → typed | `bot/portfolio_risk_engine.py` | 1 bare `except:` → `except Exception:` (sector exposure) |
+| Bare except → typed | `bot/user_pnl_tracker.py` | 1 bare `except:` → `except Exception:` (hold-time calc) |
+
+### How to Recover to This Exact State
+
+```bash
+# 1. Find this reference commit
+git log --oneline | grep "v7.3\|March 2026\|deep-clean"
+
+# 2. Hard reset to it (DANGER: discards local changes)
+git reset --hard <commit-hash>
+
+# 3. Verify the bot compiles and is healthy
+python -m py_compile bot/trading_strategy.py && echo "✅ Syntax OK"
+python3 check_nija_profitability_status.py   # Should show 5/5
+
+# 4. Restart the bot
+bash start.sh
+```
+
+### Quick Health Check After Any Restart
+
+```bash
+python3 check_nija_profitability_status.py   # 5/5 checks must pass
+python3 check_current_positions.py            # View open positions
+python3 diagnose_profitability_now.py         # Full system diagnostic
+```
 
 ---
 
@@ -4565,9 +4628,9 @@ python3 full_status_check.py             # Overall bot status
 
 ---
 
-**NIJA v7.2 - December 23, 2025**
-*Profitability Locked. No More Flat Positions. Recovery Plan in Place.*
+**NIJA v7.3.0 — March 6, 2026**
+*Deep-Clean Complete. All Exception Handlers Fixed. Stop-Loss Logging Accurate. Reference Point Locked.*
 
-🔒 **This Is the Reference Point**: Commit all v7.2 changes. Recovery to this exact state if needed.
+🔒 **This Is the Reference Point**: All v7.3.0 changes committed. Recover to this exact state using the "Current Success Reference Point" section at the top of this README.
 
 🚀 Bot is LIVE and monitoring markets 24/7

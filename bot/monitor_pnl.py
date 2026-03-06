@@ -71,7 +71,7 @@ def get_total_portfolio_value(client):
                                     'price': price,
                                     'value_usd': value_usd
                                 })
-                    except:
+                    except Exception:
                         pass
 
         return total_usd, positions

@@ -303,7 +303,7 @@ class UserPnLTracker:
                         exit = datetime.fromisoformat(t.exit_time)
                         hold_time = (exit - entry).total_seconds() / 60  # minutes
                         hold_times.append(hold_time)
-                    except:
+                    except Exception:
                         pass
             
             avg_hold_time_minutes = sum(hold_times) / len(hold_times) if hold_times else 0.0

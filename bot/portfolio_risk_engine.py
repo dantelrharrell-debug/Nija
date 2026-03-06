@@ -431,7 +431,7 @@ class PortfolioRiskEngine:
                 pos_sector = self.get_sector(pos_symbol)
                 if pos_sector == sector:
                     current_sector_exposure_usd += position.size_usd
-            except:
+            except Exception:
                 continue
         
         current_sector_exposure_pct = current_sector_exposure_usd / portfolio_value

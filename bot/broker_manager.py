@@ -3568,7 +3568,7 @@ class CoinbaseBroker(BaseBroker):
                         if price_data and 'price' in price_data:
                             current_price = float(price_data['price'])
                             filled_size = quote_size / current_price
-                    except:
+                    except Exception:
                         # Fallback: use quantity as estimate
                         filled_size = quantity
                 else:
@@ -3590,7 +3590,7 @@ class CoinbaseBroker(BaseBroker):
                         if success_response and 'average_filled_price' in success_response:
                             try:
                                 fill_price = float(success_response['average_filled_price'])
-                            except:
+                            except Exception:
                                 pass
 
                         # Fallback to current market price if fill price not available
@@ -3622,7 +3622,7 @@ class CoinbaseBroker(BaseBroker):
                         if success_response and 'average_filled_price' in success_response:
                             try:
                                 fill_price = float(success_response['average_filled_price'])
-                            except:
+                            except Exception:
                                 pass
                         if not fill_price or fill_price == 0:
                             fill_price = self.get_current_price(symbol)

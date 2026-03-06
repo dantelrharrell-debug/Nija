@@ -621,7 +621,7 @@ def get_trading_status():
                                     trades_24h += 1
                                     if not last_trade or trade_time > datetime.fromisoformat(last_trade):
                                         last_trade = trade.get('timestamp')
-                            except:
+                            except Exception:
                                 continue
 
                     status["recent_activity"]["trades_24h"] = trades_24h

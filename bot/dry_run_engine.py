@@ -535,7 +535,7 @@ def is_dry_run_mode() -> bool:
     try:
         from bot.trading_state_machine import get_state_machine
         return get_state_machine().is_dry_run_mode()
-    except:
+    except Exception:
         return False
 
 
