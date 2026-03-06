@@ -4552,9 +4552,15 @@ class TradingStrategy:
                                         pnl_dollars = pnl_data['pnl_dollars']
                                         entry_price = pnl_data['entry_price']
 
-                                        # CRITICAL: Validate PnL is in fractional format (not percentage)
-                                        # If abs(pnl_percent) >= 1, it's likely using wrong scale (percentage instead of fractional)
-                                        assert abs(pnl_percent) < 1.0, f"PNL scale mismatch for {symbol}: {pnl_percent} (expected fractional format like -0.01 for -1%)"
+                                        # Validate PnL scale — log a warning for extreme values (>±100%)
+                                        # but do NOT raise an exception: a genuine >100% gain or catastrophic
+                                        # loss must still flow through the exit checks below.
+                                        if abs(pnl_percent) >= 1.0:
+                                            logger.warning(
+                                                f"   ⚠️ Large PnL detected for {symbol}: "
+                                                f"{pnl_percent*100:.2f}% — extreme move or scale issue. "
+                                                f"Continuing with exit checks."
+                                            )
 
                                         logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent*100:+.2f}%) | Entry: ${entry_price:.2f}")
 

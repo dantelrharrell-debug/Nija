@@ -99,9 +99,14 @@ class ForcedStopLoss:
         # Calculate current P&L percentage (FRACTIONAL FORMAT: -0.01 = -1%)
         pnl_pct = ((current_price - entry_price) / entry_price)
 
-        # CRITICAL: Validate PnL is in fractional format (not percentage)
-        # If abs(pnl_pct) >= 1, it's likely a bug (percentage format being used incorrectly)
-        assert abs(pnl_pct) < 1.0, f"PNL scale mismatch for {symbol}: {pnl_pct} (expected fractional format like -0.01 for -1%)"
+        # Validate PnL scale — log a warning for extreme values (>±100%) but do NOT
+        # raise an exception.  A position could technically lose/gain >100% in extreme
+        # market conditions; we must still run the stop-loss comparison below.
+        if abs(pnl_pct) >= 1.0:
+            logger.warning(
+                f"⚠️ Large PnL detected for {symbol}: {pnl_pct*100:.2f}% — "
+                f"extreme move or scale issue. Continuing with stop-loss check."
+            )
 
         # Stop-loss is triggered if P&L is below threshold
         is_triggered = pnl_pct <= stop_loss_pct
