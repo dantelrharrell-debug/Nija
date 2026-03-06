@@ -33,6 +33,8 @@ from bot.user_rules_engine import (
     get_user_rules_engine,
     RULE_TYPE_TAKE_PROFIT,
     RULE_TYPE_STOP_LOSS,
+    RULE_TYPE_TRAILING_STOP,
+    RULE_TYPE_PORTFOLIO_REBALANCE,
 )
 import json
 from pathlib import Path
@@ -857,15 +859,19 @@ def list_rules():
     _type_map = {
         'take-profit': RULE_TYPE_TAKE_PROFIT,
         'stop-loss': RULE_TYPE_STOP_LOSS,
+        'trailing-stop': RULE_TYPE_TRAILING_STOP,
+        'portfolio-rebalance': RULE_TYPE_PORTFOLIO_REBALANCE,
         RULE_TYPE_TAKE_PROFIT: RULE_TYPE_TAKE_PROFIT,
         RULE_TYPE_STOP_LOSS: RULE_TYPE_STOP_LOSS,
+        RULE_TYPE_TRAILING_STOP: RULE_TYPE_TRAILING_STOP,
+        RULE_TYPE_PORTFOLIO_REBALANCE: RULE_TYPE_PORTFOLIO_REBALANCE,
     }
 
     rule_type = None
     if rule_type_param:
         rule_type = _type_map.get(rule_type_param)
         if rule_type is None:
-            return jsonify({'error': "Invalid type. Use 'take-profit' or 'stop-loss'"}), 400
+            return jsonify({'error': "Invalid rule type. Use: take-profit, stop-loss, trailing-stop, or portfolio-rebalance"}), 400
 
     engine = get_user_rules_engine()
     rules = engine.get_rules(user_id, symbol=symbol, rule_type=rule_type)
@@ -995,7 +1001,129 @@ def add_stop_loss_rule():
     }), 201
 
 
-@app.route('/api/rules/<rule_id>', methods=['GET', 'DELETE'])
+@app.route('/api/rules/trailing-stop', methods=['POST'])
+@require_auth
+def add_trailing_stop_rule():
+    """
+    Add a trailing-stop rule for the authenticated user.
+
+    The trailing stop tracks the highest (peak) price seen for each matching
+    position.  When price drops ``trail_pct`` percent below that peak, NIJA
+    sells ``sell_pct`` percent of the position.  After firing, the peak resets
+    so the rule re-arms and can trigger again on a subsequent rally-then-drop.
+
+    Request body (JSON):
+        {
+            "symbol":    "BTC-USD",  // optional; omit to apply to all symbols
+            "trail_pct": 5.0,        // sell when price falls this % from peak
+            "sell_pct":  100.0       // sell this % of position when triggered (1-100)
+        }
+
+    Example: "Sell 100% of BTC if it drops 5% from its highest price."
+
+    Returns:
+        201 with the created rule object.
+    """
+    user_id = request.user_id
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body is required'}), 400
+
+    if 'trail_pct' not in data:
+        return jsonify({'error': 'trail_pct is required (e.g. 5.0 for a 5% trailing stop)'}), 400
+    if 'sell_pct' not in data:
+        return jsonify({'error': 'sell_pct is required (e.g. 100.0 to close the full position)'}), 400
+
+    try:
+        trail_pct = float(data['trail_pct'])
+        sell_pct = float(data['sell_pct'])
+    except (TypeError, ValueError):
+        return jsonify({'error': 'trail_pct and sell_pct must be numeric'}), 400
+
+    symbol = data.get('symbol')
+
+    try:
+        engine = get_user_rules_engine()
+        rule = engine.add_trailing_stop_rule(
+            user_id=user_id,
+            trail_pct=trail_pct,
+            sell_pct=sell_pct,
+            symbol=symbol,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        logger.error("Failed to add trailing-stop rule for %s: %s", user_id, exc)
+        return jsonify({'error': 'Failed to add rule'}), 500
+
+    logger.info("Trailing-stop rule added: user=%s symbol=%s trail=%.1f%% sell=%.0f%%",
+                user_id, symbol or 'all', trail_pct, sell_pct)
+    return jsonify({
+        'message': 'Trailing-stop rule added successfully',
+        'rule': rule.to_dict(),
+    }), 201
+
+
+@app.route('/api/rules/portfolio-rebalance', methods=['POST'])
+@require_auth
+def add_portfolio_rebalance_rule():
+    """
+    Add a portfolio-rebalance rule for the authenticated user.
+
+    When a position's USD value exceeds ``max_portfolio_pct`` percent of the
+    total open-position portfolio value, NIJA sells the excess to bring the
+    position back to exactly the threshold.
+
+    Request body (JSON):
+        {
+            "symbol":           "ETH-USD",  // optional; omit to apply to all symbols
+            "max_portfolio_pct": 20.0       // trim if position grows above this % of portfolio
+        }
+
+    Example: "Trim any single holding that grows above 20% of my portfolio."
+
+    Returns:
+        201 with the created rule object.
+    """
+    user_id = request.user_id
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body is required'}), 400
+
+    if 'max_portfolio_pct' not in data:
+        return jsonify({'error': 'max_portfolio_pct is required (e.g. 20.0 to cap any holding at 20% of portfolio)'}), 400
+
+    try:
+        max_portfolio_pct = float(data['max_portfolio_pct'])
+    except (TypeError, ValueError):
+        return jsonify({'error': 'max_portfolio_pct must be numeric'}), 400
+
+    symbol = data.get('symbol')
+
+    try:
+        engine = get_user_rules_engine()
+        rule = engine.add_portfolio_rebalance_rule(
+            user_id=user_id,
+            max_portfolio_pct=max_portfolio_pct,
+            symbol=symbol,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        logger.error("Failed to add portfolio-rebalance rule for %s: %s", user_id, exc)
+        return jsonify({'error': 'Failed to add rule'}), 500
+
+    logger.info("Portfolio-rebalance rule added: user=%s symbol=%s max_pct=%.1f%%",
+                user_id, symbol or 'all', max_portfolio_pct)
+    return jsonify({
+        'message': 'Portfolio-rebalance rule added successfully',
+        'rule': rule.to_dict(),
+    }), 201
+
+
+
 @require_auth
 def manage_rule(rule_id: str):
     """

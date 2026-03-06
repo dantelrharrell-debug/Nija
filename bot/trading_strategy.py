@@ -4381,7 +4381,23 @@ class TradingStrategy:
                 # CRITICAL FIX: Identify ALL positions that need to exit first
                 # Then sell them ALL concurrently, not one at a time
                 positions_to_exit = []
-                
+
+                # Pre-calculate total portfolio value (used by portfolio-rebalance rules).
+                # Uses the last-known size_usd from each position as an approximation;
+                # exact per-cycle prices are fetched per-position in the analysis loop below.
+                _total_portfolio_value_usd = 0.0
+                for _pos in current_positions:
+                    _pos_val = (
+                        _pos.get('size_usd') or
+                        _pos.get('usd_value') or
+                        _pos.get('value_usd') or
+                        0
+                    )
+                    try:
+                        _total_portfolio_value_usd += float(_pos_val)
+                    except (TypeError, ValueError):
+                        pass
+
                 # FORCED UNWIND MODE: Close all positions immediately
                 if new_state == PositionManagementState.FORCED_UNWIND:
                     logger.error("=" * 80)
@@ -4555,6 +4571,9 @@ class TradingStrategy:
                                                         symbol=symbol,
                                                         pnl_pct_fractional=pnl_percent,
                                                         full_quantity=quantity,
+                                                        current_price=current_price,
+                                                        position_value_usd=position_value,
+                                                        portfolio_total_value_usd=_total_portfolio_value_usd if _total_portfolio_value_usd > 0 else None,
                                                     )
                                                     for _sell_qty, _rule_reason in _rule_actions:
                                                         if _sell_qty > 0:
@@ -5501,7 +5520,13 @@ class TradingStrategy:
                             # Use force_liquidate for Coinbase sells to bypass ALL validation
                             # This ensures stop-losses and profit-taking ALWAYS execute
                             is_coinbase = 'coinbase' in exit_broker_label.lower()
-                            use_force_liquidate = is_coinbase and ('lockdown' in reason.lower() or 'loss' in reason.lower() or 'stop' in reason.lower())
+                            use_force_liquidate = is_coinbase and (
+                                'lockdown' in reason.lower() or
+                                'loss' in reason.lower() or
+                                'stop' in reason.lower() or
+                                'profit' in reason.lower() or
+                                'rebalance' in reason.lower()
+                            )
 
                             if use_force_liquidate:
                                 logger.info(f"  🛡️ PROTECTIVE MODE: Using force_liquidate for Coinbase exit")
