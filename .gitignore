@@ -505,3 +505,6 @@ data/demo_paper_analytics/
 # Analytics data files (can be large)
 data/analytics/*.jsonl
 test_forced_cleanup.py
+
+# Emergency stop file (runtime artifact, never commit)
+EMERGENCY_STOP
