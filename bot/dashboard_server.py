@@ -89,6 +89,19 @@ except ImportError:
         ENHANCED_DASHBOARD_AVAILABLE = False
         create_enhanced_dashboard_blueprint = None
 
+# Import AI Monitoring API blueprint
+try:
+    from ai_monitoring_api import register_ai_monitoring
+    AI_MONITORING_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.ai_monitoring_api import register_ai_monitoring
+        AI_MONITORING_AVAILABLE = True
+    except ImportError:
+        logger.warning("AI Monitoring API not available")
+        AI_MONITORING_AVAILABLE = False
+        register_ai_monitoring = None
+
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 10  # 10 seconds
 
@@ -2088,12 +2101,23 @@ if __name__ == "__main__":
     else:
         logger.warning("⚠️ Enhanced Performance Dashboard not available")
 
+    # Register AI Monitoring API blueprint
+    if AI_MONITORING_AVAILABLE and register_ai_monitoring:
+        try:
+            register_ai_monitoring(app)
+            logger.info("✅ AI Monitoring API routes registered (/ai/regime, /ai/trade-confidence, /ai/liquidity-map, /system/brain-status)")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not register AI Monitoring API: {e}")
+    else:
+        logger.warning("⚠️ AI Monitoring API not available")
+
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")
     print("👥 Users Dashboard: http://localhost:5001/users")
     print("⚡ Command Center: http://localhost:5001/command-center")
     print("🎯 Control Center: http://localhost:5001/control-center")
     print("📈 Performance Dashboard: http://localhost:5001/performance")
+    print("🧠 AI Monitoring: http://localhost:5001/ai/regime")
     print(f"🔄 Auto-refresh every {AUTO_REFRESH_INTERVAL} seconds")
     print("\nPress Ctrl+C to stop\n")
 
