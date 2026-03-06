@@ -976,6 +976,20 @@ class TradingStrategy:
             logger.warning("⚠️ Forced stop-loss module not available")
             self.forced_stop_loss = None
 
+        # Initialize user-defined take-profit / stop-loss rules engine
+        try:
+            from user_rules_engine import get_user_rules_engine as _get_ure
+            self._user_rules_engine = _get_ure()
+            logger.info("✅ User Rules Engine initialized – custom TP/SL rules active")
+        except ImportError:
+            try:
+                from bot.user_rules_engine import get_user_rules_engine as _get_ure
+                self._user_rules_engine = _get_ure()
+                logger.info("✅ User Rules Engine initialized – custom TP/SL rules active")
+            except ImportError:
+                self._user_rules_engine = None
+                logger.warning("⚠️ User Rules Engine not available – custom TP/SL rules disabled")
+
         # Initialize entry guardrails (correlation, liquidity, latency)
         if _ENTRY_GUARDRAILS_AVAILABLE:
             try:
@@ -4527,6 +4541,32 @@ class TradingStrategy:
                                         assert abs(pnl_percent) < 1.0, f"PNL scale mismatch for {symbol}: {pnl_percent} (expected fractional format like -0.01 for -1%)"
 
                                         logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent*100:+.2f}%) | Entry: ${entry_price:.2f}")
+
+                                        # ✅ USER-DEFINED TAKE-PROFIT / STOP-LOSS RULES
+                                        # Checked immediately after P&L is computed, before
+                                        # the 3-tier system stop-loss checks below, so that
+                                        # personal thresholds are honoured first.
+                                        if hasattr(self, '_user_rules_engine') and self._user_rules_engine is not None:
+                                            _rule_user_id = getattr(active_broker, 'user_id', None)
+                                            if _rule_user_id:
+                                                try:
+                                                    _rule_actions = self._user_rules_engine.check_rules(
+                                                        user_id=_rule_user_id,
+                                                        symbol=symbol,
+                                                        pnl_pct_fractional=pnl_percent,
+                                                        full_quantity=quantity,
+                                                    )
+                                                    for _sell_qty, _rule_reason in _rule_actions:
+                                                        if _sell_qty > 0:
+                                                            positions_to_exit.append({
+                                                                'symbol': symbol,
+                                                                'quantity': _sell_qty,
+                                                                'reason': _rule_reason,
+                                                                'broker': position_broker,
+                                                                'broker_label': broker_label,
+                                                            })
+                                                except Exception as _re:
+                                                    logger.warning(f"   ⚠️ User rules check error for {symbol}: {_re}")
 
                                         # 🛡️ 3-TIER PROTECTIVE STOP-LOSS SYSTEM (JAN 21, 2026)
                                         # Tier 1: Primary trading stop (varies by broker and balance)
