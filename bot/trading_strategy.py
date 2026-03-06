@@ -3125,6 +3125,35 @@ class TradingStrategy:
             logger.warning(f"⚠️ Failed to initialize advanced features: {e}")
             self.advanced_manager = None
 
+        # ── Hedge-Fund Upgrade: Global Integration Layer ─────────────────
+        # Initialises all five pillars (multi-strategy, portfolio execution,
+        # smart execution, adaptive learning, regulatory infrastructure) as
+        # a single globally accessible singleton.
+        try:
+            from bot.nija_global_integration import get_nija_global
+            log_dir    = os.getenv("COMPLIANCE_LOG_DIR",    "logs/compliance")
+            report_dir = os.getenv("COMPLIANCE_REPORT_DIR", "logs/reports")
+            dry_run    = os.getenv("DRY_RUN", "true").lower() in ("true", "1", "yes")
+            quorum     = int(os.getenv("STRATEGY_QUORUM", "2"))
+            min_conf   = float(os.getenv("MIN_SIGNAL_CONFIDENCE", "0.45"))
+
+            self.nija_global = get_nija_global(
+                total_capital=initial_capital if 'initial_capital' in dir() else total_capital,
+                log_dir=log_dir,
+                report_dir=report_dir,
+                dry_run=dry_run,
+                min_strategy_quorum=quorum,
+                min_signal_confidence=min_conf,
+            )
+            logger.info("=" * 70)
+            logger.info("🌐 NIJA GLOBAL INTEGRATION ACTIVE")
+            logger.info(f"   Pillars: {self.nija_global._initialized_pillars}")
+            logger.info(f"   Dry-run: {dry_run}")
+            logger.info("=" * 70)
+        except Exception as e:
+            logger.warning(f"⚠️ NijaGlobalIntegration init failed (non-critical): {e}")
+            self.nija_global = None
+
     def start_independent_multi_broker_trading(self):
         """
         Start independent trading threads for all connected and funded brokers.

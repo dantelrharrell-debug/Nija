@@ -1,0 +1,21 @@
+{
+  "peak_capital": 0.0,
+  "current_capital": 0.0,
+  "severity": "normal",
+  "in_recovery_mode": false,
+  "recovery_start_capital": 0.0,
+  "recovery_target_capital": 0.0,
+  "consecutive_wins": 0,
+  "consecutive_losses": 0,
+  "total_trades": 0,
+  "recovery_trades": 0,
+  "times_entered_recovery": 0,
+  "times_exited_recovery": 0,
+  "last_updated": "2026-03-06T22:57:38.410015",
+  "recovery_entered_at": "",
+  "recovery_exited_at": "",
+  "snapshots": [],
+  "drawdown_amount": 0.0,
+  "drawdown_pct": 0.0,
+  "recovery_progress_pct": 100.0
+}
