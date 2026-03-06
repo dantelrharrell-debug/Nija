@@ -29,6 +29,11 @@ import secrets
 from auth import get_api_key_manager, get_user_manager
 from execution import get_permission_validator, UserPermissions
 from bot.kill_switch import get_kill_switch
+from bot.user_rules_engine import (
+    get_user_rules_engine,
+    RULE_TYPE_TAKE_PROFIT,
+    RULE_TYPE_STOP_LOSS,
+)
 import json
 from pathlib import Path
 
@@ -825,6 +830,195 @@ def get_simulation_status():
     except Exception as e:
         logger.error(f"Error retrieving simulation status: {e}")
         return jsonify({'error': 'Failed to retrieve simulation status'}), 500
+
+
+# ========================================
+# User Take-Profit / Stop-Loss Rules Endpoints
+# ========================================
+
+@app.route('/api/rules', methods=['GET'])
+@require_auth
+def list_rules():
+    """
+    List all active take-profit and stop-loss rules for the authenticated user.
+
+    Optional query parameters:
+        symbol (str): Filter rules to a specific trading symbol.
+        type   (str): Filter by rule type ('take-profit' or 'stop-loss').
+
+    Returns:
+        JSON list of rule objects.
+    """
+    user_id = request.user_id
+    symbol = request.args.get('symbol')
+    rule_type_param = request.args.get('type')
+
+    # Map user-friendly URL names to internal constants; also accept internal names directly
+    _type_map = {
+        'take-profit': RULE_TYPE_TAKE_PROFIT,
+        'stop-loss': RULE_TYPE_STOP_LOSS,
+        RULE_TYPE_TAKE_PROFIT: RULE_TYPE_TAKE_PROFIT,
+        RULE_TYPE_STOP_LOSS: RULE_TYPE_STOP_LOSS,
+    }
+
+    rule_type = None
+    if rule_type_param:
+        rule_type = _type_map.get(rule_type_param)
+        if rule_type is None:
+            return jsonify({'error': "Invalid type. Use 'take-profit' or 'stop-loss'"}), 400
+
+    engine = get_user_rules_engine()
+    rules = engine.get_rules(user_id, symbol=symbol, rule_type=rule_type)
+
+    return jsonify({
+        'user_id': user_id,
+        'rules': [r.to_dict() for r in rules],
+        'count': len(rules),
+    })
+
+
+@app.route('/api/rules/take-profit', methods=['POST'])
+@require_auth
+def add_take_profit_rule():
+    """
+    Add a take-profit rule for the authenticated user.
+
+    Request body (JSON):
+        {
+            "symbol":      "1INCH-USD",   // optional; omit to apply to all symbols
+            "trigger_pct": 20.0,          // sell when position gains this % (e.g. 20 = +20%)
+            "sell_pct":    50.0           // sell this % of the position (1-100)
+        }
+
+    Example: "Sell 50% of my 1INCH position if it gains 20%."
+
+    Returns:
+        201 with the created rule object.
+    """
+    user_id = request.user_id
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body is required'}), 400
+
+    if 'trigger_pct' not in data:
+        return jsonify({'error': 'trigger_pct is required (e.g. 20.0 for +20%)'}), 400
+    if 'sell_pct' not in data:
+        return jsonify({'error': 'sell_pct is required (e.g. 50.0 to sell half the position)'}), 400
+
+    try:
+        trigger_pct = float(data['trigger_pct'])
+        sell_pct = float(data['sell_pct'])
+    except (TypeError, ValueError):
+        return jsonify({'error': 'trigger_pct and sell_pct must be numeric'}), 400
+
+    symbol = data.get('symbol')
+
+    try:
+        engine = get_user_rules_engine()
+        rule = engine.add_take_profit_rule(
+            user_id=user_id,
+            trigger_pct=trigger_pct,
+            sell_pct=sell_pct,
+            symbol=symbol,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        logger.error("Failed to add take-profit rule for %s: %s", user_id, exc)
+        return jsonify({'error': 'Failed to add rule'}), 500
+
+    logger.info("Take-profit rule added: user=%s symbol=%s trigger=%.1f%% sell=%.0f%%",
+                user_id, symbol or 'all', trigger_pct, sell_pct)
+    return jsonify({
+        'message': 'Take-profit rule added successfully',
+        'rule': rule.to_dict(),
+    }), 201
+
+
+@app.route('/api/rules/stop-loss', methods=['POST'])
+@require_auth
+def add_stop_loss_rule():
+    """
+    Add a stop-loss rule for the authenticated user.
+
+    Request body (JSON):
+        {
+            "symbol":      "AI3-USD",  // optional; omit to apply to all symbols
+            "trigger_pct": 30.0,       // sell when position is down this % (e.g. 30 = -30%)
+            "sell_pct":    100.0       // sell this % of the position (1-100)
+        }
+
+    Example: "Sell 100% of AI3 if it drops 30% below entry."
+
+    Returns:
+        201 with the created rule object.
+    """
+    user_id = request.user_id
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body is required'}), 400
+
+    if 'trigger_pct' not in data:
+        return jsonify({'error': 'trigger_pct is required (e.g. 30.0 for -30%)'}), 400
+    if 'sell_pct' not in data:
+        return jsonify({'error': 'sell_pct is required (e.g. 100.0 to sell the full position)'}), 400
+
+    try:
+        trigger_pct = float(data['trigger_pct'])
+        sell_pct = float(data['sell_pct'])
+    except (TypeError, ValueError):
+        return jsonify({'error': 'trigger_pct and sell_pct must be numeric'}), 400
+
+    symbol = data.get('symbol')
+
+    try:
+        engine = get_user_rules_engine()
+        rule = engine.add_stop_loss_rule(
+            user_id=user_id,
+            trigger_pct=trigger_pct,
+            sell_pct=sell_pct,
+            symbol=symbol,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        logger.error("Failed to add stop-loss rule for %s: %s", user_id, exc)
+        return jsonify({'error': 'Failed to add rule'}), 500
+
+    logger.info("Stop-loss rule added: user=%s symbol=%s trigger=%.1f%% sell=%.0f%%",
+                user_id, symbol or 'all', trigger_pct, sell_pct)
+    return jsonify({
+        'message': 'Stop-loss rule added successfully',
+        'rule': rule.to_dict(),
+    }), 201
+
+
+@app.route('/api/rules/<rule_id>', methods=['GET', 'DELETE'])
+@require_auth
+def manage_rule(rule_id: str):
+    """
+    Get or delete a specific rule by ID.
+
+    GET    /api/rules/<rule_id>  — retrieve the rule details.
+    DELETE /api/rules/<rule_id>  — deactivate (soft-delete) the rule.
+    """
+    user_id = request.user_id
+    engine = get_user_rules_engine()
+
+    if request.method == 'GET':
+        rule = engine.get_rule_by_id(user_id, rule_id)
+        if not rule:
+            return jsonify({'error': 'Rule not found'}), 404
+        return jsonify(rule.to_dict())
+
+    elif request.method == 'DELETE':
+        deleted = engine.delete_rule(user_id, rule_id)
+        if not deleted:
+            return jsonify({'error': 'Rule not found or already deleted'}), 404
+        logger.info("Rule %s deleted by user %s", rule_id, user_id)
+        return jsonify({'message': 'Rule deleted successfully', 'rule_id': rule_id})
 
 
 # ========================================
