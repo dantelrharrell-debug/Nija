@@ -1,42 +1,54 @@
 """
-NIJA Walk-Forward Genetic Optimization Engine
-==============================================
+NIJA Walk-Forward Optimization Engine
+======================================
 
-Implements walk-forward optimization with genetic algorithms:
-- Rolling window optimization (in-sample training)
-- Out-of-sample testing for validation
-- Continuous parameter evolution over time
-- Prevents overfitting through forward testing
+Implements walk-forward optimization in two flavours:
 
-Process:
-1. Split historical data into windows (e.g., 3 months train, 1 month test)
-2. Run genetic optimization on training window
-3. Test best parameters on out-of-sample window
-4. Roll forward and repeat
-5. Track parameter stability and performance degradation
+WalkForwardOptimizer (genetic)
+    Uses genetic algorithms (GeneticEvolution) to evolve parameters.
+    High-quality results but requires the meta_ai package.
+
+SimpleWalkForwardOptimizer (grid-search)
+    Pure grid-search over a discrete parameter space.  No external
+    dependencies — works out of the box with only pandas/numpy.
+    Suitable for live auto-tuning of strategy parameters over time.
+
+Common workflow
+    1. Split historical data into rolling windows (train → test).
+    2. Optimise parameters on the *training* window.
+    3. Evaluate the best parameters on the *test* (out-of-sample) window.
+    4. Roll the window forward and repeat.
+    5. Select the parameter set that generalises best across windows.
 
 Author: NIJA Trading Systems
-Version: 1.0 - God Mode Edition
-Date: January 29, 2026
+Version: 1.1
+Date: January 29, 2026 (updated March 2026 – SimpleWalkForwardOptimizer added)
 """
 
+import itertools
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
 
-# Import genetic evolution engine
+# Import genetic evolution engine (optional – only needed for WalkForwardOptimizer)
 try:
     from bot.meta_ai.genetic_evolution import GeneticEvolution, StrategyGenome
     from bot.meta_ai.evolution_config import GENETIC_CONFIG, PARAMETER_SEARCH_SPACE
+    _GENETIC_AVAILABLE = True
 except ImportError:
     try:
         from meta_ai.genetic_evolution import GeneticEvolution, StrategyGenome
         from meta_ai.evolution_config import GENETIC_CONFIG, PARAMETER_SEARCH_SPACE
+        _GENETIC_AVAILABLE = True
     except ImportError:
-        raise ImportError("Genetic evolution module not found")
+        _GENETIC_AVAILABLE = False
+        GeneticEvolution = None  # type: ignore
+        StrategyGenome = None  # type: ignore
+        GENETIC_CONFIG = {}
+        PARAMETER_SEARCH_SPACE = {}
 
 logger = logging.getLogger("nija.walk_forward")
 
@@ -119,10 +131,21 @@ class WalkForwardOptimizer:
     def __init__(self, config: Dict = None):
         """
         Initialize Walk-Forward Optimizer
-        
+
         Args:
             config: Optional configuration dictionary
+
+        Raises:
+            ImportError: If the meta_ai genetic evolution package is unavailable.
+                Use :class:`SimpleWalkForwardOptimizer` as a drop-in alternative
+                that requires only pandas/numpy.
         """
+        if not _GENETIC_AVAILABLE:
+            raise ImportError(
+                "meta_ai.genetic_evolution is required for WalkForwardOptimizer. "
+                "Use SimpleWalkForwardOptimizer instead (no external dependencies)."
+            )
+
         self.config = config or {}
         
         # Window configuration
@@ -488,3 +511,353 @@ class WalkForwardOptimizer:
                 lines.append(f"  {key}: {value:.4f} (stability: {stability:.2f})")
         
         return "\n".join(lines)
+
+
+# ===========================================================================
+# SimpleWalkForwardOptimizer
+# ===========================================================================
+
+@dataclass
+class SimpleWFOWindow:
+    """Result for a single walk-forward window (simple variant)."""
+    window_id: int
+    train_start: datetime
+    train_end: datetime
+    test_start: datetime
+    test_end: datetime
+    best_params: Dict[str, Any] = field(default_factory=dict)
+    train_score: float = 0.0
+    test_score: float = 0.0
+    efficiency_ratio: float = 0.0  # test_score / train_score
+
+    def is_overfit(self, threshold: float = 0.70) -> bool:
+        """Return True when test performance falls below *threshold* × train."""
+        return self.efficiency_ratio < threshold
+
+
+@dataclass
+class SimpleWFOResult:
+    """Aggregated result from :class:`SimpleWalkForwardOptimizer`."""
+    windows: List[SimpleWFOWindow]
+    best_params: Dict[str, Any] = field(default_factory=dict)
+    avg_train_score: float = 0.0
+    avg_test_score: float = 0.0
+    avg_efficiency_ratio: float = 0.0
+    total_windows: int = 0
+    overfit_windows: int = 0
+    parameter_stability: Dict[str, float] = field(default_factory=dict)
+
+    # ------------------------------------------------------------------
+    # Convenience helpers
+    # ------------------------------------------------------------------
+
+    def get_recommended_params(self) -> Dict[str, Any]:
+        """
+        Return the best parameter set for live trading.
+
+        Prefers parameters from the most recent non-overfit window so that
+        the result reflects the latest market conditions.
+        """
+        non_overfit = [w for w in self.windows if not w.is_overfit()]
+        if non_overfit:
+            # Most recent non-overfit window
+            return non_overfit[-1].best_params
+        # Fallback: the globally best parameter set
+        return self.best_params
+
+
+class SimpleWalkForwardOptimizer:
+    """
+    Walk-forward parameter optimiser using exhaustive grid search.
+
+    No external dependencies beyond *pandas* and *numpy* — works out of the
+    box alongside the rest of the NIJA bot.
+
+    This class automatically tunes strategy parameters over time by:
+    1. Splitting historical data into rolling train / test windows.
+    2. Running a grid search over the supplied parameter space on each
+       training window.
+    3. Evaluating the best parameters on the unseen test window.
+    4. Rolling forward and repeating.
+    5. Returning the most stable parameters that generalise well.
+
+    Usage::
+
+        param_grid = {
+            'rsi_oversold': [25, 30, 35],
+            'rsi_overbought': [65, 70, 75],
+            'min_confirmations': [2, 3],
+        }
+
+        def my_backtest(params: dict, data: pd.DataFrame) -> dict:
+            # run backtest on *data* using *params*
+            # must return a dict with at least 'sharpe_ratio', 'win_rate',
+            # 'profit_factor', 'max_drawdown' keys.
+            ...
+
+        optimizer = SimpleWalkForwardOptimizer(param_grid)
+        result = optimizer.run(historical_df, my_backtest)
+        live_params = result.get_recommended_params()
+    """
+
+    def __init__(
+        self,
+        param_grid: Dict[str, List[Any]],
+        config: Optional[Dict] = None,
+    ):
+        """
+        Args:
+            param_grid: Mapping of parameter name → list of candidate values.
+                        All combinations are evaluated via grid search.
+            config: Optional configuration overrides:
+                - ``train_window_days``   (int, default 90)
+                - ``test_window_days``    (int, default 30)
+                - ``step_days``           (int, default 30)
+                - ``efficiency_threshold``(float, default 0.70)
+                - ``fitness_weights``     (dict, default below)
+        """
+        self.param_grid = param_grid
+        self.config = config or {}
+
+        self.train_window_days = self.config.get("train_window_days", 90)
+        self.test_window_days = self.config.get("test_window_days", 30)
+        self.step_days = self.config.get("step_days", 30)
+        self.efficiency_threshold = self.config.get("efficiency_threshold", 0.70)
+
+        # Fitness function weights (Sharpe 40 %, profit factor 30 %,
+        # win rate 20 %, low drawdown 10 %)
+        default_weights = {
+            "sharpe_ratio": 0.40,
+            "profit_factor": 0.30,
+            "win_rate": 0.20,
+            "max_drawdown": 0.10,
+        }
+        self.fitness_weights = self.config.get("fitness_weights", default_weights)
+
+        # Compute grid size once for logging; combinations are generated lazily
+        # during each grid search so that large param spaces don't pre-allocate
+        # memory unnecessarily.
+        self._grid_size: int = 1
+        for v in self.param_grid.values():
+            self._grid_size *= len(v)
+
+        logger.info("📐 SimpleWalkForwardOptimizer initialised")
+        logger.info(f"   Train window : {self.train_window_days} days")
+        logger.info(f"   Test  window : {self.test_window_days} days")
+        logger.info(f"   Step  size   : {self.step_days} days")
+        logger.info(f"   Grid  size   : {self._grid_size:,} combinations")
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def run(
+        self,
+        data: pd.DataFrame,
+        backtest_fn: Callable[[Dict[str, Any], pd.DataFrame], Dict[str, float]],
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> "SimpleWFOResult":
+        """
+        Execute the walk-forward optimisation.
+
+        Args:
+            data: Historical OHLCV DataFrame with a :class:`~pandas.DatetimeIndex`.
+            backtest_fn: ``fn(params, data) -> metrics`` where *metrics* is a
+                dictionary containing at minimum:
+                ``sharpe_ratio``, ``win_rate``, ``profit_factor``,
+                ``max_drawdown``.
+            start_date: Start of the optimisation period (defaults to first row).
+            end_date:   End   of the optimisation period (defaults to last row).
+
+        Returns:
+            :class:`SimpleWFOResult` containing per-window results and the
+            aggregated recommended parameter set.
+        """
+        if start_date is None:
+            start_date = data.index[0]
+        if end_date is None:
+            end_date = data.index[-1]
+
+        logger.info(
+            f"🚀 SimpleWFO: {start_date.date()} → {end_date.date()}, "
+            f"{self._grid_size:,} combinations/window"
+        )
+
+        windows: List[SimpleWFOWindow] = []
+        window_id = 0
+        current_train_start = start_date
+
+        while True:
+            train_end = current_train_start + timedelta(days=self.train_window_days)
+            test_start = train_end
+            test_end = test_start + timedelta(days=self.test_window_days)
+
+            if test_end > end_date:
+                break
+
+            train_data = data[(data.index >= current_train_start) & (data.index < train_end)]
+            test_data = data[(data.index >= test_start) & (data.index < test_end)]
+
+            if train_data.empty or test_data.empty:
+                current_train_start += timedelta(days=self.step_days)
+                window_id += 1
+                continue
+
+            logger.info(
+                f"  📊 Window {window_id}: "
+                f"train [{current_train_start.date()}→{train_end.date()}], "
+                f"test  [{test_start.date()}→{test_end.date()}]"
+            )
+
+            # Grid search on training data
+            best_params, train_score = self._grid_search(train_data, backtest_fn)
+
+            if not best_params:
+                logger.warning(f"    ⚠️ No valid params found in window {window_id} – skipping")
+                current_train_start += timedelta(days=self.step_days)
+                window_id += 1
+                continue
+
+            # Out-of-sample evaluation
+            try:
+                test_metrics = backtest_fn(best_params, test_data)
+                test_score = self._score(test_metrics)
+            except Exception as exc:
+                logger.debug(f"    Out-of-sample eval failed for window {window_id}: {exc}")
+                current_train_start += timedelta(days=self.step_days)
+                window_id += 1
+                continue
+
+            efficiency = test_score / train_score if train_score > 0 else 0.0
+
+            flag = "⚠️ OVERFIT" if efficiency < self.efficiency_threshold else "✅"
+            logger.info(
+                f"    {flag}  train={train_score:.4f}  test={test_score:.4f}  "
+                f"efficiency={efficiency:.1%}"
+            )
+
+            windows.append(
+                SimpleWFOWindow(
+                    window_id=window_id,
+                    train_start=current_train_start,
+                    train_end=train_end,
+                    test_start=test_start,
+                    test_end=test_end,
+                    best_params=best_params,
+                    train_score=train_score,
+                    test_score=test_score,
+                    efficiency_ratio=efficiency,
+                )
+            )
+
+            current_train_start += timedelta(days=self.step_days)
+            window_id += 1
+
+        return self._aggregate(windows)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _grid_search(
+        self,
+        data: pd.DataFrame,
+        backtest_fn: Callable,
+    ) -> tuple:
+        """Return (best_params, best_score) from an exhaustive grid search."""
+        best_params: Dict[str, Any] = {}
+        best_score: float = -np.inf
+
+        # Iterate lazily to avoid materialising the full Cartesian product
+        # in memory when the parameter space is very large.
+        keys = list(self.param_grid.keys())
+        for values in itertools.product(*self.param_grid.values()):
+            params = dict(zip(keys, values))
+            try:
+                metrics = backtest_fn(params, data)
+                score = self._score(metrics)
+            except Exception as exc:
+                logger.debug(f"    Grid eval failed for {params}: {exc}")
+                continue
+
+            if score > best_score:
+                best_score = score
+                best_params = params.copy()
+
+        return best_params, best_score
+
+    def _score(self, metrics: Dict[str, float]) -> float:
+        """Weighted fitness score from a backtest metrics dictionary."""
+        w = self.fitness_weights
+        sharpe = metrics.get("sharpe_ratio", 0.0)
+        pf = metrics.get("profit_factor", 1.0)
+        wr = metrics.get("win_rate", 0.5)
+        dd = metrics.get("max_drawdown", 0.0)
+
+        score = (
+            sharpe * w.get("sharpe_ratio", 0.40)
+            + (pf - 1.0) * w.get("profit_factor", 0.30)
+            + wr * w.get("win_rate", 0.20)
+            + (1.0 - min(abs(dd), 1.0)) * w.get("max_drawdown", 0.10)
+        )
+        return max(score, 0.0)
+
+    def _aggregate(self, windows: List[SimpleWFOWindow]) -> SimpleWFOResult:
+        """Aggregate per-window results into a :class:`SimpleWFOResult`."""
+        if not windows:
+            return SimpleWFOResult(windows=[])
+
+        valid = [w for w in windows if w.best_params]
+        non_overfit = [w for w in valid if not w.is_overfit(self.efficiency_threshold)]
+
+        avg_train = float(np.mean([w.train_score for w in valid])) if valid else 0.0
+        avg_test = float(np.mean([w.test_score for w in valid])) if valid else 0.0
+        avg_eff = float(np.mean([w.efficiency_ratio for w in valid])) if valid else 0.0
+        overfit_count = len(valid) - len(non_overfit)
+
+        # Best parameters: highest test score among non-overfit windows
+        if non_overfit:
+            best_window = max(non_overfit, key=lambda w: w.test_score)
+            best_params = best_window.best_params
+        elif valid:
+            best_window = max(valid, key=lambda w: w.test_score)
+            best_params = best_window.best_params
+            logger.warning("⚠️  All windows overfit – returning best available params")
+        else:
+            best_params = {}
+
+        # Parameter stability: std / mean per parameter (lower = more stable)
+        param_stability: Dict[str, float] = {}
+        if valid and valid[0].best_params:
+            for key in valid[0].best_params:
+                vals = [w.best_params[key] for w in valid if key in w.best_params]
+                if len(vals) >= 2:
+                    mean_v = float(np.mean(vals))
+                    std_v = float(np.std(vals))
+                    cv = std_v / mean_v if mean_v != 0 else float("inf")
+                    param_stability[key] = round(1.0 / (1.0 + cv), 4)
+                else:
+                    param_stability[key] = 1.0
+
+        result = SimpleWFOResult(
+            windows=windows,
+            best_params=best_params,
+            avg_train_score=avg_train,
+            avg_test_score=avg_test,
+            avg_efficiency_ratio=avg_eff,
+            total_windows=len(windows),
+            overfit_windows=overfit_count,
+            parameter_stability=param_stability,
+        )
+
+        logger.info("=" * 60)
+        logger.info("📊 SimpleWFO RESULTS")
+        logger.info(f"   Windows: {result.total_windows}  |  Overfit: {result.overfit_windows}")
+        logger.info(f"   Avg train score : {result.avg_train_score:.4f}")
+        logger.info(f"   Avg test  score : {result.avg_test_score:.4f}")
+        logger.info(f"   Avg efficiency  : {result.avg_efficiency_ratio:.1%}")
+        logger.info(f"   Best params     : {result.best_params}")
+        logger.info("=" * 60)
+
+        return result
