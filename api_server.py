@@ -838,6 +838,46 @@ def get_simulation_status():
 # User Take-Profit / Stop-Loss Rules Endpoints
 # ========================================
 
+def _normalize_trigger_pct(value: float, rule_type: str) -> float:
+    """
+    Normalize trigger_pct to internal percentage format (1–100 scale).
+
+    Accepts two input formats:
+      - Fractional: 0.10 (= 10%), -0.10 (= -10% for stop-loss)
+      - Percentage: 10.0 (= 10%)
+
+    For stop-loss, the input may be negative (fractional) or positive (percentage).
+    Returns the absolute percentage value (e.g. 10.0 for a -10% stop).
+    """
+    if rule_type == RULE_TYPE_STOP_LOSS:
+        # Accept negative fractional (-0.10 → 10) or positive percentage (10.0 → 10)
+        abs_val = abs(value)
+        if 0 < abs_val <= 1.0:
+            return abs_val * 100.0
+        return abs_val
+    else:
+        # take_profit / trailing_stop: positive only
+        if 0 < value <= 1.0:
+            return value * 100.0
+        return value
+
+
+def _normalize_sell_pct(value: float) -> float:
+    """
+    Normalize sell_pct to internal percentage format (1–100 scale).
+
+    Accepts:
+      - Fractional: 0.25 (= 25%), 1.0 (= 100%)
+      - Percentage: 25.0 (= 25%), 100.0 (= 100%)
+
+    Raises ValueError if the normalized value is not in the range (0, 100].
+    """
+    normalized = value * 100.0 if 0 < value <= 1.0 else value
+    if not (0 < normalized <= 100):
+        raise ValueError(f"sell_pct must be between 0 and 100 (exclusive of 0), got {value}")
+    return normalized
+
+
 @app.route('/api/rules', methods=['GET'])
 @require_auth
 def list_rules():
@@ -891,12 +931,18 @@ def add_take_profit_rule():
 
     Request body (JSON):
         {
-            "symbol":      "1INCH-USD",   // optional; omit to apply to all symbols
-            "trigger_pct": 20.0,          // sell when position gains this % (e.g. 20 = +20%)
-            "sell_pct":    50.0           // sell this % of the position (1-100)
+            "symbol":             "1INCH-USD",  // optional; omit (or null) to apply to all symbols
+            "trigger_pct":        0.10,          // sell when position gains this % —
+                                                 //   fractional (0.10 = +10%) or percentage (10.0 = +10%)
+            "sell_pct":           0.25,          // sell this fraction/% of the position —
+                                                 //   fractional (0.25 = 25%) or percentage (25.0 = 25%)
+            "lock_to_stablecoin": false          // optional; when true, proceeds are flagged
+                                                 //   for conversion to USDC/USDT
         }
 
-    Example: "Sell 50% of my 1INCH position if it gains 20%."
+    Example: "Sell 25% of all positions if they gain 10%."
+        POST /api/rules/take-profit
+        {"trigger_pct": 0.10, "sell_pct": 0.25, "symbol": null}
 
     Returns:
         201 with the created rule object.
@@ -908,9 +954,9 @@ def add_take_profit_rule():
         return jsonify({'error': 'Request body is required'}), 400
 
     if 'trigger_pct' not in data:
-        return jsonify({'error': 'trigger_pct is required (e.g. 20.0 for +20%)'}), 400
+        return jsonify({'error': 'trigger_pct is required (e.g. 0.10 for +10%, or 10.0 for +10%)'}), 400
     if 'sell_pct' not in data:
-        return jsonify({'error': 'sell_pct is required (e.g. 50.0 to sell half the position)'}), 400
+        return jsonify({'error': 'sell_pct is required (e.g. 0.25 for 25%, or 25.0 for 25%)'}), 400
 
     try:
         trigger_pct = float(data['trigger_pct'])
@@ -918,7 +964,20 @@ def add_take_profit_rule():
     except (TypeError, ValueError):
         return jsonify({'error': 'trigger_pct and sell_pct must be numeric'}), 400
 
+    lock_to_stablecoin = bool(data.get('lock_to_stablecoin', False))
     symbol = data.get('symbol')
+
+    # Normalize to internal percentage format (1–100 scale), then validate
+    trigger_pct = _normalize_trigger_pct(trigger_pct, RULE_TYPE_TAKE_PROFIT)
+    if trigger_pct <= 0:
+        return jsonify({'error': 'trigger_pct must be positive (e.g. 0.10 for +10%, or 10.0 for +10%)'}), 400
+    if trigger_pct > 10000:
+        return jsonify({'error': 'trigger_pct is unreasonably large; check your input format'}), 400
+
+    try:
+        sell_pct = _normalize_sell_pct(sell_pct)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     try:
         engine = get_user_rules_engine()
@@ -927,6 +986,7 @@ def add_take_profit_rule():
             trigger_pct=trigger_pct,
             sell_pct=sell_pct,
             symbol=symbol,
+            lock_to_stablecoin=lock_to_stablecoin,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
@@ -934,8 +994,8 @@ def add_take_profit_rule():
         logger.error("Failed to add take-profit rule for %s: %s", user_id, exc)
         return jsonify({'error': 'Failed to add rule'}), 500
 
-    logger.info("Take-profit rule added: user=%s symbol=%s trigger=%.1f%% sell=%.0f%%",
-                user_id, symbol or 'all', trigger_pct, sell_pct)
+    logger.info("Take-profit rule added: user=%s symbol=%s trigger=%.1f%% sell=%.0f%% lock_stable=%s",
+                user_id, symbol or 'all', trigger_pct, sell_pct, lock_to_stablecoin)
     return jsonify({
         'message': 'Take-profit rule added successfully',
         'rule': rule.to_dict(),
@@ -950,12 +1010,19 @@ def add_stop_loss_rule():
 
     Request body (JSON):
         {
-            "symbol":      "AI3-USD",  // optional; omit to apply to all symbols
-            "trigger_pct": 30.0,       // sell when position is down this % (e.g. 30 = -30%)
-            "sell_pct":    100.0       // sell this % of the position (1-100)
+            "symbol":             "AI3-USD",  // optional; omit (or null) to apply to all symbols
+            "trigger_pct":        -0.10,       // sell when position is down this % —
+                                               //   negative fractional (-0.10 = -10%) or
+                                               //   positive percentage (10.0 = -10%)
+            "sell_pct":           1.0,         // sell this fraction/% of the position —
+                                               //   fractional (1.0 = 100%) or percentage (100.0)
+            "lock_to_stablecoin": false        // optional; when true, proceeds are flagged
+                                               //   for conversion to USDC/USDT
         }
 
-    Example: "Sell 100% of AI3 if it drops 30% below entry."
+    Example: "Sell 100% of all positions if they drop 10%."
+        POST /api/rules/stop-loss
+        {"trigger_pct": -0.10, "sell_pct": 1.0, "symbol": null}
 
     Returns:
         201 with the created rule object.
@@ -967,9 +1034,9 @@ def add_stop_loss_rule():
         return jsonify({'error': 'Request body is required'}), 400
 
     if 'trigger_pct' not in data:
-        return jsonify({'error': 'trigger_pct is required (e.g. 30.0 for -30%)'}), 400
+        return jsonify({'error': 'trigger_pct is required (e.g. -0.10 for -10%, or 10.0 for -10%)'}), 400
     if 'sell_pct' not in data:
-        return jsonify({'error': 'sell_pct is required (e.g. 100.0 to sell the full position)'}), 400
+        return jsonify({'error': 'sell_pct is required (e.g. 1.0 for 100%, or 100.0 for 100%)'}), 400
 
     try:
         trigger_pct = float(data['trigger_pct'])
@@ -977,7 +1044,20 @@ def add_stop_loss_rule():
     except (TypeError, ValueError):
         return jsonify({'error': 'trigger_pct and sell_pct must be numeric'}), 400
 
+    lock_to_stablecoin = bool(data.get('lock_to_stablecoin', False))
     symbol = data.get('symbol')
+
+    # Normalize to internal positive percentage format (1–100 scale), then validate
+    trigger_pct = _normalize_trigger_pct(trigger_pct, RULE_TYPE_STOP_LOSS)
+    if trigger_pct <= 0:
+        return jsonify({'error': 'trigger_pct must be non-zero (e.g. -0.10 or 10.0 for a 10% stop)'}), 400
+    if trigger_pct > 10000:
+        return jsonify({'error': 'trigger_pct is unreasonably large; check your input format'}), 400
+
+    try:
+        sell_pct = _normalize_sell_pct(sell_pct)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     try:
         engine = get_user_rules_engine()
@@ -986,6 +1066,7 @@ def add_stop_loss_rule():
             trigger_pct=trigger_pct,
             sell_pct=sell_pct,
             symbol=symbol,
+            lock_to_stablecoin=lock_to_stablecoin,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
@@ -993,8 +1074,8 @@ def add_stop_loss_rule():
         logger.error("Failed to add stop-loss rule for %s: %s", user_id, exc)
         return jsonify({'error': 'Failed to add rule'}), 500
 
-    logger.info("Stop-loss rule added: user=%s symbol=%s trigger=%.1f%% sell=%.0f%%",
-                user_id, symbol or 'all', trigger_pct, sell_pct)
+    logger.info("Stop-loss rule added: user=%s symbol=%s trigger=%.1f%% sell=%.0f%% lock_stable=%s",
+                user_id, symbol or 'all', trigger_pct, sell_pct, lock_to_stablecoin)
     return jsonify({
         'message': 'Stop-loss rule added successfully',
         'rule': rule.to_dict(),
@@ -1014,12 +1095,17 @@ def add_trailing_stop_rule():
 
     Request body (JSON):
         {
-            "symbol":    "BTC-USD",  // optional; omit to apply to all symbols
-            "trail_pct": 5.0,        // sell when price falls this % from peak
-            "sell_pct":  100.0       // sell this % of position when triggered (1-100)
+            "symbol":             "BTC-USD",  // optional; omit (or null) to apply to all symbols
+            "trail_pct":          5.0,         // sell when price falls this % from peak (percentage)
+            "sell_pct":           1.0,         // sell this fraction/% of position when triggered —
+                                               //   fractional (1.0 = 100%) or percentage (100.0)
+            "lock_to_stablecoin": false        // optional; when true, proceeds are flagged
+                                               //   for conversion to USDC/USDT
         }
 
-    Example: "Sell 100% of BTC if it drops 5% from its highest price."
+    Example: "Sell 100% of all positions if price drops 5% from the highest seen."
+        POST /api/rules/trailing-stop
+        {"trail_pct": 5, "sell_pct": 1.0, "symbol": null}
 
     Returns:
         201 with the created rule object.
@@ -1033,7 +1119,7 @@ def add_trailing_stop_rule():
     if 'trail_pct' not in data:
         return jsonify({'error': 'trail_pct is required (e.g. 5.0 for a 5% trailing stop)'}), 400
     if 'sell_pct' not in data:
-        return jsonify({'error': 'sell_pct is required (e.g. 100.0 to close the full position)'}), 400
+        return jsonify({'error': 'sell_pct is required (e.g. 1.0 for 100%, or 100.0 for 100%)'}), 400
 
     try:
         trail_pct = float(data['trail_pct'])
@@ -1041,7 +1127,14 @@ def add_trailing_stop_rule():
     except (TypeError, ValueError):
         return jsonify({'error': 'trail_pct and sell_pct must be numeric'}), 400
 
+    lock_to_stablecoin = bool(data.get('lock_to_stablecoin', False))
     symbol = data.get('symbol')
+
+    # Normalize sell_pct to internal percentage format (1–100 scale)
+    try:
+        sell_pct = _normalize_sell_pct(sell_pct)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     try:
         engine = get_user_rules_engine()
@@ -1050,6 +1143,7 @@ def add_trailing_stop_rule():
             trail_pct=trail_pct,
             sell_pct=sell_pct,
             symbol=symbol,
+            lock_to_stablecoin=lock_to_stablecoin,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
@@ -1057,8 +1151,8 @@ def add_trailing_stop_rule():
         logger.error("Failed to add trailing-stop rule for %s: %s", user_id, exc)
         return jsonify({'error': 'Failed to add rule'}), 500
 
-    logger.info("Trailing-stop rule added: user=%s symbol=%s trail=%.1f%% sell=%.0f%%",
-                user_id, symbol or 'all', trail_pct, sell_pct)
+    logger.info("Trailing-stop rule added: user=%s symbol=%s trail=%.1f%% sell=%.0f%% lock_stable=%s",
+                user_id, symbol or 'all', trail_pct, sell_pct, lock_to_stablecoin)
     return jsonify({
         'message': 'Trailing-stop rule added successfully',
         'rule': rule.to_dict(),
@@ -1077,11 +1171,15 @@ def add_portfolio_rebalance_rule():
 
     Request body (JSON):
         {
-            "symbol":           "ETH-USD",  // optional; omit to apply to all symbols
-            "max_portfolio_pct": 20.0       // trim if position grows above this % of portfolio
+            "symbol":             "ETH-USD",  // optional; omit (or null) to apply to all symbols
+            "max_portfolio_pct":  20.0,        // trim if position grows above this % of portfolio
+            "lock_to_stablecoin": false        // optional; when true, proceeds are flagged
+                                               //   for conversion to USDC/USDT
         }
 
     Example: "Trim any single holding that grows above 20% of my portfolio."
+        POST /api/rules/portfolio-rebalance
+        {"max_portfolio_pct": 20, "symbol": null}
 
     Returns:
         201 with the created rule object.
@@ -1100,6 +1198,7 @@ def add_portfolio_rebalance_rule():
     except (TypeError, ValueError):
         return jsonify({'error': 'max_portfolio_pct must be numeric'}), 400
 
+    lock_to_stablecoin = bool(data.get('lock_to_stablecoin', False))
     symbol = data.get('symbol')
 
     try:
@@ -1108,6 +1207,7 @@ def add_portfolio_rebalance_rule():
             user_id=user_id,
             max_portfolio_pct=max_portfolio_pct,
             symbol=symbol,
+            lock_to_stablecoin=lock_to_stablecoin,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
@@ -1115,15 +1215,15 @@ def add_portfolio_rebalance_rule():
         logger.error("Failed to add portfolio-rebalance rule for %s: %s", user_id, exc)
         return jsonify({'error': 'Failed to add rule'}), 500
 
-    logger.info("Portfolio-rebalance rule added: user=%s symbol=%s max_pct=%.1f%%",
-                user_id, symbol or 'all', max_portfolio_pct)
+    logger.info("Portfolio-rebalance rule added: user=%s symbol=%s max_pct=%.1f%% lock_stable=%s",
+                user_id, symbol or 'all', max_portfolio_pct, lock_to_stablecoin)
     return jsonify({
         'message': 'Portfolio-rebalance rule added successfully',
         'rule': rule.to_dict(),
     }), 201
 
 
-
+@app.route('/api/rules/<rule_id>', methods=['GET', 'DELETE'])
 @require_auth
 def manage_rule(rule_id: str):
     """
