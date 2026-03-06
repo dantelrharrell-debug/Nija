@@ -1250,6 +1250,153 @@ def manage_rule(rule_id: str):
 
 
 # ========================================
+# Portfolio Profit Engine Endpoints
+# ========================================
+
+def _get_ppe():
+    """Return the global PortfolioProfitEngine singleton."""
+    try:
+        from bot.portfolio_profit_engine import get_portfolio_profit_engine
+        return get_portfolio_profit_engine()
+    except ImportError:
+        from portfolio_profit_engine import get_portfolio_profit_engine
+        return get_portfolio_profit_engine()
+
+
+@app.route('/api/portfolio/profit', methods=['GET'])
+@require_auth
+def get_portfolio_profit(user_id: str):
+    """
+    GET /api/portfolio/profit
+    Returns the current TOTAL PORTFOLIO PROFIT summary.
+    """
+    try:
+        engine = _get_ppe()
+        summary = engine.get_summary()
+        return jsonify({'success': True, 'data': summary})
+    except Exception as exc:
+        logger.error("Error fetching portfolio profit: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/profit/report', methods=['GET'])
+@require_auth
+def get_portfolio_profit_report(user_id: str):
+    """
+    GET /api/portfolio/profit/report
+    Returns a human-readable portfolio profit report.
+    """
+    try:
+        engine = _get_ppe()
+        report = engine.get_report()
+        return jsonify({'success': True, 'report': report})
+    except Exception as exc:
+        logger.error("Error generating portfolio profit report: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/profit/trades', methods=['GET'])
+@require_auth
+def get_portfolio_trade_log(user_id: str):
+    """
+    GET /api/portfolio/profit/trades?limit=50
+    Returns the most recent trade records captured by the profit engine.
+    """
+    try:
+        limit = int(request.args.get('limit', 50))
+        engine = _get_ppe()
+        trades = engine.get_trade_log(limit=limit)
+        return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
+    except Exception as exc:
+        logger.error("Error fetching portfolio trade log: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/profit/harvest', methods=['POST'])
+@require_auth
+def harvest_portfolio_profit(user_id: str):
+    """
+    POST /api/portfolio/profit/harvest
+    Body (JSON, optional): {"amount": 100.0, "note": "manual harvest"}
+    Harvests (withdraws) accumulated portfolio profits.
+    If "amount" is omitted, all available profit is harvested.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        amount = body.get('amount', None)
+        note = body.get('note', f'Harvested by user {user_id}')
+
+        if amount is not None:
+            amount = float(amount)
+            if amount <= 0:
+                return jsonify({'error': 'amount must be positive'}), 400
+
+        engine = _get_ppe()
+        harvested = engine.harvest_profits(amount=amount, note=note)
+        summary = engine.get_summary()
+
+        logger.info("Profit harvest: user=%s amount=%.2f", user_id, harvested)
+        return jsonify({
+            'success': True,
+            'harvested_usd': harvested,
+            'available_to_harvest': summary['available_to_harvest'],
+            'total_harvested': summary['harvested_profit'],
+        })
+    except Exception as exc:
+        logger.error("Error harvesting profit: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/profit/harvest/log', methods=['GET'])
+@require_auth
+def get_harvest_log(user_id: str):
+    """
+    GET /api/portfolio/profit/harvest/log
+    Returns all harvest events for the current epoch.
+    """
+    try:
+        engine = _get_ppe()
+        log = engine.get_harvest_log()
+        return jsonify({'success': True, 'harvest_log': log, 'count': len(log)})
+    except Exception as exc:
+        logger.error("Error fetching harvest log: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/portfolio/reset', methods=['POST'])
+@require_auth
+def reset_portfolio(user_id: str):
+    """
+    POST /api/portfolio/reset
+    Body (JSON, optional): {"new_base_capital": 5000.0}
+    Resets the portfolio profit tracker, starting a new epoch.
+    Returns a summary of the completed epoch.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        new_base_capital = float(body.get('new_base_capital', 0.0))
+
+        engine = _get_ppe()
+        old_epoch_summary = engine.reset_portfolio(new_base_capital=new_base_capital)
+
+        logger.info(
+            "Portfolio reset by user=%s, new epoch=%s, base_capital=%.2f",
+            user_id,
+            engine.get_summary()['epoch'],
+            new_base_capital,
+        )
+        return jsonify({
+            'success': True,
+            'message': 'Portfolio reset successfully. New epoch started.',
+            'new_epoch': engine.get_summary()['epoch'],
+            'previous_epoch_summary': old_epoch_summary,
+        })
+    except Exception as exc:
+        logger.error("Error resetting portfolio: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+# ========================================
 # Main Entry Point
 # ========================================
 

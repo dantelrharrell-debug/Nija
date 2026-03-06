@@ -6867,6 +6867,21 @@ class TradingStrategy:
             except Exception as e:
                 logger.warning(f"Failed to record trade in market adapter: {e}")
 
+        # Record with Portfolio Profit Engine for total portfolio profit tracking
+        try:
+            from portfolio_profit_engine import get_portfolio_profit_engine
+            _ppe = get_portfolio_profit_engine()
+            _ppe.record_trade(symbol=symbol, pnl_usd=profit_usd, is_win=is_win)
+        except ImportError:
+            try:
+                from bot.portfolio_profit_engine import get_portfolio_profit_engine
+                _ppe = get_portfolio_profit_engine()
+                _ppe.record_trade(symbol=symbol, pnl_usd=profit_usd, is_win=is_win)
+            except ImportError:
+                logger.debug("Portfolio Profit Engine not available — skipping portfolio profit recording")
+        except Exception as e:
+            logger.warning(f"Failed to record trade in Portfolio Profit Engine: {e}")
+
         # Record with advanced manager (original functionality)
         if not self.advanced_manager:
             return
