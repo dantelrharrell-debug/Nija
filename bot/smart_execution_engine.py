@@ -189,7 +189,11 @@ CRYPTO_VOLUME_PROFILE = [
     0.053, 0.051, 0.049, 0.047, 0.046, 0.049,
     0.051, 0.053, 0.049, 0.046, 0.041, 0.036,
 ]
-assert abs(sum(CRYPTO_VOLUME_PROFILE) - 1.0) < 0.01, f"Profile sums to {sum(CRYPTO_VOLUME_PROFILE):.4f}"
+_profile_sum = sum(CRYPTO_VOLUME_PROFILE)
+if abs(_profile_sum - 1.0) >= 0.01:
+    raise ValueError(
+        f"CRYPTO_VOLUME_PROFILE must sum to 1.0 (±0.01); got {_profile_sum:.4f}"
+    )
 
 
 def _volume_weight_for_interval(start: datetime, interval_minutes: int) -> float:

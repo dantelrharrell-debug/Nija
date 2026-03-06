@@ -112,6 +112,17 @@ class AuditRecord:
     checksum:   str = ""
 
     def compute_checksum(self) -> str:
+        """
+        Compute a SHA-256 digest of this record's content fields.
+
+        Security note: This checksum provides **tamper detection**, not
+        cryptographic authentication.  An adversary with write access to
+        the log file could recompute and replace the checksum.  For
+        stronger guarantees, chain each record's checksum into the next
+        (Merkle-tree style) or sign the log with a private key.  The
+        current design is sufficient for detecting accidental corruption
+        and casual tampering in an operational audit context.
+        """
         payload = json.dumps(
             {"event_id": self.event_id, "event_type": self.event_type,
              "timestamp": self.timestamp, "symbol": self.symbol,

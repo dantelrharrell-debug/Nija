@@ -455,8 +455,15 @@ class MultiAssetExecutor:
     def _record_position(self, result: ExecutionResult, signal: Dict) -> None:
         side = "LONG" if result.action == "BUY" else "SHORT"
         price = result.filled_price or 0.0
-        stop = price * (1 - signal.get("stop_loss_pct", 0.03)) if side == "LONG" else price * (1 + signal.get("stop_loss_pct", 0.03))
-        tp   = price * (1 + signal.get("take_profit_pct", 0.06)) if side == "LONG" else price * (1 - signal.get("take_profit_pct", 0.06))
+        sl_pct = signal.get("stop_loss_pct", 0.03)
+        tp_pct = signal.get("take_profit_pct", 0.06)
+
+        if side == "LONG":
+            stop = price * (1 - sl_pct)   # stop below entry for longs
+            tp   = price * (1 + tp_pct)   # target above entry for longs
+        else:
+            stop = price * (1 + sl_pct)   # stop above entry for shorts
+            tp   = price * (1 - tp_pct)   # target below entry for shorts
 
         position = AssetPosition(
             symbol=result.symbol,

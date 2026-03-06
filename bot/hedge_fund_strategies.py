@@ -327,9 +327,11 @@ class StatisticalArbitrageStrategy:
         """OLS hedge ratio β: a ≈ β·b + ε"""
         if len(a) < 10 or len(b) < 10:
             return 1.0
-        b_vals = b.values.reshape(-1, 1)
-        a_vals = a.values
-        beta = float(np.linalg.lstsq(np.hstack([b_vals, np.ones_like(b_vals)]), a_vals, rcond=None)[0][0])
+        # OLS regression: a ≈ β·b + α  (design matrix = [b | 1])
+        # lstsq returns [β, α, ...]; we take index [0] = β (hedge ratio)
+        design_matrix = np.hstack([b.values.reshape(-1, 1), np.ones((len(b), 1))])
+        coefficients, _, _, _ = np.linalg.lstsq(design_matrix, a.values, rcond=None)
+        beta = float(coefficients[0])   # index 0 is β; index 1 would be intercept α
         return beta
 
     def generate_signal(
