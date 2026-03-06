@@ -441,7 +441,7 @@ class GlobalRiskController:
             Current account balance in USD (or account currency).
         """
         with self._lock:
-            # Initialise peak
+            # Initialize peak
             if self._peak_balance is None:
                 self._peak_balance = current_balance
 
