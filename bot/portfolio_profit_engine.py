@@ -101,8 +101,8 @@ class PortfolioProfitState:
     @property
     def profit_factor(self) -> float:
         if self.total_gross_loss > 0:
-            return self.total_gross_profit / self.total_gross_loss
-        return float('inf') if self.total_gross_profit > 0 else 0.0
+            return round(self.total_gross_profit / self.total_gross_loss, 4)
+        return 999.99 if self.total_gross_profit > 0 else 0.0
 
     def to_dict(self) -> Dict:
         d = asdict(self)
@@ -139,7 +139,7 @@ class PortfolioProfitEngine:
     DEFAULT_COMPOUND_RATE = 0.75
 
     def __init__(self, base_capital: float = 0.0, compound_rate: float = DEFAULT_COMPOUND_RATE):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.compound_rate = max(0.0, min(1.0, compound_rate))
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
 

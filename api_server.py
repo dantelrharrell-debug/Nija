@@ -1255,12 +1255,8 @@ def manage_rule(rule_id: str):
 
 def _get_ppe():
     """Return the global PortfolioProfitEngine singleton."""
-    try:
-        from bot.portfolio_profit_engine import get_portfolio_profit_engine
-        return get_portfolio_profit_engine()
-    except ImportError:
-        from portfolio_profit_engine import get_portfolio_profit_engine
-        return get_portfolio_profit_engine()
+    from bot.portfolio_profit_engine import get_portfolio_profit_engine
+    return get_portfolio_profit_engine()
 
 
 @app.route('/api/portfolio/profit', methods=['GET'])
@@ -1412,3 +1408,178 @@ if __name__ == '__main__':
         port=port,
         debug=debug
     )
+
+
+# ========================================
+# Self-Learning Strategy Allocator Endpoints
+# ========================================
+
+def _get_sla():
+    """Return the global SelfLearningStrategyAllocator singleton."""
+    from bot.self_learning_strategy_allocator import get_self_learning_allocator
+    return get_self_learning_allocator()
+
+
+@app.route('/api/strategy/allocations', methods=['GET'])
+@require_auth
+def get_strategy_allocations(user_id: str):
+    """
+    GET /api/strategy/allocations
+    Returns current capital allocation weights for all strategies.
+    """
+    try:
+        allocator = _get_sla()
+        return jsonify({'success': True, 'allocations': allocator.get_weights()})
+    except Exception as exc:
+        logger.error("Error fetching strategy allocations: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/strategy/stats', methods=['GET'])
+@require_auth
+def get_strategy_stats(user_id: str):
+    """
+    GET /api/strategy/stats?strategy=ApexTrend
+    Returns performance stats. Omit query param for all strategies.
+    """
+    try:
+        strategy = request.args.get('strategy')
+        allocator = _get_sla()
+        stats = allocator.get_stats(strategy=strategy)
+        return jsonify({'success': True, 'stats': stats})
+    except Exception as exc:
+        logger.error("Error fetching strategy stats: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/strategy/report', methods=['GET'])
+@require_auth
+def get_strategy_allocator_report(user_id: str):
+    """
+    GET /api/strategy/report
+    Returns a human-readable allocation report.
+    """
+    try:
+        allocator = _get_sla()
+        return jsonify({'success': True, 'report': allocator.get_report()})
+    except Exception as exc:
+        logger.error("Error generating strategy report: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/strategy/best', methods=['GET'])
+@require_auth
+def get_best_strategy(user_id: str):
+    """
+    GET /api/strategy/best
+    Returns the name of the highest-weighted strategy.
+    """
+    try:
+        allocator = _get_sla()
+        best = allocator.get_best_strategy()
+        weights = allocator.get_weights()
+        return jsonify({
+            'success': True,
+            'best_strategy': best,
+            'allocation': weights.get(best, 0.0) if best else 0.0,
+        })
+    except Exception as exc:
+        logger.error("Error fetching best strategy: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+# ========================================
+# Smart Drawdown Recovery Endpoints
+# ========================================
+
+def _get_sdr():
+    """Return the global SmartDrawdownRecovery singleton."""
+    from bot.smart_drawdown_recovery import get_smart_drawdown_recovery
+    return get_smart_drawdown_recovery()
+
+
+@app.route('/api/drawdown/status', methods=['GET'])
+@require_auth
+def get_drawdown_status(user_id: str):
+    """
+    GET /api/drawdown/status
+    Returns the current drawdown severity and recovery status.
+    """
+    try:
+        engine = _get_sdr()
+        status = engine.get_status()
+        can_trade, reason = engine.can_trade()
+        status['can_trade'] = can_trade
+        status['can_trade_reason'] = reason
+        return jsonify({'success': True, 'data': status})
+    except Exception as exc:
+        logger.error("Error fetching drawdown status: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/drawdown/report', methods=['GET'])
+@require_auth
+def get_drawdown_report(user_id: str):
+    """
+    GET /api/drawdown/report
+    Returns a human-readable drawdown recovery report.
+    """
+    try:
+        engine = _get_sdr()
+        return jsonify({'success': True, 'report': engine.get_report()})
+    except Exception as exc:
+        logger.error("Error generating drawdown report: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/drawdown/guidance', methods=['GET'])
+@require_auth
+def get_drawdown_guidance(user_id: str):
+    """
+    GET /api/drawdown/guidance
+    Returns current trading guidance: position-size multiplier,
+    profit-lock multiplier, preferred strategies.
+    """
+    try:
+        engine = _get_sdr()
+        guidance = {
+            'severity': engine.get_status()['severity'],
+            'in_recovery_mode': engine.get_status()['in_recovery_mode'],
+            'position_size_multiplier': engine.get_position_size_multiplier(),
+            'profit_lock_multiplier': engine.get_profit_lock_multiplier(),
+            'preferred_strategies': engine.get_preferred_strategies(),
+        }
+        can_trade, reason = engine.can_trade()
+        guidance['can_trade'] = can_trade
+        guidance['can_trade_reason'] = reason
+        return jsonify({'success': True, 'guidance': guidance})
+    except Exception as exc:
+        logger.error("Error fetching drawdown guidance: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/drawdown/capital', methods=['PUT'])
+@require_auth
+def update_drawdown_capital(user_id: str):
+    """
+    PUT /api/drawdown/capital
+    Body: {"current_capital": 4850.0}
+    Sync the drawdown engine with the latest account balance.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        capital = body.get('current_capital')
+        if capital is None:
+            return jsonify({'error': 'current_capital is required'}), 400
+        capital = float(capital)
+        engine = _get_sdr()
+        engine.update_capital(capital)
+        status = engine.get_status()
+        return jsonify({
+            'success': True,
+            'severity': status['severity'],
+            'drawdown_pct': status['drawdown_pct'],
+        })
+    except Exception as exc:
+        logger.error("Error updating drawdown capital: %s", exc)
+        return jsonify({'error': str(exc)}), 500

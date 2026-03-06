@@ -6869,18 +6869,57 @@ class TradingStrategy:
 
         # Record with Portfolio Profit Engine for total portfolio profit tracking
         try:
-            from portfolio_profit_engine import get_portfolio_profit_engine
+            from bot.portfolio_profit_engine import get_portfolio_profit_engine
             _ppe = get_portfolio_profit_engine()
             _ppe.record_trade(symbol=symbol, pnl_usd=profit_usd, is_win=is_win)
         except ImportError:
             try:
-                from bot.portfolio_profit_engine import get_portfolio_profit_engine
+                from portfolio_profit_engine import get_portfolio_profit_engine
                 _ppe = get_portfolio_profit_engine()
                 _ppe.record_trade(symbol=symbol, pnl_usd=profit_usd, is_win=is_win)
             except ImportError:
                 logger.debug("Portfolio Profit Engine not available — skipping portfolio profit recording")
         except Exception as e:
             logger.warning(f"Failed to record trade in Portfolio Profit Engine: {e}")
+
+        # Record with Self-Learning Strategy Allocator
+        try:
+            from bot.self_learning_strategy_allocator import get_self_learning_allocator
+            _sla = get_self_learning_allocator()
+            # Use "APEX_V71" as the strategy name for the APEX v7.1 strategy
+            _sla.record_trade(strategy="APEX_V71", pnl_usd=profit_usd, is_win=is_win)
+        except ImportError:
+            try:
+                from self_learning_strategy_allocator import get_self_learning_allocator
+                _sla = get_self_learning_allocator()
+                _sla.record_trade(strategy="APEX_V71", pnl_usd=profit_usd, is_win=is_win)
+            except ImportError:
+                logger.debug("Self-Learning Strategy Allocator not available")
+        except Exception as e:
+            logger.warning(f"Failed to record trade in Self-Learning Allocator: {e}")
+
+        # Record with Smart Drawdown Recovery engine
+        try:
+            from bot.smart_drawdown_recovery import get_smart_drawdown_recovery
+            _sdr = get_smart_drawdown_recovery()
+            _sdr_status = _sdr.get_status()
+            _sdr.update(
+                current_capital=_sdr_status["current_capital"] + profit_usd,
+                is_win=is_win,
+            )
+        except ImportError:
+            try:
+                from smart_drawdown_recovery import get_smart_drawdown_recovery
+                _sdr = get_smart_drawdown_recovery()
+                _sdr_status = _sdr.get_status()
+                _sdr.update(
+                    current_capital=_sdr_status["current_capital"] + profit_usd,
+                    is_win=is_win,
+                )
+            except ImportError:
+                logger.debug("Smart Drawdown Recovery not available")
+        except Exception as e:
+            logger.warning(f"Failed to update Smart Drawdown Recovery: {e}")
 
         # Record with advanced manager (original functionality)
         if not self.advanced_manager:
