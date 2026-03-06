@@ -282,7 +282,7 @@ class EnhancedBacktest:
             try:
                 regime = MarketRegime(regime_str)
                 self.regime_stats[regime]['trades'].append(trade)
-            except:
+            except Exception:
                 pass
 
         logger.info(f"Closed {exit_percentage*100:.0f}% of {position['side']} position: "

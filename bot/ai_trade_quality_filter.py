@@ -434,7 +434,7 @@ class AITradeQualityFilter:
         
         try:
             auc = roc_auc_score(y_test, y_pred_proba)
-        except:
+        except Exception:
             auc = 0.0
         
         self.model_accuracy = accuracy

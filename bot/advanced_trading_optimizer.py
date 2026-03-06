@@ -407,13 +407,13 @@ class AdvancedTradingOptimizer:
         if self.drawdown_protection:
             try:
                 summary['drawdown_status'] = self.drawdown_protection.get_status()
-            except:
+            except Exception:
                 pass
         
         if self.compounding_engine:
             try:
                 summary['compounding_status'] = self.compounding_engine.get_status()
-            except:
+            except Exception:
                 pass
         
         return summary

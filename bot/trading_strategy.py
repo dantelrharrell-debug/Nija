@@ -4997,13 +4997,18 @@ class TradingStrategy:
                                             #      Now triggers at WHICHEVER threshold is hit first
                                             # This was causing 80%+ of stop losses to FAIL and positions to keep losing
                                             elif pnl_percent <= STOP_LOSS_THRESHOLD or pnl_percent <= MIN_LOSS_FLOOR:
+                                                # Determine which threshold triggered for accurate logging
+                                                triggered_by = (
+                                                    f"{STOP_LOSS_THRESHOLD*100:.2f}% primary threshold"
+                                                    if pnl_percent <= STOP_LOSS_THRESHOLD
+                                                    else f"{MIN_LOSS_FLOOR*100:.2f}% noise floor"
+                                                )
                                                 if managing_only:
                                                     logger.warning(f"   💰 LOSS PROTECTION (MANAGEMENT MODE): {symbol}")
-                                                    logger.warning(f"      Current P&L: {pnl_percent*100:.2f}%")
-                                                    logger.warning(f"      Stop-loss threshold: {STOP_LOSS_THRESHOLD*100:.2f}%")
+                                                    logger.warning(f"      Current P&L: {pnl_percent*100:.2f}% (triggered by {triggered_by})")
                                                     logger.warning(f"      🔥 Proof: Cutting losses even with new entries BLOCKED")
                                                 else:
-                                                    logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (threshold: {STOP_LOSS_THRESHOLD*100:.2f}%)")
+                                                    logger.warning(f"   🛑 PROTECTIVE STOP-LOSS HIT: {symbol} at {pnl_percent*100:.2f}% (triggered by {triggered_by})")
                                                 # PROFITABILITY GUARD: Verify this is actually a losing position
                                                 if pnl_percent >= 0:
                                                     logger.error(f"   ❌ PROFITABILITY GUARD: Attempted to stop-loss a WINNING position at +{pnl_percent*100:.2f}%!")
@@ -5012,7 +5017,7 @@ class TradingStrategy:
                                                     positions_to_exit.append({
                                                         'symbol': symbol,
                                                         'quantity': quantity,
-                                                        'reason': f'Protective stop-loss at {STOP_LOSS_THRESHOLD*100:.2f}% (actual: {pnl_percent*100:.2f}%)',
+                                                        'reason': f'Protective stop-loss ({triggered_by}, actual: {pnl_percent*100:.2f}%)',
                                                         'broker': position_broker,
                                                         'broker_label': broker_label
                                                     })
