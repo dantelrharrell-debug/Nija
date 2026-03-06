@@ -1,0 +1,15 @@
+{
+  "is_active": false,
+  "history": [
+    {
+      "reason": "Unexpected balance anomaly: 92.0% change ($10000.00 \u2192 $800.00). Possible unauthorized access or API error.",
+      "source": "GLOBAL_RISK_CONTROLLER/BALANCE_DELTA",
+      "timestamp": "2026-03-06T21:22:54.186115"
+    },
+    {
+      "reason": "Manual deactivation",
+      "timestamp": "2026-03-06T21:23:55.453629"
+    }
+  ],
+  "last_updated": "2026-03-06T21:23:55.453649"
+}

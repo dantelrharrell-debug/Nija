@@ -1,5 +1,5 @@
 {
-  "current_state": "DRY_RUN",
+  "current_state": "OFF",
   "history": [
     {
       "from": "EMERGENCY_STOP",
@@ -12,7 +12,19 @@
       "to": "DRY_RUN",
       "reason": "Test cleanup",
       "timestamp": "2026-02-17T22:05:15.419942"
+    },
+    {
+      "from": "DRY_RUN",
+      "to": "EMERGENCY_STOP",
+      "reason": "Kill switch activated: Unexpected balance anomaly: 92.0% change ($10000.00 \u2192 $800.00). Possible unauthorized access or API error.",
+      "timestamp": "2026-03-06T21:22:54.189476"
+    },
+    {
+      "from": "EMERGENCY_STOP",
+      "to": "OFF",
+      "reason": "Kill switch deactivated: Manual deactivation",
+      "timestamp": "2026-03-06T21:23:55.454923"
     }
   ],
-  "last_updated": "2026-02-17T22:05:15.419948"
+  "last_updated": "2026-03-06T21:23:55.454932"
 }
