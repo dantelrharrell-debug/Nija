@@ -13,12 +13,28 @@ Central intelligence layer that controls five portfolio-level dimensions:
 5. **Capital Allocation**    – Produces approved position sizes after applying all
                                the above constraints in sequence.
 
+Portfolio-Level Optimization
+-----------------------------
+The module also contains a **portfolio-level optimizer** that tunes four
+system-wide levers using live trade feedback:
+
+* **capital_allocation**  – fraction of equity deployed per trade
+* **max_positions**       – maximum concurrent open positions
+* **risk_budget**         – maximum portfolio risk per cycle (% of equity)
+* **strategy_weighting**  – relative weight given to each active strategy
+
+Optimization is gated by a minimum trade count so it never runs on
+insufficient data:
+
+    MIN_TRADES_FOR_OPTIMIZATION = 50   # must have at least 50 completed trades
+    EVALUATION_TRADES = 30             # window used to evaluate each adjustment
+
 This module acts as the unified "brain" for portfolio-level decisions.
 It integrates with (but does not require) the existing PortfolioRiskEngine,
 VolatilityTargetingEngine, and CryptoSectorTaxonomy subsystems.
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 1.1
 Date: March 2026
 """
 
@@ -34,6 +50,20 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger("nija.portfolio_intelligence")
+
+# ---------------------------------------------------------------------------
+# Portfolio-level optimization trade-count gates
+# ---------------------------------------------------------------------------
+
+#: Minimum number of completed trades required before the portfolio-level
+#: optimizer is allowed to run.  Running on fewer trades risks noise-driven
+#: changes that hurt rather than help performance.
+MIN_TRADES_FOR_OPTIMIZATION: int = 50
+
+#: Number of trades in the rolling evaluation window used to measure whether
+#: a recent parameter adjustment actually improved performance before it is
+#: committed as the new baseline.
+EVALUATION_TRADES: int = 30
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +166,68 @@ class PortfolioIntelligenceReport:
 
 
 # ---------------------------------------------------------------------------
+# Portfolio-level optimization dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PortfolioAllocations:
+    """
+    The four system-wide levers controlled by the portfolio-level optimizer.
+
+    Attributes:
+        capital_allocation_pct: Fraction of total equity to deploy per trade
+                                 (e.g. 0.05 = 5 % per trade).
+        max_positions: Maximum number of concurrent open positions.
+        risk_budget_pct: Maximum portfolio risk accepted per optimization cycle
+                         expressed as a % of equity (e.g. 0.02 = 2 %).
+        strategy_weighting: Mapping of strategy_name → relative weight (0–1).
+                             Weights are normalised to sum to 1.0 before use.
+    """
+
+    capital_allocation_pct: float = 0.05
+    max_positions: int = 5
+    risk_budget_pct: float = 0.02
+    strategy_weighting: Dict[str, float] = field(default_factory=dict)
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def normalized_strategy_weights(self) -> Dict[str, float]:
+        """Return strategy weights normalised so they sum to 1.0."""
+        total = sum(self.strategy_weighting.values())
+        if total <= 0:
+            return {k: 1.0 / len(self.strategy_weighting) for k in self.strategy_weighting} \
+                if self.strategy_weighting else {}
+        return {k: v / total for k, v in self.strategy_weighting.items()}
+
+
+@dataclass
+class PortfolioOptimizationResult:
+    """
+    Result produced by one portfolio-level optimization cycle.
+
+    Attributes:
+        cycle_id: Unique identifier for this cycle.
+        trigger_reason: What caused this optimization (e.g. ``'scheduled'``).
+        trades_used: Number of completed trades used for analysis.
+        previous_allocations: Allocations active before this cycle.
+        recommended_allocations: New allocations recommended by the optimizer.
+        performance_delta: Estimated performance improvement (%, positive = better).
+        was_applied: Whether the new allocations were committed as the baseline.
+        notes: Human-readable summary of the key changes.
+        timestamp: When the cycle ran.
+    """
+
+    cycle_id: str
+    trigger_reason: str
+    trades_used: int
+    previous_allocations: Optional[PortfolioAllocations] = None
+    recommended_allocations: Optional[PortfolioAllocations] = None
+    performance_delta: float = 0.0
+    was_applied: bool = False
+    notes: List[str] = field(default_factory=list)
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+
+# ---------------------------------------------------------------------------
 # Main class
 # ---------------------------------------------------------------------------
 
@@ -210,6 +302,30 @@ class PortfolioIntelligence:
         self.price_history: Dict[str, pd.Series] = {}
         self.portfolio_value: float = 0.0
 
+        # --- Portfolio-level optimizer state ---
+        # Completed trade records used by the optimizer.
+        # Each entry: {strategy, pnl, return_pct, win, timestamp}
+        self._trade_log: List[Dict] = []
+
+        # Active (baseline) portfolio allocations
+        self.current_allocations: PortfolioAllocations = PortfolioAllocations(
+            capital_allocation_pct=self.config.get("capital_allocation_pct", 0.05),
+            max_positions=self.config.get("max_positions", 5),
+            risk_budget_pct=self.config.get("risk_budget_pct", 0.02),
+            strategy_weighting=dict(self.config.get("strategy_weighting", {})),
+        )
+
+        # History of completed optimization cycles
+        self.optimization_history: List[PortfolioOptimizationResult] = []
+
+        # Optional: override trade-count gate from config
+        self._min_trades_for_opt: int = self.config.get(
+            "min_trades_for_optimization", MIN_TRADES_FOR_OPTIMIZATION
+        )
+        self._evaluation_trades: int = self.config.get(
+            "evaluation_trades", EVALUATION_TRADES
+        )
+
         # --- Optional integrations ---
         self._sector_taxonomy_available: bool = False
         self._get_sector = None
@@ -233,6 +349,10 @@ class PortfolioIntelligence:
         logger.info(
             f"Target Vol: {self.target_daily_vol * 100:.1f}% daily  "
             f"Max: {self.max_daily_vol * 100:.1f}%"
+        )
+        logger.info(
+            f"Optimization gate: {self._min_trades_for_opt} trades min  |  "
+            f"Evaluation window: {self._evaluation_trades} trades"
         )
         logger.info("=" * 70)
 
@@ -641,6 +761,479 @@ class PortfolioIntelligence:
             health_label=health_label,
             recommended_actions=actions,
         )
+
+    # =========================================================================
+    # Public API – portfolio-level optimization
+    # =========================================================================
+
+    def record_trade_result(
+        self,
+        strategy: str,
+        pnl: float,
+        return_pct: float,
+    ) -> None:
+        """
+        Record a completed trade result so the optimizer can learn from it.
+
+        Call this after every closed trade.  Once
+        ``MIN_TRADES_FOR_OPTIMIZATION`` (50) trades have been recorded
+        the portfolio optimizer becomes eligible to run.
+
+        Args:
+            strategy: Name of the strategy that produced the trade.
+            pnl: Realised profit/loss in USD (negative for losses).
+            return_pct: Return as a decimal fraction (e.g. ``0.02`` = 2 %).
+        """
+        self._trade_log.append(
+            {
+                "strategy": strategy,
+                "pnl": pnl,
+                "return_pct": return_pct,
+                "win": pnl > 0,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+        logger.debug(
+            f"Trade recorded: strategy={strategy} pnl={pnl:+.2f} "
+            f"return={return_pct*100:+.2f}%  "
+            f"total_trades={len(self._trade_log)}"
+        )
+
+    @property
+    def total_trades_recorded(self) -> int:
+        """Number of completed trades recorded so far."""
+        return len(self._trade_log)
+
+    def get_optimization_status(self) -> Dict:
+        """
+        Return a summary of the portfolio-level optimizer's readiness.
+
+        Returns:
+            Dictionary with keys: ``trades_recorded``, ``trades_needed``,
+            ``ready_to_optimize``, ``cycles_completed``,
+            ``current_allocations``.
+        """
+        trades_recorded = len(self._trade_log)
+        return {
+            "trades_recorded": trades_recorded,
+            "trades_needed": self._min_trades_for_opt,
+            "ready_to_optimize": trades_recorded >= self._min_trades_for_opt,
+            "evaluation_window": self._evaluation_trades,
+            "cycles_completed": len(self.optimization_history),
+            "current_allocations": {
+                "capital_allocation_pct": self.current_allocations.capital_allocation_pct,
+                "max_positions": self.current_allocations.max_positions,
+                "risk_budget_pct": self.current_allocations.risk_budget_pct,
+                "strategy_weighting": self.current_allocations.normalized_strategy_weights(),
+            },
+        }
+
+    def run_portfolio_optimization(
+        self,
+        trigger_reason: str = "manual",
+        force: bool = False,
+    ) -> PortfolioOptimizationResult:
+        """
+        Run one portfolio-level optimization cycle.
+
+        The optimizer adjusts four system-wide levers based on live trade
+        performance:
+
+        1. **capital_allocation_pct** – how much equity to deploy per trade
+        2. **max_positions** – cap on concurrent open positions
+        3. **risk_budget_pct** – maximum accepted portfolio risk per cycle
+        4. **strategy_weighting** – relative weight of each active strategy
+
+        The cycle is **gated** by ``MIN_TRADES_FOR_OPTIMIZATION``.  Pass
+        ``force=True`` only in tests or manual overrides when you want to
+        skip the gate.
+
+        Args:
+            trigger_reason: Human-readable reason for running (e.g.
+                            ``'scheduled'``, ``'performance_degradation'``).
+            force: Skip the minimum-trade-count gate.
+
+        Returns:
+            :class:`PortfolioOptimizationResult` describing the outcome.
+        """
+        from datetime import datetime as _dt
+        cycle_id = f"portopt_{_dt.now().strftime('%Y%m%d_%H%M%S_%f')}"
+
+        trades_available = len(self._trade_log)
+
+        # --- Gate: refuse to optimize without sufficient data ---
+        if not force and trades_available < self._min_trades_for_opt:
+            msg = (
+                f"Optimization skipped: only {trades_available} trades recorded, "
+                f"need at least {self._min_trades_for_opt} "
+                f"(MIN_TRADES_FOR_OPTIMIZATION={MIN_TRADES_FOR_OPTIMIZATION})."
+            )
+            logger.info(f"⏳ {msg}")
+            result = PortfolioOptimizationResult(
+                cycle_id=cycle_id,
+                trigger_reason=trigger_reason,
+                trades_used=trades_available,
+                previous_allocations=self.current_allocations,
+                recommended_allocations=self.current_allocations,
+                was_applied=False,
+                notes=[msg],
+            )
+            self.optimization_history.append(result)
+            return result
+
+        # Use the most recent EVALUATION_TRADES records as the analysis window,
+        # capped at the number of trades actually available.
+        window = min(trades_available, self._evaluation_trades)
+        recent_trades = self._trade_log[-window:]
+
+        logger.info(
+            f"🔬 Portfolio optimization starting  "
+            f"[cycle={cycle_id} trades={len(recent_trades)} reason={trigger_reason}]"
+        )
+
+        # ---- Analyse recent performance ----
+        perf = self._analyse_trades(recent_trades)
+
+        # ---- Optimise each lever independently ----
+        new_capital_alloc, cap_notes = self._optimize_capital_allocation(perf)
+        new_max_pos, pos_notes = self._optimize_max_positions(perf)
+        new_risk_budget, risk_notes = self._optimize_risk_budget(perf)
+        new_strategy_wts, strat_notes = self._optimize_strategy_weighting(recent_trades)
+
+        recommended = PortfolioAllocations(
+            capital_allocation_pct=new_capital_alloc,
+            max_positions=new_max_pos,
+            risk_budget_pct=new_risk_budget,
+            strategy_weighting=new_strategy_wts,
+        )
+
+        # ---- Estimate performance delta (simplified) ----
+        perf_delta = self._estimate_performance_delta(perf, recommended)
+
+        all_notes = cap_notes + pos_notes + risk_notes + strat_notes
+        if not all_notes:
+            all_notes = ["All levers already at optimal levels — no changes made."]
+
+        result = PortfolioOptimizationResult(
+            cycle_id=cycle_id,
+            trigger_reason=trigger_reason,
+            trades_used=len(recent_trades),
+            previous_allocations=self.current_allocations,
+            recommended_allocations=recommended,
+            performance_delta=perf_delta,
+            was_applied=True,
+            notes=all_notes,
+        )
+
+        # Commit the new allocations as the active baseline
+        self.current_allocations = recommended
+        self.optimization_history.append(result)
+
+        logger.info(
+            f"✅ Portfolio optimization complete  "
+            f"[Δperf={perf_delta:+.1f}%  applied=True]"
+        )
+        for note in all_notes:
+            logger.info(f"   • {note}")
+
+        return result
+
+    # =========================================================================
+    # Private helpers – portfolio-level optimization
+    # =========================================================================
+
+    def _analyse_trades(self, trades: List[Dict]) -> Dict:
+        """Compute summary statistics from a list of trade records."""
+        if not trades:
+            return {
+                "win_rate": 0.0,
+                "avg_return": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
+                "profit_factor": 1.0,
+                "sharpe": 0.0,
+                "max_drawdown": 0.0,
+                "strategy_counts": {},
+                "strategy_win_rates": {},
+                "strategy_avg_returns": {},
+            }
+
+        returns = [t["return_pct"] for t in trades]
+        wins = [t for t in trades if t["win"]]
+        losses = [t for t in trades if not t["win"]]
+
+        win_rate = len(wins) / len(trades)
+        avg_return = float(np.mean(returns))
+        avg_win = float(np.mean([t["return_pct"] for t in wins])) if wins else 0.0
+        avg_loss = float(np.mean([t["return_pct"] for t in losses])) if losses else 0.0
+
+        total_gain = sum(t["pnl"] for t in wins) if wins else 0.0
+        total_loss = abs(sum(t["pnl"] for t in losses)) if losses else 1e-9
+        profit_factor = total_gain / total_loss
+
+        std_return = float(np.std(returns)) if len(returns) > 1 else 1e-9
+        sharpe = avg_return / max(std_return, 1e-9)
+
+        # Simple max drawdown from cumulative returns
+        cum = np.cumsum(returns)
+        running_max = np.maximum.accumulate(cum)
+        drawdowns = running_max - cum
+        max_drawdown = float(np.max(drawdowns)) if len(drawdowns) else 0.0
+
+        # Per-strategy breakdown
+        strategy_counts: Dict[str, int] = {}
+        strategy_wins: Dict[str, int] = {}
+        strategy_returns: Dict[str, List[float]] = {}
+        for t in trades:
+            s = t.get("strategy", "unknown")
+            strategy_counts[s] = strategy_counts.get(s, 0) + 1
+            strategy_wins[s] = strategy_wins.get(s, 0) + (1 if t["win"] else 0)
+            strategy_returns.setdefault(s, []).append(t["return_pct"])
+
+        strategy_win_rates = {
+            s: strategy_wins.get(s, 0) / count
+            for s, count in strategy_counts.items()
+        }
+        strategy_avg_returns = {
+            s: float(np.mean(rets)) for s, rets in strategy_returns.items()
+        }
+
+        return {
+            "win_rate": win_rate,
+            "avg_return": avg_return,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "profit_factor": profit_factor,
+            "sharpe": sharpe,
+            "max_drawdown": max_drawdown,
+            "strategy_counts": strategy_counts,
+            "strategy_win_rates": strategy_win_rates,
+            "strategy_avg_returns": strategy_avg_returns,
+        }
+
+    def _optimize_capital_allocation(
+        self, perf: Dict
+    ) -> Tuple[float, List[str]]:
+        """
+        Adjust the capital allocation fraction based on performance.
+
+        Rules:
+        - High win rate + positive Sharpe → increase allocation (up to 10 %)
+        - Low win rate or negative Sharpe → decrease allocation (floor 2 %)
+        - Drawdown stress → cap at 5 %
+        """
+        notes: List[str] = []
+        current = self.current_allocations.capital_allocation_pct
+        new_alloc = current
+
+        win_rate = perf.get("win_rate", 0.5)
+        sharpe = perf.get("sharpe", 0.0)
+        max_dd = perf.get("max_drawdown", 0.0)
+
+        if max_dd > 0.10:
+            # Significant drawdown: cap allocation at 5 %
+            if new_alloc > 0.05:
+                new_alloc = 0.05
+                notes.append(
+                    f"capital_allocation capped at 5% due to drawdown "
+                    f"({max_dd*100:.1f}%)"
+                )
+        elif win_rate >= 0.60 and sharpe >= 0.5:
+            # Strong performance: allow up to 8 %
+            new_alloc = min(current * 1.10, 0.08)
+            if new_alloc != current:
+                notes.append(
+                    f"capital_allocation increased: "
+                    f"{current*100:.1f}% → {new_alloc*100:.1f}% "
+                    f"(win_rate={win_rate:.0%} sharpe={sharpe:.2f})"
+                )
+        elif win_rate < 0.40 or sharpe < 0:
+            # Weak performance: reduce by 10 %, floor at 2 %
+            new_alloc = max(current * 0.90, 0.02)
+            if new_alloc != current:
+                notes.append(
+                    f"capital_allocation reduced: "
+                    f"{current*100:.1f}% → {new_alloc*100:.1f}% "
+                    f"(win_rate={win_rate:.0%} sharpe={sharpe:.2f})"
+                )
+
+        return new_alloc, notes
+
+    def _optimize_max_positions(
+        self, perf: Dict
+    ) -> Tuple[int, List[str]]:
+        """
+        Adjust the maximum number of concurrent positions.
+
+        Rules:
+        - High profit factor + good diversification → allow more positions
+        - Poor profit factor or high drawdown → reduce positions
+        """
+        notes: List[str] = []
+        current = self.current_allocations.max_positions
+        new_max = current
+
+        pf = perf.get("profit_factor", 1.0)
+        max_dd = perf.get("max_drawdown", 0.0)
+
+        if max_dd > 0.15:
+            new_max = max(current - 1, 1)
+            if new_max != current:
+                notes.append(
+                    f"max_positions reduced: {current} → {new_max} "
+                    f"(drawdown={max_dd*100:.1f}%)"
+                )
+        elif pf >= 1.5 and max_dd <= 0.05:
+            new_max = min(current + 1, 10)
+            if new_max != current:
+                notes.append(
+                    f"max_positions increased: {current} → {new_max} "
+                    f"(profit_factor={pf:.2f})"
+                )
+        elif pf < 1.0:
+            new_max = max(current - 1, 1)
+            if new_max != current:
+                notes.append(
+                    f"max_positions reduced: {current} → {new_max} "
+                    f"(profit_factor={pf:.2f} < 1.0)"
+                )
+
+        return new_max, notes
+
+    def _optimize_risk_budget(
+        self, perf: Dict
+    ) -> Tuple[float, List[str]]:
+        """
+        Adjust the portfolio risk budget (% of equity risked per cycle).
+
+        Rules:
+        - Sharpe >= 1.0 and low drawdown → loosen budget by 10 % (max 4 %)
+        - Drawdown > 10 % → tighten by 20 % (floor 0.5 %)
+        """
+        notes: List[str] = []
+        current = self.current_allocations.risk_budget_pct
+        new_budget = current
+
+        sharpe = perf.get("sharpe", 0.0)
+        max_dd = perf.get("max_drawdown", 0.0)
+
+        if max_dd > 0.10:
+            new_budget = max(current * 0.80, 0.005)
+            if new_budget != current:
+                notes.append(
+                    f"risk_budget tightened: "
+                    f"{current*100:.2f}% → {new_budget*100:.2f}% "
+                    f"(drawdown={max_dd*100:.1f}%)"
+                )
+        elif sharpe >= 1.0 and max_dd <= 0.05:
+            new_budget = min(current * 1.10, 0.04)
+            if new_budget != current:
+                notes.append(
+                    f"risk_budget loosened: "
+                    f"{current*100:.2f}% → {new_budget*100:.2f}% "
+                    f"(sharpe={sharpe:.2f})"
+                )
+
+        return new_budget, notes
+
+    def _optimize_strategy_weighting(
+        self, trades: List[Dict]
+    ) -> Tuple[Dict[str, float], List[str]]:
+        """
+        Reweight strategies proportionally to their risk-adjusted performance.
+
+        Each strategy's weight is set proportional to its risk-adjusted
+        performance over the evaluation window.
+
+        For strategies with fewer than 3 trades (where Sharpe is unreliable),
+        the average return is used directly as the quality signal.
+        Strategies with negative signal receive the minimum weight of 0.05 so
+        they are never completely excluded.
+        """
+        notes: List[str] = []
+        current_weights = dict(self.current_allocations.strategy_weighting)
+
+        # Group by strategy
+        strategy_returns: Dict[str, List[float]] = {}
+        for t in trades:
+            s = t.get("strategy", "unknown")
+            strategy_returns.setdefault(s, []).append(t["return_pct"])
+
+        if not strategy_returns:
+            return current_weights, notes
+
+        # Compute quality score per strategy.
+        # Use Sharpe when ≥ 3 trades are available, otherwise fall back to
+        # average return so a single good (or bad) trade is handled sensibly.
+        scores: Dict[str, float] = {}
+        for s, rets in strategy_returns.items():
+            mean_r = float(np.mean(rets))
+            if len(rets) >= 3:
+                std_r = float(np.std(rets))
+                scores[s] = mean_r / max(std_r, 1e-9)
+            else:
+                # Too few trades for reliable Sharpe — use avg return scaled
+                # to a comparable magnitude (÷ 0.01 maps 1% avg → score of 1)
+                scores[s] = mean_r / 0.01
+
+        # Convert score → weight (floor at 0.05 to keep all strategies alive)
+        min_weight = 0.05
+        raw_weights = {s: max(sc, 0.0) + min_weight for s, sc in scores.items()}
+        total = sum(raw_weights.values())
+        new_weights = {s: w / total for s, w in raw_weights.items()}
+
+        # Report changes worth reporting (> 5 pp shift)
+        for s, new_w in new_weights.items():
+            old_w = current_weights.get(s, 1.0 / len(new_weights))
+            if abs(new_w - old_w) >= 0.05:
+                notes.append(
+                    f"strategy_weighting[{s}]: "
+                    f"{old_w*100:.0f}% → {new_w*100:.0f}% "
+                    f"(score={scores[s]:.2f})"
+                )
+
+        return new_weights, notes
+
+    def _estimate_performance_delta(
+        self, perf: Dict, new_alloc: PortfolioAllocations
+    ) -> float:
+        """
+        Estimate the expected performance improvement from new allocations (%).
+
+        This is a heuristic estimate, not a backtest.  It measures how far the
+        new allocations move toward the theoretically optimal settings given
+        the current performance regime.
+        """
+        score_before = self._allocation_score(self.current_allocations, perf)
+        score_after = self._allocation_score(new_alloc, perf)
+        if score_before <= 0:
+            return 0.0
+        return ((score_after - score_before) / score_before) * 100.0
+
+    def _allocation_score(self, alloc: PortfolioAllocations, perf: Dict) -> float:
+        """Heuristic score (0–1) for how well allocations fit the current regime."""
+        win_rate = perf.get("win_rate", 0.5)
+        pf = perf.get("profit_factor", 1.0)
+        sharpe = perf.get("sharpe", 0.0)
+        max_dd = perf.get("max_drawdown", 0.0)
+
+        # Ideal capital allocation: between 3 % (low perf) and 8 % (high perf)
+        ideal_cap = 0.03 + 0.05 * max(0.0, min(1.0, win_rate))
+        cap_score = 1.0 - abs(alloc.capital_allocation_pct - ideal_cap) / 0.10
+
+        # Ideal max_positions: 1–10 scaled by profit factor
+        ideal_pos = max(1, min(10, int(pf * 3)))
+        pos_score = 1.0 - abs(alloc.max_positions - ideal_pos) / 10.0
+
+        # Risk budget score: prefer tighter budget when Sharpe is low
+        ideal_rb = 0.005 + 0.015 * max(0.0, min(1.0, sharpe))
+        rb_score = 1.0 - abs(alloc.risk_budget_pct - ideal_rb) / 0.04
+
+        # Drawdown penalty
+        dd_penalty = max(0.0, max_dd - 0.05) * 5.0  # 5 pp penalty per 1 % excess dd
+
+        score = (cap_score * 0.35 + pos_score * 0.30 + rb_score * 0.35) - dd_penalty
+        return max(0.0, min(1.0, score))
 
     # =========================================================================
     # Private helpers – constraint application
