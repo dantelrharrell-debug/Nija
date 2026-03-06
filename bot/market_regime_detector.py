@@ -2,18 +2,40 @@
 NIJA Market Regime Detector
 ============================
 
-Detects market regimes to optimize trading strategy parameters:
-- TRENDING: Strong directional movement (ADX > 25)
-- RANGING: Sideways consolidation (ADX < 20)
-- VOLATILE: High volatility choppy market (ADX 20-25, high ATR)
+Detects market regimes to optimize trading strategy parameters.
 
-Each regime uses different entry thresholds and position sizing strategies.
+Legacy class ``RegimeDetector`` (3 regimes — TRENDING/RANGING/VOLATILE)
+is preserved for backward compatibility.
+
+New ``MarketRegimeDetectionEngine`` provides full 7-regime detection:
+1. STRONG_TREND       — ADX > 30, clear directional momentum
+2. WEAK_TREND         — ADX 20-30, developing trend
+3. RANGING            — ADX < 20, sideways consolidation
+4. EXPANSION          — Volatility breakout, volume surge
+5. MEAN_REVERSION     — Pullback/reversal setup
+6. VOLATILITY_EXPLOSION — Crisis / panic mode
+7. CONSOLIDATION      — Low-volatility compression
+
+Features
+--------
+- Multi-dimensional classification: ADX, RSI, ATR, Bollinger Bands, volume
+- Regime persistence to prevent rapid flipping
+- Confidence scoring (0–1)
+- Strategy recommendations per regime
+- Module-level singleton via ``get_market_regime_detector()``
+
+Author: NIJA Trading Systems
+Version: 2.0
+Date: March 2026
 """
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 from enum import Enum
+from dataclasses import dataclass, field
+from datetime import datetime
+from collections import deque
 import logging
 
 logger = logging.getLogger("nija.regime")
@@ -380,5 +402,394 @@ class RegimeDetector:
         return ranges
 
 
-# Global instance
+# Global instance (legacy)
 regime_detector = RegimeDetector()
+
+
+# ---------------------------------------------------------------------------
+# Enhanced 7-regime Detection Engine
+# ---------------------------------------------------------------------------
+
+class RegimeType(Enum):
+    """Full 7-class market regime taxonomy."""
+    STRONG_TREND = "strong_trend"
+    WEAK_TREND = "weak_trend"
+    RANGING = "ranging"
+    EXPANSION = "expansion"
+    MEAN_REVERSION = "mean_reversion"
+    VOLATILITY_EXPLOSION = "volatility_explosion"
+    CONSOLIDATION = "consolidation"
+
+
+class RegimeStrategy(Enum):
+    """Recommended strategy per regime."""
+    TREND_FOLLOWING = "trend_following"
+    BREAKOUT = "breakout"
+    MEAN_REVERSION = "mean_reversion"
+    SCALPING = "scalping"
+    DEFENSIVE = "defensive"
+    MOMENTUM = "momentum"
+
+
+@dataclass
+class RegimeSnapshot:
+    """Point-in-time regime classification."""
+    regime: RegimeType
+    confidence: float                          # 0.0 – 1.0
+    probabilities: Dict[str, float]            # regime.value → probability
+    features: Dict[str, float]                 # raw indicator values used
+    recommended_strategy: RegimeStrategy = RegimeStrategy.TREND_FOLLOWING
+    strategy_confidence: float = 0.5
+    trend_strength: float = 0.0               # 0–1 normalised ADX
+    volatility_level: float = 0.0             # 0–1 normalised ATR percentile
+    momentum_score: float = 0.0               # absolute MACD histogram
+    volume_profile: str = "normal"            # low / normal / high / extreme
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> Dict:
+        return {
+            "regime": self.regime.value,
+            "confidence": round(self.confidence, 4),
+            "probabilities": {k: round(v, 4) for k, v in self.probabilities.items()},
+            "features": {k: round(v, 4) for k, v in self.features.items()},
+            "recommended_strategy": self.recommended_strategy.value,
+            "strategy_confidence": round(self.strategy_confidence, 4),
+            "metrics": {
+                "trend_strength": round(self.trend_strength, 4),
+                "volatility_level": round(self.volatility_level, 4),
+                "momentum_score": round(self.momentum_score, 4),
+                "volume_profile": self.volume_profile,
+            },
+            "timestamp": self.timestamp.isoformat(),
+        }
+
+
+# Regime → recommended strategy mapping
+_REGIME_STRATEGY_MAP: Dict[RegimeType, RegimeStrategy] = {
+    RegimeType.STRONG_TREND: RegimeStrategy.TREND_FOLLOWING,
+    RegimeType.WEAK_TREND: RegimeStrategy.MOMENTUM,
+    RegimeType.RANGING: RegimeStrategy.MEAN_REVERSION,
+    RegimeType.EXPANSION: RegimeStrategy.BREAKOUT,
+    RegimeType.MEAN_REVERSION: RegimeStrategy.MEAN_REVERSION,
+    RegimeType.VOLATILITY_EXPLOSION: RegimeStrategy.DEFENSIVE,
+    RegimeType.CONSOLIDATION: RegimeStrategy.SCALPING,
+}
+
+# Position-size multipliers per regime
+_REGIME_SIZE_MULTIPLIER: Dict[RegimeType, float] = {
+    RegimeType.STRONG_TREND: 1.25,
+    RegimeType.WEAK_TREND: 1.0,
+    RegimeType.RANGING: 0.80,
+    RegimeType.EXPANSION: 1.10,
+    RegimeType.MEAN_REVERSION: 0.90,
+    RegimeType.VOLATILITY_EXPLOSION: 0.35,
+    RegimeType.CONSOLIDATION: 0.70,
+}
+
+
+class MarketRegimeDetectionEngine:
+    """
+    Multi-dimensional 7-regime market detector.
+
+    Uses ADX, RSI, ATR (Bollinger-band-like expansion), volume ratio, and
+    MACD histogram to score each of the 7 regime buckets and pick the
+    highest-scoring one.
+
+    Regime persistence (``persistence_bars``) prevents rapid regime flipping
+    by requiring a higher confidence margin to switch away from the
+    currently-active regime.
+
+    Example
+    -------
+    ::
+
+        from bot.market_regime_detector import get_market_regime_detector
+
+        detector = get_market_regime_detector()
+        snapshot = detector.detect(df, indicators)
+        print(snapshot.regime.value, snapshot.confidence)
+    """
+
+    def __init__(self, config: Optional[Dict] = None):
+        cfg = config or {}
+        self.persistence_bars: int = cfg.get("persistence_bars", 5)
+        self.min_confidence: float = cfg.get("min_confidence", 0.55)
+        self.switch_margin: float = cfg.get("switch_margin", 0.10)
+        self.history_size: int = cfg.get("history_size", 200)
+
+        self._current: Optional[RegimeSnapshot] = None
+        self._history: deque = deque(maxlen=self.history_size)
+        self._bars_in_regime: int = 0
+
+        logger.info("MarketRegimeDetectionEngine v2.0 initialised")
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def detect(self, df: pd.DataFrame, indicators: Dict) -> RegimeSnapshot:
+        """
+        Classify the current market regime.
+
+        Parameters
+        ----------
+        df:
+            OHLCV DataFrame.  Must contain ``close``, ``high``, ``low``,
+            ``volume`` columns.  At least 30 rows recommended.
+        indicators:
+            Pre-computed indicator dict.  Recognised keys: ``adx``, ``rsi_9``,
+            ``rsi_14``, ``rsi``, ``atr``, ``macd_histogram``, ``macd_hist``,
+            ``ema_9``, ``ema_21``, ``ema_50``.
+
+        Returns
+        -------
+        RegimeSnapshot
+        """
+        features = self._extract_features(df, indicators)
+        scores = self._score_regimes(features)
+
+        # Normalise scores to probabilities
+        total = sum(scores.values()) or 1.0
+        probs = {k.value: v / total for k, v in scores.items()}
+
+        # Best regime candidate
+        best_regime = max(scores, key=scores.get)
+        best_conf = scores[best_regime] / total
+
+        # Persistence: only switch if margin is sufficient
+        if self._current is not None and best_regime != self._current.regime:
+            current_score = scores.get(self._current.regime, 0.0) / total
+            if best_conf - current_score < self.switch_margin:
+                best_regime = self._current.regime
+                best_conf = current_score
+                self._bars_in_regime += 1
+            else:
+                self._bars_in_regime = 0
+        else:
+            self._bars_in_regime += 1
+
+        strategy = _REGIME_STRATEGY_MAP.get(best_regime, RegimeStrategy.TREND_FOLLOWING)
+
+        snapshot = RegimeSnapshot(
+            regime=best_regime,
+            confidence=round(best_conf, 4),
+            probabilities=probs,
+            features=features,
+            recommended_strategy=strategy,
+            strategy_confidence=self._strategy_confidence(best_conf),
+            trend_strength=min(features.get("adx", 0) / 50.0, 1.0),
+            volatility_level=features.get("atr_pct", 0),
+            momentum_score=abs(features.get("macd_hist", 0)),
+            volume_profile=self._volume_label(features.get("volume_ratio", 1.0)),
+        )
+        self._current = snapshot
+        self._history.append(snapshot)
+        return snapshot
+
+    def get_size_multiplier(self, regime: Optional[RegimeType] = None) -> float:
+        """Return position-size multiplier for *regime* (defaults to current)."""
+        r = regime or (self._current.regime if self._current else RegimeType.RANGING)
+        return _REGIME_SIZE_MULTIPLIER.get(r, 1.0)
+
+    def get_current(self) -> Optional[RegimeSnapshot]:
+        """Return the most-recent regime snapshot, or None if never called."""
+        return self._current
+
+    def get_history(self, n: int = 10) -> List[RegimeSnapshot]:
+        """Return the last *n* snapshots (most-recent last)."""
+        return list(self._history)[-n:]
+
+    def regime_summary(self) -> Dict:
+        """Compact dict summary of current state (safe for JSON serialisation)."""
+        if self._current is None:
+            return {"regime": "unknown", "confidence": 0.0, "bars_in_regime": 0}
+        return {
+            **self._current.to_dict(),
+            "bars_in_regime": self._bars_in_regime,
+            "size_multiplier": self.get_size_multiplier(),
+        }
+
+    # ------------------------------------------------------------------
+    # Feature extraction
+    # ------------------------------------------------------------------
+
+    def _extract_features(self, df: pd.DataFrame, indicators: Dict) -> Dict[str, float]:
+        close = df["close"].iloc[-1] if len(df) else 1.0
+
+        def _last(key, alt_key=None, default=0.0) -> float:
+            v = indicators.get(key)
+            if v is None and alt_key:
+                v = indicators.get(alt_key)
+            if v is None:
+                return default
+            if hasattr(v, "iloc"):
+                return float(v.iloc[-1])
+            return float(v)
+
+        adx = _last("adx", default=15.0)
+        rsi = _last("rsi_14", "rsi", default=50.0)
+        rsi_9 = _last("rsi_9", default=rsi)
+        atr = _last("atr", default=0.0)
+        macd_hist = _last("macd_histogram", "macd_hist", default=0.0)
+
+        atr_pct = (atr / close) if close > 0 else 0.0
+
+        # ATR expansion: ratio vs 14-bar rolling mean of ATR
+        atr_series = indicators.get("atr")
+        if atr_series is not None and hasattr(atr_series, "rolling") and len(atr_series) >= 14:
+            atr_mean = float(atr_series.rolling(14).mean().iloc[-1])
+            atr_expansion = (atr / atr_mean) if atr_mean > 0 else 1.0
+        else:
+            atr_expansion = 1.0
+
+        # Volume ratio (current vs 20-bar mean)
+        if "volume" in df.columns and len(df) >= 20:
+            vol = float(df["volume"].iloc[-1])
+            vol_mean = float(df["volume"].iloc[-20:].mean())
+            volume_ratio = (vol / vol_mean) if vol_mean > 0 else 1.0
+        else:
+            volume_ratio = 1.0
+
+        # Price volatility (std/mean over last 20 closes)
+        if len(df) >= 20:
+            closes = df["close"].iloc[-20:]
+            price_vol = float(closes.std() / closes.mean()) if closes.mean() > 0 else 0.0
+        else:
+            price_vol = 0.0
+
+        # EMA alignment
+        ema_9 = _last("ema_9", default=close)
+        ema_21 = _last("ema_21", default=close)
+        ema_50 = _last("ema_50", default=close)
+        ema_aligned_bull = ema_9 > ema_21 > ema_50
+        ema_aligned_bear = ema_9 < ema_21 < ema_50
+
+        return {
+            "adx": adx,
+            "rsi": rsi,
+            "rsi_9": rsi_9,
+            "atr": atr,
+            "atr_pct": atr_pct,
+            "atr_expansion": atr_expansion,
+            "macd_hist": macd_hist,
+            "volume_ratio": volume_ratio,
+            "price_volatility": price_vol,
+            "ema_aligned_bull": 1.0 if ema_aligned_bull else 0.0,
+            "ema_aligned_bear": 1.0 if ema_aligned_bear else 0.0,
+        }
+
+    # ------------------------------------------------------------------
+    # Regime scoring (rule-based)
+    # ------------------------------------------------------------------
+
+    def _score_regimes(self, f: Dict[str, float]) -> Dict[RegimeType, float]:
+        scores: Dict[RegimeType, float] = {r: 0.0 for r in RegimeType}
+        adx = f["adx"]
+        rsi = f["rsi"]
+        rsi_9 = f["rsi_9"]
+        atr_exp = f["atr_expansion"]
+        vol_ratio = f["volume_ratio"]
+        macd = f["macd_hist"]
+        price_vol = f["price_volatility"]
+
+        # --- STRONG_TREND ---
+        if adx >= 30:
+            scores[RegimeType.STRONG_TREND] += 1.0
+        if adx >= 40:
+            scores[RegimeType.STRONG_TREND] += 0.5
+        if f["ema_aligned_bull"] or f["ema_aligned_bear"]:
+            scores[RegimeType.STRONG_TREND] += 0.4
+
+        # --- WEAK_TREND ---
+        if 20 <= adx < 30:
+            scores[RegimeType.WEAK_TREND] += 1.0
+        if abs(macd) > 0:
+            scores[RegimeType.WEAK_TREND] += 0.3
+
+        # --- RANGING ---
+        if adx < 20:
+            scores[RegimeType.RANGING] += 1.0
+        if adx < 15:
+            scores[RegimeType.RANGING] += 0.5
+        if 40 <= rsi <= 60:
+            scores[RegimeType.RANGING] += 0.3
+
+        # --- EXPANSION (breakout) ---
+        if atr_exp > 1.5 and vol_ratio > 1.3:
+            scores[RegimeType.EXPANSION] += 1.0
+        elif atr_exp > 1.2:
+            scores[RegimeType.EXPANSION] += 0.5
+        if vol_ratio > 2.0:
+            scores[RegimeType.EXPANSION] += 0.4
+
+        # --- MEAN_REVERSION (pullback setup) ---
+        if rsi_9 < 35 or rsi_9 > 65:
+            scores[RegimeType.MEAN_REVERSION] += 0.7
+        if adx < 25 and (rsi < 40 or rsi > 60):
+            scores[RegimeType.MEAN_REVERSION] += 0.5
+        if atr_exp < 0.9 and (rsi < 35 or rsi > 65):
+            scores[RegimeType.MEAN_REVERSION] += 0.3
+
+        # --- VOLATILITY_EXPLOSION (crisis) ---
+        if atr_exp > 2.5:
+            scores[RegimeType.VOLATILITY_EXPLOSION] += 1.0
+        if atr_exp > 2.0 and vol_ratio > 2.0:
+            scores[RegimeType.VOLATILITY_EXPLOSION] += 0.8
+        if price_vol > 0.05:
+            scores[RegimeType.VOLATILITY_EXPLOSION] += 0.5
+
+        # --- CONSOLIDATION (low-vol compression) ---
+        if atr_exp < 0.7 and adx < 20:
+            scores[RegimeType.CONSOLIDATION] += 1.0
+        if price_vol < 0.01:
+            scores[RegimeType.CONSOLIDATION] += 0.5
+        if vol_ratio < 0.6:
+            scores[RegimeType.CONSOLIDATION] += 0.3
+
+        return scores
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strategy_confidence(regime_confidence: float) -> float:
+        if regime_confidence >= 0.8:
+            return 0.9
+        if regime_confidence >= 0.65:
+            return 0.7
+        if regime_confidence >= 0.5:
+            return 0.5
+        return 0.3
+
+    @staticmethod
+    def _volume_label(ratio: float) -> str:
+        if ratio >= 3.0:
+            return "extreme"
+        if ratio >= 1.5:
+            return "high"
+        if ratio >= 0.7:
+            return "normal"
+        return "low"
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton
+# ---------------------------------------------------------------------------
+
+_detection_engine: Optional[MarketRegimeDetectionEngine] = None
+
+
+def get_market_regime_detector(config: Optional[Dict] = None) -> MarketRegimeDetectionEngine:
+    """
+    Return (or create) the module-level ``MarketRegimeDetectionEngine`` singleton.
+
+    Parameters
+    ----------
+    config:
+        Optional configuration dict passed only on the *first* call.
+    """
+    global _detection_engine
+    if _detection_engine is None:
+        _detection_engine = MarketRegimeDetectionEngine(config)
+    return _detection_engine
