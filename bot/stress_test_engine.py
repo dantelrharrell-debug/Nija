@@ -311,7 +311,7 @@ class StressTestEngine:
 
         for _ in range(self.num_paths):
             # Each path gets a fresh sub-seed from the master RNG
-            sub_rng = random.Random(rng.randint(0, 2**31))
+            sub_rng = random.Random(rng.getrandbits(32))
             final   = scenario_fn(sub_rng)
             finals.append(final)
             dd = max(0.0, (self.initial_capital - final) / self.initial_capital)

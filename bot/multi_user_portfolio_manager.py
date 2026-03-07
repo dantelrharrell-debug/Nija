@@ -382,7 +382,7 @@ class MultiUserPortfolioManager:
 
                     # Respect follower max-position-pct cap
                     max_size_by_cap = (follower.current_equity * group.max_copy_pct
-                                       / max(1.0, follower.available_cash))
+                                       / max(0.0001, follower.available_cash))
                     follower_size = min(raw_size, max_size_by_cap)
                     follower_size = max(group.min_copy_size, follower_size)
 

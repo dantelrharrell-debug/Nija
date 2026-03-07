@@ -128,7 +128,8 @@ class Vault:
 
     @property
     def nav(self) -> float:
-        return self.profit_pool + sum([0.0])  # extensible
+        # Net profit available; extend here to include unrealised P&L if needed
+        return self.profit_pool
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)

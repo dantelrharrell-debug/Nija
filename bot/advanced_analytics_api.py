@@ -378,7 +378,7 @@ def _compute_attribution_slice(
         d_std = 0.0
     sortino = mean_pnl / d_std if d_std > 0 else 0.0
 
-    # Max drawdown via cumulative equity curve
+    # Max drawdown via cumulative equity curve (anchored at 0 / initial)
     cum_pnl    = 0.0
     peak       = 0.0
     max_dd     = 0.0
@@ -386,9 +386,12 @@ def _compute_attribution_slice(
         cum_pnl += p
         if cum_pnl > peak:
             peak = cum_pnl
-        dd = (peak - cum_pnl) / max(1.0, abs(peak))
-        if dd > max_dd:
-            max_dd = dd
+        # Only compute drawdown when peak > 0 to avoid misleading values for
+        # equity curves that start or remain negative
+        if peak > 0:
+            dd = (peak - cum_pnl) / peak
+            if dd > max_dd:
+                max_dd = dd
 
     calmar = (total_pnl / max(0.0001, max_dd)) if max_dd > 0 else 0.0
 
