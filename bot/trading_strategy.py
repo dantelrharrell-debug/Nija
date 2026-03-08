@@ -174,6 +174,63 @@ except ImportError:
         OUTCOME_WIN = "win"
         OUTCOME_LOSS = "loss"
 
+# Import Liquidity Intelligence Engine — per-symbol spread/volume/depth scoring
+try:
+    from liquidity_intelligence_engine import get_liquidity_intelligence_engine, LiquidityIntelligenceEngine
+    LIQUIDITY_INTELLIGENCE_AVAILABLE = True
+    logger.info("✅ Liquidity Intelligence Engine loaded - spread/volume/depth gating active")
+except ImportError:
+    try:
+        from bot.liquidity_intelligence_engine import get_liquidity_intelligence_engine, LiquidityIntelligenceEngine
+        LIQUIDITY_INTELLIGENCE_AVAILABLE = True
+        logger.info("✅ Liquidity Intelligence Engine loaded - spread/volume/depth gating active")
+    except ImportError:
+        LIQUIDITY_INTELLIGENCE_AVAILABLE = False
+        logger.warning("⚠️ Liquidity Intelligence Engine not available - liquidity gating disabled")
+        get_liquidity_intelligence_engine = None
+        LiquidityIntelligenceEngine = None
+
+# Import Cross-Exchange Price Intelligence — multi-venue price divergence detection
+try:
+    from cross_exchange_price_intelligence import get_cross_exchange_price_intelligence, CrossExchangePriceIntelligence
+    CROSS_EXCHANGE_INTEL_AVAILABLE = True
+    logger.info("✅ Cross-Exchange Price Intelligence loaded - divergence detection active")
+except ImportError:
+    try:
+        from bot.cross_exchange_price_intelligence import get_cross_exchange_price_intelligence, CrossExchangePriceIntelligence
+        CROSS_EXCHANGE_INTEL_AVAILABLE = True
+        logger.info("✅ Cross-Exchange Price Intelligence loaded - divergence detection active")
+    except ImportError:
+        CROSS_EXCHANGE_INTEL_AVAILABLE = False
+        logger.warning("⚠️ Cross-Exchange Price Intelligence not available - divergence detection disabled")
+        get_cross_exchange_price_intelligence = None
+        CrossExchangePriceIntelligence = None
+
+# Import Portfolio Performance Analytics — comprehensive P&L, Sharpe, drawdown tracking
+try:
+    from portfolio_performance_analytics import (
+        get_portfolio_performance_analytics,
+        PortfolioPerformanceAnalytics,
+        TradeRecord as PerformanceTradeRecord,
+    )
+    PORTFOLIO_ANALYTICS_AVAILABLE = True
+    logger.info("✅ Portfolio Performance Analytics loaded - Sharpe/Sortino/Calmar tracking active")
+except ImportError:
+    try:
+        from bot.portfolio_performance_analytics import (
+            get_portfolio_performance_analytics,
+            PortfolioPerformanceAnalytics,
+            TradeRecord as PerformanceTradeRecord,
+        )
+        PORTFOLIO_ANALYTICS_AVAILABLE = True
+        logger.info("✅ Portfolio Performance Analytics loaded - Sharpe/Sortino/Calmar tracking active")
+    except ImportError:
+        PORTFOLIO_ANALYTICS_AVAILABLE = False
+        logger.warning("⚠️ Portfolio Performance Analytics not available - performance tracking disabled")
+        get_portfolio_performance_analytics = None
+        PortfolioPerformanceAnalytics = None
+        PerformanceTradeRecord = None
+
 # Import scalar helper for indicator conversions
 try:
     from indicators import scalar
