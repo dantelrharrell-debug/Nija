@@ -642,13 +642,14 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 # Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
-# Hard cap: never allow more than 5 positions regardless of config (risk management ceiling)
-HARD_MAX_POSITIONS = 5  # Absolute ceiling – never exceed 5 open positions
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '5')
+# Hard cap raised to 12 to support AI Capital Concentration (5–12 high-quality positions).
+# MAX_ACTIVE_POSITIONS = 12 per the AI Capital Rotation specification.
+HARD_MAX_POSITIONS = 12  # Absolute ceiling – AI Capital Concentration cap
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '12')
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
-    MAX_POSITIONS_ALLOWED = 5  # Default fallback
+    MAX_POSITIONS_ALLOWED = 12  # Default fallback
 # Enforce hard ceiling
 if MAX_POSITIONS_ALLOWED > HARD_MAX_POSITIONS:
     MAX_POSITIONS_ALLOWED = HARD_MAX_POSITIONS
@@ -1062,6 +1063,7 @@ class TradingStrategy:
         self.advanced_manager = None
         self.rotation_manager = None
         self.pro_mode_enabled = False
+        self.ai_capital_rotator = None  # AI Capital Rotation Engine (4-step + meta allocation)
 
         # Initialize credential health monitoring to detect credential loss
         # This helps diagnose recurring disconnection issues
@@ -3029,6 +3031,7 @@ class TradingStrategy:
             self.rotation_manager = None
             self.pro_mode_enabled = False
             self.advanced_manager = None
+            self.ai_capital_rotator = None
             return
 
         logger.info("=" * 70)
@@ -3064,6 +3067,27 @@ class TradingStrategy:
             self.rotation_manager = None
 
         self.pro_mode_enabled = pro_mode_enabled
+
+        # Initialize AI Capital Rotation Engine (always active, not gated by PRO_MODE)
+        try:
+            from bot.ai_capital_rotation_engine import get_ai_capital_rotation_engine
+            self.ai_capital_rotator = get_ai_capital_rotation_engine(
+                max_active_positions=MAX_POSITIONS_ALLOWED,
+                dust_threshold_usd=float(os.getenv('DUST_THRESHOLD_USD', '5.0')),
+            )
+            logger.info("✅ AI Capital Rotation Engine initialised (MAX=%d positions)", MAX_POSITIONS_ALLOWED)
+        except Exception as err:
+            logger.warning(f"⚠️ AI Capital Rotation Engine init failed (non-critical): {err}")
+            try:
+                from ai_capital_rotation_engine import get_ai_capital_rotation_engine
+                self.ai_capital_rotator = get_ai_capital_rotation_engine(
+                    max_active_positions=MAX_POSITIONS_ALLOWED,
+                    dust_threshold_usd=float(os.getenv('DUST_THRESHOLD_USD', '5.0')),
+                )
+                logger.info("✅ AI Capital Rotation Engine initialised (MAX=%d positions)", MAX_POSITIONS_ALLOWED)
+            except Exception as err2:
+                logger.warning(f"⚠️ AI Capital Rotation Engine unavailable: {err2}")
+                self.ai_capital_rotator = None
 
         try:
             # Import advanced trading modules
