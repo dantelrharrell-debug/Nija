@@ -124,6 +124,37 @@ except ImportError:
         MarketRegimeController = None
         RegimeDecision = None
 
+# Import Global Risk Governor — portfolio-wide circuit breaker (prevents cascading losses)
+try:
+    from global_risk_governor import get_global_risk_governor, GovernorConfig
+    GLOBAL_RISK_GOVERNOR_AVAILABLE = True
+    logger.info("✅ Global Risk Governor loaded - cascade-loss protection active")
+except ImportError:
+    try:
+        from bot.global_risk_governor import get_global_risk_governor, GovernorConfig
+        GLOBAL_RISK_GOVERNOR_AVAILABLE = True
+        logger.info("✅ Global Risk Governor loaded - cascade-loss protection active")
+    except ImportError:
+        GLOBAL_RISK_GOVERNOR_AVAILABLE = False
+        logger.warning("⚠️ Global Risk Governor not available - cascade-loss protection disabled")
+        get_global_risk_governor = None
+        GovernorConfig = None
+
+# Import AI Market Regime Forecaster — predicts regime changes early
+try:
+    from ai_market_regime_forecaster import get_ai_market_regime_forecaster
+    AI_REGIME_FORECASTER_AVAILABLE = True
+    logger.info("✅ AI Market Regime Forecaster loaded - early regime-change prediction active")
+except ImportError:
+    try:
+        from bot.ai_market_regime_forecaster import get_ai_market_regime_forecaster
+        AI_REGIME_FORECASTER_AVAILABLE = True
+        logger.info("✅ AI Market Regime Forecaster loaded - early regime-change prediction active")
+    except ImportError:
+        AI_REGIME_FORECASTER_AVAILABLE = False
+        logger.warning("⚠️ AI Market Regime Forecaster not available - early warning disabled")
+        get_ai_market_regime_forecaster = None
+
 # Import Risk Budget Engine — risk-first position sizing with performance scaling
 try:
     from risk_budget_engine import RiskBudgetEngine, RiskBudgetConfig, TradeRecord, OUTCOME_WIN, OUTCOME_LOSS
@@ -3867,6 +3898,51 @@ class TradingStrategy:
                 # Force user mode to block new entries but allow position management
                 user_mode = True
 
+        # ✅ LAYER 0b: GLOBAL RISK GOVERNOR — cascade-loss circuit breaker
+        # Checks daily loss, consecutive losses, equity curve, and exposure concentration.
+        # Runs after the recovery controller so we have current balance available.
+        if GLOBAL_RISK_GOVERNOR_AVAILABLE and get_global_risk_governor and not user_mode:
+            try:
+                _gov = get_global_risk_governor()
+                _gov_balance = 0.0
+                if active_broker and hasattr(active_broker, 'get_balance'):
+                    try:
+                        _bal_result = active_broker.get_balance()
+                        if _bal_result and not _bal_result[1]:
+                            _gov_balance = float(_bal_result[0])
+                    except Exception:
+                        pass
+
+                _gov_pos_count = (
+                    len(self.execution_engine.positions)
+                    if self.execution_engine else 0
+                )
+                _gov.update_open_positions(_gov_pos_count)
+
+                if _gov_balance > 0:
+                    _gov_decision = _gov.approve_entry(
+                        symbol="PORTFOLIO",
+                        proposed_risk_usd=0.0,   # portfolio-level gate; per-trade checked separately
+                        current_portfolio_value=_gov_balance,
+                    )
+                    if not _gov_decision.allowed:
+                        logger.warning("=" * 80)
+                        logger.warning("🛑 GLOBAL RISK GOVERNOR: NEW ENTRIES BLOCKED")
+                        logger.warning("=" * 80)
+                        logger.warning(f"   Reason: {_gov_decision.reason}")
+                        logger.warning(f"   Risk Score: {_gov_decision.risk_score:.0f}/100")
+                        logger.warning("   Mode: Position management only (exits/stops)")
+                        logger.warning("=" * 80)
+                        user_mode = True
+                    elif _gov_decision.risk_score > 50:
+                        logger.warning(
+                            "⚠️ Global Risk Governor: elevated risk %.0f/100 — %s",
+                            _gov_decision.risk_score,
+                            _gov_decision.reason,
+                        )
+            except Exception as _gov_exc:
+                logger.debug("Global Risk Governor check skipped: %s", _gov_exc)
+
         # CRITICAL SAFETY CHECK: Verify trading is allowed before ANY operations
         if self.safety:
             trading_allowed, reason = self.safety.is_trading_allowed()
@@ -6401,6 +6477,68 @@ class TradingStrategy:
                                     )
 
                                 # ═══════════════════════════════════════════════════════
+                                # AI MARKET REGIME FORECASTER — early-warning regime gate
+                                # ═══════════════════════════════════════════════════════
+                                # When the forecaster detects an imminent regime change
+                                # (transition_risk ≥ 80), reduce position size to protect
+                                # capital against entering during an unstable transition.
+                                if AI_REGIME_FORECASTER_AVAILABLE and get_ai_market_regime_forecaster:
+                                    try:
+                                        _forecaster = get_ai_market_regime_forecaster()
+                                        _current_regime_label = (
+                                            _regime_result.regime if _regime_result and hasattr(_regime_result, 'regime')
+                                            else "RANGING"
+                                        )
+                                        _indicators_snap = {
+                                            'atr': analysis.get('atr', 0.0),
+                                            'adx': adx if 'adx' in locals() else 25.0,
+                                            'rsi_9': analysis.get('rsi_9', 50.0),
+                                            'rsi': analysis.get('rsi', 50.0),
+                                            'bb_upper': analysis.get('bb_upper', 0.0),
+                                            'bb_lower': analysis.get('bb_lower', 0.0),
+                                            'bb_middle': analysis.get('bb_mid', 0.0),
+                                        }
+                                        _forecast = _forecaster.forecast(
+                                            df=df,
+                                            indicators=_indicators_snap,
+                                            current_regime=str(_current_regime_label),
+                                        )
+                                        if _forecast.transition_risk >= 80:
+                                            # High risk: block entry to avoid entering during regime shift
+                                            logger.warning(
+                                                f"   🔮 {symbol}: AI REGIME FORECASTER — "
+                                                f"imminent regime change BLOCKED entry "
+                                                f"(risk={_forecast.transition_risk:.0f}/100 "
+                                                f"next={_forecast.top_next_regime} "
+                                                f"p={_forecast.transition_probability:.0%})"
+                                            )
+                                            if _forecast.early_warnings:
+                                                logger.warning(
+                                                    f"      ⚡ Early warnings: {'; '.join(_forecast.early_warnings[:3])}"
+                                                )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        elif _forecast.transition_risk >= 55:
+                                            # Moderate risk: reduce position size
+                                            _forecast_mult = max(
+                                                0.5,
+                                                1.0 - (_forecast.transition_risk - 55) / 100.0,
+                                            )
+                                            _pre_forecast_size = position_size
+                                            position_size = position_size * _forecast_mult
+                                            logger.info(
+                                                f"   🔮 {symbol}: AI Regime Forecaster — "
+                                                f"regime transition risk {_forecast.transition_risk:.0f}/100 "
+                                                f"size reduced {_pre_forecast_size:.2f}→{position_size:.2f} "
+                                                f"(next_regime={_forecast.top_next_regime})"
+                                            )
+                                    except Exception as _fc_err:
+                                        logger.debug(
+                                            "AI Market Regime Forecaster skipped for %s: %s",
+                                            symbol, _fc_err,
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
                                 # RISK BUDGET ENGINE — risk-first position size override
                                 # ═══════════════════════════════════════════════════════
                                 # When available, use the Risk Budget Engine to compute
@@ -6974,7 +7112,14 @@ class TradingStrategy:
         except Exception as e:
             logger.warning(f"Failed to update Smart Drawdown Recovery: {e}")
 
-        # Record with advanced manager (original functionality)
+        # Record with Global Risk Governor for cascade-loss circuit breaker
+        if GLOBAL_RISK_GOVERNOR_AVAILABLE and get_global_risk_governor:
+            try:
+                _gov = get_global_risk_governor()
+                _gov.record_trade_result(pnl_usd=profit_usd, is_win=is_win)
+            except Exception as _gov_err:
+                logger.debug("Global Risk Governor trade record skipped: %s", _gov_err)
+
         if not self.advanced_manager:
             return
 
