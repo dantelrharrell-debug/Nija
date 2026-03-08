@@ -6491,7 +6491,7 @@ class TradingStrategy:
                                         )
                                         _indicators_snap = {
                                             'atr': analysis.get('atr', 0.0),
-                                            'adx': adx if 'adx' in dir() else 25.0,
+                                            'adx': adx if 'adx' in locals() else 25.0,
                                             'rsi_9': analysis.get('rsi_9', 50.0),
                                             'rsi': analysis.get('rsi', 50.0),
                                             'bb_upper': analysis.get('bb_upper', 0.0),
@@ -7119,7 +7119,6 @@ class TradingStrategy:
                 _gov.record_trade_result(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _gov_err:
                 logger.debug("Global Risk Governor trade record skipped: %s", _gov_err)
-
 
         if not self.advanced_manager:
             return
