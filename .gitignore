@@ -518,3 +518,9 @@ data/global_risk_governor_audit.jsonl
 # AI Market Regime Forecaster runtime state (generated at runtime, never commit)
 data/ai_regime_forecaster.json
 
+# Correlation Risk Engine / Strategy Health Monitor / VSD / DPC audit logs (runtime, never commit)
+data/correlation_decisions.jsonl
+data/strategy_health.jsonl
+data/volatility_shocks.jsonl
+data/concentration_decisions.jsonl
+
