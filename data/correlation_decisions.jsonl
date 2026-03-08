@@ -1,0 +1,2 @@
+{"timestamp": "2026-03-08T14:52:30.917657+00:00", "symbol": "SOL-USD", "allowed": false, "reason": "portfolio_corr=0.89 > limit=0.65", "proposed_size_usd": 500.0, "adjusted_size_usd": 500.0, "portfolio_corr_score": 0.8924, "max_pair_corr": 0.0}
+{"timestamp": "2026-03-08T14:54:35.818636+00:00", "symbol": "SOL-USD", "allowed": false, "reason": "portfolio_corr=0.89 > limit=0.65", "proposed_size_usd": 500.0, "adjusted_size_usd": 500.0, "portfolio_corr_score": 0.8924, "max_pair_corr": 0.0}
