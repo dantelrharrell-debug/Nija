@@ -33,6 +33,15 @@ except ImportError:
         CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker
     )
 
+# Import broker registry for platform designation tracking
+try:
+    from bot.broker_registry import broker_registry
+except ImportError:
+    try:
+        from broker_registry import broker_registry
+    except ImportError:
+        broker_registry = None
+
 # Import account isolation manager for failure isolation
 try:
     from bot.account_isolation_manager import get_isolation_manager, FailureType
@@ -198,6 +207,10 @@ class MultiAccountBrokerManager:
         
         # Register the broker instance
         self._platform_brokers[broker_type] = broker
+        # Mark in the global broker registry so any module can check is_platform()
+        if broker_registry is not None:
+            broker_registry[broker_type.value]["platform"] = True
+            logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
@@ -247,6 +260,10 @@ class MultiAccountBrokerManager:
             # Connect the broker
             if broker.connect():
                 self._platform_brokers[broker_type] = broker
+                # Mark in the global broker registry so any module can check is_platform()
+                if broker_registry is not None:
+                    broker_registry[broker_type.value]["platform"] = True
+                    logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
                 logger.info(f"✅ Platform broker added: {broker_type.value}")
                 logger.info(f"   Platform broker registered once, globally")
                 return broker
