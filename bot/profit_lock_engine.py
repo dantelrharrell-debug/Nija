@@ -2,7 +2,7 @@
 NIJA Profit Lock Engine
 ========================
 
-Implements a per-trade **ratchet-style** profit locking mechanism with five
+Implements a per-trade **ratchet-style** profit locking mechanism with six
 tiered milestones.  As a position climbs to each tier, a growing fraction of
 the peak profit is permanently "locked in" via a dynamic floor stop price.
 The lock floor can only move in the profitable direction — it never releases
@@ -22,6 +22,7 @@ Architecture
   │  3      ≥ +3.5 %      70 % of peak     +2.45 %      │
   │  4      ≥ +5.0 %      82 % of peak     +4.10 %      │
   │  5      ≥ +8.0 %      92 % of peak     +7.36 %      │
+  │  6      ≥ +15.0 %     96 % of peak     +14.40 %     │
   │                                                      │
   │  The "lock floor price" is the stop price at which   │
   │  the position would be closed to guarantee the       │
@@ -98,13 +99,14 @@ class TierSpec:
         )
 
 
-# Five ascending tiers. Each supersedes the previous.
+# Six ascending tiers. Each supersedes the previous.
 TIER_SPECS: List[TierSpec] = [
-    TierSpec("TIER_1", peak_trigger_pct=1.0, lock_fraction=0.30),
-    TierSpec("TIER_2", peak_trigger_pct=2.0, lock_fraction=0.50),
-    TierSpec("TIER_3", peak_trigger_pct=3.5, lock_fraction=0.70),
-    TierSpec("TIER_4", peak_trigger_pct=5.0, lock_fraction=0.82),
-    TierSpec("TIER_5", peak_trigger_pct=8.0, lock_fraction=0.92),
+    TierSpec("TIER_1", peak_trigger_pct=1.0,  lock_fraction=0.30),
+    TierSpec("TIER_2", peak_trigger_pct=2.0,  lock_fraction=0.50),
+    TierSpec("TIER_3", peak_trigger_pct=3.5,  lock_fraction=0.70),
+    TierSpec("TIER_4", peak_trigger_pct=5.0,  lock_fraction=0.82),
+    TierSpec("TIER_5", peak_trigger_pct=8.0,  lock_fraction=0.92),
+    TierSpec("TIER_6", peak_trigger_pct=15.0, lock_fraction=0.96),
 ]
 
 # Map tier name → spec for quick look-up
@@ -118,6 +120,7 @@ class LockTier(str, Enum):
     TIER_3 = "TIER_3"
     TIER_4 = "TIER_4"
     TIER_5 = "TIER_5"
+    TIER_6 = "TIER_6"
 
 
 # ---------------------------------------------------------------------------
