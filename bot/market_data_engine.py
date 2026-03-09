@@ -362,7 +362,10 @@ class MarketDataEngine:
         try:
             import pandas as pd
         except ImportError:
-            raise RuntimeError("pandas is required for get_bars_as_dataframe().")
+            raise RuntimeError(
+            "pandas is required for get_bars_as_dataframe(). "
+            "Install with: pip install pandas"
+        )
         bars = self.get_bars(symbol, n)
         if not bars:
             return None
