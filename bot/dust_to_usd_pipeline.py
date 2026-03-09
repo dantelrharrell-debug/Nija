@@ -321,7 +321,7 @@ class DustToUsdPipeline:
         # Method 1: close_position
         if hasattr(broker, "close_position"):
             try:
-                result = broker.close_position(dp.symbol)
+                result = broker.close_position(dp.symbol, quantity=dp.quantity)
                 if result and result.get("status") not in ("error", "failed"):
                     return True, f"close_position succeeded (status={result.get('status')})"
                 return False, f"close_position returned error: {result}"
