@@ -302,14 +302,26 @@ class MultiAssetExecutor:
         allocation: Optional[AssetAllocation] = None,
         risk_gate: Optional[Callable[[Dict], bool]] = None,
         coinbase_client=None,
+        live_brokers: Optional[Dict[AssetClass, "BrokerAdapter"]] = None,
     ):
+        """
+        Args:
+            total_capital:  Total portfolio USD value.
+            allocation:     AssetAllocation object (default: 100% crypto).
+            risk_gate:      Optional callable(signal_dict) → bool; False blocks trade.
+            coinbase_client: Optional pre-configured Coinbase RESTClient.
+            live_brokers:   Optional mapping of AssetClass → live BrokerAdapter.
+                            Provided adapters replace the default stubs.  Use
+                            ``bot.live_broker_adapters.build_live_adapters()`` to
+                            construct them, or pass individual adapters.
+        """
         self.total_capital = total_capital
         self.allocation = allocation or AssetAllocation()
         self.allocation.validate()
         self.risk_gate = risk_gate
         self._lock = threading.RLock()
 
-        # Broker adapters keyed by AssetClass
+        # Start with default adapters (stub for non-crypto asset classes)
         self._adapters: Dict[AssetClass, BrokerAdapter] = {
             AssetClass.CRYPTO:   CoinbaseBrokerAdapter(coinbase_client),
             AssetClass.EQUITY:   StubBrokerAdapter((AssetClass.EQUITY,), "equity_stub"),
@@ -317,6 +329,15 @@ class MultiAssetExecutor:
             AssetClass.FUTURES:  StubBrokerAdapter((AssetClass.FUTURES,), "futures_stub"),
             AssetClass.OPTIONS:  StubBrokerAdapter((AssetClass.OPTIONS,), "options_stub"),
         }
+
+        # Override stubs with live adapters where provided
+        if live_brokers:
+            for asset_class, adapter in live_brokers.items():
+                self._adapters[asset_class] = adapter
+                logger.info(
+                    "[MultiAssetExecutor] Live adapter registered for %s: %s",
+                    asset_class.value, adapter.NAME,
+                )
 
         # Open positions
         self._positions: Dict[str, AssetPosition] = {}   # key: symbol
@@ -567,14 +588,26 @@ _executor_lock = threading.Lock()
 def get_multi_asset_executor(
     total_capital: float = 10_000.0,
     allocation: Optional[AssetAllocation] = None,
+    live_brokers: Optional[Dict[AssetClass, BrokerAdapter]] = None,
     reset: bool = False,
 ) -> MultiAssetExecutor:
-    """Return module-level singleton MultiAssetExecutor."""
+    """
+    Return module-level singleton MultiAssetExecutor.
+
+    Args:
+        total_capital: Portfolio capital in USD.
+        allocation:    Optional AssetAllocation.
+        live_brokers:  Optional dict of AssetClass → live BrokerAdapter to replace
+                       stubs.  Constructed via
+                       ``bot.live_broker_adapters.build_live_adapters()``.
+        reset:         If True, create a fresh instance even if one exists.
+    """
     global _executor_instance
     with _executor_lock:
         if _executor_instance is None or reset:
             _executor_instance = MultiAssetExecutor(
                 total_capital=total_capital,
                 allocation=allocation,
+                live_brokers=live_brokers,
             )
     return _executor_instance
