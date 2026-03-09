@@ -1,9 +1,11 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-📋 **Version 7.3.1** — March 2026 Deep-Clean Release (Patch 1)
+📋 **Version 7.4.0** — March 2026 Portfolio Intelligence Release
 
 > **CRITICAL SAFETY GUARANTEE**  
 > **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
+> **✅ v7.4.0 (March 9, 2026):** Five new institutional-grade portfolio-intelligence engines landed: **Portfolio Master Engine** (consolidated risk brain), **Liquidity Detection Engine** (institutional-flow detector), **AI Regime Engine** (leading-indicator regime forecaster), **Global Portfolio Engine** (strategy coordinator with regime-aware capital allocation), and **Execution Router** (smart order routing with venue selection, TWAP, and auto-retry). All engines degrade gracefully when optional subsystems are unavailable.
 
 > **✅ v7.3.1 (March 6, 2026):** Second deep-clean pass — dangerous `assert` statements that could silently block profit-taking and stop-loss checks for positions with extreme P&L (>±100%) replaced with warning logs; broken diagnostic script references in README corrected. All 17 core smoke tests pass.
 
@@ -11,7 +13,7 @@
 
 ---
 
-## 🔒 CURRENT SUCCESS REFERENCE POINT — March 6, 2026 (v7.3.1)
+## 🔒 CURRENT SUCCESS REFERENCE POINT — March 9, 2026 (v7.4.0)
 
 > **Use this section to get back to the current working state at any time.**
 
@@ -32,6 +34,11 @@
 | **Candle Data Source** | ✅ Active | Coinbase Advanced Trade API, 5-minute candles |
 | **RSI Strategy** | ✅ Active | Dual RSI (RSI_9 + RSI_14), exit >55 overbought / <45 oversold |
 | **P&L Assertion Guard** | ✅ Fixed | Extreme-move positions (>±100%) now log a warning and continue — never silently skipped |
+| **Portfolio Master Engine** | ✅ Active | Aggregates 5 risk subsystems into a 0–100 composite risk score; enforces hard portfolio limits |
+| **Liquidity Detection Engine** | ✅ Active | Volume Z-score + OFI + spread analysis; NONE / WATCH / ALERT / STRONG institutional signals |
+| **AI Regime Engine** | ✅ Active | Leading-indicator regime forecaster with early-warning rules and Markov matrix |
+| **Global Portfolio Engine** | ✅ Active | Regime-aware capital allocator across named strategies; routes entries through PortfolioMasterEngine |
+| **Execution Router** | ✅ Active | Venue selection, order-type picker (MARKET / LIMIT / TWAP), retry + fallback, ExchangeKillSwitch integration |
 
 ### Verified Bug Fixes in v7.3.1 (March 6, 2026 — Patch 1)
 
@@ -83,6 +90,171 @@ python3 diagnose_trading_logic.py  # Verify buy/sell logic mapping
 python3 analyze_profitability.py   # Full profitability analysis
 python3 smoke_test_core_fixes.py   # 17-test smoke suite (all must pass)
 ```
+
+---
+
+## 🧠 **NEW: Portfolio Intelligence Suite** (March 9, 2026 — v7.4.0)
+
+Five new institutional-grade engines that form a complete **portfolio-level intelligence layer** above the individual strategy stack.
+
+---
+
+### 🏛️ Portfolio Master Engine (`bot/portfolio_master_engine.py`)
+
+The **central risk brain** of the platform. Before any order reaches an exchange, it passes through the Portfolio Master Engine, which:
+
+- Aggregates verdicts from **GlobalRiskGovernor**, **PortfolioRiskEngine**, **CorrelationRiskEngine**, **DynamicPositionConcentration**, and **VolatilityShockDetector** into a single composite risk score (0–100).
+- Enforces hard portfolio-level limits: max gross exposure, max sector exposure, max drawdown, and daily-loss ceiling.
+- Emits structured `PortfolioRiskReport` objects consumed by the execution layer and dashboard.
+
+```python
+from bot.portfolio_master_engine import get_portfolio_master_engine
+
+engine = get_portfolio_master_engine()
+
+# Before placing an order:
+report = engine.evaluate_entry(
+    symbol="BTC-USD",
+    side="long",
+    proposed_size_usd=500.0,
+    portfolio_value_usd=20_000.0,
+)
+
+if not report.approved:
+    print(f"Blocked: {report.block_reason}")
+else:
+    print(f"Approved — risk score {report.risk_score:.1f}/100")
+    print(f"Max safe size: ${report.approved_size_usd:.2f}")
+
+# Lifecycle hooks:
+engine.register_position(symbol="BTC-USD", size_usd=500.0, side="long")
+engine.close_position(symbol="BTC-USD", pnl_usd=42.0)
+
+# Dashboard snapshot:
+print(engine.get_report())
+```
+
+---
+
+### 💧 Liquidity Detection Engine (`bot/liquidity_detection_engine.py`)
+
+Detects **institutional-scale market activity** so the bot can piggyback on large-player flow or avoid entering into an absorption zone.
+
+Detection pillars:
+1. **Volume Anomaly Detection** — Z-score vs. rolling 50-bar baseline (WATCH ≥ 1.5σ, ALERT ≥ 2.5σ, STRONG ≥ 4.0σ)
+2. **Order-Flow Imbalance (OFI)** — Buy/sell volume ratio per bar
+3. **Spread Compression / Expansion** — Tight spreads attract flow; sudden widening signals liquidity withdrawal
+4. **Price Impact Analysis** — Large volume with little price movement → absorption (institutional accumulation)
+5. **Composite Institutional Score (0–100)** — Weighted combination thresholded into NONE / WATCH / ALERT / STRONG
+
+```python
+from bot.liquidity_detection_engine import get_liquidity_detection_engine
+
+engine = get_liquidity_detection_engine()
+
+signal = engine.update(
+    symbol="BTC-USD",
+    volume_usd=1_500_000.0,
+    buy_volume_usd=950_000.0,
+    spread_pct=0.0008,
+    price=65_000.0,
+)
+
+if signal.alert_level in ("ALERT", "STRONG"):
+    print(f"Institutional activity detected: {signal}")
+
+report = engine.get_portfolio_report()
+```
+
+---
+
+### 🤖 AI Regime Engine (`bot/ai_regime_engine.py`)
+
+Leading-indicator regime classifier that anticipates transitions **before** they are confirmed, enabling the portfolio to rotate strategy weights proactively rather than reactively.
+
+Key features:
+- **Leading indicators**: volatility acceleration, trend exhaustion, Bollinger Band squeeze, momentum divergence, candle entropy
+- **Markov transition matrix** that updates itself from live regime history
+- **8-rule early-warning system** with per-rule confidence scoring
+- Outputs `BULL`, `BEAR`, `SIDEWAYS`, and `TRANSITION` regime labels
+
+---
+
+### 🌐 Global Portfolio Engine (`bot/global_portfolio_engine.py`)
+
+The **top-level orchestration layer** that manages a fleet of named strategies. Every entry request from any strategy flows through it.
+
+- **Registers** and manages named strategies (`ApexTrend`, `MeanReversion`, `Breakout`, …)
+- **Allocates** capital using regime-aware scores from the MetaLearningOptimizer (equal-weight fallback)
+- **Coordinates** all entries through the PortfolioMasterEngine so portfolio-level risk limits are always respected
+- **Aggregates** per-strategy Sharpe, P&L attribution, and win-rate into a single portfolio performance view
+- **Switches** strategy weights dynamically as the AI Regime Engine detects regime transitions
+
+```python
+from bot.global_portfolio_engine import get_global_portfolio_engine
+
+engine = get_global_portfolio_engine()
+
+# Register strategies on startup:
+engine.register_strategy("ApexTrend")
+engine.register_strategy("MeanReversion")
+
+# Allocate capital for the current session:
+allocations = engine.allocate_capital(portfolio_value_usd=50_000.0, regime="BULL")
+# → {"ApexTrend": 30000.0, "MeanReversion": 20000.0}
+
+# Before placing an order on behalf of a strategy:
+report = engine.request_entry(
+    strategy="ApexTrend",
+    symbol="BTC-USD",
+    side="long",
+    size_usd=500.0,
+    portfolio_value_usd=50_000.0,
+)
+if report.approved:
+    execute(size_usd=report.approved_size_usd)
+
+# After a trade closes:
+engine.record_trade("ApexTrend", "BTC-USD", pnl_usd=42.0, is_win=True)
+
+print(engine.get_report())
+```
+
+---
+
+### ⚡ Execution Router (`bot/execution_router.py`)
+
+The **final layer** before orders reach an exchange. Selects the optimal venue, order type, and timing for each trade.
+
+Responsibilities:
+1. **Venue Selection** — ranks available exchanges by liquidity score, fee tier, and latency
+2. **Order-Type Selection** — auto-selects MARKET, LIMIT, or TWAP based on order size vs. typical volume (minimises market impact)
+3. **Pre-flight Validation** — checks broker circuit-breakers, minimum notional, and hard-controls gate
+4. **Execution Tracking** — records fill price, slippage, and latency; feeds ExchangeKillSwitch health monitor
+5. **Retry / Fallback** — on broker failure, retries with exponential back-off, then falls back to an alternate venue
+
+```python
+from bot.execution_router import get_execution_router, OrderRequest
+
+router = get_execution_router()
+
+req = OrderRequest(
+    strategy="ApexTrend",
+    symbol="BTC-USD",
+    side="buy",
+    size_usd=500.0,
+    order_type="MARKET",   # optional — auto-selected if omitted
+)
+
+result = router.execute(req)
+
+if result.success:
+    print(f"Filled at {result.fill_price:.4f} | slippage {result.slippage_bps:.1f} bps")
+else:
+    print(f"Failed: {result.error}")
+```
+
+> **All five engines degrade gracefully** — if an optional subsystem (e.g. MetaLearningOptimizer, ExchangeKillSwitch) is unavailable, the engine falls back to safe defaults rather than raising an error.
 
 ---
 
