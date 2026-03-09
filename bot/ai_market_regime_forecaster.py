@@ -89,7 +89,7 @@ import logging
 import math
 import threading
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Tuple
@@ -130,6 +130,65 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
+@dataclass
+class SoftFailMetrics:
+    """
+    Observability counters for soft-fail events inside the forecaster.
+
+    A *soft fail* is any exception that is caught internally so that the
+    forecaster can return a degraded-but-valid result rather than propagating
+    the error to the caller.  Tracking these counters makes silent degradation
+    visible in dashboards, logs, and alerting systems.
+
+    Fields
+    ------
+    feature_extraction_failures : int
+        LeadingIndicatorEngine.compute() raised an exception; forecaster fell
+        back to an empty feature dict ``{}``.
+    early_warning_rule_failures : int
+        At least one rule lambda inside EarlyWarningSystem.check() raised an
+        exception and was silently skipped.
+    state_load_failures : int
+        _load_state() failed to restore persisted Markov / history state;
+        forecaster started fresh.
+    state_save_failures : int
+        _save_state() failed to persist state; in-memory state is unaffected.
+    total_soft_fails : int
+        Running total across all categories (convenient for a single threshold
+        alert).
+    """
+
+    feature_extraction_failures: int = 0
+    early_warning_rule_failures: int = 0
+    state_load_failures: int = 0
+    state_save_failures: int = 0
+    total_soft_fails: int = 0
+
+    def increment(self, counter: str) -> None:
+        """Increment *counter* by 1 and update the running total."""
+        if not hasattr(self, counter):
+            raise ValueError(f"Unknown soft-fail counter: {counter!r}")
+        setattr(self, counter, getattr(self, counter) + 1)
+        self.total_soft_fails += 1
+
+    def increment_by(self, counter: str, amount: int) -> None:
+        """Increment *counter* by *amount* and update the running total."""
+        if not hasattr(self, counter):
+            raise ValueError(f"Unknown soft-fail counter: {counter!r}")
+        setattr(self, counter, getattr(self, counter) + amount)
+        self.total_soft_fails += amount
+
+    def to_dict(self) -> Dict[str, int]:
+        """Serialise to a plain dict suitable for JSON / logging."""
+        return {
+            "feature_extraction_failures": self.feature_extraction_failures,
+            "early_warning_rule_failures": self.early_warning_rule_failures,
+            "state_load_failures": self.state_load_failures,
+            "state_save_failures": self.state_save_failures,
+            "total_soft_fails": self.total_soft_fails,
+        }
+
 
 @dataclass
 class ForecastResult:
@@ -484,6 +543,11 @@ class EarlyWarningSystem:
         ),
     ]
 
+    def __init__(self) -> None:
+        #: Number of rule-lambda exceptions caught since instantiation.
+        #: Exposed so the parent forecaster can roll this into SoftFailMetrics.
+        self.rule_fail_count: int = 0
+
     def check(self, features: Dict[str, float]) -> List[str]:
         """Return list of triggered warning strings."""
         warnings: List[str] = []
@@ -492,7 +556,7 @@ class EarlyWarningSystem:
                 if test_fn(features):
                     warnings.append(description)
             except Exception:
-                pass
+                self.rule_fail_count += 1
         return warnings
 
 
@@ -522,6 +586,9 @@ class AIMarketRegimeForecaster:
         # Regime observation history for self-updating Markov model
         self._regime_history: Deque[str] = deque(maxlen=REGIME_HISTORY_MAXLEN)
         self._last_regime: Optional[str] = None
+
+        # Soft-fail observability counters
+        self._soft_fail_metrics = SoftFailMetrics()
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         self._load_state()
@@ -563,6 +630,7 @@ class AIMarketRegimeForecaster:
             except Exception as exc:
                 logger.warning("LeadingIndicatorEngine error: %s", exc)
                 features = {}
+                self._soft_fail_metrics.increment("feature_extraction_failures")
 
             # Get Markov transition probabilities
             transition_probs = self._markov.transition_probs(current_regime)
@@ -594,8 +662,12 @@ class AIMarketRegimeForecaster:
                 persistence_p, features
             )
 
-            # Early warnings
+            # Early warnings — sync any rule-lambda failures into metrics
+            ew_fails_before = self._ew_system.rule_fail_count
             warnings = self._ew_system.check(features)
+            new_ew_fails = self._ew_system.rule_fail_count - ew_fails_before
+            if new_ew_fails > 0:
+                self._soft_fail_metrics.increment_by("early_warning_rule_failures", new_ew_fails)
 
             result = ForecastResult(
                 current_regime=current_regime,
@@ -645,7 +717,22 @@ class AIMarketRegimeForecaster:
                     k: {r: round(p, 4) for r, p in v.items()}
                     for k, v in self._markov._matrix.items()
                 },
+                "soft_fail_metrics": self._soft_fail_metrics.to_dict(),
             }
+
+    def get_soft_fail_metrics(self) -> SoftFailMetrics:
+        """
+        Return a snapshot of soft-fail observability counters.
+
+        Callers can poll this periodically to detect silent degradation::
+
+            metrics = forecaster.get_soft_fail_metrics()
+            if metrics.total_soft_fails > threshold:
+                alert(...)
+        """
+        with self._lock:
+            # Return a defensive copy so callers cannot mutate internal state
+            return replace(self._soft_fail_metrics)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -763,6 +850,7 @@ class AIMarketRegimeForecaster:
             self.STATE_FILE.write_text(json.dumps(state, indent=2))
         except Exception as exc:
             logger.debug("RegimeForecasterState save failed: %s", exc)
+            self._soft_fail_metrics.increment("state_save_failures")
 
     def _load_state(self) -> None:
         try:
@@ -778,6 +866,7 @@ class AIMarketRegimeForecaster:
             logger.info("RegimeForecasterState loaded from %s", self.STATE_FILE)
         except Exception as exc:
             logger.warning("RegimeForecasterState load failed (%s) — starting fresh", exc)
+            self._soft_fail_metrics.increment("state_load_failures")
 
 
 # ---------------------------------------------------------------------------
