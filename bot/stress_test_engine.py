@@ -541,7 +541,7 @@ class StressTestEngine:
     num_paths : int
         Number of independent simulation paths per scenario.
     seed : int | None
-        Random seed for reproducibility.  None → non-deterministic.
+        Random seed for reproducibility.  None = non-deterministic.
     """
 
     def __init__(

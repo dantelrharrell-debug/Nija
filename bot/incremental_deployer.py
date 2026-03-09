@@ -399,7 +399,7 @@ class IncrementalDeployer:
         ----------
         pnl           : trade P&L in dollars (positive = profit).
         won           : True if the trade was profitable.
-        drawdown_pct  : current portfolio drawdown percentage (0–100).
+        drawdown_pct  : current portfolio drawdown percentage (0-100).
         equity        : current portfolio equity (used to track peak/drawdown).
         """
         with self._lock:
@@ -899,9 +899,6 @@ def get_incremental_deployer(
     state_path: str = "data/incremental_deployer_state.json",
     **kwargs: Any,
 ) -> IncrementalDeployer:
-    """Return the process-wide IncrementalDeployer singleton."""
-    total_risk_budget: float = 10_000.0,
-) -> IncrementalDeployer:
     """Return the global IncrementalDeployer singleton."""
     global _deployer_instance
     with _deployer_lock:
@@ -912,14 +909,3 @@ def get_incremental_deployer(
                 **kwargs,
             )
     return _deployer_instance
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-                total_risk_budget=total_risk_budget
-            )
-        return _deployer_instance
