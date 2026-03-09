@@ -1583,3 +1583,138 @@ def update_drawdown_capital(user_id: str):
     except Exception as exc:
         logger.error("Error updating drawdown capital: %s", exc)
         return jsonify({'error': str(exc)}), 500
+
+
+# ========================================
+# Capital Recycling Engine Endpoints
+# ========================================
+
+def _get_cre():
+    """Return the global CapitalRecyclingEngine singleton."""
+    from bot.capital_recycling_engine import get_capital_recycling_engine
+    return get_capital_recycling_engine()
+
+
+@app.route('/api/recycle/status', methods=['GET'])
+@require_auth
+def get_recycle_status(user_id: str):
+    """
+    GET /api/recycle/status
+    Returns pool balance, cumulative deposits/claims, and last allocations.
+    """
+    try:
+        engine = _get_cre()
+        return jsonify({'success': True, 'data': engine.get_status()})
+    except Exception as exc:
+        logger.error("Error fetching recycle status: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/recycle/report', methods=['GET'])
+@require_auth
+def get_recycle_report(user_id: str):
+    """
+    GET /api/recycle/report
+    Returns a human-readable Capital Recycling Engine report.
+    """
+    try:
+        engine = _get_cre()
+        return jsonify({'success': True, 'report': engine.get_report()})
+    except Exception as exc:
+        logger.error("Error generating recycle report: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/recycle/deposit', methods=['POST'])
+@require_auth
+def recycle_deposit(user_id: str):
+    """
+    POST /api/recycle/deposit
+    Body: {"amount_usd": 250.0, "source_symbol": "BTC-USD", "regime": "BULL_TRENDING", "note": ""}
+    Deposit harvested profit into the recycling pool.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        amount = body.get('amount_usd')
+        if amount is None:
+            return jsonify({'error': 'amount_usd is required'}), 400
+        amount = float(amount)
+        if amount <= 0:
+            return jsonify({'error': 'amount_usd must be positive'}), 400
+        source_symbol = str(body.get('source_symbol', 'MANUAL'))
+        regime = str(body.get('regime', 'UNKNOWN'))
+        note = str(body.get('note', ''))
+        engine = _get_cre()
+        pool = engine.deposit_profit(amount, source_symbol=source_symbol, regime=regime, note=note)
+        return jsonify({
+            'success': True,
+            'deposited_usd': round(amount, 4),
+            'pool_usd': round(pool, 4),
+        })
+    except Exception as exc:
+        logger.error("Error depositing to recycle pool: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/recycle/allocate', methods=['GET'])
+@require_auth
+def recycle_allocate(user_id: str):
+    """
+    GET /api/recycle/allocate?regime=BULL_TRENDING
+    Compute per-strategy allocations from the current pool without
+    modifying the pool.
+    """
+    try:
+        regime = request.args.get('regime', 'UNKNOWN')
+        engine = _get_cre()
+        allocations = engine.allocate(regime=regime)
+        return jsonify({
+            'success': True,
+            'regime': regime,
+            'pool_usd': round(engine.get_pool_balance(), 4),
+            'allocations': {k: round(v, 4) for k, v in allocations.items()},
+        })
+    except Exception as exc:
+        logger.error("Error computing recycle allocations: %s", exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/recycle/claim', methods=['POST'])
+@require_auth
+def recycle_claim(user_id: str):
+    """
+    POST /api/recycle/claim
+    Body: {"strategy": "ApexTrend", "requested_usd": 100.0,
+           "regime": "BULL_TRENDING", "note": ""}
+    Claim recycled capital for a strategy.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        strategy = body.get('strategy')
+        if not strategy:
+            return jsonify({'error': 'strategy is required'}), 400
+        requested = body.get('requested_usd')
+        if requested is None:
+            return jsonify({'error': 'requested_usd is required'}), 400
+        requested = float(requested)
+        if requested <= 0:
+            return jsonify({'error': 'requested_usd must be positive'}), 400
+        regime = str(body.get('regime', 'UNKNOWN'))
+        note = str(body.get('note', ''))
+        engine = _get_cre()
+        granted = engine.claim_allocation(
+            strategy=str(strategy),
+            requested_usd=requested,
+            regime=regime,
+            note=note,
+        )
+        return jsonify({
+            'success': True,
+            'strategy': strategy,
+            'requested_usd': round(requested, 4),
+            'granted_usd': round(granted, 4),
+            'pool_usd': round(engine.get_pool_balance(), 4),
+        })
+    except Exception as exc:
+        logger.error("Error claiming recycle allocation: %s", exc)
+        return jsonify({'error': str(exc)}), 500
