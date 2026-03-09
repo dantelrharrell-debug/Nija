@@ -119,6 +119,48 @@ except ImportError:
 VALID_ORDER_STATUSES = ['open', 'closed', 'filled', 'pending']
 LOG_SEPARATOR = "=" * 70
 
+# ─── Net Edge Gate ────────────────────────────────────────────────────────────
+# Minimum net profit (as a decimal fraction of position size) that a trade must
+# clear AFTER fees, slippage, and spread before execution is allowed.
+# Example: 0.0035 = 0.35% – every trade must earn at least 0.35% net or be
+# rejected. This ensures NIJA never takes trades that are unprofitable by design.
+MIN_EDGE_THRESHOLD: float = 0.0035  # 0.35%
+
+
+def calculate_net_edge(
+    entry: float,
+    target: float,
+    size: float,
+    fee_rate: float,
+    slippage_rate: float,
+    spread_rate: float,
+) -> float:
+    """Calculate the net profit of a prospective trade after all costs.
+
+    Args:
+        entry:         Expected entry price.
+        target:        Expected exit / take-profit price.
+        size:          Position size in USD (notional).
+        fee_rate:      One-way fee rate as a decimal (e.g. 0.006 for 0.6%).
+                       Applied twice (entry + exit).
+        slippage_rate: Expected slippage as a decimal (e.g. 0.001 for 0.1%).
+        spread_rate:   Bid-ask spread as a decimal (e.g. 0.001 for 0.1%).
+
+    Returns:
+        Net profit in USD. Negative means the trade would be a net loss even
+        if the price target is hit.
+    """
+    if entry <= 0 or target <= 0 or size <= 0:
+        return 0.0
+
+    gross_profit = (target - entry) * size / entry  # USD gross profit
+    fees = size * fee_rate * 2        # round-trip fees (entry + exit)
+    slippage = size * slippage_rate   # one-way slippage
+    spread = size * spread_rate       # spread cost on entry
+
+    net_profit = gross_profit - fees - slippage - spread
+    return net_profit
+
 # Import fee-aware configuration for profit calculations
 try:
     from fee_aware_config import MARKET_ORDER_ROUND_TRIP
@@ -639,7 +681,60 @@ class ExecutionEngine:
                     logger.warning(f"❌ Entry rejected: {rejection_reason}")
                     return None
 
-            # 🎯 EXECUTION INTELLIGENCE: Optimize execution before placing order
+            # ✅ NET EDGE GATE: Reject trades that cannot clear the minimum
+            # profitability threshold after fees, slippage, and spread.
+            # Dynamic fee detection: pull live rates from the broker when
+            # available, otherwise fall back to hardcoded broker defaults.
+            tp1_price = take_profit_levels.get('tp1', 0.0)
+            if entry_price > 0 and tp1_price > entry_price:
+                # --- Fetch fees (dynamic first, then hardcoded fallback) ---
+                _live_fees = None
+                if self.broker_client and hasattr(self.broker_client, 'get_trading_fees'):
+                    try:
+                        _live_fees = self.broker_client.get_trading_fees(symbol)
+                    except Exception:
+                        pass
+
+                if _live_fees and _live_fees.get('taker_fee'):
+                    _fee_rate = float(_live_fees['taker_fee'])
+                    _fee_source = _live_fees.get('source', 'live')
+                else:
+                    _fee_rate = self._get_broker_round_trip_fee() / 2  # one-way from round-trip
+                    _fee_source = 'hardcoded'
+
+                # Conservative cost assumptions
+                _slippage_rate = 0.001   # 0.1% slippage
+                _spread_rate = 0.001     # 0.1% spread
+
+                _net_edge = calculate_net_edge(
+                    entry=entry_price,
+                    target=tp1_price,
+                    size=position_size,
+                    fee_rate=_fee_rate,
+                    slippage_rate=_slippage_rate,
+                    spread_rate=_spread_rate,
+                )
+                _net_edge_pct = _net_edge / position_size if position_size > 0 else 0.0
+
+                if _net_edge_pct < MIN_EDGE_THRESHOLD:
+                    logger.warning("=" * 70)
+                    logger.warning("🚫 NET EDGE GATE: Trade rejected — insufficient net profit")
+                    logger.warning("=" * 70)
+                    logger.warning(f"   Symbol:          {symbol}")
+                    logger.warning(f"   Entry:           ${entry_price:.4f}")
+                    logger.warning(f"   TP1 Target:      ${tp1_price:.4f}")
+                    logger.warning(f"   Position Size:   ${position_size:.2f}")
+                    logger.warning(f"   Fee Rate (1-way):{_fee_rate*100:.3f}% [{_fee_source}]")
+                    logger.warning(f"   Net Edge:        {_net_edge_pct*100:.4f}% "
+                                   f"(min required: {MIN_EDGE_THRESHOLD*100:.2f}%)")
+                    logger.warning("=" * 70)
+                    return None
+
+                logger.info(f"✅ Net Edge Gate passed: {_net_edge_pct*100:.4f}% "
+                            f">= {MIN_EDGE_THRESHOLD*100:.2f}% threshold "
+                            f"[fees: {_fee_source}]")
+
+
             execution_plan = self._optimize_execution_with_intelligence(
                 symbol=symbol,
                 side=side,
