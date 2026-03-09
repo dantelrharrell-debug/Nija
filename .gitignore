@@ -524,3 +524,4 @@ data/strategy_health.jsonl
 data/volatility_shocks.jsonl
 data/concentration_decisions.jsonl
 
+data/profit_lock_state.json
