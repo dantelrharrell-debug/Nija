@@ -49,10 +49,10 @@ Usage
 
     for rec in report.recommendations:
         if rec.action == ConsolidationAction.CLOSE:
-            broker.close_position(rec.symbol)
+            broker.close_position(rec.symbol, quantity=rec.quantity)
         elif rec.action == ConsolidationAction.MERGE:
             # Engine returns the target symbol to consolidate into
-            broker.close_position(rec.symbol)
+            broker.close_position(rec.symbol, quantity=rec.quantity)
 
 Author: NIJA Trading Systems
 Version: 1.0
@@ -117,6 +117,7 @@ class ConsolidationRec:
     symbol: str
     action: ConsolidationAction
     size_usd: float
+    quantity: float          # Units held (required by close_position)
     pnl_pct: float
     severity: DustSeverity
     merge_target: Optional[str]  # Populated when action == MERGE
@@ -368,6 +369,7 @@ class DustConsolidationEngine:
                     symbol=entry.symbol,
                     action=action,
                     size_usd=entry.size_usd,
+                    quantity=entry.quantity,
                     pnl_pct=entry.pnl_pct,
                     severity=entry.severity,
                     merge_target=target,
@@ -392,6 +394,7 @@ class DustConsolidationEngine:
                     symbol=entry.symbol,
                     action=action,
                     size_usd=entry.size_usd,
+                    quantity=entry.quantity,
                     pnl_pct=entry.pnl_pct,
                     severity=entry.severity,
                     merge_target=None,
