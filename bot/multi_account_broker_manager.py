@@ -52,6 +52,16 @@ except ImportError:
         get_isolation_manager = None
         FailureType = None
 
+# Import account mode manager for hierarchy-driven mode enforcement
+try:
+    from bot.account_mode_manager import get_account_mode_manager, AccountMode
+except ImportError:
+    try:
+        from account_mode_manager import get_account_mode_manager, AccountMode
+    except ImportError:
+        get_account_mode_manager = None
+        AccountMode = None
+
 logger = logging.getLogger('nija.multi_account')
 
 # Root nija logger for flushing all handlers
@@ -1094,19 +1104,51 @@ class MultiAccountBrokerManager:
             logger.debug(f"   is_platform_connected result: {platform_connected}")
 
             if not platform_connected:
-                # CRITICAL FIX (Jan 17, 2026): ENFORCE connection order for Kraken copy trading
-                # For Kraken, user accounts MUST NOT connect without master (prevents nonce conflicts & broken copy trading)
-                # For other brokers, allow connection with warning (user may want standalone trading)
+                # HIERARCHY ENFORCEMENT: User is connecting without a Platform account.
+                # This violates the intended primary/secondary structure. The user is
+                # temporarily acting as primary, which can cause reporting, risk
+                # aggregation, and capital orchestration inconsistencies.
+                #
+                # Mitigation: automatically place this user in RECOVERY mode so that:
+                #   • Existing positions can still be exited (standalone mode works for exits)
+                #   • No NEW entries are accepted until the Platform account is connected
                 logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Platform account!")
                 logger.warning(f"   User: {user.name} ({user.user_id})")
                 logger.warning(f"   Platform {broker_type.value.upper()} account is NOT connected")
-                logger.warning("   🔧 RECOMMENDATION: Configure Platform account credentials first")
-                logger.warning(f"      Platform should be PRIMARY, users should be SECONDARY")
                 logger.warning("   ⚠️  HIERARCHY ISSUE: User is temporarily acting as primary — this may cause")
-                logger.warning("      hierarchy and reporting issues until the Platform account is configured.")
+                logger.warning("      reporting, risk aggregation, and capital orchestration inconsistencies.")
+                logger.warning("   🔒 STANDALONE MODE ENFORCED: new entries BLOCKED until Platform account")
+                logger.warning(f"      is connected. Connect Platform {broker_type.value.upper()} account first,")
+                logger.warning("      then configure users as secondary.")
+                logger.warning("   🔧 RECOMMENDATION: Configure Platform account credentials first.")
+                logger.warning(f"      Platform should be PRIMARY, users should be SECONDARY.")
+                logger.warning("   ℹ️  See PLATFORM_ACCOUNT_REQUIRED.md for setup instructions.")
                 logger.warning("=" * 70)
-                # Allow connection to proceed for non-Kraken brokers - user may want standalone trading
-                # But log the warning so they know this is not the ideal setup
+
+                # Automatically enforce RECOVERY mode (exits only, no new entries)
+                # for any user connecting without a Platform account.
+                # RECOVERY is the baseline enforcement level for standalone operation.
+                # PAUSED is the only mode stricter than RECOVERY; we never downgrade it.
+                if get_account_mode_manager is not None and AccountMode is not None:
+                    try:
+                        mode_manager = get_account_mode_manager()
+                        current_mode = mode_manager.get_mode(user.user_id)
+                        # Escalate to RECOVERY if the current mode allows new entries.
+                        # Skip if already at RECOVERY (target) or PAUSED (stricter).
+                        if current_mode not in (AccountMode.RECOVERY, AccountMode.PAUSED):
+                            mode_manager.set_mode(user.user_id, AccountMode.RECOVERY)
+                            logger.warning(
+                                f"   🔄 Mode escalated: {user.name} ({user.user_id}) "
+                                f"switched from '{current_mode.value}' → '{AccountMode.RECOVERY.value}' "
+                                "(no new entries while Platform account is absent)"
+                            )
+                        else:
+                            logger.info(
+                                f"   ✅ {user.name} already in '{current_mode.value}' mode "
+                                "(new entries already blocked)"
+                            )
+                    except Exception as mode_err:
+                        logger.warning(f"   ⚠️  Could not enforce recovery mode for {user.name}: {mode_err}")
 
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
@@ -1121,7 +1163,7 @@ class MultiAccountBrokerManager:
             if platform_connected:
                 logger.info(f"   ✅ Platform {broker_type.value.upper()} is connected (correct priority)")
             else:
-                logger.info(f"   ⚠️  Platform {broker_type.value.upper()} is NOT connected (user will be primary — hierarchy issue)")
+                logger.info(f"   ⚠️  Platform {broker_type.value.upper()} is NOT connected (STANDALONE MODE — exits only, no new entries)")
             # Flush to ensure this message appears before connection attempt logs
             # CRITICAL FIX: Must flush the root 'nija' logger's handlers, not the child logger's
             # Child loggers (like 'nija.multi_account', 'nija.broker') propagate to parent but
@@ -1281,23 +1323,25 @@ class MultiAccountBrokerManager:
                 continue
 
         if users_without_platform:
-            # Platform account missing - recommend configuring it for stability
-            # Platform trades independently (not as master), but its presence stabilizes system
+            # Platform account missing – users are in standalone mode (exits only).
+            # New entries are blocked by the RECOVERY mode enforcement above.
             try:
-                logger.info("ℹ️  ACCOUNT CONFIGURATION:")
-                logger.info(f"   ℹ️  Platform account not connected on: {', '.join(users_without_platform)}")
-                logger.info("   💡 RECOMMENDATION: Configure Platform account for optimal operation")
-                logger.info("")
-                logger.info("   Platform account provides:")
-                logger.info("   • Stable system initialization")
-                logger.info("   • Additional trading capacity (Platform trades independently)")
-                logger.info("   • Cleaner logs and startup flow")
-                logger.info("")
-                # Flush output to ensure recommendations are visible
+                logger.warning("=" * 70)
+                logger.warning("⚠️  HIERARCHY ISSUE — STANDALONE MODE ACTIVE")
+                logger.warning("=" * 70)
+                logger.warning(f"   Platform account NOT connected on: {', '.join(users_without_platform)}")
+                logger.warning("   User accounts are temporarily acting as primary.")
+                logger.warning("   🔒 NEW ENTRIES BLOCKED for affected users (exits still work).")
+                logger.warning("      Connect the Platform account first, then configure users as secondary.")
+                logger.warning("")
+                logger.warning("   ⚠️  This may cause reporting, risk aggregation, and capital")
+                logger.warning("      orchestration inconsistencies until resolved.")
+                logger.warning("")
+                # Flush output to ensure warnings are visible
                 for handler in _root_logger.handlers:
                     handler.flush()
-                
-                logger.info("   📋 TO CONFIGURE PLATFORM ACCOUNT:")
+
+                logger.info("   📋 TO RESTORE CORRECT HIERARCHY:")
                 for broker in users_without_platform:
                     logger.info(f"")
                     logger.info(f"   For {broker} Platform account:")
@@ -1321,9 +1365,9 @@ class MultiAccountBrokerManager:
                     # Flush after each broker to ensure output is visible
                     for handler in _root_logger.handlers:
                         handler.flush()
-                
+
                 logger.info("")
-                logger.info("   Note: Platform and Users all trade independently using same NIJA logic")
+                logger.info("   ℹ️  See PLATFORM_ACCOUNT_REQUIRED.md for full setup instructions.")
                 logger.info("=" * 70)
                 # Final flush to ensure all configuration messages are visible
                 for handler in _root_logger.handlers:
@@ -1367,8 +1411,12 @@ class MultiAccountBrokerManager:
               'hierarchy_issues'      – List of strings describing any violations found.
               'platform_brokers'      – Dict mapping broker name → connection status.
               'user_brokers'          – Dict mapping broker name → number of connected users.
+              'standalone_mode_users' – List of user_ids operating in standalone mode
+                                        (exits only, no new entries) because their Platform
+                                        account is not connected.
         """
         issues: list = []
+        standalone_mode_users: list = []
 
         # ── 1. Platform PRIMARY check ──────────────────────────────────────────
         platform_status: Dict[str, bool] = {}
@@ -1399,6 +1447,8 @@ class MultiAccountBrokerManager:
                 platform_broker = self._platform_brokers.get(broker_type)
                 if platform_broker is None or not platform_broker.connected:
                     users_are_secondary = False
+                    if user_id not in standalone_mode_users:
+                        standalone_mode_users.append(user_id)
                     # Build broker-specific credential guidance
                     if name == "KRAKEN":
                         cred_hint = "KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET"
@@ -1451,7 +1501,7 @@ class MultiAccountBrokerManager:
         if user_broker_summary:
             for name, count in user_broker_summary.items():
                 platform_ok = platform_status.get(name, False)
-                role = "SECONDARY ✅" if platform_ok else "⚠️  TEMPORARILY ACTING AS PRIMARY"
+                role = "SECONDARY ✅" if platform_ok else "⚠️  STANDALONE MODE (exits only, no new entries)"
                 logger.info(f"   • {name}: {count} user(s) — {role}")
         else:
             logger.info("   ⚪ No connected user accounts")
@@ -1479,8 +1529,15 @@ class MultiAccountBrokerManager:
             logger.warning("⚠️  HIERARCHY ISSUE DETECTED:")
             for issue in issues:
                 logger.warning(f"   • {issue}")
+            if standalone_mode_users:
+                logger.warning(
+                    f"   🔒 STANDALONE MODE: {len(standalone_mode_users)} user(s) in exits-only mode "
+                    f"({', '.join(standalone_mode_users)})"
+                )
+                logger.warning("      NIJA is managing existing positions for profit exits and risk.")
+                logger.warning("      New entries are blocked until the Platform account is connected.")
             logger.info("")
-            logger.info("💡 NEXT STEPS:")
+            logger.info("💡 NEXT STEPS TO RESTORE FULL TRADING:")
             # Identify which brokers are missing a Platform account
             missing_platform_brokers = [
                 name for name, count in user_broker_summary.items()
@@ -1490,14 +1547,32 @@ class MultiAccountBrokerManager:
             for broker_name in missing_platform_brokers:
                 if broker_name == "KRAKEN":
                     logger.info(
-                        f"   {step}. Configure the Kraken Platform account: "
-                        "KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET"
+                        f"   {step}. Connect Platform Kraken Account:"
+                    )
+                    logger.info(
+                        f"      • Set environment variable: KRAKEN_PLATFORM_API_KEY=<your-api-key>"
+                    )
+                    logger.info(
+                        f"      • Set environment variable: KRAKEN_PLATFORM_API_SECRET=<your-api-secret>"
+                    )
+                    logger.info(
+                        f"      • Restart NIJA — new entries will resume and hierarchy warnings will clear."
                     )
                 elif broker_name == "ALPACA":
                     logger.info(
-                        f"   {step}. Configure the Alpaca Platform account: "
-                        "ALPACA_API_KEY + ALPACA_API_SECRET "
-                        "(optionally set ALPACA_PAPER=true for paper trading)"
+                        f"   {step}. Connect Platform Alpaca Account:"
+                    )
+                    logger.info(
+                        f"      • Set environment variable: ALPACA_API_KEY=<your-api-key>"
+                    )
+                    logger.info(
+                        f"      • Set environment variable: ALPACA_API_SECRET=<your-api-secret>"
+                    )
+                    logger.info(
+                        f"      • Optionally set ALPACA_PAPER=true for paper trading"
+                    )
+                    logger.info(
+                        f"      • Restart NIJA — new entries will resume and hierarchy warnings will clear."
                     )
                 else:
                     logger.info(
@@ -1510,7 +1585,8 @@ class MultiAccountBrokerManager:
                 )
                 step += 1
             logger.info(
-                f"   {step}. Restart the bot — Platform will become PRIMARY and users SECONDARY"
+                f"   {step}. Monitor Exit Cycles: NIJA is managing your "
+                f"{len(standalone_mode_users)} user account(s) automatically for profit exits and risk."
             )
             step += 1
             logger.info(
@@ -1531,6 +1607,7 @@ class MultiAccountBrokerManager:
             'hierarchy_issues': issues,
             'platform_brokers': platform_status,
             'user_brokers': user_broker_summary,
+            'standalone_mode_users': standalone_mode_users,
         }
 
     def audit_user_accounts(self):

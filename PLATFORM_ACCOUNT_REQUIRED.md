@@ -1,60 +1,106 @@
-# Platform Account Configuration - Recommended for Optimal Operation
+# Platform Account Configuration - Required for Full Operation
 
-**Version:** 1.1  
-**Last Updated:** February 6, 2026  
-**Status:** RECOMMENDED - Optimal for production stability
+**Version:** 1.2  
+**Last Updated:** March 2026  
+**Status:** REQUIRED — without Platform account, new entries are blocked (standalone mode)
 
 ---
 
-## The ONE Fix for Cleaner Logs and Stable Startup
+## The ONE Fix for Full Trading Operation
 
-### Current Behavior
+### Current Behavior (Platform Account Missing)
 
-When running NIJA with only user accounts (no Platform account), you may see:
+When running NIJA with only user accounts (no Platform account), you will see:
 
-- ℹ️  **Informational messages** about Platform account not connected
-- ℹ️  **Recommendation** to configure Platform account
-- ℹ️  **Suggestions** for optimal system operation
+- ⚠️  **Hierarchy warnings** about Platform account not connected
+- 🔒  **Standalone mode enforced** — new entries are **blocked** for affected users
+- ✅  **Exit cycles run normally** — NIJA continues managing existing positions for profit exits and risk
+- ℹ️  **Step-by-step instructions** to restore full trading
 
-### The Solution
+### How to Restore Full Trading
 
-**Configure Platform Kraken credentials for optimal operation.**
+**Step 1: Connect Platform Kraken Account**
 
-This configuration change will:
-- ✅ **Enable Platform to trade independently** (additional trading capacity)
-- ✅ **Stabilize startup flow** 
-- ✅ **Provide cleaner, quieter logs**
-- ✅ **Improve system initialization**
+Set the following environment variables for your Platform Kraken account:
+
+```bash
+KRAKEN_PLATFORM_API_KEY=<your-platform-api-key>
+KRAKEN_PLATFORM_API_SECRET=<your-platform-api-secret>
+```
+
+**Step 2: Restart NIJA**
+
+After setting the variables, restart the bot:
+
+```bash
+./start.sh
+```
+
+**Result:**
+- ✅ New entries will resume immediately
+- ✅ Hierarchy warnings will clear
+- ✅ Platform becomes PRIMARY, users become SECONDARY
+- ✅ Unified reporting and capital protection fully enabled
+
+**Step 3: Monitor Exit Cycles**
+
+While you are in standalone mode (before Platform account is connected), NIJA
+automatically manages your existing positions for profit exits and risk:
+
+- 🔄 Stop-loss orders are enforced
+- 🎯 Take-profit targets are tracked
+- 📈 Trailing stops are active
+- ⚠️  No new entries will be opened
+
+---
+
+## Understanding Standalone Mode
+
+When the Platform account is **not** connected and a user account **is** connected,
+NIJA automatically enforces **standalone mode** (RECOVERY) for the affected user:
+
+```
+⚠️  HIERARCHY ISSUE — STANDALONE MODE ACTIVE
+   Platform account NOT connected: KRAKEN
+   User accounts are temporarily acting as primary.
+   🔒 NEW ENTRIES BLOCKED (exits still work).
+      Connect the Platform account first, then configure users as secondary.
+```
+
+**Standalone mode means:**
+- ❌ No new trade entries will be accepted
+- ✅ Existing positions continue to be managed (exits, stops, take-profits)
+- ✅ The bot runs exit cycles every 2.5 minutes automatically
+
+This protects capital and prevents incorrect exposure while the hierarchy is misconfigured.
 
 ---
 
 ## Understanding the Architecture
 
-### Independent Trading Model
+### Primary / Secondary Structure
 
-NIJA uses an **independent trading model** where all accounts trade separately:
+NIJA enforces a strict account hierarchy:
 
 ```
-🔷 PLATFORM ACCOUNT (Independent Trader #1)
-   ↓ Uses NIJA signals + execution logic
-   ↓ Trades with its own capital
-   
-👤 USER ACCOUNT 1 (Independent Trader #2)
-   ↓ Uses same NIJA signals + execution logic
-   ↓ Trades with their own capital
-   
-👤 USER ACCOUNT 2 (Independent Trader #3)
-   ↓ Uses same NIJA signals + execution logic
-   ↓ Trades with their own capital
+🔷 PLATFORM ACCOUNT (PRIMARY)
+   ↓ Must be connected first
+   ↓ Routes trades and maintains correct exposure limits
+   ↓ Enables unified reporting and risk aggregation
+   ↓ Enables capital orchestration
+
+👤 USER ACCOUNT (SECONDARY)
+   ↓ Connects after Platform
+   ↓ Adopts positions and risk limits from Platform context
+   ↓ Trades with its own capital under Platform oversight
 ```
 
-**Key Points:**
-- ❌ Platform is **NOT** a "master" account
-- ❌ Platform does **NOT** control user accounts
-- ❌ Platform is **NOT** a capital allocator
-- ✅ Platform **IS** just another independent trader
-- ✅ All accounts trade **independently** using same logic
-- ✅ All accounts are **equal** - no hierarchy
+**Without Platform account:**
+- ❌ Risk aggregation is incomplete
+- ❌ Capital orchestration is unavailable
+- ❌ Reporting may be inconsistent
+- ❌ New entries are blocked (standalone/RECOVERY mode)
+- ✅ Exit management still works
 
 ---
 
@@ -80,7 +126,7 @@ NIJA uses an **independent trading model** where all accounts trade separately:
 #### For Local Development (`.env` file):
 
 ```bash
-# Platform Kraken credentials (REQUIRED for stable operation)
+# Platform Kraken credentials (REQUIRED for new entries)
 KRAKEN_PLATFORM_API_KEY=your-api-key-here
 KRAKEN_PLATFORM_API_SECRET=your-api-secret-here
 ```
@@ -121,15 +167,14 @@ This script will:
 ✅ Kraken Platform credentials detected
 🔷 PLATFORM ACCOUNTS (Primary Trading Accounts):
    • KRAKEN: ✅ CONNECTED
-✅ ACCOUNT HIERARCHY STATUS:
-   ✅ All user accounts have corresponding Platform accounts (correct hierarchy)
+✅ HIERARCHY VALID: Platform is PRIMARY, all users are SECONDARY
 ```
 
-**❌ Still seeing warnings?**
+**❌ Still in standalone mode?**
 ```
-⚠️  Kraken Platform credentials NOT SET
-⚠️  ACCOUNT PRIORITY WARNINGS:
-   ⚠️  User accounts trading WITHOUT Platform account on: KRAKEN
+⚠️  HIERARCHY ISSUE — STANDALONE MODE ACTIVE
+   Platform account NOT connected: KRAKEN
+   🔒 NEW ENTRIES BLOCKED (exits still work).
 ```
 
 If you see warnings, verify:
@@ -140,63 +185,32 @@ If you see warnings, verify:
 
 ---
 
-## Why Configure Platform Account?
-
-### Benefits
-
-**1. Platform trades independently** - Additional trading capacity
-- Platform account is another independent trader
-- Uses same NIJA signals and execution logic
-- Deploys more capital in the strategy
-
-**2. Cleaner system operation**
-- Less verbose startup logs
-- Smoother initialization flow
-- Fewer informational messages
-
-**3. All accounts are equal**
-- No hierarchy or master/follower relationship
-- All accounts are independent traders
-- Each manages its own capital and positions
-
-### Minimum Balance Recommendations
-
-| Account Purpose | Minimum Balance | Notes |
-|----------------|-----------------|-------|
-| **Platform account** | $50+ | Trades independently like any user account |
-| **User accounts** | $50+ | Each user trades independently |
-
-**Note:** Platform account CAN have $0 balance (it just won't trade), but recommended to fund it so it trades alongside users.
-
-### Trading Control
-
-All accounts trade independently:
-- Set `PLATFORM_ACCOUNT_TIER=BALLER` in `.env` for best risk parameters
-- Platform trades independently from user accounts
-- Each account has its own capital, positions, and risk limits
-- All use same NIJA signal generation and execution logic
-
----
-
 ## Frequently Asked Questions
 
 ### Q: Is Platform account required?
 
-**A:** No, but it's recommended. Without Platform account:
-- ✅ System still works normally
-- ℹ️  Informational messages suggest configuring Platform
-- ✅ User accounts trade independently
-- ❌ Missing Platform's trading capacity
+**A:** Yes, for new entries. Without Platform account:
+- ✅ Existing positions are managed (exits, stops, take-profits)
+- 🔒 No new entries are accepted (standalone/RECOVERY mode enforced automatically)
+- ⚠️  Risk aggregation and capital orchestration are unavailable
 
-For production use, **Platform account is required**.
+For full trading capability, **Platform account is required**.
+
+### Q: What happens to my existing positions while in standalone mode?
+
+**A:** NIJA continues to manage them automatically:
+- 🔄 Stop-loss orders are enforced
+- 🎯 Take-profit targets are tracked  
+- 📈 Trailing stops are active
+- ⏱️  Exit cycles run every 2.5 minutes
 
 ### Q: Will configuring Platform account change my existing user account trading?
 
-**A:** No. User accounts continue to trade independently. Platform account connection only affects:
-- System hierarchy validation
-- Startup flow stability
-- Log verbosity
-- Production readiness status
+**A:** No disruption to existing positions. Platform account connection:
+- Restores new entry capability for users
+- Enables unified reporting and risk aggregation
+- Enables capital orchestration
+- Resolves hierarchy warnings
 
 ### Q: What if I only want one account to trade?
 
@@ -218,14 +232,14 @@ Each exchange can have its own Platform account if needed.
 **A:** You only need Platform account for exchanges where you have user accounts. For example:
 
 **Scenario A: Only user accounts on Kraken**
-- ✅ Configure `KRAKEN_PLATFORM_API_KEY/SECRET` (required)
+- ✅ Configure `KRAKEN_PLATFORM_API_KEY/SECRET` (required for new entries)
 - ❌ Don't need Alpaca Platform credentials
 
 **Scenario B: User accounts on Kraken AND Alpaca**
 - ✅ Configure `KRAKEN_PLATFORM_API_KEY/SECRET` (required)
 - ✅ Configure `ALPACA_API_KEY/SECRET` (Platform account, required)
 
-### Q: What happens if Platform account connection fails?
+### Q: What if Platform account connection fails?
 
 **A:** Check logs for specific errors:
 - Invalid credentials → Verify in Kraken dashboard
@@ -233,7 +247,7 @@ Each exchange can have its own Platform account if needed.
 - Wrong permission → Enable required API permissions
 - Network issues → Check Kraken API status
 
-System will continue attempting connection and display warnings until Platform account connects successfully.
+System will continue attempting connection and display warnings until Platform account connects successfully. Users remain in standalone mode (exits only) until Platform connects.
 
 ---
 
@@ -292,20 +306,28 @@ If showing "NOT CONNECTED", check:
 
 ---
 
-## Summary
+## Quick Reference
 
-**The ONE fix for hierarchy warnings:**
+### Restore Full Trading in 3 Steps
 
-1. Get Kraken API credentials
-2. Set `KRAKEN_PLATFORM_API_KEY` and `KRAKEN_PLATFORM_API_SECRET`
-3. Restart the bot
-4. Verify "✅ CONNECTED" status in logs
+```
+1. Set KRAKEN_PLATFORM_API_KEY=<key>
+2. Set KRAKEN_PLATFORM_API_SECRET=<secret>
+3. Restart NIJA
+```
 
 **Result:**
-- ✅ Clean startup logs
-- ✅ Stable operation
-- ✅ Production-ready hierarchy
-- ✅ No repeated warnings
-- ✅ Linear, calm logs
+- ✅ New entries resume
+- ✅ Hierarchy warnings clear
+- ✅ Platform PRIMARY, users SECONDARY
+- ✅ Full reporting and risk aggregation active
 
-**Platform account does not need capital - it just needs to exist and connect.**
+### While in Standalone Mode
+
+NIJA automatically monitors your existing positions:
+
+- ✅ Exit cycles run every 2.5 minutes
+- ✅ Stop-loss protection active
+- ✅ Take-profit targets tracked
+- ✅ Trailing stops enforced
+- 🔒 No new entries until Platform account connected
