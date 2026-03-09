@@ -511,7 +511,9 @@ class CapitalRecyclingEngine:
 
         # --- equal-weight fallback ---
         n = len(self.strategies)
-        equal = 1.0 / n if n > 0 else 1.0
+        if n == 0:
+            return {}
+        equal = 1.0 / n
         return {s: equal for s in self.strategies}
 
     def _normalise_and_clip(self, weights: Dict[str, float]) -> Dict[str, float]:
