@@ -8374,7 +8374,15 @@ class OKXBroker(BaseBroker):
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
             from position_tracker import PositionTracker
-            self.position_tracker = PositionTracker(storage_file="data/positions.json")
+            # Resolve an absolute path for the data directory so the tracker works
+            # regardless of the current working directory, and create it with
+            # restrictive permissions (0o750) to prevent world-readable config files.
+            _okx_data_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data'
+            )
+            os.makedirs(_okx_data_dir, mode=0o750, exist_ok=True)
+            _okx_positions_file = os.path.join(_okx_data_dir, "positions.json")
+            self.position_tracker = PositionTracker(storage_file=_okx_positions_file)
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
             logger.error(f"❌ CAPITAL PROTECTION: Position tracker initialization FAILED: {e}")
