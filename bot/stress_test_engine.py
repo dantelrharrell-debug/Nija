@@ -94,17 +94,6 @@ class ScenarioResult:
             "var_95":            round(self.var_95, 2),
             "cvar_95":           round(self.cvar_95, 2),
         }
-import random
-import statistics
-import time
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-
-import numpy as np
-
-logger = logging.getLogger("nija.stress_test_engine")
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -234,55 +223,6 @@ class StressTestReport:
         if not self.scenario_results:
             return 1.0
         return statistics.mean(r.survival_rate for r in self.scenario_results)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Core engine
-# ─────────────────────────────────────────────────────────────────────────────
-
-class StressTestEngine:
-    """
-    Monte Carlo stress test engine.
-    """Complete report across all scenarios."""
-    timestamp: str
-    initial_capital: float
-    scenarios: List[ScenarioReport] = field(default_factory=list)
-    overall_passed: bool = False
-
-    def summary(self) -> str:
-        lines = [
-            "=" * 55,
-            "NIJA STRESS TEST ENGINE — FULL REPORT",
-            f"Timestamp      : {self.timestamp}",
-            f"Initial capital: ${self.initial_capital:,.2f}",
-            f"Overall passed : {'✅ YES' if self.overall_passed else '❌ NO'}",
-            "=" * 55,
-        ]
-        for sr in self.scenarios:
-            lines.append(sr.summary())
-            lines.append("")
-        return "\n".join(lines)
-
-    def to_dict(self) -> Dict:
-        return {
-            "timestamp": self.timestamp,
-            "initial_capital": self.initial_capital,
-            "overall_passed": self.overall_passed,
-            "scenarios": [
-                {
-                    "scenario": s.scenario,
-                    "num_paths": s.num_paths,
-                    "survival_rate": s.survival_rate,
-                    "avg_final_capital": s.avg_final_capital,
-                    "avg_max_drawdown_pct": s.avg_max_drawdown_pct,
-                    "worst_drawdown_pct": s.worst_drawdown_pct,
-                    "var_breach_rate": s.var_breach_rate,
-                    "kill_switch_rate": s.kill_switch_rate,
-                    "avg_win_rate": s.avg_win_rate,
-                }
-                for s in self.scenarios
-            ],
-        }
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +481,7 @@ class StressTestEngine:
     num_paths : int
         Number of independent simulation paths per scenario.
     seed : int | None
-        Random seed for reproducibility.  None → non-deterministic.
+        Random seed for reproducibility.  None = non-deterministic.
     """
 
     def __init__(
@@ -750,100 +690,3 @@ class StressTestEngine:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-        initial_capital: float = DEFAULT_INITIAL_CAPITAL,
-        num_paths: int = DEFAULT_NUM_PATHS,
-        seed: Optional[int] = None,
-    ) -> None:
-        self.initial_capital = initial_capital
-        self.num_paths = num_paths
-        self._rng = random.Random(seed)
-        logger.info(
-            "StressTestEngine initialised — capital=$%.2f, paths=%d",
-            initial_capital, num_paths,
-        )
-
-    # ------------------------------------------------------------------
-    # Individual scenario runners
-    # ------------------------------------------------------------------
-
-    def run_flash_crash_scenario(self) -> ScenarioReport:
-        """Run flash-crash scenario across all paths."""
-        logger.info("Running FlashCrash scenario (%d paths)…", self.num_paths)
-        t0 = time.monotonic()
-        runner = _ScenarioRunner(self.initial_capital, self._rng)
-        paths = [runner.run_flash_crash(i) for i in range(self.num_paths)]
-        elapsed = time.monotonic() - t0
-        report = _aggregate(paths, "FlashCrash")
-        logger.info(
-            "FlashCrash done in %.1fs — survival=%.1f%%",
-            elapsed, report.survival_rate * 100,
-        )
-        return report
-
-    def run_high_volatility_scenario(self) -> ScenarioReport:
-        """Run high-volatility scenario across all paths."""
-        logger.info("Running HighVolatility scenario (%d paths)…", self.num_paths)
-        t0 = time.monotonic()
-        runner = _ScenarioRunner(self.initial_capital, self._rng)
-        paths = [runner.run_high_volatility(i) for i in range(self.num_paths)]
-        elapsed = time.monotonic() - t0
-        report = _aggregate(paths, "HighVolatility")
-        logger.info(
-            "HighVolatility done in %.1fs — survival=%.1f%%",
-            elapsed, report.survival_rate * 100,
-        )
-        return report
-
-    def run_liquidity_drought_scenario(self) -> ScenarioReport:
-        """Run liquidity-drought scenario across all paths."""
-        logger.info("Running LiquidityDrought scenario (%d paths)…", self.num_paths)
-        t0 = time.monotonic()
-        runner = _ScenarioRunner(self.initial_capital, self._rng)
-        paths = [runner.run_liquidity_drought(i) for i in range(self.num_paths)]
-        elapsed = time.monotonic() - t0
-        report = _aggregate(paths, "LiquidityDrought")
-        logger.info(
-            "LiquidityDrought done in %.1fs — survival=%.1f%%",
-            elapsed, report.survival_rate * 100,
-        )
-        return report
-
-    # ------------------------------------------------------------------
-    # Full test suite
-    # ------------------------------------------------------------------
-
-    def run_all_scenarios(self) -> StressTestReport:
-        """
-        Run all three stress scenarios and return a unified report.
-
-        The overall test is considered *passed* when every scenario achieves
-        a survival rate of ≥ 70 % (i.e. at most 30 % of paths trigger the
-        kill-switch or exceed the drawdown limit).
-        """
-        logger.info("=== Starting full stress-test suite ===")
-        t_start = time.monotonic()
-
-        flash = self.run_flash_crash_scenario()
-        high_vol = self.run_high_volatility_scenario()
-        drought = self.run_liquidity_drought_scenario()
-
-        scenarios = [flash, high_vol, drought]
-        overall_passed = all(s.survival_rate >= 0.70 for s in scenarios)
-
-        report = StressTestReport(
-            timestamp=datetime.utcnow().isoformat(),
-            initial_capital=self.initial_capital,
-            scenarios=scenarios,
-            overall_passed=overall_passed,
-        )
-
-        elapsed = time.monotonic() - t_start
-        logger.info(
-            "=== Stress-test suite complete in %.1fs — overall_passed=%s ===",
-            elapsed, overall_passed,
-        )
-        return report
-
-    def get_markets(self) -> List[str]:
-        """Return the list of crypto markets covered by the stress test."""
-        return list(SAMPLE_MARKETS)

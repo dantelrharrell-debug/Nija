@@ -21,7 +21,7 @@ Date: January 30, 2026
 """
 
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum

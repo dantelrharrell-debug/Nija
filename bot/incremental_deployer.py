@@ -67,9 +67,30 @@ import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.incremental_deployer")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+DEFAULT_DATA_PATH: str = "deployer_state.json"
+
+MIN_TRADES_PER_PHASE: Dict[str, int] = {
+    "MICRO": 20,
+    "SMALL": 50,
+    "MEDIUM": 100,
+    "FULL": 200,
+}
+
+PHASE_ADVANCE_CRITERIA: Dict[str, Dict] = {
+    "MICRO":  {"min_win_rate": 0.45, "min_profit_factor": 1.1, "max_drawdown": 0.10},
+    "SMALL":  {"min_win_rate": 0.48, "min_profit_factor": 1.2, "max_drawdown": 0.12},
+    "MEDIUM": {"min_win_rate": 0.50, "min_profit_factor": 1.3, "max_drawdown": 0.15},
+    "FULL":   {"min_win_rate": 0.52, "min_profit_factor": 1.5, "max_drawdown": 0.20},
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase definitions
@@ -119,39 +140,47 @@ _REGRESSION_FACTOR = 1.5
 
 @dataclass
 class PhaseStats:
+    """Running statistics for one deployment phase."""
     phase: str = DeploymentPhase.PAPER.value
-    trades: int = 0
-    wins: int = 0
-import threading
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from enum import Enum
-from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+    trade_count: int = 0
+    win_count: int = 0
+    total_pnl: float = 0.0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+    peak_equity: float = 0.0
+    trough_equity: float = 0.0
+    start_equity: float = 0.0
+    max_drawdown_pct: float = 0.0
+    started_at: str = ""
 
-logger = logging.getLogger("nija.incremental_deployer")
+    @property
+    def win_rate(self) -> float:
+        return self.win_count / self.trade_count if self.trade_count > 0 else 0.0
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+    @property
+    def profit_factor(self) -> float:
+        return self.gross_profit / max(self.gross_loss, 1e-9)
 
-DEFAULT_DATA_PATH: str = "deployer_state.json"
+    @property
+    def max_drawdown(self) -> float:
+        if self.peak_equity <= 0:
+            return 0.0
+        return (self.peak_equity - self.trough_equity) / self.peak_equity
 
-# Minimum evaluation period per phase (number of live trades)
-MIN_TRADES_PER_PHASE: Dict[str, int] = {
-    "MICRO": 20,
-    "SMALL": 50,
-    "MEDIUM": 100,
-    "FULL": 200,
-}
+    def to_dict(self) -> Dict:
+        return {
+            "phase": self.phase,
+            "trade_count": self.trade_count,
+            "win_count": self.win_count,
+            "win_rate": round(self.win_rate, 4),
+            "total_pnl": round(self.total_pnl, 4),
+            "profit_factor": round(self.profit_factor, 4),
+            "max_drawdown": round(self.max_drawdown, 4),
+            "peak_equity": round(self.peak_equity, 2),
+            "gross_profit": round(self.gross_profit, 2),
+            "gross_loss": round(self.gross_loss, 2),
+        }
 
-# Gating criteria for advancing to the next phase
-PHASE_ADVANCE_CRITERIA: Dict[str, Dict] = {
-    "MICRO": {"min_win_rate": 0.45, "min_profit_factor": 1.1, "max_drawdown": 0.10},
-    "SMALL": {"min_win_rate": 0.48, "min_profit_factor": 1.2, "max_drawdown": 0.12},
-    "MEDIUM": {"min_win_rate": 0.50, "min_profit_factor": 1.3, "max_drawdown": 0.15},
-    "FULL":   {"min_win_rate": 0.52, "min_profit_factor": 1.5, "max_drawdown": 0.20},
-}
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +243,8 @@ class PhaseStats:
     gross_profit: float = 0.0
     gross_loss: float = 0.0
     peak_equity: float = 0.0
+    trough_equity: float = 0.0
+    start_equity: float = 0.0
     current_equity: float = 0.0
     max_drawdown_pct: float = 0.0
     started_at: str = ""
@@ -222,47 +253,12 @@ class PhaseStats:
     # ── derived ──────────────────────────────────────────────────────────────
     @property
     def win_rate(self) -> float:
-        return self.wins / self.trades if self.trades else 0.0
+        return self.win_count / self.trade_count if self.trade_count else 0.0
 
     @property
     def profit_factor(self) -> float:
         return (self.gross_profit / self.gross_loss
                 if self.gross_loss > 0 else float("inf"))
-
-    def to_dict(self) -> Dict[str, Any]:
-        d = asdict(self)
-        d["win_rate"] = self.win_rate
-        d["profit_factor"] = self.profit_factor if self.profit_factor != float("inf") else 99.0
-        return d
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main class
-# ─────────────────────────────────────────────────────────────────────────────
-
-class IncrementalDeployer:
-    """
-    Phased capital deployment controller.
-
-    Parameters
-    ----------
-    target_capital : float
-        Full target capital amount.  Allocated amounts are fractions
-        of this value per phase.
-    state_path : str
-        JSON file that persists phase progress across restarts.
-    phase_configs : dict, optional
-        Override any PhaseConfig entries.
-    trough_equity: float = 0.0
-    start_equity: float = 0.0
-
-    @property
-    def win_rate(self) -> float:
-        return self.win_count / self.trade_count if self.trade_count > 0 else 0.0
-
-    @property
-    def profit_factor(self) -> float:
-        return self.gross_profit / max(self.gross_loss, 1e-9)
 
     @property
     def max_drawdown(self) -> float:
@@ -270,17 +266,12 @@ class IncrementalDeployer:
             return 0.0
         return (self.peak_equity - self.trough_equity) / self.peak_equity
 
-    def to_dict(self) -> Dict:
-        return {
-            "phase": self.phase,
-            "trade_count": self.trade_count,
-            "win_count": self.win_count,
-            "win_rate": round(self.win_rate, 4),
-            "total_pnl": round(self.total_pnl, 4),
-            "profit_factor": round(self.profit_factor, 4),
-            "max_drawdown": round(self.max_drawdown, 4),
-        }
-
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["win_rate"] = self.win_rate
+        d["profit_factor"] = self.profit_factor if self.profit_factor != float("inf") else 99.0
+        d["max_drawdown"] = self.max_drawdown
+        return d
 
 @dataclass
 class DeployerState:
@@ -319,31 +310,55 @@ class IncrementalDeployer:
         self,
         target_capital: float = 10_000.0,
         state_path: str = "data/incremental_deployer_state.json",
+        total_risk_budget: float = 10_000.0,
+        data_path: str = DEFAULT_DATA_PATH,
         phase_configs: Optional[Dict[DeploymentPhase, PhaseConfig]] = None,
+        on_phase_advance: Optional[Callable] = None,
+        on_trade_feedback: Optional[Callable] = None,
     ) -> None:
         self.target_capital = max(1.0, target_capital)
-        self.state_path     = state_path
-        self._lock          = threading.RLock()
+        self.state_path = state_path
+        self.total_risk_budget = total_risk_budget if total_risk_budget != 10_000.0 else target_capital
+        self._data_path = Path(data_path if data_path != DEFAULT_DATA_PATH else state_path)
+        self._lock = threading.RLock()
+        self._on_phase_advance = on_phase_advance
+        self._on_trade_feedback = on_trade_feedback
 
-        # Merge caller overrides with defaults
+        # Version A: phase config and stats
         self._configs = dict(_DEFAULT_PHASE_CONFIG)
         if phase_configs:
             self._configs.update(phase_configs)
-
         self._phase: DeploymentPhase = DeploymentPhase.PAPER
-        self._stats: PhaseStats = PhaseStats(
-            phase=DeploymentPhase.PAPER.value,
-            started_at=_now(),
-        )
         self._history: List[Dict[str, Any]] = []
 
-        self._load_state()
-        logger.info(
-            "📈 IncrementalDeployer ready | phase=%s | target_capital=$%.2f",
-            self._phase.value, self.target_capital,
-        )
+        # Version B: per-phase stats dict and audit ledger
+        self._phase_stats: Dict[str, PhaseStats] = {
+            p.value: PhaseStats(phase=p.value) for p in DeploymentPhase
+        }
+        self._ledger: List[LiveTradeAudit] = []
+        self._ledger_path = self._data_path.parent / "trade_ledger.jsonl"
 
-    # ── public interface ──────────────────────────────────────────────────────
+        # Shared stats reference for version A methods
+        self._stats: PhaseStats = self._phase_stats[DeploymentPhase.PAPER.value]
+
+        # Load persisted state
+        self._state = self._load_state()
+        for phase_key, stats_dict in self._state.phase_stats.items():
+            if phase_key in self._phase_stats:
+                ps = self._phase_stats[phase_key]
+                ps.trade_count = stats_dict.get("trade_count", 0)
+                ps.win_count = stats_dict.get("win_count", 0)
+                ps.total_pnl = stats_dict.get("total_pnl", 0.0)
+                ps.gross_profit = stats_dict.get("gross_profit", 0.0)
+                ps.gross_loss = stats_dict.get("gross_loss", 0.0)
+                ps.peak_equity = stats_dict.get("peak_equity", 0.0)
+                ps.trough_equity = stats_dict.get("trough_equity", 0.0)
+                ps.start_equity = stats_dict.get("start_equity", 0.0)
+
+        logger.info(
+            "IncrementalDeployer ready | phase=%s | target_capital=$%.2f",
+            self._state.current_phase, self.target_capital,
+        )
 
     @property
     def current_phase(self) -> DeploymentPhase:
@@ -399,7 +414,7 @@ class IncrementalDeployer:
         ----------
         pnl           : trade P&L in dollars (positive = profit).
         won           : True if the trade was profitable.
-        drawdown_pct  : current portfolio drawdown percentage (0–100).
+        drawdown_pct  : current portfolio drawdown percentage (0-100).
         equity        : current portfolio equity (used to track peak/drawdown).
         """
         with self._lock:
@@ -577,50 +592,6 @@ class IncrementalDeployer:
                 )
         except Exception as exc:
             logger.warning("[Deployer] Could not persist state: %s", exc)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Singleton
-# ─────────────────────────────────────────────────────────────────────────────
-        total_risk_budget: float = 10_000.0,
-        data_path: str = DEFAULT_DATA_PATH,
-        on_phase_advance: Optional[Callable] = None,
-        on_trade_feedback: Optional[Callable] = None,
-    ) -> None:
-        self._lock = threading.RLock()
-        self.total_risk_budget = total_risk_budget
-        self._data_path = Path(data_path)
-        self._on_phase_advance = on_phase_advance
-        self._on_trade_feedback = on_trade_feedback
-
-        # Phase stats objects
-        self._phase_stats: Dict[str, PhaseStats] = {
-            p.value: PhaseStats(phase=p.value) for p in DeployPhase
-        }
-
-        # Audit ledger (in-memory; also appended to disk)
-        self._ledger: List[LiveTradeAudit] = []
-        self._ledger_path = self._data_path.parent / "trade_ledger.jsonl"
-
-        # Load or initialise state
-        self._state = self._load_state()
-        # Restore phase stats from saved state
-        for phase_key, stats_dict in self._state.phase_stats.items():
-            if phase_key in self._phase_stats:
-                ps = self._phase_stats[phase_key]
-                ps.trade_count = stats_dict.get("trade_count", 0)
-                ps.win_count = stats_dict.get("win_count", 0)
-                ps.total_pnl = stats_dict.get("total_pnl", 0.0)
-                ps.gross_profit = stats_dict.get("gross_profit", 0.0)
-                ps.gross_loss = stats_dict.get("gross_loss", 0.0)
-                ps.peak_equity = stats_dict.get("peak_equity", 0.0)
-                ps.trough_equity = stats_dict.get("trough_equity", 0.0)
-                ps.start_equity = stats_dict.get("start_equity", 0.0)
-
-        logger.info(
-            "IncrementalDeployer initialised — phase=%s, risk_budget=$%.2f",
-            self._state.current_phase, total_risk_budget,
-        )
 
     # ------------------------------------------------------------------
     # State persistence
@@ -899,9 +870,6 @@ def get_incremental_deployer(
     state_path: str = "data/incremental_deployer_state.json",
     **kwargs: Any,
 ) -> IncrementalDeployer:
-    """Return the process-wide IncrementalDeployer singleton."""
-    total_risk_budget: float = 10_000.0,
-) -> IncrementalDeployer:
     """Return the global IncrementalDeployer singleton."""
     global _deployer_instance
     with _deployer_lock:
@@ -912,14 +880,3 @@ def get_incremental_deployer(
                 **kwargs,
             )
     return _deployer_instance
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-                total_risk_budget=total_risk_budget
-            )
-        return _deployer_instance
