@@ -340,7 +340,9 @@ class CoinbaseBrokerAdapter(BrokerInterface):
     """
     Coinbase Advanced Trade API adapter.
 
-    Integrates with existing Coinbase client in the codebase.
+    Delegates to the existing CoinbaseBroker in broker_manager for all
+    real exchange operations (balance, market data, order placement, etc.)
+    so there is a single, well-tested code path for every Coinbase call.
     """
 
     def __init__(self, api_key: str = None, api_secret: str = None):
@@ -348,71 +350,281 @@ class CoinbaseBrokerAdapter(BrokerInterface):
         Initialize Coinbase broker adapter.
 
         Args:
-            api_key: Coinbase API key (loaded from environment if None)
-            api_secret: Coinbase API secret (loaded from environment if None)
+            api_key: Accepted for API compatibility; credentials are read
+                     from environment variables (COINBASE_API_KEY /
+                     COINBASE_API_SECRET) by the underlying CoinbaseBroker.
+            api_secret: Same note as api_key above.
         """
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.client = None
+        # Credentials are intentionally not stored here; CoinbaseBroker
+        # reads them directly from environment variables.
+        self._broker = None   # CoinbaseBroker instance (set on connect())
         logger.info("Coinbase broker adapter initialized")
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_broker(self):
+        """Return the connected CoinbaseBroker, raising if not connected."""
+        if self._broker is None:
+            raise RuntimeError("CoinbaseBrokerAdapter is not connected. Call connect() first.")
+        return self._broker
+
+    @staticmethod
+    def _extract_order_id(resp) -> Optional[str]:
+        """Extract the order_id from a Coinbase SDK response object or dict."""
+        if isinstance(resp, dict):
+            return resp.get('order_id') or resp.get('success_response', {}).get('order_id')
+        order_id = getattr(resp, 'order_id', None)
+        if not order_id:
+            sr = getattr(resp, 'success_response', None)
+            if sr:
+                order_id = getattr(sr, 'order_id', None)
+        return order_id
+
+    # ------------------------------------------------------------------
+    # BrokerInterface implementation
+    # ------------------------------------------------------------------
+
     def connect(self) -> bool:
-        """Connect to Coinbase Advanced Trade API."""
+        """Connect to Coinbase Advanced Trade API via CoinbaseBroker."""
         try:
-            # TODO: Implement actual connection using existing broker_manager
-            # Example:
-            # from broker_manager import BrokerManager
-            # self.client = BrokerManager()
+            try:
+                from bot.broker_manager import CoinbaseBroker
+            except ImportError:
+                from broker_manager import CoinbaseBroker
+
             logger.info("Connecting to Coinbase Advanced Trade API...")
-            return True
+            broker = CoinbaseBroker()
+            if broker.connect():
+                self._broker = broker
+                logger.info("✅ CoinbaseBrokerAdapter connected successfully")
+                return True
+            else:
+                logger.error("❌ CoinbaseBroker.connect() returned False")
+                return False
         except Exception as e:
-            logger.error(f"Failed to connect to Coinbase: {e}")
+            logger.error(f"❌ Failed to connect to Coinbase: {e}")
             return False
 
     def get_account_balance(self) -> Dict[str, float]:
-        """Get Coinbase account balance."""
-        # TODO: Implement using existing broker_manager methods
-        logger.info("Fetching Coinbase account balance...")
-        return {
-            'total_balance': 0.0,
-            'available_balance': 0.0,
-            'currency': 'USD'
-        }
+        """Get Coinbase account balance.
+
+        Returns:
+            dict with keys: total_balance, available_balance, currency
+        """
+        try:
+            broker = self._get_broker()
+            detailed = broker.get_account_balance_detailed(verbose=False)
+            if detailed:
+                total = float(detailed.get('total_funds', detailed.get('trading_balance', 0.0)))
+                available = float(detailed.get('trading_balance', 0.0))
+            else:
+                total = float(broker.get_account_balance(verbose=False))
+                available = total
+            return {
+                'total_balance': total,
+                'available_balance': available,
+                'currency': 'USD'
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch Coinbase account balance: {e}")
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USD'
+            }
 
     def get_market_data(self, symbol: str, timeframe: str = '5m',
-                       limit: int = 100) -> Optional[Dict]:
-        """Get market data from Coinbase."""
-        # TODO: Implement using existing Coinbase candle fetching
-        logger.info(f"Fetching market data for {symbol} ({timeframe})...")
-        return None
+                        limit: int = 100) -> Optional[Dict]:
+        """Get market data (candles) from Coinbase.
+
+        Args:
+            symbol: Trading pair, e.g. 'BTC-USD'
+            timeframe: Candle interval ('1m', '5m', '15m', '1h', '1d')
+            limit: Number of candles to fetch
+
+        Returns:
+            dict with key 'candles' containing a list of candle dicts,
+            or None on failure.
+        """
+        try:
+            broker = self._get_broker()
+            candles = broker.get_candles(symbol, timeframe, limit)
+            if candles is not None:
+                return {'symbol': symbol, 'timeframe': timeframe, 'candles': candles}
+            return None
+        except Exception as e:
+            logger.error(f"Failed to fetch Coinbase market data for {symbol}: {e}")
+            return None
 
     def place_market_order(self, symbol: str, side: str, size: float,
-                          size_type: str = 'quote') -> Optional[Dict]:
-        """Place market order on Coinbase."""
-        # TODO: Implement using existing broker_manager order methods
-        logger.info(f"Placing Coinbase market {side} order: {symbol} size={size}")
-        return None
+                           size_type: str = 'quote') -> Optional[Dict]:
+        """Place a market order on Coinbase.
+
+        Args:
+            symbol: Trading pair, e.g. 'BTC-USD'
+            side: 'buy' or 'sell'
+            size: Amount to trade (USD when size_type='quote', crypto when 'base')
+            size_type: 'quote' (default) or 'base'
+
+        Returns:
+            Order response dict, or None on failure.
+        """
+        try:
+            broker = self._get_broker()
+            result = broker.place_market_order(
+                symbol=symbol,
+                side=side,
+                quantity=size,
+                size_type=size_type
+            )
+            if result and result.get('status') not in ('error', 'unfilled'):
+                logger.info(f"✅ Coinbase market {side} order placed: {symbol} size={size}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to place Coinbase market order {side} {symbol}: {e}")
+            return None
 
     def place_limit_order(self, symbol: str, side: str, size: float,
-                         price: float, size_type: str = 'quote') -> Optional[Dict]:
-        """Place limit order on Coinbase."""
-        logger.info(f"Placing Coinbase limit {side} order: {symbol} @ {price}")
-        return None
+                          price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """Place a GTC limit order on Coinbase.
+
+        Args:
+            symbol: Trading pair, e.g. 'BTC-USD'
+            side: 'buy' or 'sell'
+            size: Base-asset quantity (crypto amount) for the order
+            price: Limit price in quote currency (USD)
+            size_type: Ignored – Coinbase limit orders always use base quantity.
+
+        Returns:
+            Order response dict, or None on failure.
+        """
+        try:
+            broker = self._get_broker()
+            if broker.client is None:
+                raise RuntimeError("Coinbase REST client not initialized")
+
+            logger.info(f"Placing Coinbase GTC limit {side} order: {symbol} qty={size} @ {price}")
+            if side.lower() == 'buy':
+                resp = broker.client.limit_order_gtc_buy(
+                    product_id=symbol,
+                    base_size=str(size),
+                    limit_price=str(price)
+                )
+            else:
+                resp = broker.client.limit_order_gtc_sell(
+                    product_id=symbol,
+                    base_size=str(size),
+                    limit_price=str(price)
+                )
+
+            order_id = self._extract_order_id(resp)
+
+            logger.info(f"✅ Coinbase limit {side} order placed: {symbol} order_id={order_id}")
+            return {
+                'order_id': order_id,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'price': price,
+                'status': 'open',
+                'raw': resp
+            }
+        except Exception as e:
+            logger.error(f"Failed to place Coinbase limit order {side} {symbol}: {e}")
+            return None
 
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel order on Coinbase."""
-        logger.info(f"Cancelling Coinbase order: {order_id}")
-        return False
+        """Cancel an open order on Coinbase.
+
+        Args:
+            order_id: The Coinbase order ID to cancel.
+
+        Returns:
+            True if the cancel request was accepted, False otherwise.
+        """
+        try:
+            broker = self._get_broker()
+            if broker.client is None:
+                raise RuntimeError("Coinbase REST client not initialized")
+
+            logger.info(f"Cancelling Coinbase order: {order_id}")
+            resp = broker.client.cancel_orders(order_ids=[order_id])
+
+            # The SDK returns a list of CancelOrdersResult objects
+            results = getattr(resp, 'results', None)
+            if isinstance(resp, dict):
+                results = resp.get('results', [])
+
+            if results:
+                first = results[0]
+                success = getattr(first, 'success', None)
+                if isinstance(first, dict):
+                    success = first.get('success')
+                if success is False:
+                    failure_reason = getattr(first, 'failure_reason', 'unknown')
+                    logger.warning(f"⚠️ Coinbase cancel order {order_id} failed: {failure_reason}")
+                    return False
+
+            logger.info(f"✅ Coinbase order cancelled: {order_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cancel Coinbase order {order_id}: {e}")
+            return False
 
     def get_open_positions(self) -> List[Dict]:
-        """Get open positions from Coinbase."""
-        # TODO: Implement using existing position tracking
-        return []
+        """Get open crypto positions held on Coinbase.
+
+        Returns:
+            List of position dicts (symbol, quantity, side, entry_price, …).
+        """
+        try:
+            broker = self._get_broker()
+            return broker.get_positions()
+        except Exception as e:
+            logger.error(f"Failed to fetch Coinbase open positions: {e}")
+            return []
 
     def get_order_status(self, order_id: str) -> Optional[Dict]:
-        """Get order status from Coinbase."""
-        logger.info(f"Checking Coinbase order status: {order_id}")
-        return None
+        """Get the status of a Coinbase order.
+
+        Args:
+            order_id: The Coinbase order ID to query.
+
+        Returns:
+            Order status dict, or None on failure.
+        """
+        try:
+            broker = self._get_broker()
+            if broker.client is None:
+                raise RuntimeError("Coinbase REST client not initialized")
+
+            logger.info(f"Checking Coinbase order status: {order_id}")
+            resp = broker.client.get_order(order_id=order_id)
+
+            order = getattr(resp, 'order', None)
+            if isinstance(resp, dict):
+                order = resp.get('order', resp)
+
+            if order is None:
+                return None
+
+            status = getattr(order, 'status', None)
+            filled_size = getattr(order, 'filled_size', None)
+            if isinstance(order, dict):
+                status = order.get('status')
+                filled_size = order.get('filled_size')
+
+            return {
+                'order_id': order_id,
+                'status': status,
+                'filled_size': filled_size,
+                'raw': order
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch Coinbase order status for {order_id}: {e}")
+            return None
 
 
 class BinanceBrokerAdapter(BrokerInterface):
