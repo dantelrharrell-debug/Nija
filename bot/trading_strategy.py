@@ -931,6 +931,31 @@ def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
         # This should never happen if thread completed, but handle it anyway
         return None, Exception("Worker thread completed but no result available")
 
+
+def safe_close_position(broker, symbol: str, quantity: float) -> bool:
+    """
+    Safe wrapper around broker.close_position that prevents exchange errors
+    from halting the pipeline.
+
+    Args:
+        broker: Broker instance with a close_position method.
+        symbol: Trading symbol to close.
+        quantity: Quantity to close; must be positive.
+
+    Returns:
+        True if the position was closed successfully, False otherwise.
+    """
+    if quantity <= 0:
+        return False
+
+    try:
+        broker.close_position(symbol, quantity=quantity)
+        return True
+    except Exception as e:
+        logger.warning(f"Dust close failed for {symbol}: {e}")
+        return False
+
+
 # Add bot directory to path if running from root
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
@@ -2340,8 +2365,7 @@ class TradingStrategy:
                         try:
                             _recovery_sell_submitted = False
                             if hasattr(broker, 'close_position'):
-                                broker.close_position(symbol, quantity=quantity)
-                                _recovery_sell_submitted = True
+                                _recovery_sell_submitted = safe_close_position(broker, symbol, quantity)
                             elif hasattr(broker, 'place_market_order'):
                                 broker.place_market_order(symbol, side='sell', quantity=quantity)
                                 _recovery_sell_submitted = True

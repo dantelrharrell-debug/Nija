@@ -334,6 +334,32 @@ class BrokerInterface(ABC):
         # Default implementation - brokers can override
         return None
 
+    def get_trading_fees(self, symbol: str) -> Dict[str, float]:
+        """
+        Get trading fee rates for a symbol from the exchange.
+
+        Brokers should override this method to return live fee data pulled
+        from the exchange API. If the exchange does not expose per-symbol
+        fees, return the account-level fee tier. Callers must always handle
+        the case where this returns hardcoded defaults (exchange API
+        unavailable or not yet implemented).
+
+        Args:
+            symbol: Trading pair symbol (e.g. 'BTC-USD')
+
+        Returns:
+            dict with keys:
+                'maker_fee' (float) – maker fee as decimal (e.g. 0.004 = 0.4%)
+                'taker_fee' (float) – taker fee as decimal (e.g. 0.006 = 0.6%)
+                'source'    (str)   – 'live' | 'hardcoded'
+        """
+        # Default conservative fallback (Coinbase taker fee)
+        return {
+            'maker_fee': 0.004,
+            'taker_fee': 0.006,
+            'source': 'hardcoded',
+        }
+
 
 
 class CoinbaseBrokerAdapter(BrokerInterface):
@@ -625,6 +651,53 @@ class CoinbaseBrokerAdapter(BrokerInterface):
         except Exception as e:
             logger.error(f"Failed to fetch Coinbase order status for {order_id}: {e}")
             return None
+
+    def get_trading_fees(self, symbol: str) -> Dict[str, float]:
+        """Get trading fee rates for a symbol from the Coinbase API.
+
+        Attempts to pull live account-level fee tiers via the
+        ``get_transaction_summary`` endpoint. Falls back to the standard
+        Coinbase Advanced Trade default fee schedule when the live call
+        fails or returns unexpected data.
+
+        Args:
+            symbol: Trading pair symbol (e.g. 'BTC-USD')
+
+        Returns:
+            dict with keys 'maker_fee', 'taker_fee' (both as decimals) and
+            'source' ('live' or 'hardcoded').
+        """
+        # Coinbase Advanced Trade standard defaults (non-VIP tier)
+        _DEFAULT = {'maker_fee': 0.004, 'taker_fee': 0.006, 'source': 'hardcoded'}
+
+        try:
+            broker = self._get_broker()
+            if broker.client is None:
+                return _DEFAULT
+
+            # Coinbase Advanced Trade API: GET /api/v3/brokerage/transaction_summary
+            resp = broker.client.get_transaction_summary()
+
+            # Normalise response to a plain dict regardless of SDK version
+            resp_dict = resp if isinstance(resp, dict) else vars(resp) if hasattr(resp, '__dict__') else {}
+            fee_tier = resp_dict.get('fee_tier') or getattr(resp, 'fee_tier', None) or {}
+            if not isinstance(fee_tier, dict):
+                fee_tier = vars(fee_tier) if hasattr(fee_tier, '__dict__') else {}
+
+            maker_raw = fee_tier.get('maker_fee_rate')
+            taker_raw = fee_tier.get('taker_fee_rate')
+
+            if maker_raw is not None and taker_raw is not None:
+                return {
+                    'maker_fee': float(maker_raw),
+                    'taker_fee': float(taker_raw),
+                    'source': 'live',
+                }
+
+        except Exception as e:
+            logger.debug(f"Could not fetch live Coinbase fees for {symbol}: {e}")
+
+        return _DEFAULT
 
 
 class BinanceBrokerAdapter(BrokerInterface):
