@@ -119,6 +119,38 @@ except ImportError:
         RiskIntelligenceGate = None  # type: ignore
         logger.warning("RiskIntelligenceGate not available — pre-entry volatility gate disabled")
 
+try:
+    from liquidity_risk_gate import LiquidityRiskGate, get_liquidity_risk_gate
+    _LRG_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.liquidity_risk_gate import LiquidityRiskGate, get_liquidity_risk_gate
+        _LRG_AVAILABLE = True
+    except ImportError:
+        _LRG_AVAILABLE = False
+        LiquidityRiskGate = None  # type: ignore
+        get_liquidity_risk_gate = None  # type: ignore
+        logger.warning("LiquidityRiskGate not available — daily-volume cap disabled")
+
+try:
+    from asset_exposure_correlation_gate import (
+        AssetExposureCorrelationGate,
+        get_asset_exposure_correlation_gate,
+    )
+    _AECG_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.asset_exposure_correlation_gate import (
+            AssetExposureCorrelationGate,
+            get_asset_exposure_correlation_gate,
+        )
+        _AECG_AVAILABLE = True
+    except ImportError:
+        _AECG_AVAILABLE = False
+        AssetExposureCorrelationGate = None  # type: ignore
+        get_asset_exposure_correlation_gate = None  # type: ignore
+        logger.warning("AssetExposureCorrelationGate not available — symbol-level correlation gate disabled")
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -228,6 +260,12 @@ class RiskEngine:
             if _RIG_AVAILABLE
             else None
         )
+        self._lrg: Optional[LiquidityRiskGate] = (
+            get_liquidity_risk_gate() if _LRG_AVAILABLE else None
+        )
+        self._aecg: Optional[AssetExposureCorrelationGate] = (
+            get_asset_exposure_correlation_gate() if _AECG_AVAILABLE else None
+        )
 
         # Internal bookkeeping
         self._current_balance: float = 0.0
@@ -253,6 +291,8 @@ class RiskEngine:
         portfolio_value: float,
         df: Optional[pd.DataFrame] = None,
         direction: str = "long",
+        daily_volume_usd: Optional[float] = None,
+        strategy: Optional[str] = None,
     ) -> TradeGateResult:
         """
         Evaluate all capital-protection checks for a proposed trade.
@@ -271,6 +311,16 @@ class RiskEngine:
             Recent OHLCV price DataFrame (used by the volatility gate).
         direction:
             ``"long"`` or ``"short"``.
+        daily_volume_usd:
+            24-hour market trading volume in USD for the symbol being traded.
+            When provided, the liquidity risk gate enforces
+            ``trade_size / daily_volume ≤ 1 %`` to prevent slippage and
+            liquidity traps.  If ``None``, the liquidity gate is skipped.
+        strategy:
+            Identifier of the strategy requesting the trade (e.g. ``"RSI_9"``).
+            When provided, the asset-exposure correlation gate checks whether
+            the proposed symbol is highly correlated with symbols already held
+            by peer strategies.  If ``None``, the correlation gate is skipped.
 
         Returns
         -------
@@ -400,6 +450,64 @@ class RiskEngine:
                 except Exception as exc:
                     logger.debug("RiskIntelligenceGate error (non-fatal): %s", exc)
 
+            # ── 7. Liquidity risk gate (trade_size ≤ 1 % of daily volume) ─
+            if self._lrg is not None and daily_volume_usd is not None and daily_volume_usd > 0:
+                try:
+                    liq_decision = self._lrg.approve_trade(
+                        symbol=symbol,
+                        trade_size_usd=adjusted,
+                        daily_volume_usd=daily_volume_usd,
+                    )
+                    if not liq_decision.allowed:
+                        return TradeGateResult(
+                            approved=False,
+                            adjusted_size_usd=0.0,
+                            size_multiplier=0.0,
+                            reason=f"Liquidity gate: {liq_decision.reason}",
+                            risk_level=risk_level_str,
+                            checks_passed=checks_passed,
+                            checks_failed=checks_failed + ["liquidity_gate"],
+                        )
+                    if liq_decision.size_multiplier < 1.0:
+                        adjusted = liq_decision.adjusted_size_usd
+                        checks_failed.append(
+                            f"liquidity_gate_reduction({liq_decision.size_multiplier:.2f}x)"
+                        )
+                    else:
+                        checks_passed.append("liquidity_gate")
+                except Exception as exc:
+                    logger.debug("LiquidityRiskGate error (non-fatal): %s", exc)
+
+            # ── 8. Asset exposure correlation gate ────────────────────────
+            if self._aecg is not None and strategy is not None:
+                try:
+                    aec_decision = self._aecg.approve_entry(
+                        strategy=strategy,
+                        symbol=symbol,
+                        proposed_size_usd=adjusted,
+                        portfolio_value=portfolio_value,
+                    )
+                    if not aec_decision.allowed:
+                        return TradeGateResult(
+                            approved=False,
+                            adjusted_size_usd=0.0,
+                            size_multiplier=0.0,
+                            reason=f"Asset exposure correlation gate: {aec_decision.reason}",
+                            risk_level=risk_level_str,
+                            checks_passed=checks_passed,
+                            checks_failed=checks_failed + ["asset_exposure_correlation_gate"],
+                        )
+                    if aec_decision.adjusted_size_usd < adjusted:
+                        adjusted = aec_decision.adjusted_size_usd
+                        checks_failed.append(
+                            f"asset_exposure_corr_reduction"
+                            f"(corr={aec_decision.max_peer_symbol_corr:.2f})"
+                        )
+                    else:
+                        checks_passed.append("asset_exposure_correlation_gate")
+                except Exception as exc:
+                    logger.debug("AssetExposureCorrelationGate error (non-fatal): %s", exc)
+
             # ── Final decision ───────────────────────────────────────────
             adjusted = max(0.0, adjusted)
             multiplier = (adjusted / raw_size_usd) if raw_size_usd > 0 else 0.0
@@ -510,6 +618,8 @@ class RiskEngine:
                     "global_risk_controller": grc_status,
                     "portfolio_risk_engine": pre_stats,
                     "risk_intelligence_gate": _RIG_AVAILABLE,
+                    "liquidity_risk_gate": _LRG_AVAILABLE,
+                    "asset_exposure_correlation_gate": _AECG_AVAILABLE,
                 },
             }
 

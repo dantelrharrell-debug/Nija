@@ -523,6 +523,8 @@ data/correlation_decisions.jsonl
 data/strategy_health.jsonl
 data/volatility_shocks.jsonl
 data/concentration_decisions.jsonl
+data/liquidity_risk_gate_decisions.jsonl
+data/asset_exposure_correlation_decisions.jsonl
 
 data/profit_lock_state.json
 data/*.json
