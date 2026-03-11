@@ -149,6 +149,23 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 # MIN_BALANCE_COINBASE = 10.0  # Coinbase disabled
 
 # ============================================================================
+# MICRO-CAP COMPOUNDING MODE (balance < $100)
+# ============================================================================
+# When the account balance is below $100, the bot enters a focused single-trade
+# compounding mode:
+#   - max_positions    = 1      (one trade at a time for capital concentration)
+#   - position_size    = 25%    (of current capital per trade)
+#   - profit_target    = 1.2%   (tight, achievable target that compounds quickly)
+#   - stop_loss        = 0.6%   (half of profit target → 2:1 R:R ratio)
+#   - trade_cooldown   = 60s    (re-entry cooldown between trades per symbol)
+
+MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
+MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
+MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0   # 25% of capital per trade
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R)
+MICRO_CAP_TRADE_COOLDOWN = 60                    # Seconds between trades (re-entry cooldown)
+
 # MICRO-CAP COMPOUNDING MODE HELPER
 # ============================================================================
 
@@ -222,6 +239,7 @@ def get_dynamic_config(equity: float) -> Dict:
         config['stop_loss_pct'] = compounding['stop_loss_pct']
         config['micro_cap_compounding_active'] = True
         return config
+    
 
     # Scaling at $250
     if equity >= 250:
