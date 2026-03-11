@@ -26,6 +26,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from capital_growth_throttle import get_capital_growth_throttle
+except ImportError:
+    from bot.capital_growth_throttle import get_capital_growth_throttle
+
 logger = logging.getLogger("nija.compounding_engine")
 
 # ---------------------------------------------------------------------------
@@ -263,7 +268,17 @@ class CompoundingEngine:
 
     def get_optimal_position_size(self, base_pct: float) -> float:
         """
-        Calculate optimal position size with tier-adjusted multiplier.
+        Calculate optimal position size with tier-adjusted multiplier and
+        capital-growth throttle.
+
+        The capital growth throttle reduces the returned size when the account
+        has been growing unusually fast over the short-term window, preventing
+        overexposure during periods of rapid compounding.
+
+        The throttle reads its cached state; call
+        ``get_capital_growth_throttle().update_capital(balance)`` once per
+        trading cycle before invoking this method so the throttle always
+        reflects the latest balance.
 
         Args:
             base_pct: Base position as fraction of tradeable capital (e.g. 0.05).
@@ -273,8 +288,16 @@ class CompoundingEngine:
         """
         tradeable = self.get_tradeable_capital()
         tier_cfg = self._get_tier_config()
-        multiplier = min(self._get_compound_multiplier(), tier_cfg.max_position_multiplier)
-        return min(tradeable * base_pct * multiplier, tradeable)
+        compound_multiplier = min(
+            self._get_compound_multiplier(), tier_cfg.max_position_multiplier
+        )
+        growth_throttle_multiplier = get_capital_growth_throttle(
+            initial_capital=self._state.base_capital
+        ).get_size_multiplier()
+        return min(
+            tradeable * base_pct * compound_multiplier * growth_throttle_multiplier,
+            tradeable,
+        )
 
     def get_projections(self) -> List[CompoundingProjection]:
         """
