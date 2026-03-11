@@ -155,16 +155,46 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 # compounding mode:
 #   - max_positions    = 1      (one trade at a time for capital concentration)
 #   - position_size    = 25%    (of current capital per trade)
-#   - profit_target    = 1.2%   (tight, achievable target that compounds quickly)
-#   - stop_loss        = 0.6%   (half of profit target → 2:1 R:R ratio)
+#   - profit_target    = base_target + spread  (dynamic; base=1.0%, spread=current market spread)
+#                        Example: spread 0.20% → target 1.20%; 0.40% → 1.40%; 0.60% → 1.60%
+#   - stop_loss        = 0.6%   (half of base profit target → 2:1 R:R ratio on base)
 #   - trade_cooldown   = 60s    (re-entry cooldown between trades per symbol)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
 MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
 MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0   # 25% of capital per trade
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R)
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 1.0  # 1.0% base profit target (spread is added at runtime)
+# Backward-compatible alias used as the static fallback when no spread data is available
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R vs base target)
 MICRO_CAP_TRADE_COOLDOWN = 60                    # Seconds between trades (re-entry cooldown)
+
+
+def get_spread_adjusted_profit_target(spread_pct: float) -> float:
+    """
+    Calculate the spread-adjusted profit target for micro-cap compounding mode.
+
+    Formula:
+        profit_target = base_target + spread
+
+    where:
+        base_target = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT (1.0%)
+        spread      = current market spread expressed as a percentage
+
+    Examples:
+        spread 0.20%  →  profit target 1.20%
+        spread 0.40%  →  profit target 1.40%
+        spread 0.60%  →  profit target 1.60%
+
+    Args:
+        spread_pct: Current bid-ask spread as a decimal fraction (e.g. 0.002 = 0.2%).
+
+    Returns:
+        Profit target as a percentage (e.g. 1.2 means 1.2%).
+    """
+    spread_as_pct = spread_pct * 100.0
+    return MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT + spread_as_pct
+
 
 # MICRO-CAP COMPOUNDING MODE HELPER
 # ============================================================================
@@ -177,8 +207,12 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
     Compounding mode rules:
       - max_positions    = 1      (one trade at a time)
       - position_size    = 25%    (of current capital per trade)
-      - profit_target    = 1.2%   (tight, achievable target)
-      - stop_loss        = 0.6%   (half of profit target → 2:1 R:R)
+      - profit_target    = base (1.0%) + current market spread  (computed at entry time)
+      - stop_loss        = 0.6%   (half of base profit target → 2:1 R:R)
+
+    The 'profit_target_pct' key in the returned dict holds the *base* target only.
+    Callers should add the current spread via get_spread_adjusted_profit_target() at
+    entry time so the target reflects the actual cost of crossing the spread.
 
     Args:
         balance: Current account balance in USD.
@@ -192,7 +226,7 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             'balance_threshold': MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD,
             'max_positions': MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
             'position_size_pct': MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
-            'profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
+            'profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT,
             'stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
         }
         logger.info(
@@ -200,7 +234,7 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             f"(balance ${balance:.2f} < ${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}): "
             f"max_positions={MICRO_CAP_COMPOUNDING_MAX_POSITIONS}, "
             f"position_size={MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT}%, "
-            f"profit_target={MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT}%, "
+            f"profit_target=base {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT}% + spread (dynamic), "
             f"stop_loss={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT}%"
         )
         return config
@@ -315,14 +349,14 @@ MIN_PROFIT_TO_COMPOUND = 5.0  # Minimum profit to trigger compounding
 # Design requirements:
 #   - max_positions = 1   (focus on one trade at a time)
 #   - position_size = 25% of capital per trade
-#   - profit_target = 1.2%  (achievable target that compounds fast)
-#   - stop_loss = 0.6%      (tight stop, 2:1 reward-to-risk)
-
-MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
-MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
-MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0   # 25% of capital per trade
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss
+#   - profit_target = base_target (1.0%) + current market spread  (dynamic)
+#   - stop_loss = 0.6%      (tight stop, 2:1 reward-to-risk vs base target)
+#
+# Note: constants are defined earlier in this file; these lines reference them
+# to avoid accidental duplication divergence.
+# MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD, MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
+# MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT, MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT,
+# MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT, MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT
 
 # ============================================================================
 # COMPLETE CONFIGURATION DICTIONARY
