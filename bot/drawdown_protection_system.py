@@ -33,7 +33,7 @@ class ProtectionLevel(Enum):
     CAUTION = "caution"  # Minor drawdown (5-10%), reduce position sizes
     WARNING = "warning"  # Moderate drawdown (10-15%), significant reduction
     DANGER = "danger"  # Severe drawdown (15-20%), minimal positions only
-    HALT = "halt"  # Critical drawdown (>20%), stop trading
+    HALT = "halt"  # Critical drawdown (>20%), minimal trading (10%)
 
 
 @dataclass
@@ -43,13 +43,13 @@ class DrawdownConfig:
     caution_threshold_pct: float = 5.0  # Start reducing at 5% drawdown
     warning_threshold_pct: float = 10.0  # Significant reduction at 10%
     danger_threshold_pct: float = 15.0  # Minimal trading at 15%
-    halt_threshold_pct: float = 20.0  # Stop trading at 20%
+    halt_threshold_pct: float = 20.0  # Minimal trading (10%) at 20%
 
     # Position size adjustments per level
     caution_position_multiplier: float = 0.75  # 75% of normal size
     warning_position_multiplier: float = 0.50  # 50% of normal size
     danger_position_multiplier: float = 0.25  # 25% of normal size
-    halt_position_multiplier: float = 0.0  # No trading
+    halt_position_multiplier: float = 0.10  # Minimal trading (10% of normal size)
 
     # Recovery settings
     recovery_win_streak_required: int = 3  # Wins needed to step down protection
@@ -279,7 +279,7 @@ class DrawdownProtectionSystem:
             logger.warning(f"   Losing Streak: {self.state.losing_streak}")
 
             if new_level == ProtectionLevel.HALT:
-                logger.error("🛑 TRADING HALTED - CRITICAL DRAWDOWN")
+                logger.error("🛑 CRITICAL DRAWDOWN - MINIMAL TRADING (10%)")
                 logger.error(f"   Drawdown: {self.state.drawdown_pct:.2f}%")
                 logger.error(f"   Peak: ${self.state.peak_capital:.2f}")
                 logger.error(f"   Current: ${self.state.current_capital:.2f}")
@@ -371,7 +371,7 @@ class DrawdownProtectionSystem:
             Tuple of (can_trade, reason)
         """
         if self.state.protection_level == ProtectionLevel.HALT:
-            return (False, f"Trading halted due to {self.state.drawdown_pct:.2f}% drawdown (>{self.config.halt_threshold_pct:.1f}%)")
+            return (True, f"Minimal trading ({self.config.halt_position_multiplier*100:.0f}%) due to {self.state.drawdown_pct:.2f}% drawdown (>{self.config.halt_threshold_pct:.1f}%)")
 
         # Check capital floor
         if self.config.enable_capital_floor:
@@ -432,7 +432,7 @@ class DrawdownProtectionSystem:
             f"  Caution:              {self.config.caution_threshold_pct:>12.1f}% → {self.config.caution_position_multiplier*100:.0f}% position size",
             f"  Warning:              {self.config.warning_threshold_pct:>12.1f}% → {self.config.warning_position_multiplier*100:.0f}% position size",
             f"  Danger:               {self.config.danger_threshold_pct:>12.1f}% → {self.config.danger_position_multiplier*100:.0f}% position size",
-            f"  Halt:                 {self.config.halt_threshold_pct:>12.1f}% → Trading stopped",
+            f"  Halt:                 {self.config.halt_threshold_pct:>12.1f}% → {self.config.halt_position_multiplier*100:.0f}% position size",
             ""
         ])
 
@@ -499,7 +499,7 @@ def get_drawdown_protection(base_capital: float,
 
     Args:
         base_capital: Base capital to protect
-        halt_threshold: Drawdown % at which to halt trading
+        halt_threshold: Drawdown % at which to apply minimal (10%) trading
 
     Returns:
         DrawdownProtectionSystem instance
