@@ -157,17 +157,70 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 #   - position_size    = 25%    (of current capital per trade)
 #   - profit_target    = 1.2%   (tight, achievable target that compounds quickly)
 #   - stop_loss        = 0.6%   (half of profit target → 2:1 R:R ratio)
-#   - trade_cooldown   = 60s    (re-entry cooldown between trades per symbol)
+#   - trade_cooldown   = 30s    (re-entry cooldown between trades per symbol, ~120 trades/hr)
+#
+# Adaptive Profit Scaling:
+#   When enabled, the profit target may scale UP above the 1.2% base during
+#   favourable conditions (consecutive wins, elevated volatility). The base
+#   target is always the floor — it never drops below 1.2%.
+#   Scale caps at MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT (2.0% default).
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
 MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
 MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0   # 25% of capital per trade
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target (floor — do not lower)
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R)
-MICRO_CAP_TRADE_COOLDOWN = 60                    # Seconds between trades (re-entry cooldown)
+MICRO_CAP_TRADE_COOLDOWN = 30                    # Seconds between trades (~120 trades/hr)
 
-# MICRO-CAP COMPOUNDING MODE HELPER
+# Adaptive Profit Scaling — scales target UP in favourable conditions only
+MICRO_CAP_ADAPTIVE_PROFIT_SCALING = True         # Enable adaptive profit scaling
+MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT = 1.2          # Minimum profit target (equals base — never lower)
+MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT = 2.0          # Maximum profit target under scaling
+MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE = 0.1 # Extra % per consecutive winning trade
+MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE = True # Also scale with market volatility
+
+# MICRO-CAP COMPOUNDING MODE HELPERS
 # ============================================================================
+
+def get_adaptive_profit_target(win_streak: int = 0, volatility_factor: float = 1.0) -> float:
+    """
+    Compute an adaptive profit target for micro-cap compounding mode.
+
+    The target starts at the base (1.2%) and scales UP during favourable
+    conditions — it never drops below the base target.
+
+    Scaling rules:
+      - +MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE % per consecutive winning trade
+      - ×volatility_factor when MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE is True
+      - Clamped to [MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT, MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT]
+
+    Args:
+        win_streak:        Number of consecutive winning trades (0 = no streak).
+        volatility_factor: Market volatility multiplier (1.0 = normal; >1 = elevated).
+
+    Returns:
+        Adaptive profit target percentage (e.g. 1.2 means 1.2%).
+    """
+    if not MICRO_CAP_ADAPTIVE_PROFIT_SCALING:
+        return MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT
+
+    target = MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT + (win_streak * MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE)
+
+    if MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE and volatility_factor > 1.0:
+        # Scale only the excess above the floor so win-streak gains are preserved:
+        # new_target = target + excess * (volatility_factor - 1.0)
+        excess = target - MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT
+        target = target + excess * (volatility_factor - 1.0)
+
+    target = min(target, MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT)
+    target = max(target, MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT)
+
+    logger.debug(
+        f"Adaptive profit target: {target:.2f}% "
+        f"(win_streak={win_streak}, volatility_factor={volatility_factor:.2f})"
+    )
+    return target
+
 
 def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union[bool, float, int]]]:
     """
@@ -177,8 +230,10 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
     Compounding mode rules:
       - max_positions    = 1      (one trade at a time)
       - position_size    = 25%    (of current capital per trade)
-      - profit_target    = 1.2%   (tight, achievable target)
+      - profit_target    = 1.2%   (base floor — adaptive scaling may raise it)
       - stop_loss        = 0.6%   (half of profit target → 2:1 R:R)
+      - trade_cooldown   = 30s    (~120 trades/hr)
+      - adaptive_profit_scaling = True
 
     Args:
         balance: Current account balance in USD.
@@ -194,14 +249,21 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             'position_size_pct': MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
             'profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
             'stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
+            'trade_cooldown': MICRO_CAP_TRADE_COOLDOWN,
+            'adaptive_profit_scaling': MICRO_CAP_ADAPTIVE_PROFIT_SCALING,
+            'adaptive_profit_min_pct': MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT,
+            'adaptive_profit_max_pct': MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT,
+            'adaptive_profit_win_streak_scale': MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE,
+            'adaptive_profit_volatility_scale': MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE,
         }
         logger.info(
             f"🚀 Micro-cap compounding mode ACTIVE "
             f"(balance ${balance:.2f} < ${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}): "
             f"max_positions={MICRO_CAP_COMPOUNDING_MAX_POSITIONS}, "
             f"position_size={MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT}%, "
-            f"profit_target={MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT}%, "
-            f"stop_loss={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT}%"
+            f"profit_target={MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT}% (adaptive scaling ON), "
+            f"stop_loss={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT}%, "
+            f"cooldown={MICRO_CAP_TRADE_COOLDOWN}s"
         )
         return config
 
@@ -419,6 +481,14 @@ MICRO_CAPITAL_CONFIG = {
     'micro_cap_compounding_position_size_pct': MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
     'micro_cap_compounding_profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
     'micro_cap_compounding_stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
+    'micro_cap_trade_cooldown': MICRO_CAP_TRADE_COOLDOWN,
+
+    # Adaptive Profit Scaling (micro-cap compounding mode)
+    'micro_cap_adaptive_profit_scaling': MICRO_CAP_ADAPTIVE_PROFIT_SCALING,
+    'micro_cap_adaptive_profit_min_pct': MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT,
+    'micro_cap_adaptive_profit_max_pct': MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT,
+    'micro_cap_adaptive_profit_win_streak_scale': MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE,
+    'micro_cap_adaptive_profit_volatility_scale': MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE,
 }
 
 # ============================================================================
@@ -548,12 +618,15 @@ def get_config_summary(equity: Optional[float] = None) -> str:
 
     compounding_section = ""
     if compounding_active:
+        adaptive_label = "ON" if MICRO_CAP_ADAPTIVE_PROFIT_SCALING else "OFF"
         compounding_section = f"""
 🚀 MICRO-CAP COMPOUNDING MODE (balance < ${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}):
-   • Max Positions:  {MICRO_CAP_COMPOUNDING_MAX_POSITIONS}  (single position focus)
-   • Position Size:  {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% of capital per trade
-   • Profit Target:  {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT:.1f}%
-   • Stop Loss:      {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}%  (2:1 reward-to-risk)
+   • Max Positions:          {MICRO_CAP_COMPOUNDING_MAX_POSITIONS}  (single position focus)
+   • Position Size:          {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% of capital per trade
+   • Profit Target (base):   {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT:.1f}%  (floor — never lower)
+   • Stop Loss:              {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}%  (2:1 reward-to-risk)
+   • Trade Cooldown:         {MICRO_CAP_TRADE_COOLDOWN}s  (theoretical max ~{3600 // MICRO_CAP_TRADE_COOLDOWN} trades/hr)
+   • Adaptive Profit Scaling:{adaptive_label}  [{MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT:.1f}% – {MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT:.1f}%]
 """
 
     return f"""
