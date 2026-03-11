@@ -58,6 +58,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+_MAX_HISTORY_SIZE: int = 100   # maximum trigger/reset records persisted
+
 logger = logging.getLogger("nija.portfolio_kill_switch")
 
 # ---------------------------------------------------------------------------
@@ -384,7 +386,7 @@ class PortfolioKillSwitch:
                     "triggered": self._triggered,
                     "trigger_reason": self._trigger_reason,
                     "trigger_timestamp": self._trigger_timestamp,
-                    "history": self._history[-100:],
+                    "history": self._history[-_MAX_HISTORY_SIZE:],
                     "last_saved": datetime.now(timezone.utc).isoformat(),
                 }
             tmp = self._state_file.with_suffix(".tmp")

@@ -175,6 +175,8 @@ class CircuitState(Enum):
 # Exchange outage circuit breaker
 # ---------------------------------------------------------------------------
 
+_CB_MAX_HISTORY: int = 50   # maximum transition records kept in ExchangeOutageCircuitBreaker
+
 
 class ExchangeOutageCircuitBreaker:
     """Three-state circuit breaker for complete exchange outages.
@@ -261,10 +263,8 @@ class ExchangeOutageCircuitBreaker:
                 return False  # still open
 
             # HALF_OPEN — allow exactly one probe
-            if self._state == CircuitState.HALF_OPEN:
-                return True
-
-        return False  # unreachable, but mypy wants a return
+            # (state is HALF_OPEN here because all states are covered above)
+            return True
 
     def record_success(self) -> None:
         """Record a successful exchange call."""
@@ -352,8 +352,8 @@ class ExchangeOutageCircuitBreaker:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._state_history.append(record)
-        if len(self._state_history) > 50:
-            self._state_history = self._state_history[-50:]
+        if len(self._state_history) > _CB_MAX_HISTORY:
+            self._state_history = self._state_history[-_CB_MAX_HISTORY:]
 
         if new_state == CircuitState.OPEN:
             logger.critical(

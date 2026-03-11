@@ -65,6 +65,8 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.trade_duplication_guard")
 
+_MAX_BLOCKED_LOG_SIZE: int = 200   # maximum number of blocked-attempt records kept in memory
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -125,7 +127,7 @@ class TradeDuplicationGuard:
         self._cfg = config or TradeDuplicationGuardConfig()
         self._lock = threading.Lock()
         self._slots: Dict[str, _Slot] = {}   # fingerprint → slot
-        self._blocked_log: List[Dict] = []   # recent blocked attempts (capped at 200)
+        self._blocked_log: List[Dict] = []   # recent blocked attempts (capped at _MAX_BLOCKED_LOG_SIZE)
 
         # Background cleanup thread
         self._stop_cleanup = threading.Event()
@@ -202,8 +204,8 @@ class TradeDuplicationGuard:
                     "submission_count": existing.submission_count,
                 }
                 self._blocked_log.append(entry)
-                if len(self._blocked_log) > 200:
-                    self._blocked_log = self._blocked_log[-200:]
+                if len(self._blocked_log) > _MAX_BLOCKED_LOG_SIZE:
+                    self._blocked_log = self._blocked_log[-_MAX_BLOCKED_LOG_SIZE:]
                 logger.warning("🚫 %s", reason)
                 return False, reason
 
