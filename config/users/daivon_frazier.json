@@ -4,8 +4,8 @@
   "role": "user",
   "enabled": true,
   "independent_trading": true,
-  "active_trading": false,
+  "active_trading": true,
   "risk_multiplier": 1.0,
   "disabled_symbols": ["XRP-USD"],
-  "mode": "recovery"
+  "mode": "normal"
 }
