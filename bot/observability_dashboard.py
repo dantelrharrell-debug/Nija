@@ -164,6 +164,9 @@ class MetricCollector:
         # 11. Broker health (from multi_account_broker_manager if available)
         snap["modules"]["broker_health"] = self._collect_broker_health()
 
+        # 12. Capital Growth Throttle (drawdown/size-multiplier)
+        snap["modules"]["capital_throttle"] = self._collect_capital_throttle()
+
         # Derived top-level fields for quick status bar
         snap["status"] = self._compute_top_level_status(snap["modules"])
 
@@ -214,10 +217,43 @@ class MetricCollector:
         try:
             from bot.capital_recycling_engine import get_capital_recycling_engine
             engine = get_capital_recycling_engine()
-            pool = getattr(engine, "_pool", None)
+            status = engine.get_status()
             return {
                 "available": True,
-                "pool_usd": round(float(pool), 2) if pool is not None else None,
+                "pool_usd": status.get("pool_usd"),
+                "allocation_pcts": status.get("allocation_pcts", {}),
+                "last_allocations": status.get("last_allocations", {}),
+                "last_allocation_regime": status.get("last_allocation_regime", ""),
+                "last_allocation_ts": status.get("last_allocation_ts", ""),
+                "rebalance_interval_hours": status.get("rebalance_interval_hours"),
+                "weights_computed_at": status.get("weights_computed_at", ""),
+                "next_rebalance_ts": status.get("next_rebalance_ts", ""),
+                "throttle_multiplier": status.get("throttle_multiplier", 1.0),
+                "throttle_label": status.get("throttle_label", "UNRESTRICTED"),
+                "throttle_drawdown_pct": status.get("throttle_drawdown_pct", 0.0),
+                "strategy_health_factors": status.get("strategy_health_factors", {}),
+            }
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+
+    def _collect_capital_throttle(self) -> Dict:
+        try:
+            from bot.capital_growth_throttle import get_capital_growth_throttle
+            throttle = get_capital_growth_throttle()
+            # Use get_status() if available (growth-velocity implementation)
+            if hasattr(throttle, "get_status"):
+                status = throttle.get_status()
+                return {"available": True, **status}
+            # Fallback for drawdown-based implementation
+            state = throttle.state
+            return {
+                "available": True,
+                "throttle_level": getattr(state, "label", "UNKNOWN"),
+                "current_multiplier": getattr(state, "multiplier", 1.0),
+                "short_growth_pct": getattr(state, "drawdown_pct", 0.0),
+                "long_growth_pct": 0.0,
+                "throttle_reason": getattr(state, "label", ""),
+                "last_updated": state.last_updated.isoformat() if state.last_updated else None,
             }
         except Exception as exc:
             return {"available": False, "error": str(exc)}
@@ -497,12 +533,43 @@ async function refresh() {
     if (stratRows.length === 0) stratRows.push(metricRow('No strategies tracked', '—'));
     cards.push(buildCard('Strategy Health', stratRows));
 
-    // Capital Recycling
+    // Capital Recycling — allocation plan + throttle
     const cr = mods.capital_recycling || {};
-    cards.push(buildCard('Capital Recycling', [
-      metricRow('Available', badge(cr.available ? 'OK' : null)),
-      metricRow('Pool (USD)', cr.pool_usd != null ? '$' + cr.pool_usd.toLocaleString() : '—'),
-    ]));
+    if (cr.available) {
+      const crRows = [
+        metricRow('Pool (USD)', cr.pool_usd != null ? '$' + cr.pool_usd.toLocaleString() : '—'),
+        metricRow('Throttle', badge(cr.throttle_label, 'UNRESTRICTED', 'CONSERVATIVE', 'N/A')),
+        metricRow('Drawdown', cr.throttle_drawdown_pct != null ? cr.throttle_drawdown_pct.toFixed(2) + ' %' : '—'),
+        metricRow('Size Multiplier', cr.throttle_multiplier != null ? (cr.throttle_multiplier * 100).toFixed(0) + ' %' : '—'),
+        metricRow('Last Regime', cr.last_allocation_regime || '—'),
+        metricRow('Next Rebalance', cr.next_rebalance_ts ? new Date(cr.next_rebalance_ts).toLocaleTimeString() : '—'),
+      ];
+      // Strategy allocation plan
+      const pcts = cr.allocation_pcts || {};
+      const hfs = cr.strategy_health_factors || {};
+      for (const [strat, pct] of Object.entries(pcts).sort((a, b) => b[1] - a[1])) {
+        const hf = hfs[strat] ?? 1.0;
+        const hfStr = hf < 1.0 ? ` <span class="badge badge-warn">health ${(hf*100).toFixed(0)}%</span>` : '';
+        crRows.push(`<div class="metric"><span class="label" style="font-size:0.82rem">${strat}</span><span class="value">${Number(pct).toFixed(1)} %${hfStr}</span></div>`);
+      }
+      cards.push(buildCard('Capital Recycling & Allocation Plan', crRows));
+    } else {
+      cards.push(buildCard('Capital Recycling', [
+        metricRow('Available', badge(null)),
+      ]));
+    }
+
+    // Capital Growth Throttle (standalone card)
+    const ct = mods.capital_throttle || {};
+    if (ct.available) {
+      cards.push(buildCard('Capital Growth Throttle', [
+        metricRow('Throttle Level', badge(ct.throttle_level, 'FREE', 'CAUTION', 'N/A')),
+        metricRow('Size Multiplier', ct.current_multiplier != null ? (ct.current_multiplier * 100).toFixed(0) + ' %' : '—'),
+        metricRow('7d Growth', ct.short_growth_pct != null ? ct.short_growth_pct.toFixed(2) + ' %' : '—'),
+        metricRow('30d Growth', ct.long_growth_pct != null ? ct.long_growth_pct.toFixed(2) + ' %' : '—'),
+        metricRow('Reason', ct.throttle_reason || '—'),
+      ]));
+    }
 
     // Multi-Asset Executor
     const mae = mods.multi_asset_executor || {};

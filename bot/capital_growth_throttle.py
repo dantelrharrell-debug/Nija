@@ -239,6 +239,7 @@ __all__ = [
     "ThrottleState",
     "get_capital_growth_throttle",
 ]
+"""
 NIJA Capital Growth Throttle
 
 Limits the velocity of capital deployment growth to prevent overexposure
