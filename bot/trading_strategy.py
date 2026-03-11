@@ -261,6 +261,38 @@ except ImportError:
         logger.warning("⚠️ Capital Growth Throttle not available - position scaling disabled")
         get_capital_growth_throttle = None
 
+# Import Slippage Protection — pre-trade gate that blocks orders with excessive slippage
+try:
+    from slippage_protection import get_slippage_protector, SlippageProtector
+    SLIPPAGE_PROTECTION_AVAILABLE = True
+    logger.info("✅ Slippage Protection loaded - pre-trade slippage gating active")
+except ImportError:
+    try:
+        from bot.slippage_protection import get_slippage_protector, SlippageProtector
+        SLIPPAGE_PROTECTION_AVAILABLE = True
+        logger.info("✅ Slippage Protection loaded - pre-trade slippage gating active")
+    except ImportError:
+        SLIPPAGE_PROTECTION_AVAILABLE = False
+        logger.warning("⚠️ Slippage Protection not available - slippage gating disabled")
+        get_slippage_protector = None
+        SlippageProtector = None
+
+# Import Volatility Position Sizing — adjusts position sizes based on current volatility
+try:
+    from volatility_position_sizing import get_volatility_position_sizer, VolatilityPositionSizer
+    VOLATILITY_POSITION_SIZING_AVAILABLE = True
+    logger.info("✅ Volatility Position Sizing loaded - ATR-based size scaling active")
+except ImportError:
+    try:
+        from bot.volatility_position_sizing import get_volatility_position_sizer, VolatilityPositionSizer
+        VOLATILITY_POSITION_SIZING_AVAILABLE = True
+        logger.info("✅ Volatility Position Sizing loaded - ATR-based size scaling active")
+    except ImportError:
+        VOLATILITY_POSITION_SIZING_AVAILABLE = False
+        logger.warning("⚠️ Volatility Position Sizing not available - volatility scaling disabled")
+        get_volatility_position_sizer = None
+        VolatilityPositionSizer = None
+
 load_dotenv()
 
 # Position adoption safety constants
@@ -1094,6 +1126,28 @@ class TradingStrategy:
                 self.risk_budget_engine = None
         else:
             self.risk_budget_engine = None
+
+        # Initialize Slippage Protector — pre-trade gate that blocks high-slippage orders
+        if SLIPPAGE_PROTECTION_AVAILABLE and get_slippage_protector is not None:
+            try:
+                self.slippage_protector = get_slippage_protector()
+                logger.info("✅ Slippage Protector initialized - pre-trade slippage gating active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Slippage Protector: {e}")
+                self.slippage_protector = None
+        else:
+            self.slippage_protector = None
+
+        # Initialize Volatility Position Sizer — ATR-based position size scaling
+        if VOLATILITY_POSITION_SIZING_AVAILABLE and get_volatility_position_sizer is not None:
+            try:
+                self.volatility_position_sizer = get_volatility_position_sizer()
+                logger.info("✅ Volatility Position Sizer initialized - ATR-based scaling active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Volatility Position Sizer: {e}")
+                self.volatility_position_sizer = None
+        else:
+            self.volatility_position_sizer = None
 
         # FIX #2: Initialize forced stop-loss executor
         try:
@@ -6716,6 +6770,34 @@ class TradingStrategy:
                                         logger.debug(f"   ⚠️ Risk Budget Engine error for {symbol}: {rb_err}")
 
                                 # ═══════════════════════════════════════════════════════
+                                # VOLATILITY POSITION SIZING — ATR-based size adjustment
+                                # Scales position size inversely with current volatility
+                                # so every trade carries a similar dollar-risk exposure.
+                                # ═══════════════════════════════════════════════════════
+                                if hasattr(self, 'volatility_position_sizer') and self.volatility_position_sizer is not None:
+                                    try:
+                                        _vol_current_price = float(df['close'].iloc[-1])
+                                        _vol_adjusted_size, _vol_sizing_result = self.volatility_position_sizer.adjust(
+                                            df=df,
+                                            current_price=_vol_current_price,
+                                            proposed_size_usd=position_size,
+                                            account_balance=account_balance,
+                                        )
+                                        if _vol_sizing_result.size_multiplier != 1.0:
+                                            logger.info(
+                                                f"   📐 {symbol}: Volatility Position Sizing "
+                                                f"({_vol_sizing_result.size_multiplier:.2f}x) "
+                                                f"${position_size:.2f} → ${_vol_adjusted_size:.2f} "
+                                                f"[regime={_vol_sizing_result.volatility_regime} "
+                                                f"atr={_vol_sizing_result.atr_pct:.2f}%]"
+                                            )
+                                        position_size = _vol_adjusted_size
+                                    except Exception as _vol_err:
+                                        logger.debug(
+                                            f"   ⚠️ Volatility Position Sizing skipped for {symbol}: {_vol_err}"
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
                                 # MARKET READINESS GATE - Re-check with entry score for CAUTIOUS mode
                                 # ═══════════════════════════════════════════════════════
                                 if self.market_readiness_gate is not None:
@@ -6999,6 +7081,51 @@ class TradingStrategy:
                                         # Non-fatal: allow trade if guardrails fail unexpectedly
 
                                 logger.info(f"   🎯 BUY SIGNAL: {symbol} - size=${position_size:.2f} - {analysis.get('reason', '')}")
+
+                                # ═══════════════════════════════════════════════════════
+                                # SLIPPAGE PROTECTION — block order if worst-case slippage
+                                # is too high to preserve profitability.
+                                # ═══════════════════════════════════════════════════════
+                                if hasattr(self, 'slippage_protector') and self.slippage_protector is not None:
+                                    try:
+                                        _slip_current_price = float(df['close'].iloc[-1])
+                                        # Use spread from analysis if available; default to 0.1% estimate
+                                        _slip_spread = analysis.get('spread_pct', 0.001) or 0.001
+                                        _slip_bid = _slip_current_price * (1.0 - _slip_spread / 2.0)
+                                        _slip_ask = _slip_current_price * (1.0 + _slip_spread / 2.0)
+                                        _slip_vol_pct = analysis.get('atr_pct', 0.02) or 0.02
+                                        # Estimate 24h volume from df when available
+                                        if 'volume' in df.columns and _slip_current_price > 0:
+                                            _slip_n = max(1, len(df))
+                                            _slip_vol_24h = float(df['volume'].sum()) * (
+                                                _slip_current_price * 288 / _slip_n
+                                            )
+                                        else:
+                                            _slip_vol_24h = 0.0
+                                        _slip_result = self.slippage_protector.check(
+                                            symbol=symbol,
+                                            side='buy',
+                                            order_size_usd=position_size,
+                                            bid=_slip_bid,
+                                            ask=_slip_ask,
+                                            volume_24h_usd=_slip_vol_24h,
+                                            volatility_pct=float(_slip_vol_pct),
+                                        )
+                                        if not _slip_result.approved:
+                                            logger.info(
+                                                f"   🚫 {symbol}: SLIPPAGE PROTECTION blocked entry — "
+                                                f"{_slip_result.reason}"
+                                            )
+                                            filter_stats['market_filter'] = (
+                                                filter_stats.get('market_filter', 0) + 1
+                                            )
+                                            continue
+                                    except Exception as _slip_err:
+                                        logger.debug(
+                                            f"   ⚠️ Slippage protection check skipped for {symbol}: {_slip_err}"
+                                        )
+                                        # Non-fatal: allow trade if slippage check fails
+
                                 success = self.apex.execute_action(analysis, symbol)
                                 if success:
                                     logger.info(f"   ✅ Position opened successfully")
