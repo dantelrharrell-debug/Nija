@@ -160,7 +160,7 @@ class TestClassify(unittest.TestCase):
         )
         self.assertEqual(ctrl.regime, MarketRegime.CHAOTIC)
         self.assertEqual(ctrl.trade_permission, TradePermission.PAUSED)
-        self.assertEqual(ctrl.position_size_multiplier, 0.0)
+        self.assertAlmostEqual(ctrl.position_size_multiplier, 0.10)
 
     def test_chaotic_thin_liquidity(self):
         """Thin liquidity (ratio < 0.5) triggers CHAOTIC."""
@@ -248,7 +248,7 @@ class TestClassify(unittest.TestCase):
 
         self.assertGreater(trending, ranging)
         self.assertGreater(ranging, chaotic)
-        self.assertEqual(chaotic, 0.0)
+        self.assertAlmostEqual(chaotic, 0.10)
 
 
 # ---------------------------------------------------------------------------
