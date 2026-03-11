@@ -137,6 +137,10 @@ class CapitalGrowthThrottle:
         with self._lock:
             return self._state.multiplier
 
+    def get_size_multiplier(self) -> float:
+        """Alias for :meth:`get_multiplier` for API compatibility."""
+        return self.get_multiplier()
+
     @property
     def state(self) -> ThrottleState:
         """Read-only snapshot of the current throttle state."""
