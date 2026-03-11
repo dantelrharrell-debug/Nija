@@ -502,8 +502,8 @@ class DrawdownCircuitBreaker:
         drawdown_pct = self.get_drawdown_pct()
         if drawdown_pct >= self._HALT_THRESHOLD_PCT:
             return (
-                False,
-                f"Circuit breaker HALTED: drawdown {drawdown_pct:.1f}% "
+                True,
+                f"Minimal trading (10%) — drawdown {drawdown_pct:.1f}% "
                 f">= {self._HALT_THRESHOLD_PCT:.0f}%",
             )
         return True, f"Trading allowed (drawdown {drawdown_pct:.1f}%)"
@@ -511,7 +511,7 @@ class DrawdownCircuitBreaker:
     def _fallback_multiplier(self) -> float:
         drawdown_pct = self.get_drawdown_pct()
         if drawdown_pct >= self._HALT_THRESHOLD_PCT:
-            return 0.0
+            return 0.10
         if drawdown_pct >= self._DANGER_THRESHOLD_PCT:
             return 0.25
         if drawdown_pct >= self._WARNING_THRESHOLD_PCT:

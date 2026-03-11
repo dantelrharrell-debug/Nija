@@ -408,11 +408,12 @@ class TestDrawdownCircuitBreaker(unittest.TestCase):
         self.assertTrue(can_trade)
 
     def test_halts_trading_at_deep_drawdown(self):
-        """20%+ drawdown should trigger the circuit breaker halt."""
+        """20%+ drawdown should activate minimal trading mode (10% position size)."""
         self.breaker.update(7_900.0)  # 21% drawdown
         can_trade, reason = self.breaker.can_trade()
-        self.assertFalse(can_trade)
-        self.assertIn('HALT', reason.upper() + 'CIRCUIT BREAKER')
+        self.assertTrue(can_trade)
+        mult = self.breaker.get_position_size_multiplier()
+        self.assertAlmostEqual(mult, 0.10, places=2)
 
     def test_drawdown_pct_calculation(self):
         """Drawdown percentage should be accurate."""
@@ -454,7 +455,7 @@ class TestRiskIntelligenceSystem(unittest.TestCase):
         self.assertEqual(reason, 'ok')
 
     def test_circuit_breaker_blocks_on_deep_drawdown(self):
-        """Circuit breaker should block after deep drawdown."""
+        """Circuit breaker activates minimal trading (10%) on deep drawdown."""
         self.ris.update_capital(7_000.0)  # 30% drawdown
         allowed, reason = self.ris.can_open_position(
             symbol='ETH-USD',
@@ -462,8 +463,14 @@ class TestRiskIntelligenceSystem(unittest.TestCase):
             current_positions=[],
             account_balance=7_000.0,
         )
-        self.assertFalse(allowed)
-        self.assertIn('CircuitBreaker', reason)
+        self.assertTrue(allowed)
+        # Position size should be reduced to 10%
+        adjusted, meta = self.ris.get_adjusted_position_size(
+            symbol='ETH-USD',
+            base_size_usd=200.0,
+            account_balance=7_000.0,
+        )
+        self.assertLessEqual(adjusted, 200.0 * 0.10 + 1e-6)
 
     def test_correlation_control_blocks_overexposed_group(self):
         """Correlation control should block when group exposure is too high."""

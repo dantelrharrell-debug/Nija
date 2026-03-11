@@ -17,7 +17,11 @@ Throttle levels (drawdown from all-time peak)
 5–10 %   → 0.75  (conservative)
 10–15 %  → 0.50  (moderate)
 15–20 %  → 0.25  (strict)
-≥ 20 %   → 0.00  (locked – no new entries)
+≥ 20 %   → 0.10  (minimal – severely reduced but not fully halted)
+
+Note: some funds prefer a hard lock (0.00) at ≥20% drawdown; this
+implementation uses 0.10 so the bot retains a small foothold during
+deep drawdowns rather than going completely dark.
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ _DRAWDOWN_TIERS = [
     (5.0,  0.75, "CONSERVATIVE"),
     (10.0, 0.50, "MODERATE"),
     (15.0, 0.25, "STRICT"),
-    (20.0, 0.00, "LOCKED"),
+    (20.0, 0.10, "MINIMAL"),
 ]
 
 
@@ -128,7 +132,7 @@ class CapitalGrowthThrottle:
             throttled_size = base_size * throttle.get_multiplier()
 
         Returns:
-            A float between 0.0 (fully locked) and 1.0 (no throttle).
+            A float between 0.1 (minimal — severe drawdown) and 1.0 (no throttle).
         """
         with self._lock:
             return self._state.multiplier
@@ -175,10 +179,10 @@ class CapitalGrowthThrottle:
         self._state.label = label
 
         if label != prev_label:
-            if label == "LOCKED":
+            if label == "MINIMAL":
                 logger.warning(
-                    "🔒 Capital Growth Throttle: LOCKED — drawdown %.1f%% ≥ 20%%. "
-                    "No new entries until capital recovers.",
+                    "🔒 Capital Growth Throttle: MINIMAL — drawdown %.1f%% ≥ 20%%. "
+                    "Position sizes reduced to 10%% until capital recovers.",
                     self._state.drawdown_pct,
                 )
             elif label in ("STRICT", "MODERATE"):
