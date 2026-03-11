@@ -45,7 +45,7 @@ def test_rate_profile_selection():
 
     test_cases = [
         (25.0, KrakenRateMode.MICRO_CAP, "Micro-Cap Rate Profile"),
-        (150.0, KrakenRateMode.LOW_CAPITAL, "Low-Capital Rate Profile"),
+        (150.0, KrakenRateMode.SMALL_CAP, "Small-Cap Rate Profile"),
         (750.0, KrakenRateMode.STANDARD, "Standard Rate Profile"),
         (1500.0, KrakenRateMode.AGGRESSIVE, "Aggressive Rate Profile"),
     ]
@@ -114,18 +114,34 @@ def test_min_interval_calculation():
         print(f"❌ MICRO_CAP monitoring interval: Expected 60.0s, got {monitoring_interval}s")
         return False
 
-    # Test LOW_CAPITAL mode (updated from 3s to 10s)
+    # Test SMALL_CAP mode (replaces LOW_CAPITAL as the $100-$500 tier)
+    entry_interval = calculate_min_interval(KrakenAPICategory.ENTRY, KrakenRateMode.SMALL_CAP)
+    monitoring_interval = calculate_min_interval(KrakenAPICategory.MONITORING, KrakenRateMode.SMALL_CAP)
+
+    if entry_interval == 10.0:
+        print(f"✅ SMALL_CAP entry interval: {entry_interval}s")
+    else:
+        print(f"❌ SMALL_CAP entry interval: Expected 10.0s, got {entry_interval}s")
+        return False
+
+    if monitoring_interval == 30.0:
+        print(f"✅ SMALL_CAP monitoring interval: {monitoring_interval}s")
+    else:
+        print(f"❌ SMALL_CAP monitoring interval: Expected 30.0s, got {monitoring_interval}s")
+        return False
+
+    # Test LOW_CAPITAL backward-compat alias (should resolve to SMALL_CAP intervals)
     entry_interval = calculate_min_interval(KrakenAPICategory.ENTRY, KrakenRateMode.LOW_CAPITAL)
     monitoring_interval = calculate_min_interval(KrakenAPICategory.MONITORING, KrakenRateMode.LOW_CAPITAL)
 
     if entry_interval == 10.0:
-        print(f"✅ LOW_CAPITAL entry interval: {entry_interval}s")
+        print(f"✅ LOW_CAPITAL (alias→SMALL_CAP) entry interval: {entry_interval}s")
     else:
         print(f"❌ LOW_CAPITAL entry interval: Expected 10.0s, got {entry_interval}s")
         return False
 
     if monitoring_interval == 30.0:
-        print(f"✅ LOW_CAPITAL monitoring interval: {monitoring_interval}s")
+        print(f"✅ LOW_CAPITAL (alias→SMALL_CAP) monitoring interval: {monitoring_interval}s")
     else:
         print(f"❌ LOW_CAPITAL monitoring interval: Expected 30.0s, got {monitoring_interval}s")
         return False
