@@ -22,12 +22,18 @@ Architecture
   │                                                                    │
   │  • Effective N – 1/HHI; number of equal-risk positions implied    │
   │                                                                    │
-  │  Dynamic Caps (scale with HHI):                                   │
-  │    HHI ≤ 0.10  → base_cap (e.g. 25%)                             │
-  │    0.10–0.20   → base_cap × 0.85                                  │
-  │    0.20–0.30   → base_cap × 0.70                                  │
-  │    0.30–0.50   → base_cap × 0.50                                  │
-  │    HHI > 0.50  → base_cap × 0.30 (high concentration penalty)    │
+  │  Capital-Tier Base Cap (scales with account balance):             │
+  │    Balance < $100    → 25% (micro-cap)                            │
+  │    Balance $100–$500 → 20%                                        │
+  │    Balance $500–$2k  → 15%                                        │
+  │    Balance $2k+      → 10% (mature account)                       │
+  │                                                                    │
+  │  Dynamic Caps (scale with HHI, applied on top of tier cap):      │
+  │    HHI ≤ 0.10  → tier_cap (e.g. 25% for micro accounts)          │
+  │    0.10–0.20   → tier_cap × 0.85                                  │
+  │    0.20–0.30   → tier_cap × 0.70                                  │
+  │    0.30–0.50   → tier_cap × 0.50                                  │
+  │    HHI > 0.50  → tier_cap × 0.30 (high concentration penalty)    │
   │                                                                    │
   │  approve_entry() returns ConcentrationDecision with               │
   │  allowed flag, max_allowed_usd, adjusted_size, and explanation    │
@@ -78,6 +84,15 @@ logger = logging.getLogger("nija.dynamic_position_concentration")
 DEFAULT_BASE_CAP_PCT: float = 0.25         # single-position hard cap (% of portfolio)
 DEFAULT_MAX_HHI: float = 0.40             # block if portfolio HHI exceeds this
 DEFAULT_MAX_SINGLE_WEIGHT: float = 0.35   # block if any position weight > this
+
+# Capital-tier base caps: (upper_balance_bound, max_position_pct)
+# The first tier whose upper bound exceeds the portfolio value is used.
+_CAPITAL_TIER_CAPS: List[Tuple[float, float]] = [
+    (100.0,         0.25),   # balance < $100   → 25% (micro-cap, max aggressiveness)
+    (500.0,         0.20),   # $100 – $500       → 20%
+    (2_000.0,       0.15),   # $500 – $2 000     → 15%
+    (float("inf"),  0.10),   # $2 000+           → 10% (mature account, risk-reduced)
+]
 
 # HHI bands → cap multipliers
 _HHI_BANDS: List[Tuple[float, float]] = [
@@ -130,13 +145,27 @@ class ConcentrationDecision:
 
 class DynamicPositionConcentration:
     """
-    Dynamically caps position size based on portfolio Herfindahl concentration.
+    Dynamically caps position size based on portfolio Herfindahl concentration
+    and the current capital tier.
 
     Parameters
     ----------
-    base_cap_pct : float
-        Maximum single-position size as a fraction of portfolio value when HHI
-        is low (default 0.25 = 25%).
+    base_cap_pct : float or None
+        Override the capital-tier cap with a fixed fraction of portfolio value.
+        When ``None`` (default), the cap is derived automatically from the
+        portfolio value using :attr:`_CAPITAL_TIER_CAPS`:
+
+        ============  ===============
+        Balance       Max position %
+        ============  ===============
+        < $100        25% (micro-cap)
+        $100 – $500   20%
+        $500 – $2 000 15%
+        $2 000+       10%
+        ============  ===============
+
+        This reduces risk as the account grows while remaining aggressive for
+        small accounts where a 25 % cap is appropriate.
     max_hhi : float
         Portfolio HHI ceiling; new entries blocked when HHI would exceed this
         (default 0.40).
@@ -147,10 +176,11 @@ class DynamicPositionConcentration:
 
     def __init__(
         self,
-        base_cap_pct: float = DEFAULT_BASE_CAP_PCT,
+        base_cap_pct: Optional[float] = None,
         max_hhi: float = DEFAULT_MAX_HHI,
         max_single_weight: float = DEFAULT_MAX_SINGLE_WEIGHT,
     ) -> None:
+        # None means "use capital-tier auto-scaling"; a float is a fixed override.
         self.base_cap_pct = base_cap_pct
         self.max_hhi = max_hhi
         self.max_single_weight = max_single_weight
@@ -199,7 +229,8 @@ class DynamicPositionConcentration:
                 )
 
             metrics = self._compute_metrics(current_positions, portfolio_value)
-            dynamic_cap = self._dynamic_cap(metrics.hhi)
+            tier_cap = self._effective_base_cap(portfolio_value)
+            dynamic_cap = self._dynamic_cap(metrics.hhi, tier_cap)
             max_allowed_usd = portfolio_value * dynamic_cap
 
             # Simulate post-entry positions
@@ -271,9 +302,37 @@ class DynamicPositionConcentration:
         with self._lock:
             return self._compute_metrics(current_positions, portfolio_value)
 
-    def dynamic_cap_pct(self, current_hhi: float) -> float:
-        """Return the effective single-position cap % for a given HHI."""
-        return self._dynamic_cap(current_hhi)
+    def dynamic_cap_pct(self, current_hhi: float, portfolio_value: float = 0.0) -> float:
+        """Return the effective single-position cap % for a given HHI.
+
+        Parameters
+        ----------
+        current_hhi : float
+            Current portfolio HHI (0–1).
+        portfolio_value : float, optional
+            Portfolio value used to resolve the capital-tier base cap.  When
+            ``0`` or omitted the fixed :attr:`base_cap_pct` override is used if
+            set, otherwise the micro-cap tier (25%) is applied as the base.
+        """
+        return self._dynamic_cap(current_hhi, self._effective_base_cap(portfolio_value))
+
+    def capital_tier_cap_pct(self, portfolio_value: float) -> float:
+        """Return the raw capital-tier cap (before HHI adjustment) for *portfolio_value*.
+
+        This is a diagnostic helper that shows which tier cap would be applied
+        given the current account balance, ignoring HHI adjustment.
+
+        Parameters
+        ----------
+        portfolio_value : float
+            Total portfolio value in USD.
+
+        Returns
+        -------
+        float
+            Maximum single-position fraction (e.g. ``0.15`` for 15%).
+        """
+        return self._effective_base_cap(portfolio_value)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -332,12 +391,43 @@ class DynamicPositionConcentration:
             concentration_level=level,
         )
 
-    def _dynamic_cap(self, hhi: float) -> float:
-        """Map HHI to a single-position cap fraction using the band table."""
-        cap = self.base_cap_pct
+    def _effective_base_cap(self, portfolio_value: float) -> float:
+        """Return the capital-tier base cap for *portfolio_value*.
+
+        If :attr:`base_cap_pct` is set (i.e. not ``None``), that fixed value is
+        returned regardless of portfolio size (backward-compatible override).
+        Otherwise the appropriate tier is selected from :attr:`_CAPITAL_TIER_CAPS`.
+        """
+        if self.base_cap_pct is not None:
+            return self.base_cap_pct
+
+        for upper_bound, cap_pct in _CAPITAL_TIER_CAPS:
+            if portfolio_value < upper_bound:
+                return cap_pct
+
+        # Unreachable when _CAPITAL_TIER_CAPS contains a float("inf") sentinel,
+        # but guard against accidental misconfiguration.
+        raise RuntimeError(  # pragma: no cover
+            "_CAPITAL_TIER_CAPS is missing the required float('inf') sentinel entry"
+        )
+
+    def _dynamic_cap(self, hhi: float, effective_base: Optional[float] = None) -> float:
+        """Map HHI to a single-position cap fraction using the band table.
+
+        Parameters
+        ----------
+        hhi : float
+            Current portfolio HHI.
+        effective_base : float, optional
+            Base cap to scale.  When omitted, falls back to
+            :meth:`_effective_base_cap` with a zero portfolio value (returns the
+            fixed :attr:`base_cap_pct` or the micro-cap tier default).
+        """
+        base = effective_base if effective_base is not None else self._effective_base_cap(0.0)
+        cap = base
         for band_max, multiplier in _HHI_BANDS:
             if hhi <= band_max:
-                cap = self.base_cap_pct * multiplier
+                cap = base * multiplier
                 break
         return round(cap, 4)
 
