@@ -62,7 +62,7 @@ Monitors:
 Regimes & controls:
     TRENDING  → position_size_multiplier = 1.0, normal scan_frequency, trades ALLOWED
     RANGING   → position_size_multiplier = 0.5, normal scan_frequency, trades ALLOWED
-    CHAOTIC   → position_size_multiplier = 0.0, reduced scan_frequency, trades PAUSED
+    CHAOTIC   → position_size_multiplier = 0.1, reduced scan_frequency, trades PAUSED
 
 Author: NIJA Trading Systems
 Version: 1.0
@@ -553,7 +553,7 @@ class MarketRegimeController:
         "ranging_scan_seconds": 150,
 
         # CHAOTIC
-        "chaotic_size_multiplier": 0.0,
+        "chaotic_size_multiplier": 0.10,
         "chaotic_scan_seconds": 300,      # slow down scan during chaos
     }
 
@@ -599,7 +599,7 @@ class MarketRegimeController:
                 trade_permission=TradePermission.PAUSED,
                 position_size_multiplier=cfg["chaotic_size_multiplier"],
                 scan_frequency_seconds=cfg["chaotic_scan_seconds"],
-                reason="Chaotic / extreme-volatility market — trading paused",
+                reason="Chaotic / extreme-volatility market — position sizes reduced to 10%",
             ),
         }
 
