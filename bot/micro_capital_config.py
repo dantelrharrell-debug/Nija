@@ -164,6 +164,13 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 #   favourable conditions (consecutive wins, elevated volatility). The base
 #   target is always the floor — it never drops below 1.2%.
 #   Scale caps at MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT (2.0% default).
+#   - profit_target    = base_target + spread + streak_bonus  (fully dynamic)
+#                          base_target  = 1.0%
+#                          spread       = current market spread (e.g. 0.20% → target 1.20%)
+#                          streak_bonus = +0.1% per consecutive win (capped at +0.5%)
+#                          After any loss: win_streak resets to 0 → no streak bonus
+#   - stop_loss        = 0.6%   (half of base profit target → 2:1 R:R ratio on base)
+#   - trade_cooldown   = 60s    (re-entry cooldown between trades per symbol)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
 MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
@@ -180,6 +187,59 @@ MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE = 0.1 # Extra % per consecutive winni
 MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE = True # Also scale with market volatility
 
 # MICRO-CAP COMPOUNDING MODE HELPERS
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 1.0  # 1.0% base profit target (spread + streak bonus added at runtime)
+# Backward-compatible alias used as the static fallback when no spread data is available
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R vs base target)
+MICRO_CAP_TRADE_COOLDOWN = 60                    # Seconds between trades (re-entry cooldown)
+
+# Win-streak bonus applied on top of (base + spread) while on a hot streak.
+# The bonus is reset to 0 whenever a trade ends in a loss so the bot does not
+# chase extended targets after momentum ends.
+MICRO_CAP_WIN_STREAK_BONUS_PER_WIN = 0.1  # +0.1% per consecutive win
+MICRO_CAP_WIN_STREAK_BONUS_MAX = 0.5      # cap at +0.5% (5 consecutive wins)
+
+
+def get_spread_adjusted_profit_target(spread_pct: float, win_streak: int = 0) -> float:
+    """
+    Calculate the spread- and streak-adjusted profit target for micro-cap compounding mode.
+
+    Formula:
+        profit_target = base_target + spread + streak_bonus
+
+    where:
+        base_target  = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT (1.0%)
+        spread       = current market spread expressed as a percentage
+        streak_bonus = min(MICRO_CAP_WIN_STREAK_BONUS_MAX,
+                          win_streak * MICRO_CAP_WIN_STREAK_BONUS_PER_WIN)
+
+    The streak bonus rewards sustained momentum but is immediately reset to 0
+    after any losing trade (win_streak = 0), preventing the bot from chasing
+    extended targets when momentum has ended.
+
+    Examples (assuming win_streak=0):
+        spread 0.20%  →  profit target 1.20%
+        spread 0.40%  →  profit target 1.40%
+        spread 0.60%  →  profit target 1.60%
+
+    Examples (assuming win_streak=3, bonus=0.3%):
+        spread 0.20%  →  profit target 1.50%
+        spread 0.40%  →  profit target 1.70%
+
+    Args:
+        spread_pct: Current bid-ask spread as a decimal fraction (e.g. 0.002 = 0.2%).
+        win_streak:  Number of consecutive winning trades. Resets to 0 after any loss.
+
+    Returns:
+        Profit target as a percentage (e.g. 1.4 means 1.4%).
+    """
+    spread_as_pct = spread_pct * 100.0
+    streak_bonus = min(MICRO_CAP_WIN_STREAK_BONUS_MAX,
+                       win_streak * MICRO_CAP_WIN_STREAK_BONUS_PER_WIN)
+    return MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT + spread_as_pct + streak_bonus
+
+
+# MICRO-CAP COMPOUNDING MODE HELPER
 # ============================================================================
 
 def get_adaptive_profit_target(win_streak: int = 0, volatility_factor: float = 1.0) -> float:
@@ -234,6 +294,14 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
       - stop_loss        = 0.6%   (half of profit target → 2:1 R:R)
       - trade_cooldown   = 30s    (~120 trades/hr)
       - adaptive_profit_scaling = True
+      - profit_target    = base (1.0%) + current market spread + streak bonus
+                           (computed at entry time via get_spread_adjusted_profit_target())
+      - stop_loss        = 0.6%   (half of base profit target → 2:1 R:R)
+
+    The 'profit_target_pct' key in the returned dict holds the *base* target only.
+    Callers must call get_spread_adjusted_profit_target(spread_pct, win_streak) at entry
+    time to get the fully dynamic target.  win_streak must be reset to 0 after any losing
+    trade so the bot does not chase extended targets when momentum has ended.
 
     Args:
         balance: Current account balance in USD.
@@ -247,7 +315,7 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             'balance_threshold': MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD,
             'max_positions': MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
             'position_size_pct': MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
-            'profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
+            'profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT,
             'stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
             'trade_cooldown': MICRO_CAP_TRADE_COOLDOWN,
             'adaptive_profit_scaling': MICRO_CAP_ADAPTIVE_PROFIT_SCALING,
@@ -264,6 +332,8 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             f"profit_target={MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT}% (adaptive scaling ON), "
             f"stop_loss={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT}%, "
             f"cooldown={MICRO_CAP_TRADE_COOLDOWN}s"
+            f"profit_target=base {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT}% + spread + streak_bonus (dynamic), "
+            f"stop_loss={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT}%"
         )
         return config
 
@@ -377,14 +447,14 @@ MIN_PROFIT_TO_COMPOUND = 5.0  # Minimum profit to trigger compounding
 # Design requirements:
 #   - max_positions = 1   (focus on one trade at a time)
 #   - position_size = 25% of capital per trade
-#   - profit_target = 1.2%  (achievable target that compounds fast)
-#   - stop_loss = 0.6%      (tight stop, 2:1 reward-to-risk)
-
-MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
-MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
-MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0   # 25% of capital per trade
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss
+#   - profit_target = base_target (1.0%) + current market spread  (dynamic)
+#   - stop_loss = 0.6%      (tight stop, 2:1 reward-to-risk vs base target)
+#
+# Note: constants are defined earlier in this file; these lines reference them
+# to avoid accidental duplication divergence.
+# MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD, MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
+# MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT, MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT,
+# MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT, MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT
 
 # ============================================================================
 # COMPLETE CONFIGURATION DICTIONARY
@@ -627,6 +697,10 @@ def get_config_summary(equity: Optional[float] = None) -> str:
    • Stop Loss:              {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}%  (2:1 reward-to-risk)
    • Trade Cooldown:         {MICRO_CAP_TRADE_COOLDOWN}s  (theoretical max ~{3600 // MICRO_CAP_TRADE_COOLDOWN} trades/hr)
    • Adaptive Profit Scaling:{adaptive_label}  [{MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT:.1f}% – {MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT:.1f}%]
+   • Max Positions:  {MICRO_CAP_COMPOUNDING_MAX_POSITIONS}  (single position focus)
+   • Position Size:  {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% of capital per trade
+   • Profit Target:  {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT:.1f}% (base) + spread + streak bonus (dynamic)
+   • Stop Loss:      {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}%  (2:1 reward-to-risk vs base)
 """
 
     return f"""
@@ -686,7 +760,7 @@ def get_config_summary(equity: Optional[float] = None) -> str:
    • Cash Buffer: {FORCE_CASH_BUFFER:.1f}%
 
 📊 DYNAMIC SCALING THRESHOLDS:
-   • <${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}: Micro-cap compounding mode (1 position, {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% size, {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT:.1f}% PT, {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}% SL)
+   • <${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}: Micro-cap compounding mode (1 position, {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% size, PT={MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT:.1f}%+spread+streak, SL={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}%)
    • $250+: 3 positions, 4% risk per trade
    • $500+: 4 positions
    • $1000+: 6 positions, 5% risk, leverage enabled
