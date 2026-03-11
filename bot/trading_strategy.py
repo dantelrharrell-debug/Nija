@@ -246,6 +246,21 @@ except ImportError:
                 return float(x[0])
             return float(x)
 
+# Import Capital Growth Throttle — updates each cycle and scales position sizes
+try:
+    from capital_growth_throttle import get_capital_growth_throttle
+    CAPITAL_GROWTH_THROTTLE_AVAILABLE = True
+    logger.info("✅ Capital Growth Throttle loaded - drawdown-based position scaling active")
+except ImportError:
+    try:
+        from bot.capital_growth_throttle import get_capital_growth_throttle
+        CAPITAL_GROWTH_THROTTLE_AVAILABLE = True
+        logger.info("✅ Capital Growth Throttle loaded - drawdown-based position scaling active")
+    except ImportError:
+        CAPITAL_GROWTH_THROTTLE_AVAILABLE = False
+        logger.warning("⚠️ Capital Growth Throttle not available - position scaling disabled")
+        get_capital_growth_throttle = None
+
 load_dotenv()
 
 # Position adoption safety constants
@@ -4384,6 +4399,15 @@ class TradingStrategy:
                 balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
 
+            # ✅ Step 1 of correct throttle order: update capital BEFORE position sizing
+            # This ensures the throttle multiplier reflects the current balance for
+            # the upcoming position-size calculation (Step 2) and order (Steps 3-4).
+            if CAPITAL_GROWTH_THROTTLE_AVAILABLE and get_capital_growth_throttle:
+                try:
+                    get_capital_growth_throttle().update_capital(account_balance)
+                except Exception as _cgt_err:
+                    logger.warning("⚠️ Could not update capital growth throttle: %s", _cgt_err)
+
             # ✅ CRITICAL FIX (Jan 22, 2026): Update capital dynamically BEFORE allocation
             # Capital must be fetched live, not stuck at initialization value
             # This ensures failsafes and allocators use current real balance
@@ -6047,6 +6071,14 @@ class TradingStrategy:
 
                         account_balance = balance_data.get('trading_balance', 0.0)
 
+                        # Update capital growth throttle with refreshed broker balance
+                        # (broker may have changed mid-cycle; keep throttle in sync)
+                        if CAPITAL_GROWTH_THROTTLE_AVAILABLE and get_capital_growth_throttle:
+                            try:
+                                get_capital_growth_throttle().update_capital(account_balance)
+                            except Exception as _cgt_err:
+                                logger.debug("Capital growth throttle update skipped: %s", _cgt_err)
+
                         # Also update position values and total capital from the new broker
                         held_funds = balance_data.get('total_held', 0.0)
                         total_funds = balance_data.get('total_funds', account_balance)
@@ -6533,6 +6565,43 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
+
+                                # ═══════════════════════════════════════════════════════
+                                # CAPITAL GROWTH THROTTLE — Steps 2 & 3 of correct order
+                                # Step 2: base position size is already set above.
+                                # Step 3: apply throttle multiplier before any further
+                                #         adjustments so all downstream gates work on the
+                                #         already-throttled size.
+                                # ═══════════════════════════════════════════════════════
+                                if CAPITAL_GROWTH_THROTTLE_AVAILABLE and get_capital_growth_throttle:
+                                    try:
+                                        _throttle = get_capital_growth_throttle()
+                                        _throttle_mult = _throttle.get_multiplier()
+                                        if _throttle_mult <= 0.0:
+                                            logger.warning(
+                                                "   🔒 %s: Capital Growth Throttle LOCKED "
+                                                "(drawdown ≥ 20%%) — entry blocked.",
+                                                symbol,
+                                            )
+                                            filter_stats['market_filter'] += 1  # capital protection block
+                                            continue
+                                        if _throttle_mult < 1.0:
+                                            _pre_throttle_size = position_size
+                                            position_size = position_size * _throttle_mult
+                                            logger.info(
+                                                "   📉 %s: Capital Growth Throttle %.0f%% "
+                                                "(drawdown=%.1f%%) — size $%.2f → $%.2f",
+                                                symbol,
+                                                _throttle_mult * 100,
+                                                _throttle.state.drawdown_pct,
+                                                _pre_throttle_size,
+                                                position_size,
+                                            )
+                                    except Exception as _cgt_err:
+                                        logger.debug(
+                                            "Capital Growth Throttle skipped for %s: %s",
+                                            symbol, _cgt_err,
+                                        )
 
                                 # ═══════════════════════════════════════════════════════
                                 # REGIME CONTROLLER GATE — respect regime decision
