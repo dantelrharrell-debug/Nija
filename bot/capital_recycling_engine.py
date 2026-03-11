@@ -72,7 +72,7 @@ import math
 import os
 import threading
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija.capital_recycling")
@@ -138,6 +138,16 @@ class EngineState:
     last_allocations: Dict[str, float] = field(default_factory=dict)
     last_allocation_regime: str = ""
     last_allocation_ts: str = ""
+    # Cached normalised weights — recomputed on the rebalance schedule
+    cached_weights: Dict[str, float] = field(default_factory=dict)
+    weights_computed_at: str = ""
+    next_rebalance_ts: str = ""
+    # Throttle snapshot at time of last allocation
+    throttle_multiplier: float = 1.0
+    throttle_label: str = "UNRESTRICTED"
+    throttle_drawdown_pct: float = 0.0
+    # Per-strategy health factors applied during last rebalance
+    strategy_health_factors: Dict[str, float] = field(default_factory=dict)
     created_at: str = ""
     last_updated: str = ""
 
@@ -163,6 +173,10 @@ class CapitalRecyclingEngine:
         Maximum fraction any strategy receives (default 60 %).
     min_pool_for_allocation : float
         Minimum pool size before allocations are computed (default $1).
+    rebalance_interval_hours : float
+        Minimum time between weight recomputations (default 1 h).
+        Too-frequent rebalancing generates extra fees/slippage; set to 24 h
+        for daily-only rebalancing.
     """
 
     def __init__(
@@ -172,12 +186,14 @@ class CapitalRecyclingEngine:
         min_allocation_frac: float = MIN_ALLOCATION_FRAC,
         max_allocation_frac: float = MAX_ALLOCATION_FRAC,
         min_pool_for_allocation: float = MIN_POOL_FOR_ALLOCATION,
+        rebalance_interval_hours: float = 1.0,
     ) -> None:
         self.state_path = state_path
         self.strategies = list(strategies or DEFAULT_STRATEGIES)
         self.min_allocation_frac = min_allocation_frac
         self.max_allocation_frac = max_allocation_frac
         self.min_pool_for_allocation = min_pool_for_allocation
+        self.rebalance_interval_hours = max(0.0, rebalance_interval_hours)
         self._lock = threading.RLock()
 
         self._state = EngineState(
@@ -187,9 +203,10 @@ class CapitalRecyclingEngine:
         self._load_state()
 
         logger.info(
-            "♻️  CapitalRecyclingEngine ready | pool=$%.2f | strategies=%s",
+            "♻️  CapitalRecyclingEngine ready | pool=$%.2f | strategies=%s | rebalance_interval=%.1fh",
             self._state.pool_usd,
             self.strategies,
+            self.rebalance_interval_hours,
         )
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -257,6 +274,14 @@ class CapitalRecyclingEngine:
         The allocation is a *snapshot* — it does not modify the pool.  Strategies
         draw down their share by calling ``claim_allocation()``.
 
+        Weights are recomputed only when the ``rebalance_interval_hours`` window
+        has elapsed since the last computation, preventing over-frequent strategy
+        shifts that generate unnecessary fees and slippage.
+
+        The effective pool used for allocation is scaled by the global
+        ``CapitalGrowthThrottle`` multiplier so that less capital is deployed
+        during drawdown periods.  The undeployed remainder stays in the pool.
+
         Parameters
         ----------
         regime : str
@@ -279,21 +304,34 @@ class CapitalRecyclingEngine:
             )
             return {s: 0.0 for s in self.strategies}
 
-        weights = self._get_strategy_weights(regime)
-        allocations = {s: pool * w for s, w in weights.items()}
+        # ── Rebalance frequency gate ─────────────────────────────────────────
+        # Only recompute strategy weights when the configured interval has passed
+        # to avoid over-frequent reallocations that generate fees/slippage.
+        weights = self._get_strategy_weights_cached(regime)
+
+        # ── Global drawdown throttle ─────────────────────────────────────────
+        # Scale the effective pool by the capital growth throttle multiplier.
+        # During drawdowns the multiplier < 1.0 so only a fraction of the pool
+        # is deployed; the rest stays in the pool for later.
+        throttle_multiplier = self._get_global_throttle_multiplier()
+        effective_pool = pool * throttle_multiplier
+
+        allocations = {s: effective_pool * w for s, w in weights.items()}
 
         with self._lock:
             self._state.last_allocations = {s: round(v, 4) for s, v in allocations.items()}
             self._state.last_allocation_regime = regime
             self._state.last_allocation_ts = _now()
+            self._state.throttle_multiplier = throttle_multiplier
             self._save_state()
 
         logger.info(
-            "[Recycle] Allocations computed for regime=%s | pool=$%.2f",
-            regime, pool,
+            "[Recycle] Allocations computed for regime=%s | pool=$%.2f | "
+            "effective_pool=$%.2f (throttle=%.2f)",
+            regime, pool, effective_pool, throttle_multiplier,
         )
         for strat, amt in sorted(allocations.items(), key=lambda x: x[1], reverse=True):
-            logger.info("  %-22s $%10.2f  (%.1f%%)", strat, amt, (amt / pool * 100) if pool else 0)
+            logger.info("  %-22s $%10.2f  (%.1f%%)", strat, amt, (amt / effective_pool * 100) if effective_pool else 0)
 
         return allocations
 
@@ -400,14 +438,31 @@ class CapitalRecyclingEngine:
                 s.total_claimed_usd / s.total_deposited_usd
                 if s.total_deposited_usd > 0 else 0.0
             )
+            # Build allocation-percentage view alongside dollar amounts
+            effective_pool = s.pool_usd * s.throttle_multiplier
+            alloc_pcts: Dict[str, float] = {}
+            if effective_pool > 0:
+                for strat, amt in s.last_allocations.items():
+                    alloc_pcts[strat] = round(amt / effective_pool * 100, 2)
             return {
                 "pool_usd": round(s.pool_usd, 4),
                 "total_deposited_usd": round(s.total_deposited_usd, 4),
                 "total_claimed_usd": round(s.total_claimed_usd, 4),
                 "utilisation_pct": round(utilisation * 100, 2),
                 "last_allocations": {k: round(v, 4) for k, v in s.last_allocations.items()},
+                "allocation_pcts": alloc_pcts,
                 "last_allocation_regime": s.last_allocation_regime,
                 "last_allocation_ts": s.last_allocation_ts,
+                # Rebalance schedule
+                "rebalance_interval_hours": self.rebalance_interval_hours,
+                "weights_computed_at": s.weights_computed_at,
+                "next_rebalance_ts": s.next_rebalance_ts,
+                # Throttle snapshot
+                "throttle_multiplier": round(s.throttle_multiplier, 4),
+                "throttle_label": s.throttle_label,
+                "throttle_drawdown_pct": round(s.throttle_drawdown_pct, 2),
+                # Per-strategy health factors
+                "strategy_health_factors": {k: round(v, 4) for k, v in s.strategy_health_factors.items()},
                 "strategies": self.strategies,
                 "recent_deposits": s.recycle_events[-10:],
                 "recent_claims": s.claim_events[-10:],
@@ -423,6 +478,7 @@ class CapitalRecyclingEngine:
                 s.total_claimed_usd / s.total_deposited_usd
                 if s.total_deposited_usd > 0 else 0.0
             )
+            effective_pool = s.pool_usd * s.throttle_multiplier
             lines = [
                 "=" * 70,
                 "  ♻️   CAPITAL RECYCLING ENGINE — STATUS REPORT",
@@ -434,13 +490,24 @@ class CapitalRecyclingEngine:
                 f"  Last Regime         : {s.last_allocation_regime or 'N/A'}",
                 f"  Last Allocation     : {s.last_allocation_ts or 'N/A'}",
                 "",
-                "  Last Computed Allocations:",
+                "  Drawdown Throttle:",
+                f"    Label             : {s.throttle_label}",
+                f"    Drawdown          : {s.throttle_drawdown_pct:>8.2f} %",
+                f"    Multiplier        : {s.throttle_multiplier:>8.2f}",
+                f"    Effective Pool    : ${effective_pool:>10,.2f}",
+                "",
+                f"  Rebalance Interval  : {self.rebalance_interval_hours:.1f} h",
+                f"  Weights Computed At : {s.weights_computed_at or 'N/A'}",
+                f"  Next Rebalance      : {s.next_rebalance_ts or 'N/A'}",
+                "",
+                "  Strategy Allocation Plan:",
             ]
             if s.last_allocations:
-                pool = s.pool_usd
                 for strat, amt in sorted(s.last_allocations.items(), key=lambda x: x[1], reverse=True):
-                    pct = (amt / pool * 100) if pool > 0 else 0.0
-                    lines.append(f"    {strat:<22s} ${amt:>10,.2f}  ({pct:>5.1f} %)")
+                    pct = (amt / effective_pool * 100) if effective_pool > 0 else 0.0
+                    hf = s.strategy_health_factors.get(strat, 1.0)
+                    hf_str = f"  health={hf:.2f}" if hf < 1.0 else ""
+                    lines.append(f"    {strat:<22s} ${amt:>10,.2f}  ({pct:>5.1f} %){hf_str}")
             else:
                 lines.append("    (no allocations computed yet)")
 
@@ -473,48 +540,181 @@ class CapitalRecyclingEngine:
 
     # ── Internals ────────────────────────────────────────────────────────────
 
+    def _get_strategy_weights_cached(self, regime: str) -> Dict[str, float]:
+        """
+        Return cached normalised weights, recomputing only when the
+        ``rebalance_interval_hours`` window has elapsed.
+
+        This prevents over-frequent strategy-weight recomputation that can
+        drive unnecessary fees and slippage.
+        """
+        with self._lock:
+            cached_at_str = self._state.weights_computed_at
+            cached_weights = self._state.cached_weights
+
+        # Decide whether a recompute is needed
+        needs_recompute = True
+        if cached_at_str and cached_weights:
+            try:
+                cached_at = datetime.fromisoformat(cached_at_str)
+                age_hours = (datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
+                if age_hours < self.rebalance_interval_hours:
+                    needs_recompute = False
+            except Exception:
+                pass  # malformed timestamp → recompute
+
+        if needs_recompute:
+            logger.info(
+                "[Recycle] Recomputing strategy weights for regime=%s "
+                "(interval=%.1fh)",
+                regime, self.rebalance_interval_hours,
+            )
+            new_weights = self._get_strategy_weights(regime)
+            next_ts = (
+                datetime.now(timezone.utc) + timedelta(hours=self.rebalance_interval_hours)
+            ).isoformat()
+            with self._lock:
+                self._state.cached_weights = new_weights
+                self._state.weights_computed_at = _now()
+                self._state.next_rebalance_ts = next_ts
+            return new_weights
+
+        logger.debug(
+            "[Recycle] Using cached weights (next rebalance: %s)",
+            self._state.next_rebalance_ts,
+        )
+        return cached_weights
+
+    def _get_global_throttle_multiplier(self) -> float:
+        """
+        Return the position-size multiplier from the CapitalGrowthThrottle.
+
+        Queries ``get_size_multiplier()`` and records the throttle snapshot in
+        ``EngineState`` for dashboard/audit visibility.  If the throttle is
+        unavailable the method returns 1.0 (no throttle applied).
+        """
+        try:
+            from bot.capital_growth_throttle import get_capital_growth_throttle
+            throttle = get_capital_growth_throttle()
+            multiplier = throttle.get_size_multiplier()
+            # Collect status snapshot (works with both throttle implementations)
+            status = throttle.get_status() if hasattr(throttle, "get_status") else {}
+            label = (
+                status.get("throttle_level") or
+                getattr(getattr(throttle, "state", None), "label", "UNKNOWN")
+            )
+            drawdown_pct = status.get("short_growth_pct", 0.0)
+            with self._lock:
+                self._state.throttle_multiplier = multiplier
+                self._state.throttle_label = str(label)
+                self._state.throttle_drawdown_pct = drawdown_pct
+            if multiplier < 1.0:
+                logger.info(
+                    "[Recycle] Growth throttle active: %s (multiplier=%.2f) — "
+                    "effective pool scaled down accordingly.",
+                    label, multiplier,
+                )
+            return multiplier
+        except Exception as exc:
+            logger.debug("[Recycle] CapitalGrowthThrottle unavailable (%s) — assuming 1.0.", exc)
+            return 1.0
+
     def _get_strategy_weights(self, regime: str) -> Dict[str, float]:
         """
-        Query the best available scorer for normalised strategy weights.
+        Query the best available scorer for normalised strategy weights,
+        then apply per-strategy health factors so throttled or degraded
+        strategies receive proportionally less capital.
 
         Priority:
         1. MetaLearningOptimizer (regime-aware, Sharpe-weighted)
         2. SelfLearningStrategyAllocator (simpler EMA-based)
         3. Equal-weight fallback
 
+        After obtaining base weights the method applies a health-level factor
+        for each strategy from StrategyHealthMonitor:
+          - SUSPENDED  → 0.0  (minimal allocation — floor applied by clip)
+          - DEGRADED   → 0.5  (half allocation)
+          - WATCHING   → 0.75 (reduced allocation)
+          - HEALTHY    → 1.0  (full allocation)
+
         Returns normalised weights clipped to [min_allocation_frac, max_allocation_frac].
         """
+        weights: Optional[Dict[str, float]] = None
+
         # --- attempt MetaLearningOptimizer ---
         try:
             from bot.meta_learning_optimizer import get_meta_learning_optimizer
             opt = get_meta_learning_optimizer()
             raw_weights = opt.get_regime_weights(regime)
-            # raw_weights may not include all strategies the recycler knows
-            weights = {}
-            for s in self.strategies:
-                weights[s] = raw_weights.get(s, self.min_allocation_frac)
-            return self._normalise_and_clip(weights)
+            weights = {s: raw_weights.get(s, self.min_allocation_frac) for s in self.strategies}
         except Exception as exc:
             logger.debug("[Recycle] MetaLearningOptimizer unavailable (%s), trying SLA.", exc)
 
         # --- attempt SelfLearningStrategyAllocator ---
-        try:
-            from bot.self_learning_strategy_allocator import get_self_learning_allocator
-            sla = get_self_learning_allocator()
-            sla_weights = sla.get_weights()
-            weights = {}
-            for s in self.strategies:
-                weights[s] = sla_weights.get(s, self.min_allocation_frac)
-            return self._normalise_and_clip(weights)
-        except Exception as exc:
-            logger.debug("[Recycle] SelfLearningAllocator unavailable (%s), using equal weights.", exc)
+        if weights is None:
+            try:
+                from bot.self_learning_strategy_allocator import get_self_learning_allocator
+                sla = get_self_learning_allocator()
+                sla_weights = sla.get_weights()
+                weights = {s: sla_weights.get(s, self.min_allocation_frac) for s in self.strategies}
+            except Exception as exc:
+                logger.debug("[Recycle] SelfLearningAllocator unavailable (%s), using equal weights.", exc)
 
         # --- equal-weight fallback ---
-        n = len(self.strategies)
-        if n == 0:
+        if weights is None:
+            n = len(self.strategies)
+            if n == 0:
+                return {}
+            weights = {s: 1.0 / n for s in self.strategies}
+
+        # ── Apply per-strategy health / throttle factors ─────────────────────
+        health_factors = self._get_strategy_health_factors()
+        if health_factors:
+            for s in list(weights.keys()):
+                factor = health_factors.get(s, 1.0)
+                weights[s] *= factor  # factor=0.0 for SUSPENDED; clip enforces floor
+            with self._lock:
+                self._state.strategy_health_factors = {k: round(v, 4) for k, v in health_factors.items()}
+
+        return self._normalise_and_clip(weights)
+
+    def _get_strategy_health_factors(self) -> Dict[str, float]:
+        """
+        Return a dict mapping strategy name → health multiplier (0.0–1.0).
+
+        Health levels map to multipliers as follows:
+          SUSPENDED → 0.0  (weight set to 0; clipped to min_allocation_frac by normaliser)
+          DEGRADED  → 0.50 · WATCHING → 0.75 · HEALTHY → 1.0
+        """
+        try:
+            from bot.strategy_health_monitor import get_strategy_health_monitor
+            monitor = get_strategy_health_monitor()
+            level_factors = {
+                "SUSPENDED": 0.0,
+                "DEGRADED":  0.50,
+                "WATCHING":  0.75,
+                "HEALTHY":   1.0,
+            }
+            factors: Dict[str, float] = {}
+            for s in self.strategies:
+                try:
+                    health = monitor.get_health(s)
+                    level_str = (
+                        health.level.value
+                        if hasattr(health.level, "value") else str(health.level)
+                    ).upper()
+                    factors[s] = level_factors.get(level_str, 1.0)
+                    if factors[s] < 1.0:
+                        logger.info(
+                            "[Recycle] Strategy %s health=%s → allocation factor=%.2f",
+                            s, level_str, factors[s],
+                        )
+                except Exception:
+                    factors[s] = 1.0  # unknown strategy → full weight
+            return factors
+        except Exception as exc:
+            logger.debug("[Recycle] StrategyHealthMonitor unavailable (%s) — no health factors.", exc)
             return {}
-        equal = 1.0 / n
-        return {s: equal for s in self.strategies}
 
     def _normalise_and_clip(self, weights: Dict[str, float]) -> Dict[str, float]:
         """
@@ -554,6 +754,13 @@ class CapitalRecyclingEngine:
                     last_allocations=data.get("last_allocations", {}),
                     last_allocation_regime=data.get("last_allocation_regime", ""),
                     last_allocation_ts=data.get("last_allocation_ts", ""),
+                    cached_weights=data.get("cached_weights", {}),
+                    weights_computed_at=data.get("weights_computed_at", ""),
+                    next_rebalance_ts=data.get("next_rebalance_ts", ""),
+                    throttle_multiplier=data.get("throttle_multiplier", 1.0),
+                    throttle_label=data.get("throttle_label", "UNRESTRICTED"),
+                    throttle_drawdown_pct=data.get("throttle_drawdown_pct", 0.0),
+                    strategy_health_factors=data.get("strategy_health_factors", {}),
                     created_at=data.get("created_at", _now()),
                     last_updated=data.get("last_updated", _now()),
                 )
