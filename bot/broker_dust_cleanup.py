@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # Dust threshold - positions below this are considered dust
 DUST_THRESHOLD_USD = 1.00
 
+# Exchange minimum order size – positions below this USD value cannot be filled
+# by most exchanges (including Coinbase) and will always be rejected.
+# Skip them during cleanup rather than generating repeated errors.
+EXCHANGE_MIN_CLOSE_USD = 1.00
+
 
 @dataclass
 class DustPosition:
@@ -145,12 +150,23 @@ class BrokerDustCleanup:
             logger.info(f"   [DRY RUN] Would close {dust_pos.symbol}: ${dust_pos.usd_value:.4f}")
             return True, "Dry run - no action taken"
         
+        # Skip positions below exchange minimum – these cannot be traded and will always fail.
+        # Log as a warning (not an error) so they are visible but don't pollute error logs.
+        if dust_pos.usd_value < EXCHANGE_MIN_CLOSE_USD:
+            logger.warning(
+                f"   ⚠️  SKIPPED: {dust_pos.symbol} (${dust_pos.usd_value:.4f}) is below "
+                f"exchange minimum (${EXCHANGE_MIN_CLOSE_USD:.2f}). "
+                f"Position too small to sell – monitoring."
+            )
+            return False, f"Skipped: below exchange minimum (${dust_pos.usd_value:.4f} < ${EXCHANGE_MIN_CLOSE_USD:.2f})"
+        
         try:
             logger.info(f"🔨 Closing dust position: {dust_pos.symbol}")
             logger.info(f"   Quantity: {dust_pos.quantity:.8f} {dust_pos.currency}")
             logger.info(f"   USD Value: ${dust_pos.usd_value:.4f}")
             
-            # Place market sell order to close position
+            # Place market sell order to close position.
+            # quantity is explicitly set to the exact amount to sell (fixes missing quantity/base_size bug).
             result = broker.place_market_order(
                 symbol=dust_pos.symbol,
                 side='sell',
