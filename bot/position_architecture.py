@@ -21,6 +21,7 @@ Date: February 18, 2026
 
 import json
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
@@ -217,7 +218,10 @@ class PositionArchitecture:
         # Volatility spike detection
         self.recent_volatility: List[float] = []
         self.volatility_spike_threshold = 2.0  # 2x normal
-        
+
+        # Protects position count check + registration so the cap is enforced atomically
+        self.position_lock = threading.Lock()
+
         logger.info(
             f"🏗️ Position Architecture initialized - "
             f"Tier: {tier_name} | Max Positions: {max_positions} | "
@@ -227,13 +231,24 @@ class PositionArchitecture:
     def can_open_position(self, symbol: str, size_usd: float) -> Tuple[bool, str]:
         """
         Check if a new position can be opened.
-        
+
+        All checks are performed inside ``self.position_lock`` so that
+        concurrent callers cannot both pass the position-count gate and then
+        both proceed to register a position, bypassing the cap.
+
         Args:
             symbol: Trading symbol
             size_usd: Proposed position size in USD
             
         Returns:
             (can_open, reason)
+        """
+        with self.position_lock:
+            return self._can_open_position_locked(symbol, size_usd)
+
+    def _can_open_position_locked(self, symbol: str, size_usd: float) -> Tuple[bool, str]:
+        """
+        Internal check (must be called while holding ``self.position_lock``).
         """
         # Check 1: Hard position count limit
         current_count = len(self.positions)
@@ -250,6 +265,8 @@ class PositionArchitecture:
             return False, f"Position already exists for {symbol}"
         
         # Check 4: Exposure validation
+        if self.account_balance <= 0:
+            return False, "Account balance is zero or negative"
         proposed_exposure_pct = size_usd / self.account_balance
         current_exposure_pct = self._calculate_total_exposure()
         
@@ -273,28 +290,46 @@ class PositionArchitecture:
     
     def register_position(self, symbol: str, size_usd: float, entry_price: float,
                          side: str, stop_loss: float):
-        """Register a new position"""
-        self.positions[symbol] = {
-            'symbol': symbol,
-            'size_usd': size_usd,
-            'entry_price': entry_price,
-            'current_price': entry_price,
-            'side': side,
-            'stop_loss': stop_loss,
-            'opened_at': datetime.now(),
-            'last_updated': datetime.now(),
-            'unrealized_pnl': 0.0,
-        }
-        
-        self.position_states[symbol] = PositionState.ACTIVE
-        self.symbol_exposure[symbol] = size_usd / self.account_balance
-        
-        logger.info(
-            f"📥 Position registered: {symbol} | "
-            f"Size: ${size_usd:.2f} | "
-            f"Entry: ${entry_price:.2f} | "
-            f"Positions: {len(self.positions)}/{self.max_positions}"
-        )
+        """Register a new position.
+
+        The position-count cap is re-validated inside ``self.position_lock``
+        so that the check and the registration are atomic.  This prevents two
+        concurrent callers that both passed ``can_open_position`` from each
+        registering a position and exceeding the cap.
+        """
+        with self.position_lock:
+            # Re-check the cap atomically with the registration so that no
+            # concurrent thread can slip past the limit between the earlier
+            # can_open_position call and this registration.
+            can_open, reason = self._can_open_position_locked(symbol, size_usd)
+            if not can_open:
+                logger.warning(
+                    f"⛔ register_position blocked for {symbol}: {reason} "
+                    f"(concurrent cap check enforcement)"
+                )
+                return
+
+            self.positions[symbol] = {
+                'symbol': symbol,
+                'size_usd': size_usd,
+                'entry_price': entry_price,
+                'current_price': entry_price,
+                'side': side,
+                'stop_loss': stop_loss,
+                'opened_at': datetime.now(),
+                'last_updated': datetime.now(),
+                'unrealized_pnl': 0.0,
+            }
+
+            self.position_states[symbol] = PositionState.ACTIVE
+            self.symbol_exposure[symbol] = size_usd / self.account_balance
+
+            logger.info(
+                f"📥 Position registered: {symbol} | "
+                f"Size: ${size_usd:.2f} | "
+                f"Entry: ${entry_price:.2f} | "
+                f"Positions: {len(self.positions)}/{self.max_positions}"
+            )
     
     def update_position(self, symbol: str, current_price: float):
         """Update position with current price"""
