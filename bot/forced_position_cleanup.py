@@ -21,6 +21,9 @@ from enum import Enum
 
 logger = logging.getLogger("nija.cleanup")
 
+# Minimum USD value below which we skip closing (exchange won't accept the order)
+EXCHANGE_MIN_CLOSE_USD = 1.00
+
 
 class CleanupType(Enum):
     """Types of cleanup operations"""
@@ -248,9 +251,12 @@ class ForcedPositionCleanup:
             size_usd = pos.get('size_usd', 0) or pos.get('usd_value', 0)
             
             if size_usd > 0 and size_usd < self.dust_threshold_usd:
+                # Preserve quantity so execute_cleanup can pass it as base_size to close_position()
+                quantity = pos.get('quantity') or pos.get('base_size') or pos.get('size') or pos.get('balance')
                 dust_positions.append({
                     'symbol': pos['symbol'],
                     'size_usd': size_usd,
+                    'quantity': quantity,
                     'pnl_pct': pos.get('pnl_pct', 0),
                     'cleanup_type': CleanupType.DUST.value,
                     'reason': f'Dust position (${size_usd:.2f} < ${self.dust_threshold_usd:.2f})',
@@ -418,6 +424,7 @@ class ForcedPositionCleanup:
         
         successful = 0
         failed = 0
+        skipped = 0
         
         for pos_data in positions_to_close:
             symbol = pos_data['symbol']
@@ -425,6 +432,8 @@ class ForcedPositionCleanup:
             reason = pos_data['reason']
             pnl_pct = pos_data.get('pnl_pct', 0) or 0  # Handle None values
             size_usd = pos_data.get('size_usd', 0)
+            # Retrieve quantity so the broker receives the exact amount to sell (base_size)
+            base_size = pos_data.get('quantity') or pos_data.get('base_size')
             
             outcome = "WIN" if pnl_pct > 0 else "LOSS"
             
@@ -433,9 +442,20 @@ class ForcedPositionCleanup:
             logger.warning(f"   Account: {account_id}")
             logger.warning(f"   Reason: {reason}")
             logger.warning(f"   Size: ${size_usd:.2f}")
+            if base_size is not None:
+                logger.warning(f"   Base Size: {base_size}")
             logger.warning(f"   P&L: {pnl_pct*100:+.2f}%")
             logger.warning(f"   PROFIT_STATUS = PENDING → CONFIRMED")
             logger.warning(f"   OUTCOME = {outcome}")
+
+            # Skip positions below exchange minimum – these cannot be filled and will always fail
+            if size_usd > 0 and size_usd < EXCHANGE_MIN_CLOSE_USD:
+                logger.warning(
+                    f"   ⚠️  SKIPPED: {symbol} (${size_usd:.4f}) is below exchange minimum "
+                    f"(${EXCHANGE_MIN_CLOSE_USD:.2f}). Position too small to sell – monitoring."
+                )
+                skipped += 1
+                continue
             
             # Check if we should cancel open orders for this position
             should_cancel = self._should_cancel_open_orders(pos_data, is_startup)
@@ -457,8 +477,12 @@ class ForcedPositionCleanup:
                 continue
             
             try:
-                # Attempt to close the position
-                result = broker.close_position(symbol)
+                # Attempt to close the position, passing base_size so the broker
+                # knows the exact quantity to sell (fixes missing quantity bug)
+                if base_size is not None:
+                    result = broker.close_position(symbol, base_size=base_size)
+                else:
+                    result = broker.close_position(symbol)
                 
                 if result and result.get('status') in ['filled', 'success']:
                     logger.warning(f"   ✅ CLOSED SUCCESSFULLY")
@@ -478,6 +502,7 @@ class ForcedPositionCleanup:
         logger.warning(f"")
         logger.warning(f"🧹 Cleanup executed: {account_id}")
         logger.warning(f"   Successful: {successful}")
+        logger.warning(f"   Skipped (below exchange minimum): {skipped}")
         logger.warning(f"   Failed: {failed}")
         logger.warning(f"")
         
