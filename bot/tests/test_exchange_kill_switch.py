@@ -15,12 +15,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from exchange_kill_switch import (
+    CircuitState,
     ExchangeKillSwitchConfig,
     ExchangeKillSwitchProtector,
+    ExchangeOutageCircuitBreaker,
     GateStatus,
     GateResult,
     ThreatLevel,
     get_exchange_kill_switch_protector,
+    get_exchange_outage_circuit_breaker,
 )
 
 
@@ -484,3 +487,149 @@ class TestSingletonFactory:
             assert a is b
         finally:
             eks_module._protector = original
+
+
+# ---------------------------------------------------------------------------
+# ExchangeOutageCircuitBreaker
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cb():
+    """Circuit breaker with tight thresholds for fast testing."""
+    return ExchangeOutageCircuitBreaker(
+        failure_threshold=3,
+        recovery_timeout_seconds=0.2,
+        probe_success_threshold=2,
+    )
+
+
+class TestCircuitBreakerInitial:
+
+    def test_starts_closed(self, cb):
+        assert cb.get_state() == CircuitState.CLOSED
+
+    def test_allows_requests_when_closed(self, cb):
+        assert cb.allow_request() is True
+
+
+class TestCircuitBreakerOpening:
+
+    def test_opens_after_failure_threshold(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.get_state() == CircuitState.OPEN
+
+    def test_blocks_requests_when_open(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.allow_request() is False
+
+    def test_single_success_does_not_close_if_already_open(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        cb.record_success()  # should be ignored in OPEN state
+        assert cb.get_state() == CircuitState.OPEN
+
+    def test_consecutive_failures_needed_to_open(self, cb):
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.get_state() == CircuitState.CLOSED  # still needs one more
+
+
+class TestCircuitBreakerHalfOpen:
+
+    def test_transitions_to_half_open_after_timeout(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.get_state() == CircuitState.OPEN
+        time.sleep(0.3)  # recovery_timeout_seconds
+        # Calling allow_request should transition to HALF_OPEN and return True
+        result = cb.allow_request()
+        assert result is True
+        assert cb.get_state() == CircuitState.HALF_OPEN
+
+    def test_probe_failure_reopens_circuit(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        time.sleep(0.3)
+        cb.allow_request()  # transition to HALF_OPEN
+        cb.record_failure()  # probe fails
+        assert cb.get_state() == CircuitState.OPEN
+
+    def test_probe_success_closes_after_threshold(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        time.sleep(0.3)
+        cb.allow_request()  # → HALF_OPEN
+        cb.record_success()
+        cb.record_success()  # probe_success_threshold = 2
+        assert cb.get_state() == CircuitState.CLOSED
+
+    def test_single_probe_success_does_not_close(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        time.sleep(0.3)
+        cb.allow_request()
+        cb.record_success()   # only 1, need 2
+        assert cb.get_state() == CircuitState.HALF_OPEN
+
+
+class TestCircuitBreakerReset:
+
+    def test_reset_closes_open_circuit(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.get_state() == CircuitState.OPEN
+        cb.reset()
+        assert cb.get_state() == CircuitState.CLOSED
+
+    def test_allows_requests_after_reset(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        cb.reset()
+        assert cb.allow_request() is True
+
+
+class TestCircuitBreakerGetStatus:
+
+    def test_status_keys(self, cb):
+        status = cb.get_status()
+        expected = {
+            "state",
+            "consecutive_failures",
+            "consecutive_probe_successes",
+            "seconds_open",
+            "recovery_timeout_seconds",
+            "recent_transitions",
+        }
+        assert expected.issubset(status.keys())
+
+    def test_state_closed_in_status(self, cb):
+        assert cb.get_status()["state"] == "closed"
+
+    def test_state_open_in_status(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.get_status()["state"] == "open"
+
+    def test_seconds_open_populated(self, cb):
+        for _ in range(3):
+            cb.record_failure()
+        time.sleep(0.05)
+        status = cb.get_status()
+        assert status["seconds_open"] is not None
+        assert status["seconds_open"] >= 0
+
+
+class TestCircuitBreakerSingleton:
+
+    def test_singleton_returns_same_instance(self):
+        import exchange_kill_switch as eks_module
+        original = eks_module._circuit_breaker
+        eks_module._circuit_breaker = None
+        try:
+            a = get_exchange_outage_circuit_breaker()
+            b = get_exchange_outage_circuit_breaker()
+            assert a is b
+        finally:
+            eks_module._circuit_breaker = original
