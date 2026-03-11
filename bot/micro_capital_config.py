@@ -24,7 +24,7 @@ Updated: Kraken as exclusive primary broker (Coinbase disabled)
 
 import os
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 logger = logging.getLogger("nija.micro_capital_config")
 
@@ -149,6 +149,64 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 # MIN_BALANCE_COINBASE = 10.0  # Coinbase disabled
 
 # ============================================================================
+# MICRO-CAP COMPOUNDING MODE (balance < $100)
+# ============================================================================
+# When the account balance is below $100, the bot enters a focused single-trade
+# compounding mode:
+#   - max_positions    = 1      (one trade at a time for capital concentration)
+#   - position_size    = 25%    (of current capital per trade)
+#   - profit_target    = 1.2%   (tight, achievable target that compounds quickly)
+#   - stop_loss        = 0.6%   (half of profit target → 2:1 R:R ratio)
+#   - trade_cooldown   = 60s    (re-entry cooldown between trades per symbol)
+
+MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
+MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
+MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0   # 25% of capital per trade
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R)
+MICRO_CAP_TRADE_COOLDOWN = 60                    # Seconds between trades (re-entry cooldown)
+
+
+def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union[bool, float, int]]]:
+    """
+    Return the micro-cap compounding mode configuration when the account
+    balance is below the activation threshold ($100 by default).
+
+    Compounding mode rules:
+      - max_positions    = 1      (one trade at a time)
+      - position_size    = 25%    (of current capital per trade)
+      - profit_target    = 1.2%   (tight, achievable target)
+      - stop_loss        = 0.6%   (half of profit target → 2:1 R:R)
+
+    Args:
+        balance: Current account balance in USD.
+
+    Returns:
+        Dict with compounding mode parameters when active, otherwise None.
+    """
+    if balance < MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:
+        config = {
+            'micro_cap_compounding_active': True,
+            'balance_threshold': MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD,
+            'max_positions': MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
+            'position_size_pct': MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
+            'profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
+            'stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
+        }
+        logger.info(
+            f"🚀 Micro-cap compounding mode ACTIVE "
+            f"(balance ${balance:.2f} < ${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}): "
+            f"max_positions={MICRO_CAP_COMPOUNDING_MAX_POSITIONS}, "
+            f"position_size={MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT}%, "
+            f"profit_target={MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT}%, "
+            f"stop_loss={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT}%"
+        )
+        return config
+
+    return None
+
+
+# ============================================================================
 # DYNAMIC SCALING BASED ON EQUITY
 # ============================================================================
 
@@ -167,6 +225,18 @@ def get_dynamic_config(equity: float) -> Dict:
         'risk_per_trade': RISK_PER_TRADE,
         'leverage_enabled': LEVERAGE_ENABLED,
     }
+
+    # Micro-cap compounding mode: balance < $100
+    # Takes full precedence over all other tiers; standard tiers ($250/$500/$1000)
+    # only apply once the balance reaches $100 or above.
+    compounding = get_micro_cap_compounding_config(equity)
+    if compounding:
+        config['max_positions'] = compounding['max_positions']
+        config['position_size_pct'] = compounding['position_size_pct']
+        config['profit_target_pct'] = compounding['profit_target_pct']
+        config['stop_loss_pct'] = compounding['stop_loss_pct']
+        config['micro_cap_compounding_active'] = True
+        return config
     
     # Scaling at $250
     if equity >= 250:

@@ -293,6 +293,40 @@ except ImportError:
         get_volatility_position_sizer = None
         VolatilityPositionSizer = None
 
+# Import Micro-Cap Compounding Config — applies before risk engine and position sizing
+try:
+    from micro_capital_config import (
+        get_micro_cap_compounding_config,
+        MICRO_CAP_TRADE_COOLDOWN,
+        MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
+        MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
+        MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
+        MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
+    )
+    MICRO_CAP_COMPOUNDING_AVAILABLE = True
+    logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
+except ImportError:
+    try:
+        from bot.micro_capital_config import (
+            get_micro_cap_compounding_config,
+            MICRO_CAP_TRADE_COOLDOWN,
+            MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
+            MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
+            MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
+            MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
+        )
+        MICRO_CAP_COMPOUNDING_AVAILABLE = True
+        logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
+    except ImportError:
+        MICRO_CAP_COMPOUNDING_AVAILABLE = False
+        MICRO_CAP_TRADE_COOLDOWN = 60  # Default: 60 seconds (matches config constant)
+        MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1
+        MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0
+        MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2
+        MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6
+        logger.warning("⚠️ Micro-Cap Compounding Config not available - micro-cap mode disabled")
+        get_micro_cap_compounding_config = None  # type: ignore
+
 load_dotenv()
 
 # Position adoption safety constants
@@ -1221,6 +1255,9 @@ class TradingStrategy:
         # Heartbeat trade state tracking (for deployment verification and health checks)
         self.heartbeat_last_trade_time = 0  # Last heartbeat trade timestamp
         self.heartbeat_trade_count = 0  # Total heartbeat trades executed
+
+        # Micro-cap re-entry cooldown tracking (MICRO_CAP_TRADE_COOLDOWN seconds between trades per symbol)
+        self._micro_cap_last_trade_times: Dict[str, float] = {}
         
         # Trade execution tracking (for trade-based cleanup trigger)
         self.trades_since_last_cleanup = 0  # Trades executed since last forced cleanup
@@ -4453,6 +4490,30 @@ class TradingStrategy:
                 balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
 
+            # ═══════════════════════════════════════════════════════
+            # MICRO-CAP COMPOUNDING CONFIG — Step 2 of correct order
+            # Correct order: balance fetch → micro-cap config →
+            #                volatility position sizing → risk engine → trade execution
+            # This config is used later in the entry loop to override position size,
+            # profit targets, and stop losses when balance < $100.
+            # ═══════════════════════════════════════════════════════
+            _micro_cap_config = None
+            if MICRO_CAP_COMPOUNDING_AVAILABLE and get_micro_cap_compounding_config is not None:
+                try:
+                    _micro_cap_config = get_micro_cap_compounding_config(account_balance)
+                    if _micro_cap_config:
+                        logger.info(
+                            f"🚀 Micro-cap compounding mode active: "
+                            f"max_pos={_micro_cap_config['max_positions']}, "
+                            f"size={_micro_cap_config['position_size_pct']}%, "
+                            f"PT={_micro_cap_config['profit_target_pct']}%, "
+                            f"SL={_micro_cap_config['stop_loss_pct']}%, "
+                            f"cooldown={MICRO_CAP_TRADE_COOLDOWN}s"
+                        )
+                except Exception as _mc_err:
+                    logger.warning(f"⚠️ Could not load micro-cap compounding config: {_mc_err}")
+                    _micro_cap_config = None
+
             # ✅ Step 1 of correct throttle order: update capital BEFORE position sizing
             # This ensures the throttle multiplier reflects the current balance for
             # the upcoming position-size calculation (Step 2) and order (Steps 3-4).
@@ -6621,6 +6682,72 @@ class TradingStrategy:
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
 
                                 # ═══════════════════════════════════════════════════════
+                                # MICRO-CAP COMPOUNDING CONFIG — applied BEFORE volatility
+                                # sizing and risk engine (correct pipeline order).
+                                #
+                                # Correct order:
+                                #   balance fetch → micro-cap config → volatility sizing
+                                #   → risk engine → trade execution
+                                # ═══════════════════════════════════════════════════════
+                                if _micro_cap_config:
+                                    # 1. Re-entry cooldown: enforce MICRO_CAP_TRADE_COOLDOWN
+                                    _last_trade_ts = self._micro_cap_last_trade_times.get(symbol, 0.0)
+                                    if _last_trade_ts > 0:
+                                        _elapsed_since_trade = time.time() - _last_trade_ts
+                                        if _elapsed_since_trade < MICRO_CAP_TRADE_COOLDOWN:
+                                            _remaining = MICRO_CAP_TRADE_COOLDOWN - _elapsed_since_trade
+                                            logger.info(
+                                                f"   ⏳ {symbol}: Micro-cap re-entry cooldown active "
+                                                f"({_remaining:.0f}s remaining, cooldown={MICRO_CAP_TRADE_COOLDOWN}s)"
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+
+                                    # 2. Max positions from micro-cap config (1 at a time)
+                                    _mc_max_pos = int(_micro_cap_config.get('max_positions', MICRO_CAP_COMPOUNDING_MAX_POSITIONS))
+                                    if len(current_positions) >= _mc_max_pos:
+                                        logger.info(
+                                            f"   🛑 {symbol}: Micro-cap position limit reached "
+                                            f"({len(current_positions)}/{_mc_max_pos}) — entry blocked"
+                                        )
+                                        filter_stats['market_filter'] += 1
+                                        continue
+
+                                    # 3. Override position size from micro-cap config
+                                    _mc_pos_pct = float(_micro_cap_config.get('position_size_pct', MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT))
+                                    _mc_position_size = account_balance * _mc_pos_pct / 100.0
+                                    logger.info(
+                                        f"   🚀 {symbol}: Micro-cap compounding mode — "
+                                        f"position size {_mc_pos_pct:.0f}% of "
+                                        f"${account_balance:.2f} = ${_mc_position_size:.2f} "
+                                        f"(was ${position_size:.2f})"
+                                    )
+                                    position_size = _mc_position_size
+
+                                    # 4. Override stop_loss and profit_target in analysis dict
+                                    _mc_entry_price = analysis.get('entry_price', 0.0)
+                                    if _mc_entry_price and _mc_entry_price > 0:
+                                        _mc_stop_pct = float(_micro_cap_config.get('stop_loss_pct', MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT))
+                                        _mc_profit_pct = float(_micro_cap_config.get('profit_target_pct', MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT))
+                                        if action == 'enter_long':
+                                            _mc_stop_loss = _mc_entry_price * (1.0 - _mc_stop_pct / 100.0)
+                                            _mc_take_profit = _mc_entry_price * (1.0 + _mc_profit_pct / 100.0)
+                                        else:  # enter_short
+                                            _mc_stop_loss = _mc_entry_price * (1.0 + _mc_stop_pct / 100.0)
+                                            _mc_take_profit = _mc_entry_price * (1.0 - _mc_profit_pct / 100.0)
+                                        analysis['stop_loss'] = _mc_stop_loss
+                                        analysis['take_profit'] = [_mc_take_profit]
+                                        analysis['position_size'] = position_size
+                                        logger.info(
+                                            f"   🎯 {symbol}: Micro-cap targets — "
+                                            f"SL={_mc_stop_pct}% (${_mc_stop_loss:.6f}), "
+                                            f"PT={_mc_profit_pct}% (${_mc_take_profit:.6f})"
+                                        )
+                                    else:
+                                        # Entry price not available; just update position_size in analysis
+                                        analysis['position_size'] = position_size
+
+                                # ═══════════════════════════════════════════════════════
                                 # CAPITAL GROWTH THROTTLE — Steps 2 & 3 of correct order
                                 # Step 2: base position size is already set above.
                                 # Step 3: apply throttle multiplier before any further
@@ -7129,6 +7256,13 @@ class TradingStrategy:
                                 success = self.apex.execute_action(analysis, symbol)
                                 if success:
                                     logger.info(f"   ✅ Position opened successfully")
+                                    # Record micro-cap trade time for re-entry cooldown
+                                    if _micro_cap_config:
+                                        self._micro_cap_last_trade_times[symbol] = time.time()
+                                        logger.info(
+                                            f"   ⏱️  Micro-cap cooldown started for {symbol} "
+                                            f"({MICRO_CAP_TRADE_COOLDOWN}s)"
+                                        )
                                     break  # Only open one position per cycle
                                 else:
                                     logger.error(f"   ❌ Failed to open position")
