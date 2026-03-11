@@ -285,6 +285,11 @@ class DrawdownProtectionSystem:
                 logger.warning(f"   Current: ${self.state.current_capital:.2f}")
                 logger.warning(f"   Loss: ${self.state.drawdown_amount:.2f}")
                 logger.warning(f"   Position sizes reduced to {self.config.halt_position_multiplier*100:.0f}% until recovery.")
+                logger.error("🛑 CRITICAL DRAWDOWN - MINIMAL TRADING (10%)")
+                logger.error(f"   Drawdown: {self.state.drawdown_pct:.2f}%")
+                logger.error(f"   Peak: ${self.state.peak_capital:.2f}")
+                logger.error(f"   Current: ${self.state.current_capital:.2f}")
+                logger.error(f"   Loss: ${self.state.drawdown_amount:.2f}")
         else:
             # De-escalating protection (recovery)
             logger.info("✅ PROTECTION DE-ESCALATED")
@@ -373,6 +378,7 @@ class DrawdownProtectionSystem:
         """
         if self.state.protection_level == ProtectionLevel.HALT:
             return (True, f"Minimal trading (10%) — drawdown {self.state.drawdown_pct:.2f}% exceeds {self.config.halt_threshold_pct:.1f}% threshold")
+            return (True, f"Minimal trading ({self.config.halt_position_multiplier*100:.0f}%) due to {self.state.drawdown_pct:.2f}% drawdown (>{self.config.halt_threshold_pct:.1f}%)")
 
         # Check capital floor
         if self.config.enable_capital_floor:
@@ -434,6 +440,7 @@ class DrawdownProtectionSystem:
             f"  Warning:              {self.config.warning_threshold_pct:>12.1f}% → {self.config.warning_position_multiplier*100:.0f}% position size",
             f"  Danger:               {self.config.danger_threshold_pct:>12.1f}% → {self.config.danger_position_multiplier*100:.0f}% position size",
             f"  Halt:                 {self.config.halt_threshold_pct:>12.1f}% → {self.config.halt_position_multiplier*100:.0f}% position size (minimal)",
+            f"  Halt:                 {self.config.halt_threshold_pct:>12.1f}% → {self.config.halt_position_multiplier*100:.0f}% position size",
             ""
         ])
 
@@ -500,7 +507,7 @@ def get_drawdown_protection(base_capital: float,
 
     Args:
         base_capital: Base capital to protect
-        halt_threshold: Drawdown % at which to halt trading
+        halt_threshold: Drawdown % at which to apply minimal (10%) trading
 
     Returns:
         DrawdownProtectionSystem instance
