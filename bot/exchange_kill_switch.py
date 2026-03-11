@@ -139,6 +139,11 @@ DEFAULT_LATENCY_P95_CAUTION_MS: float = 2_000.0    # p95 > 2 s → YELLOW
 DEFAULT_PHANTOM_FILL_THRESHOLD: int = 2     # same fill seen N times → anomaly
 DEFAULT_DUPLICATE_ORDER_THRESHOLD: int = 2  # same client_order_id N times → anomaly
 
+# Outage circuit-breaker defaults
+DEFAULT_OUTAGE_FAILURE_THRESHOLD: int = 5       # consecutive failures to open circuit
+DEFAULT_OUTAGE_RECOVERY_TIMEOUT_S: float = 60.0  # seconds before half-open probe
+DEFAULT_OUTAGE_PROBE_SUCCESS_THRESHOLD: int = 2  # successes needed to close circuit
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 
@@ -158,6 +163,210 @@ class ThreatLevel(Enum):
     ELEVATED = "elevated"
     CRITICAL = "critical"
 
+
+class CircuitState(Enum):
+    """States for the exchange-outage circuit breaker."""
+    CLOSED    = "closed"     # Normal — requests flow through
+    OPEN      = "open"       # Exchange unreachable — block all calls
+    HALF_OPEN = "half_open"  # Testing recovery — allow probe calls
+
+
+# ---------------------------------------------------------------------------
+# Exchange outage circuit breaker
+# ---------------------------------------------------------------------------
+
+
+class ExchangeOutageCircuitBreaker:
+    """Three-state circuit breaker for complete exchange outages.
+
+    Unlike the rolling-window gates in :class:`ExchangeKillSwitchProtector`
+    (which trigger on *rates*), this breaker trips on *N consecutive*
+    connection failures and only recovers after a quiet period followed by a
+    minimum number of successful probe calls.
+
+    States
+    ------
+    * **CLOSED** — normal; all calls are allowed.
+    * **OPEN**   — exchange is down; no calls allowed.  Transitions to
+      HALF_OPEN after ``recovery_timeout_seconds``.
+    * **HALF_OPEN** — one probe call is allowed per ``check()``.  If
+      ``probe_success_threshold`` consecutive probes succeed the circuit
+      closes; a single failure re-opens it.
+
+    Usage
+    -----
+    ::
+
+        cb = ExchangeOutageCircuitBreaker()
+
+        # Before every API call:
+        if not cb.allow_request():
+            raise ConnectionError("Exchange circuit breaker is OPEN")
+
+        try:
+            response = api.get_price("BTC-USD")
+            cb.record_success()
+        except ConnectionError:
+            cb.record_failure()
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = DEFAULT_OUTAGE_FAILURE_THRESHOLD,
+        recovery_timeout_seconds: float = DEFAULT_OUTAGE_RECOVERY_TIMEOUT_S,
+        probe_success_threshold: int = DEFAULT_OUTAGE_PROBE_SUCCESS_THRESHOLD,
+    ) -> None:
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout = recovery_timeout_seconds
+        self._probe_success_threshold = probe_success_threshold
+
+        self._lock = threading.Lock()
+        self._state: CircuitState = CircuitState.CLOSED
+        self._consecutive_failures: int = 0
+        self._consecutive_probe_successes: int = 0
+        self._opened_at: Optional[float] = None   # monotonic timestamp when opened
+        self._state_history: List[Dict] = []
+
+        logger.info(
+            "⚡ ExchangeOutageCircuitBreaker initialised "
+            "(failure_threshold=%d, recovery_timeout=%.0fs, probe_threshold=%d)",
+            failure_threshold, recovery_timeout_seconds, probe_success_threshold,
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def allow_request(self) -> bool:
+        """Return ``True`` if the caller is permitted to make an exchange call.
+
+        In CLOSED state all requests are allowed.
+        In OPEN state all requests are blocked (returns ``False``).
+        In HALF_OPEN state exactly one probe is allowed at a time; subsequent
+        calls return ``False`` until the probe result is recorded.
+        """
+        with self._lock:
+            if self._state == CircuitState.CLOSED:
+                return True
+
+            if self._state == CircuitState.OPEN:
+                # Check whether the recovery timeout has elapsed
+                if (
+                    self._opened_at is not None
+                    and time.monotonic() - self._opened_at >= self._recovery_timeout
+                ):
+                    self._transition(CircuitState.HALF_OPEN, "recovery timeout elapsed")
+                    self._consecutive_probe_successes = 0
+                    return True  # allow first probe
+                return False  # still open
+
+            # HALF_OPEN — allow exactly one probe
+            if self._state == CircuitState.HALF_OPEN:
+                return True
+
+        return False  # unreachable, but mypy wants a return
+
+    def record_success(self) -> None:
+        """Record a successful exchange call."""
+        with self._lock:
+            if self._state == CircuitState.CLOSED:
+                self._consecutive_failures = 0
+                return
+
+            if self._state == CircuitState.HALF_OPEN:
+                self._consecutive_probe_successes += 1
+                logger.info(
+                    "✅ Circuit breaker probe success %d/%d",
+                    self._consecutive_probe_successes,
+                    self._probe_success_threshold,
+                )
+                if self._consecutive_probe_successes >= self._probe_success_threshold:
+                    self._consecutive_failures = 0
+                    self._consecutive_probe_successes = 0
+                    self._transition(CircuitState.CLOSED, "probes succeeded — exchange recovered")
+
+    def record_failure(self) -> None:
+        """Record a failed exchange call (connection error, timeout, etc.)."""
+        with self._lock:
+            if self._state == CircuitState.HALF_OPEN:
+                # Any failure in HALF_OPEN re-opens immediately
+                self._consecutive_probe_successes = 0
+                self._opened_at = time.monotonic()
+                self._transition(CircuitState.OPEN, "probe failed — re-opening circuit")
+                return
+
+            self._consecutive_failures += 1
+            logger.warning(
+                "⚠️  Exchange failure #%d (opens at %d)",
+                self._consecutive_failures,
+                self._failure_threshold,
+            )
+            if self._consecutive_failures >= self._failure_threshold:
+                self._opened_at = time.monotonic()
+                self._transition(
+                    CircuitState.OPEN,
+                    f"{self._consecutive_failures} consecutive failures — exchange unreachable",
+                )
+
+    def get_state(self) -> CircuitState:
+        """Return the current circuit state."""
+        with self._lock:
+            return self._state
+
+    def get_status(self) -> Dict:
+        """Return a status snapshot for dashboards."""
+        with self._lock:
+            elapsed: Optional[float] = None
+            if self._state == CircuitState.OPEN and self._opened_at is not None:
+                elapsed = time.monotonic() - self._opened_at
+            return {
+                "state": self._state.value,
+                "consecutive_failures": self._consecutive_failures,
+                "consecutive_probe_successes": self._consecutive_probe_successes,
+                "seconds_open": round(elapsed, 1) if elapsed is not None else None,
+                "recovery_timeout_seconds": self._recovery_timeout,
+                "recent_transitions": self._state_history[-5:],
+            }
+
+    def reset(self) -> None:
+        """Force the circuit back to CLOSED (for testing / emergency recovery)."""
+        with self._lock:
+            self._consecutive_failures = 0
+            self._consecutive_probe_successes = 0
+            self._opened_at = None
+            self._transition(CircuitState.CLOSED, "manual reset")
+        logger.warning("🔄 ExchangeOutageCircuitBreaker reset to CLOSED")
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _transition(self, new_state: CircuitState, reason: str) -> None:
+        """Record a state transition (must be called with self._lock held)."""
+        old_state = self._state
+        self._state = new_state
+        record = {
+            "from": old_state.value,
+            "to": new_state.value,
+            "reason": reason,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self._state_history.append(record)
+        if len(self._state_history) > 50:
+            self._state_history = self._state_history[-50:]
+
+        if new_state == CircuitState.OPEN:
+            logger.critical(
+                "🔴 Exchange circuit breaker OPEN — %s", reason
+            )
+        elif new_state == CircuitState.HALF_OPEN:
+            logger.warning(
+                "🟡 Exchange circuit breaker HALF-OPEN — %s", reason
+            )
+        else:
+            logger.info(
+                "🟢 Exchange circuit breaker CLOSED — %s", reason
+            )
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -860,6 +1069,9 @@ class ExchangeKillSwitchProtector:
 _protector: Optional[ExchangeKillSwitchProtector] = None
 _protector_lock = threading.Lock()
 
+_circuit_breaker: Optional[ExchangeOutageCircuitBreaker] = None
+_circuit_breaker_lock = threading.Lock()
+
 
 def get_exchange_kill_switch_protector(
     config: Optional[ExchangeKillSwitchConfig] = None,
@@ -879,6 +1091,37 @@ def get_exchange_kill_switch_protector(
             if _protector is None:
                 _protector = ExchangeKillSwitchProtector(config)
     return _protector
+
+
+def get_exchange_outage_circuit_breaker(
+    failure_threshold: int = DEFAULT_OUTAGE_FAILURE_THRESHOLD,
+    recovery_timeout_seconds: float = DEFAULT_OUTAGE_RECOVERY_TIMEOUT_S,
+    probe_success_threshold: int = DEFAULT_OUTAGE_PROBE_SUCCESS_THRESHOLD,
+) -> ExchangeOutageCircuitBreaker:
+    """Return (or create) the global :class:`ExchangeOutageCircuitBreaker` singleton.
+
+    Parameters
+    ----------
+    failure_threshold:
+        Number of consecutive failures before opening the circuit.
+    recovery_timeout_seconds:
+        Seconds to wait in OPEN state before probing for recovery.
+    probe_success_threshold:
+        Number of consecutive successful probes needed to close the circuit.
+
+    Only the first call creates the instance; subsequent calls return the
+    existing singleton regardless of the arguments.
+    """
+    global _circuit_breaker
+    if _circuit_breaker is None:
+        with _circuit_breaker_lock:
+            if _circuit_breaker is None:
+                _circuit_breaker = ExchangeOutageCircuitBreaker(
+                    failure_threshold=failure_threshold,
+                    recovery_timeout_seconds=recovery_timeout_seconds,
+                    probe_success_threshold=probe_success_threshold,
+                )
+    return _circuit_breaker
 
 
 # ---------------------------------------------------------------------------

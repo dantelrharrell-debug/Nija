@@ -1,5 +1,5 @@
 {
-  "current_state": "OFF",
+  "current_state": "EMERGENCY_STOP",
   "history": [
     {
       "from": "EMERGENCY_STOP",
@@ -24,7 +24,13 @@
       "to": "OFF",
       "reason": "Kill switch deactivated: Manual deactivation",
       "timestamp": "2026-03-06T21:23:55.454923"
+    },
+    {
+      "from": "OFF",
+      "to": "EMERGENCY_STOP",
+      "reason": "Kill switch activated: PortfolioKillSwitch: Test trigger",
+      "timestamp": "2026-03-11T11:39:51.914646"
     }
   ],
-  "last_updated": "2026-03-06T21:23:55.454932"
+  "last_updated": "2026-03-11T11:39:51.914654"
 }
