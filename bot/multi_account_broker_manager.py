@@ -1104,51 +1104,16 @@ class MultiAccountBrokerManager:
             logger.debug(f"   is_platform_connected result: {platform_connected}")
 
             if not platform_connected:
-                # HIERARCHY ENFORCEMENT: User is connecting without a Platform account.
-                # This violates the intended primary/secondary structure. The user is
-                # temporarily acting as primary, which can cause reporting, risk
-                # aggregation, and capital orchestration inconsistencies.
-                #
-                # Mitigation: automatically place this user in RECOVERY mode so that:
-                #   • Existing positions can still be exited (standalone mode works for exits)
-                #   • No NEW entries are accepted until the Platform account is connected
-                logger.warning(f"⚠️  WARNING: User account connecting to {broker_type.value.upper()} WITHOUT Platform account!")
-                logger.warning(f"   User: {user.name} ({user.user_id})")
-                logger.warning(f"   Platform {broker_type.value.upper()} account is NOT connected")
-                logger.warning("   ⚠️  HIERARCHY ISSUE: User is temporarily acting as primary — this may cause")
-                logger.warning("      reporting, risk aggregation, and capital orchestration inconsistencies.")
-                logger.warning("   🔒 STANDALONE MODE ENFORCED: new entries BLOCKED until Platform account")
-                logger.warning(f"      is connected. Connect Platform {broker_type.value.upper()} account first,")
-                logger.warning("      then configure users as secondary.")
-                logger.warning("   🔧 RECOMMENDATION: Configure Platform account credentials first.")
-                logger.warning(f"      Platform should be PRIMARY, users should be SECONDARY.")
-                logger.warning("   ℹ️  See PLATFORM_ACCOUNT_REQUIRED.md for setup instructions.")
-                logger.warning("=" * 70)
-
-                # Automatically enforce RECOVERY mode (exits only, no new entries)
-                # for any user connecting without a Platform account.
-                # RECOVERY is the baseline enforcement level for standalone operation.
-                # PAUSED is the only mode stricter than RECOVERY; we never downgrade it.
-                if get_account_mode_manager is not None and AccountMode is not None:
-                    try:
-                        mode_manager = get_account_mode_manager()
-                        current_mode = mode_manager.get_mode(user.user_id)
-                        # Escalate to RECOVERY if the current mode allows new entries.
-                        # Skip if already at RECOVERY (target) or PAUSED (stricter).
-                        if current_mode not in (AccountMode.RECOVERY, AccountMode.PAUSED):
-                            mode_manager.set_mode(user.user_id, AccountMode.RECOVERY)
-                            logger.warning(
-                                f"   🔄 Mode escalated: {user.name} ({user.user_id}) "
-                                f"switched from '{current_mode.value}' → '{AccountMode.RECOVERY.value}' "
-                                "(no new entries while Platform account is absent)"
-                            )
-                        else:
-                            logger.info(
-                                f"   ✅ {user.name} already in '{current_mode.value}' mode "
-                                "(new entries already blocked)"
-                            )
-                    except Exception as mode_err:
-                        logger.warning(f"   ⚠️  Could not enforce recovery mode for {user.name}: {mode_err}")
+                # No platform account connected — user account operates as standalone primary.
+                # Trading is fully allowed; the platform account is optional.
+                # Note: Without a platform account, unified cross-account risk aggregation,
+                # capital orchestration, and consolidated reporting are unavailable. Each
+                # standalone user account manages its own risk limits independently.
+                logger.info(f"ℹ️  No Platform {broker_type.value.upper()} account configured.")
+                logger.info(f"   User: {user.name} ({user.user_id})")
+                logger.info(f"   Operating in standalone mode — full trading enabled.")
+                logger.info("   ℹ️  Note: Cross-account risk aggregation and capital orchestration")
+                logger.info("      require a Platform account but are not needed for standalone trading.")
 
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
@@ -1163,7 +1128,7 @@ class MultiAccountBrokerManager:
             if platform_connected:
                 logger.info(f"   ✅ Platform {broker_type.value.upper()} is connected (correct priority)")
             else:
-                logger.info(f"   ⚠️  Platform {broker_type.value.upper()} is NOT connected (STANDALONE MODE — exits only, no new entries)")
+                logger.info(f"   ℹ️  Platform {broker_type.value.upper()} is NOT connected (STANDALONE MODE — full trading enabled)")
             # Flush to ensure this message appears before connection attempt logs
             # CRITICAL FIX: Must flush the root 'nija' logger's handlers, not the child logger's
             # Child loggers (like 'nija.multi_account', 'nija.broker') propagate to parent but
@@ -1323,53 +1288,22 @@ class MultiAccountBrokerManager:
                 continue
 
         if users_without_platform:
-            # Platform account missing – users are in standalone mode (exits only).
-            # New entries are blocked by the RECOVERY mode enforcement above.
+            # Platform account not connected — users operate in standalone mode with full trading.
+            # Trade entries are fully enabled. Cross-account risk aggregation and capital
+            # orchestration features are unavailable without a Platform account, but each
+            # standalone user account enforces its own per-account risk limits independently.
             try:
-                logger.warning("=" * 70)
-                logger.warning("⚠️  HIERARCHY ISSUE — STANDALONE MODE ACTIVE")
-                logger.warning("=" * 70)
-                logger.warning(f"   Platform account NOT connected on: {', '.join(users_without_platform)}")
-                logger.warning("   User accounts are temporarily acting as primary.")
-                logger.warning("   🔒 NEW ENTRIES BLOCKED for affected users (exits still work).")
-                logger.warning("      Connect the Platform account first, then configure users as secondary.")
-                logger.warning("")
-                logger.warning("   ⚠️  This may cause reporting, risk aggregation, and capital")
-                logger.warning("      orchestration inconsistencies until resolved.")
-                logger.warning("")
-                # Flush output to ensure warnings are visible
-                for handler in _root_logger.handlers:
-                    handler.flush()
-
-                logger.info("   📋 TO RESTORE CORRECT HIERARCHY:")
-                for broker in users_without_platform:
-                    logger.info(f"")
-                    logger.info(f"   For {broker} Platform account:")
-                    logger.info(f"   1. Get API credentials from the {broker} website")
-                    if broker == "KRAKEN":
-                        logger.info(f"      URL: https://www.kraken.com/u/security/api")
-                        logger.info(f"   2. Set these environment variables:")
-                        logger.info(f"      KRAKEN_PLATFORM_API_KEY=<your-api-key>")
-                        logger.info(f"      KRAKEN_PLATFORM_API_SECRET=<your-api-secret>")
-                    elif broker == "ALPACA":
-                        logger.info(f"      URL: https://alpaca.markets/")
-                        logger.info(f"   2. Set these environment variables:")
-                        logger.info(f"      ALPACA_API_KEY=<your-api-key>")
-                        logger.info(f"      ALPACA_API_SECRET=<your-api-secret>")
-                        logger.info(f"      ALPACA_PAPER=true  # Set to false for live trading")
-                    else:
-                        logger.info(f"   2. Set environment variables:")
-                        logger.info(f"      {broker}_PLATFORM_API_KEY=<your-api-key>")
-                        logger.info(f"      {broker}_PLATFORM_API_SECRET=<your-api-secret>")
-                    logger.info(f"   3. Restart the bot")
-                    # Flush after each broker to ensure output is visible
-                    for handler in _root_logger.handlers:
-                        handler.flush()
-
-                logger.info("")
-                logger.info("   ℹ️  See PLATFORM_ACCOUNT_REQUIRED.md for full setup instructions.")
                 logger.info("=" * 70)
-                # Final flush to ensure all configuration messages are visible
+                logger.info("ℹ️  STANDALONE MODE — No Platform Account Configured")
+                logger.info("=" * 70)
+                logger.info(f"   Platform account not connected on: {', '.join(users_without_platform)}")
+                logger.info("   User accounts are operating as standalone primary accounts.")
+                logger.info("   ✅ Full trading is enabled — new entries are allowed.")
+                logger.info("   ℹ️  Per-account risk limits are active and enforced independently.")
+                logger.info("   ℹ️  Cross-account risk aggregation and capital orchestration require")
+                logger.info("      a Platform account, but are not needed for standalone trading.")
+                logger.info("")
+                # Flush output to ensure messages are visible
                 for handler in _root_logger.handlers:
                     handler.flush()
             except Exception as e:
@@ -1501,7 +1435,7 @@ class MultiAccountBrokerManager:
         if user_broker_summary:
             for name, count in user_broker_summary.items():
                 platform_ok = platform_status.get(name, False)
-                role = "SECONDARY ✅" if platform_ok else "⚠️  STANDALONE MODE (exits only, no new entries)"
+                role = "SECONDARY ✅" if platform_ok else "✅ STANDALONE MODE (full trading enabled)"
                 logger.info(f"   • {name}: {count} user(s) — {role}")
         else:
             logger.info("   ⚪ No connected user accounts")
@@ -1526,76 +1460,14 @@ class MultiAccountBrokerManager:
         if hierarchy_valid:
             logger.info("✅ HIERARCHY VALID: Platform is PRIMARY, all users are SECONDARY")
         else:
-            logger.warning("⚠️  HIERARCHY ISSUE DETECTED:")
-            for issue in issues:
-                logger.warning(f"   • {issue}")
+            logger.info("ℹ️  STANDALONE MODE: No Platform account configured.")
             if standalone_mode_users:
-                logger.warning(
-                    f"   🔒 STANDALONE MODE: {len(standalone_mode_users)} user(s) in exits-only mode "
+                logger.info(
+                    f"   ✅ STANDALONE MODE: {len(standalone_mode_users)} user(s) trading independently "
                     f"({', '.join(standalone_mode_users)})"
                 )
-                logger.warning("      NIJA is managing existing positions for profit exits and risk.")
-                logger.warning("      New entries are blocked until the Platform account is connected.")
-            logger.info("")
-            logger.info("💡 NEXT STEPS TO RESTORE FULL TRADING:")
-            # Identify which brokers are missing a Platform account
-            missing_platform_brokers = [
-                name for name, count in user_broker_summary.items()
-                if not platform_status.get(name, False)
-            ]
-            step = 1
-            for broker_name in missing_platform_brokers:
-                if broker_name == "KRAKEN":
-                    logger.info(
-                        f"   {step}. Connect Platform Kraken Account:"
-                    )
-                    logger.info(
-                        f"      • Set environment variable: KRAKEN_PLATFORM_API_KEY=<your-api-key>"
-                    )
-                    logger.info(
-                        f"      • Set environment variable: KRAKEN_PLATFORM_API_SECRET=<your-api-secret>"
-                    )
-                    logger.info(
-                        f"      • Restart NIJA — new entries will resume and hierarchy warnings will clear."
-                    )
-                elif broker_name == "ALPACA":
-                    logger.info(
-                        f"   {step}. Connect Platform Alpaca Account:"
-                    )
-                    logger.info(
-                        f"      • Set environment variable: ALPACA_API_KEY=<your-api-key>"
-                    )
-                    logger.info(
-                        f"      • Set environment variable: ALPACA_API_SECRET=<your-api-secret>"
-                    )
-                    logger.info(
-                        f"      • Optionally set ALPACA_PAPER=true for paper trading"
-                    )
-                    logger.info(
-                        f"      • Restart NIJA — new entries will resume and hierarchy warnings will clear."
-                    )
-                else:
-                    logger.info(
-                        f"   {step}. Configure the {broker_name} Platform account credentials"
-                    )
-                step += 1
-            if not missing_platform_brokers:
-                logger.info(
-                    f"   {step}. Configure the Platform account credentials for your broker"
-                )
-                step += 1
-            logger.info(
-                f"   {step}. Monitor Exit Cycles: NIJA is managing your "
-                f"{len(standalone_mode_users)} user account(s) automatically for profit exits and risk."
-            )
-            step += 1
-            logger.info(
-                f"   {step}. NIJA will automatically fetch missing entry prices from trade history"
-            )
-            step += 1
-            logger.info(
-                f"   {step}. Position adoption will be fully aligned with capital protection rules"
-            )
+                logger.info("      Full trading is enabled — new entries are allowed.")
+                logger.info("      A Platform account can be added later for unified reporting.")
 
         logger.info("=" * 70)
 
