@@ -166,6 +166,8 @@ MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R)
 MICRO_CAP_TRADE_COOLDOWN = 60                    # Seconds between trades (re-entry cooldown)
 
+# MICRO-CAP COMPOUNDING MODE HELPER
+# ============================================================================
 
 def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union[bool, float, int]]]:
     """
@@ -238,6 +240,7 @@ def get_dynamic_config(equity: float) -> Dict:
         config['micro_cap_compounding_active'] = True
         return config
     
+
     # Scaling at $250
     if equity >= 250:
         config['max_positions'] = 3
@@ -255,7 +258,8 @@ def get_dynamic_config(equity: float) -> Dict:
         config['risk_per_trade'] = 5.0
         config['leverage_enabled'] = True
         logger.info(f"Equity ${equity:.2f}: Scaled to 6 positions, 5% risk, leverage enabled")
-    
+
+    config['micro_cap_compounding_active'] = False
     return config
 
 # ============================================================================
@@ -300,6 +304,25 @@ ENABLE_PROFIT_COMPOUNDING = True  # Automatically compound profits
 COMPOUNDING_STRATEGY = "moderate"  # conservative/moderate/aggressive
 PROFIT_REINVEST_PCT = 90.0  # % of profits to reinvest (90% for micro capital)
 MIN_PROFIT_TO_COMPOUND = 5.0  # Minimum profit to trigger compounding
+
+# ============================================================================
+# MICRO-CAP COMPOUNDING MODE (balance < $100)
+# ============================================================================
+# Activated automatically when account balance falls below the threshold.
+# Designed for faster compounding on very small balances by concentrating
+# capital into a single high-conviction position with tight risk controls.
+#
+# Design requirements:
+#   - max_positions = 1   (focus on one trade at a time)
+#   - position_size = 25% of capital per trade
+#   - profit_target = 1.2%  (achievable target that compounds fast)
+#   - stop_loss = 0.6%      (tight stop, 2:1 reward-to-risk)
+
+MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
+MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
+MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0   # 25% of capital per trade
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss
 
 # ============================================================================
 # COMPLETE CONFIGURATION DICTIONARY
@@ -389,6 +412,13 @@ MICRO_CAPITAL_CONFIG = {
     'compounding_strategy': COMPOUNDING_STRATEGY,
     'profit_reinvest_pct': PROFIT_REINVEST_PCT,
     'min_profit_to_compound': MIN_PROFIT_TO_COMPOUND,
+
+    # Micro-cap compounding mode (balance < $100)
+    'micro_cap_compounding_balance_threshold': MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD,
+    'micro_cap_compounding_max_positions': MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
+    'micro_cap_compounding_position_size_pct': MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
+    'micro_cap_compounding_profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
+    'micro_cap_compounding_stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
 }
 
 # ============================================================================
@@ -508,13 +538,24 @@ def get_config_summary(equity: Optional[float] = None) -> str:
         Formatted configuration summary
     """
     dynamic_config = get_dynamic_config(equity) if equity else {}
-    
+
     max_positions = dynamic_config.get('max_positions', MAX_POSITIONS)
     risk_per_trade = dynamic_config.get('risk_per_trade', RISK_PER_TRADE)
     leverage_enabled = dynamic_config.get('leverage_enabled', LEVERAGE_ENABLED)
-    
+    compounding_active = dynamic_config.get('micro_cap_compounding_active', False)
+
     equity_str = f"${equity:.2f}" if equity is not None else "$0.00"
-    
+
+    compounding_section = ""
+    if compounding_active:
+        compounding_section = f"""
+🚀 MICRO-CAP COMPOUNDING MODE (balance < ${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}):
+   • Max Positions:  {MICRO_CAP_COMPOUNDING_MAX_POSITIONS}  (single position focus)
+   • Position Size:  {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% of capital per trade
+   • Profit Target:  {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT:.1f}%
+   • Stop Loss:      {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}%  (2:1 reward-to-risk)
+"""
+
     return f"""
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                  NIJA MICRO CAPITAL MODE CONFIGURATION                   ║
@@ -522,7 +563,7 @@ def get_config_summary(equity: Optional[float] = None) -> str:
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 📊 CURRENT EQUITY: {equity_str}
-
+{compounding_section}
 ⚙️  OPERATIONAL MODE:
    • Mode: {MODE}
    • Micro Capital Mode: {MICRO_CAPITAL_MODE}
@@ -572,6 +613,7 @@ def get_config_summary(equity: Optional[float] = None) -> str:
    • Cash Buffer: {FORCE_CASH_BUFFER:.1f}%
 
 📊 DYNAMIC SCALING THRESHOLDS:
+   • <${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}: Micro-cap compounding mode (1 position, {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% size, {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT:.1f}% PT, {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}% SL)
    • $250+: 3 positions, 4% risk per trade
    • $500+: 4 positions
    • $1000+: 6 positions, 5% risk, leverage enabled
@@ -594,6 +636,7 @@ This configuration is optimized for:
 ✅ Multi-broker support
 ✅ Advanced AI and signal filtering
 ✅ Automatic feature enablement
+✅ Micro-cap compounding mode for fast growth under $100
 
 To activate: apply_micro_capital_config(equity=your_balance)
 """
