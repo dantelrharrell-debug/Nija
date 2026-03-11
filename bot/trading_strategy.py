@@ -297,6 +297,7 @@ except ImportError:
 try:
     from micro_capital_config import (
         get_micro_cap_compounding_config,
+        get_spread_adjusted_profit_target,
         MICRO_CAP_TRADE_COOLDOWN,
         MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
         MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
@@ -309,6 +310,7 @@ except ImportError:
     try:
         from bot.micro_capital_config import (
             get_micro_cap_compounding_config,
+            get_spread_adjusted_profit_target,
             MICRO_CAP_TRADE_COOLDOWN,
             MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
             MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
@@ -322,10 +324,14 @@ except ImportError:
         MICRO_CAP_TRADE_COOLDOWN = 60  # Default: 60 seconds (matches config constant)
         MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1
         MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0
-        MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2
+        MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.0
         MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6
         logger.warning("⚠️ Micro-Cap Compounding Config not available - micro-cap mode disabled")
         get_micro_cap_compounding_config = None  # type: ignore
+
+        def get_spread_adjusted_profit_target(spread_pct: float, win_streak: int = 0) -> float:
+            """Fallback when micro_capital_config is unavailable: base 1.0% + spread."""
+            return MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT + spread_pct * 100.0
 
 load_dotenv()
 
@@ -1258,6 +1264,10 @@ class TradingStrategy:
 
         # Micro-cap re-entry cooldown tracking (MICRO_CAP_TRADE_COOLDOWN seconds between trades per symbol)
         self._micro_cap_last_trade_times: Dict[str, float] = {}
+        # Micro-cap consecutive win streak: incremented after each profitable exit,
+        # reset to 0 after any losing exit so the bot does not chase extended profit
+        # targets when momentum has ended (used by get_spread_adjusted_profit_target).
+        self._micro_cap_win_streak: int = 0
         
         # Trade execution tracking (for trade-based cleanup trigger)
         self.trades_since_last_cleanup = 0  # Trades executed since last forced cleanup
@@ -5992,6 +6002,36 @@ class TradingStrategy:
                     logger.info(f"="*80)
                     logger.info(f"")
 
+                    # ── Micro-cap win-streak update ──────────────────────────────
+                    # After each successfully closed position, determine whether the
+                    # exit was a profit (win) or a loss and update the streak counter.
+                    # Only explicit loss exits reset the streak; ambiguous/neutral exits
+                    # (e.g., manual closes, timeouts with no loss keyword) are ignored.
+                    _profit_keywords = ('profit target', 'profit realization', 'profit hit')
+                    _loss_keywords = ('stop loss', 'stop-loss', 'loss', 'lockdown',
+                                      'time exit', 'protective', 'zombie', 'catastrophic',
+                                      'drawdown', 'emergency')
+                    for _pd in positions_to_exit:
+                        if _pd['symbol'] not in successful_sells:
+                            continue  # only update for sells that went through
+                        _reason_lower = _pd.get('reason', '').lower()
+                        _is_profit_exit = any(kw in _reason_lower for kw in _profit_keywords)
+                        _is_loss_exit = any(kw in _reason_lower for kw in _loss_keywords)
+                        if _is_profit_exit and not _is_loss_exit:
+                            self._micro_cap_win_streak += 1
+                            logger.info(
+                                f"   🔥 Micro-cap win streak: {self._micro_cap_win_streak} "
+                                f"(+1 after profit exit of {_pd['symbol']})"
+                            )
+                        elif _is_loss_exit:
+                            if self._micro_cap_win_streak > 0:
+                                logger.info(
+                                    f"   🔄 Micro-cap win streak RESET: {self._micro_cap_win_streak} → 0 "
+                                    f"(loss exit of {_pd['symbol']})"
+                                )
+                            self._micro_cap_win_streak = 0
+                        # Ambiguous exits (neither profit nor loss keyword) leave the streak unchanged.
+
                 # CRITICAL FIX: Ensure position management errors don't crash the entire cycle
                 # If exit logic fails, log the error but continue to allow next cycle to retry
             except Exception as exit_err:
@@ -6728,7 +6768,19 @@ class TradingStrategy:
                                     _mc_entry_price = analysis.get('entry_price', 0.0)
                                     if _mc_entry_price and _mc_entry_price > 0:
                                         _mc_stop_pct = float(_micro_cap_config.get('stop_loss_pct', MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT))
-                                        _mc_profit_pct = float(_micro_cap_config.get('profit_target_pct', MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT))
+                                        # Dynamic profit target: base + current spread + win-streak bonus.
+                                        # Spread from analysis (if available) or a conservative 0.1% estimate
+                                        # (representative of typical liquid pairs such as BTC/ETH/SOL).
+                                        # Win-streak resets to 0 after any loss so extended targets are
+                                        # only applied while momentum is intact.
+                                        _mc_spread_pct = analysis.get('spread_pct', 0.001) or 0.001
+                                        _mc_profit_pct = get_spread_adjusted_profit_target(
+                                            _mc_spread_pct, self._micro_cap_win_streak
+                                        )
+                                        # Pre-compute components for the log message (avoids re-deriving from total)
+                                        _mc_spread_display = _mc_spread_pct * 100.0
+                                        _mc_base = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT  # 1.0%
+                                        _mc_streak_bonus = round(_mc_profit_pct - _mc_base - _mc_spread_display, 4)
                                         if action == 'enter_long':
                                             _mc_stop_loss = _mc_entry_price * (1.0 - _mc_stop_pct / 100.0)
                                             _mc_take_profit = _mc_entry_price * (1.0 + _mc_profit_pct / 100.0)
@@ -6741,7 +6793,8 @@ class TradingStrategy:
                                         logger.info(
                                             f"   🎯 {symbol}: Micro-cap targets — "
                                             f"SL={_mc_stop_pct}% (${_mc_stop_loss:.6f}), "
-                                            f"PT={_mc_profit_pct}% (${_mc_take_profit:.6f})"
+                                            f"PT={_mc_profit_pct:.2f}% (${_mc_take_profit:.6f}) "
+                                            f"[base={_mc_base:.1f}% + spread={_mc_spread_display:.2f}% + streak_bonus={_mc_streak_bonus:.2f}% | wins={self._micro_cap_win_streak}]"
                                         )
                                     else:
                                         # Entry price not available; just update position_size in analysis
