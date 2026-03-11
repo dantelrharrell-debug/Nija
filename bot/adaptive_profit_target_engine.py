@@ -95,11 +95,57 @@ class AdaptiveProfitTargetEngine:
         
         # Momentum divergence detection thresholds
         self.divergence_threshold = 0.15  # 15% divergence triggers tightening
+
+        # Win-streak tracking: resets to 0 on any loss to prevent chasing
+        # extended targets after momentum ends.
+        self.win_streak: int = 0
+        self.streak_bonus_per_win: float = self.config.get('streak_bonus_per_win', 0.05)  # +5% per consecutive win
+        self.max_streak_bonus: float = self.config.get('max_streak_bonus', 0.25)          # cap at +25%
         
         logger.info("✅ Adaptive Profit Target Engine initialized")
         logger.info(f"   Base targets: {list(self.base_targets.values())}")
         logger.info(f"   Trend multiplier range: {min(self.trend_multipliers.values()):.1f}x - {max(self.trend_multipliers.values()):.1f}x")
     
+    def record_trade_result(self, is_win: bool) -> None:
+        """
+        Record a completed trade outcome and update the win streak.
+
+        If the trade was a loss the streak resets to zero, preventing the
+        engine from continuing to apply extended profit targets after
+        momentum has ended.
+
+        Args:
+            is_win: True if the trade closed at a profit, False if a loss.
+        """
+        if is_win:
+            self.win_streak += 1
+            logger.info("📈 Win streak extended to %d", self.win_streak)
+        else:
+            if self.win_streak > 0:
+                logger.info(
+                    "📉 Trade loss — win streak reset to 0 (was %d). "
+                    "Extended profit targets will no longer be applied.",
+                    self.win_streak,
+                )
+            self.win_streak = 0
+
+    def _calculate_streak_multiplier(self) -> float:
+        """
+        Return a target-extension multiplier based on the current win streak.
+
+        A positive streak earns a modest bonus so the engine can ride strong
+        momentum.  The bonus is strictly capped and resets to 1.0 the moment
+        a loss is recorded via :meth:`record_trade_result`.
+
+        Returns:
+            Multiplier >= 1.0 (no penalty for losing streaks — those are
+            handled by the trend/volatility components).
+        """
+        if self.win_streak == 0:
+            return 1.0
+        bonus = min(self.win_streak * self.streak_bonus_per_win, self.max_streak_bonus)
+        return 1.0 + bonus
+
     def calculate_adaptive_targets(
         self,
         entry_price: float,
@@ -137,9 +183,13 @@ class AdaptiveProfitTargetEngine:
         
         # Reduce multiplier if divergence detected
         divergence_penalty = 1.0 - (divergence_score * 0.5) if has_divergence else 1.0
+
+        # Apply win-streak bonus — resets to 1.0 after any loss so the bot
+        # does not chase extended targets once momentum ends.
+        streak_mult = self._calculate_streak_multiplier()
         
         # Combined multiplier with safety bounds
-        combined_multiplier = trend_mult * vol_mult * divergence_penalty
+        combined_multiplier = trend_mult * vol_mult * divergence_penalty * streak_mult
         combined_multiplier = max(self.min_multiplier, min(self.max_multiplier, combined_multiplier))
         
         # 4. Generate adaptive targets
@@ -188,6 +238,8 @@ class AdaptiveProfitTargetEngine:
             'volatility_multiplier': vol_mult,
             'has_divergence': has_divergence,
             'divergence_penalty': divergence_penalty,
+            'win_streak': self.win_streak,
+            'streak_multiplier': streak_mult,
             'combined_multiplier': combined_multiplier,
             'metrics': trend_metrics,
         }
@@ -197,6 +249,7 @@ class AdaptiveProfitTargetEngine:
         logger.info(f"   Trend: {trend_strength.value.upper()} ({trend_mult:.1f}x)")
         logger.info(f"   Volatility: {current_regime.upper()} ({vol_mult:.1f}x)")
         logger.info(f"   Divergence: {'YES' if has_divergence else 'NO'} ({divergence_penalty:.2f}x)")
+        logger.info(f"   Win Streak: {self.win_streak} ({streak_mult:.2f}x)")
         logger.info(f"   Combined Multiplier: {combined_multiplier:.2f}x")
         logger.info(f"   TP1: ${adaptive_targets['tp1']['price']:.4f} ({adaptive_targets['tp1']['percentage']*100:.2f}%)")
         logger.info(f"   TP2: ${adaptive_targets['tp2']['price']:.4f} ({adaptive_targets['tp2']['percentage']*100:.2f}%)")
