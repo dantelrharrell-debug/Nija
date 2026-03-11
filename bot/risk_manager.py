@@ -104,6 +104,7 @@ HARD_DAILY_LOSS_PCT = 3.0        # 3% daily loss → daily kill switch fires
 HARD_WEEKLY_HALF_PCT = 8.0       # 8% weekly loss → cut risk in half
 HARD_WEEKLY_STOP_PCT = 10.0      # 10% weekly loss → weekly kill switch fires
 HARD_MAX_LEVERAGE = 3.0          # 3x leverage cap — no 10x / 20x
+SAFETY_CLAMP_PCT = 0.25          # Hard ceiling: position_size ≤ 25% of account_balance
 
 
 class AdaptiveRiskManager:
@@ -1005,6 +1006,17 @@ class AdaptiveRiskManager:
 
         # Calculate position size based on sizing_base (total capital in PRO MODE, free balance otherwise)
         position_size = sizing_base * final_pct
+
+        # SAFETY CLAMP: position_size must not exceed 25% of account_balance
+        safety_cap = account_balance * SAFETY_CLAMP_PCT
+        if position_size > safety_cap:
+            logger.info(
+                f"🔒 SAFETY CLAMP: Position size ${position_size:.2f} → ${safety_cap:.2f} "
+                f"({SAFETY_CLAMP_PCT:.0%} of ${account_balance:.2f} account balance)"
+            )
+            position_size = safety_cap
+            breakdown['safety_clamped'] = True
+            breakdown['safety_cap_usd'] = safety_cap
 
         # BROKER-AWARE MINIMUM POSITION ADJUSTMENT (Jan 25, 2026)
         # Fix for edge case: When calculated position is just below broker minimum due to

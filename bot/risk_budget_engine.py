@@ -47,6 +47,8 @@ WIN_RATE_THRESHOLD: float = 0.65       # 65 % win rate triggers upward scaling
 LOSING_STREAK_THRESHOLD: int = 3       # 3+ consecutive losses = losing streak
 LOOKBACK_TRADES: int = 10              # Number of recent trades for performance check
 
+SAFETY_CLAMP_PCT: float = 0.25        # Hard ceiling: position_size ≤ 25% of account_balance
+
 # Trade outcome sentinels – use these instead of bare strings.
 OUTCOME_WIN: str = "win"
 OUTCOME_LOSS: str = "loss"
@@ -90,6 +92,9 @@ class RiskBudgetConfig:
     exchange_minimum: float = 2.0      # Exchange minimum order value ($)
     max_position_cap: float = 10_000.0  # Maximum single-position exposure ($)
 
+    # Safety clamp: position_size must not exceed this fraction of account_balance
+    balance_safety_clamp_pct: float = SAFETY_CLAMP_PCT  # 25% hard ceiling
+
     # Dynamic scaling toggle
     enable_dynamic_scaling: bool = True
 
@@ -129,6 +134,7 @@ class RiskBudgetEngine:
         logger.info(f"  Tier floor          : ${self.config.tier_floor:.2f}")
         logger.info(f"  Exchange minimum    : ${self.config.exchange_minimum:.2f}")
         logger.info(f"  Max position cap    : ${self.config.max_position_cap:,.2f}")
+        logger.info(f"  Safety clamp        : {self.config.balance_safety_clamp_pct:.0%} of account balance")
         logger.info(f"  Dynamic scaling     : {'ON' if self.config.enable_dynamic_scaling else 'OFF'}")
         logger.info("=" * 65)
 
@@ -224,6 +230,18 @@ class RiskBudgetEngine:
             return result
 
         raw_position_size = risk_per_trade / stop_distance
+
+        # --- safety clamp: position_size ≤ account_balance * 25% ---
+        safety_cap = account_balance * self.config.balance_safety_clamp_pct
+        if raw_position_size > safety_cap:
+            logger.info(
+                "🔒 SAFETY CLAMP: raw=$%.2f → capped=$%.2f (%.0f%% of $%.2f balance)",
+                raw_position_size,
+                safety_cap,
+                self.config.balance_safety_clamp_pct * 100,
+                account_balance,
+            )
+            raw_position_size = safety_cap
 
         # --- clamp ---
         clamped_size, clamped, clamp_reason = self._clamp_position(raw_position_size)
