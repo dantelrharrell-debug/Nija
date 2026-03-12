@@ -58,16 +58,23 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # ============================================================================
 
 # Pro-Level Optimization (Jan 30, 2026):
-# - MAX_POSITIONS = 4: Balanced diversification for small capital
+# - MAX_POSITIONS = 8: Upper bound of the 3–8 position range for micro accounts
+# - MIN_POSITIONS = 3: Lower bound — applied at the base of the micro account range ($100)
 # - MAX_POSITION_PCT = 25%: Larger individual positions for small capital efficiency
 # - RISK_PER_TRADE = 0.9%: Balanced risk control per trade
+#
+# Micro account position scaling (Mar 2026):
+#   Balance $100–$500 → max_positions scales linearly from MIN_POSITIONS (3) to MAX_POSITIONS (8)
+#   This replaces the old fixed value of 4 with a dynamic 3–8 range so that accounts
+#   approaching $500 can diversify further while very small accounts stay concentrated.
 #
 # NOTE: While MAX_POSITIONS × MAX_POSITION_PCT = 100% theoretical maximum,
 # the risk_manager.py enforces max_total_exposure = 60% as a safeguard.
 # This configuration is optimized for fast-frequency trading where not all
 # positions will be at maximum size simultaneously.
 
-MAX_POSITIONS = 4  # Maximum concurrent positions (UPDATED Jan 30, 2026 for fast-frequency trading)
+MIN_POSITIONS = 3  # Minimum concurrent positions for micro accounts (lower bound of 3–8 range)
+MAX_POSITIONS = 8  # Maximum concurrent positions for micro accounts (upper bound of 3–8 range)
 
 # Position sizing as percentage of capital
 MAX_POSITION_PCT = 25.0  # Maximum 25% of capital per position (OPTIMIZED for small capital fast-frequency)
@@ -151,47 +158,50 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 # ============================================================================
 # MICRO-CAP COMPOUNDING MODE (balance < $100)
 # ============================================================================
-# When the account balance is below $100, the bot enters a focused single-trade
-# compounding mode:
-#   - max_positions    = 1      (one trade at a time for capital concentration)
-#   - position_size    = 25%    (of current capital per trade)
-#   - profit_target    = 1.2%   (tight, achievable target that compounds quickly)
-#   - stop_loss        = 0.6%   (half of profit target → 2:1 R:R ratio)
-#   - trade_cooldown   = 30s    (re-entry cooldown between trades per symbol, ~120 trades/hr)
+# High-performing compounding bots concentrate capital: rather than spreading
+# across dozens of small trades, this mode executes only 3–5 high-conviction
+# trades per session, each using a large fraction of available capital.
+#
+#   - max_positions    = 1      (one trade at a time — maximum concentration)
+#   - position_size    = 80%    (concentrate capital; e.g. $34 of a $43 account)
+#   - profit_target    = 3.0%   (meaningful per-trade gain to compound quickly)
+#   - stop_loss        = 1.5%   (half of profit target → 2:1 R:R ratio)
+#   - trade_cooldown   = 1800s  (30-min re-entry gate → 3–5 trades per session
+#                                instead of the previous ~54 trades)
 #
 # Adaptive Profit Scaling:
-#   When enabled, the profit target may scale UP above the 1.2% base during
-#   favourable conditions (consecutive wins, elevated volatility). The base
-#   target is always the floor — it never drops below 1.2%.
-#   Scale caps at MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT (2.0% default).
+#   The profit target may scale UP above the 3.0% base during favourable
+#   conditions (consecutive wins, elevated volatility). The base target is
+#   always the floor — it never drops below 3.0%.
+#   Scale caps at MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT (5.0% default).
 #   - profit_target    = base_target + spread + streak_bonus  (fully dynamic)
-#                          base_target  = 1.0%
-#                          spread       = current market spread (e.g. 0.20% → target 1.20%)
+#                          base_target  = 3.0%
+#                          spread       = current market spread
 #                          streak_bonus = +0.1% per consecutive win (capped at +0.5%)
 #                          After any loss: win_streak resets to 0 → no streak bonus
-#   - stop_loss        = 0.6%   (half of base profit target → 2:1 R:R ratio on base)
-#   - trade_cooldown   = 60s    (re-entry cooldown between trades per symbol)
+#   - stop_loss        = 1.5%   (half of base profit target → 2:1 R:R ratio on base)
+#   - trade_cooldown   = 1800s  (30 min re-entry cooldown between trades per symbol)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
-MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position focus
-MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0   # 25% of capital per trade
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.2    # 1.2% profit target (floor — do not lower)
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R)
-MICRO_CAP_TRADE_COOLDOWN = 30                    # Seconds between trades (~120 trades/hr)
+MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position — maximum capital concentration
+MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 80.0   # 80% of capital per trade (concentrated compounding)
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 3.0    # 3.0% profit target (floor — do not lower)
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (2:1 R:R)
+MICRO_CAP_TRADE_COOLDOWN = 1800                  # 30-min re-entry gate (3–5 trades per session)
 
 # Adaptive Profit Scaling — scales target UP in favourable conditions only
 MICRO_CAP_ADAPTIVE_PROFIT_SCALING = True         # Enable adaptive profit scaling
-MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT = 1.2          # Minimum profit target (equals base — never lower)
-MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT = 2.0          # Maximum profit target under scaling
+MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT = 3.0          # Minimum profit target (equals base — never lower)
+MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT = 5.0          # Maximum profit target under scaling
 MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE = 0.1 # Extra % per consecutive winning trade
 MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE = True # Also scale with market volatility
 
 # MICRO-CAP COMPOUNDING MODE HELPERS
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 1.0  # 1.0% base profit target (spread + streak bonus added at runtime)
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 3.0  # 3.0% base profit target (spread + streak bonus added at runtime)
 # Backward-compatible alias used as the static fallback when no spread data is available
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6        # 0.6% stop loss (2:1 R:R vs base target)
-MICRO_CAP_TRADE_COOLDOWN = 60                    # Seconds between trades (re-entry cooldown)
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (2:1 R:R vs base target)
+MICRO_CAP_TRADE_COOLDOWN = 1800                  # 30-min re-entry cooldown between trades per symbol
 
 # Win-streak bonus applied on top of (base + spread) while on a hot streak.
 # The bonus is reset to 0 whenever a trade ends in a loss so the bot does not
@@ -287,16 +297,16 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
     Return the micro-cap compounding mode configuration when the account
     balance is below the activation threshold ($100 by default).
 
-    Compounding mode rules:
-      - max_positions    = 1      (one trade at a time)
-      - position_size    = 25%    (of current capital per trade)
-      - profit_target    = 1.2%   (base floor — adaptive scaling may raise it)
-      - stop_loss        = 0.6%   (half of profit target → 2:1 R:R)
-      - trade_cooldown   = 30s    (~120 trades/hr)
+    Compounding mode rules (concentrated capital — 3–5 trades per session):
+      - max_positions    = 1      (one trade at a time — maximum concentration)
+      - position_size    = 80%    (concentrate capital; e.g. $34 of a $43 account)
+      - profit_target    = 3.0%   (base floor — adaptive scaling may raise it)
+      - stop_loss        = 1.5%   (half of profit target → 2:1 R:R)
+      - trade_cooldown   = 1800s  (30-min gate → 3–5 trades per session)
       - adaptive_profit_scaling = True
-      - profit_target    = base (1.0%) + current market spread + streak bonus
+      - profit_target    = base (3.0%) + current market spread + streak bonus
                            (computed at entry time via get_spread_adjusted_profit_target())
-      - stop_loss        = 0.6%   (half of base profit target → 2:1 R:R)
+      - stop_loss        = 1.5%   (half of base profit target → 2:1 R:R)
 
     The 'profit_target_pct' key in the returned dict holds the *base* target only.
     Callers must call get_spread_adjusted_profit_target(spread_pct, win_streak) at entry
@@ -373,16 +383,24 @@ def get_dynamic_config(equity: float) -> Dict:
         return config
     
 
-    # Scaling at $250
-    if equity >= 250:
-        config['max_positions'] = 3
-        config['risk_per_trade'] = 4.0
-        logger.info(f"Equity ${equity:.2f}: Scaled to 3 positions, 4% risk per trade")
-    
+    # Micro account position scaling: $100–$499 → 3 to 8 positions (linear)
+    # Replaces the old step-wise approach ($250→3, $500→4) with a smooth range.
+    if equity < 500:
+        micro_range_min = MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD  # $100
+        micro_range_max = 500.0
+        progress = (equity - micro_range_min) / (micro_range_max - micro_range_min)
+        progress = max(0.0, min(1.0, progress))
+        positions = round(MIN_POSITIONS + (MAX_POSITIONS - MIN_POSITIONS) * progress)
+        config['max_positions'] = max(MIN_POSITIONS, min(MAX_POSITIONS, positions))
+        logger.info(
+            f"Equity ${equity:.2f}: Micro account mode — {config['max_positions']} positions "
+            f"(3–8 range, progress={progress:.2f})"
+        )
+
     # Scaling at $500
     if equity >= 500:
-        config['max_positions'] = 4
-        logger.info(f"Equity ${equity:.2f}: Scaled to 4 positions")
+        config['max_positions'] = MAX_POSITIONS
+        logger.info(f"Equity ${equity:.2f}: Scaled to {MAX_POSITIONS} positions")
     
     # Scaling at $1000
     if equity >= 1000:
