@@ -390,7 +390,7 @@ def get_dynamic_config(equity: float) -> Dict:
         micro_range_max = 500.0
         progress = (equity - micro_range_min) / (micro_range_max - micro_range_min)
         progress = max(0.0, min(1.0, progress))
-        positions = int(MIN_POSITIONS + round((MAX_POSITIONS - MIN_POSITIONS) * progress))
+        positions = round(MIN_POSITIONS + (MAX_POSITIONS - MIN_POSITIONS) * progress)
         config['max_positions'] = max(MIN_POSITIONS, min(MAX_POSITIONS, positions))
         logger.info(
             f"Equity ${equity:.2f}: Micro account mode — {config['max_positions']} positions "
