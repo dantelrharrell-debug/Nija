@@ -58,16 +58,23 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # ============================================================================
 
 # Pro-Level Optimization (Jan 30, 2026):
-# - MAX_POSITIONS = 4: Balanced diversification for small capital
+# - MAX_POSITIONS = 8: Upper bound of the 3–8 position range for micro accounts
+# - MIN_POSITIONS = 3: Lower bound — applied at the base of the micro account range ($100)
 # - MAX_POSITION_PCT = 25%: Larger individual positions for small capital efficiency
 # - RISK_PER_TRADE = 0.9%: Balanced risk control per trade
+#
+# Micro account position scaling (Mar 2026):
+#   Balance $100–$500 → max_positions scales linearly from MIN_POSITIONS (3) to MAX_POSITIONS (8)
+#   This replaces the old fixed value of 4 with a dynamic 3–8 range so that accounts
+#   approaching $500 can diversify further while very small accounts stay concentrated.
 #
 # NOTE: While MAX_POSITIONS × MAX_POSITION_PCT = 100% theoretical maximum,
 # the risk_manager.py enforces max_total_exposure = 60% as a safeguard.
 # This configuration is optimized for fast-frequency trading where not all
 # positions will be at maximum size simultaneously.
 
-MAX_POSITIONS = 4  # Maximum concurrent positions (UPDATED Jan 30, 2026 for fast-frequency trading)
+MIN_POSITIONS = 3  # Minimum concurrent positions for micro accounts (lower bound of 3–8 range)
+MAX_POSITIONS = 8  # Maximum concurrent positions for micro accounts (upper bound of 3–8 range)
 
 # Position sizing as percentage of capital
 MAX_POSITION_PCT = 25.0  # Maximum 25% of capital per position (OPTIMIZED for small capital fast-frequency)
@@ -373,16 +380,24 @@ def get_dynamic_config(equity: float) -> Dict:
         return config
     
 
-    # Scaling at $250
-    if equity >= 250:
-        config['max_positions'] = 3
-        config['risk_per_trade'] = 4.0
-        logger.info(f"Equity ${equity:.2f}: Scaled to 3 positions, 4% risk per trade")
-    
+    # Micro account position scaling: $100–$499 → 3 to 8 positions (linear)
+    # Replaces the old step-wise approach ($250→3, $500→4) with a smooth range.
+    if equity < 500:
+        micro_range_min = MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD  # $100
+        micro_range_max = 500.0
+        progress = (equity - micro_range_min) / (micro_range_max - micro_range_min)
+        progress = max(0.0, min(1.0, progress))
+        positions = int(MIN_POSITIONS + round((MAX_POSITIONS - MIN_POSITIONS) * progress))
+        config['max_positions'] = max(MIN_POSITIONS, min(MAX_POSITIONS, positions))
+        logger.info(
+            f"Equity ${equity:.2f}: Micro account mode — {config['max_positions']} positions "
+            f"(3–8 range, progress={progress:.2f})"
+        )
+
     # Scaling at $500
     if equity >= 500:
-        config['max_positions'] = 4
-        logger.info(f"Equity ${equity:.2f}: Scaled to 4 positions")
+        config['max_positions'] = MAX_POSITIONS
+        logger.info(f"Equity ${equity:.2f}: Scaled to {MAX_POSITIONS} positions")
     
     # Scaling at $1000
     if equity >= 1000:
