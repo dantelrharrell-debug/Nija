@@ -8,11 +8,16 @@ Advanced market filtering to avoid low-quality trading conditions:
 - News event filtering (skeleton for future implementation)
 - Spread and slippage checks
 - Top-10 high-liquidity symbol filter (locked setting)
+- Momentum universe filter: Top-20 volume × Top-20 volatility × Top-10 trend strength
 """
 
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from typing import Dict, List, Tuple
+
+logger = logging.getLogger('nija.market_filters')
 
 # Top 10 high-liquidity Coinbase pairs by 24h volume.
 # Only these symbols are eligible for entry to ensure tight spreads,
@@ -419,6 +424,175 @@ def apply_all_filters(df, adx_threshold=20, min_volume_multiplier=0.5,
         'details': details
     }
 
+
+# ============================================================================
+# MOMENTUM UNIVERSE FILTER
+# ============================================================================
+# Profitable bots only trade the strongest momentum coins.
+# Before evaluating individual signals, narrow the tradeable universe to the
+# symbols that rank in ALL THREE of the following top-N lists:
+#
+#   Top 20 by 24 h rolling volume   – ensures liquidity and market participation
+#   Top 20 by ATR volatility %      – ensures enough price range to profit
+#   Top 10 by ADX trend strength    – ensures a clear directional move to ride
+#
+# Only the intersection of all three lists is eligible for entry.
+
+MOMENTUM_TOP_VOLUME_N: int = 20      # Keep top N symbols by 24 h rolling volume
+MOMENTUM_TOP_VOLATILITY_N: int = 20  # Keep top N symbols by ATR volatility %
+MOMENTUM_TOP_TREND_N: int = 10       # Keep top N symbols by ADX trend strength
+
+# 24 h proxy: 24 h × 60 min / 5 min per candle = 288 five-minute candles
+_CANDLES_PER_24H: int = 288
+
+
+def _compute_24h_volume(df: pd.DataFrame) -> float:
+    """Sum of the last 288 five-minute candles' volume (≈ 24 h)."""
+    candles = min(_CANDLES_PER_24H, len(df))
+    return float(df['volume'].iloc[-candles:].sum()) if candles > 0 else 0.0
+
+
+def _compute_volatility_pct(df: pd.DataFrame) -> float:
+    """ATR expressed as a percentage of the current price (volatility proxy)."""
+    if 'atr' in df.columns and 'close' in df.columns and len(df) >= 1:
+        price = scalar(df['close'].iloc[-1])
+        atr = scalar(df['atr'].iloc[-1])
+        return float(atr / price) if price > 0 else 0.0
+    # Fallback: average high-low range % over the last 14 bars
+    if len(df) < 14:
+        return 0.0
+    recent = df.tail(14)
+    hl_range = float((recent['high'] - recent['low']).mean())
+    price = float(df['close'].iloc[-1])
+    return float(hl_range / price) if price > 0 else 0.0
+
+
+def _compute_trend_strength(df: pd.DataFrame) -> float:
+    """ADX value as a trend-strength score (higher = stronger trend)."""
+    if 'adx' in df.columns and len(df) >= 1:
+        return float(scalar(df['adx'].iloc[-1]))
+    # Fallback: directional-consistency score over last 14 bars (0–100 scale)
+    if len(df) < 14:
+        return 0.0
+    closes = df['close'].iloc[-14:]
+    up_bars = int((closes.diff() > 0).sum())  # diff() gives 13 non-NaN values
+    mid = (len(closes) - 1) / 2               # midpoint of 13 possible up-bars
+    return float(abs(up_bars - mid) / mid * 100)
+
+
+def get_momentum_universe(
+    market_data_dict: Dict[str, pd.DataFrame],
+    top_volume: int = MOMENTUM_TOP_VOLUME_N,
+    top_volatility: int = MOMENTUM_TOP_VOLATILITY_N,
+    top_trend: int = MOMENTUM_TOP_TREND_N,
+) -> List[str]:
+    """
+    Return the tradeable universe of highest-momentum symbols.
+
+    Ranks every symbol in *market_data_dict* across three independent axes
+    and returns only those present in **all three** top-N lists:
+
+    * **Top ``top_volume``** (default 20) by 24 h rolling volume
+    * **Top ``top_volatility``** (default 20) by ATR volatility %
+    * **Top ``top_trend``** (default 10) by ADX trend strength
+
+    Args:
+        market_data_dict: Mapping of symbol → OHLCV DataFrame.  Each
+            DataFrame may optionally contain pre-computed ``'adx'`` and
+            ``'atr'`` columns; if absent, fallback estimators are used.
+            Symbols whose DataFrame has fewer than 14 rows are skipped.
+        top_volume:     Size of the volume ranking shortlist (default 20).
+        top_volatility: Size of the volatility ranking shortlist (default 20).
+        top_trend:      Size of the trend-strength ranking shortlist (default 10).
+
+    Returns:
+        List of symbol strings that appear in all three top-N rankings,
+        sorted by descending ADX (strongest trend first).
+
+    Example::
+
+        universe = get_momentum_universe(market_data)
+        # → ['SOL-USD', 'BTC-USD', 'ETH-USD', ...]
+    """
+    if not market_data_dict:
+        return []
+
+    volume_scores: List[Tuple[str, float]] = []
+    volatility_scores: List[Tuple[str, float]] = []
+    trend_scores: List[Tuple[str, float]] = []
+
+    for symbol, df in market_data_dict.items():
+        if df is None or len(df) < 14:
+            continue
+        volume_scores.append((symbol, _compute_24h_volume(df)))
+        volatility_scores.append((symbol, _compute_volatility_pct(df)))
+        trend_scores.append((symbol, _compute_trend_strength(df)))
+
+    if not volume_scores:
+        return []
+
+    # Build each top-N set (descending sort, take first N)
+    top_volume_set = {
+        s for s, _ in sorted(volume_scores, key=lambda x: x[1], reverse=True)[:top_volume]
+    }
+    top_volatility_set = {
+        s for s, _ in sorted(volatility_scores, key=lambda x: x[1], reverse=True)[:top_volatility]
+    }
+    top_trend_set = {
+        s for s, _ in sorted(trend_scores, key=lambda x: x[1], reverse=True)[:top_trend]
+    }
+
+    # Intersection: symbol must appear in all three shortlists
+    eligible = top_volume_set & top_volatility_set & top_trend_set
+
+    # Return sorted by ADX (strongest momentum first)
+    trend_map: Dict[str, float] = dict(trend_scores)
+    result = sorted(eligible, key=lambda s: trend_map.get(s, 0.0), reverse=True)
+
+    logger.info(
+        "🎯 Momentum universe: %d symbol(s) pass all 3 filters "
+        "(top-%d volume: %d, top-%d volatility: %d, top-%d ADX: %d)",
+        len(result),
+        top_volume, len(top_volume_set),
+        top_volatility, len(top_volatility_set),
+        top_trend, len(top_trend_set),
+    )
+    if result:
+        logger.info("   Eligible symbols: %s", result)
+
+    return result
+
+
+def is_in_momentum_universe(
+    symbol: str,
+    market_data_dict: Dict[str, pd.DataFrame],
+    top_volume: int = MOMENTUM_TOP_VOLUME_N,
+    top_volatility: int = MOMENTUM_TOP_VOLATILITY_N,
+    top_trend: int = MOMENTUM_TOP_TREND_N,
+) -> bool:
+    """
+    Return True if *symbol* belongs to the current momentum universe.
+
+    Convenience wrapper around :func:`get_momentum_universe` for single-symbol
+    gate checks inside the main trading loop.
+
+    Args:
+        symbol: Symbol to check, e.g. ``'BTC-USD'``.
+        market_data_dict: Full market data mapping (same as for
+            :func:`get_momentum_universe`).
+        top_volume, top_volatility, top_trend: Shortlist sizes (see
+            :func:`get_momentum_universe`).
+
+    Returns:
+        bool: True if *symbol* is in the momentum universe.
+    """
+    universe = get_momentum_universe(
+        market_data_dict,
+        top_volume=top_volume,
+        top_volatility=top_volatility,
+        top_trend=top_trend,
+    )
+    return symbol in universe
 
 def check_pair_quality(symbol, bid_price, ask_price, volume_24h=None, atr_pct=None,
                        max_spread_pct=0.0015, min_volume_usd=100000, min_atr_pct=0.005,
