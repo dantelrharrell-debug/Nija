@@ -122,17 +122,17 @@ TAKE_PROFIT = {
     # Tiered profit taking
     'tp1': {
         'pct': 0.015,  # +1.5% first target
-        'exit_size': 0.50,  # Close 50%
-        'action': 'move_stop_to_breakeven',
+        'exit_size': 0.33,  # Exit 33% of original position at TP1
+        'action': 'move_stop_to_breakeven',  # Move stop to breakeven after TP1
     },
     'tp2': {
         'pct': 0.025,  # +2.5% second target
-        'exit_size': 0.30,  # Close 30% more (80% total)
+        'exit_size': 0.33,  # Exit 33% of original position at TP2
         'action': 'activate_trailing_stop',
     },
     'tp3': {
         'pct': 0.040,  # +4.0% final target
-        'exit_size': 0.20,  # Close remaining 20%
+        'exit_size': 0.34,  # Exit remaining 34% of original position at TP3
         'action': 'full_exit',
     },
 

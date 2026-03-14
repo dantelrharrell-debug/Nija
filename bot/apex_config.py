@@ -183,37 +183,30 @@ TAKE_PROFIT = {
             'name': 'TP1',
             'profit_pct': 0.015,  # 1.5% profit (OPTIMIZED: fee-aware minimum)
             'profit_r': 2.5,  # 2.5R (if stop is 0.6%)
-            'exit_percentage': 0.15,  # Exit 15% of position (was 10%, more aggressive)
-            'action': 'partial_exit',
+            'exit_percentage': 0.33,  # Exit 33% of original position at TP1
+            'action': 'move_stop_to_breakeven',  # Move stop to breakeven after TP1
         },
         {
             'name': 'TP2',
             'profit_pct': 0.025,  # 2.5% profit (OPTIMIZED: safe profit level)
             'profit_r': 4.17,  # 4.17R
-            'exit_percentage': 0.25,  # Exit 25% (40% total exited)
-            'action': 'move_stop_to_breakeven',
+            'exit_percentage': 0.33,  # Exit 33% of original position at TP2
+            'action': 'activate_trailing',
         },
         {
             'name': 'TP3',
             'profit_pct': 0.040,  # 4.0% profit (OPTIMIZED: strong profit)
             'profit_r': 6.67,  # 6.67R
-            'exit_percentage': 0.35,  # Exit 35% (75% total exited)
-            'action': 'activate_trailing',
-        },
-        {
-            'name': 'TP4',
-            'profit_pct': 0.060,  # 6.0% profit (OPTIMIZED: excellent trade)
-            'profit_r': 10.0,  # 10R
-            'exit_percentage': 0.50,  # Exit 50% (only 25% remains with trailing stop)
+            'exit_percentage': 0.34,  # Exit remaining 34% of original position at TP3
             'action': 'tighten_trailing',
         },
     ],
     'default_target': 0.025,  # 2.5% default target (OPTIMIZED: reduced from 3.0% for more consistent wins)
-    'description': 'Optimized for aggressive profit-taking with 2.5-3% target range',
+    'description': '33/33/34 tiered exits of original position size: TP1 exits 33% at 1.5% profit, TP2 exits 33% at 2.5% profit, TP3 exits final 34% at 4.0% profit',
 }
 
 TRAILING_STOP = {
-    'activation_r': 1.5,  # OPTIMIZED: Activate after 1.5R profit (earlier protection)
+    'activation_r': 2.5,  # Activate breakeven after TP1 (matches TP1 profit_r of 2.5R)
     'atr_multiplier': 1.2,  # OPTIMIZED: Tighter trail at ATR(14) x 1.2 (was 1.5, tighter to lock profits)
     'update_frequency': 'every_candle',  # Update on each new candle
     'never_widen': True,  # Only tighten, never widen
@@ -864,17 +857,17 @@ TAKE_PROFIT_CONFIG = {
     # Tiered Take-Profit Levels
     'tp1': {
         'pct': 0.008,  # +0.8% profit
-        'exit_size': 0.50,  # Exit 50% of position
-        'action': 'activate_trailing_stop'
+        'exit_size': 0.33,  # Exit 33% of original position at TP1
+        'action': 'move_stop_to_breakeven'  # Move stop to breakeven after TP1
     },
     'tp2': {
         'pct': 0.015,  # +1.5% profit
-        'exit_size': 0.30,  # Exit 30% of position (80% total)
-        'action': 'tighten_trailing_stop'
+        'exit_size': 0.33,  # Exit 33% of original position at TP2
+        'action': 'activate_trailing_stop'
     },
     'tp3': {
         'pct': 0.025,  # +2.5% profit
-        'exit_size': 0.20,  # Exit final 20%
+        'exit_size': 0.34,  # Exit remaining 34% of original position at TP3
         'action': 'let_runner_trail'
     },
 
