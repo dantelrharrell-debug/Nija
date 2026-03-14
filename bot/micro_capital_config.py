@@ -189,10 +189,16 @@ MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 3.0    # 3.0% profit target (floor —
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (2:1 R:R)
 MICRO_CAP_TRADE_COOLDOWN = 1800                  # 30-min re-entry gate (3–5 trades per session)
 
+# Tiered profit targets for micro-cap compounding mode
+MICRO_CAP_TP1_PCT = 3.0   # Target 1: 3.0% — partial exit + activate trailing stop
+MICRO_CAP_TP2_PCT = 4.5   # Target 2: 4.5% — second partial exit
+MICRO_CAP_TP3_PCT = 6.0   # Target 3: 6.0% — final exit / full runner target
+MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT = 3.0  # Trailing stop activates after 3% profit (TP1)
+
 # Adaptive Profit Scaling — scales target UP in favourable conditions only
 MICRO_CAP_ADAPTIVE_PROFIT_SCALING = True         # Enable adaptive profit scaling
 MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT = 3.0          # Minimum profit target (equals base — never lower)
-MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT = 5.0          # Maximum profit target under scaling
+MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT = 6.0          # Maximum profit target under scaling (raised to match TP3)
 MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE = 0.1 # Extra % per consecutive winning trade
 MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE = True # Also scale with market volatility
 
@@ -300,8 +306,11 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
     Compounding mode rules (concentrated capital — 3–5 trades per session):
       - max_positions    = 1      (one trade at a time — maximum concentration)
       - position_size    = 80%    (concentrate capital; e.g. $34 of a $43 account)
-      - profit_target    = 3.0%   (base floor — adaptive scaling may raise it)
-      - stop_loss        = 1.5%   (half of profit target → 2:1 R:R)
+      - stop_loss        = 1.5%   (half of TP1 → 2:1 R:R)
+      - tp1              = 3.0%   (partial exit + trailing stop activation)
+      - tp2              = 4.5%   (second partial exit)
+      - tp3              = 6.0%   (final exit / full runner target)
+      - trailing_stop_activation = 3.0%  (trailing stop kicks in at TP1)
       - trade_cooldown   = 1800s  (30-min gate → 3–5 trades per session)
       - adaptive_profit_scaling = True
       - profit_target    = base (3.0%) + current market spread + streak bonus
@@ -326,6 +335,10 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             'max_positions': MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
             'position_size_pct': MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
             'profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT,
+            'tp1_pct': MICRO_CAP_TP1_PCT,
+            'tp2_pct': MICRO_CAP_TP2_PCT,
+            'tp3_pct': MICRO_CAP_TP3_PCT,
+            'trailing_stop_activation_pct': MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT,
             'stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
             'trade_cooldown': MICRO_CAP_TRADE_COOLDOWN,
             'adaptive_profit_scaling': MICRO_CAP_ADAPTIVE_PROFIT_SCALING,
@@ -339,11 +352,11 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             f"(balance ${balance:.2f} < ${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}): "
             f"max_positions={MICRO_CAP_COMPOUNDING_MAX_POSITIONS}, "
             f"position_size={MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT}%, "
-            f"profit_target={MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT}% (adaptive scaling ON), "
             f"stop_loss={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT}%, "
-            f"cooldown={MICRO_CAP_TRADE_COOLDOWN}s"
+            f"tp1={MICRO_CAP_TP1_PCT}%, tp2={MICRO_CAP_TP2_PCT}%, tp3={MICRO_CAP_TP3_PCT}%, "
+            f"trailing_stop_activation={MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT}%, "
             f"profit_target=base {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT}% + spread + streak_bonus (dynamic), "
-            f"stop_loss={MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT}%"
+            f"cooldown={MICRO_CAP_TRADE_COOLDOWN}s"
         )
         return config
 
@@ -570,6 +583,10 @@ MICRO_CAPITAL_CONFIG = {
     'micro_cap_compounding_profit_target_pct': MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
     'micro_cap_compounding_stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
     'micro_cap_trade_cooldown': MICRO_CAP_TRADE_COOLDOWN,
+    'micro_cap_tp1_pct': MICRO_CAP_TP1_PCT,
+    'micro_cap_tp2_pct': MICRO_CAP_TP2_PCT,
+    'micro_cap_tp3_pct': MICRO_CAP_TP3_PCT,
+    'micro_cap_trailing_stop_activation_pct': MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT,
 
     # Adaptive Profit Scaling (micro-cap compounding mode)
     'micro_cap_adaptive_profit_scaling': MICRO_CAP_ADAPTIVE_PROFIT_SCALING,
@@ -711,14 +728,14 @@ def get_config_summary(equity: Optional[float] = None) -> str:
 🚀 MICRO-CAP COMPOUNDING MODE (balance < ${MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:.0f}):
    • Max Positions:          {MICRO_CAP_COMPOUNDING_MAX_POSITIONS}  (single position focus)
    • Position Size:          {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% of capital per trade
-   • Profit Target (base):   {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT:.1f}%  (floor — never lower)
    • Stop Loss:              {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}%  (2:1 reward-to-risk)
+   • Target 1 (TP1):         {MICRO_CAP_TP1_PCT:.1f}%  (partial exit + trailing stop activation)
+   • Target 2 (TP2):         {MICRO_CAP_TP2_PCT:.1f}%  (second partial exit)
+   • Target 3 (TP3):         {MICRO_CAP_TP3_PCT:.1f}%  (final exit / runner target)
+   • Trailing Stop:          activates after {MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT:.1f}% profit (TP1)
    • Trade Cooldown:         {MICRO_CAP_TRADE_COOLDOWN}s  (theoretical max ~{3600 // MICRO_CAP_TRADE_COOLDOWN} trades/hr)
    • Adaptive Profit Scaling:{adaptive_label}  [{MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT:.1f}% – {MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT:.1f}%]
-   • Max Positions:  {MICRO_CAP_COMPOUNDING_MAX_POSITIONS}  (single position focus)
-   • Position Size:  {MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT:.0f}% of capital per trade
-   • Profit Target:  {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT:.1f}% (base) + spread + streak bonus (dynamic)
-   • Stop Loss:      {MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT:.1f}%  (2:1 reward-to-risk vs base)
+   • Adaptive Base Target:   {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT:.1f}% (base) + spread + streak bonus (used for dynamic scaling only)
 """
 
     return f"""
