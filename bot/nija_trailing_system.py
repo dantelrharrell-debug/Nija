@@ -320,19 +320,32 @@ class NIJATrailingSystem:
             if result:
                 return result
         else:
-            # TP1: +3.0% → Close 33% of position, activate trailing stop (67% remaining)
+            # TP1: +3.0% → Close 33% of original position, move stop to breakeven, activate trailing stop
             if profit_pct >= 3.0 and position['remaining_size'] == 1.0 and not position.get('tp1_hit', False):
-                position['remaining_size'] = 0.67
+                tp1_exit_pct = 0.33  # 33% of original position at TP1
+                position['remaining_size'] = round(1.0 - tp1_exit_pct, 2)  # 0.67 remaining
                 position['tsl_active'] = True
                 position['tp1_hit'] = True
-                return 'partial_close', 0.33, f"TP1 hit (+{profit_pct:.2f}%) - TSL activated"
+                # Move stop to breakeven (entry price + small buffer) after TP1
+                breakeven_buffer = 0.001  # 0.1% buffer above/below entry
+                breakeven_price = entry_price * (1 + breakeven_buffer) if side == 'long' else entry_price * (1 - breakeven_buffer)
+                if side == 'long':
+                    position['stop_loss'] = max(position['stop_loss'], breakeven_price)
+                else:
+                    position['stop_loss'] = min(position['stop_loss'], breakeven_price)
+                return 'partial_close', tp1_exit_pct, f"TP1 hit (+{profit_pct:.2f}%) - TSL activated, stop moved to breakeven"
 
-            # TP2: +4.5% → Close another 33% of original position (67% - 33% = 34% remaining)
+            # TP2: +4.5% → Close another 33% of original position (67% remaining - 33% of original = 34% remaining)
+            # size_to_close is expressed as fraction of remaining (0.67) to equal 33% of original
             if profit_pct >= 4.5 and position['remaining_size'] == 0.67 and not position.get('tp2_hit', False):
-                position['remaining_size'] = 0.34
+                tp2_exit_pct = 0.33  # 33% of original position at TP2
+                tp1_remaining = 0.67  # remaining after TP1
+                # Fraction of current remaining that equals tp2_exit_pct of original position
+                tp2_size = round(tp2_exit_pct / tp1_remaining, 4)
+                position['remaining_size'] = round(tp1_remaining - tp2_exit_pct, 2)  # 0.34 remaining
                 position['ttp_active'] = True
                 position['tp2_hit'] = True
-                return 'partial_close', 0.33, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
+                return 'partial_close', tp2_size, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
 
         # TP3: +6.0% → Runner zone, let remaining position trail to full target
         if profit_pct >= 6.0 and position['remaining_size'] == 0.34:
