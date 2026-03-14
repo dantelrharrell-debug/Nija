@@ -600,19 +600,22 @@ ZOMBIE_PNL_THRESHOLD = 0.01  # Consider position "stuck" if abs(P&L) < this % (0
 # Smaller accounts need to take profits more aggressively
 
 # MICRO TIER ($10-$100): Aggressive profit-taking, build capital fast
+# PROFITABILITY FIX: Removed 1.2% and 1.5% targets — they barely clear broker fees and produce
+# near-zero net profit. Minimum raised to 2.0% to ensure meaningful gain after fees.
 PROFIT_TARGETS_MICRO = [
-    (0.025, "Profit target +2.5% (Micro tier) - EXCELLENT"),
-    (0.020, "Profit target +2.0% (Micro tier) - GOOD"),
-    (0.015, "Profit target +1.5% (Micro tier) - ACCEPTABLE"),
-    (0.012, "Profit target +1.2% (Micro tier) - MINIMAL"),
+    (0.050, "Profit target +5.0% (Micro tier) - EXCELLENT"),
+    (0.035, "Profit target +3.5% (Micro tier) - VERY GOOD"),
+    (0.025, "Profit target +2.5% (Micro tier) - GOOD"),
+    (0.020, "Profit target +2.0% (Micro tier) - MINIMUM (ensures net profit after broker fees)"),
 ]
 
 # SMALL TIER ($100-$1000): Balanced approach
+# PROFITABILITY FIX: Raised minimum from 1.5% to 2.0% (net +0.6% after Coinbase fees).
 PROFIT_TARGETS_SMALL = [
-    (0.030, "Profit target +3.0% (Small tier) - EXCELLENT"),
-    (0.025, "Profit target +2.5% (Small tier) - GOOD"),
-    (0.020, "Profit target +2.0% (Small tier) - ACCEPTABLE"),
-    (0.015, "Profit target +1.5% (Small tier) - MINIMAL"),
+    (0.060, "Profit target +6.0% (Small tier) - EXCELLENT"),
+    (0.040, "Profit target +4.0% (Small tier) - VERY GOOD"),
+    (0.030, "Profit target +3.0% (Small tier) - GOOD"),
+    (0.020, "Profit target +2.0% (Small tier) - MINIMUM"),
 ]
 
 # MEDIUM TIER ($1000-$10000): Let winners run more
@@ -682,26 +685,26 @@ BROKER_PROTECTION_MIN_PROFIT = {
 DEFAULT_PROTECTION_MIN_PROFIT = 0.020
 
 # Kraken fees: ~0.6% round-trip (0.26% taker fee × 2 sides + ~0.1% spread safety margin)
+# PROFITABILITY FIX: Removed 1.0% (net +0.4%) and 1.5% (net +0.9%) targets.
+# Net R:R at 1.5% gross with -1.5% stop = 0.9/2.1 = 0.43:1 — negative expected value.
+# Minimum raised to 2.0% (net +1.4%), giving net R:R = 1.4/2.1 = 0.67:1; positive EV at 70%+ win rate.
 PROFIT_TARGETS_KRAKEN = [
     (0.040, "Profit target +4.0% (Net +3.4% after 0.6% fees) - MAJOR PROFIT"),    # Major profit - let winners run
     (0.030, "Profit target +3.0% (Net +2.4% after 0.6% fees) - EXCELLENT"),       # Excellent profit
-    (0.020, "Profit target +2.0% (Net +1.4% after 0.6% fees) - GOOD"),            # Good profit (preferred target)
-    (0.015, "Profit target +1.5% (Net +0.9% after 0.6% fees) - ACCEPTABLE"),      # Acceptable profit
-    (0.010, "Profit target +1.0% (Net +0.4% after 0.6% fees) - MINIMAL"),         # Bare minimum profit
+    (0.020, "Profit target +2.0% (Net +1.4% after 0.6% fees) - MINIMUM"),         # Minimum: positive EV at 70%+ win rate
 ]
 
 # 🚨 COINBASE PROFIT FIX (Jan 2026) - ENSURE NET PROFITABILITY
 # 🚨 CRITICAL FIX (Feb 4, 2026): All values converted to FRACTIONAL format (0.05 = 5%)
 # Coinbase fees are 1.4% round-trip (0.7% entry + 0.7% exit)
 # ALL profit targets must exceed 1.6% to ensure NET profitability after fees and spread
-# REMOVED all loss-making "emergency exit" targets - these guaranteed losses
-# PHILOSOPHY: Only take trades with positive risk/reward ratio
+# REMOVED 1.6% "emergency" target (net +0.2%) — negligible gain, not worth the risk with -1.5% stop
+# PHILOSOPHY: Only take trades with meaningful positive risk/reward ratio (2:1 minimum)
 PROFIT_TARGETS_COINBASE = [
     (0.050, "Profit target +5.0% (Net +3.6% after 1.4% fees) - MAJOR PROFIT"),    # Major profit - let winners run
     (0.035, "Profit target +3.5% (Net +2.1% after 1.4% fees) - EXCELLENT"),       # Excellent profit
     (0.025, "Profit target +2.5% (Net +1.1% after 1.4% fees) - GOOD"),            # Good profit (preferred target)
     (0.020, "Profit target +2.0% (Net +0.6% after fees) - ACCEPTABLE"),           # Minimum acceptable profit
-    (0.016, "Profit target +1.6% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum (emergency only)
 ]
 
 # Binance fees: ~0.2% round-trip (0.1% taker fee x 2 sides)
@@ -768,16 +771,17 @@ PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to 
 # stop losses must be proportionally sized to maintain good risk/reward
 
 # TIER 1: PRIMARY TRADING STOP-LOSS
-# Locked setting: 3–4% stop loss band (wider than previous ~1% to allow trades more room)
-# Kraken: 3% primary stop within the locked 3-4% band
-STOP_LOSS_PRIMARY_KRAKEN = -0.030  # -3.0% for Kraken (locked 3-4% band)
-STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.030  # -3.0% minimum
-STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.040  # -4.0% maximum
+# Tightened to -1.5% to enforce proper risk/reward ratio across all brokers and users.
+# With profit targets of 2.0-5.0%, a -1.5% stop gives minimum 1.3:1 R:R.
+# Previous -3.0% stop with 1.5-2.5% targets produced negative expected value.
+STOP_LOSS_PRIMARY_KRAKEN = -0.015  # -1.5% for Kraken (restored from -3.0%)
+STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.015  # -1.5% minimum
+STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.020  # -2.0% maximum (tight band to limit losses)
 
-# Coinbase: 3-4% stop loss band
-STOP_LOSS_PRIMARY_COINBASE = -0.030  # -3.0% primary stop for Coinbase (locked 3-4% band)
-COINBASE_STOP_LOSS_MIN = -0.030  # -3.0% minimum
-COINBASE_STOP_LOSS_MAX = -0.040  # -4.0% maximum
+# Coinbase: tightened to -1.5% to overcome the 1.4% round-trip fee drag
+STOP_LOSS_PRIMARY_COINBASE = -0.015  # -1.5% primary stop for Coinbase (restored from -3.0%)
+COINBASE_STOP_LOSS_MIN = -0.015  # -1.5% minimum
+COINBASE_STOP_LOSS_MAX = -0.020  # -2.0% maximum
 
 # Remove the "exit on ANY loss" requirement - this was causing premature exits
 COINBASE_EXIT_ANY_LOSS = False  # Allow positions to breathe, honor stop loss levels
@@ -785,17 +789,15 @@ COINBASE_MAX_HOLD_MINUTES = 60  # Increased from 30 to 60 minutes (allow time fo
 COINBASE_PROFIT_LOCK_ENABLED = True  # Enable aggressive profit-taking on Coinbase
 
 # TIER 2: EMERGENCY STOP (Logic failure prevention)
-# This is NOT a trading stop - it's a failsafe to prevent logic failures
-# Examples: imported positions without entry price, calculation errors, data corruption
-# Set at the outer edge of the locked 3-4% band to act as a hard backstop
-STOP_LOSS_MICRO = -0.040  # -4.0% emergency backstop (aligned with outer edge of 3-4% band)
-STOP_LOSS_WARNING = -0.030  # -3.0% warn before hitting stop (early warning at inner edge)
-STOP_LOSS_THRESHOLD = -0.040  # -4.0% primary stop threshold (outer edge of locked 3-4% band)
+# Scaled proportionally with the tightened primary stop.
+STOP_LOSS_MICRO = -0.020  # -2.0% emergency backstop (was -4.0%, scaled with primary stop)
+STOP_LOSS_WARNING = -0.015  # -1.5% warn level (matches primary stop for early alert)
+STOP_LOSS_THRESHOLD = -0.020  # -2.0% primary stop threshold (was -4.0%)
 
 # TIER 3: CATASTROPHIC FAILSAFE
 # Last resort protection - should NEVER be reached in normal operation
-# NORMALIZED FORMAT: -0.05 = -5% (fractional format)
-STOP_LOSS_EMERGENCY = -0.05  # EMERGENCY exit at -5% loss (FAILSAFE - absolute last resort)
+# NORMALIZED FORMAT: -0.03 = -3% (fractional format)
+STOP_LOSS_EMERGENCY = -0.03  # EMERGENCY exit at -3% loss (was -5%, tightened to limit catastrophic losses)
 
 # PROFITABILITY GUARD: Minimum loss threshold to reduce noise
 # CRITICAL FIX (Feb 3, 2026): Lowered from -0.25% to -0.05% to avoid creating dead zone
@@ -3824,30 +3826,30 @@ class TradingStrategy:
         elif hasattr(broker, '__class__'):
             broker_name = broker.__class__.__name__.lower()
 
-        # Kraken with small balance: Use -3.0% primary stop (locked 3-4% band)
+        # Kraken: -1.5% primary stop (tightened from -3.0% to enforce 2:1+ R:R)
         if 'kraken' in broker_name and account_balance < 100:
-            primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -3.0%
-            description = f"Kraken small balance (${account_balance:.2f}): Primary -3.0%, Backstop -4.0%, Failsafe -5.0%"
+            primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -1.5%
+            description = f"Kraken small balance (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
 
-        # Kraken with larger balance: Use -3.0% minimum (same locked band)
+        # Kraken with larger balance: same tight stop
         elif 'kraken' in broker_name:
-            primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -3.0%
-            description = f"Kraken (${account_balance:.2f}): Primary -3.0%, Backstop -4.0%, Failsafe -5.0%"
+            primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -1.5%
+            description = f"Kraken (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
 
-        # 🔒 COINBASE LOCKED STOP-LOSS: 3-4% band for controlled growth
+        # Coinbase: -1.5% stop (tightened from -3.0% to overcome 1.4% fee drag)
         elif 'coinbase' in broker_name:
-            primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -3.0%
-            description = f"COINBASE (${account_balance:.2f}): Primary -3.0%, Backstop -4.0%, Failsafe -5.0%"
+            primary_stop = STOP_LOSS_PRIMARY_COINBASE  # -1.5%
+            description = f"COINBASE (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
 
-        # Other exchanges: Use -3.0% primary stop (locked conservative default)
+        # All other exchanges: -1.5% universal stop (tightened from -3.0%)
         else:
-            primary_stop = -0.030  # -3.0% for other exchanges
-            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -3.0%, Backstop -4.0%, Failsafe -5.0%"
+            primary_stop = -0.015  # -1.5% for all other exchanges (was -3.0%)
+            description = f"{broker_name.upper()} (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
 
         return (
             primary_stop,           # Tier 1: Primary trading stop
-            STOP_LOSS_MICRO,        # Tier 2: Emergency micro-stop (-1%)
-            STOP_LOSS_EMERGENCY,    # Tier 3: Catastrophic failsafe (-5%)
+            STOP_LOSS_MICRO,        # Tier 2: Emergency backstop (-2.0%)
+            STOP_LOSS_EMERGENCY,    # Tier 3: Catastrophic failsafe (-3.0%)
             description
         )
 

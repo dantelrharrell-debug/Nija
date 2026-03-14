@@ -70,7 +70,7 @@ KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exc
 # OPTIMIZATION: Balance between signal generation and trade quality
 # Previous emergency relaxations went too far (0.50 confidence = low quality trades)
 # New strategy: Moderate confidence for better win rate while maintaining signal flow
-MIN_CONFIDENCE = 0.60  # OPTIMIZED: Balanced threshold for 60%+ win rate (was 0.50 emergency, 0.75 original)
+MIN_CONFIDENCE = 0.70  # RESTORED: Quality confidence threshold (was progressively reduced: 0.75 original → 0.50 emergency → 0.60 "optimized")
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Import emergency liquidation for capital preservation (FIX 3)
@@ -181,10 +181,10 @@ class NIJAApexStrategyV71:
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
         # New strategy: Moderate filters to capture trending markets with real volume
         # Target: 60-65% win rate with 5-10 quality trades per day
-        self.min_adx = self.config.get('min_adx', 10)  # OPTIMIZED: Moderate trends required (6→10, better quality)
+        self.min_adx = self.config.get('min_adx', 15)  # RESTORED: Require meaningful trend strength (was emergency-relaxed to 10, then 6)
         self.volume_threshold = self.config.get('volume_threshold', 0.10)  # OPTIMIZED: 10% of 5-candle avg (was 0.05, too loose)
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
-        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # OPTIMIZED: Require 2/5 indicators (was 1/5, better confirmation)
+        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 3)  # RESTORED: Require 3/5 indicators for solid confirmation (was emergency-relaxed to 2)
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
 
@@ -236,7 +236,7 @@ class NIJAApexStrategyV71:
         # Default values are conservative to prevent over-aggressive trading
         self.kraken_min_rsi = float(os.getenv('KRAKEN_MIN_RSI', '35'))  # More conservative than general (30)
         self.kraken_max_rsi = float(os.getenv('KRAKEN_MAX_RSI', '65'))  # More conservative than general (70)
-        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.65'))  # Higher than general (0.60)
+        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.70'))  # Aligned with global MIN_CONFIDENCE (was 0.65)
         self.kraken_min_atr_pct = float(os.getenv('KRAKEN_MIN_ATR_PCT', '0.6'))  # Higher than general (0.5%)
         
         # Track first trade for sanity check logging
@@ -250,8 +250,8 @@ class NIJAApexStrategyV71:
         if self.use_enhanced_scoring:
             logger.info("✅ Enhanced entry scoring: ENABLED (0-100 weighted scoring)")
             logger.info("✅ Regime detection: ENABLED (trending/ranging/volatile)")
-            min_score = self.config.get('min_score_threshold', 60)  # OPTIMIZED: Updated to 60/100 for quality
-            logger.info(f"✅ Minimum entry score: {min_score}/100 (quality threshold for 60%+ win rate)")
+            min_score = self.config.get('min_score_threshold', 70)  # RESTORED: Require good quality setups (70/100)
+            logger.info(f"✅ Minimum entry score: {min_score}/100 (quality threshold targeting 65-70%+ win rate)")
         if self.enable_stepped_exits:
             logger.info("✅ Stepped profit-taking: ENABLED (aggressive partial exits)")
             logger.info(f"   Exit levels: {len(self.stepped_exit_levels)} profit targets (1.5%, 2.5%, 4%, 6%)")
@@ -776,9 +776,9 @@ class NIJAApexStrategyV71:
 
         conditions = {}
 
-        # 1. Pullback to EMA21 or VWAP (EMERGENCY RELAXATION Jan 29: 2.0% tolerance for crypto volatility - was 1.0%)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.02
-        near_vwap = abs(current_price - vwap) / vwap < 0.02
+        # 1. Pullback to EMA21 or VWAP (RESTORED: 1.0% tolerance - tightened from 2.0% emergency relaxation)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
+        near_vwap = abs(current_price - vwap) / vwap < 0.01
         conditions['pullback'] = near_ema21 or near_vwap
 
         # 2. RSI bullish pullback (ADAPTIVE MAX ALPHA UPGRADE)
@@ -836,7 +836,7 @@ class NIJAApexStrategyV71:
 
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 2  # EMERGENCY RELAXATION (Jan 29): 2/5 required - allow more opportunities (was 5/5 → 3/5 → 2/5)
+        signal = score >= 3  # RESTORED: 3/5 required for quality trades (was emergency-relaxed to 2/5)
 
         reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
 
@@ -876,9 +876,9 @@ class NIJAApexStrategyV71:
 
         conditions = {}
 
-        # 1. Pullback to EMA21 or VWAP (EMERGENCY RELAXATION Jan 29: 2.0% tolerance for crypto volatility - was 1.0%)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.02
-        near_vwap = abs(current_price - vwap) / vwap < 0.02
+        # 1. Pullback to EMA21 or VWAP (RESTORED: 1.0% tolerance - tightened from 2.0% emergency relaxation)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
+        near_vwap = abs(current_price - vwap) / vwap < 0.01
         conditions['pullback'] = near_ema21 or near_vwap
 
         # 2. RSI bearish pullback (ADAPTIVE MAX ALPHA UPGRADE)
@@ -936,7 +936,7 @@ class NIJAApexStrategyV71:
 
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 2  # EMERGENCY RELAXATION (Jan 29): 2/5 required - allow more opportunities (was 5/5 → 3/5 → 2/5)
+        signal = score >= 3  # RESTORED: 3/5 required for quality trades (was emergency-relaxed to 2/5)
 
         reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
 
