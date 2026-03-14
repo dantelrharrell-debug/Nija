@@ -56,14 +56,14 @@ class NIJATrailingSystem:
         """
         NIJA Trailing Stop-Loss (TSL) - Fast Scalp Protection
 
-        Activated at TP1 (+0.8%)
+        Activated at TP1 (+3.0%)
         Tighter trails for faster profit capture
         """
         side = position['side']
         entry_price = position['entry_price']
 
-        # Not activated until TP1 (+0.8%) hits
-        if current_profit_pct < 0.8:
+        # Not activated until TP1 (+3.0%) hits
+        if current_profit_pct < 3.0:
             return position['stop_loss']
 
         # A. EMA-21 Dynamic Trail (looser - use EMA-21 minus buffer)
@@ -320,28 +320,22 @@ class NIJATrailingSystem:
             if result:
                 return result
         else:
-            # LEGACY FAST PROFIT CAPTURE: TP0.5 at +0.4% → Close 30% (ultra-fast scalp)
-            if profit_pct >= 0.4 and position['remaining_size'] == 1.0 and not position.get('tp05_hit', False):
-                position['remaining_size'] = 0.70
-                position['tp05_hit'] = True
-                return 'partial_close', 0.30, f"TP0.5 hit (+{profit_pct:.2f}%) - Fast scalp lock"
-
-            # TP1: +0.8% → Close 30% more (60% total out)
-            if profit_pct >= 0.8 and position['remaining_size'] == 0.70 and not position.get('tp1_hit', False):
-                position['remaining_size'] = 0.40
+            # TP1: +3.0% → Close 33% of position, activate trailing stop (67% remaining)
+            if profit_pct >= 3.0 and position['remaining_size'] == 1.0 and not position.get('tp1_hit', False):
+                position['remaining_size'] = 0.67
                 position['tsl_active'] = True
                 position['tp1_hit'] = True
-                return 'partial_close', 0.30, f"TP1 hit (+{profit_pct:.2f}%) - TSL activated"
+                return 'partial_close', 0.33, f"TP1 hit (+{profit_pct:.2f}%) - TSL activated"
 
-            # TP2: +1.5% → Close 20% more (20% remaining)
-            if profit_pct >= 1.5 and position['remaining_size'] == 0.40 and not position.get('tp2_hit', False):
-                position['remaining_size'] = 0.20
+            # TP2: +4.5% → Close another 33% of original position (67% - 33% = 34% remaining)
+            if profit_pct >= 4.5 and position['remaining_size'] == 0.67 and not position.get('tp2_hit', False):
+                position['remaining_size'] = 0.34
                 position['ttp_active'] = True
                 position['tp2_hit'] = True
-                return 'partial_close', 0.20, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
+                return 'partial_close', 0.33, f"TP2 hit (+{profit_pct:.2f}%) - TTP activated"
 
-        # TP3: Extended runner zone - let winners run to 20% with 95% lock protection
-        if profit_pct >= 2.5 and position['remaining_size'] == 0.20:
+        # TP3: +6.0% → Runner zone, let remaining position trail to full target
+        if profit_pct >= 6.0 and position['remaining_size'] == 0.34:
             # Check momentum - if strong, keep riding
             avg_volume = df['volume'].rolling(20).mean().iloc[-1]
             current_volume = df['volume'].iloc[-1]
