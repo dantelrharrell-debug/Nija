@@ -54,7 +54,7 @@ class EnhancedEntryScorer:
         # Previous emergency setting (50/100) was too low, leading to marginal trades
         # New strategy: 60/100 minimum for good setups, 75/100 for excellent setups
         # Target: 60-65% win rate with quality entries
-        self.min_score_threshold = self.config.get('min_score_threshold', 60)  # OPTIMIZED: Good quality threshold (was 50 emergency, 75 original)
+        self.min_score_threshold = self.config.get('min_score_threshold', 70)  # RESTORED: Require good quality setups (was emergency-reduced to 60, original was 75)
         self.excellent_score_threshold = self.config.get('excellent_score_threshold', 75)  # OPTIMIZED: Excellent threshold (was 70, raised for clarity)
 
         # Weights for different factors (must sum to 100)
