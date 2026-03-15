@@ -2,28 +2,40 @@
 NIJA Market Structure Filter
 ============================
 
-Confirms that a market is in a valid trending structure before allowing entry.
-Three conditions must ALL pass for an entry to be permitted:
+Evaluates market conditions using a score-weighting system instead of hard
+filters.  Each positive signal contributes points to a composite score; an
+entry is permitted when the total score reaches the minimum threshold.
 
-1. Trend Confirmation (Higher High / Higher Low)
-   - current_high > previous_high
-   - current_low  > previous_low
-   Prevents buying into fake breakouts.
+Score table
+-----------
+| Condition                              | Points |
+|----------------------------------------|--------|
+| Bullish trend (Higher High + Higher Low)| 30     |
+| Breakout (price above rolling high)    | 30     |
+| Volume spike (>= 1.5× 20-period avg)  | 20     |
+| RSI < 40 (oversold / bounce zone)     | 20     |
+| **Minimum score to allow entry**       | **60** |
 
-2. Volume Expansion
-   - current_volume > average_volume * 1.5  (20-period rolling average)
-   Ensures real participation in the move.
+Any combination of the four signals that adds up to 60+ points passes the
+filter.  For example:
+  - Trend + Volume spike → 50 pts  → BLOCKED
+  - Trend + Breakout     → 60 pts  → ALLOWED
+  - Volume spike + RSI < 40 → 40 pts → BLOCKED
+  - All four signals     → 100 pts → ALLOWED
 
-3. Momentum Confirmation
-   - RSI > 55
-   Avoids sideways / low-momentum markets.
+This dramatically improves signal generation compared with the previous
+all-or-nothing (AND) approach while still preventing low-conviction entries.
 
 Usage
 -----
-    from bot.market_structure_filter import structure_valid
+    from bot.market_structure_filter import structure_valid, get_structure_details
 
     if not structure_valid(df):
         return None  # skip this market
+
+    # Or inspect the scoring breakdown:
+    details = get_structure_details(df)
+    print(details["score"], details["score_breakdown"])
 """
 
 import logging
@@ -32,27 +44,32 @@ import pandas as pd
 logger = logging.getLogger("nija")
 
 # ── tunable thresholds ────────────────────────────────────────────────────────
-VOLUME_EXPANSION_MULTIPLIER: float = 1.5   # current volume must exceed avg * this
-MOMENTUM_RSI_THRESHOLD: float = 55.0       # minimum RSI value for momentum confirmation
+VOLUME_EXPANSION_MULTIPLIER: float = 1.5   # volume spike: current volume must exceed avg * this
 VOLUME_LOOKBACK_PERIODS: int = 20          # rolling window for average volume
+BREAKOUT_LOOKBACK_PERIODS: int = 20        # rolling window for breakout high detection
+RSI_OVERSOLD_THRESHOLD: float = 40.0       # RSI below this value → +20 pts (oversold/bounce zone)
+MIN_SCORE_TO_ENTER: int = 60               # minimum composite score required to allow entry
+
+# Score weights (must be consistent with the docstring table above)
+SCORE_TREND: int = 30      # bullish trend (HH + HL)
+SCORE_BREAKOUT: int = 30   # breakout above rolling high
+SCORE_VOLUME: int = 20     # volume spike
+SCORE_RSI: int = 20        # RSI in oversold/bounce zone (< RSI_OVERSOLD_THRESHOLD)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def structure_valid(df: pd.DataFrame) -> bool:
     """
-    Return True only when all three market-structure conditions are met.
+    Return True when the composite market-structure score is >= MIN_SCORE_TO_ENTER.
 
     Args:
         df: OHLCV DataFrame that **must** contain columns:
-            'high', 'low', 'volume', and 'rsi'.
-            At least 2 rows are required for trend comparison.
-            At least ``VOLUME_LOOKBACK_PERIODS`` rows are required for the
-            rolling average.
+            'high', 'low', 'close', 'volume', and 'rsi'.
+            At least ``max(2, VOLUME_LOOKBACK_PERIODS, BREAKOUT_LOOKBACK_PERIODS)``
+            rows are required.
 
     Returns:
-        bool: True if trend, volume expansion, and momentum all confirm.
-              False (and a debug log entry) if any condition fails or if the
-              DataFrame does not have enough data.
+        bool: True if the weighted score meets the entry threshold.
     """
     details = get_structure_details(df)
 
@@ -63,44 +80,45 @@ def structure_valid(df: pd.DataFrame) -> bool:
         )
         return False
 
-    passed = details["trend"] and details["volume"] and details["momentum"]
+    score = details["score"]
+    passed = score >= MIN_SCORE_TO_ENTER
 
     if not passed:
-        failed = [k for k in ("trend", "volume", "momentum") if not details[k]]
         logger.debug(
-            "⛔ Market structure filter FAILED — conditions not met: %s "
-            "(HH=%s, HL=%s, vol_ratio=%.2f, rsi=%.1f)",
-            ", ".join(failed),
-            details["higher_high"],
-            details["higher_low"],
-            details["volume_ratio"],
-            details["rsi"],
+            "⛔ Market structure score %d < %d — breakdown: %s",
+            score,
+            MIN_SCORE_TO_ENTER,
+            details["score_breakdown"],
         )
+
     return passed
 
 
 def get_structure_details(df: pd.DataFrame) -> dict:
     """
-    Evaluate all three structure conditions and return a rich detail dict.
+    Evaluate all market-structure conditions and return a detailed score dict.
 
     The dict always contains the key ``data_sufficient`` (bool).  When
     ``data_sufficient`` is True the dict also contains:
 
-    * ``trend``       – bool: Higher High AND Higher Low
-    * ``higher_high`` – bool
-    * ``higher_low``  – bool
-    * ``volume``      – bool: current volume > avg * VOLUME_EXPANSION_MULTIPLIER
-    * ``volume_ratio``– float: current / average volume
-    * ``momentum``    – bool: RSI > MOMENTUM_RSI_THRESHOLD
-    * ``rsi``         – float
+    * ``score``           – int: composite score (0–100)
+    * ``score_breakdown`` – dict: per-condition points awarded
+    * ``trend``           – bool: Higher High AND Higher Low
+    * ``higher_high``     – bool
+    * ``higher_low``      – bool
+    * ``breakout``        – bool: close > rolling high (excl. last candle)
+    * ``volume``          – bool: volume spike above threshold
+    * ``volume_ratio``    – float: current / average volume
+    * ``rsi_oversold``    – bool: RSI < RSI_OVERSOLD_THRESHOLD
+    * ``rsi``             – float
 
     Args:
-        df: OHLCV DataFrame with 'high', 'low', 'volume', 'rsi' columns.
+        df: OHLCV DataFrame with 'high', 'low', 'close', 'volume', 'rsi' columns.
 
     Returns:
         dict with the fields described above.
     """
-    required_cols = {"high", "low", "volume", "rsi"}
+    required_cols = {"high", "low", "close", "volume", "rsi"}
     missing = required_cols - set(df.columns)
     if missing:
         return {
@@ -108,7 +126,7 @@ def get_structure_details(df: pd.DataFrame) -> dict:
             "reason": f"Missing columns: {', '.join(sorted(missing))}",
         }
 
-    min_rows = max(2, VOLUME_LOOKBACK_PERIODS)
+    min_rows = max(2, VOLUME_LOOKBACK_PERIODS, BREAKOUT_LOOKBACK_PERIODS)
     if len(df) < min_rows:
         return {
             "data_sufficient": False,
@@ -117,7 +135,7 @@ def get_structure_details(df: pd.DataFrame) -> dict:
             ),
         }
 
-    # ── 1. Trend confirmation: Higher High + Higher Low ───────────────────────
+    # ── 1. Trend: Bullish Higher High + Higher Low ────────────────────────────
     high_now = float(df["high"].iloc[-1])
     high_prev = float(df["high"].iloc[-2])
     low_now = float(df["low"].iloc[-1])
@@ -127,7 +145,12 @@ def get_structure_details(df: pd.DataFrame) -> dict:
     higher_low = low_now > low_prev
     trend = higher_high and higher_low
 
-    # ── 2. Volume expansion ───────────────────────────────────────────────────
+    # ── 2. Breakout: close above rolling high of prior candles ────────────────
+    rolling_high = float(df["high"].iloc[-(BREAKOUT_LOOKBACK_PERIODS + 1):-1].max())
+    close_now = float(df["close"].iloc[-1])
+    breakout = close_now > rolling_high
+
+    # ── 3. Volume spike ───────────────────────────────────────────────────────
     volume_now = float(df["volume"].iloc[-1])
     avg_volume = float(
         df["volume"].rolling(VOLUME_LOOKBACK_PERIODS).mean().iloc[-1]
@@ -138,19 +161,31 @@ def get_structure_details(df: pd.DataFrame) -> dict:
     else:
         volume_ratio = 0.0
 
-    volume = volume_ratio > VOLUME_EXPANSION_MULTIPLIER
+    volume = volume_ratio >= VOLUME_EXPANSION_MULTIPLIER
 
-    # ── 3. Momentum via RSI ───────────────────────────────────────────────────
+    # ── 4. RSI oversold / bounce zone ────────────────────────────────────────
     rsi = float(df["rsi"].iloc[-1])
-    momentum = rsi > MOMENTUM_RSI_THRESHOLD
+    rsi_oversold = rsi < RSI_OVERSOLD_THRESHOLD
+
+    # ── Composite score ───────────────────────────────────────────────────────
+    score_breakdown: dict = {
+        "trend": SCORE_TREND if trend else 0,
+        "breakout": SCORE_BREAKOUT if breakout else 0,
+        "volume": SCORE_VOLUME if volume else 0,
+        "rsi_oversold": SCORE_RSI if rsi_oversold else 0,
+    }
+    score: int = sum(score_breakdown.values())
 
     return {
         "data_sufficient": True,
+        "score": score,
+        "score_breakdown": score_breakdown,
         "trend": trend,
         "higher_high": higher_high,
         "higher_low": higher_low,
+        "breakout": breakout,
         "volume": volume,
         "volume_ratio": volume_ratio,
-        "momentum": momentum,
+        "rsi_oversold": rsi_oversold,
         "rsi": rsi,
     }
