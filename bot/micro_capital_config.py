@@ -89,6 +89,18 @@ ENABLE_DCA = False  # DISABLED for micro capital (prevents averaging down)
 ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol max
 
 # ============================================================================
+# IDEAL MICRO CONFIGURATION (Mar 2026)
+# Optimised settings that dramatically improve growth without increasing risk.
+# Professional systems use score weighting instead of hard filters (see
+# market_structure_filter.py for the scoring logic).
+# ============================================================================
+
+MAX_CONCURRENT_TRADES = 4   # Maximum simultaneous open trades
+CAPITAL_PER_TRADE = 20.0    # Percentage of total capital allocated per trade (%)
+ENTRY_SCAN_INTERVAL = 20    # Seconds between entry-opportunity scans
+MONITOR_INTERVAL = 45       # Seconds between open-position monitoring cycles
+
+# ============================================================================
 # RISK MANAGEMENT
 # ============================================================================
 
