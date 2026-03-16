@@ -22,6 +22,9 @@ Architecture
   │    5. replace_weakest()← swap bottom performers with offspring        │
   │                                                                     │
   │  record_trade()        ← feed live results to update fitness         │
+  │  set_regime(regime)    ← push current market regime (TRENDING etc.)  │
+  │  pull_regime()         ← auto-read regime from MarketRegimeController│
+  │  get_genome_multipliers(id) ← base + regime-adjusted capital/conf    │
   │  get_best_genome()     ← retrieve current champion parameters        │
   │  get_report()          ← population health dashboard                 │
   └─────────────────────────────────────────────────────────────────────┘
@@ -44,6 +47,16 @@ Public API
 
     # Trigger an evolution cycle (call periodically, e.g., every 4 hours)
     report = evo.evolve_cycle()
+
+    # Push the current market regime so multipliers are regime-weighted
+    evo.set_regime("TRENDING")               # explicit push
+    # — or —
+    evo.pull_regime()                        # auto-read from MarketRegimeController
+
+    # Retrieve effective (regime-adjusted) capital & confidence multipliers
+    mults = evo.get_genome_multipliers("genome-003")
+    position_size *= mults["effective_capital_multiplier"]
+    entry_confidence *= mults["effective_confidence_multiplier"]
 
     # Retrieve best-performing parameter set
     champion = evo.get_best_genome()
@@ -94,6 +107,19 @@ CAPITAL_MULT_SENSITIVITY: float = 0.50   # how steeply capital multiplier respon
 CONFIDENCE_MULT_MIN: float = 0.50        # floor for confidence multiplier
 CONFIDENCE_MULT_MAX: float = 1.50        # ceiling for confidence multiplier
 CONFIDENCE_MULT_SENSITIVITY: float = 0.25  # half the sensitivity of capital
+
+# Regime-weighted capital scale factors
+# Applied on top of the base capital & confidence multipliers.
+# Volatile / chaotic markets pull back risk; trending markets let it grow.
+REGIME_CAPITAL_SCALE: Dict[str, float] = {
+    "TRENDING":  1.2,   # strong directional movement  → compound aggressively
+    "RANGING":   1.0,   # sideways / choppy            → neutral sizing
+    "CHAOTIC":   0.8,   # extreme volatility / crisis  → protect capital
+    "VOLATILE":  0.8,   # alias used by some detectors → same as CHAOTIC
+    "BULL":      1.2,   # legacy alias for TRENDING
+    "BEAR":      0.8,   # legacy alias for CHAOTIC
+    "UNKNOWN":   1.0,   # no data yet                  → neutral
+}
 
 # Parameter bounds  {param_name: (min, max, is_int)}
 PARAM_BOUNDS: Dict[str, Tuple[float, float, bool]] = {
@@ -238,17 +264,22 @@ class StrategyGenome:
         return self.fitness
 
     def to_dict(self) -> Dict[str, Any]:
+        rar = round(self.sharpe(), 4)
         return {
             "genome_id": self.genome_id,
             "generation": self.generation,
             "fitness": round(self.fitness, 4),
             "trade_count": self.trade_count,
             "win_rate": round(self.win_rate(), 4),
-            "return_volatility_ratio": round(self.sharpe(), 4),
+            # "return_volatility_ratio" is the canonical key; "sharpe" is kept
+            # for backward compatibility with existing dashboards and reports.
+            "return_volatility_ratio": rar,
+            "sharpe": rar,
             "volatility": round(self.volatility(), 4),
-            "sharpe": round(self.sharpe(), 4),
             "profit_factor": round(self.profit_factor(), 4),
             "max_drawdown": round(self.max_drawdown, 4),
+            "capital_multiplier": self.capital_multiplier,
+            "confidence_multiplier": self.confidence_multiplier,
             "params": {k: round(v, 4) for k, v in self.params.items()},
         }
 
@@ -280,6 +311,10 @@ class AIStrategyEvolutionEngine:
         self._generation: int = 0
         self._lock = threading.Lock()
         self._evolution_history: List[Dict[str, Any]] = []
+
+        # Regime-weighted capital layer
+        self._current_regime: str = "UNKNOWN"
+        self._regime_scale: float = REGIME_CAPITAL_SCALE["UNKNOWN"]
 
         self._init_population(population_size)
         logger.info(
@@ -435,6 +470,111 @@ class AIStrategyEvolutionEngine:
             return list(self._population)
 
     # ------------------------------------------------------------------
+    # Public: regime-weighted capital layer
+    # ------------------------------------------------------------------
+
+    def set_regime(self, regime: str) -> None:
+        """Push the current market regime into the engine.
+
+        Call this once per scan cycle (after your regime detector runs) so
+        that :meth:`get_genome_multipliers` can apply the correct scale.
+
+        Parameters
+        ----------
+        regime:
+            One of ``"TRENDING"``, ``"RANGING"``, ``"CHAOTIC"``, or any
+            alias defined in ``REGIME_CAPITAL_SCALE``.  Unknown values fall
+            back to the neutral scale (1.0).
+        """
+        regime_upper = regime.upper()
+        scale = REGIME_CAPITAL_SCALE.get(regime_upper, REGIME_CAPITAL_SCALE["UNKNOWN"])
+        with self._lock:
+            self._current_regime = regime_upper
+            self._regime_scale = scale
+        logger.debug(
+            "🌐 Regime updated: %s → scale=%.2f", regime_upper, scale
+        )
+
+    def pull_regime(self) -> str:
+        """Auto-read the current regime from :class:`MarketRegimeController`.
+
+        Queries the process-level ``MarketRegimeController`` singleton and
+        calls :meth:`set_regime` if a classified result is available.
+        Silently no-ops when the controller is unavailable or has not yet
+        produced a result, preserving the last known regime.
+
+        Returns
+        -------
+        str
+            The regime name that is now active (``"UNKNOWN"`` when the
+            controller could not be reached).
+        """
+        try:
+            try:
+                from bot.market_regime_controller import get_market_regime_controller
+            except ImportError:
+                try:
+                    from market_regime_controller import get_market_regime_controller  # type: ignore
+                except ImportError as imp_err:
+                    logger.debug("pull_regime: market_regime_controller not importable (%s)", imp_err)
+                    return self._current_regime
+
+            ctrl = get_market_regime_controller()
+            controls = ctrl.current_controls
+            if controls is not None:
+                self.set_regime(controls.regime.value)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("pull_regime: controller unavailable (%s) — keeping %s",
+                         exc, self._current_regime)
+        return self._current_regime
+
+    def get_genome_multipliers(self, genome_id: str) -> Dict[str, Any]:
+        """Return base and regime-adjusted multipliers for a genome.
+
+        The *effective* multipliers are the product of the genome's
+        performance-driven base multipliers and the current regime scale::
+
+            effective_capital    = clamp(capital_multiplier    * regime_scale,
+                                         CAPITAL_MULT_MIN, CAPITAL_MULT_MAX)
+            effective_confidence = clamp(confidence_multiplier * regime_scale,
+                                         CONFIDENCE_MULT_MIN, CONFIDENCE_MULT_MAX)
+
+        Parameters
+        ----------
+        genome_id:
+            The genome whose multipliers should be returned.  If the genome
+            is not found, neutral multipliers (1.0) are returned.
+
+        Returns
+        -------
+        dict with keys:
+            ``capital_multiplier``, ``confidence_multiplier``,
+            ``regime``, ``regime_scale``,
+            ``effective_capital_multiplier``, ``effective_confidence_multiplier``
+        """
+        with self._lock:
+            g = self._find_genome(genome_id)
+            base_cap  = g.capital_multiplier    if g else 1.0
+            base_conf = g.confidence_multiplier if g else 1.0
+            regime       = self._current_regime
+            regime_scale = self._regime_scale
+
+        eff_cap = round(
+            max(CAPITAL_MULT_MIN,  min(CAPITAL_MULT_MAX,  base_cap  * regime_scale)), 4
+        )
+        eff_conf = round(
+            max(CONFIDENCE_MULT_MIN, min(CONFIDENCE_MULT_MAX, base_conf * regime_scale)), 4
+        )
+        return {
+            "capital_multiplier":            base_cap,
+            "confidence_multiplier":         base_conf,
+            "regime":                        regime,
+            "regime_scale":                  regime_scale,
+            "effective_capital_multiplier":  eff_cap,
+            "effective_confidence_multiplier": eff_conf,
+        }
+
+    # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
 
@@ -451,6 +591,8 @@ class AIStrategyEvolutionEngine:
             "avg_fitness": round(float(np.mean(fitnesses)), 4) if fitnesses else 0.0,
             "max_fitness": round(float(np.max(fitnesses)), 4) if fitnesses else 0.0,
             "min_fitness": round(float(np.min(fitnesses)), 4) if fitnesses else 0.0,
+            "regime": self._current_regime,
+            "regime_scale": self._regime_scale,
         }
 
     def get_report(self) -> Dict[str, Any]:
