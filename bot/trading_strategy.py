@@ -303,6 +303,7 @@ try:
         MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
         MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
         MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
+        MAX_CONCURRENT_TRADES,
     )
     MICRO_CAP_COMPOUNDING_AVAILABLE = True
     logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
@@ -316,6 +317,7 @@ except ImportError:
             MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
             MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
             MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
+            MAX_CONCURRENT_TRADES,
         )
         MICRO_CAP_COMPOUNDING_AVAILABLE = True
         logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
@@ -326,6 +328,7 @@ except ImportError:
         MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0
         MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.0
         MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6
+        MAX_CONCURRENT_TRADES = 4  # Default: matches micro_capital_config.MAX_CONCURRENT_TRADES
         logger.warning("⚠️ Micro-Cap Compounding Config not available - micro-cap mode disabled")
         get_micro_cap_compounding_config = None  # type: ignore
 
@@ -821,17 +824,18 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
 # Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
 # Hard cap raised to 12 to support AI Capital Concentration (5–12 high-quality positions).
 # MAX_ACTIVE_POSITIONS = 12 per the AI Capital Rotation specification.
+# Default is MAX_CONCURRENT_TRADES (4) from micro_capital_config to enforce the cap at 4.
 HARD_MAX_POSITIONS = 12  # Absolute ceiling – AI Capital Concentration cap
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '12')
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', str(MAX_CONCURRENT_TRADES))
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
-    MAX_POSITIONS_ALLOWED = 12  # Default fallback
+    MAX_POSITIONS_ALLOWED = MAX_CONCURRENT_TRADES  # Default: micro_capital_config value (4)
 # Enforce hard ceiling
 if MAX_POSITIONS_ALLOWED > HARD_MAX_POSITIONS:
     MAX_POSITIONS_ALLOWED = HARD_MAX_POSITIONS
     logger.info(f"📊 MAX_CONCURRENT_POSITIONS capped at hard limit of {HARD_MAX_POSITIONS}")
-logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED}")
+logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED} (from MAX_CONCURRENT_TRADES={MAX_CONCURRENT_TRADES})")
 
 # SPOT_ONLY mode: when enabled, all 'enter_short' signals are blocked so the
 # bot only opens long (buy) positions, matching exchange spot-trading semantics.
@@ -2077,6 +2081,14 @@ class TradingStrategy:
                         removed = self.broker.position_tracker.sync_with_broker(broker_positions)
                         if removed > 0:
                             logger.info(f"🔄 Synced position tracker: removed {removed} orphaned positions")
+                        # Warn if live broker positions exceed the configured cap
+                        live_count = len(broker_positions) if broker_positions else 0
+                        if live_count > MAX_POSITIONS_ALLOWED:
+                            logger.warning(
+                                f"⚠️ POSITION CAP WARNING: {live_count} live position(s) found on restart "
+                                f"but cap is {MAX_POSITIONS_ALLOWED}. "
+                                f"New entries are BLOCKED until positions drop to {MAX_POSITIONS_ALLOWED}."
+                            )
                     except Exception as sync_err:
                         logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
 
