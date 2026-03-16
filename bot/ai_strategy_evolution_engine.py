@@ -86,6 +86,15 @@ MIN_TRADES_FOR_FITNESS: int = 10   # minimum trades before fitness is meaningful
 RISK_ADJ_OFFSET: float = 1.0
 RISK_ADJ_SCALE: float = 4.0
 
+# Capital & confidence multiplier settings
+RECENT_WINDOW: int = 20          # rolling trade window for real-time multiplier
+CAPITAL_MULT_MIN: float = 0.50   # floor – reduce allocation 50% after poor run
+CAPITAL_MULT_MAX: float = 2.00   # ceiling – at most double allocation
+CAPITAL_MULT_SENSITIVITY: float = 0.50   # how steeply capital multiplier responds
+CONFIDENCE_MULT_MIN: float = 0.50        # floor for confidence multiplier
+CONFIDENCE_MULT_MAX: float = 1.50        # ceiling for confidence multiplier
+CONFIDENCE_MULT_SENSITIVITY: float = 0.25  # half the sensitivity of capital
+
 # Parameter bounds  {param_name: (min, max, is_int)}
 PARAM_BOUNDS: Dict[str, Tuple[float, float, bool]] = {
     "rsi_period_fast":       (5,    20,  True),
@@ -125,6 +134,10 @@ class StrategyGenome:
     # Computed fitness (updated after each evolve_cycle)
     fitness: float = 0.0
 
+    # Real-time capital & confidence multipliers (updated after every trade)
+    capital_multiplier: float = 1.0
+    confidence_multiplier: float = 1.0
+
     def win_rate(self) -> float:
         return self.win_count / self.trade_count if self.trade_count > 0 else 0.0
 
@@ -140,6 +153,20 @@ class StrategyGenome:
         if vol < 1e-9 or len(self.pnl_history) < 5:
             return 0.0
         return float(np.asarray(self.pnl_history).mean() / vol)
+
+    def recent_rar(self) -> float:
+        """Return / Volatility computed over the last RECENT_WINDOW trades.
+
+        This is the real-time signal used to drive the capital and
+        confidence multipliers; it reacts faster than the full-history
+        ``sharpe()`` because it only looks at the most recent trades.
+        """
+        recent = self.pnl_history[-RECENT_WINDOW:]
+        if len(recent) < 5:
+            return 0.0
+        arr = np.asarray(recent)
+        vol = float(arr.std(ddof=1))
+        return float(arr.mean() / vol) if vol > 1e-9 else 0.0
 
     def profit_factor(self) -> float:
         wins = [p for p in self.pnl_history if p > 0]
@@ -161,6 +188,37 @@ class StrategyGenome:
         self.peak_pnl = max(self.peak_pnl, cumulative)
         dd = self.peak_pnl - cumulative
         self.max_drawdown = max(self.max_drawdown, dd)
+        # Self-adjust multipliers in real-time after every new trade
+        self._update_multipliers()
+
+    def _update_multipliers(self) -> None:
+        """Recompute capital and confidence multipliers from recent performance.
+
+        Both multipliers are driven by the rolling-window return/volatility
+        ratio (``recent_rar``).  When recent performance is strong the
+        multipliers rise above 1.0, increasing capital deployment and signal
+        confidence; when performance deteriorates they fall below 1.0,
+        pulling back risk automatically.
+
+        Formula (per multiplier)::
+
+            multiplier = clamp(1.0 + recent_rar * sensitivity, MIN, MAX)
+
+        Capital is more aggressive (higher sensitivity / wider bounds) than
+        confidence so that position sizing reacts quickly while entry
+        confidence scores remain smoother.
+        """
+        rar = self.recent_rar()
+        self.capital_multiplier = round(
+            max(CAPITAL_MULT_MIN, min(CAPITAL_MULT_MAX,
+                                      1.0 + rar * CAPITAL_MULT_SENSITIVITY)),
+            4,
+        )
+        self.confidence_multiplier = round(
+            max(CONFIDENCE_MULT_MIN, min(CONFIDENCE_MULT_MAX,
+                                         1.0 + rar * CONFIDENCE_MULT_SENSITIVITY)),
+            4,
+        )
 
     def compute_fitness(self) -> float:
         """Risk-adjusted fitness: fitness = return / volatility.
