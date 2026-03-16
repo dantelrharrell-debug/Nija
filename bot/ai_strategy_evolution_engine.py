@@ -15,7 +15,7 @@ Architecture
   │  population: [StrategyGenome × N]                                   │
   │                                                                     │
   │  evolve_cycle()                                                      │
-  │    1. score_fitness()  ← per-genome Sharpe / win-rate / drawdown     │
+  │    1. score_fitness()  ← return / volatility (risk-adjusted)         │
   │    2. select_parents() ← top-K tournament selection                  │
   │    3. crossover()      ← blend parameter genes from two parents      │
   │    4. mutate()         ← Gaussian noise on continuous params         │
@@ -81,11 +81,10 @@ MUTATION_SIGMA: float = 0.15       # Gaussian σ for continuous gene mutation
 ELITISM_COUNT: int = 2             # top-N genomes preserved each generation
 MIN_TRADES_FOR_FITNESS: int = 10   # minimum trades before fitness is meaningful
 
-# Fitness weights
-W_SHARPE: float = 0.40
-W_WIN_RATE: float = 0.30
-W_PROFIT_FACTOR: float = 0.20
-W_MAX_DD: float = 0.10
+# Risk-adjusted fitness normalisation window
+# Maps return/volatility ratio from [-1, 3] → [0, 1]
+RISK_ADJ_OFFSET: float = 1.0
+RISK_ADJ_SCALE: float = 4.0
 
 # Parameter bounds  {param_name: (min, max, is_int)}
 PARAM_BOUNDS: Dict[str, Tuple[float, float, bool]] = {
@@ -129,12 +128,18 @@ class StrategyGenome:
     def win_rate(self) -> float:
         return self.win_count / self.trade_count if self.trade_count > 0 else 0.0
 
-    def sharpe(self) -> float:
-        if len(self.pnl_history) < 5:
+    def volatility(self) -> float:
+        """Standard deviation of trade returns."""
+        if len(self.pnl_history) < 2:
             return 0.0
-        arr = np.asarray(self.pnl_history)
-        std = arr.std(ddof=1)
-        return float(arr.mean() / std) if std > 1e-9 else 0.0
+        return float(np.asarray(self.pnl_history).std(ddof=1))
+
+    def sharpe(self) -> float:
+        """Return / Volatility (Sharpe ratio without risk-free rate)."""
+        vol = self.volatility()
+        if vol < 1e-9 or len(self.pnl_history) < 5:
+            return 0.0
+        return float(np.asarray(self.pnl_history).mean() / vol)
 
     def profit_factor(self) -> float:
         wins = [p for p in self.pnl_history if p > 0]
@@ -158,21 +163,19 @@ class StrategyGenome:
         self.max_drawdown = max(self.max_drawdown, dd)
 
     def compute_fitness(self) -> float:
+        """Risk-adjusted fitness: fitness = return / volatility.
+
+        Uses the mean trade return divided by the standard deviation of
+        returns (a Sharpe-like ratio without a risk-free rate deduction).
+        The raw ratio is normalised to [0, 1] via:
+            fitness = clamp((rar + RISK_ADJ_OFFSET) / RISK_ADJ_SCALE, 0, 1)
+        which maps the typical range [-1, 3] onto [0, 1].
+        """
         if self.trade_count < MIN_TRADES_FOR_FITNESS:
             return 0.0
 
-        sharpe_norm = max(0.0, min(1.0, (self.sharpe() + 1) / 4))
-        wr_norm = self.win_rate()
-        pf = self.profit_factor()
-        pf_norm = max(0.0, min(1.0, (pf - 1) / 3))
-        dd_norm = max(0.0, 1.0 - self.max_drawdown / 10.0)
-
-        f = (
-            W_SHARPE * sharpe_norm
-            + W_WIN_RATE * wr_norm
-            + W_PROFIT_FACTOR * pf_norm
-            + W_MAX_DD * dd_norm
-        )
+        rar = self.sharpe()  # return / volatility
+        f = max(0.0, min(1.0, (rar + RISK_ADJ_OFFSET) / RISK_ADJ_SCALE))
         self.fitness = round(f, 6)
         return self.fitness
 
@@ -183,6 +186,8 @@ class StrategyGenome:
             "fitness": round(self.fitness, 4),
             "trade_count": self.trade_count,
             "win_rate": round(self.win_rate(), 4),
+            "return_volatility_ratio": round(self.sharpe(), 4),
+            "volatility": round(self.volatility(), 4),
             "sharpe": round(self.sharpe(), 4),
             "profit_factor": round(self.profit_factor(), 4),
             "max_drawdown": round(self.max_drawdown, 4),
