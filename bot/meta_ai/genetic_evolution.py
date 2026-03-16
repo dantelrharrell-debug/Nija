@@ -132,7 +132,14 @@ class GeneticEvolution:
         backtest_results: Dict
     ) -> float:
         """
-        Calculate fitness score from backtest results
+        Calculate fitness score from backtest results.
+
+        Fitness is risk-adjusted: ``fitness = total_return / volatility``.
+        If the backtest engine supplies explicit ``total_return`` and
+        ``volatility`` keys those are used directly; otherwise the
+        ``sharpe_ratio`` (which equals return / volatility) is used as
+        the primary signal.  The raw ratio is normalised to [0, 1] via:
+            fitness = clamp((ratio + 1) / 4, 0, 1)
 
         Args:
             genome: Strategy genome to evaluate
@@ -161,31 +168,19 @@ class GeneticEvolution:
             genome.fitness = 0.0
             return 0.0
 
-        # Multi-objective fitness function
-        # Weighted combination of multiple metrics
-        fitness = 0.0
+        # Risk-adjusted fitness: return / volatility
+        # Prefer explicit return & volatility fields when the backtest engine
+        # provides them; fall back to sharpe_ratio (which is identical).
+        total_return = backtest_results.get('total_return', None)
+        volatility = backtest_results.get('volatility', None)
 
-        # Sharpe ratio (25% weight)
-        fitness += 0.25 * max(0, sharpe / 2.0)  # Normalize to ~1.0 for Sharpe=2.0
+        if total_return is not None and volatility is not None:
+            rar = total_return / volatility if volatility > 1e-9 else 0.0
+        else:
+            rar = sharpe  # sharpe_ratio == return / volatility
 
-        # Profit factor (20% weight)
-        fitness += 0.20 * max(0, (profit_factor - 1.0) / 2.0)  # PF=3.0 gives 0.20
-
-        # Win rate (15% weight)
-        fitness += 0.15 * max(0, (win_rate - 0.4) / 0.3)  # 40-70% maps to 0-0.15
-
-        # Max drawdown penalty (15% weight)
-        # Lower drawdown = higher fitness
-        dd_score = max(0, 1.0 - (max_dd / 0.2))  # 0% DD = 1.0, 20% DD = 0
-        fitness += 0.15 * dd_score
-
-        # Expectancy (15% weight)
-        fitness += 0.15 * max(0, expectancy / 0.5)  # Expectancy=0.5R gives 0.15
-
-        # Trade count bonus (10% weight)
-        # More trades = more statistical significance
-        trade_score = min(1.0, trades_count / 100.0)  # 100+ trades = max score
-        fitness += 0.10 * trade_score
+        # Normalise to [0, 1]: typical range [-1, 3] → [0, 1]
+        fitness = max(0.0, min(1.0, (rar + 1.0) / 4.0))
 
         genome.fitness = fitness
         return fitness

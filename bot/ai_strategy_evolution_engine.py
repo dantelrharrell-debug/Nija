@@ -15,13 +15,16 @@ Architecture
   │  population: [StrategyGenome × N]                                   │
   │                                                                     │
   │  evolve_cycle()                                                      │
-  │    1. score_fitness()  ← per-genome Sharpe / win-rate / drawdown     │
+  │    1. score_fitness()  ← return / volatility (risk-adjusted)         │
   │    2. select_parents() ← top-K tournament selection                  │
   │    3. crossover()      ← blend parameter genes from two parents      │
   │    4. mutate()         ← Gaussian noise on continuous params         │
   │    5. replace_weakest()← swap bottom performers with offspring        │
   │                                                                     │
   │  record_trade()        ← feed live results to update fitness         │
+  │  set_regime(regime)    ← push current market regime (TRENDING etc.)  │
+  │  pull_regime()         ← auto-read regime from MarketRegimeController│
+  │  get_genome_multipliers(id) ← base + regime-adjusted capital/conf    │
   │  get_best_genome()     ← retrieve current champion parameters        │
   │  get_report()          ← population health dashboard                 │
   └─────────────────────────────────────────────────────────────────────┘
@@ -44,6 +47,16 @@ Public API
 
     # Trigger an evolution cycle (call periodically, e.g., every 4 hours)
     report = evo.evolve_cycle()
+
+    # Push the current market regime so multipliers are regime-weighted
+    evo.set_regime("TRENDING")               # explicit push
+    # — or —
+    evo.pull_regime()                        # auto-read from MarketRegimeController
+
+    # Retrieve effective (regime-adjusted) capital & confidence multipliers
+    mults = evo.get_genome_multipliers("genome-003")
+    position_size *= mults["effective_capital_multiplier"]
+    entry_confidence *= mults["effective_confidence_multiplier"]
 
     # Retrieve best-performing parameter set
     champion = evo.get_best_genome()
@@ -81,11 +94,32 @@ MUTATION_SIGMA: float = 0.15       # Gaussian σ for continuous gene mutation
 ELITISM_COUNT: int = 2             # top-N genomes preserved each generation
 MIN_TRADES_FOR_FITNESS: int = 10   # minimum trades before fitness is meaningful
 
-# Fitness weights
-W_SHARPE: float = 0.40
-W_WIN_RATE: float = 0.30
-W_PROFIT_FACTOR: float = 0.20
-W_MAX_DD: float = 0.10
+# Risk-adjusted fitness normalisation window
+# Maps return/volatility ratio from [-1, 3] → [0, 1]
+RISK_ADJ_OFFSET: float = 1.0
+RISK_ADJ_SCALE: float = 4.0
+
+# Capital & confidence multiplier settings
+RECENT_WINDOW: int = 20          # rolling trade window for real-time multiplier
+CAPITAL_MULT_MIN: float = 0.50   # floor – reduce allocation 50% after poor run
+CAPITAL_MULT_MAX: float = 2.00   # ceiling – at most double allocation
+CAPITAL_MULT_SENSITIVITY: float = 0.50   # how steeply capital multiplier responds
+CONFIDENCE_MULT_MIN: float = 0.50        # floor for confidence multiplier
+CONFIDENCE_MULT_MAX: float = 1.50        # ceiling for confidence multiplier
+CONFIDENCE_MULT_SENSITIVITY: float = 0.25  # half the sensitivity of capital
+
+# Regime-weighted capital scale factors
+# Applied on top of the base capital & confidence multipliers.
+# Volatile / chaotic markets pull back risk; trending markets let it grow.
+REGIME_CAPITAL_SCALE: Dict[str, float] = {
+    "TRENDING":  1.2,   # strong directional movement  → compound aggressively
+    "RANGING":   1.0,   # sideways / choppy            → neutral sizing
+    "CHAOTIC":   0.8,   # extreme volatility / crisis  → protect capital
+    "VOLATILE":  0.8,   # alias used by some detectors → same as CHAOTIC
+    "BULL":      1.2,   # legacy alias for TRENDING
+    "BEAR":      0.8,   # legacy alias for CHAOTIC
+    "UNKNOWN":   1.0,   # no data yet                  → neutral
+}
 
 # Parameter bounds  {param_name: (min, max, is_int)}
 PARAM_BOUNDS: Dict[str, Tuple[float, float, bool]] = {
@@ -126,15 +160,39 @@ class StrategyGenome:
     # Computed fitness (updated after each evolve_cycle)
     fitness: float = 0.0
 
+    # Real-time capital & confidence multipliers (updated after every trade)
+    capital_multiplier: float = 1.0
+    confidence_multiplier: float = 1.0
+
     def win_rate(self) -> float:
         return self.win_count / self.trade_count if self.trade_count > 0 else 0.0
 
-    def sharpe(self) -> float:
-        if len(self.pnl_history) < 5:
+    def volatility(self) -> float:
+        """Standard deviation of trade returns."""
+        if len(self.pnl_history) < 2:
             return 0.0
-        arr = np.asarray(self.pnl_history)
-        std = arr.std(ddof=1)
-        return float(arr.mean() / std) if std > 1e-9 else 0.0
+        return float(np.asarray(self.pnl_history).std(ddof=1))
+
+    def sharpe(self) -> float:
+        """Return / Volatility (Sharpe ratio without risk-free rate)."""
+        vol = self.volatility()
+        if vol < 1e-9 or len(self.pnl_history) < 5:
+            return 0.0
+        return float(np.asarray(self.pnl_history).mean() / vol)
+
+    def recent_rar(self) -> float:
+        """Return / Volatility computed over the last RECENT_WINDOW trades.
+
+        This is the real-time signal used to drive the capital and
+        confidence multipliers; it reacts faster than the full-history
+        ``sharpe()`` because it only looks at the most recent trades.
+        """
+        recent = self.pnl_history[-RECENT_WINDOW:]
+        if len(recent) < 5:
+            return 0.0
+        arr = np.asarray(recent)
+        vol = float(arr.std(ddof=1))
+        return float(arr.mean() / vol) if vol > 1e-9 else 0.0
 
     def profit_factor(self) -> float:
         wins = [p for p in self.pnl_history if p > 0]
@@ -156,36 +214,72 @@ class StrategyGenome:
         self.peak_pnl = max(self.peak_pnl, cumulative)
         dd = self.peak_pnl - cumulative
         self.max_drawdown = max(self.max_drawdown, dd)
+        # Self-adjust multipliers in real-time after every new trade
+        self._update_multipliers()
+
+    def _update_multipliers(self) -> None:
+        """Recompute capital and confidence multipliers from recent performance.
+
+        Both multipliers are driven by the rolling-window return/volatility
+        ratio (``recent_rar``).  When recent performance is strong the
+        multipliers rise above 1.0, increasing capital deployment and signal
+        confidence; when performance deteriorates they fall below 1.0,
+        pulling back risk automatically.
+
+        Formula (per multiplier)::
+
+            multiplier = clamp(1.0 + recent_rar * sensitivity, MIN, MAX)
+
+        Capital is more aggressive (higher sensitivity / wider bounds) than
+        confidence so that position sizing reacts quickly while entry
+        confidence scores remain smoother.
+        """
+        rar = self.recent_rar()
+        self.capital_multiplier = round(
+            max(CAPITAL_MULT_MIN, min(CAPITAL_MULT_MAX,
+                                      1.0 + rar * CAPITAL_MULT_SENSITIVITY)),
+            4,
+        )
+        self.confidence_multiplier = round(
+            max(CONFIDENCE_MULT_MIN, min(CONFIDENCE_MULT_MAX,
+                                         1.0 + rar * CONFIDENCE_MULT_SENSITIVITY)),
+            4,
+        )
 
     def compute_fitness(self) -> float:
+        """Risk-adjusted fitness: fitness = return / volatility.
+
+        Uses the mean trade return divided by the standard deviation of
+        returns (a Sharpe-like ratio without a risk-free rate deduction).
+        The raw ratio is normalised to [0, 1] via:
+            fitness = clamp((rar + RISK_ADJ_OFFSET) / RISK_ADJ_SCALE, 0, 1)
+        which maps the typical range [-1, 3] onto [0, 1].
+        """
         if self.trade_count < MIN_TRADES_FOR_FITNESS:
             return 0.0
 
-        sharpe_norm = max(0.0, min(1.0, (self.sharpe() + 1) / 4))
-        wr_norm = self.win_rate()
-        pf = self.profit_factor()
-        pf_norm = max(0.0, min(1.0, (pf - 1) / 3))
-        dd_norm = max(0.0, 1.0 - self.max_drawdown / 10.0)
-
-        f = (
-            W_SHARPE * sharpe_norm
-            + W_WIN_RATE * wr_norm
-            + W_PROFIT_FACTOR * pf_norm
-            + W_MAX_DD * dd_norm
-        )
+        rar = self.sharpe()  # return / volatility
+        f = max(0.0, min(1.0, (rar + RISK_ADJ_OFFSET) / RISK_ADJ_SCALE))
         self.fitness = round(f, 6)
         return self.fitness
 
     def to_dict(self) -> Dict[str, Any]:
+        rar = round(self.sharpe(), 4)
         return {
             "genome_id": self.genome_id,
             "generation": self.generation,
             "fitness": round(self.fitness, 4),
             "trade_count": self.trade_count,
             "win_rate": round(self.win_rate(), 4),
-            "sharpe": round(self.sharpe(), 4),
+            # "return_volatility_ratio" is the canonical key; "sharpe" is kept
+            # for backward compatibility with existing dashboards and reports.
+            "return_volatility_ratio": rar,
+            "sharpe": rar,
+            "volatility": round(self.volatility(), 4),
             "profit_factor": round(self.profit_factor(), 4),
             "max_drawdown": round(self.max_drawdown, 4),
+            "capital_multiplier": self.capital_multiplier,
+            "confidence_multiplier": self.confidence_multiplier,
             "params": {k: round(v, 4) for k, v in self.params.items()},
         }
 
@@ -217,6 +311,10 @@ class AIStrategyEvolutionEngine:
         self._generation: int = 0
         self._lock = threading.Lock()
         self._evolution_history: List[Dict[str, Any]] = []
+
+        # Regime-weighted capital layer
+        self._current_regime: str = "UNKNOWN"
+        self._regime_scale: float = REGIME_CAPITAL_SCALE["UNKNOWN"]
 
         self._init_population(population_size)
         logger.info(
@@ -372,6 +470,111 @@ class AIStrategyEvolutionEngine:
             return list(self._population)
 
     # ------------------------------------------------------------------
+    # Public: regime-weighted capital layer
+    # ------------------------------------------------------------------
+
+    def set_regime(self, regime: str) -> None:
+        """Push the current market regime into the engine.
+
+        Call this once per scan cycle (after your regime detector runs) so
+        that :meth:`get_genome_multipliers` can apply the correct scale.
+
+        Parameters
+        ----------
+        regime:
+            One of ``"TRENDING"``, ``"RANGING"``, ``"CHAOTIC"``, or any
+            alias defined in ``REGIME_CAPITAL_SCALE``.  Unknown values fall
+            back to the neutral scale (1.0).
+        """
+        regime_upper = regime.upper()
+        scale = REGIME_CAPITAL_SCALE.get(regime_upper, REGIME_CAPITAL_SCALE["UNKNOWN"])
+        with self._lock:
+            self._current_regime = regime_upper
+            self._regime_scale = scale
+        logger.debug(
+            "🌐 Regime updated: %s → scale=%.2f", regime_upper, scale
+        )
+
+    def pull_regime(self) -> str:
+        """Auto-read the current regime from :class:`MarketRegimeController`.
+
+        Queries the process-level ``MarketRegimeController`` singleton and
+        calls :meth:`set_regime` if a classified result is available.
+        Silently no-ops when the controller is unavailable or has not yet
+        produced a result, preserving the last known regime.
+
+        Returns
+        -------
+        str
+            The regime name that is now active (``"UNKNOWN"`` when the
+            controller could not be reached).
+        """
+        try:
+            try:
+                from bot.market_regime_controller import get_market_regime_controller
+            except ImportError:
+                try:
+                    from market_regime_controller import get_market_regime_controller  # type: ignore
+                except ImportError as imp_err:
+                    logger.debug("pull_regime: market_regime_controller not importable (%s)", imp_err)
+                    return self._current_regime
+
+            ctrl = get_market_regime_controller()
+            controls = ctrl.current_controls
+            if controls is not None:
+                self.set_regime(controls.regime.value)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("pull_regime: controller unavailable (%s) — keeping %s",
+                         exc, self._current_regime)
+        return self._current_regime
+
+    def get_genome_multipliers(self, genome_id: str) -> Dict[str, Any]:
+        """Return base and regime-adjusted multipliers for a genome.
+
+        The *effective* multipliers are the product of the genome's
+        performance-driven base multipliers and the current regime scale::
+
+            effective_capital    = clamp(capital_multiplier    * regime_scale,
+                                         CAPITAL_MULT_MIN, CAPITAL_MULT_MAX)
+            effective_confidence = clamp(confidence_multiplier * regime_scale,
+                                         CONFIDENCE_MULT_MIN, CONFIDENCE_MULT_MAX)
+
+        Parameters
+        ----------
+        genome_id:
+            The genome whose multipliers should be returned.  If the genome
+            is not found, neutral multipliers (1.0) are returned.
+
+        Returns
+        -------
+        dict with keys:
+            ``capital_multiplier``, ``confidence_multiplier``,
+            ``regime``, ``regime_scale``,
+            ``effective_capital_multiplier``, ``effective_confidence_multiplier``
+        """
+        with self._lock:
+            g = self._find_genome(genome_id)
+            base_cap  = g.capital_multiplier    if g else 1.0
+            base_conf = g.confidence_multiplier if g else 1.0
+            regime       = self._current_regime
+            regime_scale = self._regime_scale
+
+        eff_cap = round(
+            max(CAPITAL_MULT_MIN,  min(CAPITAL_MULT_MAX,  base_cap  * regime_scale)), 4
+        )
+        eff_conf = round(
+            max(CONFIDENCE_MULT_MIN, min(CONFIDENCE_MULT_MAX, base_conf * regime_scale)), 4
+        )
+        return {
+            "capital_multiplier":            base_cap,
+            "confidence_multiplier":         base_conf,
+            "regime":                        regime,
+            "regime_scale":                  regime_scale,
+            "effective_capital_multiplier":  eff_cap,
+            "effective_confidence_multiplier": eff_conf,
+        }
+
+    # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
 
@@ -388,6 +591,8 @@ class AIStrategyEvolutionEngine:
             "avg_fitness": round(float(np.mean(fitnesses)), 4) if fitnesses else 0.0,
             "max_fitness": round(float(np.max(fitnesses)), 4) if fitnesses else 0.0,
             "min_fitness": round(float(np.min(fitnesses)), 4) if fitnesses else 0.0,
+            "regime": self._current_regime,
+            "regime_scale": self._regime_scale,
         }
 
     def get_report(self) -> Dict[str, Any]:
