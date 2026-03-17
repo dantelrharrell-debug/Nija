@@ -163,17 +163,8 @@ class AccountRecord:
 
 @dataclass
 class BroadcastResult:
-    """Aggregated result for a full multi-account broadcast."""
+    """Result of executing a broadcast signal on a single account."""
 
-    success: bool              # True if at least one account succeeded
-    symbol: str
-    side: str
-    size_usd: float
-    volatility_blocked: bool = False
-    volatility_severity: str = "NONE"
-    size_scale_applied: float = 1.0
-    account_results: List[AccountResult] = field(default_factory=list)
-    """Result of executing a signal on one account."""
     account_id: str
     symbol: str
     side: str
