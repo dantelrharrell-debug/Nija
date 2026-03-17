@@ -9047,6 +9047,9 @@ class BrokerManager:
         self.brokers: Dict[BrokerType, BaseBroker] = {}
         self.active_broker: Optional[BaseBroker] = None
         self.primary_broker_type: Optional[BrokerType] = None
+        self.platform_broker: Optional[BaseBroker] = None
+        self.primary_broker: Optional[BaseBroker] = None
+        self._platform_locked: bool = False
 
     def add_broker(self, broker: BaseBroker):
         """
@@ -9060,6 +9063,18 @@ class BrokerManager:
         set_primary_broker() after adding brokers.
         """
         self.brokers[broker.broker_type] = broker
+
+        # Ensure platform broker is globally registered and never overwritten
+        broker_type = getattr(broker.account_type, 'value', None)
+        if broker_type == "platform":
+            self.platform_broker = broker
+            self.primary_broker = broker  # 🔥 FORCE PRIMARY
+
+            # Prevent fallback override
+            self._platform_locked = True
+            logger.info("✅ PLATFORM broker registered globally")
+            logger.info("✅ Platform set as PRIMARY (locked)")
+            logger.info("✅ Cross-account orchestration ENABLED")
 
         # CRITICAL FIX (Jan 10, 2026): Remove automatic primary broker selection
         # Previously, Coinbase was automatically set as primary, which made it
@@ -9100,6 +9115,10 @@ class BrokerManager:
         Returns:
             bool: True if successfully set as primary
         """
+        # When setting primary broker elsewhere
+        if getattr(self, "_platform_locked", False):
+            return False  # 🔒 NEVER override platform
+
         if broker_type in self.brokers:
             self.active_broker = self.brokers[broker_type]
             self.primary_broker_type = broker_type
