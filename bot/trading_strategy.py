@@ -140,7 +140,107 @@ except ImportError:
         get_global_risk_governor = None
         GovernorConfig = None
 
-# Import AI Market Regime Forecaster — predicts regime changes early
+# Import Global Capital Manager — cross-account capital scaling & risk balancing
+try:
+    from global_capital_manager import get_global_capital_manager
+    GLOBAL_CAPITAL_MANAGER_AVAILABLE = True
+    logger.info("✅ Global Capital Manager loaded - capital scaling & risk balancing active")
+except ImportError:
+    try:
+        from bot.global_capital_manager import get_global_capital_manager
+        GLOBAL_CAPITAL_MANAGER_AVAILABLE = True
+        logger.info("✅ Global Capital Manager loaded - capital scaling & risk balancing active")
+    except ImportError:
+        GLOBAL_CAPITAL_MANAGER_AVAILABLE = False
+        logger.warning("⚠️ Global Capital Manager not available - capital scaling disabled")
+        get_global_capital_manager = None
+
+# Import Master Strategy Router — one master signal for all accounts
+try:
+    from master_strategy_router import get_master_strategy_router
+    MASTER_STRATEGY_ROUTER_AVAILABLE = True
+    logger.info("✅ Master Strategy Router loaded - single master signal coordination active")
+except ImportError:
+    try:
+        from bot.master_strategy_router import get_master_strategy_router
+        MASTER_STRATEGY_ROUTER_AVAILABLE = True
+        logger.info("✅ Master Strategy Router loaded - single master signal coordination active")
+    except ImportError:
+        MASTER_STRATEGY_ROUTER_AVAILABLE = False
+        logger.warning("⚠️ Master Strategy Router not available - signal coordination disabled")
+        get_master_strategy_router = None
+
+# Import Signal Broadcaster — fan-out execution across all accounts
+try:
+    from signal_broadcaster import get_signal_broadcaster
+    SIGNAL_BROADCASTER_AVAILABLE = True
+    logger.info("✅ Signal Broadcaster loaded - cross-account fan-out execution active")
+except ImportError:
+    try:
+        from bot.signal_broadcaster import get_signal_broadcaster
+        SIGNAL_BROADCASTER_AVAILABLE = True
+        logger.info("✅ Signal Broadcaster loaded - cross-account fan-out execution active")
+    except ImportError:
+        SIGNAL_BROADCASTER_AVAILABLE = False
+        logger.warning("⚠️ Signal Broadcaster not available - fan-out execution disabled")
+        get_signal_broadcaster = None
+
+# Import Execution Pipeline — final connected flow (Steps 1-6)
+try:
+    from execution_pipeline import get_execution_pipeline
+    EXECUTION_PIPELINE_AVAILABLE = True
+    logger.info("✅ Execution Pipeline loaded - full cross-account orchestration active")
+except ImportError:
+    try:
+        from bot.execution_pipeline import get_execution_pipeline
+        EXECUTION_PIPELINE_AVAILABLE = True
+        logger.info("✅ Execution Pipeline loaded - full cross-account orchestration active")
+    except ImportError:
+        EXECUTION_PIPELINE_AVAILABLE = False
+        logger.warning("⚠️ Execution Pipeline not available")
+        get_execution_pipeline = None
+
+# Import Account Performance Dashboard — per-account metrics
+try:
+    from account_performance_dashboard import get_account_performance_dashboard
+    ACCOUNT_DASHBOARD_AVAILABLE = True
+    logger.info("✅ Account Performance Dashboard loaded - per-account metrics active")
+except ImportError:
+    try:
+        from bot.account_performance_dashboard import get_account_performance_dashboard
+        ACCOUNT_DASHBOARD_AVAILABLE = True
+        logger.info("✅ Account Performance Dashboard loaded - per-account metrics active")
+    except ImportError:
+        ACCOUNT_DASHBOARD_AVAILABLE = False
+        get_account_performance_dashboard = None
+
+# Import Profit Splitter — proportional profit distribution per user
+try:
+    from profit_splitter import get_profit_splitter
+    PROFIT_SPLITTER_AVAILABLE = True
+    logger.info("✅ Profit Splitter loaded - per-user profit splitting active")
+except ImportError:
+    try:
+        from bot.profit_splitter import get_profit_splitter
+        PROFIT_SPLITTER_AVAILABLE = True
+        logger.info("✅ Profit Splitter loaded - per-user profit splitting active")
+    except ImportError:
+        PROFIT_SPLITTER_AVAILABLE = False
+        get_profit_splitter = None
+
+# Import AI Capital Allocator — auto-shifts funds to best performers
+try:
+    from ai_capital_allocator import get_ai_capital_allocator
+    AI_CAPITAL_ALLOCATOR_AVAILABLE = True
+    logger.info("✅ AI Capital Allocator loaded - auto capital shift to best performers active")
+except ImportError:
+    try:
+        from bot.ai_capital_allocator import get_ai_capital_allocator
+        AI_CAPITAL_ALLOCATOR_AVAILABLE = True
+        logger.info("✅ AI Capital Allocator loaded - auto capital shift to best performers active")
+    except ImportError:
+        AI_CAPITAL_ALLOCATOR_AVAILABLE = False
+        get_ai_capital_allocator = None
 try:
     from ai_market_regime_forecaster import get_ai_market_regime_forecaster
     AI_REGIME_FORECASTER_AVAILABLE = True
@@ -6240,6 +6340,29 @@ class TradingStrategy:
 
                         account_balance = balance_data.get('trading_balance', 0.0)
 
+                        # ═══════════════════════════════════════════════════════
+                        # GLOBAL CAPITAL MANAGER — register account balance
+                        # Enables proportional allocation & cross-account risk
+                        # ═══════════════════════════════════════════════════════
+                        if GLOBAL_CAPITAL_MANAGER_AVAILABLE and get_global_capital_manager:
+                            try:
+                                _gcm = get_global_capital_manager()
+                                _acct_label = self._get_broker_name(active_broker)
+                                _gcm.register_account(_acct_label, account_balance)
+                            except Exception as _gcm_err:
+                                logger.debug("GlobalCapitalManager register_account skipped: %s", _gcm_err)
+
+                        # ═══════════════════════════════════════════════════════
+                        # SIGNAL BROADCASTER — register account for fan-out
+                        # ═══════════════════════════════════════════════════════
+                        if SIGNAL_BROADCASTER_AVAILABLE and get_signal_broadcaster:
+                            try:
+                                _sb = get_signal_broadcaster()
+                                _acct_label = self._get_broker_name(active_broker)
+                                _sb.register_account(_acct_label, active_broker, account_balance)
+                            except Exception as _sb_err:
+                                logger.debug("SignalBroadcaster register_account skipped: %s", _sb_err)
+
                         # Update capital growth throttle with refreshed broker balance
                         # (broker may have changed mid-cycle; keep throttle in sync)
                         if CAPITAL_GROWTH_THROTTLE_AVAILABLE and get_capital_growth_throttle:
@@ -6701,7 +6824,25 @@ class TradingStrategy:
                             # Filter trades through quality gate (R:R, momentum, stop quality)
                             if hasattr(self, 'quality_gate') and self.quality_gate:
                                 analysis = self.quality_gate.filter_strategy_signal(analysis, df)
-                            
+
+                            # ═══════════════════════════════════════════════════════
+                            # MASTER STRATEGY ROUTER — push signal; all accounts react
+                            # Master (platform) pushes; followers read same signal.
+                            # ═══════════════════════════════════════════════════════
+                            if MASTER_STRATEGY_ROUTER_AVAILABLE and get_master_strategy_router:
+                                try:
+                                    _msr = get_master_strategy_router()
+                                    if not user_mode:
+                                        # Master account: publish signal globally
+                                        _msr.update({**analysis, 'symbol': symbol})
+                                    else:
+                                        # Follower account: replace local signal with master
+                                        _master_signal = _msr.get_signal()
+                                        if _master_signal and _master_signal.get('symbol') == symbol:
+                                            analysis = _master_signal
+                                except Exception as _msr_err:
+                                    logger.debug("MasterStrategyRouter skipped for %s: %s", symbol, _msr_err)
+
                             action = analysis.get('action', 'hold')
                             reason = analysis.get('reason', '')
 
@@ -7033,6 +7174,29 @@ class TradingStrategy:
                                         logger.warning(f"   ⚠️ Market readiness re-check error for {symbol}: {readiness_err}")
                                         # Continue with trade if readiness check fails
 
+                                # ═══════════════════════════════════════════════════════
+                                # GLOBAL CAPITAL SCALING — proportional allocation
+                                # Scale position size by this account's share of total capital.
+                                # ═══════════════════════════════════════════════════════
+                                if GLOBAL_CAPITAL_MANAGER_AVAILABLE and get_global_capital_manager:
+                                    try:
+                                        _gcm = get_global_capital_manager()
+                                        _acct_label = self._get_broker_name(active_broker)
+                                        allocation = _gcm.get_allocation(_acct_label)
+                                        if allocation < 1.0:
+                                            _pre_alloc_size = position_size
+                                            position_size *= allocation
+                                            logger.info(
+                                                f"   📊 {symbol}: Global capital scaling "
+                                                f"({allocation:.2%} share) — "
+                                                f"${_pre_alloc_size:.2f} → ${position_size:.2f}"
+                                            )
+                                    except Exception as _gcm_err:
+                                        logger.debug(
+                                            "GlobalCapitalManager allocation skipped for %s: %s",
+                                            symbol, _gcm_err,
+                                        )
+
                                 # Calculate dynamic minimum based on account balance and
                                 # brokerage-specific minimums (Option B – prevent dust at creation)
                                 broker_name = self._get_broker_name(active_broker)
@@ -7058,6 +7222,36 @@ class TradingStrategy:
                                 # Warn if position is near the minimum but allowed
                                 if position_size < POSITION_SIZE_WARNING_THRESHOLD_USD:
                                     logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
+
+                                # ═══════════════════════════════════════════════════════
+                                # CROSS-ACCOUNT RISK BALANCING — global 6% ceiling
+                                # Block trade if adding it would breach MAX_GLOBAL_RISK.
+                                # ═══════════════════════════════════════════════════════
+                                if GLOBAL_CAPITAL_MANAGER_AVAILABLE and get_global_capital_manager:
+                                    try:
+                                        _gcm = get_global_capital_manager()
+                                        _acct_label = self._get_broker_name(active_broker)
+                                        _requested_risk = (
+                                            position_size / account_balance
+                                            if account_balance > 0 else 0.0
+                                        )
+                                        # Check BEFORE updating so the ceiling test excludes
+                                        # the current account's own in-flight risk.
+                                        if not _gcm.can_open_trade(_requested_risk):
+                                            logger.warning(
+                                                f"   🚫 {symbol}: BLOCKED_GLOBAL_RISK — "
+                                                f"cross-account risk ceiling reached "
+                                                f"(requested={_requested_risk:.2%}, MAX=6%)"
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        # Approved — record this account's risk commitment
+                                        _gcm.update_account_risk(_acct_label, _requested_risk)
+                                    except Exception as _gcm_err:
+                                        logger.debug(
+                                            "GlobalCapitalManager risk check skipped for %s: %s",
+                                            symbol, _gcm_err,
+                                        )
 
                                 # CRITICAL: Verify we're still under position cap before placing order
                                 if len(current_positions) >= MAX_POSITIONS_ALLOWED:
@@ -7323,6 +7517,32 @@ class TradingStrategy:
                                 success = self.apex.execute_action(analysis, symbol)
                                 if success:
                                     logger.info(f"   ✅ Position opened successfully")
+
+                                    # ═══════════════════════════════════════════════════════
+                                    # EXECUTION PIPELINE — fan-out signal to all accounts
+                                    # Steps: risk-check → broadcast → dashboard → profit split
+                                    # → AI capital reallocation
+                                    # ═══════════════════════════════════════════════════════
+                                    if EXECUTION_PIPELINE_AVAILABLE and get_execution_pipeline:
+                                        try:
+                                            _pipeline = get_execution_pipeline()
+                                            _regime_label = (
+                                                _regime_result.regime
+                                                if _regime_result and hasattr(_regime_result, 'regime')
+                                                else "RANGING"
+                                            )
+                                            _pipeline.run(
+                                                signal={**analysis, 'symbol': symbol},
+                                                account_id=self._get_broker_name(active_broker),
+                                                account_balance=account_balance,
+                                                regime=_regime_label,
+                                            )
+                                        except Exception as _pipe_err:
+                                            logger.debug(
+                                                "ExecutionPipeline skipped for %s: %s",
+                                                symbol, _pipe_err,
+                                            )
+
                                     # Record micro-cap trade time for re-entry cooldown
                                     if _micro_cap_config:
                                         self._micro_cap_last_trade_times[symbol] = time.time()
