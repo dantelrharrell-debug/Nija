@@ -9072,10 +9072,9 @@ class BrokerManager:
 
             # Prevent fallback override
             self._platform_locked = True
-            logger.info(
-                f"🔒 Platform broker locked: {broker.broker_type.value} "
-                f"(primary_broker set, fallback override prevented)"
-            )
+            logger.info("✅ PLATFORM broker registered globally")
+            logger.info("✅ Platform set as PRIMARY (locked)")
+            logger.info("✅ Cross-account orchestration ENABLED")
 
         # CRITICAL FIX (Jan 10, 2026): Remove automatic primary broker selection
         # Previously, Coinbase was automatically set as primary, which made it
@@ -9118,7 +9117,7 @@ class BrokerManager:
         """
         # When setting primary broker elsewhere
         if getattr(self, "_platform_locked", False):
-            return  # 🔒 NEVER override platform
+            return False  # 🔒 NEVER override platform
 
         if broker_type in self.brokers:
             self.active_broker = self.brokers[broker_type]
