@@ -550,6 +550,9 @@ class TradeDuplicationGuard:
                 "max_registry_size": self._config.max_registry_size,
                 "recent_blocked": self._blocked_log[-10:],
             }
+
+    def check_and_register(
+        self,
         symbol: str,
         side: str,
         size: float,
@@ -769,17 +772,13 @@ _instance_lock = threading.Lock()
 def get_trade_duplication_guard(
     config: Optional[TradeDuplicationGuardConfig] = None,
 ) -> TradeDuplicationGuard:
-    """Return (or create) the global ``TradeDuplicationGuard`` singleton.
+    """Return the global ``TradeDuplicationGuard`` singleton.
 
     Parameters
     ----------
     config:
         Optional configuration; only used on the **first** call.
-    """Return the global singleton :class:`TradeDuplicationGuard`.
-
-    The first caller may optionally supply a
-    :class:`TradeDuplicationGuardConfig` to customise behaviour.  Subsequent
-    callers receive the same instance regardless of the ``config`` argument.
+        Subsequent callers receive the same instance regardless of ``config``.
     """
     global _instance
     if _instance is None:
