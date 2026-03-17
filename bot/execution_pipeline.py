@@ -66,10 +66,8 @@ from __future__ import annotations
 
 import logging
 import threading
-pimport time
+import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -114,16 +112,9 @@ class PipelineResult:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
-
-
-class ExecutionPipeline:
-    """Orchestration layer: TradeThrottler (Priority-2) + order routing.
-
-    Thread-safe singleton via ``get_execution_pipeline()``.
 # Optional subsystem imports
 # ---------------------------------------------------------------------------
+
 
 def _try_import(primary: str, fallback: str):
     """Import a module by primary path, falling back to fallback path."""
@@ -179,6 +170,10 @@ class ExecutionPipeline:
         self._throttler = self._load_throttler()
         self._router = self._load_router()
         self._multi_router = self._load_multi_router()
+
+        self._run_count: int = 0
+        self._blocked_count: int = 0
+        self._last_run: Optional[str] = None
 
         logger.info(
             "ExecutionPipeline initialised | throttler=%s | router=%s | multi_router=%s",
@@ -406,27 +401,6 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.debug("ExecutionPipeline: could not load %s: %s", mod_name, exc)
         return None
-
-
-# ---------------------------------------------------------------------------
-# Singleton factory
-# ---------------------------------------------------------------------------
-
-_instance: Optional[ExecutionPipeline] = None
-_instance_lock = threading.Lock()
-
-
-def get_execution_pipeline() -> ExecutionPipeline:
-    """Return the process-wide :class:`ExecutionPipeline` singleton."""
-    global _instance
-    if _instance is None:
-        with _instance_lock:
-            if _instance is None:
-                _instance = ExecutionPipeline()
-    return _instance
-        self._run_count: int = 0
-        self._blocked_count: int = 0
-        self._last_run: Optional[str] = None
 
     def run(
         self,
