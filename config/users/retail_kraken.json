@@ -16,10 +16,10 @@
     "name": "Tania Gilbert",
     "account_type": "retail",
     "broker_type": "kraken",
-    "enabled": false,
-    "copy_from_master": false,
-    "independent_trading": false,
-    "active_trading": false,
+    "enabled": true,
+    "copy_from_master": true,
+    "independent_trading": true,
+    "active_trading": true,
     "disabled_symbols": ["XRP-USD"],
     "description": "Retail user - Kraken crypto account (independent trading enabled)"
   }
