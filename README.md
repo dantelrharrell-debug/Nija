@@ -1,9 +1,11 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-📋 **Version 7.4.0** — March 2026 Portfolio Intelligence Release
+📋 **Version 7.5.0** — March 2026 Multi-Layer Protection Release
 
 > **CRITICAL SAFETY GUARANTEE**  
 > **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
+> **✅ v7.5.0 (March 17, 2026):** Three new priority gate modules + three integration modules landed. **VolatilityGuard** (Priority-1, blowup prevention), **TradeThrottler** (Priority-2, consistency), and **StrategyVoter** (Priority-3, accuracy) are wired into **MasterStrategyRouter**, **ExecutionPipeline**, and **SignalBroadcaster** respectively. Both previously broken files (`portfolio_kill_switch.py`, `trade_duplication_guard.py`) fully repaired. 110 tests pass (60 existing + 50 new).
 
 > **✅ v7.4.0 (March 9, 2026):** Five new institutional-grade portfolio-intelligence engines landed: **Portfolio Master Engine** (consolidated risk brain), **Liquidity Detection Engine** (institutional-flow detector), **AI Regime Engine** (leading-indicator regime forecaster), **Global Portfolio Engine** (strategy coordinator with regime-aware capital allocation), and **Execution Router** (smart order routing with venue selection, TWAP, and auto-retry). All engines degrade gracefully when optional subsystems are unavailable.
 
@@ -12,6 +14,90 @@
 > **✅ v7.3.0 (March 2026):** Deep code audit complete — all bare exception handlers replaced with typed handlers, stop-loss log messages now correctly identify which threshold triggered (primary -4% vs. noise-floor -0.05%).
 
 ---
+
+## 🛡️ PRIORITY GATE SYSTEM (v7.5.0 — March 17, 2026)
+
+Every trade passes through **three priority gates** before reaching execution.
+The gates are enforced globally: no trade can bypass them.
+
+```
+Signal
+  │
+  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  1️⃣  VolatilityGuard  (Priority-1 — MOST IMPORTANT)             │
+│      Prevents blowups by blocking trades during extreme         │
+│      volatility shocks (ATR z-score ≥ 4.5 → EXTREME → block).  │
+│      SEVERE → 0.30× size scale.  MODERATE → 0.55×.             │
+│      Wired in: SignalBroadcaster.execute_across_accounts()      │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ PASS
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  2️⃣  TradeThrottler   (Priority-2)                              │
+│      Improves consistency by enforcing sliding-window rate      │
+│      limits: 3/min · 20/hr · 50/day · 5s minimum gap.          │
+│      Wired in: ExecutionPipeline.execute()                      │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ PASS
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  3️⃣  StrategyVoter    (Priority-3)                              │
+│      Improves accuracy by requiring ≥2 strategies to agree      │
+│      with ≥55% confidence before a signal is actionable.        │
+│      Wired in: MasterStrategyRouter.get_signal()                │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ PASS
+                               ▼
+                      EXECUTION (broker order)
+```
+
+### New Modules (v7.5.0)
+
+| Module | Gate | Purpose |
+|--------|------|---------|
+| `bot/volatility_guard.py` | Priority-1 | Wraps `VolatilityShockDetector`; EXTREME → block; SEVERE/MODERATE → scale |
+| `bot/trade_throttler.py` | Priority-2 | Sliding-window rate limiter (per-minute, per-hour, per-day, min-gap) |
+| `bot/strategy_voter.py` | Priority-3 | Wraps `HedgeFundStrategyRouter`; requires quorum + confidence threshold |
+| `bot/master_strategy_router.py` | Wiring | StrategyVoter wired here; single signal entry point for all strategies |
+| `bot/execution_pipeline.py` | Wiring | TradeThrottler wired here; wraps ExecutionRouter + MultiBrokerExecutionRouter |
+| `bot/signal_broadcaster.py` | Wiring | VolatilityGuard wired before `execute_across_accounts()`; multi-account broadcast |
+
+### Quick Usage
+
+```python
+from bot.signal_broadcaster import get_signal_broadcaster, BroadcastSignal
+from bot.master_strategy_router import get_master_strategy_router
+from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+
+# 1. Get consensus signal (StrategyVoter inside)
+router = get_master_strategy_router()
+signal = router.get_signal(df=df, symbol="BTC-USD", regime="TRENDING")
+
+if signal.approved:
+    # 2. Broadcast to multiple accounts (VolatilityGuard + TradeThrottler inside)
+    broadcaster = get_signal_broadcaster()
+    result = broadcaster.execute_across_accounts(BroadcastSignal(
+        symbol="BTC-USD",
+        side=signal.action,
+        size_usd=500.0,
+        strategy="ApexTrend",
+        account_ids=["main", "follower_1"],
+    ))
+```
+
+### Gate Behaviour at a Glance
+
+| Gate | Trigger | Effect | Fail-safe |
+|------|---------|--------|-----------|
+| VolatilityGuard | ATR z-score ≥ 4.5 (EXTREME) | Hard block — zero accounts receive order | Pass-through if detector unavailable |
+| VolatilityGuard | ATR z-score ≥ 3.0 (SEVERE) | 0.30× size scale on all accounts | Configurable via `block_on_severe=True` |
+| TradeThrottler | >3 trades/min or >20/hr or >50/day | Reject entry, log warning | Pass-through if throttler unavailable |
+| StrategyVoter | <2 strategies agree OR confidence <55% | Reject signal, no trade queued | Pass-through when no DataFrame provided |
+
+---
+
+
 
 ## 🔒 CURRENT SUCCESS REFERENCE POINT — March 9, 2026 (v7.4.0)
 
