@@ -4,38 +4,43 @@ NIJA Platform Account Layer
 
 Implements the "Smart Structure" for running NIJA as a real SaaS platform:
 
-    ┌────────────────────────────────────────────────┐
-    │           SMART STRUCTURE (Recommended)         │
-    │                                                 │
-    │  Kraken Account 1                               │
-    │    Owner  : You                                 │
-    │    Purpose: Personal investing                  │
-    │                                                 │
-    │  Kraken Account 2                               │
-    │    Owner  : NIJA                                │
-    │    Purpose: AI trading engine                   │
-    │                                                 │
-    │  User connections:                              │
-    │    User Kraken ──► API ──► NIJA                 │
-    └────────────────────────────────────────────────┘
+    ┌────────────────────────────────────────────────────────────────┐
+    │                 SMART STRUCTURE (Recommended)                  │
+    │                                                                │
+    │  Platform Account (NIJA)                                       │
+    │    Owner  : NIJA AI Engine                                     │
+    │    Purpose: AI trading engine / SaaS backbone                  │
+    │    Exchanges: Coinbase, Kraken, OKX, Alpaca, Binance           │
+    │                                                                │
+    │  User Accounts                                                 │
+    │    Owner  : Individual subscribers                             │
+    │    Purpose: Personal investing (managed by NIJA AI)            │
+    │    Connection: User Exchange ──► API ──► NIJA                  │
+    └────────────────────────────────────────────────────────────────┘
 
 How it works:
-  - Account 2 (NIJA's own Kraken) is the PLATFORM account.
-    It is the AI engine that drives all trading logic.
-  - Account 1 (owner's personal Kraken) is a USER account.
-    It connects to NIJA via API keys just like any other user.
-  - Additional users connect their own Kraken accounts to NIJA
-    using the same User Kraken → API → NIJA pattern.
+  - The PLATFORM account belongs to NIJA.  It is the AI engine that
+    drives all trading logic.  Its credentials are stored as env vars
+    prefixed with {EXCHANGE}_PLATFORM_*.
+  - USER accounts are individual subscribers who connect their own
+    exchange accounts to NIJA by supplying API keys.
+  - Credentials are encrypted at rest using Fernet symmetric encryption
+    via the ``auth`` module.  Plaintext keys are never persisted.
+  - Runtime user registration is supported in addition to the legacy
+    env-var discovery path, enabling database-backed onboarding.
 
-Environment variables:
-  # NIJA Platform account (Account 2 – NIJA AI engine)
+Environment variables (legacy / single-exchange path):
+  # NIJA Platform account — Kraken
   KRAKEN_PLATFORM_API_KEY=<nija-kraken-api-key>
   KRAKEN_PLATFORM_API_SECRET=<nija-kraken-api-secret>
 
-  # Connected user accounts (Account 1 = personal, or any user)
+  # Connected user accounts
   # Pattern: KRAKEN_USER_{FIRSTNAME}_API_KEY
   KRAKEN_USER_YOURNAME_API_KEY=<personal-kraken-api-key>
   KRAKEN_USER_YOURNAME_API_SECRET=<personal-kraken-api-secret>
+
+Supported exchanges (EXCHANGE prefix):
+  COINBASE, KRAKEN, BINANCE, OKX, ALPACA
 """
 
 import logging
@@ -45,6 +50,12 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("nija.platform_account_layer")
 
+# ---------------------------------------------------------------------------
+# Supported exchanges
+# ---------------------------------------------------------------------------
+
+SUPPORTED_EXCHANGES = ("COINBASE", "KRAKEN", "BINANCE", "OKX", "ALPACA")
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -52,9 +63,10 @@ logger = logging.getLogger("nija.platform_account_layer")
 
 @dataclass
 class UserConnection:
-    """Represents a user's Kraken account connected to NIJA."""
+    """Represents a user's exchange account connected to NIJA."""
     user_id: str
     name: str
+    exchange: str            # e.g. "KRAKEN", "COINBASE"
     env_prefix: str          # e.g. "KRAKEN_USER_YOURNAME"
     connected: bool = False
     error: Optional[str] = None
@@ -62,7 +74,7 @@ class UserConnection:
 
     @property
     def label(self) -> str:
-        return f"{self.name} ({self.user_id})"
+        return f"{self.name} ({self.user_id}) [{self.exchange}]"
 
 
 @dataclass
@@ -70,7 +82,9 @@ class PlatformStatus:
     """Current status of the NIJA Platform Account Layer."""
     platform_configured: bool = False
     platform_connected: bool = False
-    platform_account_label: str = "NIJA AI Trading Engine (Kraken Account 2)"
+    platform_account_label: str = "NIJA AI Trading Engine (Platform Account)"
+    # Exchanges for which NIJA has platform credentials
+    platform_exchanges: List[str] = field(default_factory=list)
     user_connections: List[UserConnection] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
 
@@ -84,7 +98,7 @@ class PlatformStatus:
 
     @property
     def is_ready(self) -> bool:
-        """Platform layer is ready when at least the NIJA platform account is configured."""
+        """Platform layer is ready when at least one NIJA platform account is configured."""
         return self.platform_configured
 
 
@@ -98,25 +112,26 @@ class PlatformAccountLayer:
 
     Smart Structure
     ───────────────
-    Kraken Account 2  →  NIJA (AI trading engine)      [PLATFORM]
-    Kraken Account 1  →  You  (personal investing)     [USER]
-    Kraken Account N  →  Any user                      [USER]
+    Platform Account  →  NIJA (AI trading engine)      [PLATFORM]
+    User Account 1    →  Personal investing             [USER]
+    User Account N    →  Any subscriber                 [USER]
 
-    Users connect their Kraken accounts to NIJA by providing
-    their Kraken API key/secret, which NIJA stores as
-    KRAKEN_USER_{FIRSTNAME}_API_KEY / _SECRET env vars.
+    Multiple exchanges are supported: Coinbase, Kraken, Binance, OKX, Alpaca.
+
+    Users connect their exchange accounts to NIJA by supplying their API
+    credentials, which are encrypted and stored via the ``auth`` module.
+    The legacy env-var path (KRAKEN_USER_{NAME}_*) is still supported for
+    backward compatibility.
     """
 
-    # Env var names for NIJA's own Kraken account (Account 2)
-    PLATFORM_KEY_ENV = "KRAKEN_PLATFORM_API_KEY"
-    PLATFORM_SECRET_ENV = "KRAKEN_PLATFORM_API_SECRET"
-
-    # Legacy fallback (backward compatibility)
+    # Legacy Kraken-only env var names (backward compatibility)
     LEGACY_KEY_ENV = "KRAKEN_API_KEY"
     LEGACY_SECRET_ENV = "KRAKEN_API_SECRET"
 
     def __init__(self) -> None:
         self._status = PlatformStatus()
+        # {user_id: UserConnection} — runtime-registered users (encrypted store)
+        self._runtime_users: Dict[str, UserConnection] = {}
         self._validate_platform_credentials()
         self._discover_user_connections()
 
@@ -135,22 +150,24 @@ class PlatformAccountLayer:
         logger.info("🏦  NIJA PLATFORM ACCOUNT LAYER — Smart Structure")
         logger.info("=" * 64)
 
-        # NIJA platform account (Account 2)
+        # NIJA platform accounts
         if s.platform_configured:
+            exchanges = ", ".join(s.platform_exchanges) if s.platform_exchanges else "unknown"
             icon = "✅"
-            note = "CONNECTED" if s.platform_connected else "ready — will connect on startup"
+            note = f"CONNECTED ({exchanges})" if s.platform_connected else f"ready — will connect on startup ({exchanges})"
         else:
             icon = "❌"
-            note = "NOT CONFIGURED — set KRAKEN_PLATFORM_API_KEY / SECRET"
+            note = "NOT CONFIGURED — set {EXCHANGE}_PLATFORM_API_KEY / SECRET"
 
-        logger.info(f"  {icon}  Kraken Account 2  │  Owner: NIJA  │  Purpose: AI trading engine")
+        logger.info(f"  {icon}  Platform Account  │  Owner: NIJA  │  Purpose: AI trading engine")
         logger.info(f"          Status: {note}")
         logger.info("")
 
         # Connected user accounts
-        if s.user_connections:
+        all_users = list(self._status.user_connections)
+        if all_users:
             logger.info(f"  👥  Connected user accounts  ({s.connected_user_count}/{s.user_count})")
-            for u in s.user_connections:
+            for u in all_users:
                 u_icon = "✅" if u.connected else "⚠️ "
                 if u.connected:
                     u_note = "CONNECTED"
@@ -158,77 +175,197 @@ class PlatformAccountLayer:
                     u_note = u.error
                 else:
                     u_note = "ready — will connect on startup"
-                logger.info(f"      {u_icon}  {u.label:30s}  │  {u.env_prefix}_API_KEY  │  {u_note}")
+                logger.info(
+                    f"      {u_icon}  {u.label:40s}  │  {u.env_prefix}_API_KEY  │  {u_note}"
+                )
         else:
             logger.info("  ℹ️   No user accounts configured yet.")
-            logger.info("       To connect Account 1 (your personal Kraken), add:")
-            logger.info("         KRAKEN_USER_YOURNAME_API_KEY=<key>")
-            logger.info("         KRAKEN_USER_YOURNAME_API_SECRET=<secret>")
-            logger.info("       Then add your user to  config/users/retail_kraken.json")
+            logger.info("       To connect a user account, call register_user_account() or add:")
+            logger.info("         {EXCHANGE}_USER_YOURNAME_API_KEY=<key>")
+            logger.info("         {EXCHANGE}_USER_YOURNAME_API_SECRET=<secret>")
+            logger.info("       Then add the user to config/users/retail_{exchange}.json")
 
         logger.info("")
-        logger.info("  User connection pattern:  User Kraken ──► API ──► NIJA")
+        logger.info("  User connection pattern:  User Exchange ──► API ──► NIJA")
         logger.info("=" * 64)
 
     def validate(self) -> bool:
         """
         Validate that the platform layer is properly configured.
 
-        Returns True if the NIJA platform account (Account 2) credentials
-        are present.  Logs actionable guidance when they are missing.
+        Returns True if at least one NIJA platform account credential
+        is present.  Logs actionable guidance when they are missing.
         """
         if self._status.platform_configured:
-            logger.info("✅ Platform Account Layer: NIJA platform account configured")
+            exchanges = ", ".join(self._status.platform_exchanges)
+            logger.info(
+                f"✅ Platform Account Layer: NIJA platform account configured ({exchanges})"
+            )
             return True
 
         logger.warning("⚠️  Platform Account Layer: NIJA platform account NOT configured")
-        logger.warning("   To run NIJA as a SaaS platform you need TWO Kraken accounts:")
+        logger.warning("   To run NIJA as a SaaS platform, set platform credentials for at")
+        logger.warning("   least one exchange:")
         logger.warning("")
-        logger.warning("   Kraken Account 1 (yours — personal investing)")
-        logger.warning("     → Connect as a user:  KRAKEN_USER_YOURNAME_API_KEY")
-        logger.warning("")
-        logger.warning("   Kraken Account 2 (NIJA — AI trading engine)   ← required here")
-        logger.warning("     → Set as platform:    KRAKEN_PLATFORM_API_KEY")
-        logger.warning("                            KRAKEN_PLATFORM_API_SECRET")
+        for ex in SUPPORTED_EXCHANGES:
+            logger.warning(f"   {ex}_PLATFORM_API_KEY=<key>")
+            logger.warning(f"   {ex}_PLATFORM_API_SECRET=<secret>")
         logger.warning("")
         logger.warning("   See SMART_STRUCTURE_GUIDE.md for step-by-step setup.")
         return False
 
-    def get_platform_credentials(self) -> Dict[str, str]:
+    def get_platform_credentials(self, exchange: str = "KRAKEN") -> Dict[str, str]:
         """
-        Return the NIJA platform account credentials.
+        Return the NIJA platform account credentials for a given exchange.
 
-        Returns a dict with 'api_key' and 'api_secret', or empty strings
-        if not configured.  Credentials are read from environment variables
-        and are never stored in memory beyond this call.
+        Args:
+            exchange: Exchange name (COINBASE, KRAKEN, BINANCE, OKX, ALPACA).
+                      Defaults to KRAKEN for backward compatibility.
+
+        Returns:
+            dict with 'api_key' and 'api_secret', or empty strings if not
+            configured.  Credentials are read from environment variables and
+            are never stored in memory beyond this call.
         """
-        api_key = (
-            os.getenv(self.PLATFORM_KEY_ENV, "").strip()
-            or os.getenv(self.LEGACY_KEY_ENV, "").strip()
-        )
-        api_secret = (
-            os.getenv(self.PLATFORM_SECRET_ENV, "").strip()
-            or os.getenv(self.LEGACY_SECRET_ENV, "").strip()
-        )
+        exchange = exchange.upper()
+        key_env = f"{exchange}_PLATFORM_API_KEY"
+        secret_env = f"{exchange}_PLATFORM_API_SECRET"
+
+        api_key = os.getenv(key_env, "").strip()
+        api_secret = os.getenv(secret_env, "").strip()
+
+        # Legacy Kraken fallback
+        if exchange == "KRAKEN" and not (api_key and api_secret):
+            api_key = api_key or os.getenv(self.LEGACY_KEY_ENV, "").strip()
+            api_secret = api_secret or os.getenv(self.LEGACY_SECRET_ENV, "").strip()
+
         return {"api_key": api_key, "api_secret": api_secret}
 
     def list_user_env_prefixes(self) -> List[str]:
         """
-        Return the list of KRAKEN_USER_* env prefixes that have credentials set.
+        Return the list of {EXCHANGE}_USER_* env prefixes that have credentials set.
 
         Useful for dynamically discovering which users have connected their
-        Kraken accounts to NIJA.
+        exchange accounts to NIJA.
         """
         return [u.env_prefix for u in self._status.user_connections]
 
+    def register_user_account(
+        self,
+        user_id: str,
+        name: str,
+        exchange: str,
+        api_key: str,
+        api_secret: str,
+    ) -> bool:
+        """
+        Register a user account at runtime (database-backed onboarding path).
+
+        Credentials are stored encrypted via the ``auth`` module.  The env-var
+        representation is set for the current process so that broker managers
+        that read env vars will pick up the new user immediately.
+
+        Args:
+            user_id: Unique user identifier (e.g. email or UUID).
+            name: Display name for the user.
+            exchange: Exchange name (COINBASE, KRAKEN, BINANCE, OKX, ALPACA).
+            api_key: Exchange API key.
+            api_secret: Exchange API secret.
+
+        Returns:
+            True on success, False if the user is already registered or
+            credentials are empty.
+        """
+        exchange = exchange.upper()
+        if exchange not in SUPPORTED_EXCHANGES:
+            logger.warning(f"register_user_account: unsupported exchange '{exchange}'")
+            return False
+
+        if not api_key or not api_secret:
+            logger.warning(f"register_user_account: empty credentials for user '{user_id}'")
+            return False
+
+        # Store encrypted via auth module (best-effort; falls back to env-only)
+        try:
+            from auth import get_api_key_manager
+            mgr = get_api_key_manager()
+            mgr.store_user_api_key(user_id, exchange.lower(), api_key, api_secret)
+            logger.debug(f"Encrypted credentials stored for user '{user_id}' on {exchange}")
+        except ImportError:
+            # auth module not on path in some deployment configurations — env-only is fine
+            logger.debug("auth module not importable, using env-only credential path")
+        except Exception as exc:
+            logger.debug(f"auth module unavailable, using env-only path: {exc}")
+
+        # Expose via env vars for broker managers that read os.environ.
+        # Sanitize user_id so the env-var name is always valid: keep only
+        # alphanumeric characters, replacing everything else with underscore.
+        import re as _re
+        token = _re.sub(r"[^A-Z0-9]", "_", user_id.upper())
+        prefix = f"{exchange}_USER_{token}"
+        os.environ[f"{prefix}_API_KEY"] = api_key
+        os.environ[f"{prefix}_API_SECRET"] = api_secret
+
+        conn = UserConnection(
+            user_id=user_id,
+            name=name,
+            exchange=exchange,
+            env_prefix=prefix,
+        )
+        self._runtime_users[user_id] = conn
+
+        # Merge into status list (replace if same user_id already present)
+        existing = [u for u in self._status.user_connections if u.user_id != user_id]
+        self._status.user_connections = existing + [conn]
+
+        logger.info(f"Registered user account: {conn.label}")
+        return True
+
+    def unregister_user_account(self, user_id: str) -> bool:
+        """
+        Remove a user account from the platform layer.
+
+        Removes the runtime entry and clears the env vars set during
+        registration.  Does not delete persisted encrypted keys from the
+        auth module's durable store (call ``auth.get_api_key_manager()``
+        directly for that).
+
+        Args:
+            user_id: Unique user identifier.
+
+        Returns:
+            True if the user was found and removed, False otherwise.
+        """
+        conn = self._runtime_users.pop(user_id, None)
+        if conn is None:
+            # Try env-var discovered users
+            conn_list = [u for u in self._status.user_connections if u.user_id == user_id]
+            if not conn_list:
+                return False
+            conn = conn_list[0]
+
+        # Clear env vars
+        os.environ.pop(f"{conn.env_prefix}_API_KEY", None)
+        os.environ.pop(f"{conn.env_prefix}_API_SECRET", None)
+
+        self._status.user_connections = [
+            u for u in self._status.user_connections if u.user_id != user_id
+        ]
+        logger.info(f"Unregistered user account: {conn.label}")
+        return True
+
     def mark_platform_connected(self, connected: bool = True) -> None:
-        """Called by the broker manager once NIJA's Kraken account connects."""
+        """Called by the broker manager once NIJA's platform account connects."""
         self._status.platform_connected = connected
 
-    def mark_user_connected(self, user_id: str, connected: bool = True,
-                            error: Optional[str] = None,
-                            balance_usd: float = 0.0) -> None:
-        """Called by the broker manager once a user's Kraken account connects."""
+    def mark_user_connected(
+        self,
+        user_id: str,
+        connected: bool = True,
+        error: Optional[str] = None,
+        balance_usd: float = 0.0,
+    ) -> None:
+        """Called by the broker manager once a user's account connects."""
         for u in self._status.user_connections:
             if u.user_id == user_id:
                 u.connected = connected
@@ -241,66 +378,70 @@ class PlatformAccountLayer:
     # ------------------------------------------------------------------
 
     def _validate_platform_credentials(self) -> None:
-        """Check whether NIJA's own Kraken credentials (Account 2) are set."""
-        key = (
-            os.getenv(self.PLATFORM_KEY_ENV, "").strip()
-            or os.getenv(self.LEGACY_KEY_ENV, "").strip()
-        )
-        secret = (
-            os.getenv(self.PLATFORM_SECRET_ENV, "").strip()
-            or os.getenv(self.LEGACY_SECRET_ENV, "").strip()
-        )
-        self._status.platform_configured = bool(key and secret)
+        """Check which exchanges NIJA has platform credentials for."""
+        configured_exchanges: List[str] = []
 
-        if self._status.platform_configured:
-            source = (
-                self.PLATFORM_KEY_ENV
-                if os.getenv(self.PLATFORM_KEY_ENV, "").strip()
-                else f"{self.LEGACY_KEY_ENV} (legacy)"
-            )
-            logger.debug(f"Platform credentials found via {source}")
+        for exchange in SUPPORTED_EXCHANGES:
+            key = os.getenv(f"{exchange}_PLATFORM_API_KEY", "").strip()
+            secret = os.getenv(f"{exchange}_PLATFORM_API_SECRET", "").strip()
+            if key and secret:
+                configured_exchanges.append(exchange)
+
+        # Legacy Kraken fallback
+        if "KRAKEN" not in configured_exchanges:
+            legacy_key = os.getenv(self.LEGACY_KEY_ENV, "").strip()
+            legacy_secret = os.getenv(self.LEGACY_SECRET_ENV, "").strip()
+            if legacy_key and legacy_secret:
+                configured_exchanges.append("KRAKEN")
+                logger.debug("Platform credentials found via legacy KRAKEN_API_KEY env vars")
+
+        self._status.platform_exchanges = configured_exchanges
+        self._status.platform_configured = bool(configured_exchanges)
+
+        if configured_exchanges:
+            logger.debug(f"Platform credentials found for: {', '.join(configured_exchanges)}")
         else:
-            logger.debug("Platform credentials not set")
+            logger.debug("No platform credentials set")
 
     def _discover_user_connections(self) -> None:
         """
-        Scan environment variables for KRAKEN_USER_*_API_KEY entries.
+        Scan environment variables for {EXCHANGE}_USER_*_API_KEY entries
+        across all supported exchanges.
 
         Each matching key represents a user who has connected their personal
-        Kraken account to NIJA via the pattern:
-            User Kraken → API → NIJA
+        exchange account to NIJA via the pattern:
+            User Exchange → API → NIJA
         """
         env = os.environ
         seen: Dict[str, UserConnection] = {}
 
-        for var_name in env:
-            if not var_name.startswith("KRAKEN_USER_"):
-                continue
-            if not var_name.endswith("_API_KEY"):
-                continue
+        for exchange in SUPPORTED_EXCHANGES:
+            prefix_search = f"{exchange}_USER_"
+            for var_name in env:
+                if not var_name.startswith(prefix_search):
+                    continue
+                if not var_name.endswith("_API_KEY"):
+                    continue
 
-            # Extract FIRSTNAME from KRAKEN_USER_{FIRSTNAME}_API_KEY
-            # e.g. "KRAKEN_USER_YOURNAME_API_KEY" → inner = "YOURNAME"
-            inner = var_name[len("KRAKEN_USER_"):-len("_API_KEY")]
-            if not inner:
-                continue
+                # Extract token between {EXCHANGE}_USER_ and _API_KEY
+                inner = var_name[len(prefix_search):-len("_API_KEY")]
+                if not inner:
+                    continue
 
-            prefix = f"KRAKEN_USER_{inner}"  # e.g. "KRAKEN_USER_YOURNAME"
-            api_key = env.get(f"{prefix}_API_KEY", "").strip()
-            api_secret = env.get(f"{prefix}_API_SECRET", "").strip()
+                prefix = f"{exchange}_USER_{inner}"
+                api_key = env.get(f"{prefix}_API_KEY", "").strip()
+                api_secret = env.get(f"{prefix}_API_SECRET", "").strip()
+                if not api_key or not api_secret:
+                    continue
 
-            if not api_key or not api_secret:
-                continue
-
-            # Build a user_id from the firstname token (lowercase)
-            # e.g. "YOURNAME" → user_id = "yourname"
-            user_id = inner.lower()
-            if user_id not in seen:
-                seen[user_id] = UserConnection(
-                    user_id=user_id,
-                    name=inner.capitalize(),
-                    env_prefix=prefix,
-                )
+                user_id = f"{exchange.lower()}_{inner.lower()}"
+                if user_id not in seen:
+                    seen[user_id] = UserConnection(
+                        user_id=user_id,
+                        name=inner.capitalize(),
+                        exchange=exchange,
+                        env_prefix=prefix,
+                    )
 
         self._status.user_connections = list(seen.values())
         if seen:
