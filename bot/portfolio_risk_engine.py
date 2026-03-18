@@ -26,6 +26,16 @@ from collections import defaultdict
 
 logger = logging.getLogger("nija.portfolio_risk")
 
+# ---------------------------------------------------------------------------
+# Sector exposure thresholds
+# ---------------------------------------------------------------------------
+
+#: Soft warning zone expressed as a fraction (0.30 = 30 %).  When the
+#: *current* sector exposure (before the new trade) is already at or above
+#: this level the proposed position size is scaled down to 70 % of its
+#: original value to reduce incremental concentration risk.
+SOFT_SECTOR_WARNING: float = 0.30  # 30 %
+
 
 @dataclass
 class PositionExposure:
@@ -175,6 +185,7 @@ class PortfolioRiskEngine:
         logger.info(f"Max Total Exposure: {self.max_total_exposure*100:.0f}%")
         logger.info(f"Max Corr. Group Exposure: {self.max_correlation_group_exposure*100:.0f}% (legacy)")
         logger.info(f"Soft Sector Limit: {self.soft_sector_limit_pct*100:.0f}% (warning + reduce)")
+        logger.info(f"Soft Warning Zone: {SOFT_SECTOR_WARNING*100:.0f}% (scale down by 30%)")
         logger.info(f"Hard Sector Limit: {self.hard_sector_limit_pct*100:.0f}% (block)")
         logger.info(f"Correlation Threshold: {self.correlation_threshold}")
         logger.info(f"Min Diversification Ratio: {self.min_diversification_ratio}")
@@ -402,6 +413,7 @@ class PortfolioRiskEngine:
             'sector_name': None,
             'current_sector_exposure_pct': 0.0,
             'projected_sector_exposure_pct': 0.0,
+            'soft_warning_zone_triggered': False,
             'soft_limit_triggered': False,
             'hard_limit_triggered': False,
             'enforcement_action': 'none'
@@ -440,7 +452,29 @@ class PortfolioRiskEngine:
         
         enforcement_info['current_sector_exposure_pct'] = current_sector_exposure_pct
         enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
-        
+
+        # SOFT WARNING ZONE: 30% - Existing exposure alert
+        # Fires when the sector has already drifted above SOFT_SECTOR_WARNING
+        # (e.g. due to mark-to-market gains on open positions) even before the
+        # proposed new entry is counted.
+        if current_sector_exposure_pct >= SOFT_SECTOR_WARNING:
+            position_size_usd *= 0.7  # scale down in warning zone
+            enforcement_info['soft_warning_zone_triggered'] = True
+            enforcement_info['soft_warning_reduction_factor'] = 0.7
+            logger.warning(
+                f"🟡 SOFT WARNING ZONE for {symbol} ({sector_name}): "
+                f"Current sector exposure {current_sector_exposure_pct*100:.1f}% "
+                f"is at or above the soft warning threshold "
+                f"{SOFT_SECTOR_WARNING*100:.0f}%. "
+                f"Scaling down position size by 30%: "
+                f"${enforcement_info['original_size_usd']:,.2f} → ${position_size_usd:,.2f}"
+            )
+
+        # Recalculate projected exposure with (possibly reduced) position size
+        projected_sector_exposure_usd = current_sector_exposure_usd + position_size_usd
+        projected_sector_exposure_pct = projected_sector_exposure_usd / portfolio_value
+        enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
+
         # HARD LIMIT: 20% - Absolute block
         if projected_sector_exposure_pct > self.hard_sector_limit_pct:
             enforcement_info['hard_limit_triggered'] = True
