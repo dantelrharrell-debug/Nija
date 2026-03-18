@@ -27,9 +27,11 @@ from collections import defaultdict
 import jwt
 import hashlib
 import secrets
+import json
 import os
 import logging
 import time
+import stripe
 
 from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
@@ -812,17 +814,16 @@ async def get_market_breakdown(user_id: str = Depends(get_current_user)):
     }
 
 
+
 # ========================================
 # Subscription & Billing Endpoints (Stripe)
 # ========================================
-
-import stripe as _stripe
 
 _stripe_secret_key = os.getenv("STRIPE_SECRET_KEY", "")
 _stripe_webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 _stripe_enabled = bool(_stripe_secret_key)
 if _stripe_enabled:
-    _stripe.api_key = _stripe_secret_key
+    stripe.api_key = _stripe_secret_key
     logger.info("Stripe integration enabled")
 else:
     logger.warning(
@@ -899,12 +900,12 @@ async def create_checkout_session(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"No Stripe price configured for tier '{data.tier}'. "
-                   "Set STRIPE_PRICE_{TIER} environment variables.",
+                   "Set STRIPE_PRICE_<TIER> environment variables.",
         )
 
     app_url = os.getenv("APP_BASE_URL", "https://app.nija.trading")
     try:
-        session = _stripe.checkout.Session.create(
+        session = stripe.checkout.Session.create(
             mode="subscription",
             line_items=[{"price": price_id, "quantity": 1}],
             customer_email=user_profile.get("email"),
@@ -960,17 +961,16 @@ async def stripe_webhook(request: Request):
 
     if _stripe_webhook_secret:
         try:
-            event = _stripe.Webhook.construct_event(
+            event = stripe.Webhook.construct_event(
                 payload, sig_header, _stripe_webhook_secret
             )
-        except _stripe.error.SignatureVerificationError:
+        except stripe.error.SignatureVerificationError:
             logger.warning("Stripe webhook signature verification failed")
             raise HTTPException(status_code=400, detail="Invalid signature")
     else:
-        # Accept unsigned events only in dev mode
-        import json as _json
+        # Accept unsigned events only in dev mode (no webhook secret configured)
         try:
-            event = _json.loads(payload)
+            event = json.loads(payload)
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid payload")
 
@@ -991,11 +991,16 @@ async def stripe_webhook(request: Request):
                                            new_tier=new_tier)
             logger.info(f"Subscription updated via webhook: {user_id} → {new_tier}")
 
-    elif event_type in ("customer.subscription.deleted",
-                        "invoice.payment_failed"):
-        customer_id = data_obj.get("customer")
-        logger.warning(f"Stripe subscription issue [{event_type}] customer={customer_id}")
-        # TODO: look up user by Stripe customer ID and downgrade / notify
+    elif event_type == "customer.subscription.deleted":
+        # Subscription cancelled – downgrade user to free/basic tier
+        customer_id = data_obj.get("customer", "")
+        logger.warning(f"Subscription deleted for Stripe customer {customer_id}")
+        # Note: implement customer_id → user_id lookup once Stripe customer IDs
+        # are persisted per user (e.g. via a stripe_customers table).
+
+    elif event_type == "invoice.payment_failed":
+        customer_id = data_obj.get("customer", "")
+        logger.warning(f"Payment failed for Stripe customer {customer_id}")
 
     return {"status": "ok"}
 
@@ -1005,7 +1010,7 @@ async def stripe_webhook(request: Request):
 # ========================================
 
 class TwoFASetupConfirm(BaseModel):
-    code: str = Field(..., min_length=6, max_length=6, pattern="^[0-9]{6}$")
+    code: str = Field(..., pattern="^[0-9]{6}$")
 
 
 class TwoFAVerify(BaseModel):

@@ -279,7 +279,6 @@ class EmailService:
 
         try:
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-                server.ehlo()
                 server.starttls()
                 server.login(SMTP_USERNAME, SMTP_PASSWORD)
                 server.sendmail(EMAIL_FROM, [to], msg.as_string())
