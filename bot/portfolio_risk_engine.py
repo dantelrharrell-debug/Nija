@@ -26,6 +26,16 @@ from collections import defaultdict
 
 logger = logging.getLogger("nija.portfolio_risk")
 
+# ---------------------------------------------------------------------------
+# Sector exposure thresholds
+# ---------------------------------------------------------------------------
+
+#: Soft warning zone: sector exposure at or above this level (30 %) triggers
+#: an early warning log even when the position is still allowed.  This sits
+#: above the hard-block limit (default 20 %) and flags sectors that are
+#: drifting into critically over-concentrated territory.
+SOFT_SECTOR_WARNING: float = 0.30
+
 
 @dataclass
 class PositionExposure:
@@ -131,7 +141,7 @@ class PortfolioRiskEngine:
         
         # Risk parameters
         self.max_total_exposure = self.config.get('max_total_exposure', 0.80)  # 80% max
-        self.max_correlation_group_exposure = self.config.get('max_correlation_group_exposure', 0.30)  # 30% max (LEGACY)
+        self.max_correlation_group_exposure = self.config.get('max_correlation_group_exposure', SOFT_SECTOR_WARNING)  # 30% max (LEGACY)
         self.correlation_threshold = self.config.get('correlation_threshold', 0.7)  # 0.7+ is high correlation
         self.min_diversification_ratio = self.config.get('min_diversification_ratio', 1.5)
         
@@ -441,6 +451,19 @@ class PortfolioRiskEngine:
         enforcement_info['current_sector_exposure_pct'] = current_sector_exposure_pct
         enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
         
+        # SOFT WARNING ZONE: 30% - Existing exposure alert
+        # Fires when the sector has already drifted above SOFT_SECTOR_WARNING
+        # (e.g. due to mark-to-market gains on open positions) even before the
+        # proposed new entry is counted.
+        if current_sector_exposure_pct >= SOFT_SECTOR_WARNING:
+            logger.warning(
+                f"🟡 SOFT WARNING ZONE for {symbol} ({sector_name}): "
+                f"Current sector exposure {current_sector_exposure_pct*100:.1f}% "
+                f"is at or above the soft warning threshold "
+                f"{SOFT_SECTOR_WARNING*100:.0f}%. "
+                f"Consider reducing existing positions in this sector."
+            )
+
         # HARD LIMIT: 20% - Absolute block
         if projected_sector_exposure_pct > self.hard_sector_limit_pct:
             enforcement_info['hard_limit_triggered'] = True
