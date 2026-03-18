@@ -200,6 +200,22 @@ except ImportError:
         logger.warning("⚠️ Execution Pipeline not available")
         get_execution_pipeline = None
 
+# Import Copy Trade Engine — replicate platform trades into all user accounts
+try:
+    from copy_trade_engine import get_copy_engine, CopySignal
+    COPY_ENGINE_AVAILABLE = True
+    logger.info("✅ Copy Trade Engine loaded - platform→user trade replication active")
+except ImportError:
+    try:
+        from bot.copy_trade_engine import get_copy_engine, CopySignal
+        COPY_ENGINE_AVAILABLE = True
+        logger.info("✅ Copy Trade Engine loaded - platform→user trade replication active")
+    except ImportError:
+        COPY_ENGINE_AVAILABLE = False
+        logger.warning("⚠️ Copy Trade Engine not available - user account replication disabled")
+        get_copy_engine = None
+        CopySignal = None
+
 # Import Account Performance Dashboard — per-account metrics
 try:
     from account_performance_dashboard import get_account_performance_dashboard
@@ -6828,32 +6844,53 @@ class TradingStrategy:
                             # NOTE: Both account_balance and total_capital are broker-specific at this point
                             # (updated at lines 3418 and 3440 from selected entry broker)
                             broker_balance = total_capital if self.pro_mode_enabled else account_balance
-                            analysis = self.apex.analyze_market(df, symbol, broker_balance)
-                            
-                            # ═══════════════════════════════════════════════════════
-                            # LAYER 2: TRADE QUALITY GATE
-                            # ═══════════════════════════════════════════════════════
-                            # Filter trades through quality gate (R:R, momentum, stop quality)
-                            if hasattr(self, 'quality_gate') and self.quality_gate:
-                                analysis = self.quality_gate.filter_strategy_signal(analysis, df)
 
                             # ═══════════════════════════════════════════════════════
-                            # MASTER STRATEGY ROUTER — push signal; all accounts react
-                            # Master (platform) pushes; followers read same signal.
+                            # MASTER STRATEGY ROUTER — ONE signal, not per-user signals
+                            # Platform: generates signal via APEX and publishes it.
+                            # User accounts: read the master signal only (no independent
+                            # strategy execution — copied trades only).
                             # ═══════════════════════════════════════════════════════
-                            if MASTER_STRATEGY_ROUTER_AVAILABLE and get_master_strategy_router:
-                                try:
-                                    _msr = get_master_strategy_router()
-                                    if not user_mode:
-                                        # Master account: publish signal globally
+                            if user_mode:
+                                # USER ACCOUNTS — block independent strategy execution.
+                                # Only execute trades copied from the platform account.
+                                if MASTER_STRATEGY_ROUTER_AVAILABLE and get_master_strategy_router:
+                                    try:
+                                        _msr = get_master_strategy_router()
+                                        _stored_signal = _msr.current_signal
+                                        if isinstance(_stored_signal, dict) and _stored_signal.get('symbol') == symbol:
+                                            analysis = _stored_signal
+                                        else:
+                                            # No master signal for this symbol — skip entry
+                                            filter_stats['no_entry_signal'] += 1
+                                            logger.debug("   %s (USER): no master signal — skipping entry", symbol)
+                                            continue
+                                    except Exception as _msr_err:
+                                        logger.debug("MasterStrategyRouter read skipped for %s: %s", symbol, _msr_err)
+                                        continue
+                                else:
+                                    # Master router unavailable — user accounts must not trade independently
+                                    filter_stats['no_entry_signal'] += 1
+                                    logger.debug("   %s (USER): master router unavailable — skipping entry", symbol)
+                                    continue
+                            else:
+                                # PLATFORM ACCOUNT — generate signal via APEX and publish via master router
+                                analysis = self.apex.analyze_market(df, symbol, broker_balance)
+
+                                # ═══════════════════════════════════════════════════════
+                                # LAYER 2: TRADE QUALITY GATE
+                                # ═══════════════════════════════════════════════════════
+                                # Filter trades through quality gate (R:R, momentum, stop quality)
+                                if hasattr(self, 'quality_gate') and self.quality_gate:
+                                    analysis = self.quality_gate.filter_strategy_signal(analysis, df)
+
+                                # Publish platform signal so all user accounts can read it
+                                if MASTER_STRATEGY_ROUTER_AVAILABLE and get_master_strategy_router:
+                                    try:
+                                        _msr = get_master_strategy_router()
                                         _msr.update({**analysis, 'symbol': symbol})
-                                    else:
-                                        # Follower account: replace local signal with master
-                                        _master_signal = _msr.get_signal()
-                                        if _master_signal and _master_signal.get('symbol') == symbol:
-                                            analysis = _master_signal
-                                except Exception as _msr_err:
-                                    logger.debug("MasterStrategyRouter skipped for %s: %s", symbol, _msr_err)
+                                    except Exception as _msr_err:
+                                        logger.debug("MasterStrategyRouter update skipped for %s: %s", symbol, _msr_err)
 
                             action = analysis.get('action', 'hold')
                             reason = analysis.get('reason', '')
@@ -7529,6 +7566,25 @@ class TradingStrategy:
                                 success = self.apex.execute_action(analysis, symbol)
                                 if success:
                                     logger.info(f"   ✅ Position opened successfully")
+
+                                    # ═══════════════════════════════════════════════════════
+                                    # COPY TRADE ENGINE — broadcast platform trade to users
+                                    # Only the platform account triggers copy broadcasting.
+                                    # ═══════════════════════════════════════════════════════
+                                    if not user_mode and COPY_ENGINE_AVAILABLE and get_copy_engine and CopySignal:
+                                        try:
+                                            _copy_side = "buy" if action == "enter_long" else "sell"
+                                            logger.info(f"   📡 Broadcasting trade: {symbol} {_copy_side} ${position_size:.2f}")
+                                            _copy_engine = get_copy_engine()
+                                            _copy_results = _copy_engine.broadcast(CopySignal(
+                                                symbol=symbol,
+                                                side=_copy_side,
+                                                platform_size_usd=position_size,
+                                            ))
+                                            _copy_user_count = len([r for r in (_copy_results or []) if getattr(r, 'skipped', True) is False])
+                                            logger.info(f"   👥 Copying to {_copy_user_count} account(s)")
+                                        except Exception as _copy_err:
+                                            logger.debug("CopyEngine broadcast skipped for %s: %s", symbol, _copy_err)
 
                                     # ═══════════════════════════════════════════════════════
                                     # EXECUTION PIPELINE — fan-out signal to all accounts
