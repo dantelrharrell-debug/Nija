@@ -82,6 +82,44 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.ai_capital_rotation")
 
+# ---------------------------------------------------------------------------
+# Optional diversity filter (from advanced_trading_optimizer)
+# ---------------------------------------------------------------------------
+try:
+    from advanced_trading_optimizer import _apply_diversity_filter as _diversity_filter
+    _DIVERSITY_FILTER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.advanced_trading_optimizer import _apply_diversity_filter as _diversity_filter
+        _DIVERSITY_FILTER_AVAILABLE = True
+    except ImportError:
+        _diversity_filter = None
+        _DIVERSITY_FILTER_AVAILABLE = False
+        logger.debug("Diversity filter not available in ai_capital_rotation_engine")
+
+
+class _SignalWrap:
+    """
+    Lightweight wrapper that gives a plain signal dict the attribute interface
+    expected by :func:`_apply_diversity_filter` (i.e. ``symbol``, ``score``,
+    ``metadata``, ``priority``, ``confidence``, ``volatility_regime``,
+    ``position_size``).
+
+    The original dict is stored in ``_orig`` and is accessible after filtering.
+    """
+    __slots__ = ('symbol', 'score', 'confidence', 'volatility_regime',
+                 'position_size', 'priority', 'metadata', '_orig')
+
+    def __init__(self, d: dict) -> None:
+        self.symbol = d.get('symbol', '')
+        self.score = float(d.get('score', 0) or 0)
+        self.confidence = float(d.get('confidence', 0.5) or 0.5)
+        self.volatility_regime = d.get('volatility_regime', 'normal')
+        self.position_size = d.get('position_size', 0)
+        self.priority = 0
+        self.metadata = dict(d.get('metadata') or {})
+        self._orig = d
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
@@ -468,6 +506,15 @@ class AICapitalRotationEngine:
 
         # Sort descending by score
         eligible.sort(key=lambda s: float(s.get("score", 0) or 0), reverse=True)
+
+        # Apply sector-diversity filter so top slots aren't filled with
+        # correlated assets (e.g. BTC + ETH + SOL → BTC + LINK + AVAX).
+        if _DIVERSITY_FILTER_AVAILABLE and _diversity_filter is not None:
+            # _apply_diversity_filter operates on objects with .symbol and
+            # .metadata attributes; use the module-level _SignalWrap adapter.
+            wrapped = [_SignalWrap(s) for s in eligible]
+            filtered = _diversity_filter(wrapped)
+            eligible = [w._orig for w in filtered]
 
         # Take only as many as available slots
         top = eligible[:available_slots]
