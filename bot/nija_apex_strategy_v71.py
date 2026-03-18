@@ -102,6 +102,28 @@ except ImportError:
     AIIntelligenceHub = None  # type: ignore
     logger.warning("AI Intelligence Hub not available – running without AI regime / risk / allocation layer")
 
+# Import profit optimisation stack (all three are optional – graceful degradation)
+# ProfitHarvestLayer: ratchet-tier profit locking + partial harvests
+# PortfolioProfitFlywheel: compound-growth multiplier driven by cumulative wins
+# CapitalRecyclingEngine: routes harvested profits to top-performing strategies
+try:
+    from bot.profit_harvest_layer import get_profit_harvest_layer, ProfitHarvestLayer
+    from bot.portfolio_profit_flywheel import get_portfolio_profit_flywheel, PortfolioProfitFlywheel
+    from bot.capital_recycling_engine import get_capital_recycling_engine, CapitalRecyclingEngine
+    PROFIT_STACK_AVAILABLE = True
+except ImportError:
+    try:
+        from profit_harvest_layer import get_profit_harvest_layer, ProfitHarvestLayer
+        from portfolio_profit_flywheel import get_portfolio_profit_flywheel, PortfolioProfitFlywheel
+        from capital_recycling_engine import get_capital_recycling_engine, CapitalRecyclingEngine
+        PROFIT_STACK_AVAILABLE = True
+    except ImportError:
+        get_profit_harvest_layer = None  # type: ignore
+        get_portfolio_profit_flywheel = None  # type: ignore
+        get_capital_recycling_engine = None  # type: ignore
+        PROFIT_STACK_AVAILABLE = False
+        logger.warning("Profit optimisation stack not available – running without harvest/flywheel/recycling")
+
 
 class NIJAApexStrategyV71:
     """
@@ -117,6 +139,7 @@ class NIJAApexStrategyV71:
     7. Exit Logic (opposite signal, trailing stop, trend break)
     8. Smart Filters (news, volume, candle timing)
     9. Optional: AI Momentum Scoring (skeleton)
+    10. Profit Optimisation Stack (harvest layer + flywheel compounding + capital recycling)
     """
 
     def __init__(self, broker_client=None, config: Optional[Dict] = None):
@@ -219,6 +242,34 @@ class NIJAApexStrategyV71:
                 logger.warning("⚠️  AI Intelligence Hub not available")
             else:
                 logger.info("ℹ️  AI Intelligence Hub disabled by configuration")
+
+        # PROFIT OPTIMISATION STACK
+        # Three cooperative engines that turn every realised profit into compounding growth:
+        #   1. ProfitHarvestLayer  – ratchet-tier locks + on-tier-upgrade partial harvests
+        #   2. PortfolioProfitFlywheel – cumulative-profit-driven position-size multiplier
+        #   3. CapitalRecyclingEngine  – routes harvested amounts to top-performing strategies
+        # All three degrade gracefully when unavailable.
+        enable_profit_stack = self.config.get('enable_profit_stack', True)
+        if PROFIT_STACK_AVAILABLE and enable_profit_stack:
+            try:
+                self.profit_harvest_layer = get_profit_harvest_layer()
+                self.portfolio_profit_flywheel = get_portfolio_profit_flywheel()
+                self.capital_recycling_engine = get_capital_recycling_engine()
+                logger.info("✅ Profit Optimisation Stack: ENABLED")
+                logger.info("   ├─ ProfitHarvestLayer  (ratchet-tier locks + partial harvests)")
+                logger.info("   ├─ PortfolioProfitFlywheel (compound-growth multiplier)")
+                logger.info("   └─ CapitalRecyclingEngine  (harvest → best-strategy routing)")
+            except Exception as _pstack_err:
+                logger.warning(f"⚠️  Profit stack init failed – degrading gracefully: {_pstack_err}")
+                self.profit_harvest_layer = None
+                self.portfolio_profit_flywheel = None
+                self.capital_recycling_engine = None
+        else:
+            self.profit_harvest_layer = None
+            self.portfolio_profit_flywheel = None
+            self.capital_recycling_engine = None
+            if not PROFIT_STACK_AVAILABLE:
+                logger.warning("⚠️  Profit optimisation stack not available")
 
         # PROFITABILITY ASSERTION: Validate strategy configuration (CRITICAL GUARD RAIL)
         # This prevents deployment of unprofitable configurations that would lose money after fees
@@ -1323,6 +1374,48 @@ class NIJAApexStrategyV71:
                 # Manage existing position
                 logger.debug(f"📊 Managing position: {symbol} @ ${current_price:.4f}")
 
+                # PRIORITY 0: Profit Harvest Layer – ratchet-tier floor checks
+                # Updates the tier lock and fires a floor-hit exit when price retraces
+                # to the locked-profit stop level.  Also deposits any newly-harvested
+                # amount into the capital recycling pool for re-deployment.
+                if self.profit_harvest_layer is not None:
+                    try:
+                        harvest_decision = self.profit_harvest_layer.process_price_update(
+                            symbol, current_price
+                        )
+                        # Floor hit: the ratchet stop was breached – close immediately
+                        if harvest_decision.floor_hit:
+                            return {
+                                'action': 'exit',
+                                'reason': (
+                                    f'🔒 Profit lock floor hit (tier {harvest_decision.current_tier}): '
+                                    f'locking {harvest_decision.locked_profit_pct:.2f}% of peak gain'
+                                ),
+                                'position': position,
+                                'current_price': current_price,
+                            }
+                        # New tier upgrade → harvest the incremental amount into recycling pool
+                        if (
+                            harvest_decision.harvest_triggered
+                            and harvest_decision.harvest_amount_usd > 0
+                            and self.capital_recycling_engine is not None
+                        ):
+                            try:
+                                regime = str(self.current_regime) if self.current_regime else 'UNKNOWN'
+                                self.capital_recycling_engine.deposit_profit(
+                                    amount_usd=harvest_decision.harvest_amount_usd,
+                                    source_symbol=symbol,
+                                    regime=regime,
+                                )
+                                logger.debug(
+                                    f"   💰 Harvested ${harvest_decision.harvest_amount_usd:.2f} "
+                                    f"from {symbol} → recycling pool"
+                                )
+                            except Exception as _recycl_err:
+                                logger.debug(f"Capital recycling deposit error: {_recycl_err}")
+                    except Exception as _harvest_err:
+                        logger.debug(f"Profit harvest layer update error: {_harvest_err}")
+
                 should_exit, exit_reason = self.check_exit_conditions(
                     symbol, df, indicators, current_price
                 )
@@ -1444,6 +1537,23 @@ class NIJAApexStrategyV71:
                         position_size = self.adjust_position_size_for_regime(
                             position_size, self.current_regime, score
                         )
+
+                    # ── Portfolio Profit Flywheel ──────────────────────────
+                    # As cumulative net profit grows the flywheel returns a
+                    # multiplier (1.0–3.0) that gradually increases position
+                    # sizes, compounding capital growth automatically.
+                    if self.portfolio_profit_flywheel is not None:
+                        try:
+                            flywheel_mult = self.portfolio_profit_flywheel.get_capital_multiplier()
+                            if flywheel_mult > 1.0:
+                                max_allowed = account_balance * self.risk_manager.max_position_pct
+                                position_size = min(position_size * flywheel_mult, max_allowed)
+                                position_size = scalar(position_size)
+                                logger.debug(
+                                    f"   🌀 Flywheel ×{flywheel_mult:.2f} → long ${position_size:.2f}"
+                                )
+                        except Exception as _fw_err:
+                            logger.debug(f"Flywheel multiplier error (long): {_fw_err}")
 
                     # ── AI Intelligence Hub ────────────────────────────────
                     # Evaluate trade through the three AI layers:
@@ -1669,6 +1779,20 @@ class NIJAApexStrategyV71:
                             position_size, self.current_regime, score
                         )
 
+                    # ── Portfolio Profit Flywheel ──────────────────────────
+                    if self.portfolio_profit_flywheel is not None:
+                        try:
+                            flywheel_mult = self.portfolio_profit_flywheel.get_capital_multiplier()
+                            if flywheel_mult > 1.0:
+                                max_allowed = account_balance * self.risk_manager.max_position_pct
+                                position_size = min(position_size * flywheel_mult, max_allowed)
+                                position_size = scalar(position_size)
+                                logger.debug(
+                                    f"   🌀 Flywheel ×{flywheel_mult:.2f} → short ${position_size:.2f}"
+                                )
+                        except Exception as _fw_err:
+                            logger.debug(f"Flywheel multiplier error (short): {_fw_err}")
+
                     # ── AI Intelligence Hub ────────────────────────────────
                     # Evaluate trade through the three AI layers:
                     #   1. AI Market Regime Detection (7-class classifier)
@@ -1885,6 +2009,17 @@ class NIJAApexStrategyV71:
                 )
                 if position:
                     logger.info(f"Long entry executed: {symbol} @ {action_data['entry_price']:.2f}")
+                    # Register with profit harvest layer so ratchet-tier tracking begins
+                    if self.profit_harvest_layer is not None:
+                        try:
+                            self.profit_harvest_layer.register_position(
+                                symbol=symbol,
+                                side='long',
+                                entry_price=action_data['entry_price'],
+                                position_size_usd=action_data['position_size'],
+                            )
+                        except Exception as _reg_err:
+                            logger.debug(f"Harvest layer register error (long): {_reg_err}")
                     return True
 
             elif action == 'enter_short':
@@ -1915,15 +2050,66 @@ class NIJAApexStrategyV71:
                 )
                 if position:
                     logger.info(f"✅ Short entry executed: {symbol} @ {action_data['entry_price']:.2f} (broker: {broker_name})")
+                    # Register with profit harvest layer so ratchet-tier tracking begins
+                    if self.profit_harvest_layer is not None:
+                        try:
+                            self.profit_harvest_layer.register_position(
+                                symbol=symbol,
+                                side='short',
+                                entry_price=action_data['entry_price'],
+                                position_size_usd=action_data['position_size'],
+                            )
+                        except Exception as _reg_err:
+                            logger.debug(f"Harvest layer register error (short): {_reg_err}")
                     return True
 
             elif action == 'exit':
+                pos_data = action_data.get('position', {})
+                exit_price = action_data.get('current_price', pos_data.get('entry_price', 0.0))
                 success = self.execution_engine.execute_exit(
                     symbol=symbol,
-                    exit_price=action_data.get('current_price', action_data['position']['entry_price']),
+                    exit_price=exit_price,
                     size_pct=1.0,
                     reason=action_data['reason']
                 )
+                if success:
+                    # Compute approximate P&L for profit-stack recording
+                    entry_price = pos_data.get('entry_price', exit_price)
+                    pos_size = pos_data.get('position_size', 0.0)
+                    side = pos_data.get('side', 'long')
+                    if entry_price and entry_price > 0 and pos_size:
+                        price_change = (exit_price - entry_price) / entry_price
+                        pnl_usd = price_change * pos_size if side == 'long' else -price_change * pos_size
+                    else:
+                        pnl_usd = 0.0
+                    is_win = pnl_usd > 0
+
+                    # Record trade in flywheel → updates compound multiplier
+                    if self.portfolio_profit_flywheel is not None:
+                        try:
+                            self.portfolio_profit_flywheel.record_trade(
+                                symbol=symbol,
+                                pnl_usd=pnl_usd,
+                                is_win=is_win,
+                            )
+                        except Exception as _fw_err:
+                            logger.debug(f"Flywheel record error: {_fw_err}")
+
+                    # Remove from harvest layer; flush any remaining harvestable balance
+                    if self.profit_harvest_layer is not None:
+                        try:
+                            final_state = self.profit_harvest_layer.remove_position(symbol)
+                            remaining = (final_state or {}).get('harvestable_balance_usd', 0.0)
+                            if remaining > 0 and self.capital_recycling_engine is not None:
+                                regime = str(self.current_regime) if self.current_regime else 'UNKNOWN'
+                                self.capital_recycling_engine.deposit_profit(
+                                    amount_usd=remaining,
+                                    source_symbol=symbol,
+                                    regime=regime,
+                                    note='final_flush_on_close',
+                                )
+                        except Exception as _rem_err:
+                            logger.debug(f"Harvest layer remove error: {_rem_err}")
                 return success
 
             elif action == 'partial_exit':
