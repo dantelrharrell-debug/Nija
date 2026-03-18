@@ -205,7 +205,7 @@ You agree to indemnify and hold NIJA harmless from:
 ## 16. Dispute Resolution
 
 ### Governing Law
-These Terms are governed by the laws of [Jurisdiction to be specified].
+These Terms are governed by the laws of the State of Delaware, United States, without regard to its conflict of law provisions.
 
 ### Arbitration Agreement
 Any disputes shall be resolved through binding arbitration, except:

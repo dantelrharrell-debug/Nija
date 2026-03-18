@@ -155,6 +155,10 @@ redis==5.0.1
 # Stripe payment processing (for SaaS monetization)
 stripe==7.11.0
 
+# Two-factor authentication (TOTP / Google Authenticator)
+pyotp==2.9.0
+qrcode==8.2
+
 # WebSocket support for real-time mobile updates
 python-socketio==5.11.1
 Flask-SocketIO==5.3.6

@@ -80,6 +80,22 @@ services:
       # Rate Limiting
       RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-100}
       RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
+      # Stripe Payment Processing
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_BASIC: ${STRIPE_PRICE_BASIC:-}
+      STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+      STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
+      # Transactional Email (SMTP)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@nija.trading}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-NIJA Trading}
+      APP_BASE_URL: ${APP_BASE_URL:-https://app.nija.trading}
+      # 2FA Issuer label shown in authenticator apps
+      TOTP_ISSUER: ${TOTP_ISSUER:-NIJA Trading}
       # Existing NIJA env vars (optional - for master account)
       COINBASE_API_KEY: ${COINBASE_API_KEY:-}
       COINBASE_API_SECRET: ${COINBASE_API_SECRET:-}
