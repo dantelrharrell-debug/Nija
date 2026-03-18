@@ -371,11 +371,11 @@ class LiquidityHeatmapAnalyzer:
         if "volume" not in df.columns or "close" not in df.columns:
             return
 
-        for _, row in df.tail(100).iterrows():
-            close_px = float(row.get("close", mid))
-            vol = float(row.get("volume", 0))
-            if vol <= 0 or close_px <= 0:
-                continue
+        tail = df.tail(100)
+        close_arr = tail['close'].fillna(mid).to_numpy(dtype=float)
+        vol_arr = tail['volume'].fillna(0).to_numpy(dtype=float)
+        mask = (vol_arr > 0) & (close_arr > 0)
+        for close_px, vol in zip(close_arr[mask], vol_arr[mask]):
             usd_val = close_px * vol / 100.0   # normalise to avoid inflated values
             bucket = self._find_bucket(buckets, close_px)
             if bucket is not None:

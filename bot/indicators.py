@@ -40,7 +40,8 @@ def scalar(x):
 def _ensure_numeric(df: pd.DataFrame, cols) -> pd.DataFrame:
     """Coerce selected columns to numeric and drop rows with NaN in them."""
     numeric_df = df.copy()
-    numeric_df[cols] = numeric_df[cols].apply(pd.to_numeric, errors="coerce")
+    for col in cols:
+        numeric_df[col] = pd.to_numeric(numeric_df[col], errors="coerce")
     numeric_df = numeric_df.dropna(subset=cols)
     return numeric_df
 
