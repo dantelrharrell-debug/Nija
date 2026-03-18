@@ -51,7 +51,14 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": os.getenv('ALLOWED_ORIGINS', '*').split(',')}})
+
+_allowed_origins = os.getenv('ALLOWED_ORIGINS', '*').split(',')
+if '*' in _allowed_origins:
+    logger.warning(
+        "ALLOWED_ORIGINS is set to '*' (wildcard). "
+        "Restrict to specific domains in production by setting the ALLOWED_ORIGINS env var."
+    )
+CORS(app, resources={r"/api/*": {"origins": _allowed_origins}})
 
 # Configuration – JWT secret loaded from secrets backend (env / AWS / Vault)
 app.config['SECRET_KEY'] = get_jwt_secret()
@@ -62,12 +69,19 @@ app.config['JWT_EXPIRATION_HOURS'] = int(os.getenv('JWT_EXPIRATION_HOURS', '24')
 # ---------------------------------------------------------------------------
 # Default limits: 200 requests/day per IP and 60/hour per IP globally.
 # Sensitive auth endpoints have tighter per-route limits (see decorators below).
+_rate_limit_storage = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
+if _rate_limit_storage == 'memory://':
+    logger.warning(
+        "Rate limiter using in-process memory store. "
+        "For production, set RATELIMIT_STORAGE_URI to a Redis URL "
+        "(e.g. redis://localhost:6379/0) so limits persist across workers/restarts."
+    )
 limiter = Limiter(
     key_func=get_remote_address,
     app=app,
     default_limits=["200 per day", "60 per hour"],
     headers_enabled=True,          # Return X-RateLimit-* headers
-    storage_uri="memory://",       # In-process store; swap for Redis in production
+    storage_uri=_rate_limit_storage,
 )
 
 # Current ToS version – bump this string whenever the ToS changes

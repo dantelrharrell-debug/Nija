@@ -229,17 +229,32 @@ def _get_aws_secret_dict(name: str) -> Dict[str, str]:
 
 def _vault_path(name: str) -> str:
     prefix = os.environ.get("VAULT_SECRET_PATH_PREFIX", "secret/nija/")
+    # Ensure prefix ends with / for consistent joining
+    if not prefix.endswith("/"):
+        prefix += "/"
     return f"{prefix}{name}"
+
+
+def _split_vault_path(full_path: str):
+    """
+    Split a KV v2 full path into (mount_point, secret_path).
+
+    The KV v2 mount point is the first path segment; everything after it is the
+    secret path.  E.g. "secret/nija/JWT_SECRET_KEY" → ("secret", "nija/JWT_SECRET_KEY").
+    If the path has no '/', the mount defaults to "secret" and the whole string
+    is used as the secret path.
+    """
+    if "/" not in full_path:
+        return "secret", full_path
+    mount_point, secret_path = full_path.split("/", 1)
+    return mount_point, secret_path
 
 
 def _get_vault_secret(name: str, default: Optional[str]) -> Optional[str]:
     try:
         client = _get_vault_client()
         path = _vault_path(name)
-        # KV v2: mount path is the first segment; the rest is the secret path
-        parts = path.split("/", 2)
-        mount_point = parts[0]
-        secret_path = "/".join(parts[1:]) if len(parts) > 1 else name
+        mount_point, secret_path = _split_vault_path(path)
         response = client.secrets.kv.v2.read_secret_version(
             path=secret_path,
             mount_point=mount_point,
@@ -258,9 +273,7 @@ def _get_vault_secret_dict(name: str) -> Dict[str, str]:
     try:
         client = _get_vault_client()
         path = _vault_path(name)
-        parts = path.split("/", 2)
-        mount_point = parts[0]
-        secret_path = "/".join(parts[1:]) if len(parts) > 1 else name
+        mount_point, secret_path = _split_vault_path(path)
         response = client.secrets.kv.v2.read_secret_version(
             path=secret_path,
             mount_point=mount_point,
