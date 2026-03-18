@@ -26,6 +26,12 @@ Step 4 – Cap total positions at MAX_ACTIVE_POSITIONS = 12
     already active, and it selects which existing positions to prune whenever
     the cap is exceeded.
 
+Step 3 also enforces a per-sector cap (MAX_PER_SECTOR = 2).  When the top
+signal's score exceeds the second-best signal's score by more than
+SECTOR_OVERRIDE_SCORE_GAP (15 points) the sector cap is bypassed for that
+top signal, allowing it to enter even if its sector already holds
+MAX_PER_SECTOR positions.
+
 Meta Allocation (AI Capital Rotation)
 --------------------------------------
 NIJA shifts capital proportionally across the four built-in strategies
@@ -125,6 +131,8 @@ class _SignalWrap:
 # ─────────────────────────────────────────────────────────────────────────────
 
 MAX_ACTIVE_POSITIONS: int = 12          # Hard cap on concurrent positions
+MAX_PER_SECTOR: int = 2                 # Max concurrent positions allowed in one sector
+SECTOR_OVERRIDE_SCORE_GAP: float = 15.0 # Score-gap threshold to bypass per-sector cap
 DUST_THRESHOLD_USD: float = 5.0         # Positions below this are dust
 MIN_SIGNAL_SCORE: float = 60.0          # Minimum score for a signal to be eligible
 META_BLEND_WEIGHT: float = 0.40         # How much learned weights blend into hard-coded defaults
@@ -253,10 +261,14 @@ class AICapitalRotationEngine:
         # Lazy-load optional dependencies
         self._meta_optimizer = None
         self._meta_optimizer_loaded = False
+        self._get_sector = None
+        self._get_sector_loaded = False
 
         logger.info("=" * 70)
         logger.info("🔄 AI Capital Rotation Engine initialised")
         logger.info(f"   MAX_ACTIVE_POSITIONS : {self.max_active_positions}")
+        logger.info(f"   MAX_PER_SECTOR       : {MAX_PER_SECTOR}")
+        logger.info(f"   Sector override gap  : {SECTOR_OVERRIDE_SCORE_GAP:.0f} pts")
         logger.info(f"   Dust threshold       : ${self.dust_threshold_usd:.2f}")
         logger.info(f"   Min signal score     : {self.min_signal_score:.0f}/100")
         logger.info(f"   Meta-blend weight    : {self.meta_blend_weight:.0%}")
@@ -480,6 +492,12 @@ class AICapitalRotationEngine:
         - Not already in an open position
         - Slots remain below ``max_active_positions`` after accounting for
           planned closures
+        - Sector exposure ≤ ``MAX_PER_SECTOR`` (2 positions per sector)
+
+        Sector-cap override: when the top-ranked signal's score exceeds the
+        second-ranked signal's score by more than ``SECTOR_OVERRIDE_SCORE_GAP``
+        (15 points), the per-sector cap is bypassed for that top signal so a
+        dominant conviction trade is never blocked by diversification rules.
 
         Each returned signal is annotated with ``recommended_size_usd``.
         """
@@ -507,6 +525,74 @@ class AICapitalRotationEngine:
         # Sort descending by score
         eligible.sort(key=lambda s: float(s.get("score", 0) or 0), reverse=True)
 
+        # ── Sector-cap enforcement ────────────────────────────────────────
+        # Lazy-load sector classifier (gracefully degrade if unavailable)
+        _get_sector = self._load_sector_classifier()
+
+        def _sector_key(symbol: str) -> str:
+            """Return a stable string key for a symbol's sector."""
+            if _get_sector is None or not symbol:
+                return "unknown"
+            try:
+                return str(_get_sector(symbol).value)
+            except Exception as exc:
+                logger.debug(f"Failed to get sector for {symbol}: {exc}")
+                return "unknown"
+
+        # Count per-sector open positions that will survive this rotation
+        sector_counts: Dict[str, int] = {}
+        for pos in remaining_positions:
+            key = _sector_key(pos.get("symbol", ""))
+            sector_counts[key] = sector_counts.get(key, 0) + 1
+
+        # Determine if the top signal may bypass the sector cap.
+        # The override requires an actual second signal to compare against;
+        # without one there is no meaningful score gap.
+        top_score = float(eligible[0].get("score", 0) or 0) if eligible else 0.0
+        next_score: Optional[float] = (
+            float(eligible[1].get("score", 0) or 0) if len(eligible) > 1 else None
+        )
+        score_gap: Optional[float] = (
+            (top_score - next_score) if next_score is not None else None
+        )
+        allow_sector_override = score_gap is not None and score_gap > SECTOR_OVERRIDE_SCORE_GAP
+
+        if allow_sector_override:
+            logger.info(
+                f"   🔓 Sector-cap override eligible: top score gap "
+                f"{score_gap:.1f} > {SECTOR_OVERRIDE_SCORE_GAP:.0f}"
+            )
+
+        # Select signals respecting available slots and per-sector cap
+        selected: List[Dict] = []
+        for i, sig in enumerate(eligible):
+            if len(selected) >= available_slots:
+                break
+
+            sym = sig.get("symbol", "")
+            sector = _sector_key(sym)
+            current_count = sector_counts.get(sector, 0)
+
+            if current_count >= MAX_PER_SECTOR:
+                if i == 0 and allow_sector_override:
+                    logger.info(
+                        f"   🔓 Sector cap bypassed for {sym} "
+                        f"(sector '{sector}' has {current_count} positions; "
+                        f"score gap {score_gap:.1f} > {SECTOR_OVERRIDE_SCORE_GAP:.0f})"
+                    )
+                else:
+                    logger.debug(
+                        f"   ⛔ Sector cap reached for {sym}: "
+                        f"sector '{sector}' already has "
+                        f"{current_count}/{MAX_PER_SECTOR} positions"
+                    )
+                    continue
+
+            sector_counts[sector] = current_count + 1
+            selected.append(sig)
+
+        top = selected
+        # ─────────────────────────────────────────────────────────────────
         # Apply sector-diversity filter so top slots aren't filled with
         # correlated assets (e.g. BTC + ETH + SOL → BTC + LINK + AVAX).
         if _DIVERSITY_FILTER_AVAILABLE and _diversity_filter is not None:
@@ -530,6 +616,27 @@ class AICapitalRotationEngine:
                 top[i] = annotated
 
         return top
+
+    def _load_sector_classifier(self):
+        """
+        Lazily load the ``get_sector`` callable from ``crypto_sector_taxonomy``.
+        Returns ``None`` when the module is unavailable so callers can
+        degrade gracefully.
+        """
+        if self._get_sector_loaded:
+            return self._get_sector
+        self._get_sector_loaded = True
+        try:
+            from bot.crypto_sector_taxonomy import get_sector
+            self._get_sector = get_sector
+        except ImportError:
+            try:
+                from crypto_sector_taxonomy import get_sector
+                self._get_sector = get_sector
+            except ImportError:
+                logger.debug("crypto_sector_taxonomy unavailable; sector cap will not be enforced")
+                self._get_sector = None
+        return self._get_sector
 
     def _step4_enforce_position_cap(
         self,
