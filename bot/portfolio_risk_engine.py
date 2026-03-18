@@ -510,9 +510,6 @@ class PortfolioRiskEngine:
         projected_sector_exposure_pct = projected_sector_exposure_usd / portfolio_value
         enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
 
-                f"Consider reducing existing positions in this sector."
-            )
-
         # HARD LIMIT: 20% - Absolute block
         if projected_sector_exposure_pct > self.hard_sector_limit_pct:
             enforcement_info['hard_limit_triggered'] = True
