@@ -154,6 +154,50 @@ ELITE_PERFORMANCE_PROFILE = {
 }
 
 
+MAX_GROWTH_SAFE_PROFILE = {
+    'name': 'Max Growth Safe',
+    'description': (
+        'Maximises compounding growth while retaining capital protection. '
+        'Safe-profit-mode activates only at 150% of daily target or 80% profit '
+        'locked. Profit-lock tiers use relaxed early floors to let winners run '
+        'further. Position sizing and compounding are fully aggressive.'
+    ),
+
+    'volatility_sizer': {
+        'base_position_pct': 0.07,  # 7% base position
+        'min_position_pct': 0.03,  # 3% minimum
+        'max_position_pct': 0.14,  # 14% maximum
+        'atr_lookback': 14,
+    },
+
+    'capital_rotation': {
+        'min_strategy_allocation': 0.10,  # 10% minimum per strategy
+        'max_strategy_allocation': 0.70,  # 70% maximum per strategy
+    },
+
+    'leverage': {
+        'leverage_mode': 'moderate',  # Keep leverage moderate for safety
+        'absolute_max_leverage': 3.0,
+        'max_drawdown_pct': 0.18,  # 18% max drawdown tolerance
+        'min_win_rate': 0.48,  # 48% minimum win rate
+    },
+
+    'profit_locking': {
+        'daily_target_pct': 0.03,  # 3% daily target
+        'stop_trading_at_target_pct': None,  # Never stop – keep compounding
+        # Safe-profit-mode thresholds tuned for max growth:
+        'safe_mode_target_pct_threshold': 1.5,   # activate at 150% of daily target
+        'safe_mode_lock_fraction_threshold': 0.80,  # activate when 80% of P/L is locked
+    },
+
+    'frequency_optimizer': {
+        'base_scan_interval': 120,  # 2 minutes (faster scanning for more opportunities)
+    },
+
+    'compounding_strategy': 'aggressive',  # 90% reinvest, 10% preserve
+}
+
+
 # =============================================================================
 # ENVIRONMENT-SPECIFIC OVERRIDES
 # =============================================================================
@@ -199,6 +243,7 @@ def get_config_profile(profile_name: str = 'moderate') -> dict:
         'moderate': MODERATE_PROFILE,
         'aggressive': AGGRESSIVE_PROFILE,
         'elite': ELITE_PERFORMANCE_PROFILE,
+        'max_growth_safe': MAX_GROWTH_SAFE_PROFILE,
     }
 
     profile = profiles.get(profile_name.lower(), MODERATE_PROFILE)
@@ -352,7 +397,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("AVAILABLE PROFILES")
     print("=" * 80)
-    for name in ['conservative', 'moderate', 'aggressive', 'elite']:
+    for name in ['conservative', 'moderate', 'aggressive', 'elite', 'max_growth_safe']:
         prof = get_config_profile(name)
         print(f"\n{prof['name']}:")
         print(f"  {prof['description']}")
