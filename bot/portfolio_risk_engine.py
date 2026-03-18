@@ -35,6 +35,11 @@ logger = logging.getLogger("nija.portfolio_risk")
 #: this level the proposed position size is scaled down to 70 % of its
 #: original value to reduce incremental concentration risk.
 SOFT_SECTOR_WARNING: float = 0.30  # 30 %
+#: Soft warning zone: sector exposure at or above this level (30 %) triggers
+#: an early warning log even when the position is still allowed.  This sits
+#: above the hard-block limit (default 20 %) and flags sectors that are
+#: drifting into critically over-concentrated territory.
+SOFT_SECTOR_WARNING: float = 0.30
 
 
 @dataclass
@@ -141,7 +146,7 @@ class PortfolioRiskEngine:
         
         # Risk parameters
         self.max_total_exposure = self.config.get('max_total_exposure', 0.80)  # 80% max
-        self.max_correlation_group_exposure = self.config.get('max_correlation_group_exposure', 0.30)  # 30% max (LEGACY)
+        self.max_correlation_group_exposure = self.config.get('max_correlation_group_exposure', SOFT_SECTOR_WARNING)  # 30% max (LEGACY)
         self.correlation_threshold = self.config.get('correlation_threshold', 0.7)  # 0.7+ is high correlation
         self.min_diversification_ratio = self.config.get('min_diversification_ratio', 1.5)
         
@@ -453,6 +458,7 @@ class PortfolioRiskEngine:
         enforcement_info['current_sector_exposure_pct'] = current_sector_exposure_pct
         enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
 
+        
         # SOFT WARNING ZONE: 30% - Existing exposure alert
         # Fires when the sector has already drifted above SOFT_SECTOR_WARNING
         # (e.g. due to mark-to-market gains on open positions) even before the
@@ -474,6 +480,9 @@ class PortfolioRiskEngine:
         projected_sector_exposure_usd = current_sector_exposure_usd + position_size_usd
         projected_sector_exposure_pct = projected_sector_exposure_usd / portfolio_value
         enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
+
+                f"Consider reducing existing positions in this sector."
+            )
 
         # HARD LIMIT: 20% - Absolute block
         if projected_sector_exposure_pct > self.hard_sector_limit_pct:

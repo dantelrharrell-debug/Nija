@@ -29,6 +29,18 @@ from bot.crypto_sector_taxonomy import CryptoSector, get_sector, get_sector_name
 
 logger = logging.getLogger("nija.sector_cap_state")
 
+# ---------------------------------------------------------------------------
+# Sector exposure thresholds
+# ---------------------------------------------------------------------------
+
+#: Soft warning zone expressed as a fraction (0.30 = 30 %).  Sector exposure
+#: at or above this level triggers a CRITICAL status regardless of the
+#: configured hard limit.  A percentage equivalent is derived below for
+#: comparison with the module's other percentage-based limit fields
+#: (e.g. ``soft_limit_pct = 15.0``).
+SOFT_SECTOR_WARNING: float = 0.30
+_SOFT_WARNING_ZONE_PCT: float = SOFT_SECTOR_WARNING * 100  # 30.0 %
+
 
 class SectorLimitStatus(Enum):
     """Status of sector exposure relative to limits"""
@@ -70,7 +82,7 @@ class SectorExposure:
         self.is_hard_limit_exceeded = self.exposure_pct >= self.hard_limit_pct
         
         # Determine status
-        if self.exposure_pct >= self.hard_limit_pct * 1.5:
+        if self.exposure_pct >= _SOFT_WARNING_ZONE_PCT:
             self.status = SectorLimitStatus.CRITICAL
         elif self.exposure_pct >= self.hard_limit_pct:
             self.status = SectorLimitStatus.HARD_LIMIT
