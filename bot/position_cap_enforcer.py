@@ -17,7 +17,7 @@ logger = logging.getLogger("nija.enforcer")
 
 # Constants
 # ✅ REQUIREMENT 3: DUST EXCLUSION - If usd_value < MIN_POSITION_USD, IGNORE COMPLETELY
-DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with broker)
+DUST_THRESHOLD_USD = 2.00  # USD value threshold for dust positions (raised from $1 to $2)
 MIN_POSITION_USD = DUST_THRESHOLD_USD  # Alias for clarity - positions below this are ignored
 
 # Add bot dir to path
@@ -47,12 +47,12 @@ class PositionCapEnforcer:
     - Sells positions in order until count <= max_allowed
     """
 
-    def __init__(self, max_positions: int = 8, broker: Optional[CoinbaseBroker] = None):
+    def __init__(self, max_positions: int = 5, broker: Optional[CoinbaseBroker] = None):
         """
         Initialize position cap enforcer.
 
         Args:
-            max_positions: Maximum allowed open positions (default: 8 - consistent across all configs)
+            max_positions: Maximum allowed open positions (default: 5 - global hard cap)
             broker: CoinbaseBroker instance (created if None)
         """
         self.max_positions = max_positions
@@ -326,7 +326,7 @@ def main():
         format='%(asctime)s | %(name)s | %(levelname)s | %(message)s'
     )
 
-    enforcer = PositionCapEnforcer(max_positions=8)
+    enforcer = PositionCapEnforcer(max_positions=5)
     success, result = enforcer.enforce_cap()
 
     if success:
