@@ -66,6 +66,17 @@ MIN_TRADES_FOR_OPTIMIZATION: int = 50
 #: committed as the new baseline.
 EVALUATION_TRADES: int = 30
 
+# ---------------------------------------------------------------------------
+# Sector concentration thresholds
+# ---------------------------------------------------------------------------
+
+#: Soft warning zone: when a sector's portfolio share reaches this level
+#: (30 %) a non-blocking warning is raised to flag over-concentration that
+#: has built up in existing positions (e.g. via mark-to-market drift).
+#: Sits above the hard-block limit (default 20 %) and below the emergency
+#: reduction threshold.
+SOFT_SECTOR_WARNING: float = 0.30
+
 
 # ---------------------------------------------------------------------------
 # Enumerations
@@ -656,6 +667,20 @@ class PortfolioIntelligence:
         hard_breaches = [
             s for s, p in sector_pct.items() if p >= self.hard_sector_limit_pct
         ]
+
+        # Soft warning zone: sectors that have drifted above SOFT_SECTOR_WARNING
+        # (30 %) through mark-to-market movement – flag for review/reduction.
+        soft_warning_sectors = [
+            f"'{s}' ({p*100:.1f}%)"
+            for s, p in sector_pct.items()
+            if p >= SOFT_SECTOR_WARNING
+        ]
+        if soft_warning_sectors:
+            logger.warning(
+                f"🟡 SOFT WARNING ZONE: {len(soft_warning_sectors)} sector(s) at or above "
+                f"{SOFT_SECTOR_WARNING*100:.0f}% – consider reducing existing positions: "
+                + ", ".join(soft_warning_sectors)
+            )
 
         max_sector = max(sector_pct, key=sector_pct.get) if sector_pct else ""
         max_pct = sector_pct.get(max_sector, 0.0)
