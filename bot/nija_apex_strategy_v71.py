@@ -124,6 +124,20 @@ except ImportError:
         PROFIT_STACK_AVAILABLE = False
         logger.warning("Profit optimization stack not available – running without harvest/flywheel/recycling")
 
+# Import Safe Profit Mode (daily gate that blocks new entries once profit is locked)
+try:
+    from bot.safe_profit_mode import get_safe_profit_mode, SafeProfitModeManager
+    SAFE_PROFIT_MODE_AVAILABLE = True
+except ImportError:
+    try:
+        from safe_profit_mode import get_safe_profit_mode, SafeProfitModeManager
+        SAFE_PROFIT_MODE_AVAILABLE = True
+    except ImportError:
+        get_safe_profit_mode = None  # type: ignore
+        SafeProfitModeManager = None  # type: ignore
+        SAFE_PROFIT_MODE_AVAILABLE = False
+        logger.warning("Safe Profit Mode not available – running without daily profit gate")
+
 
 class NIJAApexStrategyV71:
     """
@@ -270,6 +284,36 @@ class NIJAApexStrategyV71:
             self.capital_recycling_engine = None
             if not PROFIT_STACK_AVAILABLE:
                 logger.warning("⚠️  Profit optimization stack not available")
+
+        # SAFE PROFIT MODE: Daily gate that blocks new entries once enough profit is locked.
+        # Activates when either (a) daily profit reaches the configured target, or
+        # (b) ≥ 50% of today's accumulated profit is ratchet-locked by ProfitHarvestLayer.
+        # Configured via 'daily_profit_target_pct' (default 1% of account) and
+        # 'safe_profit_lock_fraction_threshold' (default 0.50).
+        enable_safe_profit_mode = self.config.get('enable_safe_profit_mode', True)
+        if SAFE_PROFIT_MODE_AVAILABLE and enable_safe_profit_mode:
+            try:
+                self.safe_profit_mode = get_safe_profit_mode(
+                    target_pct_threshold=self.config.get('safe_profit_target_pct_threshold', 1.0),
+                    lock_fraction_threshold=self.config.get('safe_profit_lock_fraction_threshold', 0.50),
+                )
+                logger.info("✅ Safe Profit Mode: ENABLED (blocks new entries once daily target locked)")
+            except Exception as _spm_err:
+                logger.warning(f"⚠️  Safe Profit Mode init failed – degrading gracefully: {_spm_err}")
+                self.safe_profit_mode = None
+        else:
+            self.safe_profit_mode = None
+            if not SAFE_PROFIT_MODE_AVAILABLE:
+                logger.warning("⚠️  Safe Profit Mode not available")
+
+        # Running daily P&L tracker (USD) used to feed the safe profit mode gate.
+        # Resets automatically when SafeProfitModeManager detects a new trading day.
+        self._daily_pnl_usd: float = 0.0
+        # Daily profit target as a fraction of account balance (default 1 %).
+        # Actual USD target is computed per-call in analyze_market using live balance.
+        self._daily_profit_target_pct: float = self.config.get('daily_profit_target_pct', 0.01)
+        # Last computed daily target in USD (updated in analyze_market).
+        self._last_daily_target_usd: float = 0.0
 
         # PROFITABILITY ASSERTION: Validate strategy configuration (CRITICAL GUARD RAIL)
         # This prevents deployment of unprofitable configurations that would lose money after fees
@@ -1344,6 +1388,10 @@ class NIJAApexStrategyV71:
                     'reason': f'Insufficient data ({len(df)} candles, need 100+)'
                 }
 
+            # Refresh daily profit target whenever account balance is known.
+            # Used by _update_safe_profit_mode() after trade closes.
+            self._last_daily_target_usd = account_balance * self._daily_profit_target_pct
+
             # Calculate indicators
             indicators = self.calculate_indicators(df)
 
@@ -1467,6 +1515,18 @@ class NIJAApexStrategyV71:
 
             # No position - check for entry
             adx = scalar(indicators['adx'].iloc[-1])
+
+            # SAFE PROFIT MODE GATE: Block new entries when daily profit is locked in.
+            # This prevents giving back the day's gains by continuing to trade after
+            # the daily target has been reached or sufficient profit is ratchet-locked.
+            if self.safe_profit_mode is not None and self.safe_profit_mode.should_block_entry():
+                self.safe_profit_mode.record_blocked_attempt()
+                block_reason = self.safe_profit_mode.get_block_reason()
+                logger.info(f"   🔒 {symbol}: {block_reason}")
+                return {
+                    'action': 'hold',
+                    'reason': block_reason,
+                }
 
             # EARLY FILTER: Check if we can afford minimum position size for this broker
             # This avoids wasting computation on trades that will be rejected anyway
@@ -1975,6 +2035,46 @@ class NIJAApexStrategyV71:
                 'reason': f'Error: {str(e)}'
             }
 
+    def _update_safe_profit_mode(self, trade_pnl_usd: float) -> None:
+        """
+        Update the safe profit mode gate after a trade closes.
+
+        Accumulates today's net P&L and fetches the total ratchet-locked amount
+        from the profit harvest layer, then feeds both figures to the
+        ``SafeProfitModeManager`` so it can decide whether to activate.
+
+        Args:
+            trade_pnl_usd: Net profit (or loss) from the just-closed trade.
+        """
+        if self.safe_profit_mode is None:
+            return
+
+        try:
+            # Accumulate daily P&L (reset happens inside SafeProfitModeManager on new day)
+            self._daily_pnl_usd += trade_pnl_usd
+
+            # Compute total locked profit from all still-open positions in the harvest layer
+            locked_usd = 0.0
+            if self.profit_harvest_layer is not None:
+                try:
+                    for pos_state in self.profit_harvest_layer.get_all_statuses().values():
+                        locked_pct = pos_state.get('locked_profit_pct', 0.0)
+                        size_usd   = pos_state.get('position_size_usd', 0.0)
+                        locked_usd += (locked_pct / 100.0) * size_usd
+                except Exception as _lock_err:
+                    logger.debug("Safe profit mode: error fetching locked amounts: %s", _lock_err)
+
+            # Derive daily target (stored from last analyze_market call, or fallback)
+            daily_target = getattr(self, '_last_daily_target_usd', 0.0)
+
+            self.safe_profit_mode.update(
+                daily_profit_usd=max(self._daily_pnl_usd, 0.0),  # only count profit days
+                daily_target_usd=daily_target,
+                locked_profit_usd=locked_usd,
+            )
+        except Exception as exc:
+            logger.debug("Safe profit mode update error: %s", exc)
+
     def execute_action(self, action_data: Dict, symbol: str) -> bool:
         """
         Execute the recommended action
@@ -2127,6 +2227,10 @@ class NIJAApexStrategyV71:
                                 )
                         except Exception as _rem_err:
                             logger.debug(f"Harvest layer remove error: {_rem_err}")
+
+                    # Update safe profit mode with latest daily P&L and locked amounts.
+                    # This may activate the mode and block future entries for today.
+                    self._update_safe_profit_mode(pnl_usd)
                 return success
 
             elif action == 'partial_exit':
