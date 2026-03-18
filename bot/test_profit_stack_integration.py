@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test the profit optimisation stack integration in NIJAApexStrategyV71.
+Test the profit optimization stack integration in NIJAApexStrategyV71.
 
 Verifies:
 1. ProfitHarvestLayer is initialised by the strategy.

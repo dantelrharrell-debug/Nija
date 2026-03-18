@@ -1348,8 +1348,8 @@ class ExecutionEngine:
         Check if position should execute stepped profit-taking exits
 
         PROFITABILITY_UPGRADE_V7.3 + FEE-AWARE + BROKER-AWARE (Jan 29, 2026)
-        Stepped exits now dynamically adjusted based on broker fees
-        OPTIMIZATION: Raised Kraken targets to let winners run longer (0.7%→1.2%, 1.0%→1.7%)
+        Stepped exits now dynamically adjusted based on broker fees.
+        RESTORED (Mar 2026): Kraken/Binance use lower thresholds to capture their fee advantage.
 
         BROKER-SPECIFIC FEE STRUCTURE:
         - Kraken: 0.36% round-trip (0.16% taker x2 + 0.04% spread)
@@ -1357,20 +1357,20 @@ class ExecutionEngine:
         - Binance: 0.28% round-trip (0.1% taker x2 + 0.08% spread)
         - OKX: 0.30% round-trip (0.1% taker x2 + 0.1% spread)
 
-        KRAKEN EXAMPLE (0.36% fees) - OPTIMIZED JAN 29, 2026:
-        - Exit 10% at 1.2% gross profit → ~0.84% NET profit after fees (OPTIMIZED from 0.7%)
-        - Exit 15% at 1.7% gross profit → ~1.34% NET profit after fees (OPTIMIZED from 1.0%)
-        - Exit 25% at 2.2% gross profit → ~1.84% NET profit after fees (OPTIMIZED from 1.5%)
-        - Exit 50% at 3.0% gross profit → ~2.64% NET profit after fees (OPTIMIZED from 2.5%)
+        KRAKEN EXAMPLE (0.36% fees):
+        - Exit 10% at 1.0% gross profit → ~0.64% NET profit after fees
+        - Exit 15% at 1.5% gross profit → ~1.14% NET profit after fees
+        - Exit 25% at 2.5% gross profit → ~2.14% NET profit after fees
+        - Exit 50% at 4.0% gross profit → ~3.64% NET profit after fees
 
         COINBASE EXAMPLE (1.4% fees):
-        - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees (meets criteria)
-        - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees (meets criteria)
-        - Exit 25% at 3.0% gross profit → ~1.6% NET profit after fees (meets criteria)
-        - Exit 50% at 4.0% gross profit → ~2.6% NET profit after fees (meets criteria)
+        - Exit 10% at 2.0% gross profit → ~0.6% NET profit after fees
+        - Exit 15% at 2.5% gross profit → ~1.1% NET profit after fees
+        - Exit 25% at 3.5% gross profit → ~2.1% NET profit after fees
+        - Exit 50% at 5.0% gross profit → ~3.6% NET profit after fees
 
-        This ensures faster profit-taking on low-fee brokers (Kraken, Binance, OKX)
-        while maintaining profitability on high-fee brokers (Coinbase).
+        Low-fee brokers (Kraken, Binance) take profits earlier, compounding more
+        frequently while Coinbase trades wait for larger moves to clear fees.
 
         Args:
             symbol: Trading symbol
@@ -1459,26 +1459,33 @@ class ExecutionEngine:
         # FEE-AWARE profit thresholds (GROSS profit needed for NET profitability)
         # Dynamically calculated based on broker fees
         # Each threshold ensures NET profit after broker-specific round-trip fees
+        #
+        # BROKER DIFFERENTIATION (restored Mar 2026):
+        # Low-fee brokers (Kraken 0.36%, Binance 0.28%) use LOWER thresholds to
+        # capture profits earlier, capitalising on their fee advantage.
+        # High-fee brokers (Coinbase 1.4%) require wider thresholds.
+        #
+        # Risk/reward note: these are PARTIAL exits.  The remaining position runs
+        # with a trailing stop, so the first partial peel does not determine the
+        # overall trade R/R.
 
-        # For low-fee brokers (Kraken 0.36%, Binance 0.28%, OKX 0.30%)
-        # PROFITABILITY FIX (Feb 3, 2026): Widened targets for proper risk/reward
-        # CRITICAL: With 1.5% stop-loss, need 3.0%+ average targets for 2:1 risk/reward
-        # Previous: 1.2%/1.7%/2.2%/3.0% = 2.0% avg (only 1.35:1 risk/reward - below criteria)
-        # New: 2.0%/2.5%/3.0%/4.0% = 2.9% avg (1.93:1 risk/reward - meets criteria at 52%+ win rate)
-        if broker_round_trip_fee <= 0.005:  # <= 0.5% fees (Kraken, Binance, OKX)
+        # Low-fee brokers (Kraken 0.36%, Binance 0.28%, OKX 0.30%)
+        # Earlier exits than Coinbase — fee structure makes them profitable sooner.
+        # The 0.5% gate covers all current low-fee brokers (max 0.36%) with room
+        # for future low-fee brokers up to 0.50%.  Coinbase (1.4%) stays above.
+        if broker_round_trip_fee <= 0.005:  # <= 0.5% fees (Kraken 0.36%, Binance 0.28%, OKX 0.30%)
             exit_levels = [
-                (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~1.64% NET (wider than 1.2%)
-                (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~2.14% NET (wider than 1.7%)
-                (0.030, 0.25, 'tp_exit_3.0pct'),   # Exit 25% at 3.0% gross → ~2.64% NET (wider than 2.2%)
-                (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~3.64% NET (wider than 3.0%)
+                (0.010, 0.10, 'tp_exit_1.0pct'),   # Exit 10% at 1.0% gross → ~0.64% NET (Kraken)
+                (0.015, 0.15, 'tp_exit_1.5pct'),   # Exit 15% at 1.5% gross → ~1.14% NET
+                (0.025, 0.25, 'tp_exit_2.5pct'),   # Exit 25% at 2.5% gross → ~2.14% NET
+                (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~3.64% NET
             ]
-        # For high-fee brokers (Coinbase 1.4%)
-        # Use even wider targets due to higher fees
+        # High-fee brokers (Coinbase 1.4%)
         else:
             exit_levels = [
-                (0.025, 0.10, 'tp_exit_2.5pct'),   # Exit 10% at 2.5% gross → ~1.1% NET
-                (0.030, 0.15, 'tp_exit_3.0pct'),   # Exit 15% at 3.0% gross → ~1.6% NET
-                (0.040, 0.25, 'tp_exit_4.0pct'),   # Exit 25% at 4.0% gross → ~2.6% NET
+                (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~0.6% NET
+                (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~1.1% NET
+                (0.035, 0.25, 'tp_exit_3.5pct'),   # Exit 25% at 3.5% gross → ~2.1% NET
                 (0.050, 0.50, 'tp_exit_5.0pct'),   # Exit 50% at 5.0% gross → ~3.6% NET
             ]
 

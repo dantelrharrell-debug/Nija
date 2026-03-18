@@ -122,7 +122,7 @@ except ImportError:
         get_portfolio_profit_flywheel = None  # type: ignore
         get_capital_recycling_engine = None  # type: ignore
         PROFIT_STACK_AVAILABLE = False
-        logger.warning("Profit optimisation stack not available – running without harvest/flywheel/recycling")
+        logger.warning("Profit optimization stack not available – running without harvest/flywheel/recycling")
 
 
 class NIJAApexStrategyV71:
@@ -212,16 +212,16 @@ class NIJAApexStrategyV71:
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
 
         # PROFIT OPTIMIZATION: Stepped profit-taking configuration
-        # OPTIMIZED (Jan 29, 2026): More aggressive profit-taking for capital efficiency
-        # Previous levels were too conservative, holding positions too long
-        # New strategy: Lock profits faster, free capital for new opportunities
-        # Benefits: Higher win rate (take profits before reversals), more frequent wins
+        # Default targets are conservative Coinbase-compatible values used only for
+        # profitability validation.  The execution engine dynamically selects the
+        # actual broker-specific thresholds at runtime (1.0%/1.5%/2.5%/4.0% for Kraken,
+        # 2.0%/2.5%/3.5%/5.0% for Coinbase) — see execution_engine.check_stepped_profit_exits.
         self.enable_stepped_exits = self.config.get('enable_stepped_exits', True)
         self.stepped_exit_levels = self.config.get('stepped_exits', {
-            0.015: 0.15,  # Exit 15% at 1.5% profit (was 10%, increased to lock profits faster)
-            0.025: 0.25,  # Exit 25% at 2.5% profit (was 15%, increased for more aggressive locking)
-            0.040: 0.35,  # Exit 35% at 4.0% profit (NEW level for gradual scaling)
-            0.060: 0.50,  # Exit 50% at 6.0% profit (was 5.0%, increased for better R:R)
+            0.025: 0.10,  # Exit 10% at 2.5% profit  (Coinbase-safe: 0.9% NET after fees)
+            0.030: 0.15,  # Exit 15% at 3.0% profit
+            0.040: 0.25,  # Exit 25% at 4.0% profit
+            0.065: 0.50,  # Exit 50% at 6.5% profit  (satisfies 1.5:1 R/R at 1.5% stop)
         })
 
         # AI Momentum Scoring (optional, skeleton for future)
@@ -269,7 +269,7 @@ class NIJAApexStrategyV71:
             self.portfolio_profit_flywheel = None
             self.capital_recycling_engine = None
             if not PROFIT_STACK_AVAILABLE:
-                logger.warning("⚠️  Profit optimisation stack not available")
+                logger.warning("⚠️  Profit optimization stack not available")
 
         # PROFITABILITY ASSERTION: Validate strategy configuration (CRITICAL GUARD RAIL)
         # This prevents deployment of unprofitable configurations that would lose money after fees
@@ -305,7 +305,7 @@ class NIJAApexStrategyV71:
             logger.info(f"✅ Minimum entry score: {min_score}/100 (quality threshold targeting 65-70%+ win rate)")
         if self.enable_stepped_exits:
             logger.info("✅ Stepped profit-taking: ENABLED (aggressive partial exits)")
-            logger.info(f"   Exit levels: {len(self.stepped_exit_levels)} profit targets (1.5%, 2.5%, 4%, 6%)")
+            logger.info(f"   Exit levels: {len(self.stepped_exit_levels)} profit targets (2.5%, 3.0%, 4.0%, 6.5%)")
         logger.info(f"✅ Position sizing: {self.config.get('min_position_pct', 0.02)*100:.0f}%-{self.config.get('max_position_pct', 0.10)*100:.0f}% (capital efficient)")
         logger.info(f"✅ Confidence threshold: {MIN_CONFIDENCE*100:.0f}% (balanced quality)")
         logger.info(f"✅ Minimum ADX: {self.min_adx} (moderate trend strength)")
@@ -1412,7 +1412,7 @@ class NIJAApexStrategyV71:
                                     f"from {symbol} → recycling pool"
                                 )
                             except Exception as _recycl_err:
-                                logger.debug(f"Capital recycling deposit error: {_recycl_err}")
+                                logger.warning(f"Capital recycling deposit error: {_recycl_err}")
                     except Exception as _harvest_err:
                         logger.debug(f"Profit harvest layer update error: {_harvest_err}")
 
@@ -2066,9 +2066,18 @@ class NIJAApexStrategyV71:
             elif action == 'exit':
                 pos_data = action_data.get('position', {})
                 exit_price = action_data.get('current_price', pos_data.get('entry_price', 0.0))
-                # Guard: ensure exit_price is a valid positive number before proceeding
+                # Guard: ensure exit_price is a valid positive number before proceeding.
+                # If neither current_price nor entry_price is available, skip the exit
+                # to avoid corrupt P&L calculations and invalid order submissions.
                 if not exit_price or exit_price <= 0:
                     exit_price = pos_data.get('entry_price', 0.0)
+                if not exit_price or exit_price <= 0:
+                    logger.error(
+                        f"❌ Exit skipped for {symbol}: no valid exit price available "
+                        f"(current_price={action_data.get('current_price')}, "
+                        f"entry_price={pos_data.get('entry_price')})"
+                    )
+                    return False
                 success = self.execution_engine.execute_exit(
                     symbol=symbol,
                     exit_price=exit_price,
@@ -2076,13 +2085,18 @@ class NIJAApexStrategyV71:
                     reason=action_data['reason']
                 )
                 if success:
-                    # Compute approximate P&L for profit-stack recording
+                    # Compute approximate NET P&L (after broker fees) for profit-stack recording.
+                    # Using net profit ensures the flywheel multiplier reflects real compounded gains.
                     entry_price = pos_data.get('entry_price', exit_price)
                     pos_size = pos_data.get('position_size', 0.0)
                     side = pos_data.get('side', 'long')
                     if entry_price and entry_price > 0 and pos_size is not None and pos_size > 0:
-                        price_change = (exit_price - entry_price) / entry_price
-                        pnl_usd = price_change * pos_size if side == 'long' else -price_change * pos_size
+                        gross_change = (exit_price - entry_price) / entry_price
+                        gross_pnl = gross_change * pos_size if side == 'long' else -gross_change * pos_size
+                        # Deduct round-trip broker fee so flywheel tracks net profit
+                        broker_fee = self.execution_engine._get_broker_round_trip_fee()
+                        fee_cost = pos_size * broker_fee
+                        pnl_usd = gross_pnl - fee_cost
                     else:
                         pnl_usd = 0.0
                     is_win = pnl_usd > 0
