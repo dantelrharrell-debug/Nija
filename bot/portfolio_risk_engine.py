@@ -31,10 +31,19 @@ logger = logging.getLogger("nija.portfolio_risk")
 # ---------------------------------------------------------------------------
 
 #: Soft warning zone: sector exposure at or above this level (30 %) triggers
-#: an early warning log even when the position is still allowed.  This sits
-#: above the hard-block limit (default 20 %) and flags sectors that are
+#: dynamic position-size scaling even when the position is still allowed.  This
+#: sits above the hard-block limit (default 20 %) and flags sectors that are
 #: drifting into critically over-concentrated territory.
 SOFT_SECTOR_WARNING: float = 0.30
+
+#: Multiplier used in the dynamic scaling formula:
+#:   scale_factor = max(MIN_SCALE_FACTOR, 1.0 - excess * SOFT_WARNING_SCALE_MULTIPLIER)
+#: With a multiplier of 2: at 5 % excess → 0.90; at 10 % → 0.80; at 25 % → 0.50 (floor).
+SOFT_WARNING_SCALE_MULTIPLIER: float = 2.0
+
+#: Floor for the dynamic scale factor – position is never reduced below this
+#: fraction of its original size through the soft-warning mechanism alone.
+MIN_SCALE_FACTOR: float = 0.5
 
 
 @dataclass
@@ -412,6 +421,9 @@ class PortfolioRiskEngine:
             'sector_name': None,
             'current_sector_exposure_pct': 0.0,
             'projected_sector_exposure_pct': 0.0,
+            'soft_warning_triggered': False,
+            'scale_factor': 1.0,
+            'excess': 0.0,
             'soft_limit_triggered': False,
             'hard_limit_triggered': False,
             'enforcement_action': 'none'
@@ -451,16 +463,33 @@ class PortfolioRiskEngine:
         enforcement_info['current_sector_exposure_pct'] = current_sector_exposure_pct
         enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
         
-        # SOFT WARNING ZONE: 30% - Existing exposure alert
+        # SOFT WARNING ZONE: 30% - Dynamic scaling
         # Fires when the sector has already drifted above SOFT_SECTOR_WARNING
         # (e.g. due to mark-to-market gains on open positions) even before the
-        # proposed new entry is counted.
+        # proposed new entry is counted.  Instead of a flat 50% cut, scale the
+        # proposed position size proportionally to how far above the threshold
+        # the sector already sits.
         if current_sector_exposure_pct >= SOFT_SECTOR_WARNING:
+            excess = current_sector_exposure_pct - SOFT_SECTOR_WARNING
+            # scale_factor approaches MIN_SCALE_FACTOR as excess grows;
+            # each 1 % above the threshold reduces the position by 2 %.
+            scale_factor = max(MIN_SCALE_FACTOR, 1.0 - excess * SOFT_WARNING_SCALE_MULTIPLIER)
+            position_size_usd *= scale_factor
+            enforcement_info['soft_warning_triggered'] = True
+            enforcement_info['scale_factor'] = scale_factor
+            enforcement_info['excess'] = excess
+            enforcement_info['enforcement_action'] = 'soft_warning_scaled'
+            # Recalculate projected exposure with the scaled position size
+            projected_sector_exposure_usd = current_sector_exposure_usd + position_size_usd
+            projected_sector_exposure_pct = projected_sector_exposure_usd / portfolio_value
+            enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
             logger.warning(
                 f"🟡 SOFT WARNING ZONE for {symbol} ({sector_name}): "
                 f"Current sector exposure {current_sector_exposure_pct*100:.1f}% "
                 f"is at or above the soft warning threshold "
                 f"{SOFT_SECTOR_WARNING*100:.0f}%. "
+                f"Dynamic scaling applied: scale_factor={scale_factor:.3f} "
+                f"(excess={excess*100:.1f}%): position scaled to ${position_size_usd:,.2f}. "
                 f"Consider reducing existing positions in this sector."
             )
 
