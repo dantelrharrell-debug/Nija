@@ -11,6 +11,7 @@ Advanced market filtering to avoid low-quality trading conditions:
 - Momentum universe filter: Top-20 volume × Top-20 volatility × Top-10 trend strength
 """
 
+import heapq
 import logging
 import pandas as pd
 import numpy as np
@@ -531,15 +532,15 @@ def get_momentum_universe(
     if not volume_scores:
         return []
 
-    # Build each top-N set (descending sort, take first N)
+    # Build each top-N set using heapq.nlargest (O(n) instead of O(n log n))
     top_volume_set = {
-        s for s, _ in sorted(volume_scores, key=lambda x: x[1], reverse=True)[:top_volume]
+        s for s, _ in heapq.nlargest(top_volume, volume_scores, key=lambda x: x[1])
     }
     top_volatility_set = {
-        s for s, _ in sorted(volatility_scores, key=lambda x: x[1], reverse=True)[:top_volatility]
+        s for s, _ in heapq.nlargest(top_volatility, volatility_scores, key=lambda x: x[1])
     }
     top_trend_set = {
-        s for s, _ in sorted(trend_scores, key=lambda x: x[1], reverse=True)[:top_trend]
+        s for s, _ in heapq.nlargest(top_trend, trend_scores, key=lambda x: x[1])
     }
 
     # Intersection: symbol must appear in all three shortlists

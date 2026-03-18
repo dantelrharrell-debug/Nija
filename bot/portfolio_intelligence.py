@@ -44,6 +44,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -676,14 +677,12 @@ class PortfolioIntelligence:
         correlations: List[float] = []
 
         if len(symbols) >= 2 and len(self.price_history) >= 2:
-            for i in range(len(symbols)):
-                for j in range(i + 1, len(symbols)):
-                    sym_a, sym_b = symbols[i], symbols[j]
-                    corr = self._compute_correlation(sym_a, sym_b)
-                    if corr is not None:
-                        correlations.append(abs(corr))
-                        if abs(corr) >= self.high_correlation_threshold:
-                            high_corr_pairs.append((sym_a, sym_b, corr))
+            for sym_a, sym_b in combinations(symbols, 2):
+                corr = self._compute_correlation(sym_a, sym_b)
+                if corr is not None:
+                    correlations.append(abs(corr))
+                    if abs(corr) >= self.high_correlation_threshold:
+                        high_corr_pairs.append((sym_a, sym_b, corr))
 
         avg_corr = float(np.mean(correlations)) if correlations else 0.0
         n = max(len(symbols), 1)
