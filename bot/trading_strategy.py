@@ -78,6 +78,19 @@ except ImportError:
     except ImportError:
         TradeQualityGate = None
 
+# Import Win Rate Maximizer — trade filtering, risk caps, profit consistency
+try:
+    from win_rate_maximizer import get_win_rate_maximizer as _get_win_rate_maximizer
+    WIN_RATE_MAXIMIZER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.win_rate_maximizer import get_win_rate_maximizer as _get_win_rate_maximizer
+        WIN_RATE_MAXIMIZER_AVAILABLE = True
+    except ImportError:
+        _get_win_rate_maximizer = None  # type: ignore
+        WIN_RATE_MAXIMIZER_AVAILABLE = False
+        logger.warning("⚠️ Win Rate Maximizer not available - trade filtering/risk caps/profit consistency disabled")
+
 # Import Market Structure Filter (trend + volume + momentum confirmation)
 try:
     from market_structure_filter import structure_valid as _structure_valid
@@ -1262,6 +1275,17 @@ class TradingStrategy:
                 self.quality_gate = None
         else:
             self.quality_gate = None
+
+        # Initialize Win Rate Maximizer — trade filtering, risk caps, profit consistency
+        if WIN_RATE_MAXIMIZER_AVAILABLE and _get_win_rate_maximizer is not None:
+            try:
+                self.win_rate_maximizer = _get_win_rate_maximizer()
+                logger.info("✅ Win Rate Maximizer initialized - trade filtering / risk caps / profit consistency active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Win Rate Maximizer: {e}")
+                self.win_rate_maximizer = None
+        else:
+            self.win_rate_maximizer = None
 
         # Initialize Market Regime Controller — meta-layer: "Should we trade now?"
         if REGIME_CONTROLLER_AVAILABLE and get_regime_controller is not None:
@@ -6929,6 +6953,28 @@ class TradingStrategy:
                                 if hasattr(self, 'quality_gate') and self.quality_gate:
                                     analysis = self.quality_gate.filter_strategy_signal(analysis, df)
 
+                                # ═══════════════════════════════════════════════════════
+                                # LAYER 3: WIN RATE MAXIMIZER
+                                # ═══════════════════════════════════════════════════════
+                                # Multi-layer gate: signal quality score, risk caps, profit consistency
+                                if hasattr(self, 'win_rate_maximizer') and self.win_rate_maximizer:
+                                    _wmx_action = analysis.get('action', 'hold')
+                                    if _wmx_action in ('enter_long', 'enter_short'):
+                                        try:
+                                            _indicators_for_wmx = getattr(self, '_last_indicators', {}) or {}
+                                            _wmx_approved, _wmx_reason, _wmx_score = self.win_rate_maximizer.approve_trade(
+                                                symbol=symbol,
+                                                analysis=analysis,
+                                                df=df,
+                                                indicators=_indicators_for_wmx,
+                                                account_balance=broker_balance,
+                                            )
+                                            if not _wmx_approved:
+                                                logger.info(f"   🚫 Win Rate Maximizer REJECTED {symbol}: {_wmx_reason}")
+                                                analysis = {'action': 'hold', 'reason': f'Win Rate Maximizer: {_wmx_reason}'}
+                                        except Exception as _wmx_err:
+                                            logger.debug("Win Rate Maximizer approve_trade skipped for %s: %s", symbol, _wmx_err)
+
                                 # Publish platform signal so all user accounts can read it
                                 if MASTER_STRATEGY_ROUTER_AVAILABLE and get_master_strategy_router:
                                     try:
@@ -7930,6 +7976,17 @@ class TradingStrategy:
                 _gov.record_trade_result(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _gov_err:
                 logger.debug("Global Risk Governor trade record skipped: %s", _gov_err)
+
+        # Record with Win Rate Maximizer — keeps risk caps and consistency metrics current
+        if hasattr(self, 'win_rate_maximizer') and self.win_rate_maximizer:
+            try:
+                self.win_rate_maximizer.record_outcome(
+                    symbol=symbol,
+                    is_win=is_win,
+                    pnl_usd=profit_usd,
+                )
+            except Exception as _wmx_err:
+                logger.debug("Win Rate Maximizer record_outcome skipped for %s: %s", symbol, _wmx_err)
 
         if not self.advanced_manager:
             return
