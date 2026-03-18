@@ -528,3 +528,7 @@ data/asset_exposure_correlation_decisions.jsonl
 
 data/profit_lock_state.json
 data/*.json
+
+# Profit-stack engine runtime state files (bot/data, never commit)
+bot/data/*.json
+bot/data/*.jsonl
