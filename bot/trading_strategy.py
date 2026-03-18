@@ -6703,6 +6703,14 @@ class TradingStrategy:
                     }
 
                     # ═══════════════════════════════════════════════════════
+                    # PRIORITY SELECTION — phase 1: collect validated signals
+                    # ═══════════════════════════════════════════════════════
+                    # All signals that pass every gate are stored here.  After
+                    # the full market scan they are sorted by score and only
+                    # the top-ranked setups are executed (see post-scan block).
+                    pending_signals = []
+
+                    # ═══════════════════════════════════════════════════════
                     # MARKET REGIME CONTROLLER — pre-scan meta decision
                     # "Should the bot be trading this cycle at all?"
                     # ═══════════════════════════════════════════════════════
@@ -7739,64 +7747,24 @@ class TradingStrategy:
                                         )
                                         # Non-fatal: allow trade if slippage check fails
 
-                                success = self.apex.execute_action(analysis, symbol)
-                                if success:
-                                    logger.info(f"   ✅ Position opened successfully")
-
-                                    # ═══════════════════════════════════════════════════════
-                                    # COPY TRADE ENGINE — broadcast platform trade to users
-                                    # Only the platform account triggers copy broadcasting.
-                                    # ═══════════════════════════════════════════════════════
-                                    if not user_mode and COPY_ENGINE_AVAILABLE and get_copy_engine and CopySignal:
-                                        try:
-                                            _copy_side = "buy" if action == "enter_long" else "sell"
-                                            logger.info(f"   📡 Broadcasting trade: {symbol} {_copy_side} ${position_size:.2f}")
-                                            _copy_engine = get_copy_engine()
-                                            _copy_results = _copy_engine.broadcast(CopySignal(
-                                                symbol=symbol,
-                                                side=_copy_side,
-                                                platform_size_usd=position_size,
-                                            ))
-                                            _copy_user_count = len([r for r in (_copy_results or []) if getattr(r, 'skipped', True) is False])
-                                            logger.info(f"   👥 Copying to {_copy_user_count} account(s)")
-                                        except Exception as _copy_err:
-                                            logger.debug("CopyEngine broadcast skipped for %s: %s", symbol, _copy_err)
-
-                                    # ═══════════════════════════════════════════════════════
-                                    # EXECUTION PIPELINE — fan-out signal to all accounts
-                                    # Steps: risk-check → broadcast → dashboard → profit split
-                                    # → AI capital reallocation
-                                    # ═══════════════════════════════════════════════════════
-                                    if EXECUTION_PIPELINE_AVAILABLE and get_execution_pipeline:
-                                        try:
-                                            _pipeline = get_execution_pipeline()
-                                            _regime_label = (
-                                                _regime_result.regime
-                                                if _regime_result and hasattr(_regime_result, 'regime')
-                                                else "RANGING"
-                                            )
-                                            _pipeline.run(
-                                                signal={**analysis, 'symbol': symbol},
-                                                account_id=self._get_broker_name(active_broker),
-                                                account_balance=account_balance,
-                                                regime=_regime_label,
-                                            )
-                                        except Exception as _pipe_err:
-                                            logger.debug(
-                                                "ExecutionPipeline skipped for %s: %s",
-                                                symbol, _pipe_err,
-                                            )
-
-                                    # Record micro-cap trade time for re-entry cooldown
-                                    if _micro_cap_config:
-                                        self._micro_cap_last_trade_times[symbol] = time.time()
-                                        logger.info(
-                                            f"   ⏱️  Micro-cap cooldown started for {symbol} "
-                                            f"({MICRO_CAP_TRADE_COOLDOWN}s)"
-                                        )
-                                    break  # Only open one position per cycle
-                                else:
-                                    logger.error(f"   ❌ Failed to open position")
+                                # ═══════════════════════════════════════════════════════
+                                # PRIORITY SELECTION — queue signal for post-scan ranking
+                                # ═══════════════════════════════════════════════════════
+                                # All gates have passed. Store the fully-sized signal so
+                                # the post-scan priority executor can rank all candidates
+                                # by score and deploy capital in the highest-probability
+                                # setups first (instead of first-found order).
+                                pending_signals.append({
+                                    'symbol': symbol,
+                                    'analysis': analysis,
+                                    'position_size': position_size,
+                                    'entry_score': entry_score,
+                                    'action': action,
+                                })
+                                logger.info(
+                                    f"   📋 Signal queued (score={entry_score:.1f}, "
+                                    f"size=${position_size:.2f}) — continuing scan for more candidates"
+                                )
 
                         except Exception as e:
                             # CRITICAL FIX (Jan 10, 2026): Distinguish invalid symbols from rate limits
@@ -7852,6 +7820,137 @@ class TradingStrategy:
                     # Note: Market scan delay is now applied BEFORE each candle fetch (see line ~1088)
                     # This ensures we never make requests too quickly in succession
                     # No post-delay needed since pre-delay is more effective at preventing rate limits
+
+                    # ═══════════════════════════════════════════════════════
+                    # PRIORITY SELECTION — phase 2: rank and execute top signals
+                    # ═══════════════════════════════════════════════════════
+                    # Sort every validated signal collected during the scan by
+                    # entry score (descending) and execute only the top-ranked
+                    # ones that fit within the remaining position slots.  This
+                    # ensures capital is always deployed in the highest-
+                    # probability setups rather than the first found.
+                    # ═══════════════════════════════════════════════════════
+                    if pending_signals:
+                        # current_positions was fetched at the start of this cycle. Because
+                        # the new two-phase design collects signals without executing any
+                        # trades during the scan loop, this count is accurate: no positions
+                        # were opened between the fetch and this point.  The
+                        # _trades_executed_this_cycle counter below tracks positions opened
+                        # during priority execution so subsequent slot checks stay correct.
+                        _slots_available = max(
+                            0, effective_max_positions - len(current_positions)
+                        )
+                        _ranked_signals = sorted(
+                            pending_signals,
+                            key=lambda x: x['entry_score'],
+                            reverse=True,
+                        )
+                        logger.info("")
+                        logger.info(
+                            f"🏆 PRIORITY SELECTION: {len(_ranked_signals)} signal(s) collected, "
+                            f"{_slots_available} slot(s) available"
+                        )
+                        for _rank_i, _rank_sig in enumerate(_ranked_signals[:3], start=1):
+                            logger.info(
+                                f"   #{_rank_i}: {_rank_sig['symbol']} "
+                                f"(score={_rank_sig['entry_score']:.1f}, "
+                                f"size=${_rank_sig['position_size']:.2f})"
+                            )
+                        if len(_ranked_signals) > 3:
+                            logger.info(f"   ... and {len(_ranked_signals) - 3} more signal(s) ranked below")
+
+                        _trades_executed_this_cycle = 0
+                        for _sig_data in _ranked_signals[:_slots_available]:
+                            if (
+                                len(current_positions) + _trades_executed_this_cycle
+                                >= effective_max_positions
+                            ):
+                                logger.info("   🛑 Position cap reached — stopping priority execution")
+                                break
+
+                            _ps_symbol = _sig_data['symbol']
+                            _ps_analysis = _sig_data['analysis']
+                            _ps_position_size = _sig_data['position_size']
+                            _ps_action = _sig_data['action']
+
+                            logger.info(
+                                f"   🎯 Executing priority signal "
+                                f"#{_trades_executed_this_cycle + 1}: {_ps_symbol} "
+                                f"(score={_sig_data['entry_score']:.1f})"
+                            )
+
+                            _ps_success = self.apex.execute_action(_ps_analysis, _ps_symbol)
+                            if _ps_success:
+                                logger.info(f"   ✅ Position opened: {_ps_symbol}")
+                                _trades_executed_this_cycle += 1
+
+                                # ═══════════════════════════════════════════════════════
+                                # COPY TRADE ENGINE — broadcast platform trade to users
+                                # Only the platform account triggers copy broadcasting.
+                                # ═══════════════════════════════════════════════════════
+                                if not user_mode and COPY_ENGINE_AVAILABLE and get_copy_engine and CopySignal:
+                                    try:
+                                        _ps_copy_side = "buy" if _ps_action == "enter_long" else "sell"
+                                        logger.info(
+                                            f"   📡 Broadcasting trade: {_ps_symbol} "
+                                            f"{_ps_copy_side} ${_ps_position_size:.2f}"
+                                        )
+                                        _ps_copy_engine = get_copy_engine()
+                                        _ps_copy_results = _ps_copy_engine.broadcast(CopySignal(
+                                            symbol=_ps_symbol,
+                                            side=_ps_copy_side,
+                                            platform_size_usd=_ps_position_size,
+                                        ))
+                                        _ps_copy_count = len([
+                                            r for r in (_ps_copy_results or [])
+                                            if getattr(r, 'skipped', True) is False
+                                        ])
+                                        logger.info(f"   👥 Copying to {_ps_copy_count} account(s)")
+                                    except Exception as _ps_copy_err:
+                                        logger.debug(
+                                            "CopyEngine broadcast skipped for %s: %s",
+                                            _ps_symbol, _ps_copy_err,
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
+                                # EXECUTION PIPELINE — fan-out signal to all accounts
+                                # Steps: risk-check → broadcast → dashboard → profit split
+                                # → AI capital reallocation
+                                # ═══════════════════════════════════════════════════════
+                                if EXECUTION_PIPELINE_AVAILABLE and get_execution_pipeline:
+                                    try:
+                                        _ps_pipeline = get_execution_pipeline()
+                                        _ps_regime_label = (
+                                            _regime_result.regime
+                                            if _regime_result and hasattr(_regime_result, 'regime')
+                                            else "RANGING"
+                                        )
+                                        _ps_pipeline.run(
+                                            signal={**_ps_analysis, 'symbol': _ps_symbol},
+                                            account_id=self._get_broker_name(active_broker),
+                                            account_balance=account_balance,
+                                            regime=_ps_regime_label,
+                                        )
+                                    except Exception as _ps_pipe_err:
+                                        logger.debug(
+                                            "ExecutionPipeline skipped for %s: %s",
+                                            _ps_symbol, _ps_pipe_err,
+                                        )
+
+                                # Record micro-cap trade time for re-entry cooldown
+                                if _micro_cap_config:
+                                    self._micro_cap_last_trade_times[_ps_symbol] = time.time()
+                                    logger.info(
+                                        f"   ⏱️  Micro-cap cooldown started for {_ps_symbol} "
+                                        f"({MICRO_CAP_TRADE_COOLDOWN}s)"
+                                    )
+                            else:
+                                logger.error(f"   ❌ Failed to open position: {_ps_symbol}")
+
+                        logger.info(
+                            f"   📊 Priority execution complete: "
+                            f"{_trades_executed_this_cycle} trade(s) executed this cycle"
+                        )
 
                     # ═══════════════════════════════════════════════════════
                     # MARKET REGIME CONTROLLER — post-scan evaluation
