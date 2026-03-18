@@ -11,11 +11,16 @@ Safe Profit Mode Activation Rules
 The mode activates when EITHER of these thresholds is crossed (whichever
 comes first):
 
-  * Daily profit-to-target ratio  ≥ ``target_pct_threshold``   (default 1.0)
-    i.e. today's profit already meets or exceeds the daily target.
+  * Daily profit-to-target ratio  ≥ ``target_pct_threshold``   (default 1.5)
+    i.e. today's profit has reached 150 % of the daily target.  Raising this
+    above 1.0 allows the bot to keep compounding well past the basic daily
+    goal before locking down, maximising growth on strong days.
 
-  * Locked-profit fraction        ≥ ``lock_fraction_threshold`` (default 0.50)
-    i.e. at least 50 % of today's accumulated profit is ratchet-locked.
+  * Locked-profit fraction        ≥ ``lock_fraction_threshold`` (default 0.80)
+    i.e. at least 80 % of today's accumulated profit is ratchet-locked.
+    The higher threshold (was 50 %) means the bot continues opening fresh
+    positions until the vast majority of the day's gains are already protected
+    by the ProfitLockEngine ratchet stops.
 
 When active:
   * New position entries are **blocked** (``should_block_entry()`` → ``True``).
@@ -106,8 +111,8 @@ class SafeProfitModeManager:
     DATA_DIR   = Path(__file__).parent.parent / "data"
     STATE_FILE = DATA_DIR / "safe_profit_mode_state.json"
 
-    DEFAULT_TARGET_PCT_THRESHOLD  = 1.0    # activate at 100 % of daily target
-    DEFAULT_LOCK_FRACTION_THRESHOLD = 0.50  # activate when 50 % of profit is locked
+    DEFAULT_TARGET_PCT_THRESHOLD  = 1.5    # activate at 150 % of daily target (max-growth tuning)
+    DEFAULT_LOCK_FRACTION_THRESHOLD = 0.80  # activate when 80 % of profit is locked (max-growth tuning)
 
     def __init__(
         self,

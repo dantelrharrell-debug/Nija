@@ -17,11 +17,11 @@ Architecture
   │                                                      │
   │  Tier   Peak Profit   Fraction Locked   Lock Floor % │
   │  ─────────────────────────────────────────────────── │
-  │  1      ≥ +1.0 %      30 % of peak     +0.30 %      │
-  │  2      ≥ +2.0 %      50 % of peak     +1.00 %      │
-  │  3      ≥ +3.5 %      70 % of peak     +2.45 %      │
-  │  4      ≥ +5.0 %      82 % of peak     +4.10 %      │
-  │  5      ≥ +8.0 %      92 % of peak     +7.36 %      │
+  │  1      ≥ +1.0 %      20 % of peak     +0.20 %      │
+  │  2      ≥ +2.0 %      40 % of peak     +0.80 %      │
+  │  3      ≥ +3.5 %      60 % of peak     +2.10 %      │
+  │  4      ≥ +5.0 %      78 % of peak     +3.90 %      │
+  │  5      ≥ +8.0 %      90 % of peak     +7.20 %      │
   │  6      ≥ +15.0 %     96 % of peak     +14.40 %     │
   │                                                      │
   │  The "lock floor price" is the stop price at which   │
@@ -29,6 +29,15 @@ Architecture
   │  locked profit fraction.  It is ratcheted up         │
   │  (for longs) or down (for shorts) monotonically.     │
   └──────────────────────────────────────────────────────┘
+
+Max-Growth Tier Rationale
+--------------------------
+Lock fractions at Tiers 1–5 are intentionally relaxed compared to a pure
+capital-preservation configuration.  Looser early-tier floors give winning
+trades more room to continue running before the ratchet stop tightens,
+increasing expected profit per trade on strong moves.  Tier 6 retains its
+original 96 % lock to provide near-total protection once a position has
+delivered 15 %+ gains.
 
 Key Design Decisions
 --------------------
@@ -100,13 +109,15 @@ class TierSpec:
 
 
 # Six ascending tiers. Each supersedes the previous.
+# Lock fractions at Tiers 1–5 are tuned for max-growth: looser early floors
+# give winning trades more room to run before the ratchet tightens.
 TIER_SPECS: List[TierSpec] = [
-    TierSpec("TIER_1", peak_trigger_pct=1.0,  lock_fraction=0.30),
-    TierSpec("TIER_2", peak_trigger_pct=2.0,  lock_fraction=0.50),
-    TierSpec("TIER_3", peak_trigger_pct=3.5,  lock_fraction=0.70),
-    TierSpec("TIER_4", peak_trigger_pct=5.0,  lock_fraction=0.82),
-    TierSpec("TIER_5", peak_trigger_pct=8.0,  lock_fraction=0.92),
-    TierSpec("TIER_6", peak_trigger_pct=15.0, lock_fraction=0.96),
+    TierSpec("TIER_1", peak_trigger_pct=1.0,  lock_fraction=0.20),  # floor +0.20%
+    TierSpec("TIER_2", peak_trigger_pct=2.0,  lock_fraction=0.40),  # floor +0.80%
+    TierSpec("TIER_3", peak_trigger_pct=3.5,  lock_fraction=0.60),  # floor +2.10%
+    TierSpec("TIER_4", peak_trigger_pct=5.0,  lock_fraction=0.78),  # floor +3.90%
+    TierSpec("TIER_5", peak_trigger_pct=8.0,  lock_fraction=0.90),  # floor +7.20%
+    TierSpec("TIER_6", peak_trigger_pct=15.0, lock_fraction=0.96),  # floor +14.40%
 ]
 
 # Map tier name → spec for quick look-up
