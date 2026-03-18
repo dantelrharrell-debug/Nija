@@ -21,12 +21,14 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import jwt
 from functools import wraps
-import hashlib
 import secrets
 
 from auth import get_api_key_manager, get_user_manager
+from auth.user_database import get_user_database
 from execution import get_permission_validator, UserPermissions
 from bot.kill_switch import get_kill_switch
 from bot.user_rules_engine import (
@@ -36,6 +38,7 @@ from bot.user_rules_engine import (
     RULE_TYPE_TRAILING_STOP,
     RULE_TYPE_PORTFOLIO_REBALANCE,
 )
+from security.secrets_manager import get_jwt_secret
 import json
 from pathlib import Path
 
@@ -48,30 +51,47 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# Configuration
-app.config['SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', secrets.token_hex(32))
+_allowed_origins = os.getenv('ALLOWED_ORIGINS', '*').split(',')
+if '*' in _allowed_origins:
+    logger.warning(
+        "ALLOWED_ORIGINS is set to '*' (wildcard). "
+        "Restrict to specific domains in production by setting the ALLOWED_ORIGINS env var."
+    )
+CORS(app, resources={r"/api/*": {"origins": _allowed_origins}})
+
+# Configuration – JWT secret loaded from secrets backend (env / AWS / Vault)
+app.config['SECRET_KEY'] = get_jwt_secret()
 app.config['JWT_EXPIRATION_HOURS'] = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+# Default limits: 200 requests/day per IP and 60/hour per IP globally.
+# Sensitive auth endpoints have tighter per-route limits (see decorators below).
+_rate_limit_storage = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
+if _rate_limit_storage == 'memory://':
+    logger.warning(
+        "Rate limiter using in-process memory store. "
+        "For production, set RATELIMIT_STORAGE_URI to a Redis URL "
+        "(e.g. redis://localhost:6379/0) so limits persist across workers/restarts."
+    )
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=["200 per day", "60 per hour"],
+    headers_enabled=True,          # Return X-RateLimit-* headers
+    storage_uri=_rate_limit_storage,
+)
+
+# Current ToS version – bump this string whenever the ToS changes
+CURRENT_TOS_VERSION = "2026-01-31"
 
 # Get manager instances
 api_key_manager = get_api_key_manager()
 user_manager = get_user_manager()
 permission_validator = get_permission_validator()
-
-# In-memory user credentials (TODO: replace with database)
-# Format: {email: {password_hash: str, user_id: str}}
-user_credentials = {}
-
-
-def hash_password(password: str) -> str:
-    """Hash password using SHA256 (TODO: upgrade to bcrypt/argon2)."""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    """Verify password against hash."""
-    return hash_password(password) == password_hash
+user_db = get_user_database()
 
 
 def generate_jwt_token(user_id: str) -> str:
@@ -139,6 +159,33 @@ def require_auth(f):
 
         # Add user_id to request context
         request.user_id = payload['user_id']
+
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
+def require_tos_accepted(f):
+    """
+    Decorator that enforces Terms-of-Service acceptance before allowing
+    access to trading and account-management endpoints.
+
+    Must be applied *after* ``@require_auth`` so that ``request.user_id``
+    is already set.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        user_id = getattr(request, 'user_id', None)
+        if not user_id:
+            return jsonify({'error': 'Authentication required'}), 401
+
+        if not user_db.has_accepted_tos(user_id, required_version=CURRENT_TOS_VERSION):
+            return jsonify({
+                'error': 'Terms of Service acceptance required',
+                'tos_url': '/api/compliance/tos',
+                'accept_url': '/api/compliance/accept-tos',
+                'current_version': CURRENT_TOS_VERSION,
+            }), 403
 
         return f(*args, **kwargs)
 
@@ -245,6 +292,7 @@ def get_info():
 # ========================================
 
 @app.route('/api/auth/register', methods=['POST'])
+@limiter.limit("5 per hour")
 def register():
     """
     Register a new user.
@@ -269,22 +317,31 @@ def register():
     if '@' not in email or '.' not in email:
         return jsonify({'error': 'Invalid email format'}), 400
 
-    # Check if user already exists
-    if email in user_credentials:
+    # Enforce minimum password length
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+    # Check if user already exists (persistent DB)
+    existing = user_db.get_user_by_email(email)
+    if existing:
         return jsonify({'error': 'User already exists'}), 409
 
     # Create user ID
     user_id = f"user_{secrets.token_hex(8)}"
 
-    # Store credentials
-    user_credentials[email] = {
-        'password_hash': hash_password(password),
-        'user_id': user_id
-    }
+    # Persist user with Argon2 password hash
+    created = user_db.create_user(
+        user_id=user_id,
+        email=email,
+        password=password,
+        subscription_tier=subscription_tier,
+    )
+    if not created:
+        return jsonify({'error': 'Registration failed'}), 500
 
-    # Create user profile
+    # Create user profile in in-memory manager (for permission/stats)
     try:
-        user_profile = user_manager.create_user(
+        user_manager.create_user(
             user_id=user_id,
             email=email,
             subscription_tier=subscription_tier
@@ -305,25 +362,28 @@ def register():
         )
         permission_validator.register_user(permissions)
 
-        # Generate token
-        token = generate_jwt_token(user_id)
-
-        logger.info(f"New user registered: {email} (ID: {user_id}, Tier: {subscription_tier})")
-
-        return jsonify({
-            'message': 'User registered successfully',
-            'user_id': user_id,
-            'email': email,
-            'subscription_tier': subscription_tier,
-            'token': token
-        }), 201
-
     except Exception as e:
-        logger.error(f"Failed to register user: {e}")
-        return jsonify({'error': 'Registration failed'}), 500
+        logger.warning(f"Could not initialise in-memory profile for {user_id}: {e}")
+
+    # Generate token
+    token = generate_jwt_token(user_id)
+
+    logger.info(f"New user registered: {email} (ID: {user_id}, Tier: {subscription_tier})")
+
+    return jsonify({
+        'message': 'User registered successfully',
+        'user_id': user_id,
+        'email': email,
+        'subscription_tier': subscription_tier,
+        'token': token,
+        'tos_accepted': False,
+        'tos_required': True,
+        'accept_tos_url': '/api/compliance/accept-tos',
+    }), 201
 
 
 @app.route('/api/auth/login', methods=['POST'])
+@limiter.limit("10 per minute")
 def login():
     """
     Login user and return JWT token.
@@ -342,22 +402,20 @@ def login():
     email = data['email'].lower().strip()
     password = data['password']
 
-    # Check credentials
-    if email not in user_credentials:
+    # Look up user in persistent database
+    user_record = user_db.get_user_by_email(email)
+    if not user_record:
         return jsonify({'error': 'Invalid credentials'}), 401
 
-    user_creds = user_credentials[email]
+    user_id = user_record['user_id']
 
-    if not verify_password(password, user_creds['password_hash']):
-        return jsonify({'error': 'Invalid credentials'}), 401
-
-    user_id = user_creds['user_id']
-
-    # Get user profile
-    user_profile = user_manager.get_user(user_id)
-
-    if not user_profile or not user_profile.get('enabled', True):
+    if not user_record.get('enabled', True):
         return jsonify({'error': 'Account disabled'}), 403
+
+    # Verify password with Argon2 (via UserDatabase)
+    ip_address = request.remote_addr
+    if not user_db.verify_password(user_id, password, ip_address=ip_address):
+        return jsonify({'error': 'Invalid credentials'}), 401
 
     # Generate token
     token = generate_jwt_token(user_id)
@@ -368,8 +426,10 @@ def login():
         'message': 'Login successful',
         'user_id': user_id,
         'email': email,
-        'subscription_tier': user_profile.get('subscription_tier', 'basic'),
-        'token': token
+        'subscription_tier': user_record.get('subscription_tier', 'basic'),
+        'token': token,
+        'tos_accepted': bool(user_record.get('tos_accepted_at')),
+        'tos_version': user_record.get('tos_version'),
     })
 
 
@@ -382,7 +442,7 @@ def login():
 def get_user_profile():
     """Get user profile (requires authentication)."""
     user_id = request.user_id
-    user_profile = user_manager.get_user(user_id)
+    user_profile = user_db.get_user(user_id)
 
     if not user_profile:
         return jsonify({'error': 'User not found'}), 404
@@ -397,7 +457,9 @@ def get_user_profile():
         'created_at': user_profile['created_at'],
         'enabled': user_profile['enabled'],
         'brokers': api_key_manager.list_user_brokers(user_id),
-        'permissions': permissions.to_dict() if permissions else None
+        'permissions': permissions.to_dict() if permissions else None,
+        'tos_accepted': bool(user_profile.get('tos_accepted_at')),
+        'tos_version': user_profile.get('tos_version'),
     })
 
 
@@ -408,7 +470,7 @@ def user_settings():
     user_id = request.user_id
 
     if request.method == 'GET':
-        user_profile = user_manager.get_user(user_id)
+        user_profile = user_db.get_user(user_id)
         if not user_profile:
             return jsonify({'error': 'User not found'}), 404
 
@@ -426,7 +488,7 @@ def user_settings():
             allowed_updates['subscription_tier'] = data['subscription_tier']
 
         if allowed_updates:
-            user_manager.update_user(user_id, allowed_updates)
+            user_db.update_user(user_id, allowed_updates)
             logger.info(f"User {user_id} updated settings: {allowed_updates}")
 
         return jsonify({'message': 'Settings updated successfully'})
@@ -438,6 +500,7 @@ def user_settings():
 
 @app.route('/api/user/brokers', methods=['GET'])
 @require_auth
+@require_tos_accepted
 def list_brokers():
     """List all configured brokers for user."""
     user_id = request.user_id
@@ -452,6 +515,7 @@ def list_brokers():
 
 @app.route('/api/user/brokers/<broker_name>', methods=['POST', 'DELETE'])
 @require_auth
+@require_tos_accepted
 def manage_broker_keys(broker_name: str):
     """Add or remove broker API keys."""
     user_id = request.user_id
@@ -486,7 +550,13 @@ def manage_broker_keys(broker_name: str):
 
         return jsonify({
             'message': f'{broker_name} API credentials added successfully',
-            'broker': broker_name
+            'broker': broker_name,
+            'permissions_advisory': (
+                'IMPORTANT: Ensure your API key has TRADE-ONLY permissions. '
+                'Never enable withdrawal permissions on keys used with NIJA. '
+                'NIJA does not hold custody of your funds and will never request '
+                'withdrawal access.'
+            ),
         }), 201
 
     elif request.method == 'DELETE':
@@ -509,6 +579,7 @@ def manage_broker_keys(broker_name: str):
 
 @app.route('/api/user/stats', methods=['GET'])
 @require_auth
+@require_tos_accepted
 def get_user_stats():
     """Get user trading statistics."""
     user_id = request.user_id
@@ -533,6 +604,7 @@ def get_user_stats():
 
 @app.route('/api/trading/status', methods=['GET'])
 @require_auth
+@require_tos_accepted
 def get_trading_status():
     """Get current trading status for user."""
     user_id = request.user_id
@@ -552,6 +624,7 @@ def get_trading_status():
 
 @app.route('/api/trading/positions', methods=['GET'])
 @require_auth
+@require_tos_accepted
 def get_positions():
     """Get active trading positions for user."""
     user_id = request.user_id
@@ -568,6 +641,7 @@ def get_positions():
 
 @app.route('/api/trading/history', methods=['GET'])
 @require_auth
+@require_tos_accepted
 def get_trade_history():
     """Get trade history for user."""
     user_id = request.user_id
@@ -585,6 +659,126 @@ def get_trade_history():
         'count': len(trades),
         'limit': limit,
         'offset': offset
+    })
+
+
+
+# ========================================
+# Compliance Endpoints
+# ========================================
+
+_TOS_TEXT_URL = "https://github.com/dantelrharrell-debug/Nija/blob/main/TERMS_OF_SERVICE.md"
+_RISK_URL = "https://github.com/dantelrharrell-debug/Nija/blob/main/RISK_DISCLOSURE.md"
+_PRIVACY_URL = "https://github.com/dantelrharrell-debug/Nija/blob/main/PRIVACY_POLICY.md"
+
+
+@app.route('/api/compliance/tos', methods=['GET'])
+def get_tos():
+    """
+    Return a summary of the current Terms of Service and links to full documents.
+
+    No authentication required – publicly accessible so users can review before
+    creating an account.
+    """
+    return jsonify({
+        'tos_version': CURRENT_TOS_VERSION,
+        'tos_url': _TOS_TEXT_URL,
+        'risk_disclosure_url': _RISK_URL,
+        'privacy_policy_url': _PRIVACY_URL,
+        'custody_statement': (
+            'NIJA does not hold custody of your funds at any time. '
+            'Your assets remain in your own exchange account. '
+            'NIJA accesses your account solely via read/trade API keys '
+            'to execute trades on your behalf.'
+        ),
+        'api_key_permissions_advisory': (
+            'Only grant TRADE permissions (read + create/cancel orders) to API keys '
+            'used with NIJA. NEVER enable withdrawal permissions.'
+        ),
+        'disclaimer': (
+            'Cryptocurrency trading involves substantial risk of loss. '
+            'Past performance is not indicative of future results. '
+            'You may lose some or all of your invested capital. '
+            'NIJA is a tool – you remain solely responsible for your trading decisions.'
+        ),
+    })
+
+
+@app.route('/api/compliance/accept-tos', methods=['POST'])
+@require_auth
+def accept_tos():
+    """
+    Record the authenticated user's acceptance of the current Terms of Service.
+
+    Request body (optional):
+        {
+            "tos_version": "2026-01-31"   // defaults to current version
+        }
+
+    The user must accept the ToS before accessing trading or broker-management
+    endpoints.
+    """
+    user_id = request.user_id
+    data = request.get_json() or {}
+    tos_version = data.get('tos_version', CURRENT_TOS_VERSION)
+
+    # Only allow accepting the current version
+    if tos_version != CURRENT_TOS_VERSION:
+        return jsonify({
+            'error': 'Invalid ToS version. Please accept the current version.',
+            'current_version': CURRENT_TOS_VERSION,
+        }), 400
+
+    success = user_db.accept_tos(user_id, tos_version=tos_version)
+    if not success:
+        return jsonify({'error': 'Failed to record ToS acceptance'}), 500
+
+    logger.info(f"User {user_id} accepted ToS version {tos_version}")
+
+    return jsonify({
+        'message': 'Terms of Service accepted',
+        'tos_version': tos_version,
+        'accepted_at': datetime.utcnow().isoformat(),
+    })
+
+
+@app.route('/api/compliance/status', methods=['GET'])
+@require_auth
+def compliance_status():
+    """
+    Return the compliance status for the authenticated user, including:
+    - ToS acceptance
+    - Custody disclaimer
+    - API key permission advisory
+    """
+    user_id = request.user_id
+    user_record = user_db.get_user(user_id)
+
+    if not user_record:
+        return jsonify({'error': 'User not found'}), 404
+
+    tos_accepted = bool(user_record.get('tos_accepted_at'))
+    tos_version = user_record.get('tos_version')
+    tos_current = (tos_version == CURRENT_TOS_VERSION) if tos_accepted else False
+
+    return jsonify({
+        'user_id': user_id,
+        'tos_accepted': tos_accepted,
+        'tos_version_accepted': tos_version,
+        'tos_current_version': CURRENT_TOS_VERSION,
+        'tos_is_current': tos_current,
+        'tos_accepted_at': user_record.get('tos_accepted_at'),
+        'trading_allowed': tos_current,
+        'custody_confirmation': (
+            'NIJA does not hold custody of your funds. '
+            'All assets remain in your own exchange account.'
+        ),
+        'api_key_permissions_advisory': (
+            'Recommended API key permissions: Read + Trade only. '
+            'Withdrawal permissions should NEVER be granted.'
+        ),
+        'tos_url': _TOS_TEXT_URL,
+        'risk_disclosure_url': _RISK_URL,
     })
 
 
