@@ -68,6 +68,15 @@ try:
 except ImportError:
     from broker_manager import BrokerType
 
+# Import PlatformAccountLayer singleton for platform-context injection into user threads
+try:
+    from bot.platform_account_layer import get_platform_account_layer
+except ImportError:
+    try:
+        from platform_account_layer import get_platform_account_layer
+    except ImportError:
+        get_platform_account_layer = None
+
 # Import account isolation manager for failure isolation
 try:
     from bot.account_isolation_manager import get_isolation_manager, FailureType
@@ -111,7 +120,8 @@ class IndependentBrokerTrader:
     Each broker operates in isolation to prevent cascade failures.
     """
 
-    def __init__(self, broker_manager, trading_strategy, multi_account_manager=None):
+    def __init__(self, broker_manager, trading_strategy, multi_account_manager=None,
+                 platform_account: Optional[Dict] = None):
         """
         Initialize independent broker trader.
 
@@ -119,10 +129,32 @@ class IndependentBrokerTrader:
             broker_manager: BrokerManager instance with connected brokers
             trading_strategy: TradingStrategy instance for trading logic
             multi_account_manager: Optional MultiAccountBrokerManager for user accounts
+            platform_account: Optional dict of platform credentials
+                (``{'api_key': ..., 'api_secret': ...}``) obtained from
+                ``get_platform_account_layer().get_platform_credentials()``.
+                When not supplied the singleton is queried at startup.
         """
         self.broker_manager = broker_manager
         self.trading_strategy = trading_strategy
         self.multi_account_manager = multi_account_manager
+
+        # Platform account credentials injected at construction time.
+        # If not provided, fetch from the PAL singleton so user threads always
+        # have access to the platform context they need.
+        if platform_account is not None:
+            self.platform_account: Optional[Dict] = platform_account
+        else:
+            self.platform_account = None
+            if get_platform_account_layer is not None:
+                try:
+                    _pal = get_platform_account_layer()
+                    # Use the first configured exchange, defaulting to KRAKEN for legacy compat.
+                    from bot.platform_account_layer import SUPPORTED_EXCHANGES
+                    _status = _pal.get_status()
+                    _exchange = _status.platform_exchanges[0] if _status.platform_exchanges else "KRAKEN"
+                    self.platform_account = _pal.get_platform_credentials(_exchange)
+                except Exception:
+                    pass
 
         # Track broker health and status
         self.broker_health: Dict[str, Dict] = {}
@@ -169,6 +201,10 @@ class IndependentBrokerTrader:
             logger.info("   ✅ Multi-account support enabled (user trading)")
         if self.isolation_manager:
             logger.info("   🛡️  Account isolation manager active")
+        if self.platform_account and self.platform_account.get("api_key"):
+            logger.info("   🔑 Platform account context loaded")
+        else:
+            logger.warning("   ⚠️  No platform account context — user threads will not have platform credentials")
         logger.info("=" * 70)
 
     def _get_platform_broker_source(self):
@@ -691,6 +727,25 @@ class IndependentBrokerTrader:
         """
         broker_name = f"{user_id}_{broker_type.value}"
         logger.info(f"🚀 {broker_name} (USER) trading loop started")
+
+        # --- Step 4: Log platform context for this user thread ---
+        # Resolve platform credentials for this exchange from the injected context
+        # or fall back to the PAL singleton so each thread always carries its context.
+        _platform_ctx: Optional[Dict] = None
+        if self.platform_account and self.platform_account.get("api_key"):
+            _platform_ctx = self.platform_account
+        else:
+            if get_platform_account_layer is not None:
+                try:
+                    _pal = get_platform_account_layer()
+                    _platform_ctx = _pal.get_platform_credentials(broker_type.value)
+                except Exception:
+                    pass
+
+        if _platform_ctx and _platform_ctx.get("api_key"):
+            logger.info(f"   🔑 {broker_name}: platform context loaded ({broker_type.value.upper()})")
+        else:
+            logger.warning(f"   ⚠️  {broker_name}: no platform context — user account has no platform backing")
 
         # Random startup delay to prevent all user brokers hitting API at once
         startup_delay = random.uniform(STARTUP_DELAY_MIN, STARTUP_DELAY_MAX)

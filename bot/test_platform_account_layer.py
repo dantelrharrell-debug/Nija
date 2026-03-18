@@ -569,3 +569,83 @@ class TestSingletons:
         inst1 = mod.get_api_abstraction_layer()
         inst2 = mod.get_api_abstraction_layer()
         assert inst1 is inst2
+
+    def test_get_platform_layer_alias(self):
+        """get_platform_layer() is the same object as get_platform_account_layer()."""
+        import bot.platform_account_layer as mod
+        mod._platform_account_layer = None
+        assert mod.get_platform_layer is mod.get_platform_account_layer
+        inst1 = mod.get_platform_layer()
+        inst2 = mod.get_platform_account_layer()
+        assert inst1 is inst2
+
+    def test_pal_singleton_thread_safe(self):
+        """Two threads racing on singleton creation must receive the same instance."""
+        import threading
+        import bot.platform_account_layer as mod
+        mod._platform_account_layer = None
+
+        results = []
+
+        def _get():
+            results.append(mod.get_platform_account_layer())
+
+        t1 = threading.Thread(target=_get)
+        t2 = threading.Thread(target=_get)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        assert len(results) == 2
+        assert results[0] is results[1]
+
+
+# ===========================================================================
+# has_platform_account() tests
+# ===========================================================================
+
+class TestHasPlatformAccount:
+    """Tests for PlatformAccountLayer.has_platform_account()."""
+
+    def test_returns_true_when_exchange_credentials_set(self, monkeypatch):
+        """has_platform_account() returns True when EXCHANGE_PLATFORM_* vars are present."""
+        layer, _ = _fresh_pal(monkeypatch, {
+            "KRAKEN_PLATFORM_API_KEY": "my_platform_key_long",
+            "KRAKEN_PLATFORM_API_SECRET": "my_platform_secret_long",
+        })
+        assert layer.has_platform_account("KRAKEN") is True
+        assert layer.has_platform_account("kraken") is True  # case-insensitive
+
+    def test_returns_false_when_no_credentials(self, monkeypatch):
+        """has_platform_account() returns False when no platform vars are set."""
+        layer, _ = _fresh_pal(monkeypatch, {})
+        assert layer.has_platform_account("KRAKEN") is False
+        assert layer.has_platform_account("COINBASE") is False
+
+    def test_returns_false_for_unconfigured_exchange(self, monkeypatch):
+        """has_platform_account() returns False for an exchange with no credentials."""
+        layer, _ = _fresh_pal(monkeypatch, {
+            "KRAKEN_PLATFORM_API_KEY": "my_platform_key_long",
+            "KRAKEN_PLATFORM_API_SECRET": "my_platform_secret_long",
+        })
+        assert layer.has_platform_account("COINBASE") is False
+
+    def test_multi_exchange(self, monkeypatch):
+        """has_platform_account() correctly reflects multiple configured exchanges."""
+        layer, _ = _fresh_pal(monkeypatch, {
+            "KRAKEN_PLATFORM_API_KEY": "kraken_key_long",
+            "KRAKEN_PLATFORM_API_SECRET": "kraken_secret_long",
+            "COINBASE_PLATFORM_API_KEY": "cb_key_long",
+            "COINBASE_PLATFORM_API_SECRET": "cb_secret_long",
+        })
+        assert layer.has_platform_account("KRAKEN") is True
+        assert layer.has_platform_account("COINBASE") is True
+        assert layer.has_platform_account("OKX") is False
+
+    def test_legacy_kraken_fallback(self, monkeypatch):
+        """has_platform_account('KRAKEN') returns True with legacy KRAKEN_API_KEY vars."""
+        layer, _ = _fresh_pal(monkeypatch, {
+            "KRAKEN_API_KEY": "legacy_key",
+            "KRAKEN_API_SECRET": "legacy_secret",
+        })
+        assert layer.has_platform_account("KRAKEN") is True

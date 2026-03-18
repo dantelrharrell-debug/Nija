@@ -45,6 +45,7 @@ Supported exchanges (EXCHANGE prefix):
 
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -240,6 +241,21 @@ class PlatformAccountLayer:
             api_secret = api_secret or os.getenv(self.LEGACY_SECRET_ENV, "").strip()
 
         return {"api_key": api_key, "api_secret": api_secret}
+
+    def has_platform_account(self, exchange: str = "KRAKEN") -> bool:
+        """
+        Return True when NIJA has platform credentials configured for *exchange*.
+
+        This is the canonical check used before connecting user accounts so that
+        standalone-fallback trading can be blocked when no platform account exists.
+
+        Args:
+            exchange: Exchange name (case-insensitive, e.g. "KRAKEN", "COINBASE").
+
+        Returns:
+            True if platform credentials for the exchange are present, False otherwise.
+        """
+        return exchange.upper() in self._status.platform_exchanges
 
     def list_user_env_prefixes(self) -> List[str]:
         """
@@ -456,16 +472,24 @@ class PlatformAccountLayer:
 # ---------------------------------------------------------------------------
 
 _platform_account_layer: Optional[PlatformAccountLayer] = None
+_platform_layer_lock = threading.Lock()
 
 
 def get_platform_account_layer() -> PlatformAccountLayer:
     """
     Return the module-level PlatformAccountLayer singleton.
 
+    Thread-safe: uses a module-level lock to guard first-time creation.
     Call this once during startup, then use display_hierarchy() and validate()
     to log the Smart Structure and confirm configuration.
     """
     global _platform_account_layer
     if _platform_account_layer is None:
-        _platform_account_layer = PlatformAccountLayer()
+        with _platform_layer_lock:
+            if _platform_account_layer is None:
+                _platform_account_layer = PlatformAccountLayer()
     return _platform_account_layer
+
+
+# Convenience alias — preferred name for new call sites.
+get_platform_layer = get_platform_account_layer
