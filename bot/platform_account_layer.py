@@ -491,5 +491,20 @@ def get_platform_account_layer() -> PlatformAccountLayer:
     return _platform_account_layer
 
 
-# Convenience alias — preferred name for new call sites.
-get_platform_layer = get_platform_account_layer
+def get_platform_layer() -> PlatformAccountLayer:
+    """
+    Convenience alias for :func:`get_platform_account_layer`.
+
+    Preferred name for new call sites introduced after the singleton
+    enforcement refactor (March 2026).  Both functions return the same
+    module-level singleton instance.
+
+    Example::
+
+        from bot.platform_account_layer import get_platform_layer
+
+        pal = get_platform_layer()
+        if not pal.has_platform_account("KRAKEN"):
+            raise RuntimeError("Platform account not configured")
+    """
+    return get_platform_account_layer()

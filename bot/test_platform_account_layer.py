@@ -571,10 +571,10 @@ class TestSingletons:
         assert inst1 is inst2
 
     def test_get_platform_layer_alias(self):
-        """get_platform_layer() is the same object as get_platform_account_layer()."""
+        """get_platform_layer() returns the same singleton as get_platform_account_layer()."""
         import bot.platform_account_layer as mod
         mod._platform_account_layer = None
-        assert mod.get_platform_layer is mod.get_platform_account_layer
+        # Both accessors must return the same singleton instance.
         inst1 = mod.get_platform_layer()
         inst2 = mod.get_platform_account_layer()
         assert inst1 is inst2
