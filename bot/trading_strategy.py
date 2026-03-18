@@ -2086,10 +2086,22 @@ class TradingStrategy:
             # Initialize independent broker trader for multi-broker support
             try:
                 from independent_broker_trader import IndependentBrokerTrader
+                # Resolve platform credentials from the PAL singleton so the trader
+                # (and all user threads it spawns) carry the platform context.
+                _platform_creds = None
+                try:
+                    from bot.platform_account_layer import get_platform_account_layer
+                    _pal_ts = get_platform_account_layer()
+                    _ts_status = _pal_ts.get_status()
+                    _ts_exchange = _ts_status.platform_exchanges[0] if _ts_status.platform_exchanges else "KRAKEN"
+                    _platform_creds = _pal_ts.get_platform_credentials(_ts_exchange)
+                except Exception:
+                    pass
                 self.independent_trader = IndependentBrokerTrader(
                     self.broker_manager,
                     self,
-                    self.multi_account_manager  # Pass multi-account manager for user trading
+                    self.multi_account_manager,  # Pass multi-account manager for user trading
+                    platform_account=_platform_creds,
                 )
                 logger.info("✅ Independent broker trader initialized")
             except Exception as indie_err:

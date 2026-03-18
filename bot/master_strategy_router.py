@@ -6,6 +6,7 @@ Orchestrates all active strategies for a given symbol and returns a single
 consensus trade signal.  The **StrategyVoter** gate (Priority-3) is wired in
 here: signals that do not achieve multi-strategy quorum + confidence are
 rejected before they reach execution.
+
 Provides a single authoritative trading signal shared across all registered
 broker accounts so that every account reacts to ONE master decision rather
 than each account running its own independent strategy.
@@ -20,13 +21,13 @@ Architecture
         |         TrendFollowing / MeanReversion / Momentum / Macro / StatArb
         |
         +-- (2) StrategyVoter gate  [Priority-3: quorum + confidence check]
-        |         approved? -- YES --> return VoteResult
-        |                   -- NO  --> return no-trade signal
+        |         approved? -- YES --> return RouterSignal
+        |                   -- NO  --> return no-trade RouterSignal
         |
         +-- (3) NIJA APEX dual-RSI strategy  [supplemental signal, optional]
+        |
+        +-- (4) Stored master signal  [broadcast from platform account via update()]
 
-The router is the canonical entry point called by everything upstream
-(ExecutionPipeline, SignalBroadcaster, TradingStrategy).
     ┌─────────────────────────────────────────────────────────┐
     │               MasterStrategyRouter (singleton)           │
     │                                                         │
@@ -35,8 +36,8 @@ The router is the canonical entry point called by everything upstream
     │  update(signal)   ← called by the MASTER/platform       │
     │                     account after analyze_market()       │
     │                                                         │
-    │  get_signal()     → returns latest master signal        │
-    │                     (all accounts read from here)       │
+    │  get_signal(df, symbol, ...)  → evaluates via voter     │
+    │  get_signal()                 → returns stored signal   │
     └─────────────────────────────────────────────────────────┘
 
 Usage
@@ -47,23 +48,17 @@ Usage
 
     router = get_master_strategy_router()
 
-signal = router.get_signal(df=df, symbol="BTC-USD", regime="TRENDING")
-
+    # ── Fresh consensus evaluation (platform account): ───────────────────
+    signal = router.get_signal(df=df, symbol="BTC-USD", regime="TRENDING")
     if signal.approved:
-        # signal.action  -- "long" | "short"
-        # signal.confidence  -- 0.0-1.0
-        # proceed to ExecutionPipeline
-        ...
+        router.update(signal.metadata)   # broadcast to user accounts
 
-    # Master (platform) account — after analysis:
-    router.update(analysis)
-
-    # All accounts — replace local signal derivation:
-    signal = router.get_signal()
-    action = signal.get('action', 'hold') if signal else 'hold'
+    # ── User accounts read the stored master signal: ─────────────────────
+    signal = router.get_signal()          # no df → returns stored signal
+    action = signal.action if signal else "hold"
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 2.0
 Date: March 2026
 """
 
@@ -72,7 +67,8 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("nija.master_strategy_router")
 
@@ -102,7 +98,17 @@ class RouterSignal:
 
 
 class MasterStrategyRouter:
-    """Consensus strategy router with integrated StrategyVoter (Priority-3) gate.
+    """Unified master strategy coordinator.
+
+    Responsibilities
+    ----------------
+    1. **Consensus gate** – evaluates market data against all registered
+       strategies via ``StrategyVoter``; blocks low-confidence signals.
+    2. **Signal broadcast** – the platform account calls ``update()`` after
+       its analysis; all user accounts then call ``get_signal()`` (without
+       market data) to read the same master decision.
+    3. **APEX tie-breaker** – APEX dual-RSI adds supplemental metadata when
+       the StrategyVoter approves a signal.
 
     Thread-safe singleton via ``get_master_strategy_router()``.
     """
@@ -116,6 +122,11 @@ class MasterStrategyRouter:
         self._voter = self._load_voter(min_quorum, min_confidence)
         self._apex = self._load_apex()
 
+        # Stored master signal — broadcast by the platform account and read
+        # by all user accounts so every broker acts on ONE coordinated decision.
+        self._current_signal: Optional[Dict[str, Any]] = None
+        self._last_updated: Optional[str] = None
+
         logger.info(
             "MasterStrategyRouter initialised | StrategyVoter wired=%s | ApexRSI wired=%s",
             self._voter is not None,
@@ -123,7 +134,7 @@ class MasterStrategyRouter:
         )
 
     # ------------------------------------------------------------------
-    # Public API
+    # Public API — consensus evaluation
     # ------------------------------------------------------------------
 
     def get_signal(
@@ -135,13 +146,20 @@ class MasterStrategyRouter:
         df_pair=None,
         pair_symbol: Optional[str] = None,
     ) -> RouterSignal:
-        """Evaluate all strategies and return a consensus signal.
+        """Return a trading signal.
+
+        Behaviour
+        ---------
+        * **With** ``df`` (market data) — runs the full StrategyVoter
+          consensus evaluation and APEX supplemental analysis.
+        * **Without** ``df`` — returns the most-recently stored master signal
+          (set via ``update()``).  Returns a ``no_trade`` RouterSignal when no
+          signal has been broadcast yet.
 
         Parameters
         ----------
         df:
-            OHLCV DataFrame.  May be ``None`` when called without market data
-            (vote result will pass through with ``approved=True``).
+            OHLCV DataFrame.  Pass ``None`` to retrieve the stored signal.
         symbol:
             Trading symbol, e.g. ``"BTC-USD"``.
         indicators:
@@ -154,12 +172,37 @@ class MasterStrategyRouter:
         Returns
         -------
         RouterSignal
-            When ``approved`` is ``False`` the caller should NOT enter a trade.
+            ``approved=False`` means the caller should NOT enter a trade.
         """
-        # ── Priority-3: Strategy Voter ───────────────────────────────────
+        # ── Stored-signal path (no market data) ─────────────────────────
+        if df is None:
+            with self._lock:
+                stored = self._current_signal
+            if stored is None:
+                return RouterSignal(
+                    approved=False,
+                    action="no_trade",
+                    confidence=0.0,
+                    vote_count=0,
+                    reason="no master signal broadcast yet",
+                    symbol=symbol,
+                    regime=regime,
+                )
+            return RouterSignal(
+                approved=stored.get("approved", True),
+                action=stored.get("action", "no_trade"),
+                confidence=stored.get("confidence", 0.0),
+                vote_count=stored.get("vote_count", 0),
+                reason=stored.get("reason", "stored master signal"),
+                symbol=stored.get("symbol", symbol),
+                regime=stored.get("regime", regime),
+                metadata=stored.get("metadata", {}),
+            )
+
+        # ── Live-evaluation path ─────────────────────────────────────────
+        # Priority-3: Strategy Voter
         voter = self._voter
         if voter is None:
-            # No voter available -- pass through
             vote = _passthrough_vote(symbol)
         else:
             try:
@@ -190,9 +233,9 @@ class MasterStrategyRouter:
                 metadata=vote.metadata,
             )
 
-        # ── Supplemental: APEX dual-RSI (optional tie-breaker) ──────────
+        # Supplemental: APEX dual-RSI (optional tie-breaker)
         apex_meta: Dict = {}
-        if self._apex is not None and df is not None:
+        if self._apex is not None:
             try:
                 apex_result = self._apex.analyze(df, symbol=symbol)
                 if isinstance(apex_result, dict):
@@ -215,10 +258,68 @@ class MasterStrategyRouter:
             metadata={**vote.metadata, **apex_meta},
         )
 
+    # ------------------------------------------------------------------
+    # Public API — signal broadcast (platform → all accounts)
+    # ------------------------------------------------------------------
+
+    def update(self, signal: Dict[str, Any]) -> None:
+        """Store the latest signal from the master (platform) account.
+
+        Called by the platform account after ``analyze_market()`` or after
+        evaluating ``get_signal(df=df, ...)``.  All user accounts then call
+        ``get_signal()`` (no args) to read this shared decision.
+
+        Args:
+            signal: Analysis dict containing at minimum ``{'action': str}``.
+                    A ``RouterSignal`` can be passed directly (it will be
+                    converted to a plain dict via its ``__dict__``).
+        """
+        if isinstance(signal, RouterSignal):
+            payload: Dict[str, Any] = {
+                "approved": signal.approved,
+                "action": signal.action,
+                "confidence": signal.confidence,
+                "vote_count": signal.vote_count,
+                "reason": signal.reason,
+                "symbol": signal.symbol,
+                "regime": signal.regime,
+                "metadata": signal.metadata,
+            }
+        else:
+            payload = dict(signal)
+
+        with self._lock:
+            self._current_signal = payload
+            self._last_updated = datetime.now(timezone.utc).isoformat()
+            action = payload.get("action", "hold")
+            logger.debug(
+                "[MasterRouter] signal updated → action=%s at %s",
+                action, self._last_updated,
+            )
+
+    def clear(self) -> None:
+        """Reset the stored signal (call at the start of each trading cycle)."""
+        with self._lock:
+            self._current_signal = None
+            self._last_updated = None
+        logger.debug("[MasterRouter] stored signal cleared")
+
+    @property
+    def current_signal(self) -> Optional[Dict[str, Any]]:
+        """The most recently broadcast master signal dict, or ``None``."""
+        with self._lock:
+            return self._current_signal
+
+    @property
+    def last_updated(self) -> Optional[str]:
+        """ISO-8601 UTC timestamp of the last ``update()`` call, or ``None``."""
+        with self._lock:
+            return self._last_updated
+
     def update_thresholds(
         self, min_quorum: int, min_confidence: float
     ) -> None:
-        """Dynamically update the StrategyVoter thresholds."""
+        """Dynamically update the StrategyVoter quorum / confidence thresholds."""
         if self._voter is not None:
             self._voter.update_quorum(min_quorum, min_confidence)
 
@@ -229,23 +330,23 @@ class MasterStrategyRouter:
     @staticmethod
     def _load_voter(min_quorum: int, min_confidence: float):
         """Load the StrategyVoter (Priority-3 gate)."""
-        try:
-            from bot.strategy_voter import get_strategy_voter  # type: ignore
-            return get_strategy_voter(
-                min_quorum=min_quorum,
-                min_confidence=min_confidence,
-            )
-        except ImportError:
-            pass
-        try:
-            from strategy_voter import get_strategy_voter  # type: ignore
-            return get_strategy_voter(
-                min_quorum=min_quorum,
-                min_confidence=min_confidence,
-            )
-        except ImportError:
-            logger.warning("MasterStrategyRouter: StrategyVoter not found -- voter gate disabled")
-            return None
+        for mod_name in ("bot.strategy_voter", "strategy_voter"):
+            try:
+                mod = __import__(mod_name, fromlist=["get_strategy_voter"])
+                return mod.get_strategy_voter(
+                    min_quorum=min_quorum,
+                    min_confidence=min_confidence,
+                )
+            except ImportError:
+                continue
+            except Exception as exc:
+                logger.warning(
+                    "MasterStrategyRouter: StrategyVoter load error (%s): %s -- trying next path",
+                    mod_name, exc,
+                )
+                continue
+        logger.warning("MasterStrategyRouter: StrategyVoter not found -- voter gate disabled")
+        return None
 
     @staticmethod
     def _load_apex():
@@ -287,8 +388,8 @@ def _passthrough_vote(symbol: str):
 # Singleton factory
 # ---------------------------------------------------------------------------
 
-_instance: Optional[MasterStrategyRouter] = None
-_instance_lock = threading.Lock()
+_ROUTER: Optional[MasterStrategyRouter] = None
+_ROUTER_LOCK = threading.Lock()
 
 
 def get_master_strategy_router(
@@ -296,83 +397,15 @@ def get_master_strategy_router(
     min_confidence: float = 0.55,
 ) -> MasterStrategyRouter:
     """Return the process-wide :class:`MasterStrategyRouter` singleton."""
-    global _instance
-    if _instance is None:
-        with _instance_lock:
-            if _instance is None:
-                _instance = MasterStrategyRouter(
+    global _ROUTER
+    if _ROUTER is None:
+        with _ROUTER_LOCK:
+            if _ROUTER is None:
+                _ROUTER = MasterStrategyRouter(
                     min_quorum=min_quorum,
                     min_confidence=min_confidence,
                 )
-    return _instance
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
-
-logger = logging.getLogger("nija.master_router")
-
-
-class MasterStrategyRouter:
-    """
-    Holds the current master trading signal and distributes it to all
-    accounts so they all act on a single coordinated decision.
-    """
-
-    def __init__(self) -> None:
-        self.current_signal: Optional[Dict[str, Any]] = None
-        self._last_updated: Optional[str] = None
-        self._lock = threading.Lock()
-
-    def update(self, signal: Dict[str, Any]) -> None:
-        """
-        Store the latest signal emitted by the master (platform) strategy.
-
-        Args:
-            signal: Analysis dict from ``ApexStrategy.analyze_market()``,
-                    must contain at minimum ``{'action': str}``.
-        """
-        with self._lock:
-            self.current_signal = signal
-            self._last_updated = datetime.now(timezone.utc).isoformat()
-            action = signal.get('action', 'hold') if signal else 'hold'
-            logger.debug(
-                "[MasterRouter] signal updated → action=%s at %s",
-                action, self._last_updated,
-            )
-
-    def get_signal(self) -> Optional[Dict[str, Any]]:
-        """
-        Return the current master signal, or *None* if no signal has been
-        set yet (callers should fall back to their local analysis in that case).
-        """
-        with self._lock:
-            return self.current_signal
-
-    def clear(self) -> None:
-        """Reset the stored signal (e.g. at the start of each trading cycle)."""
-        with self._lock:
-            self.current_signal = None
-            self._last_updated = None
-
-    @property
-    def last_updated(self) -> Optional[str]:
-        """ISO-8601 timestamp of the last ``update()`` call, or None."""
-        with self._lock:
-            return self._last_updated
-
-
-# ---------------------------------------------------------------------------
-# Singleton accessor
-# ---------------------------------------------------------------------------
-
-_ROUTER: Optional[MasterStrategyRouter] = None
-_ROUTER_LOCK = threading.Lock()
-
-
-def get_master_strategy_router() -> MasterStrategyRouter:
-    """Return the process-wide MasterStrategyRouter singleton."""
-    global _ROUTER
-    with _ROUTER_LOCK:
-        if _ROUTER is None:
-            _ROUTER = MasterStrategyRouter()
-            logger.info("[MasterRouter] singleton created — one master signal for all accounts")
+                logger.info(
+                    "[MasterRouter] singleton created — one master signal for all accounts"
+                )
     return _ROUTER

@@ -68,6 +68,15 @@ try:
 except ImportError:
     from broker_manager import BrokerType
 
+# Import PlatformAccountLayer singleton for platform-context injection into user threads
+try:
+    from bot.platform_account_layer import get_platform_account_layer
+except ImportError:
+    try:
+        from platform_account_layer import get_platform_account_layer
+    except ImportError:
+        get_platform_account_layer = None
+
 # Import account isolation manager for failure isolation
 try:
     from bot.account_isolation_manager import get_isolation_manager, FailureType
@@ -78,18 +87,32 @@ except ImportError:
         get_isolation_manager = None
         FailureType = None
 
-# LEGACY: Import copy trade engine for checking if copy trading is active
-# NOTE: Copy trading is deprecated. This import is kept for backward compatibility.
-# Expected: ImportError (module doesn't exist) - system uses independent trading
+# Import copy trade engine for replicating platform trades into user accounts
 try:
     from bot.copy_trade_engine import get_copy_engine
 except ImportError:
-    # Handle case where bot module path isn't available
     try:
         from copy_trade_engine import get_copy_engine
     except ImportError:
-        # Expected: Copy trading modules don't exist (using independent trading)
         get_copy_engine = None
+
+# Import master strategy router — single authoritative signal for all accounts
+try:
+    from bot.master_strategy_router import get_master_strategy_router
+except ImportError:
+    try:
+        from master_strategy_router import get_master_strategy_router
+    except ImportError:
+        get_master_strategy_router = None
+
+# Import cross-account capital allocator — proportional sizing across users
+try:
+    from bot.cross_account_capital_allocator import get_cross_account_allocator
+except ImportError:
+    try:
+        from cross_account_capital_allocator import get_cross_account_allocator
+    except ImportError:
+        get_cross_account_allocator = None
 
 logger = logging.getLogger("nija.independent_trader")
 
@@ -111,7 +134,8 @@ class IndependentBrokerTrader:
     Each broker operates in isolation to prevent cascade failures.
     """
 
-    def __init__(self, broker_manager, trading_strategy, multi_account_manager=None):
+    def __init__(self, broker_manager, trading_strategy, multi_account_manager=None,
+                 platform_account: Optional[Dict] = None):
         """
         Initialize independent broker trader.
 
@@ -119,10 +143,32 @@ class IndependentBrokerTrader:
             broker_manager: BrokerManager instance with connected brokers
             trading_strategy: TradingStrategy instance for trading logic
             multi_account_manager: Optional MultiAccountBrokerManager for user accounts
+            platform_account: Optional dict of platform credentials
+                (``{'api_key': ..., 'api_secret': ...}``) obtained from
+                ``get_platform_account_layer().get_platform_credentials()``.
+                When not supplied the singleton is queried at startup.
         """
         self.broker_manager = broker_manager
         self.trading_strategy = trading_strategy
         self.multi_account_manager = multi_account_manager
+
+        # Platform account credentials injected at construction time.
+        # If not provided, fetch from the PAL singleton so user threads always
+        # have access to the platform context they need.
+        if platform_account is not None:
+            self.platform_account: Optional[Dict] = platform_account
+        else:
+            self.platform_account = None
+            if get_platform_account_layer is not None:
+                try:
+                    _pal = get_platform_account_layer()
+                    # Use the first configured exchange, defaulting to KRAKEN for legacy compat.
+                    from bot.platform_account_layer import SUPPORTED_EXCHANGES
+                    _status = _pal.get_status()
+                    _exchange = _status.platform_exchanges[0] if _status.platform_exchanges else "KRAKEN"
+                    self.platform_account = _pal.get_platform_credentials(_exchange)
+                except Exception:
+                    pass
 
         # Track broker health and status
         self.broker_health: Dict[str, Dict] = {}
@@ -163,12 +209,48 @@ class IndependentBrokerTrader:
             except Exception as e:
                 logger.warning(f"   ⚠️  Could not initialize isolation manager: {e}")
 
+        # COPY TRADE ENGINE — attach multi_account_manager so broadcast() can reach users
+        self.copy_engine = None
+        if get_copy_engine is not None:
+            try:
+                self.copy_engine = get_copy_engine()
+                if multi_account_manager is not None:
+                    self.copy_engine.attach(multi_account_manager)
+            except Exception as _ce_err:
+                logger.warning("   ⚠️  CopyTradeEngine unavailable: %s", _ce_err)
+
+        # MASTER STRATEGY ROUTER — single signal source for all accounts
+        self.master_router = None
+        if get_master_strategy_router is not None:
+            try:
+                self.master_router = get_master_strategy_router()
+            except Exception as _mr_err:
+                logger.warning("   ⚠️  MasterStrategyRouter unavailable: %s", _mr_err)
+
+        # CROSS-ACCOUNT CAPITAL ALLOCATOR — proportional sizing across users
+        self.capital_allocator = None
+        if get_cross_account_allocator is not None:
+            try:
+                self.capital_allocator = get_cross_account_allocator()
+            except Exception as _ca_err:
+                logger.warning("   ⚠️  CrossAccountCapitalAllocator unavailable: %s", _ca_err)
+
         logger.info("=" * 70)
         logger.info("🔒 INDEPENDENT BROKER TRADER INITIALIZED")
         if multi_account_manager:
             logger.info("   ✅ Multi-account support enabled (user trading)")
         if self.isolation_manager:
             logger.info("   🛡️  Account isolation manager active")
+        if self.platform_account and self.platform_account.get("api_key"):
+            logger.info("   🔑 Platform account context loaded")
+        else:
+            logger.warning("   ⚠️  No platform account context — user threads will not have platform credentials")
+        if self.copy_engine:
+            logger.info("   📡 Copy trade engine active")
+        if self.master_router:
+            logger.info("   🧭 Master strategy router active")
+        if self.capital_allocator:
+            logger.info("   💰 Cross-account capital allocator active")
         logger.info("=" * 70)
 
     def _get_platform_broker_source(self):
@@ -691,6 +773,25 @@ class IndependentBrokerTrader:
         """
         broker_name = f"{user_id}_{broker_type.value}"
         logger.info(f"🚀 {broker_name} (USER) trading loop started")
+
+        # --- Step 4: Log platform context for this user thread ---
+        # Resolve platform credentials for this exchange from the injected context
+        # or fall back to the PAL singleton so each thread always carries its context.
+        _platform_ctx: Optional[Dict] = None
+        if self.platform_account and self.platform_account.get("api_key"):
+            _platform_ctx = self.platform_account
+        else:
+            if get_platform_account_layer is not None:
+                try:
+                    _pal = get_platform_account_layer()
+                    _platform_ctx = _pal.get_platform_credentials(broker_type.value)
+                except Exception:
+                    pass
+
+        if _platform_ctx and _platform_ctx.get("api_key"):
+            logger.info(f"   🔑 {broker_name}: platform context loaded ({broker_type.value.upper()})")
+        else:
+            logger.warning(f"   ⚠️  {broker_name}: no platform context — user account has no platform backing")
 
         # Random startup delay to prevent all user brokers hitting API at once
         startup_delay = random.uniform(STARTUP_DELAY_MIN, STARTUP_DELAY_MAX)

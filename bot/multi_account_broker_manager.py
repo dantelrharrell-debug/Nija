@@ -62,6 +62,15 @@ except ImportError:
         get_account_mode_manager = None
         AccountMode = None
 
+# Import PlatformAccountLayer singleton for platform-presence gating
+try:
+    from bot.platform_account_layer import get_platform_account_layer
+except ImportError:
+    try:
+        from platform_account_layer import get_platform_account_layer
+    except ImportError:
+        get_platform_account_layer = None
+
 logger = logging.getLogger('nija.multi_account')
 
 # Root nija logger for flushing all handlers
@@ -1103,17 +1112,19 @@ class MultiAccountBrokerManager:
             platform_connected = self.is_platform_connected(broker_type)
             logger.debug(f"   is_platform_connected result: {platform_connected}")
 
+            # --- Step 3: Verify platform presence before connecting the user ---
+            # Use the PAL singleton to confirm that NIJA platform credentials exist
+            # for this exchange.  If they are absent we cannot safely operate in
+            # multi-user SaaS mode, so we block the standalone fallback.
             if not platform_connected:
-                # No platform account connected — user account operates as standalone primary.
-                # Trading is fully allowed; the platform account is optional.
-                # Note: Without a platform account, unified cross-account risk aggregation,
-                # capital orchestration, and consolidated reporting are unavailable. Each
-                # standalone user account manages its own risk limits independently.
-                logger.info(f"ℹ️  No Platform {broker_type.value.upper()} account configured.")
-                logger.info(f"   User: {user.name} ({user.user_id})")
-                logger.info(f"   Operating in standalone mode — full trading enabled.")
-                logger.info("   ℹ️  Note: Cross-account risk aggregation and capital orchestration")
-                logger.info("      require a Platform account but are not needed for standalone trading.")
+                _pal = get_platform_account_layer() if get_platform_account_layer is not None else None
+                _has_platform = _pal.has_platform_account(broker_type.value) if _pal is not None else False
+                if not _has_platform:
+                    logger.warning(f"⚠️  Platform not detected — blocking standalone fallback")
+                    logger.warning(f"   User: {user.name} ({user.user_id}) [{broker_type.value.upper()}]")
+                    logger.warning(f"   Configure {broker_type.value.upper()}_PLATFORM_API_KEY / SECRET")
+                    logger.warning(f"   to enable multi-user SaaS trading for this exchange.")
+                    continue
 
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
@@ -1128,7 +1139,7 @@ class MultiAccountBrokerManager:
             if platform_connected:
                 logger.info(f"   ✅ Platform {broker_type.value.upper()} is connected (correct priority)")
             else:
-                logger.info(f"   ℹ️  Platform {broker_type.value.upper()} is NOT connected (STANDALONE MODE — full trading enabled)")
+                logger.info(f"   ℹ️  Platform {broker_type.value.upper()} is present but not yet connected")
             # Flush to ensure this message appears before connection attempt logs
             # CRITICAL FIX: Must flush the root 'nija' logger's handlers, not the child logger's
             # Child loggers (like 'nija.multi_account', 'nija.broker') propagate to parent but
@@ -1288,21 +1299,20 @@ class MultiAccountBrokerManager:
                 continue
 
         if users_without_platform:
-            # Platform account not connected — users operate in standalone mode with full trading.
-            # Trade entries are fully enabled. Cross-account risk aggregation and capital
-            # orchestration features are unavailable without a Platform account, but each
-            # standalone user account enforces its own per-account risk limits independently.
+            # Step 5: Standalone mode is blocked — trading requires a platform account.
+            # Users without a matching platform account were skipped during connection above
+            # (Step 3 guard).  This section surfaces any that slipped through (e.g. legacy
+            # env-var users that bypassed the PAL check) with a clear warning.
             try:
-                logger.info("=" * 70)
-                logger.info("ℹ️  STANDALONE MODE — No Platform Account Configured")
-                logger.info("=" * 70)
-                logger.info(f"   Platform account not connected on: {', '.join(users_without_platform)}")
-                logger.info("   User accounts are operating as standalone primary accounts.")
-                logger.info("   ✅ Full trading is enabled — new entries are allowed.")
-                logger.info("   ℹ️  Per-account risk limits are active and enforced independently.")
-                logger.info("   ℹ️  Cross-account risk aggregation and capital orchestration require")
-                logger.info("      a Platform account, but are not needed for standalone trading.")
-                logger.info("")
+                logger.warning("=" * 70)
+                logger.warning("⛔  STANDALONE MODE BLOCKED — Platform Account Required")
+                logger.warning("=" * 70)
+                logger.warning(f"   Missing platform account on: {', '.join(users_without_platform)}")
+                logger.warning("   User accounts require a NIJA Platform account to trade.")
+                logger.warning("   Configure the platform credentials and restart:")
+                for ex in users_without_platform:
+                    logger.warning(f"     {ex}_PLATFORM_API_KEY / {ex}_PLATFORM_API_SECRET")
+                logger.warning("")
                 # Flush output to ensure messages are visible
                 for handler in _root_logger.handlers:
                     handler.flush()
@@ -1435,7 +1445,7 @@ class MultiAccountBrokerManager:
         if user_broker_summary:
             for name, count in user_broker_summary.items():
                 platform_ok = platform_status.get(name, False)
-                role = "SECONDARY ✅" if platform_ok else "✅ STANDALONE MODE (full trading enabled)"
+                role = "SECONDARY ✅" if platform_ok else "⛔ NO PLATFORM — trading blocked"
                 logger.info(f"   • {name}: {count} user(s) — {role}")
         else:
             logger.info("   ⚪ No connected user accounts")
@@ -1460,14 +1470,13 @@ class MultiAccountBrokerManager:
         if hierarchy_valid:
             logger.info("✅ HIERARCHY VALID: Platform is PRIMARY, all users are SECONDARY")
         else:
-            logger.info("ℹ️  STANDALONE MODE: No Platform account configured.")
+            logger.warning("⛔ HIERARCHY INVALID: No Platform account configured — standalone mode blocked.")
             if standalone_mode_users:
-                logger.info(
-                    f"   ✅ STANDALONE MODE: {len(standalone_mode_users)} user(s) trading independently "
-                    f"({', '.join(standalone_mode_users)})"
+                logger.warning(
+                    f"   User(s) without platform coverage: {', '.join(standalone_mode_users)}"
                 )
-                logger.info("      Full trading is enabled — new entries are allowed.")
-                logger.info("      A Platform account can be added later for unified reporting.")
+                logger.warning("   New trade entries are BLOCKED until a platform account is configured.")
+                logger.warning("   Set {EXCHANGE}_PLATFORM_API_KEY / SECRET and restart.")
 
         logger.info("=" * 70)
 
