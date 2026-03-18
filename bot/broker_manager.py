@@ -8228,17 +8228,14 @@ class KrakenBroker(BaseBroker):
                 ascending=True
             )
 
-            # Convert to standard format
-            candles = []
-            for idx, row in ohlc.tail(count).iterrows():
-                candles.append({
-                    'time': int(idx.timestamp()),
-                    'open': float(row['open']),
-                    'high': float(row['high']),
-                    'low': float(row['low']),
-                    'close': float(row['close']),
-                    'volume': float(row['volume'])
-                })
+            # Convert to standard format (vectorised – avoids iterrows overhead)
+            tail = ohlc.tail(count)
+            timestamps = [int(ts.timestamp()) for ts in tail.index]
+            ohlcv_data = tail[['open', 'high', 'low', 'close', 'volume']].astype(float).values
+            candles = [
+                {'time': ts, 'open': o, 'high': h, 'low': l, 'close': c, 'volume': v}
+                for ts, (o, h, l, c, v) in zip(timestamps, ohlcv_data)
+            ]
 
             return candles
 
