@@ -117,13 +117,20 @@ def test_kraken_profit_thresholds():
         'tp3': 108.0
     }
 
-    # Test at 0.7% profit (should trigger for Kraken, not Coinbase)
+    # Test at 0.7% profit (should NOT trigger even for Kraken – below 1.0% threshold)
     current_price = 100.7  # 0.7% profit
     result = engine.check_stepped_profit_exits('BTC-USD', current_price)
 
-    assert result is not None, "Kraken should trigger profit exit at 0.7%"
-    assert result['profit_level'] == '0.7%', f"Expected 0.7% profit level, got {result['profit_level']}"
-    print(f"✅ Kraken triggers profit exit at 0.7% (NET profit: ~{(0.007 - 0.0036)*100:.2f}%)")
+    assert result is None, "Kraken should NOT trigger profit exit at 0.7% (below 1.0% threshold)"
+    print(f"✅ Kraken does NOT trigger at 0.7% (below 1.0% threshold)")
+
+    # Test at 1.0% profit (should trigger for Kraken – first threshold)
+    current_price = 101.0  # 1.0% profit
+    result = engine.check_stepped_profit_exits('BTC-USD', current_price)
+
+    assert result is not None, "Kraken should trigger profit exit at 1.0%"
+    assert result['profit_level'] == '1.0%', f"Expected 1.0% profit level, got {result['profit_level']}"
+    print(f"✅ Kraken triggers profit exit at 1.0% (NET profit: ~{(0.010 - 0.0036)*100:.2f}%)")
 
 
 def test_coinbase_profit_thresholds():
@@ -147,14 +154,14 @@ def test_coinbase_profit_thresholds():
         'tp3': 108.0
     }
 
-    # Test at 0.7% profit (should NOT trigger for Coinbase)
+    # Test at 0.7% profit (should NOT trigger for Coinbase – fees too high)
     current_price = 100.7  # 0.7% profit
     result = engine.check_stepped_profit_exits('BTC-USD', current_price)
 
     assert result is None, "Coinbase should NOT trigger profit exit at 0.7% (fees too high)"
     print(f"✅ Coinbase does NOT trigger profit exit at 0.7% (would be NET loss)")
 
-    # Test at 2.0% profit (should trigger for Coinbase)
+    # Test at 2.0% profit (should trigger for Coinbase – first threshold)
     current_price = 102.0  # 2.0% profit
     result = engine.check_stepped_profit_exits('BTC-USD', current_price)
 
@@ -185,10 +192,10 @@ def main():
         print("✅ ALL TESTS PASSED")
         print("="*70)
         print("\nSummary:")
-        print("- Kraken uses 0.36% fees → takes profit at 0.7%, 1.0%, 1.5%, 2.5%")
-        print("- Coinbase uses 1.4% fees → takes profit at 2.0%, 2.5%, 3.0%, 4.0%")
+        print("- Kraken uses 0.36% fees → takes profit at 1.0%, 1.5%, 2.5%, 4.0%")
+        print("- Coinbase uses 1.4% fees → takes profit at 2.0%, 2.5%, 3.5%, 5.0%")
         print("- All profit levels ensure NET profitability after fees")
-        print("- Kraken will take profits ~60-70% faster than before")
+        print("- Kraken takes profits faster, compounding more frequently")
         print("\n")
         return 0
 
