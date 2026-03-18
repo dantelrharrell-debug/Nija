@@ -557,7 +557,7 @@ class MarketRegimeController:
         "chaotic_scan_seconds": 300,      # slow down scan during chaos
     }
 
-    def __init__(self, config: Optional[Dict] = None) -> None:
+    def __init__(self, config: Optional[Dict] = None, window_size: int = REGIME_WINDOW_SIZE) -> None:
         """
         Initialise the controller.
 
@@ -566,8 +566,15 @@ class MarketRegimeController:
         config : dict, optional
             Override any of the threshold / control defaults listed in
             ``_DEFAULTS``.
+        window_size : int, optional
+            Number of scan cycles to average for regime smoothing.
         """
         cfg = {**self._DEFAULTS, **(config or {})}
+
+        # Rolling-window state (used by evaluate() / get_history())
+        self._window_size = window_size
+        self._history: Deque[MarketSnapshot] = deque(maxlen=window_size)
+        self._last_result: Optional[RegimeResult] = None
 
         # Thresholds
         self.trending_adx_threshold: float  = cfg["trending_adx_threshold"]
