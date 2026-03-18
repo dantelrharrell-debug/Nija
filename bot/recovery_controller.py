@@ -178,7 +178,10 @@ class RecoveryController:
                         logger.warning(f"Invalid state '{state_name}', defaulting to NORMAL")
                         self._current_state = FailureState.NORMAL
                     
-                    self._trading_enabled = data.get('trading_enabled', False)
+                    # Default to True on fresh startup (no saved state).  A saved
+                    # False value from a previous explicit disable_trading() call is
+                    # still respected.
+                    self._trading_enabled = data.get('trading_enabled', True)
                     self._safe_mode = data.get('safe_mode', False)
                     self._failure_count = data.get('failure_count', 0)
                     self._state_change_history = data.get('history', [])
@@ -312,8 +315,11 @@ class RecoveryController:
                 # Keep current trading_enabled, but raise caution
                 self._safe_mode = False
             elif new_state == FailureState.NORMAL:
-                # Trading must be explicitly enabled, not automatic
+                # Auto-enable trading when recovering to NORMAL state so that
+                # is_trading_enabled reflects the true operational status and
+                # callers do not need to call enable_trading() separately.
                 self._safe_mode = False
+                self._trading_enabled = True
             
             logger.warning("=" * 70)
             logger.warning(f"🔄 STATE TRANSITION: {old_state.value} → {new_state.value}")
@@ -477,7 +483,21 @@ class RecoveryController:
                     return True, "Exit allowed in recovery mode"
                 return False, f"RECOVERY MODE - {operation} operations blocked"
             
-            # Check global trading flag
+            # ── NORMAL STATE + SAFE/CAUTION CAPITAL ──────────────────────────────
+            # Fix: when state is normal and capital is safe, allow entries without
+            # requiring an explicit enable_trading() call.  The state machine already
+            # expresses that conditions are healthy — blocking here is a logic bug.
+            if self._current_state == FailureState.NORMAL:
+                if self._capital_safety_level in [
+                    CapitalSafetyLevel.SAFE,
+                    CapitalSafetyLevel.CAUTION,
+                ]:
+                    return True, "Trading allowed (normal state, safe capital)"
+                # Fall through to capital-safety checks for WARNING/DANGER/CRITICAL
+                # so those levels are still enforced even in NORMAL state.
+
+            # Check global trading flag (manual kill-switch)
+            # Note: only reached when state is NORMAL+WARNING or DEGRADED.
             if not self._trading_enabled:
                 return False, "Trading globally disabled"
             
@@ -492,12 +512,15 @@ class RecoveryController:
                 if self._capital_safety_level == CapitalSafetyLevel.WARNING:
                     return False, "Capital safety warning - entries reduced"
             
-            # Degraded state - allow with caution
+            # Degraded state - allow entries when capital is safe or caution
             if self._current_state == FailureState.DEGRADED:
-                if operation == "entry" and self._capital_safety_level == CapitalSafetyLevel.CAUTION:
+                if operation == "entry" and self._capital_safety_level in [
+                    CapitalSafetyLevel.SAFE,
+                    CapitalSafetyLevel.CAUTION,
+                ]:
                     return True, "Entry allowed (degraded state, caution advised)"
             
-            # Normal state - all operations allowed
+            # Normal state - remaining operations (non-entry, or entry with WARNING)
             if self._current_state == FailureState.NORMAL:
                 return True, "Trading allowed (normal state)"
             

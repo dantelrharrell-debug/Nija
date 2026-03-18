@@ -4200,6 +4200,10 @@ class TradingStrategy:
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
 
+        # Remember whether the caller explicitly requested user mode so we can
+        # distinguish it from user_mode being forced True by safety checks later.
+        explicit_user_mode = user_mode
+
         # ✅ LAYER 0: RECOVERY CONTROLLER - Capital-first safety check
         # This is the AUTHORITATIVE control layer that sits above all other safety checks
         if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
@@ -4297,8 +4301,16 @@ class TradingStrategy:
                 # Allow position management (exits/stops) but block new entries
                 user_mode = True  # Force user mode to disable new entries
 
-        # Log mode for clarity
-        mode_label = "USER (position management only)" if user_mode else "MASTER (full strategy)"
+        # Log mode for clarity.  Distinguish between:
+        #   USER   — caller explicitly requested user mode (copy-trade accounts)
+        #   PLATFORM (entries blocked) — safety checks forced entry-only mode on a platform account
+        #   MASTER — full strategy execution
+        if explicit_user_mode:
+            mode_label = "USER (position management only)"
+        elif user_mode:
+            mode_label = "PLATFORM (entries blocked by safety checks)"
+        else:
+            mode_label = "MASTER (full strategy)"
         logger.info(f"🔄 Trading cycle mode: {mode_label}")
 
         # ⏱️ Scan-cycle timing: record overall start time
@@ -6206,12 +6218,22 @@ class TradingStrategy:
             logger.info("🎯 TRADE EXECUTION CONDITION CHECKLIST (BROKER-AWARE)")
             logger.info("═" * 80)
 
+            # Initialise entry-gate variables so they are always in scope for the
+            # ENTRY CHECK log that follows the if/else block below.
+            can_enter = True
+            skip_reasons = []
+
             if user_mode:
-                # USER MODE: Skip market scanning and entry signal generation entirely
-                logger.info("   ✅ Mode: USER (copy trading only)")
-                logger.info("   ⏭️  RESULT: Skipping market scan (signals from copy trade engine)")
-                logger.info("   ℹ️  USER accounts execute copied trades only")
-                logger.info("   ℹ️  USER accounts do not scan markets independently")
+                if explicit_user_mode:
+                    # USER MODE: Skip market scanning and entry signal generation entirely
+                    logger.info("   ✅ Mode: USER (copy trading only)")
+                    logger.info("   ⏭️  RESULT: Skipping market scan (signals from copy trade engine)")
+                    logger.info("   ℹ️  USER accounts execute copied trades only")
+                    logger.info("   ℹ️  USER accounts do not scan markets independently")
+                else:
+                    # PLATFORM account with entries blocked by safety checks
+                    logger.info("   ⚠️  Mode: PLATFORM (entries blocked by safety checks)")
+                    logger.info("   ⏭️  RESULT: Skipping market scan until safety conditions clear")
                 logger.info("═" * 80)
                 logger.info("")
             else:
@@ -6475,6 +6497,29 @@ class TradingStrategy:
                         logger.warning(f"   Veto Reason {idx}: {reason}")
                     logger.warning("=" * 70)
                     logger.warning("")
+
+            # ENTRY CHECK debug log — emitted before the entry gate to make the
+            # decision transparent in the logs regardless of the outcome.
+            allow_entries = (
+                not user_mode
+                and not entries_blocked
+                and len(current_positions) < MAX_POSITIONS_ALLOWED
+                and account_balance >= MIN_BALANCE_TO_TRADE_USD
+                and can_enter
+            )
+            if allow_entries:
+                block_reason = "OK"
+            elif user_mode:
+                block_reason = "user_mode" if explicit_user_mode else "safety_check_forced_user_mode"
+            elif entries_blocked:
+                block_reason = "STOP_ALL_ENTRIES.conf active"
+            elif len(current_positions) >= MAX_POSITIONS_ALLOWED:
+                block_reason = f"position_cap ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})"
+            elif account_balance < MIN_BALANCE_TO_TRADE_USD:
+                block_reason = f"low_balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})"
+            else:
+                block_reason = "; ".join(skip_reasons) if skip_reasons else "unknown"
+            logger.info(f"ENTRY CHECK → allowed={allow_entries}, reason={block_reason}")
 
             # Continue with market scanning if conditions passed
             if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD and can_enter:
