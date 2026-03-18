@@ -406,6 +406,22 @@ except ImportError:
         get_slippage_protector = None
         SlippageProtector = None
 
+# Import Crypto Sector Taxonomy — used for sector-level capital allocation caps
+try:
+    from crypto_sector_taxonomy import get_sector, get_sector_name
+    SECTOR_TAXONOMY_AVAILABLE = True
+    logger.info("✅ Crypto Sector Taxonomy loaded - sector capital allocation caps active")
+except ImportError:
+    try:
+        from bot.crypto_sector_taxonomy import get_sector, get_sector_name
+        SECTOR_TAXONOMY_AVAILABLE = True
+        logger.info("✅ Crypto Sector Taxonomy loaded - sector capital allocation caps active")
+    except ImportError:
+        SECTOR_TAXONOMY_AVAILABLE = False
+        logger.warning("⚠️ Crypto Sector Taxonomy not available - sector allocation caps disabled")
+        get_sector = None
+        get_sector_name = None
+
 # Import Volatility Position Sizing — adjusts position sizes based on current volatility
 try:
     from volatility_position_sizing import get_volatility_position_sizer, VolatilityPositionSizer
@@ -698,6 +714,7 @@ MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each c
 # trades.  Balance-aware sub-limits are enforced via
 # get_balance_based_max_positions() below.
 MAX_TOTAL_POSITIONS = 5   # HARD GLOBAL CAP: maximum concurrent open positions
+MAX_SECTOR_ALLOCATION = 0.4  # 40% of total capital — cap per sector to prevent concentration risk
 
 # Balance thresholds for the per-account position cap.
 # Micro accounts (< BALANCE_THRESHOLD_MICRO) are capped at 3 positions.
@@ -6699,7 +6716,8 @@ class TradingStrategy:
                         'position_too_small': 0,
                         'signals_found': 0,
                         'rate_limited': 0,
-                        'cache_hits': 0
+                        'cache_hits': 0,
+                        'sector_cap': 0,
                     }
 
                     # ═══════════════════════════════════════════════════════
@@ -7104,6 +7122,43 @@ class TradingStrategy:
                                         f"(short positions not permitted)"
                                     )
                                     continue
+
+                                # ═══════════════════════════════════════════════════════
+                                # SECTOR CAPITAL CAP — block entry if sector already
+                                # consumes ≥ MAX_SECTOR_ALLOCATION (40 %) of capital.
+                                # ═══════════════════════════════════════════════════════
+                                if SECTOR_TAXONOMY_AVAILABLE and get_sector is not None and broker_balance > 0:
+                                    try:
+                                        _signal_sector = get_sector(symbol)
+                                        _sector_alloc_usd = 0.0
+                                        for _pos in current_positions:
+                                            _pos_sym = _pos.get('symbol', '')
+                                            if not _pos_sym:
+                                                continue
+                                            if get_sector(_pos_sym) == _signal_sector:
+                                                # Use size_usd / usd_value if available, else qty * last price
+                                                _pos_val = _pos.get('size_usd', _pos.get('usd_value', 0.0))
+                                                if _pos_val <= 0:
+                                                    _pos_qty = _pos.get('quantity', _pos.get('size', 0.0))
+                                                    _pos_price = _pos.get('current_price', 0.0)
+                                                    if _pos_qty > 0 and _pos_price > 0:
+                                                        _pos_val = _pos_qty * _pos_price
+                                                _sector_alloc_usd += _pos_val
+                                        if broker_balance > 0 and _sector_alloc_usd / broker_balance > MAX_SECTOR_ALLOCATION:
+                                            _sector_name = get_sector_name(_signal_sector) if get_sector_name else str(_signal_sector)
+                                            logger.info(
+                                                f"   🚫 {symbol}: SECTOR CAP — {_sector_name} sector "
+                                                f"allocation ${_sector_alloc_usd:.2f} / ${broker_balance:.2f} "
+                                                f"= {_sector_alloc_usd / broker_balance:.1%} "
+                                                f"> {MAX_SECTOR_ALLOCATION:.0%} limit — signal skipped"
+                                            )
+                                            filter_stats['sector_cap'] += 1
+                                            continue
+                                    except Exception as _sector_err:
+                                        logger.debug(
+                                            "Sector allocation check skipped for %s: %s",
+                                            symbol, _sector_err,
+                                        )
 
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
@@ -7982,6 +8037,8 @@ class TradingStrategy:
                     logger.info(f"      📊 Market filter: {filter_stats['market_filter']}")
                     logger.info(f"      🚫 No entry signal: {filter_stats['no_entry_signal']}")
                     logger.info(f"      💵 Position too small: {filter_stats['position_too_small']}")
+                    if filter_stats.get('sector_cap', 0) > 0:
+                        logger.info(f"      🏷️  Sector cap (40%): {filter_stats['sector_cap']}")
                     if filter_stats.get('entry_guardrails', 0) > 0:
                         logger.info(f"      🛡️  Entry guardrails: {filter_stats['entry_guardrails']}")
 
