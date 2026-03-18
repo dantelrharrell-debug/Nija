@@ -689,9 +689,38 @@ MARKET_BATCH_SIZE_MAX = 30  # Maximum markets to scan per cycle after warmup
 MARKET_BATCH_WARMUP_CYCLES = 3  # Number of cycles to warm up before using max batch size
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
+# ============================================================================
+# POSITION CAP & SIZE CONSTANTS (CRITICAL RISK CONTROLS)
+# ============================================================================
+# Global hard cap on concurrent open positions.  No matter the account size
+# or environment override, the bot will NEVER hold more than this many
+# positions simultaneously.  Lower values = fewer but larger, more meaningful
+# trades.  Balance-aware sub-limits are enforced via
+# get_balance_based_max_positions() below.
+MAX_TOTAL_POSITIONS = 5   # HARD GLOBAL CAP: maximum concurrent open positions
+
+# Balance thresholds for the per-account position cap.
+# Micro accounts (< BALANCE_THRESHOLD_MICRO) are capped at 3 positions.
+# Small accounts (< BALANCE_THRESHOLD_SMALL) are capped at 5 positions.
+# Larger accounts use MAX_TOTAL_POSITIONS (5).
+BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → max 3 positions
+BALANCE_THRESHOLD_SMALL = 500.0   # Below this balance → max 5 positions
+
+# Minimum USD notional for any NEW entry order.  Orders below this value are
+# rejected at source to prevent dust accumulation and unproductive fee spend.
+MIN_POSITION_USD = 5.0    # Minimum entry size ($5 prevents $1 dust trades)
+
+# Dust cleanup threshold for EXISTING positions.  Any open position whose
+# current market value falls below this level is marked for cleanup:
+#   • sold immediately if the exchange permits (notional >= exchange minimum)
+#   • or added to the permanent dust blacklist so it is ignored forever
+DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = dust)
+
+# ============================================================================
+
 # Exit strategy constants (no entry price required)
 # CRITICAL FIX (Jan 13, 2026): Aggressive RSI thresholds to sell faster
-MIN_POSITION_VALUE = 1.0  # Auto-exit positions under this USD value
+MIN_POSITION_VALUE = DUST_POSITION_USD  # Auto-exit positions under this USD value (was $1, now $2)
 RSI_OVERBOUGHT_THRESHOLD = 55  # Exit when RSI exceeds this (lock gains) - LOWERED from 60 for faster profit-taking
 RSI_OVERSOLD_THRESHOLD = 45  # Exit when RSI below this (cut losses) - RAISED from 40 for faster loss-cutting
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
@@ -951,20 +980,19 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than curren
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 # Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
-# Hard cap raised to 12 to support AI Capital Concentration (5–12 high-quality positions).
-# MAX_ACTIVE_POSITIONS = 12 per the AI Capital Rotation specification.
-# Default is MAX_CONCURRENT_TRADES (4) from micro_capital_config to enforce the cap at 4.
-HARD_MAX_POSITIONS = 12  # Absolute ceiling – AI Capital Concentration cap
+# Hard cap aligned with MAX_TOTAL_POSITIONS = 5 (global limit, force consolidation).
+# Per-balance sub-limits are enforced at runtime via get_balance_based_max_positions().
+HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (5)
 _max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', str(MAX_CONCURRENT_TRADES))
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
     MAX_POSITIONS_ALLOWED = MAX_CONCURRENT_TRADES  # Default: micro_capital_config value (4)
-# Enforce hard ceiling
+# Enforce hard ceiling – never exceed MAX_TOTAL_POSITIONS regardless of env override
 if MAX_POSITIONS_ALLOWED > HARD_MAX_POSITIONS:
     MAX_POSITIONS_ALLOWED = HARD_MAX_POSITIONS
     logger.info(f"📊 MAX_CONCURRENT_POSITIONS capped at hard limit of {HARD_MAX_POSITIONS}")
-logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED} (from MAX_CONCURRENT_TRADES={MAX_CONCURRENT_TRADES})")
+logger.info(f"📊 Max concurrent positions: {MAX_POSITIONS_ALLOWED} (global cap={MAX_TOTAL_POSITIONS})")
 
 # SPOT_ONLY mode: when enabled, all 'enter_short' signals are blocked so the
 # bot only opens long (buy) positions, matching exchange spot-trading semantics.
@@ -1063,8 +1091,48 @@ def get_dynamic_min_position_size(balance: float, broker_name: str = '') -> floa
         BASE_MIN_POSITION_SIZE_USD,
     )
 
-    # Enforce: max(floor, balance-based dynamic, brokerage minimum)
-    return max(BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
+    # Enforce: max(MIN_POSITION_USD floor, base floor, balance-based dynamic, brokerage minimum)
+    # MIN_POSITION_USD is the absolute hard floor (prevents any sub-$5 entry regardless of config)
+    return max(MIN_POSITION_USD, BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
+
+
+def get_balance_based_max_positions(balance: float) -> int:
+    """
+    Return the maximum number of concurrent open positions allowed for the
+    given account balance.
+
+    Per-account position cap (force consolidation on micro accounts):
+      • balance  < BALANCE_THRESHOLD_MICRO ($150)  → 3 positions  (micro / starter)
+      • balance  < BALANCE_THRESHOLD_SMALL ($500)  → 5 positions  (small accounts)
+      • otherwise                                  → MAX_TOTAL_POSITIONS (= 5)
+
+    The returned value is always capped at MAX_TOTAL_POSITIONS so it is safe
+    to use as a direct replacement for the global MAX_POSITIONS_ALLOWED
+    whenever a live balance is available.
+
+    Args:
+        balance: Current account balance in USD (≥ 0).
+
+    Returns:
+        Maximum allowed concurrent positions (int, 1 – MAX_TOTAL_POSITIONS).
+    """
+    if balance < 0:
+        logger.warning(
+            "get_balance_based_max_positions: negative balance %.2f detected "
+            "(possible API error) – treating as 0.0",
+            balance,
+        )
+        balance = 0.0
+
+    if balance < BALANCE_THRESHOLD_MICRO:
+        cap = 3
+    elif balance < BALANCE_THRESHOLD_SMALL:
+        cap = 5
+    else:
+        cap = MAX_TOTAL_POSITIONS
+
+    # Never exceed the global hard cap
+    return min(cap, MAX_TOTAL_POSITIONS)
 
 # DEPRECATED: Use get_dynamic_min_position_size() instead
 # This constant is maintained for backward compatibility only
@@ -2149,11 +2217,11 @@ class TradingStrategy:
                 self.independent_trader = None
                 logger.warning("No platform broker available")
 
-            # Initialize position cap enforcer (Maximum 8 positions total across all brokers)
+            # Initialize position cap enforcer (hard cap = MAX_TOTAL_POSITIONS = 5)
             if self.broker:
-                self.enforcer = PositionCapEnforcer(max_positions=8, broker=self.broker)
+                self.enforcer = PositionCapEnforcer(max_positions=MAX_TOTAL_POSITIONS, broker=self.broker)
                 
-                # Initialize dust blacklist for permanent sub-$1 position exclusion
+                # Initialize dust blacklist for permanent sub-$2 position exclusion
                 try:
                     self.dust_blacklist = get_dust_blacklist()
                     logger.info("🗑️  Dust blacklist initialized for position normalization")
@@ -2165,8 +2233,8 @@ class TradingStrategy:
                 try:
                     from forced_position_cleanup import ForcedPositionCleanup
                     self.forced_cleanup = ForcedPositionCleanup(
-                        dust_threshold_usd=1.00,
-                        max_positions=8,
+                        dust_threshold_usd=DUST_POSITION_USD,
+                        max_positions=MAX_TOTAL_POSITIONS,
                         dry_run=False
                     )
                     logger.info("🧹 Forced position cleanup engine initialized")
@@ -2179,7 +2247,7 @@ class TradingStrategy:
                     from continuous_dust_monitor import get_continuous_dust_monitor
                     import os as _os
                     _dust_interval = float(_os.getenv('DUST_SWEEP_INTERVAL_MINUTES', '30'))
-                    _dust_threshold = float(_os.getenv('DUST_THRESHOLD_USD', '1.00'))
+                    _dust_threshold = float(_os.getenv('DUST_THRESHOLD_USD', str(DUST_POSITION_USD)))
                     self.continuous_dust_monitor = get_continuous_dust_monitor(
                         dust_threshold_usd=_dust_threshold,
                         sweep_interval_minutes=_dust_interval,
@@ -4832,6 +4900,25 @@ class TradingStrategy:
             balance_duration = time.time() - balance_start_time
             logger.info(f"⏱️  [TIMING] Balance update: {balance_duration:.2f}s")
 
+            # ── PER-ACCOUNT POSITION CAP (CONSOLIDATION MODE) ─────────────────
+            # Derive the effective position cap from the live account balance.
+            # This enforces the force-consolidation rule:
+            #   balance < $150  → max 3 positions  (micro/starter accounts)
+            #   balance < $500  → max 5 positions  (small accounts)
+            #   otherwise       → MAX_TOTAL_POSITIONS (global cap = 5)
+            # The result is also capped at MAX_POSITIONS_ALLOWED so the user's
+            # environment variable can only *lower* the cap, never raise it above
+            # the global hard limit.
+            effective_max_positions = min(
+                get_balance_based_max_positions(account_balance),
+                MAX_POSITIONS_ALLOWED,
+            )
+            logger.info(
+                f"📊 Effective position cap: {effective_max_positions} "
+                f"(balance=${account_balance:.2f}, global_cap={MAX_TOTAL_POSITIONS})"
+            )
+            # ──────────────────────────────────────────────────────────────────
+
             # ⏱️ Sub-step 2: Position update
             positions_start_time = time.time()
 
@@ -4870,8 +4957,8 @@ class TradingStrategy:
                 # using self._get_stop_loss_tier(position_broker, position_broker_balance)
 
                 # STATE MACHINE: Calculate current state based on position count and forced unwind status
-                # Position cap set to 8 maximum concurrent positions
-                positions_over_cap = len(current_positions) - MAX_POSITIONS_ALLOWED
+                # Effective position cap is balance-aware (see get_balance_based_max_positions)
+                positions_over_cap = len(current_positions) - effective_max_positions
                 
                 # INVARIANT VALIDATION: Ensure position count is valid
                 assert len(current_positions) >= 0, f"INVARIANT VIOLATION: Position count is negative: {len(current_positions)}"
@@ -4897,7 +4984,7 @@ class TradingStrategy:
                     new_state, 
                     len(current_positions), 
                     positions_over_cap, 
-                    MAX_POSITIONS_ALLOWED
+                    effective_max_positions
                 )
                 
                 # STATE TRANSITION LOGGING: Log state changes explicitly
@@ -4912,7 +4999,7 @@ class TradingStrategy:
                         logger.warning("=" * 80)
                         logger.warning(f"🔄 STATE TRANSITION: {old_state_name} → {new_state_name}")
                         logger.warning("=" * 80)
-                        logger.warning(f"   Positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
+                        logger.warning(f"   Positions: {len(current_positions)}/{effective_max_positions}")
                         logger.warning(f"   Excess: {positions_over_cap}")
                         logger.warning(f"   Forced Unwind: {forced_unwind_active}")
                         logger.warning("=" * 80)
@@ -4988,16 +5075,14 @@ class TradingStrategy:
                     logger.info(f"   📊 Excess positions: {positions_over_cap}")
                     logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
                     logger.info(f"   🔄 Drain rate: 1-{min(positions_over_cap, 3)} positions per cycle")
-                    logger.info(f"   🚫 New entries: BLOCKED until under {MAX_POSITIONS_ALLOWED} positions")
+                    logger.info(f"   🚫 New entries: BLOCKED until under {effective_max_positions} positions")
                     logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
                     logger.info("=" * 70)
                 elif new_state == PositionManagementState.NORMAL:
                     logger.info("=" * 70)
                     logger.info("✅ NORMAL MODE - Position Management")
                     logger.info("=" * 70)
-                    logger.info(f"   📊 Positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
-                    logger.info(f"   ✅ Under cap - entries allowed")
-                    logger.info(f"   🎯 Managing positions for optimal exits")
+                    logger.info(f"   📊 Positions: {len(current_positions)}/{effective_max_positions}")
                     logger.info("=" * 70)
                 
                 # Position analysis loop (runs for both DRAIN and NORMAL modes)
@@ -5977,9 +6062,9 @@ class TradingStrategy:
                             time.sleep(POSITION_CHECK_DELAY + jitter)
 
                 # CRITICAL: If still over cap after normal exit analysis, force-sell weakest remaining positions
-                # Position cap set to 8 maximum concurrent positions
-                if len(current_positions) > MAX_POSITIONS_ALLOWED and len(positions_to_exit) < (len(current_positions) - MAX_POSITIONS_ALLOWED):
-                    logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - MAX_POSITIONS_ALLOWED - len(positions_to_exit)} more positions")
+                # Uses balance-aware effective_max_positions cap
+                if len(current_positions) > effective_max_positions and len(positions_to_exit) < (len(current_positions) - effective_max_positions):
+                    logger.warning(f"🚨 STILL OVER CAP: Need to sell {len(current_positions) - effective_max_positions - len(positions_to_exit)} more positions")
 
                     # Identify positions not yet marked for exit
                     symbols_to_exit = {p['symbol'] for p in positions_to_exit}
@@ -5998,7 +6083,7 @@ class TradingStrategy:
                     remaining_sorted = sorted(remaining_positions, key=get_position_value)
 
                     # Force-sell smallest positions to get under cap
-                    positions_needed = (len(current_positions) - MAX_POSITIONS_ALLOWED) - len(positions_to_exit)
+                    positions_needed = (len(current_positions) - effective_max_positions) - len(positions_to_exit)
                     for pos_idx, pos in enumerate(remaining_sorted[:positions_needed]):
                         symbol = pos.get('symbol')
                         quantity = pos.get('quantity', 0)
@@ -6262,7 +6347,7 @@ class TradingStrategy:
                 logger.info("")
             else:
                 logger.info("   ✅ Mode: PLATFORM (full strategy execution)")
-                logger.info(f"   📊 Current positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}")
+                logger.info(f"   📊 Current positions: {len(current_positions)}/{effective_max_positions}")
                 logger.info(f"   💰 Account balance: ${account_balance:.2f}")
                 logger.info(f"   💵 Minimum to trade: ${MIN_BALANCE_TO_TRADE_USD:.2f}")
                 logger.info(f"   🚫 Entries blocked: {entries_blocked}")
@@ -6279,12 +6364,12 @@ class TradingStrategy:
                 else:
                     logger.info("   ✅ CONDITION PASSED: Entry blocking is OFF")
 
-                if len(current_positions) >= MAX_POSITIONS_ALLOWED:
+                if len(current_positions) >= effective_max_positions:
                     can_enter = False
-                    skip_reasons.append(f"Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
-                    logger.warning(f"   ❌ CONDITION FAILED: Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
+                    skip_reasons.append(f"Position cap reached ({len(current_positions)}/{effective_max_positions})")
+                    logger.warning(f"   ❌ CONDITION FAILED: Position cap reached ({len(current_positions)}/{effective_max_positions})")
                 else:
-                    logger.info(f"   ✅ CONDITION PASSED: Under position cap ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
+                    logger.info(f"   ✅ CONDITION PASSED: Under position cap ({len(current_positions)}/{effective_max_positions})")
 
                 if account_balance < MIN_BALANCE_TO_TRADE_USD:
                     can_enter = False
@@ -6527,7 +6612,7 @@ class TradingStrategy:
             allow_entries = (
                 not user_mode
                 and not entries_blocked
-                and len(current_positions) < MAX_POSITIONS_ALLOWED
+                and len(current_positions) < effective_max_positions
                 and account_balance >= MIN_BALANCE_TO_TRADE_USD
                 and can_enter
             )
@@ -6537,8 +6622,8 @@ class TradingStrategy:
                 block_reason = "user_mode" if explicit_user_mode else "safety_check_forced_user_mode"
             elif entries_blocked:
                 block_reason = "STOP_ALL_ENTRIES.conf active"
-            elif len(current_positions) >= MAX_POSITIONS_ALLOWED:
-                block_reason = f"position_cap ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})"
+            elif len(current_positions) >= effective_max_positions:
+                block_reason = f"position_cap ({len(current_positions)}/{effective_max_positions})"
             elif account_balance < MIN_BALANCE_TO_TRADE_USD:
                 block_reason = f"low_balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})"
             else:
@@ -6546,8 +6631,8 @@ class TradingStrategy:
             logger.info(f"ENTRY CHECK → allowed={allow_entries}, reason={block_reason}")
 
             # Continue with market scanning if conditions passed
-            if not user_mode and not entries_blocked and len(current_positions) < MAX_POSITIONS_ALLOWED and account_balance >= MIN_BALANCE_TO_TRADE_USD and can_enter:
-                logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{MAX_POSITIONS_ALLOWED}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
+            if not user_mode and not entries_blocked and len(current_positions) < effective_max_positions and account_balance >= MIN_BALANCE_TO_TRADE_USD and can_enter:
+                logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{effective_max_positions}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
 
                 # Get top market candidates (limit scan to prevent timeouts)
                 try:
@@ -7394,13 +7479,13 @@ class TradingStrategy:
                                         )
 
                                 # CRITICAL: Verify we're still under position cap before placing order
-                                if len(current_positions) >= MAX_POSITIONS_ALLOWED:
-                                    logger.error(f"   ❌ SAFETY VIOLATION: Position cap ({MAX_POSITIONS_ALLOWED}) reached - BLOCKING NEW ENTRY")
+                                if len(current_positions) >= effective_max_positions:
+                                    logger.error(f"   ❌ SAFETY VIOLATION: Position cap ({effective_max_positions}) reached - BLOCKING NEW ENTRY")
                                     logger.error(f"      Current positions: {len(current_positions)}")
                                     logger.error(f"      This should not happen - cap should have been checked earlier!")
                                     break
                                 
-                                logger.info(f"   ✅ Final position cap check: {len(current_positions)}/{MAX_POSITIONS_ALLOWED} - OK to enter")
+                                logger.info(f"   ✅ Final position cap check: {len(current_positions)}/{effective_max_positions} - OK to enter")
 
                                 # PRO MODE: Check if rotation is needed
                                 needs_rotation = False
@@ -7815,8 +7900,8 @@ class TradingStrategy:
                 reasons = []
                 if entries_blocked:
                     reasons.append("STOP_ALL_ENTRIES.conf exists")
-                if len(current_positions) >= MAX_POSITIONS_ALLOWED:
-                    reasons.append(f"Position cap reached ({len(current_positions)}/{MAX_POSITIONS_ALLOWED})")
+                if len(current_positions) >= effective_max_positions:
+                    reasons.append(f"Position cap reached ({len(current_positions)}/{effective_max_positions})")
                 if account_balance < MIN_BALANCE_TO_TRADE_USD:
                     reasons.append(f"Balance ${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD} minimum (need buffer for fees)")
 
@@ -7845,18 +7930,18 @@ class TradingStrategy:
                     final_positions = active_broker.get_positions()
                     final_count = len(final_positions)
                     
-                    if final_count > MAX_POSITIONS_ALLOWED:
+                    if final_count > effective_max_positions:
                         logger.error(f"")
                         logger.error(f"❌ SAFETY VIOLATION DETECTED AT END OF CYCLE!")
                         logger.error(f"   Position count: {final_count}")
-                        logger.error(f"   Maximum allowed: {MAX_POSITIONS_ALLOWED}")
-                        logger.error(f"   Excess positions: {final_count - MAX_POSITIONS_ALLOWED}")
+                        logger.error(f"   Maximum allowed: {effective_max_positions}")
+                        logger.error(f"   Excess positions: {final_count - effective_max_positions}")
                         logger.error(f"   ⚠️ CRITICAL: Cap enforcement failed - this should never happen!")
                         logger.error(f"")
-                    elif final_count == MAX_POSITIONS_ALLOWED:
-                        logger.info(f"✅ Position cap verification: At cap ({final_count}/{MAX_POSITIONS_ALLOWED})")
+                    elif final_count == effective_max_positions:
+                        logger.info(f"✅ Position cap verification: At cap ({final_count}/{effective_max_positions})")
                     else:
-                        logger.info(f"✅ Position cap verification: Under cap ({final_count}/{MAX_POSITIONS_ALLOWED})")
+                        logger.info(f"✅ Position cap verification: Under cap ({final_count}/{effective_max_positions})")
             except Exception as verify_err:
                 logger.debug(f"Position count verification skipped: {verify_err}")
 
