@@ -10,6 +10,8 @@ backoff==2.2.1
 beautifulsoup4==4.14.2
 bleach==6.3.0
 blinker==1.9.0
+# AWS Secrets Manager support (SECRETS_BACKEND=aws)
+boto3==1.34.46
 certifi==2025.11.12
 cffi==2.0.0
 charset-normalizer==3.4.4
@@ -27,6 +29,7 @@ executing==2.2.1
 fastjsonschema==2.21.2
 Flask==2.3.3
 Flask-CORS==4.0.0
+Flask-Limiter==4.1.1
 # FastAPI stack (recommended for production)
 # Security: Using FastAPI 0.109.1+ to fix CVE ReDoS vulnerability in Content-Type header
 fastapi==0.110.0
@@ -41,6 +44,8 @@ gunicorn==23.0.0
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
+# HashiCorp Vault support (SECRETS_BACKEND=vault)
+hvac==2.4.0
 idna==3.11
 ipykernel==7.1.0
 ipython==9.7.0

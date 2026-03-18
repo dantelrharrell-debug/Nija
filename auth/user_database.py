@@ -52,9 +52,21 @@ class UserDatabase:
                 updated_at TEXT NOT NULL,
                 last_login TEXT,
                 enabled INTEGER DEFAULT 1,
-                email_verified INTEGER DEFAULT 0
+                email_verified INTEGER DEFAULT 0,
+                tos_accepted_at TEXT,
+                tos_version TEXT
             )
         """)
+
+        # Migrate: add ToS columns to databases created before this schema version
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN tos_accepted_at TEXT")
+        except Exception:
+            pass  # column already exists
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN tos_version TEXT")
+        except Exception:
+            pass  # column already exists
 
         # Sessions table
         cursor.execute("""
@@ -198,7 +210,8 @@ class UserDatabase:
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT user_id, email, subscription_tier, created_at, last_login, enabled, email_verified
+                SELECT user_id, email, subscription_tier, created_at, last_login,
+                       enabled, email_verified, tos_accepted_at, tos_version
                 FROM users
                 WHERE user_id = ?
             """, (user_id,))
@@ -216,7 +229,9 @@ class UserDatabase:
                 'created_at': row[3],
                 'last_login': row[4],
                 'enabled': bool(row[5]),
-                'email_verified': bool(row[6])
+                'email_verified': bool(row[6]),
+                'tos_accepted_at': row[7],
+                'tos_version': row[8],
             }
 
         except Exception as e:
@@ -230,7 +245,8 @@ class UserDatabase:
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT user_id, email, subscription_tier, created_at, last_login, enabled, email_verified
+                SELECT user_id, email, subscription_tier, created_at, last_login,
+                       enabled, email_verified, tos_accepted_at, tos_version
                 FROM users
                 WHERE email = ?
             """, (email,))
@@ -248,12 +264,82 @@ class UserDatabase:
                 'created_at': row[3],
                 'last_login': row[4],
                 'enabled': bool(row[5]),
-                'email_verified': bool(row[6])
+                'email_verified': bool(row[6]),
+                'tos_accepted_at': row[7],
+                'tos_version': row[8],
             }
 
         except Exception as e:
             logger.error(f"Failed to get user by email: {e}")
             return None
+
+    def accept_tos(self, user_id: str, tos_version: str = "2026-01-31") -> bool:
+        """
+        Record that a user has accepted the Terms of Service.
+
+        Args:
+            user_id: User identifier
+            tos_version: Version/date string of the ToS that was accepted
+
+        Returns:
+            bool: True if recorded successfully
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                UPDATE users
+                SET tos_accepted_at = ?, tos_version = ?, updated_at = ?
+                WHERE user_id = ?
+            """, (datetime.utcnow().isoformat(), tos_version, datetime.utcnow().isoformat(), user_id))
+
+            updated = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+
+            if updated:
+                logger.info(f"User {user_id} accepted ToS version {tos_version}")
+
+            return updated
+
+        except Exception as e:
+            logger.error(f"Failed to record ToS acceptance for user {user_id}: {e}")
+            return False
+
+    def has_accepted_tos(self, user_id: str, required_version: Optional[str] = None) -> bool:
+        """
+        Check whether a user has accepted the Terms of Service.
+
+        Args:
+            user_id: User identifier
+            required_version: If provided, also verify the accepted version matches.
+
+        Returns:
+            bool: True if the user has accepted (the required version of) the ToS
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT tos_accepted_at, tos_version FROM users WHERE user_id = ?
+            """, (user_id,))
+
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row or not row[0]:
+                return False
+
+            if required_version and row[1] != required_version:
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to check ToS acceptance for user {user_id}: {e}")
+            return False
 
     def update_user(self, user_id: str, updates: Dict) -> bool:
         """Update user profile."""
