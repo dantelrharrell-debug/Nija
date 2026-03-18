@@ -336,6 +336,10 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to log login: {e}")
 
+    def update_subscription_tier(self, user_id: str, tier: str) -> bool:
+        """Update subscription tier for a user."""
+        return self.update_user(user_id, {'subscription_tier': tier})
+
     def create_session(
         self,
         user_id: str,

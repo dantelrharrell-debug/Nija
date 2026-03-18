@@ -65,7 +65,7 @@ You maintain full control:
 ## 5. Subscription and Fees
 
 ### 5.1 Subscription Tiers
-NIJA offers multiple subscription tiers with different features and limits. Current pricing is available at [pricing page].
+NIJA offers multiple subscription tiers with different features and limits. Current pricing is available at [nija.trading/pricing](https://nija.trading/pricing).
 
 ### 5.2 Payment
 - Subscriptions are billed monthly or annually
@@ -250,10 +250,10 @@ NIJA reserves the right to:
 ## 13. Dispute Resolution
 
 ### 13.1 Governing Law
-These Terms are governed by the laws of [Jurisdiction], without regard to conflict of law principles.
+These Terms are governed by the laws of the State of Delaware, United States, without regard to conflict of law principles.
 
 ### 13.2 Arbitration
-Any disputes shall be resolved through binding arbitration in accordance with [Arbitration Rules], except for:
+Any disputes shall be resolved through binding arbitration in accordance with the rules of the American Arbitration Association (AAA), except for:
 - Claims for injunctive relief
 - Intellectual property disputes
 - Claims under $10,000 (may be filed in small claims court)
@@ -278,7 +278,7 @@ You may not assign these Terms. NIJA may assign them to any successor entity.
 ### 14.5 Contact
 For questions about these Terms, contact us at:
 - Email: legal@nija.trading
-- Address: [Company Address]
+- Mailing Address: NIJA Trading Systems LLC, c/o Registered Agent (address on file with the Secretary of State). See [nija.trading/legal](https://nija.trading/legal) for the current address.
 
 ## 15. Acknowledgment
 
@@ -749,7 +749,7 @@ Contact: support@nija.com
 
 ### 14.2 Governing Law
 
-These Terms are governed by the laws of [State/Country], without regard to conflict of law principles.
+These Terms are governed by the laws of the State of Delaware, United States, without regard to conflict of law principles.
 
 ### 14.3 Arbitration Agreement
 
@@ -764,7 +764,7 @@ These Terms are governed by the laws of [State/Country], without regard to confl
 - Administered by the American Arbitration Association (AAA)
 - Conducted under AAA Commercial Arbitration Rules
 - One neutral arbitrator
-- Location: [City, State]
+- Location: Wilmington, Delaware, USA
 - Language: English
 
 **Class Action Waiver**:
