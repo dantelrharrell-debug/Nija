@@ -102,7 +102,7 @@ except ImportError:
     AIIntelligenceHub = None  # type: ignore
     logger.warning("AI Intelligence Hub not available – running without AI regime / risk / allocation layer")
 
-# Import profit optimisation stack (all three are optional – graceful degradation)
+# Import profit optimization stack (all three are optional – graceful degradation)
 # ProfitHarvestLayer: ratchet-tier profit locking + partial harvests
 # PortfolioProfitFlywheel: compound-growth multiplier driven by cumulative wins
 # CapitalRecyclingEngine: routes harvested profits to top-performing strategies
@@ -139,7 +139,7 @@ class NIJAApexStrategyV71:
     7. Exit Logic (opposite signal, trailing stop, trend break)
     8. Smart Filters (news, volume, candle timing)
     9. Optional: AI Momentum Scoring (skeleton)
-    10. Profit Optimisation Stack (harvest layer + flywheel compounding + capital recycling)
+    10. Profit Optimization Stack (harvest layer + flywheel compounding + capital recycling)
     """
 
     def __init__(self, broker_client=None, config: Optional[Dict] = None):
@@ -243,7 +243,7 @@ class NIJAApexStrategyV71:
             else:
                 logger.info("ℹ️  AI Intelligence Hub disabled by configuration")
 
-        # PROFIT OPTIMISATION STACK
+        # PROFIT OPTIMIZATION STACK
         # Three cooperative engines that turn every realised profit into compounding growth:
         #   1. ProfitHarvestLayer  – ratchet-tier locks + on-tier-upgrade partial harvests
         #   2. PortfolioProfitFlywheel – cumulative-profit-driven position-size multiplier
@@ -255,7 +255,7 @@ class NIJAApexStrategyV71:
                 self.profit_harvest_layer = get_profit_harvest_layer()
                 self.portfolio_profit_flywheel = get_portfolio_profit_flywheel()
                 self.capital_recycling_engine = get_capital_recycling_engine()
-                logger.info("✅ Profit Optimisation Stack: ENABLED")
+                logger.info("✅ Profit Optimization Stack: ENABLED")
                 logger.info("   ├─ ProfitHarvestLayer  (ratchet-tier locks + partial harvests)")
                 logger.info("   ├─ PortfolioProfitFlywheel (compound-growth multiplier)")
                 logger.info("   └─ CapitalRecyclingEngine  (harvest → best-strategy routing)")
@@ -2066,6 +2066,9 @@ class NIJAApexStrategyV71:
             elif action == 'exit':
                 pos_data = action_data.get('position', {})
                 exit_price = action_data.get('current_price', pos_data.get('entry_price', 0.0))
+                # Guard: ensure exit_price is a valid positive number before proceeding
+                if not exit_price or exit_price <= 0:
+                    exit_price = pos_data.get('entry_price', 0.0)
                 success = self.execution_engine.execute_exit(
                     symbol=symbol,
                     exit_price=exit_price,
@@ -2077,7 +2080,7 @@ class NIJAApexStrategyV71:
                     entry_price = pos_data.get('entry_price', exit_price)
                     pos_size = pos_data.get('position_size', 0.0)
                     side = pos_data.get('side', 'long')
-                    if entry_price and entry_price > 0 and pos_size:
+                    if entry_price and entry_price > 0 and pos_size is not None and pos_size > 0:
                         price_change = (exit_price - entry_price) / entry_price
                         pnl_usd = price_change * pos_size if side == 'long' else -price_change * pos_size
                     else:
