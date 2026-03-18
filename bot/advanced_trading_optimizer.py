@@ -3,16 +3,36 @@ NIJA Advanced Trading Optimization System
 ==========================================
 
 Comprehensive integration of:
-1. Optimized Signal Scoring + Ranking
-2. Dynamic Volatility-Based Sizing  
+1. Optimized Signal Scoring + Ranking (weighted by risk + volatility)
+2. Dynamic Volatility-Based Sizing
 3. Adaptive Drawdown Control
 4. Smart Compounding Logic
+
+Signal Ranking Formula
+----------------------
+Signals are ranked using a weighted composite score that accounts for
+signal quality, trend strength, volume confirmation, and inverse volatility::
+
+    composite_score = (
+        entry_score    * 0.6   # primary signal quality
+        + trend_strength * 0.2   # ADX / EMA trend alignment
+        + volume_score   * 0.1   # volume confirmation
+        + inv_volatility * 0.1   # lower volatility → higher score
+    )
+
+Diversity Filter
+----------------
+After ranking, a sector-aware diversity filter is applied so that the
+final selection avoids concentrating all positions in the same correlated
+sector.  When the top-N signals all come from the same sector (e.g. BTC,
+ETH, SOL), the filter promotes the highest-ranked signal from an
+under-represented sector, giving a spread such as BTC + LINK + AVAX.
 
 This system coordinates all optimization modules to create a cohesive,
 adaptive trading engine that maximizes returns while protecting capital.
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 1.1
 Date: January 30, 2026
 """
 
@@ -25,6 +45,18 @@ import pandas as pd
 import numpy as np
 
 logger = logging.getLogger("nija.advanced_optimizer")
+
+# ---------------------------------------------------------------------------
+# Optional sector taxonomy for diversity filter
+# ---------------------------------------------------------------------------
+try:
+    from crypto_sector_taxonomy import SYMBOL_TO_SECTOR
+except ImportError:
+    try:
+        from bot.crypto_sector_taxonomy import SYMBOL_TO_SECTOR
+    except ImportError:
+        SYMBOL_TO_SECTOR = {}
+        logger.debug("crypto_sector_taxonomy not available – diversity filter will use symbol prefix")
 
 # Import existing modules
 try:
@@ -316,66 +348,122 @@ class AdvancedTradingOptimizer:
     
     def rank_signals(self, signals: List[Dict]) -> List[SignalRanking]:
         """
-        Rank and prioritize trading signals
-        
+        Rank and prioritize trading signals using a weighted composite score.
+
+        Scoring Formula
+        ---------------
+        ::
+
+            composite_score = (
+                entry_score    * 0.6
+                + trend_strength * 0.2
+                + volume_score   * 0.1
+                + inv_volatility * 0.1   # (1 / volatility), higher = better
+            )
+
+        After scoring, a diversity filter promotes the best signal from each
+        sector so the final selection avoids over-concentration in correlated
+        assets (e.g. BTC + ETH + SOL → BTC + LINK + AVAX).
+
         Args:
-            signals: List of signal dictionaries
-            
+            signals: List of signal dictionaries.  Recognised keys:
+                ``symbol``, ``score``, ``confidence``, ``trend_strength``,
+                ``volume_score``, ``volatility_pct``, ``volatility_regime``,
+                ``position_size``, ``metadata``.
+
         Returns:
-            Ranked list of signals
+            Ranked list of :class:`SignalRanking` objects, best first, with
+            diversity already applied.
         """
         if not signals:
             return []
-        
+
         ranked = []
-        
+
         for signal in signals:
-            # Extract signal data
             symbol = signal.get('symbol', '')
-            score = signal.get('score', 50.0)
-            confidence = signal.get('confidence', 0.5)
-            volatility = signal.get('volatility_regime', 'normal')
+            metadata = signal.get('metadata', {})
+
+            # --- entry score (0-100) -----------------------------------------
+            entry_score = float(signal.get('score', 50.0) or 50.0)
+
+            # --- trend strength (0-100) – prefer explicit field, else metadata.
+            # Falls back to a neutral 50 rather than the entry_score to avoid
+            # inflating the composite for signals that lack trend data.
+            _ts = signal.get('trend_strength') or metadata.get('trend_strength')
+            trend_strength = max(0.0, min(100.0, float(_ts if _ts is not None else 50.0)))
+
+            # --- volume score (0-100) -----------------------------------------
+            # Falls back to a neutral 50 rather than deriving from entry_score
+            # to avoid inflating the composite for signals without volume data.
+            _vs = signal.get('volume_score') or metadata.get('volume_score')
+            volume_score_raw = max(0.0, min(100.0, float(_vs if _vs is not None else 50.0)))
+
+            # --- inverse-volatility component (0-100) -------------------------
+            # Higher score = lower volatility = more favourable entry conditions.
+            # Formula: min(100, 1 / volatility_pct * 100)
+            #   0.5 % vol → 100 pts (cap)   1 % vol → 100 pts (cap)
+            #   2 %   vol →  50 pts          5 % vol →  20 pts
+            #  10 %   vol →  10 pts
+            volatility_regime = signal.get('volatility_regime', 'normal')
+            volatility_pct = signal.get('volatility_pct') or metadata.get('volatility_pct')
+
+            if volatility_pct and float(volatility_pct) > 0:
+                inv_volatility = min(100.0, 1.0 / float(volatility_pct) * 100.0)
+            else:
+                # Fall back to regime string estimate
+                inv_volatility = float({
+                    'extreme_low':  90.0,
+                    'low':          75.0,
+                    'normal':       50.0,
+                    'high':         30.0,
+                    'extreme_high': 15.0,
+                }.get(str(volatility_regime), 50.0))
+
+            # --- weighted composite score ------------------------------------
+            composite_score = (
+                entry_score      * 0.6
+                + trend_strength * 0.2
+                + volume_score_raw * 0.1
+                + inv_volatility * 0.1
+            )
+
+
+            confidence = float(signal.get('confidence', 0.5) or 0.5)
             position_size = signal.get('position_size', 0)
-            
-            # Calculate composite priority
-            # Higher score + higher confidence + lower volatility = higher priority
-            volatility_weight = {
-                'extreme_low': 1.2,
-                'low': 1.1,
-                'normal': 1.0,
-                'high': 0.9,
-                'extreme_high': 0.8
-            }.get(volatility, 1.0)
-            
-            composite_score = score * confidence * volatility_weight
-            
-            # Create ranking
+
             ranking = SignalRanking(
                 symbol=symbol,
-                score=score,
+                score=round(composite_score, 2),
                 confidence=confidence,
-                volatility_regime=volatility,
+                volatility_regime=str(volatility_regime),
                 position_size=position_size,
                 priority=int(composite_score),
-                metadata=signal.get('metadata', {})
+                metadata=metadata,
             )
-            
+
             ranked.append(ranking)
-        
-        # Sort by priority (highest first)
-        ranked.sort(key=lambda x: x.priority, reverse=True)
-        
-        # Assign final priority rankings
+
+        # Sort descending by composite score
+        ranked.sort(key=lambda x: x.score, reverse=True)
+
+        # Apply sector-diversity filter
+        ranked = _apply_diversity_filter(ranked)
+
+        # Assign sequential priority labels (1 = best)
         for i, ranking in enumerate(ranked):
             ranking.priority = i + 1
-        
+
         self.ranked_signals = ranked
-        
-        logger.info(f"   🏆 Ranked {len(ranked)} signals")
+
+        logger.info(f"   🏆 Ranked {len(ranked)} signals (diversity filter applied)")
         if ranked:
             top = ranked[0]
-            logger.info(f"      #1: {top.symbol} - Score: {top.score:.1f}, Confidence: {top.confidence:.2f}")
-        
+            logger.info(
+                f"      #1: {top.symbol} – Score: {top.score:.1f}, "
+                f"Confidence: {top.confidence:.2f}"
+            )
+
         return ranked
     
     def get_optimization_summary(self) -> Dict:
@@ -493,7 +581,114 @@ class AdvancedTradingOptimizer:
         return optimized
 
 
-def create_optimizer(capital_balance: float = 100.0, 
+# ---------------------------------------------------------------------------
+# Diversity filter
+# ---------------------------------------------------------------------------
+
+# Maximum signals allowed from the same sector before promotion kicks in.
+_MAX_PER_SECTOR: int = 1
+
+
+def _get_sector(symbol: str) -> str:
+    """
+    Return a sector string for *symbol*.
+
+    Uses the ``SYMBOL_TO_SECTOR`` mapping when available; falls back to a
+    simple prefix heuristic (the base currency before the first ``-`` or
+    last three characters).
+
+    Examples
+    --------
+    >>> _get_sector("BTC-USD")
+    'bitcoin'
+    >>> _get_sector("ETH-USDT")
+    'ethereum'
+    >>> _get_sector("UNKNOWN-USD")
+    'misc'
+    """
+    if SYMBOL_TO_SECTOR and symbol in SYMBOL_TO_SECTOR:
+        sector = SYMBOL_TO_SECTOR[symbol]
+        return sector.value if hasattr(sector, 'value') else str(sector)
+
+    # Prefix fallback: strip quote currency to get base asset.
+    # Handles: 'BTC-USD', 'BTCUSDT' (last 4 chars), bare 'BTC'.
+    if '-' in symbol:
+        base = symbol.split('-')[0].upper()
+    elif len(symbol) > 4 and symbol.endswith(('USDT', 'USDC', 'BUSD')):
+        base = symbol[:-4].upper()
+    elif len(symbol) > 3 and symbol.endswith(('USD', 'BTC', 'ETH')):
+        base = symbol[:-3].upper()
+    else:
+        base = symbol.upper()
+    return base if base else 'misc'
+
+
+def _apply_diversity_filter(
+    ranked: List[SignalRanking],
+    max_per_sector: int = _MAX_PER_SECTOR,
+) -> List[SignalRanking]:
+    """
+    Promote sector diversity in a pre-sorted signal list.
+
+    Algorithm
+    ---------
+    1. Iterate through *ranked* (already sorted best-first).
+    2. Track how many signals have been *selected* from each sector.
+    3. If a signal's sector has already reached *max_per_sector*,
+       it is marked as ``diversity_skipped`` in its metadata and moved to
+       the tail of the list so under-represented sectors surface first.
+
+    The returned list always contains every input signal – nothing is
+    discarded – but lower-ranked correlated signals are moved toward the
+    end so callers that take ``ranked[:N]`` naturally get a diversified set.
+
+    Parameters
+    ----------
+    ranked : list[SignalRanking]
+        Signals sorted by composite score, best first.
+    max_per_sector : int
+        How many signals per sector are allowed before the filter
+        promotes a candidate from a different sector (default: 1).
+
+    Returns
+    -------
+    list[SignalRanking]
+        Re-ordered list with sector diversity promoted to the front.
+    """
+    if not ranked:
+        return ranked
+
+    sector_counts: Dict[str, int] = {}
+    promoted: List[SignalRanking] = []
+    deferred: List[SignalRanking] = []
+    skipped_sectors: List[str] = []
+
+    for ranking in ranked:
+        sector = _get_sector(ranking.symbol)
+        count = sector_counts.get(sector, 0)
+
+        if count < max_per_sector:
+            sector_counts[sector] = count + 1
+            promoted.append(ranking)
+        else:
+            # Too correlated with an already-selected signal – defer it
+            ranking.metadata['diversity_skipped'] = True
+            ranking.metadata['diversity_sector'] = sector
+            deferred.append(ranking)
+            if sector not in skipped_sectors:
+                skipped_sectors.append(sector)
+
+    if skipped_sectors:
+        logger.info(
+            "   🌐 Diversity filter deferred %d signal(s) from sector(s): %s",
+            len(deferred),
+            ", ".join(skipped_sectors),
+        )
+
+    return promoted + deferred
+
+
+def create_optimizer(capital_balance: float = 100.0,
                     config: OptimizationConfig = None) -> AdvancedTradingOptimizer:
     """
     Factory function to create optimizer with appropriate mode for capital level
