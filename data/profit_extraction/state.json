@@ -1,11 +1,11 @@
 {
-  "pool_usd": 25.0,
-  "total_profit_recorded_usd": 25.0,
-  "total_extracted_usd": 0.0,
+  "pool_usd": 81.0,
+  "total_profit_recorded_usd": 250.0,
+  "total_extracted_usd": 169.0,
   "dest_totals": {
-    "bank": 0.0,
-    "stablecoins": 0.0,
-    "treasury_wallet": 0.0
+    "bank": 67.6,
+    "stablecoins": 59.15,
+    "treasury_wallet": 42.25
   },
   "profit_log": [
     {
@@ -13,7 +13,166 @@
       "symbol": "TEST-USD",
       "pnl_usd": 25.0,
       "note": "closed trade profit"
+    },
+    {
+      "timestamp": "2026-03-19T08:52:56.953106+00:00",
+      "symbol": "SOL-USD",
+      "pnl_usd": 75.0,
+      "note": "closed trade profit: SOL-USD"
+    },
+    {
+      "timestamp": "2026-03-19T08:53:49.815743+00:00",
+      "symbol": "SOL-USD",
+      "pnl_usd": 75.0,
+      "note": "closed trade profit: SOL-USD"
+    },
+    {
+      "timestamp": "2026-03-19T08:55:31.901463+00:00",
+      "symbol": "SOL-USD",
+      "pnl_usd": 75.0,
+      "note": "closed trade profit: SOL-USD"
     }
   ],
-  "extraction_log": []
+  "extraction_log": [
+    {
+      "extraction_id": "d187c6b9-c02b-4b81-9d6e-0ba31fca5b93",
+      "timestamp": "2026-03-19T08:52:56.926141+00:00",
+      "total_extracted_usd": 25.0,
+      "bank_usd": 10.0,
+      "stablecoins_usd": 8.75,
+      "treasury_usd": 6.25,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after BTC-USD profit",
+      "pool_before_usd": 25.0,
+      "pool_after_usd": 0.0
+    },
+    {
+      "extraction_id": "30153a97-55ca-44c8-b4f2-f1a2725e3855",
+      "timestamp": "2026-03-19T08:53:49.797675+00:00",
+      "total_extracted_usd": 15.0,
+      "bank_usd": 6.0,
+      "stablecoins_usd": 5.25,
+      "treasury_usd": 3.75,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after BTC-USD profit",
+      "pool_before_usd": 75.0,
+      "pool_after_usd": 60.0
+    },
+    {
+      "extraction_id": "4c9d5351-61b9-4391-8275-7d47c0089e14",
+      "timestamp": "2026-03-19T08:53:49.799230+00:00",
+      "total_extracted_usd": 15.0,
+      "bank_usd": 6.0,
+      "stablecoins_usd": 5.25,
+      "treasury_usd": 3.75,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after BTC-USD profit",
+      "pool_before_usd": 60.0,
+      "pool_after_usd": 45.0
+    },
+    {
+      "extraction_id": "ab88afab-2bda-425b-ad36-ff4579557eed",
+      "timestamp": "2026-03-19T08:53:49.800647+00:00",
+      "total_extracted_usd": 15.0,
+      "bank_usd": 6.0,
+      "stablecoins_usd": 5.25,
+      "treasury_usd": 3.75,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after BTC-USD profit",
+      "pool_before_usd": 45.0,
+      "pool_after_usd": 30.0
+    },
+    {
+      "extraction_id": "64a1b310-ecd6-4622-8c25-167a091c9a6a",
+      "timestamp": "2026-03-19T08:53:49.801891+00:00",
+      "total_extracted_usd": 15.0,
+      "bank_usd": 6.0,
+      "stablecoins_usd": 5.25,
+      "treasury_usd": 3.75,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after ETH-USD profit",
+      "pool_before_usd": 30.0,
+      "pool_after_usd": 15.0
+    },
+    {
+      "extraction_id": "d1a7ddb2-11b7-4133-b70a-1fa25457e26f",
+      "timestamp": "2026-03-19T08:53:49.803337+00:00",
+      "total_extracted_usd": 15.0,
+      "bank_usd": 6.0,
+      "stablecoins_usd": 5.25,
+      "treasury_usd": 3.75,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after BTC-USD profit",
+      "pool_before_usd": 15.0,
+      "pool_after_usd": 0.0
+    },
+    {
+      "extraction_id": "3d651efa-5466-4933-b177-166e66705901",
+      "timestamp": "2026-03-19T08:53:49.818528+00:00",
+      "total_extracted_usd": 15.0,
+      "bank_usd": 6.0,
+      "stablecoins_usd": 5.25,
+      "treasury_usd": 3.75,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: closed trade: SOL-USD",
+      "pool_before_usd": 75.0,
+      "pool_after_usd": 60.0
+    },
+    {
+      "extraction_id": "f972862e-d9af-4f6d-a32e-d352bd5db2bd",
+      "timestamp": "2026-03-19T08:53:56.478457+00:00",
+      "total_extracted_usd": 15.0,
+      "bank_usd": 6.0,
+      "stablecoins_usd": 5.25,
+      "treasury_usd": 3.75,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after SOL-USD profit",
+      "pool_before_usd": 60.0,
+      "pool_after_usd": 45.0
+    },
+    {
+      "extraction_id": "884348d6-e661-4134-b455-5ebd9ba6ba31",
+      "timestamp": "2026-03-19T08:53:56.479871+00:00",
+      "total_extracted_usd": 24.0,
+      "bank_usd": 9.600000000000001,
+      "stablecoins_usd": 8.399999999999999,
+      "treasury_usd": 6.0,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after ADA-USD profit",
+      "pool_before_usd": 45.0,
+      "pool_after_usd": 21.0
+    },
+    {
+      "extraction_id": "ee9dcdd3-5b64-48e6-ba5c-e9f72cf359d5",
+      "timestamp": "2026-03-19T08:55:31.886312+00:00",
+      "total_extracted_usd": 15.0,
+      "bank_usd": 6.0,
+      "stablecoins_usd": 5.25,
+      "treasury_usd": 3.75,
+      "bank_label": "linked_bank_account",
+      "stablecoins_label": "USDC_on_exchange",
+      "treasury_label": "cold_storage_wallet",
+      "source_note": "daily-withdrawal/intraday: after BTC-USD profit",
+      "pool_before_usd": 21.0,
+      "pool_after_usd": 6.0
+    }
+  ]
 }

@@ -1,0 +1,142 @@
+{
+  "today": "2026-03-19",
+  "daily_profit_usd": 75.0,
+  "daily_withdrawn_usd": 0.0,
+  "total_profit_recorded_usd": 1680.0,
+  "total_withdrawn_usd": 391.5,
+  "withdrawal_log": [
+    {
+      "withdrawal_id": "ce67be83-2861-47a9-9a35-83c4c52af776",
+      "timestamp": "2026-03-19T08:52:56.925171+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 39.0,
+      "daily_profit_at_time": 230.0,
+      "daily_withdrawn_before": 0.0,
+      "trigger": "intraday",
+      "note": "after BTC-USD profit"
+    },
+    {
+      "withdrawal_id": "64e62437-31e0-477f-a837-ae189f17a13f",
+      "timestamp": "2026-03-19T08:52:56.927074+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 45.0,
+      "daily_profit_at_time": 380.0,
+      "daily_withdrawn_before": 39.0,
+      "trigger": "intraday",
+      "note": "after BTC-USD profit"
+    },
+    {
+      "withdrawal_id": "46e8eb4f-5065-4f8c-9012-87e32493a0ec",
+      "timestamp": "2026-03-19T08:52:56.928347+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 45.0,
+      "daily_profit_at_time": 530.0,
+      "daily_withdrawn_before": 84.0,
+      "trigger": "intraday",
+      "note": "after BTC-USD profit"
+    },
+    {
+      "withdrawal_id": "b3aa6367-2ad1-468a-890a-eb782934fff0",
+      "timestamp": "2026-03-19T08:52:56.929800+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 60.0,
+      "daily_profit_at_time": 730.0,
+      "daily_withdrawn_before": 129.0,
+      "trigger": "intraday",
+      "note": "after BTC-USD profit"
+    },
+    {
+      "withdrawal_id": "4f31157e-398c-469b-927c-27d26a354284",
+      "timestamp": "2026-03-19T08:52:56.930933+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 48.0,
+      "daily_profit_at_time": 890.0,
+      "daily_withdrawn_before": 189.0,
+      "trigger": "intraday",
+      "note": "after BTC-USD profit"
+    },
+    {
+      "withdrawal_id": "e3446ed0-e285-4dbf-a68b-72da39d47302",
+      "timestamp": "2026-03-19T08:52:56.932641+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 18.0,
+      "daily_profit_at_time": 160.0,
+      "daily_withdrawn_before": 0.0,
+      "trigger": "intraday",
+      "note": "after BTC-USD profit"
+    },
+    {
+      "withdrawal_id": "d8a65749-2e90-40f7-804a-0e7f49bafdfb",
+      "timestamp": "2026-03-19T08:52:56.935745+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 75.0,
+      "daily_profit_at_time": 200.0,
+      "daily_withdrawn_before": 0.0,
+      "trigger": "intraday",
+      "note": "after BTC-USD profit"
+    },
+    {
+      "withdrawal_id": "7ffe9f3d-fb98-4ab0-a479-21a913fa8433",
+      "timestamp": "2026-03-19T08:53:49.817600+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 15.0,
+      "daily_profit_at_time": 350.0,
+      "daily_withdrawn_before": 75.0,
+      "trigger": "intraday",
+      "note": "closed trade: SOL-USD"
+    },
+    {
+      "withdrawal_id": "c1c0e4f3-38ea-42b0-a671-df2fa9d769c5",
+      "timestamp": "2026-03-19T08:53:56.475893+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 7.5,
+      "daily_profit_at_time": 425.0,
+      "daily_withdrawn_before": 90.0,
+      "trigger": "intraday",
+      "note": "after ETH-USD profit"
+    },
+    {
+      "withdrawal_id": "3ec7d0af-74e9-4d83-b117-6fa211531b86",
+      "timestamp": "2026-03-19T08:53:56.477697+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 15.0,
+      "daily_profit_at_time": 475.0,
+      "daily_withdrawn_before": 97.5,
+      "trigger": "intraday",
+      "note": "after SOL-USD profit"
+    },
+    {
+      "withdrawal_id": "f62cf282-e826-45e0-8612-8f58b19bc57d",
+      "timestamp": "2026-03-19T08:53:56.479294+00:00",
+      "date": "2026-03-19",
+      "amount_usd": 24.0,
+      "daily_profit_at_time": 555.0,
+      "daily_withdrawn_before": 112.5,
+      "trigger": "intraday",
+      "note": "after ADA-USD profit"
+    }
+  ],
+  "daily_history": [
+    {
+      "date": "2026-03-19",
+      "daily_profit_usd": 890.0,
+      "daily_withdrawn_usd": 237.0,
+      "net_retained_usd": 653.0,
+      "withdrawal_rate_pct": 26.62921348314607
+    },
+    {
+      "date": "2026-03-19",
+      "daily_profit_usd": 160.0,
+      "daily_withdrawn_usd": 18.0,
+      "net_retained_usd": 142.0,
+      "withdrawal_rate_pct": 11.25
+    },
+    {
+      "date": "2026-03-19",
+      "daily_profit_usd": 555.0,
+      "daily_withdrawn_usd": 136.5,
+      "net_retained_usd": 418.5,
+      "withdrawal_rate_pct": 24.594594594594597
+    }
+  ]
+}
