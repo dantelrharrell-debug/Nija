@@ -1,4 +1,5 @@
 # indicators.py
+import numpy as np
 import pandas as pd
 
 # Division-by-zero guard constant
@@ -38,12 +39,21 @@ def scalar(x):
 
 
 def _ensure_numeric(df: pd.DataFrame, cols) -> pd.DataFrame:
-    """Coerce selected columns to numeric and drop rows with NaN in them."""
-    numeric_df = df.copy()
-    for col in cols:
-        numeric_df[col] = pd.to_numeric(numeric_df[col], errors="coerce")
-    numeric_df = numeric_df.dropna(subset=cols)
-    return numeric_df
+    """Coerce selected columns to numeric and drop rows with NaN in them.
+
+    Avoids an unnecessary DataFrame copy when all requested columns are
+    already numeric (the common hot path after the APEX strategy normalises
+    candle types to float before computing indicators).
+    """
+    needs_conversion = any(
+        col in df.columns and not pd.api.types.is_numeric_dtype(df[col])
+        for col in cols
+    )
+    if needs_conversion:
+        df = df.copy()
+        for col in cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.dropna(subset=cols)
 
 def calculate_vwap(df):
     df = _ensure_numeric(df, ['high', 'low', 'close', 'volume'])
@@ -173,6 +183,18 @@ def calculate_macd(df, fast=12, slow=26, signal=9):
     histogram = macd_line - signal_line
     return macd_line.ffill(), signal_line.ffill(), histogram.ffill()
 
+def _true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    """Compute True Range using element-wise np.maximum (avoids a temporary DataFrame).
+
+    TR = max(high - low, |high - prev_close|, |low - prev_close|)
+    """
+    prev_close = close.shift()
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    return np.maximum(np.maximum(tr1, tr2), tr3)
+
+
 def calculate_atr(df, period=14):
     """
     Calculate Average True Range (ATR)
@@ -185,18 +207,8 @@ def calculate_atr(df, period=14):
         pandas.Series: ATR values
     """
     df = _ensure_numeric(df, ['high', 'low', 'close'])
-    high = df['high']
-    low = df['low']
-    close = df['close']
-
-    # True Range calculation
-    tr1 = high - low
-    tr2 = abs(high - close.shift())
-    tr3 = abs(low - close.shift())
-
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    tr = _true_range(df['high'], df['low'], df['close'])
     atr = tr.rolling(window=period, min_periods=period).mean()
-
     return atr.ffill().fillna(0)
 
 def calculate_adx(df, period=14):
@@ -215,21 +227,18 @@ def calculate_adx(df, period=14):
     low = df['low']
     close = df['close']
 
-    # Calculate +DM and -DM
-    plus_dm = high.diff()
-    minus_dm = -low.diff()
+    # Calculate raw directional movement
+    up_move = high.diff()
+    down_move = -low.diff()
 
-    # Set values to 0 when not dominant
-    plus_dm[plus_dm < 0] = 0
-    plus_dm[(plus_dm < minus_dm)] = 0
-    minus_dm[minus_dm < 0] = 0
-    minus_dm[(minus_dm < plus_dm)] = 0
+    # Keep +DM only when up-move is positive AND greater than down-move;
+    # keep -DM only when down-move is positive AND strictly greater than up-move.
+    # Using .where() avoids chained boolean-index mutations (SettingWithCopyWarning).
+    plus_dm = up_move.where((up_move > 0) & (up_move >= down_move), other=0.0)
+    minus_dm = down_move.where((down_move > 0) & (down_move > up_move), other=0.0)
 
-    # Calculate True Range
-    tr1 = high - low
-    tr2 = abs(high - close.shift())
-    tr3 = abs(low - close.shift())
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    # True Range (reuse shared helper to avoid a temporary DataFrame)
+    tr = _true_range(high, low, close)
 
     # Smooth the indicators
     atr = tr.rolling(window=period, min_periods=period).mean()
