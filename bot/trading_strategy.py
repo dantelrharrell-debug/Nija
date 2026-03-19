@@ -2303,6 +2303,49 @@ class TradingStrategy:
                     logger.warning(f"⚠️  Failed to initialize continuous dust monitor: {_cdm_err}")
                     self.continuous_dust_monitor = None
 
+                # ── AUTO-CLEANUP ENGINE (1-step dust liquidation + micro-position merge) ──
+                try:
+                    from bot.auto_cleanup_engine import get_auto_cleanup_engine
+                    _ace_dry_run = os.getenv('AUTO_CLEANUP_DRY_RUN', 'false').lower() in ('true', '1', 'yes')
+                    _ace_dust_thr  = float(os.getenv('AUTO_CLEANUP_DUST_USD',  str(DUST_POSITION_USD)))
+                    _ace_micro_thr = float(os.getenv('AUTO_CLEANUP_MICRO_USD', '10.0'))
+                    self.auto_cleanup_engine = get_auto_cleanup_engine(
+                        dust_threshold_usd=_ace_dust_thr,
+                        micro_threshold_usd=_ace_micro_thr,
+                        dry_run=_ace_dry_run,
+                    )
+                    logger.info(
+                        "🧹 Auto-Cleanup Engine initialised "
+                        f"(dust<${_ace_dust_thr:.2f}, micro<${_ace_micro_thr:.2f}, "
+                        f"dry_run={_ace_dry_run})"
+                    )
+                except Exception as _ace_err:
+                    logger.warning(f"⚠️  Auto-Cleanup Engine not available: {_ace_err}")
+                    self.auto_cleanup_engine = None
+
+                # ── PRO POSITION MANAGER (Kelly sizing + tiered scaling rules) ──────
+                try:
+                    from bot.position_manager import get_pro_position_manager
+                    _ppm_kelly = float(os.getenv('KELLY_FRACTION', '0.5'))
+                    _ppm_wr    = float(os.getenv('WIN_RATE_ESTIMATE', '0.55'))
+                    _ppm_aw    = float(os.getenv('AVG_WIN_PCT', '0.04'))
+                    _ppm_al    = float(os.getenv('AVG_LOSS_PCT', '0.02'))
+                    self.pro_position_manager = get_pro_position_manager(
+                        balance=platform_balance,
+                        win_rate=_ppm_wr,
+                        avg_win_pct=_ppm_aw,
+                        avg_loss_pct=_ppm_al,
+                        kelly_fraction=_ppm_kelly,
+                    )
+                    logger.info(
+                        f"🚀 Pro Position Manager initialised | tier={self.pro_position_manager.tier.tier.value} "
+                        f"| max_pos={self.pro_position_manager.tier.max_positions} "
+                        f"| kelly={_ppm_kelly}"
+                    )
+                except Exception as _ppm_err:
+                    logger.warning(f"⚠️  Pro Position Manager not available: {_ppm_err}")
+                    self.pro_position_manager = None
+
                 # Initialize broker failsafes (hard limits and circuit breakers)
                 # CRITICAL: Use ONLY master balance, not user balances
                 try:
@@ -4630,6 +4673,45 @@ class TradingStrategy:
                         )
                 except Exception as _cdm_run_err:
                     logger.warning(f"⚠️  Continuous dust monitor sweep failed: {_cdm_run_err}")
+
+            # ── AUTO-CLEANUP ENGINE: 1-step dust liquidation + micro-merge ──────────
+            # Runs every FORCED_CLEANUP_INTERVAL cycles (same cadence as forced cleanup)
+            # or on startup (cycle 0) to boot with a clean slate.
+            _ace_run = (
+                hasattr(self, 'auto_cleanup_engine') and self.auto_cleanup_engine
+                and hasattr(self, 'cycle_count')
+                and (
+                    self.cycle_count == 0
+                    or self.cycle_count % FORCED_CLEANUP_INTERVAL == 0
+                )
+            )
+            if _ace_run and active_broker:
+                try:
+                    # Collect current raw positions from broker for the cleanup scan
+                    _ace_positions = []
+                    try:
+                        _ace_positions = active_broker.get_positions() or []
+                    except Exception:
+                        _ace_positions = list(self.open_positions.values()) if hasattr(self, 'open_positions') else []
+
+                    _ace_portfolio_val = getattr(self, 'current_balance', 0.0) or 0.0
+                    _ace_result = self.auto_cleanup_engine.run(
+                        broker=active_broker,
+                        positions=_ace_positions,
+                        portfolio_value_usd=_ace_portfolio_val,
+                    )
+                    _ace_total = _ace_result.dust_liquidated + _ace_result.micro_merged + _ace_result.micro_liquidated
+                    if _ace_total:
+                        logger.warning(
+                            f"🧹 AUTO-CLEANUP: liquidated={_ace_result.dust_liquidated} "
+                            f"merged={_ace_result.micro_merged} "
+                            f"freed={_ace_result.micro_liquidated} "
+                            f"recovered=${_ace_result.total_usd_recovered:.4f}"
+                        )
+                    else:
+                        logger.info("🧹 Auto-cleanup: portfolio is clean (no dust/micro positions)")
+                except Exception as _ace_run_err:
+                    logger.warning(f"⚠️  Auto-cleanup run failed: {_ace_run_err}")
 
             # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
             # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.
