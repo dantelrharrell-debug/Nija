@@ -257,6 +257,20 @@ except ImportError:
         PROFIT_SPLITTER_AVAILABLE = False
         get_profit_splitter = None
 
+# Import Profit Lock System — ratchet stops + auto-withdrawal of gains
+try:
+    from profit_lock_system import get_profit_lock_system as _get_profit_lock_system
+    PROFIT_LOCK_SYSTEM_AVAILABLE = True
+    logger.info("✅ Profit Lock System loaded - ratchet stops + auto-withdrawal active")
+except ImportError:
+    try:
+        from bot.profit_lock_system import get_profit_lock_system as _get_profit_lock_system
+        PROFIT_LOCK_SYSTEM_AVAILABLE = True
+        logger.info("✅ Profit Lock System loaded - ratchet stops + auto-withdrawal active")
+    except ImportError:
+        PROFIT_LOCK_SYSTEM_AVAILABLE = False
+        _get_profit_lock_system = None
+
 # Import AI Capital Allocator — auto-shifts funds to best performers
 try:
     from ai_capital_allocator import get_ai_capital_allocator
@@ -1371,6 +1385,17 @@ class TradingStrategy:
                 self.win_rate_maximizer = None
         else:
             self.win_rate_maximizer = None
+
+        # Initialize Profit Lock System — ratchet stops + auto-withdrawal of secured gains
+        if PROFIT_LOCK_SYSTEM_AVAILABLE and _get_profit_lock_system is not None:
+            try:
+                self.profit_lock_system = _get_profit_lock_system()
+                logger.info("✅ Profit Lock System initialized – ratchet stops + auto-withdrawal active")
+            except Exception as _pls_init_err:
+                logger.warning("⚠️ Failed to initialize Profit Lock System: %s", _pls_init_err)
+                self.profit_lock_system = None
+        else:
+            self.profit_lock_system = None
 
         # Initialize Market Regime Controller — meta-layer: "Should we trade now?"
         if REGIME_CONTROLLER_AVAILABLE and get_regime_controller is not None:
@@ -5212,6 +5237,30 @@ class TradingStrategy:
 
                                         logger.info(f"   💰 P&L: ${pnl_dollars:+.2f} ({pnl_percent*100:+.2f}%) | Entry: ${entry_price:.2f}")
 
+                                        # 🔒 PROFIT LOCK SYSTEM — ratchet floor check
+                                        # Advance the ratchet stop for this position; if the
+                                        # lock floor has been hit, queue an immediate exit to
+                                        # secure the locked-in gain.
+                                        if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:
+                                            try:
+                                                _pls_action = self.profit_lock_system.update_position(
+                                                    symbol=symbol,
+                                                    current_price=current_price,
+                                                )
+                                                if _pls_action == "close":
+                                                    positions_to_exit.append({
+                                                        'symbol': symbol,
+                                                        'quantity': quantity,
+                                                        'reason': 'Profit lock: ratchet floor hit – securing gains',
+                                                        'broker': position_broker,
+                                                        'broker_label': broker_label,
+                                                    })
+                                            except Exception as _pls_upd_err:
+                                                logger.debug(
+                                                    "ProfitLockSystem.update_position skipped for %s: %s",
+                                                    symbol, _pls_upd_err,
+                                                )
+
                                         # ✅ USER-DEFINED TAKE-PROFIT / STOP-LOSS RULES
                                         # Checked immediately after P&L is computed, before
                                         # the 3-tier system stop-loss checks below, so that
@@ -7939,6 +7988,32 @@ class TradingStrategy:
                                 logger.info(f"   ✅ Position opened: {_ps_symbol}")
                                 _trades_executed_this_cycle += 1
 
+                                # 🔒 PROFIT LOCK SYSTEM — register new position for ratchet tracking
+                                if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:
+                                    try:
+                                        _pls_entry = (
+                                            _ps_analysis.get('entry_price')
+                                            or _ps_analysis.get('price')
+                                            or 0.0
+                                        )
+                                        if _pls_entry > 0:
+                                            self.profit_lock_system.register_position(
+                                                symbol=_ps_symbol,
+                                                side='long',
+                                                entry_price=float(_pls_entry),
+                                                position_size_usd=float(_ps_position_size),
+                                            )
+                                        else:
+                                            logger.debug(
+                                                "ProfitLockSystem: skipping register for %s — entry price unavailable",
+                                                _ps_symbol,
+                                            )
+                                    except Exception as _pls_reg_err:
+                                        logger.debug(
+                                            "ProfitLockSystem.register_position skipped for %s: %s",
+                                            _ps_symbol, _pls_reg_err,
+                                        )
+
                                 # ═══════════════════════════════════════════════════════
                                 # COPY TRADE ENGINE — broadcast platform trade to users
                                 # Only the platform account triggers copy broadcasting.
@@ -8228,6 +8303,13 @@ class TradingStrategy:
                 )
             except Exception as _wmx_err:
                 logger.debug("Win Rate Maximizer record_outcome skipped for %s: %s", symbol, _wmx_err)
+
+        # 🔒 PROFIT LOCK SYSTEM — record realised profit and trigger auto-withdrawal if threshold met
+        if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:
+            try:
+                self.profit_lock_system.record_closed_profit(symbol=symbol, pnl_usd=profit_usd)
+            except Exception as _pls_close_err:
+                logger.debug("ProfitLockSystem.record_closed_profit skipped for %s: %s", symbol, _pls_close_err)
 
         if not self.advanced_manager:
             return
