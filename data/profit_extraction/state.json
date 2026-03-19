@@ -1,0 +1,19 @@
+{
+  "pool_usd": 25.0,
+  "total_profit_recorded_usd": 25.0,
+  "total_extracted_usd": 0.0,
+  "dest_totals": {
+    "bank": 0.0,
+    "stablecoins": 0.0,
+    "treasury_wallet": 0.0
+  },
+  "profit_log": [
+    {
+      "timestamp": "2026-03-19T03:15:04.122335+00:00",
+      "symbol": "TEST-USD",
+      "pnl_usd": 25.0,
+      "note": "closed trade profit"
+    }
+  ],
+  "extraction_log": []
+}
