@@ -100,6 +100,39 @@ except ImportError:
         get_emergency_capital_protection = None  # type: ignore
         _ECP_AVAILABLE = False
 
+try:
+    from bot.minimum_daily_target import get_minimum_daily_target
+    _MDT_AVAILABLE = True
+except ImportError:
+    try:
+        from minimum_daily_target import get_minimum_daily_target  # type: ignore
+        _MDT_AVAILABLE = True
+    except ImportError:
+        get_minimum_daily_target = None  # type: ignore
+        _MDT_AVAILABLE = False
+
+try:
+    from bot.user_registry import get_user_registry
+    _USER_REGISTRY_AVAILABLE = True
+except ImportError:
+    try:
+        from user_registry import get_user_registry  # type: ignore
+        _USER_REGISTRY_AVAILABLE = True
+    except ImportError:
+        get_user_registry = None  # type: ignore
+        _USER_REGISTRY_AVAILABLE = False
+
+try:
+    from bot.kill_switch import KillSwitch
+    _KILL_SWITCH_AVAILABLE = True
+except ImportError:
+    try:
+        from kill_switch import KillSwitch  # type: ignore
+        _KILL_SWITCH_AVAILABLE = True
+    except ImportError:
+        KillSwitch = None  # type: ignore
+        _KILL_SWITCH_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -149,6 +182,50 @@ def _ecp():
     if _ECP_AVAILABLE:
         return get_emergency_capital_protection()
     return None
+
+
+def _mdt():
+    if _MDT_AVAILABLE:
+        return get_minimum_daily_target()
+    return None
+
+
+def _user_registry():
+    if _USER_REGISTRY_AVAILABLE:
+        return get_user_registry()
+    return None
+
+
+_global_kill_switch: Any = None
+
+
+def _get_kill_switch():
+    global _global_kill_switch
+    if not _KILL_SWITCH_AVAILABLE:
+        return None
+    if _global_kill_switch is None:
+        _global_kill_switch = KillSwitch()
+    return _global_kill_switch
+
+
+def _validate_owner_pin(pin: str) -> bool:
+    """
+    Validate the owner PIN.
+
+    Checks against OWNER_PIN environment variable first, then falls back to
+    the OwnerControlLayer's configured PIN if available.
+
+    Returns True if the PIN is valid (or no PIN is configured).
+    """
+    expected = os.environ.get("OWNER_PIN", "")
+    if not expected:
+        # No PIN configured — check owner control layer
+        owner = _owner()
+        if owner and hasattr(owner, "_config") and hasattr(owner._config, "pin"):
+            expected = owner._config.pin
+    if expected and pin != expected:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +391,326 @@ def check_profit():
         "is_big_profit_day": is_big,
         "timestamp": _ts(),
     })
+
+
+# ---------------------------------------------------------------------------
+# Kill Switch endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/owner/kill-switch", methods=["GET"])
+def kill_switch_status():
+    """Return current kill switch status."""
+    ks = _get_kill_switch()
+    if ks:
+        status = ks.get_status()
+    else:
+        # Fallback: read from owner control layer
+        owner = _owner()
+        if owner:
+            oc_status = owner.get_status()
+            status = {
+                "is_active": oc_status.get("emergency_stop_active", False),
+                "source": "owner_control_layer",
+            }
+        else:
+            status = {"is_active": False, "source": "unavailable"}
+    return jsonify({"timestamp": _ts(), "kill_switch": status})
+
+
+@app.route("/api/owner/kill-switch/activate", methods=["POST"])
+def kill_switch_activate():
+    """
+    Activate the global kill switch (immediate halt).
+
+    JSON body fields
+    ----------------
+    pin    : str   — owner PIN
+    reason : str   — optional reason
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    pin = data.get("pin", "")
+    reason = data.get("reason", "Mobile kill switch triggered")
+
+    # Validate PIN via owner control layer
+    owner = _owner()
+    if owner:
+        result = owner.emergency_stop(pin=pin, ip=request.remote_addr or "")
+        if not result.success:
+            return jsonify({"success": False, "message": result.message}), 403
+    else:
+        # If owner control unavailable, use kill switch directly with env PIN
+        expected = os.environ.get("OWNER_PIN", "")
+        if expected and pin != expected:
+            return jsonify({"success": False, "message": "Invalid PIN"}), 403
+
+    ks = _get_kill_switch()
+    if ks:
+        ks.activate(reason=reason, source="MOBILE_DASHBOARD")
+
+    alerts_sys = _alerts()
+    if alerts_sys:
+        try:
+            alerts_sys.emergency_mode_triggered(
+                level="EMERGENCY",
+                drawdown_pct=0.0,
+                extra=f"Kill switch activated: {reason}",
+            )
+        except Exception:
+            pass
+
+    logger.critical("🚨 KILL SWITCH ACTIVATED via dashboard: %s", reason)
+    return jsonify({"success": True, "message": "Kill switch activated", "timestamp": _ts()})
+
+
+@app.route("/api/owner/kill-switch/deactivate", methods=["POST"])
+def kill_switch_deactivate():
+    """
+    Deactivate the global kill switch.
+
+    JSON body fields
+    ----------------
+    pin    : str   — owner PIN
+    reason : str   — optional reason
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    pin = data.get("pin", "")
+    reason = data.get("reason", "Manual deactivation via dashboard")
+
+    owner = _owner()
+    if owner:
+        result = owner.clear_emergency_stop(pin=pin, ip=request.remote_addr or "")
+        if not result.success:
+            return jsonify({"success": False, "message": result.message}), 403
+
+    ks = _get_kill_switch()
+    if ks:
+        ks.deactivate(reason=reason)
+
+    logger.info("✅ Kill switch deactivated via dashboard: %s", reason)
+    return jsonify({"success": True, "message": "Kill switch deactivated", "timestamp": _ts()})
+
+
+# ---------------------------------------------------------------------------
+# PnL + Salary dashboard endpoint
+# ---------------------------------------------------------------------------
+
+@app.route("/api/owner/pnl", methods=["GET"])
+def get_pnl_dashboard():
+    """
+    Return a combined real-time PnL + salary dashboard payload.
+
+    Pulls from:
+    - AccountingVerificationLayer (balance, net P&L, trade history)
+    - WeeklySalaryMode (salary pool, weekly profit, target)
+    - MinimumDailyTarget (daily goal progress, lock status)
+    """
+    payload: Dict[str, Any] = {"timestamp": _ts()}
+
+    # Accounting / balance
+    acct = _accounting()
+    if acct:
+        summary = acct.get_summary()
+        payload["balance_usd"] = summary.get("balance_usd", 0.0)
+        payload["net_pnl_usd"] = summary.get("net_pnl_usd", 0.0)
+        payload["total_profit_usd"] = summary.get("total_profit_usd", 0.0)
+        payload["total_loss_usd"] = summary.get("total_loss_usd", 0.0)
+        payload["total_trades"] = summary.get("total_entries", 0)
+    else:
+        payload["balance_usd"] = None
+        payload["net_pnl_usd"] = None
+        payload["total_profit_usd"] = None
+        payload["total_loss_usd"] = None
+        payload["total_trades"] = None
+
+    # Weekly salary
+    salary = _salary()
+    if salary:
+        payload["salary"] = {
+            "enabled": salary.config.enabled,
+            "pool_usd": round(salary.pool_usd, 2),
+            "weekly_profit_usd": round(salary.weekly_profit_usd, 2),
+            "total_salary_paid_usd": round(salary.total_salary_paid_usd, 2),
+            "weekly_target_usd": salary.config.weekly_salary_usd,
+            "weekly_progress_pct": round(
+                min(
+                    salary.weekly_profit_usd / salary.config.weekly_salary_usd * 100
+                    if salary.config.weekly_salary_usd > 0
+                    else 0,
+                    100,
+                ),
+                1,
+            ),
+        }
+    else:
+        payload["salary"] = {"error": "WeeklySalaryMode not available"}
+
+    # Daily target
+    mdt = _mdt()
+    if mdt:
+        payload["daily_target"] = mdt.get_status()
+    else:
+        payload["daily_target"] = {"error": "MinimumDailyTarget not available"}
+
+    return jsonify(payload)
+
+
+# ---------------------------------------------------------------------------
+# Daily target management endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/owner/daily-target", methods=["GET"])
+def get_daily_target():
+    """Return current daily target status."""
+    mdt = _mdt()
+    if not mdt:
+        return jsonify({"error": "MinimumDailyTarget not available"}), 503
+    return jsonify({"timestamp": _ts(), "daily_target": mdt.get_status()})
+
+
+@app.route("/api/owner/daily-target/set", methods=["POST"])
+def set_daily_target():
+    """
+    Update the daily profit target.
+
+    JSON body fields
+    ----------------
+    target_usd : float  — new daily target in USD
+    pin        : str    — owner PIN
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    target_usd = float(data.get("target_usd", 0.0))
+    pin = data.get("pin", "")
+
+    mdt = _mdt()
+    if not mdt:
+        return jsonify({"success": False, "message": "MinimumDailyTarget not available"}), 503
+
+    ok = mdt.set_target(target_usd=target_usd, pin=pin)
+    if ok:
+        return jsonify({"success": True, "message": f"Daily target set to ${target_usd:.2f}", "timestamp": _ts()})
+    return jsonify({"success": False, "message": "Invalid PIN or bad target value"}), 403
+
+
+@app.route("/api/owner/daily-target/unlock", methods=["POST"])
+def unlock_daily_target():
+    """
+    Unlock the bot after the daily target lock.
+
+    JSON body fields
+    ----------------
+    pin    : str  — owner PIN
+    reason : str  — optional reason
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    pin = data.get("pin", "")
+    reason = data.get("reason", "Manual unlock via dashboard")
+
+    mdt = _mdt()
+    if not mdt:
+        return jsonify({"success": False, "message": "MinimumDailyTarget not available"}), 503
+
+    ok = mdt.unlock(pin=pin, reason=reason)
+    if ok:
+        return jsonify({"success": True, "message": "Daily target lock removed", "timestamp": _ts()})
+    return jsonify({"success": False, "message": "Invalid PIN"}), 403
+
+
+# ---------------------------------------------------------------------------
+# User registry (multi-user / business scaling) endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/owner/users", methods=["GET"])
+def list_users():
+    """Return all registered users and a summary."""
+    reg = _user_registry()
+    if not reg:
+        return jsonify({"error": "UserRegistry not available"}), 503
+    return jsonify({
+        "timestamp": _ts(),
+        "summary": reg.get_summary(),
+        "users": reg.list_users(),
+    })
+
+
+@app.route("/api/owner/users/register", methods=["POST"])
+def register_user():
+    """
+    Register a new user/subscriber.
+
+    JSON body fields
+    ----------------
+    user_id          : str   — optional; auto-generated if omitted
+    display_name     : str
+    email            : str
+    plan             : str   — free | starter | pro | elite
+    daily_target_usd : float — optional; defaults to plan default
+    pin              : str   — owner PIN (required)
+    notes            : str   — optional
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    pin = data.get("pin", "")
+
+    if not _validate_owner_pin(pin):
+        return jsonify({"success": False, "message": "Invalid PIN"}), 403
+
+    reg = _user_registry()
+    if not reg:
+        return jsonify({"success": False, "message": "UserRegistry not available"}), 503
+
+    try:
+        user = reg.register_user(
+            user_id=data.get("user_id"),
+            display_name=data.get("display_name", ""),
+            email=data.get("email", ""),
+            plan=data.get("plan", "starter"),
+            daily_target_usd=data.get("daily_target_usd"),
+            notes=data.get("notes", ""),
+        )
+        return jsonify({"success": True, "user": user.to_dict(), "timestamp": _ts()})
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+
+
+@app.route("/api/owner/users/<user_id>", methods=["GET"])
+def get_user(user_id: str):
+    """Return a single user record."""
+    reg = _user_registry()
+    if not reg:
+        return jsonify({"error": "UserRegistry not available"}), 503
+    user = reg.get_user(user_id)
+    if user is None:
+        return jsonify({"error": f"User '{user_id}' not found"}), 404
+    return jsonify({"timestamp": _ts(), "user": user.to_dict()})
+
+
+@app.route("/api/owner/users/<user_id>/kill-switch", methods=["POST"])
+def user_kill_switch(user_id: str):
+    """
+    Enable or disable the kill switch for a specific user.
+
+    JSON body fields
+    ----------------
+    active : bool  — True to activate, False to deactivate
+    reason : str   — optional reason
+    pin    : str   — owner PIN
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    pin = data.get("pin", "")
+    active = bool(data.get("active", True))
+    reason = data.get("reason", "")
+
+    if not _validate_owner_pin(pin):
+        return jsonify({"success": False, "message": "Invalid PIN"}), 403
+
+    reg = _user_registry()
+    if not reg:
+        return jsonify({"success": False, "message": "UserRegistry not available"}), 503
+
+    ok = reg.set_kill_switch(user_id=user_id, active=active, reason=reason)
+    if ok:
+        state = "activated" if active else "cleared"
+        return jsonify({"success": True, "message": f"Kill switch {state} for user '{user_id}'", "timestamp": _ts()})
+    return jsonify({"success": False, "message": f"User '{user_id}' not found"}), 404
 
 
 # ---------------------------------------------------------------------------

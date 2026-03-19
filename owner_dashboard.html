@@ -283,6 +283,90 @@
     .recon-banner.ok  { background: rgba(34,197,94,.12);  color: var(--green); border: 1px solid rgba(34,197,94,.3); }
     .recon-banner.err { background: rgba(239,68,68,.12);  color: var(--red);   border: 1px solid rgba(239,68,68,.3); }
 
+    /* ===================== PROGRESS BAR ===================== */
+    .progress-wrap {
+      background: var(--bg);
+      border-radius: 20px;
+      height: 10px;
+      overflow: hidden;
+      margin: 6px 0 2px;
+    }
+    .progress-bar {
+      height: 100%;
+      border-radius: 20px;
+      transition: width .5s ease;
+    }
+    .progress-bar-green  { background: var(--green); }
+    .progress-bar-yellow { background: var(--yellow); }
+    .progress-bar-red    { background: var(--red); }
+    .progress-bar-blue   { background: var(--blue); }
+
+    /* ===================== KILL SWITCH BUTTON ===================== */
+    .kill-switch-btn {
+      width: 100%;
+      padding: 18px 10px;
+      border: 2px solid rgba(239,68,68,.6);
+      border-radius: var(--radius);
+      background: rgba(239,68,68,.12);
+      color: var(--red);
+      font-size: 17px;
+      font-weight: 800;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      letter-spacing: .5px;
+      transition: background .15s, border-color .15s;
+      margin-bottom: 10px;
+    }
+    .kill-switch-btn:active { background: rgba(239,68,68,.25); }
+    .kill-switch-btn.inactive {
+      border-color: rgba(34,197,94,.5);
+      background: rgba(34,197,94,.10);
+      color: var(--green);
+    }
+    .kill-switch-emoji { font-size: 26px; }
+
+    /* ===================== USER TABLE ===================== */
+    .user-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .user-table th {
+      text-align: left; padding: 6px 8px;
+      color: var(--muted); font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+    .user-table td {
+      padding: 8px 8px;
+      border-bottom: 1px solid rgba(42,51,71,.5);
+      vertical-align: middle;
+    }
+    .user-table tr:last-child td { border-bottom: none; }
+    .plan-badge {
+      display: inline-block; padding: 2px 8px;
+      border-radius: 10px; font-size: 10px; font-weight: 700;
+    }
+    .plan-free    { background: rgba(136,150,179,.2); color: var(--muted); }
+    .plan-starter { background: rgba(59,130,246,.2);  color: var(--blue); }
+    .plan-pro     { background: rgba(168,85,247,.2);  color: var(--purple); }
+    .plan-elite   { background: rgba(234,179,8,.2);   color: var(--yellow); }
+
+    /* ===================== STAT ROW ===================== */
+    .stat-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      text-align: center;
+    }
+    .stat-value { font-size: 20px; font-weight: 800; }
+    .stat-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
   </style>
 </head>
 <body>
@@ -296,7 +380,15 @@
 <!-- TAB: STATUS -->
 <div class="tab active" id="tab-status">
 
+  <!-- KILL SWITCH — always visible on status screen -->
   <div class="section" style="padding-top:14px">
+    <button class="kill-switch-btn" id="killSwitchBtn" onclick="promptKillSwitch()">
+      <span class="kill-switch-emoji">🔴</span>
+      <span id="killSwitchLabel">KILL SWITCH — STOP ALL TRADING</span>
+    </button>
+  </div>
+
+  <div class="section">
     <div class="section-label">System Status</div>
     <div class="card" id="systemStatusCard">
       <div class="spinner"></div>
@@ -313,6 +405,47 @@
   <div class="section">
     <div class="section-label">Salary Engine</div>
     <div class="card" id="salaryCard">
+      <div class="spinner"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- TAB: PNL -->
+<div class="tab" id="tab-pnl">
+
+  <div class="section" style="padding-top:14px">
+    <div class="section-label">Real-Time PnL</div>
+    <div class="stat-row" id="pnlStatRow">
+      <div class="stat-card">
+        <div class="stat-value val-green" id="pnlBalance">—</div>
+        <div class="stat-label">Balance</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="pnlNetPnl">—</div>
+        <div class="stat-label">Net P&amp;L</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value val-green" id="pnlTotalProfit">—</div>
+        <div class="stat-label">Total Profit</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value val-red" id="pnlTotalLoss">—</div>
+        <div class="stat-label">Total Loss</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Daily Target Progress</div>
+    <div class="card" id="dailyTargetCard">
+      <div class="spinner"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Weekly Salary Progress</div>
+    <div class="card" id="pnlSalaryCard">
       <div class="spinner"></div>
     </div>
   </div>
@@ -347,6 +480,18 @@
   </div>
 
   <div class="section">
+    <div class="section-label">Daily Target</div>
+    <div class="btn-grid">
+      <button class="btn btn-warn" onclick="promptSetDailyTarget()">
+        <span class="btn-emoji">🎯</span>Set Target
+      </button>
+      <button class="btn btn-success" onclick="doUnlockDailyTarget()">
+        <span class="btn-emoji">🔓</span>Unlock Bot
+      </button>
+    </div>
+  </div>
+
+  <div class="section">
     <div class="section-label">Salary</div>
     <div class="btn-grid">
       <button class="btn btn-warn" onclick="doAction('disable_salary')">
@@ -373,6 +518,43 @@
   <div class="section" style="padding-top:14px">
     <div class="section-label">Recent Text Alerts</div>
     <div id="alertsList"></div>
+  </div>
+
+</div>
+
+<!-- TAB: USERS -->
+<div class="tab" id="tab-users">
+
+  <div class="section" style="padding-top:14px">
+    <div class="section-label">Business Overview</div>
+    <div class="card" id="usersSummaryCard">
+      <div class="spinner"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Subscribers</div>
+    <div class="card" style="overflow-x:auto; padding:0;">
+      <table class="user-table" id="usersTable">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Plan</th>
+            <th>Target</th>
+            <th>P&amp;L</th>
+            <th>🔴</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody">
+          <tr><td colspan="5" style="text-align:center;padding:20px;">
+            <div class="spinner"></div>
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+    <button class="btn btn-info" style="width:100%;margin-top:10px;" onclick="promptRegisterUser()">
+      <span class="btn-emoji">➕</span>Add New User
+    </button>
   </div>
 
 </div>
@@ -414,14 +596,17 @@
   <button class="nav-btn active" id="nav-status"   onclick="switchTab('status')">
     <span class="nav-icon">📊</span>Status
   </button>
+  <button class="nav-btn"        id="nav-pnl"      onclick="switchTab('pnl')">
+    <span class="nav-icon">💰</span>PnL
+  </button>
   <button class="nav-btn"        id="nav-controls" onclick="switchTab('controls')">
     <span class="nav-icon">🔑</span>Controls
   </button>
   <button class="nav-btn"        id="nav-alerts"   onclick="switchTab('alerts')">
     <span class="nav-icon">📣</span>Alerts
   </button>
-  <button class="nav-btn"        id="nav-ledger"   onclick="switchTab('ledger')">
-    <span class="nav-icon">📒</span>Ledger
+  <button class="nav-btn"        id="nav-users"    onclick="switchTab('users')">
+    <span class="nav-icon">👥</span>Users
   </button>
 </div>
 
@@ -476,13 +661,17 @@ updateClock();
 // TAB SWITCHING
 // =====================================================================
 function switchTab(name) {
-  ['status','controls','alerts','ledger'].forEach(t => {
-    document.getElementById('tab-' + t).classList.toggle('active', t === name);
-    document.getElementById('nav-' + t).classList.toggle('active', t === name);
+  ['status','pnl','controls','alerts','users','ledger'].forEach(t => {
+    const tab = document.getElementById('tab-' + t);
+    const nav = document.getElementById('nav-' + t);
+    if (tab) tab.classList.toggle('active', t === name);
+    if (nav) nav.classList.toggle('active', t === name);
   });
   if (name === 'status')   loadStatus();
+  if (name === 'pnl')      loadPnl();
   if (name === 'controls') loadStatus();
   if (name === 'alerts')   loadAlerts();
+  if (name === 'users')    loadUsers();
   if (name === 'ledger')   loadLedger();
 }
 
@@ -532,11 +721,17 @@ function timeAgo(iso) {
 // =====================================================================
 async function loadStatus() {
   try {
-    const res = await fetch(`${API_BASE}/api/owner/status`);
-    const data = await res.json();
-    renderSystemStatus(data);
+    const [statusRes, ksRes] = await Promise.all([
+      fetch(`${API_BASE}/api/owner/status`),
+      fetch(`${API_BASE}/api/owner/kill-switch`).catch(() => null),
+    ]);
+    const data = await statusRes.json();
+    const ksData = ksRes ? await ksRes.json() : null;
+
+    renderSystemStatus(data, ksData);
     renderAccounting(data.accounting || {});
     renderSalary(data.salary || {});
+    renderKillSwitchBtn(data, ksData);
     renderAudit();
   } catch(e) {
     document.getElementById('systemStatusCard').innerHTML =
@@ -544,7 +739,23 @@ async function loadStatus() {
   }
 }
 
-function renderSystemStatus(data) {
+function renderKillSwitchBtn(data, ksData) {
+  const oc = data.owner_control || {};
+  const ks = (ksData && ksData.kill_switch) || {};
+  const isActive = ks.is_active || oc.emergency_stop_active || false;
+  const btn = document.getElementById('killSwitchBtn');
+  const lbl = document.getElementById('killSwitchLabel');
+  if (!btn) return;
+  if (isActive) {
+    btn.classList.remove('inactive');
+    lbl.textContent = '🚨 TRADING HALTED — TAP TO RESUME';
+  } else {
+    btn.classList.add('inactive');
+    lbl.textContent = '✅ BOT RUNNING — TAP TO STOP';
+  }
+}
+
+function renderSystemStatus(data, ksData) {
   const oc = data.owner_control || {};
   const ecp = data.emergency_protection || {};
   const ecpLevel = ecp.level || 'UNKNOWN';
@@ -603,15 +814,191 @@ function renderSalary(s) {
 }
 
 // =====================================================================
+// PNL TAB
+// =====================================================================
+async function loadPnl() {
+  try {
+    const res = await fetch(`${API_BASE}/api/owner/pnl`);
+    const data = await res.json();
+    renderPnlStats(data);
+    renderDailyTarget(data.daily_target || {});
+    renderPnlSalary(data.salary || {});
+  } catch(e) {
+    document.getElementById('dailyTargetCard').innerHTML =
+      `<div style="color:var(--red);font-size:13px;">⚠️ ${e.message}</div>`;
+  }
+}
+
+function renderPnlStats(data) {
+  const bal = data.balance_usd;
+  const pnl = data.net_pnl_usd;
+  const profit = data.total_profit_usd;
+  const loss = data.total_loss_usd;
+
+  const balEl = document.getElementById('pnlBalance');
+  const pnlEl = document.getElementById('pnlNetPnl');
+  const profEl = document.getElementById('pnlTotalProfit');
+  const lossEl = document.getElementById('pnlTotalLoss');
+
+  if (balEl) balEl.textContent = bal !== null && bal !== undefined ? '$' + bal.toFixed(2) : '—';
+  if (pnlEl) {
+    const v = pnl !== null && pnl !== undefined ? pnl : null;
+    pnlEl.textContent = v !== null ? (v >= 0 ? '+' : '') + '$' + v.toFixed(2) : '—';
+    pnlEl.className = 'stat-value ' + (v === null ? '' : v >= 0 ? 'val-green' : 'val-red');
+  }
+  if (profEl) profEl.textContent = profit !== null && profit !== undefined ? '$' + profit.toFixed(2) : '—';
+  if (lossEl) lossEl.textContent = loss !== null && loss !== undefined ? '$' + loss.toFixed(2) : '—';
+}
+
+function renderDailyTarget(dt) {
+  const el = document.getElementById('dailyTargetCard');
+  if (!el) return;
+  if (dt.error) {
+    el.innerHTML = `<div class="val-muted">${dt.error}</div>`;
+    return;
+  }
+  if (!dt.enabled) {
+    el.innerHTML = `<div class="val-muted">Daily target system disabled.</div>`;
+    return;
+  }
+  const pct = Math.min(dt.progress_pct || 0, 100);
+  const barColor = pct >= 100 ? 'red' : pct >= 75 ? 'yellow' : 'green';
+  let html = '';
+  html += row('Date', `<span>${escHtml(dt.date || '')}</span>`);
+  html += row('Target', `<span class="val-blue">${fmt(dt.target_usd)}</span>`);
+  html += row('Today\'s Profit', `<span class="${(dt.current_profit_usd||0) >= 0 ? 'val-green' : 'val-red'}">${fmt(dt.current_profit_usd)}</span>`);
+  html += row('Remaining', `<span class="val-muted">${fmt(dt.remaining_usd)}</span>`);
+  html += `<div class="card-row" style="flex-direction:column;align-items:flex-start;gap:4px;">
+    <span class="card-row-label">Progress — ${pct.toFixed(1)}%</span>
+    <div class="progress-wrap" style="width:100%">
+      <div class="progress-bar progress-bar-${barColor}" style="width:${pct}%"></div>
+    </div>
+  </div>`;
+  html += row('Status',
+    dt.locked
+      ? badge('🔒 LOCKED — Goal Hit!', 'red')
+      : (dt.target_hit ? badge('🎯 Target Hit', 'yellow') : badge('▶ Trading', 'green')));
+  html += row('Trades Today', `<span>${dt.trades_today || 0} (${dt.win_rate_pct || 0}% WR)</span>`);
+  el.innerHTML = html;
+}
+
+function renderPnlSalary(s) {
+  const el = document.getElementById('pnlSalaryCard');
+  if (!el) return;
+  if (s.error) {
+    el.innerHTML = `<div class="val-muted">${s.error}</div>`;
+    return;
+  }
+  const pct = Math.min(s.weekly_progress_pct || 0, 100);
+  const barColor = pct >= 100 ? 'yellow' : pct >= 60 ? 'blue' : 'green';
+  let html = '';
+  html += row('Status', s.enabled ? badge('✅ Active','green') : badge('❌ Off','red'));
+  html += row('Weekly Profit', `<span class="val-green">${fmt(s.weekly_profit_usd)}</span>`);
+  html += row('Weekly Target', `<span class="val-blue">${fmt(s.weekly_target_usd)}</span>`);
+  html += `<div class="card-row" style="flex-direction:column;align-items:flex-start;gap:4px;">
+    <span class="card-row-label">Salary Progress — ${pct.toFixed(1)}%</span>
+    <div class="progress-wrap" style="width:100%">
+      <div class="progress-bar progress-bar-${barColor}" style="width:${pct}%"></div>
+    </div>
+  </div>`;
+  html += row('Pool Balance', `<span class="val-blue">${fmt(s.pool_usd)}</span>`);
+  html += row('Total Paid', `<span>${fmt(s.total_salary_paid_usd)}</span>`);
+  el.innerHTML = html;
+}
+
+// =====================================================================
+// USERS TAB
+// =====================================================================
+async function loadUsers() {
+  try {
+    const res = await fetch(`${API_BASE}/api/owner/users`);
+    const data = await res.json();
+    if (data.error) {
+      document.getElementById('usersSummaryCard').innerHTML = `<div class="val-muted">${data.error}</div>`;
+      document.getElementById('usersBody').innerHTML = `<tr><td colspan="5" style="color:var(--muted);padding:12px;text-align:center;">Users unavailable</td></tr>`;
+      return;
+    }
+    renderUsersSummary(data.summary || {});
+    renderUsersTable(data.users || []);
+  } catch(e) {
+    document.getElementById('usersSummaryCard').innerHTML =
+      `<div style="color:var(--red);font-size:13px;">⚠️ ${e.message}</div>`;
+  }
+}
+
+function renderUsersSummary(s) {
+  const el = document.getElementById('usersSummaryCard');
+  if (!el) return;
+  let html = '';
+  html += row('Total Users',   `<span class="val-blue">${s.total_users || 0}</span>`);
+  html += row('Active Users',  `<span class="val-green">${s.active_users || 0}</span>`);
+  html += row('Kill Switches', `<span class="${(s.kill_switch_active_count||0) > 0 ? 'val-red' : 'val-muted'}">${s.kill_switch_active_count || 0}</span>`);
+  html += row('Total PnL',     `<span class="${(s.total_pnl_usd||0) >= 0 ? 'val-green' : 'val-red'}">${fmt(s.total_pnl_usd)}</span>`);
+  html += row('Monthly Revenue', `<span class="val-yellow">${fmt(s.monthly_recurring_revenue_usd)}</span>`);
+  const plans = s.plan_breakdown || {};
+  const planStr = Object.entries(plans).map(([k,v]) => `${k}: ${v}`).join(', ') || '—';
+  html += row('Plans', `<span style="font-size:12px">${escHtml(planStr)}</span>`);
+  el.innerHTML = html;
+}
+
+function renderUsersTable(users) {
+  const tbody = document.getElementById('usersBody');
+  if (!tbody) return;
+  if (!users.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--muted);padding:12px;text-align:center;">No users yet. Tap + to add.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = users.map(u => {
+    const pnlCls = (u.total_pnl_usd || 0) >= 0 ? 'val-green' : 'val-red';
+    const ksBtn = u.kill_switch_active
+      ? `<button style="background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);border-radius:6px;padding:3px 7px;font-size:11px;cursor:pointer;" onclick="userKillSwitch('${escHtml(u.user_id)}', false)">Resume</button>`
+      : `<button style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:3px 7px;font-size:11px;cursor:pointer;" onclick="userKillSwitch('${escHtml(u.user_id)}', true)">Stop</button>`;
+    return `<tr>
+      <td><div style="font-weight:600;font-size:12px">${escHtml(u.display_name || u.user_id)}</div>
+          <div style="color:var(--muted);font-size:10px">${escHtml(u.email || '')}</div></td>
+      <td><span class="plan-badge plan-${escHtml(u.plan)}">${escHtml(u.plan)}</span></td>
+      <td style="font-size:11px">${fmt(u.daily_target_usd)}</td>
+      <td class="${pnlCls}" style="font-size:11px">${u.total_pnl_usd !== undefined ? (u.total_pnl_usd >= 0 ? '+' : '') + '$' + u.total_pnl_usd.toFixed(2) : '—'}</td>
+      <td>${ksBtn}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function userKillSwitch(userId, activate) {
+  const pin = prompt(activate ? `Stop trading for user "${userId}"?\nEnter PIN:` : `Resume trading for user "${userId}"?\nEnter PIN:`);
+  if (pin === null) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/owner/users/${encodeURIComponent(userId)}/kill-switch`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ active: activate, pin, reason: activate ? 'Stopped via dashboard' : 'Resumed via dashboard' }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('✅ ' + data.message);
+      loadUsers();
+    } else {
+      showToast('❌ ' + (data.message || 'Failed'), 3500);
+    }
+  } catch(e) {
+    showToast('❌ ' + e.message, 3500);
+  }
+}
+
+function promptRegisterUser() {
+  currentAction = 'register_user';
+  document.getElementById('modalTitle').textContent = '➕ Add New User';
+  document.getElementById('modalDesc').textContent  = 'Enter owner PIN to register a new subscriber.';
+  document.getElementById('pinInput').value = '';
+  document.getElementById('pinModal').classList.add('open');
+  setTimeout(() => document.getElementById('pinInput').focus(), 100);
+}
+
+// =====================================================================
 // AUDIT (shown in Controls tab)
 // =====================================================================
 async function renderAudit() {
   try {
-    const res = await fetch(`${API_BASE}/api/owner/status`);
-    const data = await res.json();
-    const owner = data.owner_control || {};
-    // audit is embedded via get_recent_audit endpoint — reuse status for now
-    // We display a minimal "last action" notice
     document.getElementById('auditCard').innerHTML =
       `<div class="val-muted" style="font-size:13px">
         Owner audit trail is stored in <code>data/owner_control/owner_audit.jsonl</code>.
@@ -704,6 +1091,91 @@ async function loadLedger() {
 }
 
 // =====================================================================
+// KILL SWITCH (mobile button)
+// =====================================================================
+let _ksActive = false;
+
+async function promptKillSwitch() {
+  // Refresh to know current state
+  try {
+    const [statusRes, ksRes] = await Promise.all([
+      fetch(`${API_BASE}/api/owner/status`),
+      fetch(`${API_BASE}/api/owner/kill-switch`).catch(() => null),
+    ]);
+    const sd = await statusRes.json();
+    const kd = ksRes ? await ksRes.json() : null;
+    const oc = sd.owner_control || {};
+    const ks = (kd && kd.kill_switch) || {};
+    _ksActive = ks.is_active || oc.emergency_stop_active || false;
+  } catch(_) {}
+
+  if (_ksActive) {
+    currentAction = '__kill_switch_deactivate__';
+    document.getElementById('modalTitle').textContent = '✅ Resume Trading';
+    document.getElementById('modalDesc').textContent  = 'Enter PIN to deactivate the kill switch and resume trading.';
+  } else {
+    currentAction = '__kill_switch_activate__';
+    document.getElementById('modalTitle').textContent = '🔴 KILL SWITCH — STOP TRADING';
+    document.getElementById('modalDesc').textContent  = 'This will IMMEDIATELY halt ALL trading. Enter PIN to confirm.';
+  }
+  document.getElementById('pinInput').value = '';
+  document.getElementById('pinModal').classList.add('open');
+  setTimeout(() => document.getElementById('pinInput').focus(), 100);
+}
+
+async function activateKillSwitch(pin) {
+  const res = await fetch(`${API_BASE}/api/owner/kill-switch/activate`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ pin, reason: 'Mobile kill switch button' }),
+  });
+  const data = await res.json();
+  return data;
+}
+
+async function deactivateKillSwitch(pin) {
+  const res = await fetch(`${API_BASE}/api/owner/kill-switch/deactivate`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ pin }),
+  });
+  const data = await res.json();
+  return data;
+}
+
+// =====================================================================
+// DAILY TARGET CONTROLS
+// =====================================================================
+function promptSetDailyTarget() {
+  currentAction = '__set_daily_target__';
+  document.getElementById('modalTitle').textContent = '🎯 Set Daily Target';
+  document.getElementById('modalDesc').textContent  = 'Enter PIN then type target amount in USD on next screen.';
+  document.getElementById('pinInput').value = '';
+  document.getElementById('pinModal').classList.add('open');
+  setTimeout(() => document.getElementById('pinInput').focus(), 100);
+}
+
+async function doUnlockDailyTarget() {
+  const pin = prompt('Enter owner PIN to unlock the bot:');
+  if (pin === null) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/owner/daily-target/unlock`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ pin, reason: 'Manual unlock via controls' }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('🔓 Bot unlocked — trading resumed!');
+    } else {
+      showToast('❌ ' + (data.message || 'Failed'), 3500);
+    }
+  } catch(e) {
+    showToast('❌ ' + e.message, 3500);
+  }
+}
+
+// =====================================================================
 // OWNER CONTROL (PIN MODAL)
 // =====================================================================
 const ACTION_LABELS = {
@@ -736,6 +1208,84 @@ async function confirmAction() {
   const action = currentAction;
   closeModal();
 
+  // Special: kill switch activate
+  if (action === '__kill_switch_activate__') {
+    try {
+      const data = await activateKillSwitch(pin);
+      if (data.success) {
+        showToast('🔴 Kill switch activated — trading STOPPED');
+        loadStatus();
+      } else {
+        showToast('❌ ' + (data.message || 'Failed'), 3500);
+      }
+    } catch(e) { showToast('❌ ' + e.message, 3500); }
+    return;
+  }
+
+  // Special: kill switch deactivate
+  if (action === '__kill_switch_deactivate__') {
+    try {
+      const data = await deactivateKillSwitch(pin);
+      if (data.success) {
+        showToast('✅ Kill switch cleared — trading resumed');
+        loadStatus();
+      } else {
+        showToast('❌ ' + (data.message || 'Failed'), 3500);
+      }
+    } catch(e) { showToast('❌ ' + e.message, 3500); }
+    return;
+  }
+
+  // Special: set daily target — prompt for amount after PIN
+  if (action === '__set_daily_target__') {
+    const amtStr = prompt('Enter new daily target in USD (e.g. 50):');
+    if (!amtStr) return;
+    const targetUsd = parseFloat(amtStr);
+    if (isNaN(targetUsd) || targetUsd < 0) {
+      showToast('❌ Invalid amount', 3000);
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/owner/daily-target/set`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ pin, target_usd: targetUsd }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🎯 Daily target set to $' + targetUsd.toFixed(2));
+        loadPnl();
+      } else {
+        showToast('❌ ' + (data.message || 'Failed'), 3500);
+      }
+    } catch(e) { showToast('❌ ' + e.message, 3500); }
+    return;
+  }
+
+  // Special: register user
+  if (action === 'register_user') {
+    const displayName = prompt('New user display name:');
+    if (!displayName) return;
+    const email = prompt('Email (optional):') || '';
+    const plan = prompt('Plan (free/starter/pro/elite):') || 'starter';
+    try {
+      const res = await fetch(`${API_BASE}/api/owner/users/register`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ pin, display_name: displayName, email, plan }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('✅ User registered: ' + displayName);
+        loadUsers();
+      } else {
+        showToast('❌ ' + (data.message || 'Failed'), 3500);
+      }
+    } catch(e) { showToast('❌ ' + e.message, 3500); }
+    return;
+  }
+
+  // Standard owner control actions
   try {
     const res = await fetch(`${API_BASE}/api/owner/control`, {
       method: 'POST',
@@ -777,8 +1327,10 @@ function autoRefresh() {
   const el = document.querySelector('.nav-btn.active');
   if (el) _activeTab = el.id.replace('nav-','');
   if (_activeTab === 'status')  loadStatus();
+  if (_activeTab === 'pnl')     loadPnl();
   if (_activeTab === 'alerts')  loadAlerts();
   if (_activeTab === 'ledger')  loadLedger();
+  if (_activeTab === 'users')   loadUsers();
 }
 setInterval(autoRefresh, REFRESH_MS);
 
