@@ -65,6 +65,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 logger = logging.getLogger("nija.multi_broker_router")
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Minimum number of observed routes required before a broker's runtime ranking
+# is trusted for selection.  Brokers with fewer observations fall back to the
+# static-priority leader, preventing a single lucky fill from elevating a new
+# broker to the top slot.
+MIN_OBSERVATIONS: int = 10
+
+# ---------------------------------------------------------------------------
 # Optional subsystem imports — degrade gracefully when unavailable.
 # ---------------------------------------------------------------------------
 
@@ -219,6 +229,9 @@ class BrokerProfile:
     # Minimum notional in USD
     min_notional_usd: float = 1.0
     fee_bps: float = 10.0
+    # Number of routes dispatched through this broker.  Used by _select_broker()
+    # to enforce MIN_OBSERVATIONS before trusting any dynamically-derived ranking.
+    observation_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +446,11 @@ class MultiBrokerExecutionRouter:
                     dispatch_error,
                 )
 
+            # Increment observation count so the broker accrues evidence for
+            # future selection decisions (MIN_OBSERVATIONS threshold).
+            if broker.name in self._brokers:
+                self._brokers[broker.name].observation_count += 1
+
             self._route_log.append({
                 "timestamp": result.timestamp,
                 "symbol": request.symbol,
@@ -468,6 +486,22 @@ class MultiBrokerExecutionRouter:
     def _select_broker(
         self, asset_class: AssetClass, preferred: Optional[str]
     ) -> Optional[BrokerProfile]:
+        """Select the best available broker for the asset class.
+
+        Candidates are sorted by static ``priority`` (ascending, 1 = best)
+        to establish a stable fallback order.  Only brokers that have
+        accumulated at least ``MIN_OBSERVATIONS`` route records are
+        considered "qualified" — this prevents a single lucky fill from
+        promoting a new broker to the top slot.
+
+        Selection logic:
+        1. Build ``candidates`` — available brokers for the asset class.
+        2. Sort ``candidates`` by ``priority``; the first becomes the
+           ``fallback_priority_broker`` (used when no one qualifies).
+        3. Filter to ``qualified`` — those with ``observation_count >=
+           MIN_OBSERVATIONS``.
+        4. Return ``qualified[0]`` if any qualify; otherwise return the
+           static-priority fallback, ensuring a usable route always exists.
         """
         Select the best available broker for the asset class.
 
@@ -512,7 +546,24 @@ class MultiBrokerExecutionRouter:
 
         # Fallback: sort by priority (ascending = highest priority first)
         candidates.sort(key=lambda b: b.priority)
-        return candidates[0]
+
+        # The static fallback: always the highest-priority (lowest number) broker.
+        # It is returned whenever no candidate has sufficient observations.
+        fallback_priority_broker = candidates[0]
+
+        # Only trust brokers that have enough observations to produce a reliable
+        # ranking.  Skip under-observed brokers and return the static fallback.
+        qualified = [b for b in candidates if b.observation_count >= MIN_OBSERVATIONS]
+
+        if not qualified:
+            logger.debug(
+                "No broker has reached MIN_OBSERVATIONS=%d for asset_class=%s "
+                "— using static-priority fallback '%s'",
+                MIN_OBSERVATIONS, asset_class.value, fallback_priority_broker.name,
+            )
+            return fallback_priority_broker
+
+        return qualified[0]
 
     def _dispatch(
         self,
@@ -704,6 +755,7 @@ class MultiBrokerExecutionRouter:
             f"  Successful Routes : {stats['successful_routes']:>10,}",
             f"  Failed Routes     : {stats['failed_routes']:>10,}",
             f"  Success Rate      : {stats['success_rate_pct']:>10.1f} %",
+            f"  Min Observations  : {MIN_OBSERVATIONS:>10}  (threshold before trusting broker ranking)",
             "",
             "  REGISTERED BROKERS",
             "-" * 70,
@@ -712,8 +764,9 @@ class MultiBrokerExecutionRouter:
             for b in sorted(self._brokers.values(), key=lambda x: (x.asset_classes[0].value, x.priority)):
                 status = "✅ AVAILABLE" if b.available else "❌ UNAVAILABLE"
                 classes = ", ".join(a.value for a in b.asset_classes)
+                obs_flag = "" if b.observation_count >= MIN_OBSERVATIONS else " ⚠️ (warming up)"
                 lines.append(
-                    f"  {b.name:<40} [{classes:<10}] priority={b.priority}  {status}"
+                    f"  {b.name:<40} [{classes:<10}] priority={b.priority}  obs={b.observation_count}{obs_flag}  {status}"
                 )
         lines.append("=" * 70)
         return "\n".join(lines)
