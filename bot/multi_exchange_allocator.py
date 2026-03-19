@@ -20,6 +20,26 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger("nija.capital_allocator")
 
+# Import AutoBrokerCapitalShifter for score-driven capital rebalancing
+try:
+    from bot.auto_broker_capital_shifter import (
+        get_auto_broker_capital_shifter,
+        ShiftPolicy,
+    )
+    _ACS_AVAILABLE = True
+except ImportError:
+    try:
+        from auto_broker_capital_shifter import (
+            get_auto_broker_capital_shifter,
+            ShiftPolicy,
+        )
+        _ACS_AVAILABLE = True
+    except ImportError:
+        _ACS_AVAILABLE = False
+        get_auto_broker_capital_shifter = None  # type: ignore
+        ShiftPolicy = None  # type: ignore
+        logger.warning("⚠️ AutoBrokerCapitalShifter not available — AUTO_SHIFT strategy will fall back to HYBRID")
+
 # Import exchange profiles
 try:
     from exchange_risk_profiles import (
@@ -49,6 +69,7 @@ class AllocationStrategy:
     PERFORMANCE_BASED = "performance_based"  # Allocate based on historical performance
     RISK_BALANCED = "risk_balanced"  # Balance risk across exchanges
     HYBRID = "hybrid"  # Combination of fee optimization and performance
+    AUTO_SHIFT = "auto_shift"  # AI-driven: score-weighted shifts via AutoBrokerCapitalShifter
 
 
 # ============================================================================
@@ -135,6 +156,8 @@ class MultiExchangeCapitalAllocator:
             allocations_pct = self._performance_based_allocation(available_exchanges)
         elif self.strategy == AllocationStrategy.RISK_BALANCED:
             allocations_pct = self._risk_balanced_allocation(available_exchanges)
+        elif self.strategy == AllocationStrategy.AUTO_SHIFT:
+            allocations_pct = self._auto_shift_allocation(available_exchanges)
         else:  # HYBRID
             allocations_pct = self._hybrid_allocation(available_exchanges)
 
@@ -285,6 +308,68 @@ class MultiExchangeCapitalAllocator:
                 )
 
         return self._apply_constraints(hybrid_alloc)
+
+    def _auto_shift_allocation(self, exchanges: List[str]) -> Dict[str, float]:
+        """
+        Delegate allocation weights to the ``AutoBrokerCapitalShifter``.
+
+        The shifter maintains an EMA-blended, score-weighted allocation that
+        gradually moves capital toward top-performing brokers while respecting
+        per-broker min/max bounds and hysteresis/cooldown constraints.
+
+        Falls back to ``_hybrid_allocation()`` when the shifter module is
+        unavailable or not yet warmed up (insufficient observations).
+        """
+        if not _ACS_AVAILABLE:
+            logger.debug("AUTO_SHIFT: AutoBrokerCapitalShifter unavailable — using HYBRID fallback")
+            return self._hybrid_allocation(exchanges)
+
+        try:
+            shifter = get_auto_broker_capital_shifter()
+
+            # Register any exchanges that are not yet tracked by the shifter
+            current_allocs = shifter.get_allocations()
+            for exchange in exchanges:
+                if exchange not in current_allocs:
+                    # Bootstrap with equal weight
+                    initial = 1.0 / len(exchanges)
+                    shifter.register_broker(
+                        exchange,
+                        initial_allocation=initial,
+                        min_allocation=self.min_allocation,
+                        max_allocation=self.max_allocation,
+                    )
+
+            # Trigger a score-based evaluation (honours cooldown internally)
+            result = shifter.evaluate()
+
+            # Use the resulting allocations — restrict to requested exchanges
+            allocs = {
+                ex: result.new_allocations.get(ex, 0.0)
+                for ex in exchanges
+                if ex in result.new_allocations
+            }
+
+            if not allocs:
+                logger.debug("AUTO_SHIFT: no allocations returned — using HYBRID fallback")
+                return self._hybrid_allocation(exchanges)
+
+            # Renormalise to the requested exchange set (in case others are registered)
+            total = sum(allocs.values())
+            if total > 0:
+                allocs = {ex: v / total for ex, v in allocs.items()}
+
+            if result.shifted:
+                logger.info(
+                    "🔀 AUTO_SHIFT applied: %s",
+                    "  ".join(f"{ex}={v*100:.1f}%" for ex, v in sorted(allocs.items())),
+                )
+
+            return allocs
+
+        except Exception as exc:
+            logger.warning("AUTO_SHIFT allocation failed (%s) — using HYBRID fallback", exc)
+            return self._hybrid_allocation(exchanges)
 
     def _apply_constraints(self, allocations: Dict[str, float]) -> Dict[str, float]:
         """Apply min/max constraints to allocations"""
