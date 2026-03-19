@@ -9,12 +9,15 @@ layer in the NIJA bot:
    (internally wraps ProfitLockEngine).
 2. **ProfitExtractionEngine** — auto-withdrawal of accumulated profits to
    configurable destinations (bank, stablecoins, treasury wallet).
+3. **DailyProfitWithdrawalEngine** — daily profit withdrawal lock that
+   automatically pays out a fraction of daily profits once a minimum
+   threshold is reached ("pay yourself" feature).
 
 Why a façade?
 -------------
-The two subsystems already work independently.  This module provides a single
-"register / update / close" lifecycle API so ``TradingStrategy`` (and any
-other component) never has to import both engines separately.
+The three subsystems already work independently.  This module provides a
+single "register / update / close" lifecycle API so ``TradingStrategy``
+(and any other component) never has to import multiple engines separately.
 
 Lifecycle
 ---------
@@ -43,7 +46,7 @@ All public methods delegate to the underlying engines which are themselves
 thread-safe singletons.
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 1.1
 Date: March 2026
 """
 
@@ -84,6 +87,25 @@ except ImportError:
         ProfitExtractionEngine = None  # type: ignore
         _EXTRACTION_AVAILABLE = False
         logger.warning("ProfitExtractionEngine not available — auto-withdrawal disabled")
+
+try:
+    from bot.daily_profit_withdrawal import (
+        get_daily_profit_withdrawal_engine,
+        DailyProfitWithdrawalEngine,
+    )
+    _DAILY_WITHDRAWAL_AVAILABLE = True
+except ImportError:
+    try:
+        from daily_profit_withdrawal import (  # type: ignore
+            get_daily_profit_withdrawal_engine,
+            DailyProfitWithdrawalEngine,
+        )
+        _DAILY_WITHDRAWAL_AVAILABLE = True
+    except ImportError:
+        get_daily_profit_withdrawal_engine = None  # type: ignore
+        DailyProfitWithdrawalEngine = None  # type: ignore
+        _DAILY_WITHDRAWAL_AVAILABLE = False
+        logger.warning("DailyProfitWithdrawalEngine not available — daily pay-yourself lock disabled")
 
 
 # ---------------------------------------------------------------------------
@@ -126,12 +148,30 @@ class ProfitLockSystem:
         else:
             self._extraction = None
 
-        _active = sum([self._harvest is not None, self._extraction is not None])
+        # --- Daily profit withdrawal lock ("pay yourself") ---
+        if _DAILY_WITHDRAWAL_AVAILABLE and get_daily_profit_withdrawal_engine is not None:
+            try:
+                self._daily_withdrawal: Optional[DailyProfitWithdrawalEngine] = (
+                    get_daily_profit_withdrawal_engine()
+                )
+                logger.info("✅ ProfitLockSystem: daily profit withdrawal lock active")
+            except Exception as exc:
+                logger.warning("ProfitLockSystem: daily withdrawal init failed – %s", exc)
+                self._daily_withdrawal = None
+        else:
+            self._daily_withdrawal = None
+
+        _active = sum(
+            1 for subsys in [self._harvest, self._extraction, self._daily_withdrawal]
+            if subsys is not None
+        )
         logger.info(
-            "🔒 ProfitLockSystem initialised (%d/%d subsystems active: harvest=%s, extraction=%s)",
-            _active, 2,
+            "🔒 ProfitLockSystem initialised (%d/3 subsystems active: "
+            "harvest=%s, extraction=%s, daily_withdrawal=%s)",
+            _active,
             "✓" if self._harvest else "✗",
             "✓" if self._extraction else "✗",
+            "✓" if self._daily_withdrawal else "✗",
         )
 
     # ------------------------------------------------------------------
@@ -212,9 +252,9 @@ class ProfitLockSystem:
         """
         Record realised profit (or loss) after a position closes.
 
-        Winning trades are forwarded to the ``ProfitExtractionEngine`` which
-        accumulates gains and auto-withdraws them once the configured
-        threshold is reached.
+        Winning trades are forwarded to both the ``ProfitExtractionEngine``
+        (pool-based auto-withdrawal) and the ``DailyProfitWithdrawalEngine``
+        (daily "pay yourself" lock).
 
         The position is also removed from the harvest layer's tracking.
 
@@ -229,21 +269,42 @@ class ProfitLockSystem:
             except Exception as exc:
                 logger.debug("ProfitLockSystem.remove_position failed for %s: %s", symbol, exc)
 
-        # Only forward profits to the extraction engine
-        if pnl_usd > 0 and self._extraction is not None:
-            try:
-                pool = self._extraction.record_profit(
-                    symbol=symbol,
-                    pnl_usd=pnl_usd,
-                    note=f"closed trade profit: {symbol}",
-                    auto_extract=True,
-                )
-                logger.info(
-                    "💵 ProfitLockSystem: recorded $%.2f profit from %s (extraction pool=$%.2f)",
-                    pnl_usd, symbol, pool,
-                )
-            except Exception as exc:
-                logger.warning("ProfitLockSystem.record_closed_profit failed for %s: %s", symbol, exc)
+        # Only forward profits to the extraction and daily-withdrawal engines
+        if pnl_usd > 0:
+            if self._extraction is not None:
+                try:
+                    pool = self._extraction.record_profit(
+                        symbol=symbol,
+                        pnl_usd=pnl_usd,
+                        note=f"closed trade profit: {symbol}",
+                        auto_extract=True,
+                    )
+                    logger.info(
+                        "💵 ProfitLockSystem: recorded $%.2f profit from %s (extraction pool=$%.2f)",
+                        pnl_usd, symbol, pool,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "ProfitLockSystem.record_closed_profit(extraction) failed for %s: %s",
+                        symbol, exc,
+                    )
+
+            if self._daily_withdrawal is not None:
+                try:
+                    daily_profit = self._daily_withdrawal.record_profit(
+                        symbol=symbol,
+                        pnl_usd=pnl_usd,
+                        note=f"closed trade: {symbol}",
+                    )
+                    logger.debug(
+                        "ProfitLockSystem: daily_profit=$%.2f after %s profit",
+                        daily_profit, symbol,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "ProfitLockSystem.record_closed_profit(daily_withdrawal) failed for %s: %s",
+                        symbol, exc,
+                    )
 
     def remove_position(self, symbol: str) -> None:
         """
@@ -286,6 +347,14 @@ class ProfitLockSystem:
         else:
             lines.append("  ⚠️  Auto-withdrawal extraction engine: NOT AVAILABLE")
 
+        if self._daily_withdrawal is not None:
+            try:
+                lines.append(self._daily_withdrawal.get_report())
+            except Exception as exc:
+                lines.append(f"[DailyWithdrawal report error: {exc}]")
+        else:
+            lines.append("  ⚠️  Daily profit withdrawal lock: NOT AVAILABLE")
+
         lines.append("=" * 70)
         return "\n".join(lines)
 
@@ -298,6 +367,11 @@ class ProfitLockSystem:
     def extraction_engine(self) -> Optional["ProfitExtractionEngine"]:
         """Direct access to the underlying ProfitExtractionEngine (read-only)."""
         return self._extraction
+
+    @property
+    def daily_withdrawal(self) -> Optional["DailyProfitWithdrawalEngine"]:
+        """Direct access to the DailyProfitWithdrawalEngine (read-only)."""
+        return self._daily_withdrawal
 
 
 # ---------------------------------------------------------------------------
