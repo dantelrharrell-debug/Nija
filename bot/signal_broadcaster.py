@@ -31,8 +31,21 @@ Usage
     for r in results:
         print(r.account_id, "->", r.status, r.error or "")
 
+Retry System
+------------
+Every per-account execution is automatically retried on transient failures
+using exponential backoff::
+
+    RetryConfig(max_retries=3, base_delay_s=1.0, backoff_factor=2.0, max_delay_s=30.0)
+
+Retry schedule (defaults): 1 s → 2 s → 4 s (capped at 30 s).
+"skipped" results (e.g. size_zero) are never retried.
+All retries are fail-safe — exceptions never propagate to the caller.
+``BroadcastResult.attempts`` records how many attempts were made and
+``BroadcastResult.retry_exhausted`` is ``True`` when all retries failed.
+
 Author: NIJA Trading Systems
-Version: 2.0
+Version: 2.1
 Date: March 2026
 """
 
@@ -48,6 +61,26 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("nija.signal_broadcaster")
 
 DEFAULT_RISK_FRACTION = 0.02
+
+# ---------------------------------------------------------------------------
+# Retry configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RetryConfig:
+    """Exponential-backoff retry policy for per-account broadcast attempts.
+
+    Attributes:
+        max_retries:    Maximum number of *additional* attempts after the first.
+                        Set to 0 to disable retries entirely.
+        base_delay_s:   Delay (seconds) before the first retry.
+        backoff_factor: Multiplier applied to the delay on each subsequent retry.
+        max_delay_s:    Hard cap on inter-retry delay (seconds).
+    """
+    max_retries: int = 3
+    base_delay_s: float = 1.0
+    backoff_factor: float = 2.0
+    max_delay_s: float = 30.0
 
 # ---------------------------------------------------------------------------
 # Optional dependency: GlobalCapitalManager
@@ -112,6 +145,8 @@ class BroadcastResult:
     status: str                      # "filled" | "skipped" | "error"
     order_result: Dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    attempts: int = 1                # total execution attempts made (1 = no retries)
+    retry_exhausted: bool = False    # True when all retries failed
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -127,9 +162,14 @@ class SignalBroadcaster:
     with proportional, risk-adjusted position sizing.
     """
 
-    def __init__(self, risk_fraction: float = DEFAULT_RISK_FRACTION) -> None:
+    def __init__(
+        self,
+        risk_fraction: float = DEFAULT_RISK_FRACTION,
+        retry_config: Optional[RetryConfig] = None,
+    ) -> None:
         self._accounts: Dict[str, AccountRecord] = {}
         self._risk_fraction = risk_fraction
+        self._retry_config = retry_config or RetryConfig()
         self._lock = threading.Lock()
 
     # ── Account registry ─────────────────────────────────────────────────────
@@ -215,7 +255,7 @@ class SignalBroadcaster:
         )
 
         for account in accounts_snapshot:
-            result = self._execute_single(
+            result = self._execute_with_retry(
                 account=account,
                 signal=signal,
                 symbol=symbol,
@@ -230,6 +270,70 @@ class SignalBroadcaster:
             side.upper(), symbol, filled, len(results),
         )
         return results
+
+    def _execute_with_retry(
+        self,
+        account: AccountRecord,
+        signal: Dict[str, Any],
+        symbol: str,
+        side: str,
+        capital_manager: Any,
+    ) -> BroadcastResult:
+        """Execute signal for one account, retrying on transient errors.
+
+        Uses exponential backoff governed by ``self._retry_config``.
+        "skipped" results (e.g. size_zero) are never retried.
+        This method is always fail-safe — it never raises an exception.
+        """
+        cfg = self._retry_config
+        result = self._execute_single(
+            account=account,
+            signal=signal,
+            symbol=symbol,
+            side=side,
+            capital_manager=capital_manager,
+        )
+
+        # Don't retry skipped orders or successful fills
+        if result.status != "error" or cfg.max_retries <= 0:
+            return result
+
+        delay = cfg.base_delay_s
+        for attempt in range(1, cfg.max_retries + 1):
+            capped_delay = min(delay, cfg.max_delay_s)
+            logger.warning(
+                "[Broadcaster] retry %d/%d for account=%s %s %s in %.1fs — prev: %s",
+                attempt, cfg.max_retries,
+                account.account_id, side.upper(), symbol,
+                capped_delay, result.error,
+            )
+            time.sleep(capped_delay)
+
+            result = self._execute_single(
+                account=account,
+                signal=signal,
+                symbol=symbol,
+                side=side,
+                capital_manager=capital_manager,
+            )
+            result.attempts = attempt + 1  # 1 original + N retries so far
+
+            if result.status != "error":
+                logger.info(
+                    "[Broadcaster] retry %d succeeded for account=%s %s %s",
+                    attempt, account.account_id, side.upper(), symbol,
+                )
+                return result
+
+            delay *= cfg.backoff_factor
+
+        # All retries exhausted
+        result.retry_exhausted = True
+        logger.error(
+            "[Broadcaster] all %d retries exhausted for account=%s %s %s — final error: %s",
+            cfg.max_retries, account.account_id, side.upper(), symbol, result.error,
+        )
+        return result
 
     def _execute_single(
         self,
@@ -319,7 +423,8 @@ def get_signal_broadcaster() -> SignalBroadcaster:
             _BROADCASTER = SignalBroadcaster()
             logger.info(
                 "[Broadcaster] singleton created "
-                "(risk_fraction=%.0f%% per account)",
+                "(risk_fraction=%.0f%% per account, max_retries=%d)",
                 DEFAULT_RISK_FRACTION * 100,
+                _BROADCASTER._retry_config.max_retries,
             )
     return _BROADCASTER
