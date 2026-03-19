@@ -1,0 +1,5 @@
+{"record_id": "OWNER-000001", "action": "emergency_stop", "success": false, "message": "Invalid PIN", "timestamp": "2026-03-19T09:48:54.624789+00:00", "ip_address": ""}
+{"record_id": "OWNER-000002", "action": "emergency_stop", "success": true, "message": "\ud83d\udea8 Emergency stop ACTIVATED by owner", "timestamp": "2026-03-19T09:48:54.624945+00:00", "ip_address": ""}
+{"record_id": "OWNER-000003", "action": "clear_emergency_stop", "success": true, "message": "\u2705 Emergency stop CLEARED by owner", "timestamp": "2026-03-19T09:48:54.625052+00:00", "ip_address": ""}
+{"record_id": "OWNER-000001", "action": "emergency_stop", "success": true, "message": "\ud83d\udea8 Emergency stop ACTIVATED by owner", "timestamp": "2026-03-19T09:58:28.163604+00:00", "ip_address": "127.0.0.1"}
+{"record_id": "OWNER-000002", "action": "emergency_stop", "success": false, "message": "Invalid PIN", "timestamp": "2026-03-19T09:58:28.197688+00:00", "ip_address": ""}
