@@ -101,6 +101,18 @@ except ImportError:
         _CAE_AVAILABLE = False
         get_capital_allocation_engine = None  # type: ignore
 
+try:
+    from bot.broker_performance_scorer import get_broker_performance_scorer
+    _BPS_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_performance_scorer import get_broker_performance_scorer
+        _BPS_AVAILABLE = True
+    except ImportError:
+        _BPS_AVAILABLE = False
+        get_broker_performance_scorer = None  # type: ignore
+        logger.warning("BrokerPerformanceScorer not available — performance-aware routing disabled")
+
 
 # ---------------------------------------------------------------------------
 # Asset-class detection helpers
@@ -243,6 +255,9 @@ class MultiBrokerExecutionRouter:
             "successful_routes": 0,
             "failed_routes": 0,
         }
+
+        # Lazy-initialised performance scorer
+        self._scorer = None
 
         # Register default broker profiles
         self._register_default_brokers()
@@ -399,7 +414,21 @@ class MultiBrokerExecutionRouter:
             dispatch_error,
         )
 
-        # 5. Update stats & log
+        # 5. Feed the performance scorer so future routing improves over time
+        scorer = self._get_scorer()
+        if scorer is not None:
+            try:
+                scorer.record_order_result(
+                    broker=broker.name,
+                    success=success,
+                    latency_ms=elapsed_ms,
+                    slippage_bps=0.0,  # slippage not yet tracked at this layer
+                    error=dispatch_error,
+                )
+            except Exception:
+                pass  # scoring errors must never abort order flow
+
+        # 6. Update stats & log
         with self._lock:
             self._stats["total_routes"] += 1
             if success:
@@ -445,6 +474,15 @@ class MultiBrokerExecutionRouter:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _get_scorer(self):
+        """Return the BrokerPerformanceScorer singleton (lazy init)."""
+        if self._scorer is None and _BPS_AVAILABLE:
+            try:
+                self._scorer = get_broker_performance_scorer()
+            except Exception:
+                pass
+        return self._scorer
+
     def _select_broker(
         self, asset_class: AssetClass, preferred: Optional[str]
     ) -> Optional[BrokerProfile]:
@@ -465,6 +503,14 @@ class MultiBrokerExecutionRouter:
         4. Return ``qualified[0]`` if any qualify; otherwise return the
            static-priority fallback, ensuring a usable route always exists.
         """
+        Select the best available broker for the asset class.
+
+        Selection order:
+        1. If a preferred broker is specified and available, use it.
+        2. Otherwise, score all candidates via the BrokerPerformanceScorer
+           and return the highest-scoring one.  Ties are broken by the
+           static ``priority`` field (lower = higher priority).
+        """
         with self._lock:
             candidates = [
                 b for b in self._brokers.values()
@@ -484,7 +530,21 @@ class MultiBrokerExecutionRouter:
                 preferred, asset_class.value,
             )
 
-        # Sort by priority (ascending = highest priority first)
+        # Score-aware selection via BrokerPerformanceScorer
+        scorer = self._get_scorer()
+        if scorer is not None:
+            candidate_names = [b.name for b in candidates]
+            best_name = scorer.get_best_broker(candidate_names)
+            if best_name is not None:
+                for b in candidates:
+                    if b.name == best_name:
+                        logger.debug(
+                            "Score-based routing: selected '%s' for %s (score=%.1f)",
+                            best_name, asset_class.value, scorer.get_score(best_name),
+                        )
+                        return b
+
+        # Fallback: sort by priority (ascending = highest priority first)
         candidates.sort(key=lambda b: b.priority)
 
         # The static fallback: always the highest-priority (lowest number) broker.
@@ -710,6 +770,18 @@ class MultiBrokerExecutionRouter:
                 )
         lines.append("=" * 70)
         return "\n".join(lines)
+
+    def get_broker_scores(self) -> str:
+        """
+        Return a human-readable table of live broker performance scores.
+
+        Delegates to the BrokerPerformanceScorer when available; otherwise
+        returns a short notice that scoring data is not yet collected.
+        """
+        scorer = self._get_scorer()
+        if scorer is None:
+            return "BrokerPerformanceScorer not available — install bot.broker_performance_scorer"
+        return scorer.get_report()
 
 
 # ---------------------------------------------------------------------------
