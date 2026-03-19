@@ -116,6 +116,7 @@ except ImportError:
         WeeklySalaryMode = None  # type: ignore
         _SALARY_AVAILABLE = False
         logger.warning("WeeklySalaryMode not available — weekly salary payouts disabled")
+try:
     from bot.daily_profit_withdrawal import (
         get_daily_profit_withdrawal_engine,
         DailyProfitWithdrawalEngine,
@@ -199,20 +200,6 @@ class ProfitLockSystem:
         else:
             self._salary = None
 
-        _active = sum([
-            self._harvest is not None,
-            self._extraction is not None,
-            self._protection is not None,
-            self._salary is not None,
-        ])
-        logger.info(
-            "🔒 ProfitLockSystem initialised (%d/4 subsystems active: "
-            "harvest=%s, extraction=%s, protection=%s, salary=%s)",
-            _active,
-            "✓" if self._harvest else "✗",
-            "✓" if self._extraction else "✗",
-            "✓" if self._protection else "✗",
-            "✓" if self._salary else "✗",
         # --- Daily profit withdrawal lock ("pay yourself") ---
         if _DAILY_WITHDRAWAL_AVAILABLE and get_daily_profit_withdrawal_engine is not None:
             try:
@@ -226,16 +213,21 @@ class ProfitLockSystem:
         else:
             self._daily_withdrawal = None
 
-        _active = sum(
-            1 for subsys in [self._harvest, self._extraction, self._daily_withdrawal]
-            if subsys is not None
-        )
+        _active = sum([
+            self._harvest is not None,
+            self._extraction is not None,
+            self._protection is not None,
+            self._salary is not None,
+            self._daily_withdrawal is not None,
+        ])
         logger.info(
-            "🔒 ProfitLockSystem initialised (%d/3 subsystems active: "
-            "harvest=%s, extraction=%s, daily_withdrawal=%s)",
+            "🔒 ProfitLockSystem initialised (%d/5 subsystems active: "
+            "harvest=%s, extraction=%s, protection=%s, salary=%s, daily_withdrawal=%s)",
             _active,
             "✓" if self._harvest else "✗",
             "✓" if self._extraction else "✗",
+            "✓" if self._protection else "✗",
+            "✓" if self._salary else "✗",
             "✓" if self._daily_withdrawal else "✗",
         )
 
@@ -366,42 +358,24 @@ class ProfitLockSystem:
                 self._protection.record_trade(pnl_usd=pnl_usd, is_win=pnl_usd > 0)
             except Exception as exc:
                 logger.warning("ProfitLockSystem.record_closed_profit (protection) failed for %s: %s", symbol, exc)
-        # Only forward profits to the extraction and daily-withdrawal engines
-        if pnl_usd > 0:
-            if self._extraction is not None:
-                try:
-                    pool = self._extraction.record_profit(
-                        symbol=symbol,
-                        pnl_usd=pnl_usd,
-                        note=f"closed trade profit: {symbol}",
-                        auto_extract=True,
-                    )
-                    logger.info(
-                        "💵 ProfitLockSystem: recorded $%.2f profit from %s (extraction pool=$%.2f)",
-                        pnl_usd, symbol, pool,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "ProfitLockSystem.record_closed_profit(extraction) failed for %s: %s",
-                        symbol, exc,
-                    )
 
-            if self._daily_withdrawal is not None:
-                try:
-                    daily_profit = self._daily_withdrawal.record_profit(
-                        symbol=symbol,
-                        pnl_usd=pnl_usd,
-                        note=f"closed trade: {symbol}",
-                    )
-                    logger.debug(
-                        "ProfitLockSystem: daily_profit=$%.2f after %s profit",
-                        daily_profit, symbol,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "ProfitLockSystem.record_closed_profit(daily_withdrawal) failed for %s: %s",
-                        symbol, exc,
-                    )
+        # Forward profits to the daily withdrawal engine
+        if pnl_usd > 0 and self._daily_withdrawal is not None:
+            try:
+                daily_profit = self._daily_withdrawal.record_profit(
+                    symbol=symbol,
+                    pnl_usd=pnl_usd,
+                    note=f"closed trade: {symbol}",
+                )
+                logger.debug(
+                    "ProfitLockSystem: daily_profit=$%.2f after %s profit",
+                    daily_profit, symbol,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "ProfitLockSystem.record_closed_profit(daily_withdrawal) failed for %s: %s",
+                    symbol, exc,
+                )
 
     def remove_position(self, symbol: str) -> None:
         """
@@ -489,6 +463,8 @@ class ProfitLockSystem:
     def salary_mode(self) -> Optional["WeeklySalaryMode"]:
         """Direct access to the underlying WeeklySalaryMode (read-only)."""
         return self._salary
+
+    @property
     def daily_withdrawal(self) -> Optional["DailyProfitWithdrawalEngine"]:
         """Direct access to the DailyProfitWithdrawalEngine (read-only)."""
         return self._daily_withdrawal
