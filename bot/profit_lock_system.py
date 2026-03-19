@@ -9,6 +9,9 @@ layer in the NIJA bot:
    (internally wraps ProfitLockEngine).
 2. **ProfitExtractionEngine** — auto-withdrawal of accumulated profits to
    configurable destinations (bank, stablecoins, treasury wallet).
+3. **WeeklySalaryMode** — fixed weekly payout ($1 250/week default) paid only
+   when the system is profitable; smooths operator income into predictable
+   real-life cash flow.
 
 Why a façade?
 -------------
