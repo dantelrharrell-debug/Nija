@@ -11,6 +11,9 @@ Business logic
 
 A capital scale-up is *approved* when **all** of the following are true:
 
+0. **Profit Threshold Unlock** — account equity > $150 **OR** the last 10
+   consecutive closed trades were all profitable.  This gate prevents
+   over-optimisation on small starting capital.
 1. Rolling Sharpe ratio ≥ ``sharpe_threshold``  (default 1.5)
 2. Current drawdown from peak ≤ ``max_drawdown_pct``  (default 5 %)
 3. Cooldown since last scale-up ≥ ``cooldown_trades``  (default 20 trades)
@@ -91,6 +94,10 @@ DEFAULT_COOLDOWN_TRADES: int = 20     # minimum trades between scale-ups
 DEFAULT_MAX_SCALE_FACTOR: float = 3.0 # cap: never exceed base × this
 DEFAULT_SCALE_INCREMENT: float = 0.10 # each approved step adds 10 % of base
 
+# Profit Threshold Unlock — prevents scaling on small / immature accounts
+PROFIT_UNLOCK_CAPITAL_THRESHOLD: float = 150.0  # USD: account must exceed this…
+PROFIT_UNLOCK_CONSECUTIVE_WINS: int = 10         # …OR achieve this many consecutive wins
+
 # Annualisation constant (crypto trades 365 d/yr)
 TRADING_DAYS_PER_YEAR: int = 365
 
@@ -128,6 +135,9 @@ class TriggerConfig:
     cooldown_trades: int = DEFAULT_COOLDOWN_TRADES
     max_scale_factor: float = DEFAULT_MAX_SCALE_FACTOR
     scale_increment: float = DEFAULT_SCALE_INCREMENT
+    # Profit Threshold Unlock
+    profit_unlock_capital: float = PROFIT_UNLOCK_CAPITAL_THRESHOLD
+    profit_unlock_consecutive_wins: int = PROFIT_UNLOCK_CONSECUTIVE_WINS
 
 
 # ---------------------------------------------------------------------------
@@ -167,15 +177,20 @@ class CapitalScalingTrigger:
         self._trades_since_last_scale: int = 0
         self._scale_events: List[Dict] = []
 
+        # Profit Threshold Unlock state
+        self._consecutive_wins: int = 0
+
         # Persistence
         DATA_DIR.mkdir(parents=True, exist_ok=True)
 
         logger.info(
             "✅ CapitalScalingTrigger initialised — base=$%.2f "
-            "sharpe≥%.2f drawdown≤%.1f%%",
+            "sharpe≥%.2f drawdown≤%.1f%% unlock>$%.0f|%d consecutive wins",
             base_capital,
             self.config.sharpe_threshold,
             self.config.max_drawdown_pct,
+            self.config.profit_unlock_capital,
+            self.config.profit_unlock_consecutive_wins,
         )
 
     # ------------------------------------------------------------------
@@ -203,6 +218,11 @@ class CapitalScalingTrigger:
             self._pnl_window.append(pnl_usd)
             self._trades_since_last_scale += 1
             self._update_drawdown(current_capital)
+            # Track consecutive wins for the Profit Threshold Unlock gate
+            if is_win:
+                self._consecutive_wins += 1
+            else:
+                self._consecutive_wins = 0
             return self._evaluate(current_capital)
 
     # ------------------------------------------------------------------
@@ -244,9 +264,30 @@ class CapitalScalingTrigger:
         """Number of trades recorded since the last approved scale-up."""
         return self._trades_since_last_scale
 
+    @property
+    def consecutive_wins(self) -> int:
+        """Current streak of consecutive profitable trades."""
+        return self._consecutive_wins
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _is_scaling_unlocked(self, current_capital: float) -> bool:
+        """Return ``True`` if the Profit Threshold Unlock condition is met.
+
+        Scaling is permitted when **either**:
+        - the account equity exceeds ``profit_unlock_capital`` ($150 by default), or
+        - the trader has recorded ≥ ``profit_unlock_consecutive_wins`` consecutive
+          profitable trades (10 by default).
+
+        Must be called while holding ``self._lock``.
+        """
+        cfg = self.config
+        return (
+            current_capital > cfg.profit_unlock_capital
+            or self._consecutive_wins >= cfg.profit_unlock_consecutive_wins
+        )
 
     def _update_drawdown(self, current_capital: float) -> None:
         """Recompute drawdown from the running peak (must hold lock)."""
@@ -282,6 +323,24 @@ class CapitalScalingTrigger:
         sharpe = self._sharpe_ratio()
         drawdown = self._current_drawdown_pct
         trades_since = self._trades_since_last_scale
+
+        # ── Gate 0: Profit Threshold Unlock ────────────────────────────
+        if not self._is_scaling_unlocked(current_capital):
+            return ScaleDecision(
+                approved=False,
+                reason=(
+                    f"Scaling locked — account ${current_capital:,.2f} ≤ "
+                    f"${cfg.profit_unlock_capital:,.0f} threshold "
+                    f"AND only {self._consecutive_wins} / "
+                    f"{cfg.profit_unlock_consecutive_wins} consecutive wins"
+                ),
+                current_capital=current_capital,
+                recommended_capital=self._allocated_capital,
+                scale_factor=self._allocated_capital / self.base_capital,
+                sharpe_ratio=sharpe,
+                drawdown_pct=drawdown,
+                trades_since_last_scale=trades_since,
+            )
 
         # ── Gate 1: Sharpe ─────────────────────────────────────────────
         if sharpe < cfg.sharpe_threshold:
@@ -404,18 +463,24 @@ class CapitalScalingTrigger:
                 "sharpe_ratio": round(self._sharpe_ratio(), 3),
                 "trades_since_last_scale": self._trades_since_last_scale,
                 "total_scale_events": len(self._scale_events),
+                # Profit Threshold Unlock
+                "consecutive_wins": self._consecutive_wins,
+                "scaling_unlocked": self._is_scaling_unlocked(self._current_capital),
                 "config": {
                     "sharpe_threshold": self.config.sharpe_threshold,
                     "max_drawdown_pct": self.config.max_drawdown_pct,
                     "cooldown_trades": self.config.cooldown_trades,
                     "max_scale_factor": self.config.max_scale_factor,
                     "scale_increment": self.config.scale_increment,
+                    "profit_unlock_capital": self.config.profit_unlock_capital,
+                    "profit_unlock_consecutive_wins": self.config.profit_unlock_consecutive_wins,
                 },
             }
 
     def get_report(self) -> str:
         """Return a human-readable status report."""
         s = self.get_status()
+        unlock_status = "✅ UNLOCKED" if s["scaling_unlocked"] else "🔒 LOCKED"
         lines = [
             "",
             "=" * 65,
@@ -427,6 +492,12 @@ class CapitalScalingTrigger:
             f"({s['scale_factor']:.2f}× base)",
             f"  Current Equity     : ${s['current_capital']:>12,.2f}",
             f"  Peak Equity        : ${s['peak_capital']:>12,.2f}",
+            "",
+            "  — Profit Threshold Unlock —",
+            f"  Status             : {unlock_status}",
+            f"  Consecutive Wins   : {s['consecutive_wins']:>8d}  "
+            f"(need ≥ {s['config']['profit_unlock_consecutive_wins']} OR "
+            f"account > ${s['config']['profit_unlock_capital']:,.0f})",
             "",
             "  — Current Metrics —",
             f"  Rolling Sharpe     : {s['sharpe_ratio']:>8.3f}  "
