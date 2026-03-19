@@ -1809,6 +1809,11 @@ class TradingStrategy:
 
             logger.info("=" * 70)
             logger.info("✅ Broker connection phase complete")
+
+            # Validate platform account now that all brokers have attempted
+            # connection — this is the authoritative post-connection check.
+            self._validate_platform_account()
+
             if connected_brokers or user_brokers:
                 if connected_brokers:
                     logger.info(f"✅ PLATFORM ACCOUNT BROKERS: {', '.join(connected_brokers)}")
@@ -3089,6 +3094,56 @@ class TradingStrategy:
             'anomaly_detected': (user_positions > 0 and platform_positions == 0),
             'details': self.position_adoption_status
         }
+
+    def _validate_platform_account(self) -> bool:
+        """
+        Validate that the platform account is recognised and connected.
+
+        Called once after the broker connection phase completes so that
+        platform status is always checked against *live* broker state
+        rather than preliminary credential checks run before brokers
+        have had a chance to connect.
+
+        Returns:
+            bool: True if at least one platform broker is connected.
+        """
+        logger.info("=" * 70)
+        logger.info("🔍 PLATFORM ACCOUNT VALIDATION")
+        logger.info("=" * 70)
+
+        # --- Credential check via Platform Account Layer ---
+        try:
+            from bot.platform_account_layer import get_platform_account_layer
+            pal = get_platform_account_layer()
+            pal.validate()
+        except Exception as pal_err:
+            logger.warning(
+                f"   ⚠️  PAL validation error: {pal_err} — "
+                "continuing with live broker connection check only"
+            )
+
+        # --- Live broker connection check (post-connection phase) ---
+        platform_connected_count = 0
+        if self.multi_account_manager:
+            for broker_type, broker in self.multi_account_manager.platform_brokers.items():
+                if broker and broker.connected:
+                    platform_connected_count += 1
+                    logger.info(f"   ✅ Platform {broker_type.value.upper()} — connected")
+                else:
+                    logger.warning(f"   ⚠️  Platform {broker_type.value.upper()} — NOT connected")
+
+        if platform_connected_count > 0:
+            logger.info(
+                f"✅ Platform validation complete — "
+                f"{platform_connected_count} broker(s) active"
+            )
+        else:
+            logger.warning(
+                "⚠️  Platform validation: no platform brokers are connected"
+            )
+
+        logger.info("=" * 70)
+        return platform_connected_count > 0
 
     def _log_broker_independence_message(self):
         """
