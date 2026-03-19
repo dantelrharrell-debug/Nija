@@ -491,6 +491,46 @@ class MultiAccountBrokerManager:
             logger.exception(f"❌ Error checking platform broker connection for {broker_name}: This is unexpected - please report this error")
             return False
 
+    def _wait_and_retry_platform_connection(
+        self,
+        broker_type: BrokerType,
+        retries: int = 3,
+        wait_secs: float = 2.0,
+    ) -> bool:
+        """
+        Wait briefly and retry the platform connection check.
+
+        Called when :meth:`is_platform_connected` returns ``False`` during
+        user account setup.  Returns ``True`` as soon as the platform broker
+        reports as connected; ``False`` if it is still offline after all
+        retries.
+
+        Args:
+            broker_type: Exchange to check.
+            retries: Number of additional attempts before giving up.
+            wait_secs: Seconds to wait between each attempt.
+
+        Returns:
+            bool: True if platform became connected within the retry window.
+        """
+        broker_name = broker_type.value.upper()
+        for attempt in range(1, retries + 1):
+            logger.info(
+                f"   ⏳ Platform {broker_name} not connected yet — "
+                f"waiting {wait_secs:.0f}s before retry {attempt}/{retries}..."
+            )
+            time.sleep(wait_secs)
+            if self.is_platform_connected(broker_type):
+                logger.info(
+                    f"   ✅ Platform {broker_name} connected on retry {attempt}"
+                )
+                return True
+        logger.warning(
+            f"   ⚠️  Platform {broker_name} still not connected after "
+            f"{retries} retries ({int(retries * wait_secs)}s total)"
+        )
+        return False
+
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
         """
         Check if a user has credentials configured for a broker type.
@@ -1117,14 +1157,18 @@ class MultiAccountBrokerManager:
             # for this exchange.  If they are absent we cannot safely operate in
             # multi-user SaaS mode, so we block the standalone fallback.
             if not platform_connected:
-                _pal = get_platform_account_layer() if get_platform_account_layer is not None else None
-                _has_platform = _pal.has_platform_account(broker_type.value) if _pal is not None else False
-                if not _has_platform:
-                    logger.warning(f"⚠️  Platform not detected — blocking standalone fallback")
-                    logger.warning(f"   User: {user.name} ({user.user_id}) [{broker_type.value.upper()}]")
-                    logger.warning(f"   Configure {broker_type.value.upper()}_PLATFORM_API_KEY / SECRET")
-                    logger.warning(f"   to enable multi-user SaaS trading for this exchange.")
-                    continue
+                # Retry before concluding the platform is absent — it may still
+                # be completing its own connection handshake.
+                platform_connected = self._wait_and_retry_platform_connection(broker_type)
+                if not platform_connected:
+                    _pal = get_platform_account_layer() if get_platform_account_layer is not None else None
+                    _has_platform = _pal.has_platform_account(broker_type.value) if _pal is not None else False
+                    if not _has_platform:
+                        logger.warning(f"⚠️  Platform not detected — blocking standalone fallback")
+                        logger.warning(f"   User: {user.name} ({user.user_id}) [{broker_type.value.upper()}]")
+                        logger.warning(f"   Configure {broker_type.value.upper()}_PLATFORM_API_KEY / SECRET")
+                        logger.warning(f"   to enable multi-user SaaS trading for this exchange.")
+                        continue
 
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
