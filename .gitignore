@@ -86,6 +86,10 @@ data/drawdown_protection.json
 data/milestones.json
 data/capital_allocation.json
 
+# Regime-Aware Memory and Capital Scaling Triggers runtime state
+data/regime_aware_memory.json
+data/capital_scaling_trigger.jsonl
+
 # Intelligence & performance module runtime state (should not be committed)
 data/trade_intelligence_state.json
 data/strategy_performance_state.json
