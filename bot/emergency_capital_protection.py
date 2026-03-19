@@ -80,6 +80,21 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("nija.emergency_capital_protection")
 
 # ---------------------------------------------------------------------------
+# Optional: TextAlertSystem integration
+# ---------------------------------------------------------------------------
+
+try:
+    from bot.text_alert_system import get_text_alert_system as _get_text_alert_system
+    _TEXT_ALERT_AVAILABLE = True
+except ImportError:
+    try:
+        from text_alert_system import get_text_alert_system as _get_text_alert_system  # type: ignore
+        _TEXT_ALERT_AVAILABLE = True
+    except ImportError:
+        _get_text_alert_system = None  # type: ignore
+        _TEXT_ALERT_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
 # Enumerations
 # ---------------------------------------------------------------------------
 
@@ -459,6 +474,17 @@ class EmergencyCapitalProtection:
                     current_level.value, required_level.value,
                     drawdown_pct, current_balance, s.peak_balance_usd,
                 )
+                if _TEXT_ALERT_AVAILABLE:
+                    try:
+                        _get_text_alert_system().emergency_mode_triggered(
+                            level=required_level.value,
+                            drawdown_pct=drawdown_pct,
+                            previous_level=current_level.value,
+                        )
+                    except Exception as _ta_exc:
+                        logger.debug(
+                            "TextAlertSystem: emergency_mode_triggered failed: %s", _ta_exc
+                        )
                 decision = self._build_decision(
                     required_level, drawdown_pct, current_balance,
                     reason=f"Drawdown {drawdown_pct:.2f}% → level {required_level.value}",

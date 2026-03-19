@@ -91,6 +91,21 @@ except ImportError:
             "logged but not dispatched to external destinations"
         )
 
+# ---------------------------------------------------------------------------
+# Optional: TextAlertSystem integration
+# ---------------------------------------------------------------------------
+
+try:
+    from bot.text_alert_system import get_text_alert_system as _get_text_alert_system
+    _TEXT_ALERT_AVAILABLE = True
+except ImportError:
+    try:
+        from text_alert_system import get_text_alert_system as _get_text_alert_system  # type: ignore
+        _TEXT_ALERT_AVAILABLE = True
+    except ImportError:
+        _get_text_alert_system = None  # type: ignore
+        _TEXT_ALERT_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -384,6 +399,14 @@ class DailyProfitWithdrawalEngine:
                 self._daily_withdrawn_usd,
                 self._daily_profit_usd - self._daily_withdrawn_usd,
             )
+            if _TEXT_ALERT_AVAILABLE:
+                try:
+                    _get_text_alert_system().big_profit_day(
+                        daily_profit_usd=self._daily_profit_usd,
+                        note=f"trigger={trigger}",
+                    )
+                except Exception as _ta_exc:
+                    logger.debug("TextAlertSystem: big_profit_day notification failed: %s", _ta_exc)
 
         # Dispatch to extraction engine outside the lock
         if _PEE_AVAILABLE and get_profit_extraction_engine is not None:

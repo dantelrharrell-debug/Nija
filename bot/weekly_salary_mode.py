@@ -93,6 +93,21 @@ except ImportError:
         logger.debug("EmergencyCapitalProtection not available — salary always allowed when profitable")
 
 # ---------------------------------------------------------------------------
+# Optional: TextAlertSystem integration
+# ---------------------------------------------------------------------------
+
+try:
+    from bot.text_alert_system import get_text_alert_system as _get_text_alert_system
+    _TEXT_ALERT_AVAILABLE = True
+except ImportError:
+    try:
+        from text_alert_system import get_text_alert_system as _get_text_alert_system  # type: ignore
+        _TEXT_ALERT_AVAILABLE = True
+    except ImportError:
+        _get_text_alert_system = None  # type: ignore
+        _TEXT_ALERT_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -502,6 +517,14 @@ class WeeklySalaryMode:
                 target_week, salary, pool_before, s.pool_usd, weekly_profit,
                 weekly_profit, self._config.weekly_salary_usd,
             )
+            if _TEXT_ALERT_AVAILABLE:
+                try:
+                    _get_text_alert_system().salary_paid(
+                        amount_usd=salary,
+                        week=target_week,
+                    )
+                except Exception as _ta_exc:
+                    logger.debug("TextAlertSystem: salary_paid notification failed: %s", _ta_exc)
             return payment
 
     def _maybe_rollover_week(self) -> None:
