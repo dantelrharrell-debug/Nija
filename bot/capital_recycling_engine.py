@@ -73,7 +73,7 @@ import os
 import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.capital_recycling")
 
@@ -148,6 +148,10 @@ class EngineState:
     throttle_drawdown_pct: float = 0.0
     # Per-strategy health factors applied during last rebalance
     strategy_health_factors: Dict[str, float] = field(default_factory=dict)
+    # Meta-learner condition quality snapshot at time of last allocation
+    condition_quality_multiplier: float = 1.0
+    condition_quality_fingerprint: str = ""
+    condition_quality_confidence: float = 0.0
     created_at: str = ""
     last_updated: str = ""
 
@@ -314,7 +318,13 @@ class CapitalRecyclingEngine:
         # During drawdowns the multiplier < 1.0 so only a fraction of the pool
         # is deployed; the rest stays in the pool for later.
         throttle_multiplier = self._get_global_throttle_multiplier()
-        effective_pool = pool * throttle_multiplier
+
+        # ── Meta-learner condition quality ───────────────────────────────────
+        # Apply an additional multiplier from the ReinvestMetaLearner based on
+        # how historically profitable the current conditions are.  When the
+        # learner has insufficient data the multiplier defaults to 1.0.
+        cq_mult, cq_fp, cq_conf = self._get_condition_quality_multiplier(regime, pool)
+        effective_pool = pool * throttle_multiplier * cq_mult
 
         allocations = {s: effective_pool * w for s, w in weights.items()}
 
@@ -323,12 +333,15 @@ class CapitalRecyclingEngine:
             self._state.last_allocation_regime = regime
             self._state.last_allocation_ts = _now()
             self._state.throttle_multiplier = throttle_multiplier
+            self._state.condition_quality_multiplier = cq_mult
+            self._state.condition_quality_fingerprint = cq_fp
+            self._state.condition_quality_confidence = cq_conf
             self._save_state()
 
         logger.info(
             "[Recycle] Allocations computed for regime=%s | pool=$%.2f | "
-            "effective_pool=$%.2f (throttle=%.2f)",
-            regime, pool, effective_pool, throttle_multiplier,
+            "effective_pool=$%.2f (throttle=%.2f, cq_mult=%.2f, cq_conf=%.2f)",
+            regime, pool, effective_pool, throttle_multiplier, cq_mult, cq_conf,
         )
         for strat, amt in sorted(allocations.items(), key=lambda x: x[1], reverse=True):
             logger.info("  %-22s $%10.2f  (%.1f%%)", strat, amt, (amt / effective_pool * 100) if effective_pool else 0)
@@ -425,6 +438,94 @@ class CapitalRecyclingEngine:
             return 0.0
         return self.claim_allocation(strategy, share, regime=regime, note=note)
 
+    def record_reinvest_outcome(
+        self,
+        token: str,
+        pnl: float,
+        won: bool,
+    ) -> None:
+        """
+        Feed back the trade outcome for a previously issued reinvestment token.
+
+        Delegates to :class:`~bot.reinvest_meta_learner.ReinvestMetaLearner` so
+        the system can learn which conditions produce the best reinvest returns.
+
+        Parameters
+        ----------
+        token : str
+            The token returned by :meth:`claim_allocation_with_token`.
+        pnl : float
+            P&L in USD from the reinvested trade (positive = profit).
+        won : bool
+            Whether the trade closed as a winner.
+        """
+        try:
+            from bot.reinvest_meta_learner import get_reinvest_meta_learner
+            get_reinvest_meta_learner().record_outcome(token, pnl=pnl, won=won)
+        except Exception as exc:
+            logger.debug("[Recycle] ReinvestMetaLearner outcome recording failed: %s", exc)
+
+    def claim_allocation_with_token(
+        self,
+        strategy: str,
+        requested_usd: float,
+        regime: str = "UNKNOWN",
+        volatility: str = "CALM",
+        win_rate_tier: str = "MODERATE",
+        note: str = "",
+    ) -> Tuple[float, str]:
+        """
+        Claim recycled capital **and** register the conditions with the
+        :class:`~bot.reinvest_meta_learner.ReinvestMetaLearner`.
+
+        Use this instead of :meth:`claim_allocation` when you intend to report
+        the trade outcome later via :meth:`record_reinvest_outcome`.
+
+        Parameters
+        ----------
+        strategy : str
+            Name of the claiming strategy.
+        requested_usd : float
+            Dollar amount the strategy wishes to draw.
+        regime : str
+            Current market regime.
+        volatility : str
+            Current volatility tier (``"CALM"`` / ``"MINOR"`` / etc.).
+        win_rate_tier : str
+            Current rolling win-rate tier (``"LOW"`` / ``"MODERATE"`` / ``"HIGH"``).
+        note : str
+            Optional annotation.
+
+        Returns
+        -------
+        tuple[float, str]
+            ``(granted_usd, tracking_token)`` — pass the token to
+            :meth:`record_reinvest_outcome` after the trade closes.
+        """
+        granted = self.claim_allocation(strategy, requested_usd, regime=regime, note=note)
+
+        # Record entry in meta-learner for outcome tracking
+        token = ""
+        if granted > 0:
+            try:
+                from bot.reinvest_meta_learner import (
+                    get_reinvest_meta_learner,
+                    classify_pool_tier,
+                )
+                pool_tier = classify_pool_tier(self.get_pool_balance())
+                token = get_reinvest_meta_learner().record_entry(
+                    regime=regime,
+                    volatility=volatility,
+                    win_rate_tier=win_rate_tier,
+                    pool_tier=pool_tier,
+                    amount_usd=granted,
+                    strategy=strategy,
+                )
+            except Exception as exc:
+                logger.debug("[Recycle] ReinvestMetaLearner entry recording failed: %s", exc)
+
+        return granted, token
+
     def get_pool_balance(self) -> float:
         """Return the current available pool balance in USD."""
         with self._lock:
@@ -463,6 +564,10 @@ class CapitalRecyclingEngine:
                 "throttle_drawdown_pct": round(s.throttle_drawdown_pct, 2),
                 # Per-strategy health factors
                 "strategy_health_factors": {k: round(v, 4) for k, v in s.strategy_health_factors.items()},
+                # Meta-learner condition quality
+                "condition_quality_multiplier": round(s.condition_quality_multiplier, 4),
+                "condition_quality_fingerprint": s.condition_quality_fingerprint,
+                "condition_quality_confidence": round(s.condition_quality_confidence, 4),
                 "strategies": self.strategies,
                 "recent_deposits": s.recycle_events[-10:],
                 "recent_claims": s.claim_events[-10:],
@@ -478,7 +583,7 @@ class CapitalRecyclingEngine:
                 s.total_claimed_usd / s.total_deposited_usd
                 if s.total_deposited_usd > 0 else 0.0
             )
-            effective_pool = s.pool_usd * s.throttle_multiplier
+            effective_pool = s.pool_usd * s.throttle_multiplier * s.condition_quality_multiplier
             lines = [
                 "=" * 70,
                 "  ♻️   CAPITAL RECYCLING ENGINE — STATUS REPORT",
@@ -494,6 +599,11 @@ class CapitalRecyclingEngine:
                 f"    Label             : {s.throttle_label}",
                 f"    Drawdown          : {s.throttle_drawdown_pct:>8.2f} %",
                 f"    Multiplier        : {s.throttle_multiplier:>8.2f}",
+                "",
+                "  Meta-Learner Condition Quality:",
+                f"    Fingerprint       : {s.condition_quality_fingerprint or 'N/A'}",
+                f"    Multiplier        : {s.condition_quality_multiplier:>8.2f}",
+                f"    Confidence        : {s.condition_quality_confidence:>8.2f}",
                 f"    Effective Pool    : ${effective_pool:>10,.2f}",
                 "",
                 f"  Rebalance Interval  : {self.rebalance_interval_hours:.1f} h",
@@ -618,6 +728,100 @@ class CapitalRecyclingEngine:
         except Exception as exc:
             logger.debug("[Recycle] CapitalGrowthThrottle unavailable (%s) — assuming 1.0.", exc)
             return 1.0
+
+    def _get_condition_quality_multiplier(
+        self, regime: str, pool_usd: float
+    ) -> Tuple[float, str, float]:
+        """
+        Query the :class:`~bot.reinvest_meta_learner.ReinvestMetaLearner` for a
+        condition quality multiplier based on the current environment.
+
+        Attempts to read volatility and win-rate from live monitoring modules;
+        falls back to neutral values if those modules are unavailable.
+
+        Parameters
+        ----------
+        regime : str
+            Current market regime.
+        pool_usd : float
+            Current pool balance (used to classify pool tier).
+
+        Returns
+        -------
+        tuple[float, str, float]
+            ``(multiplier, fingerprint, confidence)`` — the multiplier is in
+            ``[CONDITION_QUALITY_MIN, CONDITION_QUALITY_MAX]`` or 1.0 when the
+            learner is unavailable.
+        """
+        try:
+            from bot.reinvest_meta_learner import (
+                get_reinvest_meta_learner,
+                classify_pool_tier,
+                classify_win_rate_tier,
+            )
+            from bot.reinvest_meta_learner import _make_fingerprint  # noqa: F401
+
+            # --- volatility tier ---
+            volatility = "CALM"
+            try:
+                from bot.volatility_shock_detector import get_volatility_shock_detector
+                shock = get_volatility_shock_detector()
+                portfolio_shock = shock.get_portfolio_shock()
+                severity = str(
+                    getattr(portfolio_shock, "severity", None)
+                    or portfolio_shock.get("severity", "NONE")
+                ).upper()
+                volatility = severity if severity not in ("NONE", "") else "CALM"
+            except Exception:
+                pass
+
+            # --- win-rate tier ---
+            win_rate_tier = "MODERATE"
+            try:
+                from bot.strategy_health_monitor import get_strategy_health_monitor
+                monitor = get_strategy_health_monitor()
+                win_rates = []
+                for strat in self.strategies:
+                    try:
+                        health = monitor.get_health(strat)
+                        wr = getattr(health, "win_rate", None)
+                        if wr is not None:
+                            win_rates.append(float(wr))
+                    except Exception:
+                        pass
+                if win_rates:
+                    avg_wr = sum(win_rates) / len(win_rates)
+                    win_rate_tier = classify_win_rate_tier(avg_wr)
+            except Exception:
+                pass
+
+            pool_tier = classify_pool_tier(pool_usd)
+            learner = get_reinvest_meta_learner()
+            mult = learner.get_quality_multiplier(
+                regime=regime,
+                volatility=volatility,
+                win_rate_tier=win_rate_tier,
+                pool_tier=pool_tier,
+            )
+            _score, confidence = learner.get_condition_score(
+                regime=regime,
+                volatility=volatility,
+                win_rate_tier=win_rate_tier,
+                pool_tier=pool_tier,
+            )
+            fp = f"{regime}|{volatility}|{win_rate_tier}|{pool_tier}"
+            if mult != 1.0:
+                logger.info(
+                    "[Recycle] Meta-learner condition quality: %s → mult=%.2f (conf=%.2f)",
+                    fp, mult, confidence,
+                )
+            return mult, fp, confidence
+
+        except Exception as exc:
+            logger.debug(
+                "[Recycle] ReinvestMetaLearner unavailable (%s) — condition mult=1.0.", exc
+            )
+            return 1.0, "", 0.0
 
     def _get_strategy_weights(self, regime: str) -> Dict[str, float]:
         """
@@ -761,6 +965,9 @@ class CapitalRecyclingEngine:
                     throttle_label=data.get("throttle_label", "UNRESTRICTED"),
                     throttle_drawdown_pct=data.get("throttle_drawdown_pct", 0.0),
                     strategy_health_factors=data.get("strategy_health_factors", {}),
+                    condition_quality_multiplier=data.get("condition_quality_multiplier", 1.0),
+                    condition_quality_fingerprint=data.get("condition_quality_fingerprint", ""),
+                    condition_quality_confidence=data.get("condition_quality_confidence", 0.0),
                     created_at=data.get("created_at", _now()),
                     last_updated=data.get("last_updated", _now()),
                 )
