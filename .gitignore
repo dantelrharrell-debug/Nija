@@ -533,6 +533,10 @@ data/asset_exposure_correlation_decisions.jsonl
 data/profit_lock_state.json
 data/*.json
 
+# Owner control layer / accounting runtime state (never commit)
+data/owner_control/
+data/accounting/
+
 # Profit-stack engine runtime state files (bot/data, never commit)
 bot/data/*.json
 bot/data/*.jsonl
