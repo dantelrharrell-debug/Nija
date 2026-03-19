@@ -138,6 +138,20 @@ except ImportError:
         SAFE_PROFIT_MODE_AVAILABLE = False
         logger.warning("Safe Profit Mode not available – running without daily profit gate")
 
+# Import Smart Reinvest Cycles (re-deploys locked profits only when conditions are perfect)
+try:
+    from bot.smart_reinvest_cycles import get_smart_reinvest_engine, SmartReinvestCycleEngine
+    SMART_REINVEST_AVAILABLE = True
+except ImportError:
+    try:
+        from smart_reinvest_cycles import get_smart_reinvest_engine, SmartReinvestCycleEngine
+        SMART_REINVEST_AVAILABLE = True
+    except ImportError:
+        get_smart_reinvest_engine = None  # type: ignore
+        SmartReinvestCycleEngine = None  # type: ignore
+        SMART_REINVEST_AVAILABLE = False
+        logger.warning("Smart Reinvest Cycles not available – running without condition-gated reinvestment")
+
 
 class NIJAApexStrategyV71:
     """
@@ -314,6 +328,28 @@ class NIJAApexStrategyV71:
         self._daily_profit_target_pct: float = self.config.get('daily_profit_target_pct', 0.01)
         # Last computed daily target in USD (updated in analyze_market).
         self._last_daily_target_usd: float = 0.0
+
+        # SMART REINVEST CYCLES: Re-deploy locked profits only when conditions are perfect.
+        # Gates capital redeployment through 7 simultaneous condition checks:
+        #   1. Regime Gate       – regime not in blocked list
+        #   2. Volatility Gate   – no SEVERE/EXTREME shock
+        #   3. Risk Governor     – no circuit breakers active
+        #   4. Strategy Health   – strategy is tradeable (≥ WATCHING)
+        #   5. Win Rate Gate     – rolling win rate ≥ floor
+        #   6. Pool Gate         – recycling pool has minimum balance
+        #   7. Cooldown Gate     – minimum cooldown elapsed since last deploy
+        enable_smart_reinvest = self.config.get('enable_smart_reinvest', True)
+        if SMART_REINVEST_AVAILABLE and enable_smart_reinvest:
+            try:
+                self.smart_reinvest_engine = get_smart_reinvest_engine()
+                logger.info("✅ Smart Reinvest Cycles: ENABLED (re-deploy locked profits when conditions are perfect)")
+            except Exception as _sri_err:
+                logger.warning(f"⚠️  Smart Reinvest Cycles init failed – degrading gracefully: {_sri_err}")
+                self.smart_reinvest_engine = None
+        else:
+            self.smart_reinvest_engine = None
+            if not SMART_REINVEST_AVAILABLE:
+                logger.warning("⚠️  Smart Reinvest Cycles not available")
 
         # PROFITABILITY ASSERTION: Validate strategy configuration (CRITICAL GUARD RAIL)
         # This prevents deployment of unprofitable configurations that would lose money after fees
@@ -1769,6 +1805,19 @@ class NIJAApexStrategyV71:
                     # Log approval
                     logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
 
+                    # ── Smart Reinvest Cycles (LONG) ───────────────────────
+                    # Re-deploy recycled locked profits only when all 7 conditions
+                    # are simultaneously perfect.  Augments position size with
+                    # claimed capital from the recycling pool.
+                    regime_str = str(self.current_regime) if self.current_regime else 'UNKNOWN'
+                    position_size = self._apply_smart_reinvestment(
+                        position_size=position_size,
+                        strategy='ApexTrend',
+                        regime=regime_str,
+                        account_balance=account_balance,
+                    )
+                    # ──────────────────────────────────────────────────────
+
                     result = {
                         'action': 'enter_long',
                         'reason': reason,
@@ -2006,6 +2055,19 @@ class NIJAApexStrategyV71:
                     # Log approval
                     logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
 
+                    # ── Smart Reinvest Cycles (SHORT) ──────────────────────
+                    # Re-deploy recycled locked profits only when all 7 conditions
+                    # are simultaneously perfect.  Augments position size with
+                    # claimed capital from the recycling pool.
+                    regime_str = str(self.current_regime) if self.current_regime else 'UNKNOWN'
+                    position_size = self._apply_smart_reinvestment(
+                        position_size=position_size,
+                        strategy='ApexTrend',
+                        regime=regime_str,
+                        account_balance=account_balance,
+                    )
+                    # ──────────────────────────────────────────────────────
+
                     result = {
                         'action': 'enter_short',
                         'reason': reason,
@@ -2034,6 +2096,52 @@ class NIJAApexStrategyV71:
                 'action': 'hold',
                 'reason': f'Error: {str(e)}'
             }
+
+    def _apply_smart_reinvestment(
+        self,
+        position_size: float,
+        strategy: str,
+        regime: str,
+        account_balance: float,
+    ) -> float:
+        """
+        Attempt to augment *position_size* with recycled capital from the
+        Smart Reinvest Cycles engine.
+
+        Capital is only deployed when ALL seven conditions are simultaneously
+        "perfect" (regime, volatility, risk governor, strategy health, win rate,
+        pool level, and cooldown).  On any failure the original size is returned
+        unchanged.
+
+        Args:
+            position_size:   Base position size already validated by the strategy.
+            strategy:        Strategy name used for health / cooldown look-ups.
+            regime:          Current market regime string.
+            account_balance: Portfolio value in USD (for risk-governor check).
+
+        Returns:
+            Potentially augmented position size (>= original *position_size*).
+        """
+        if self.smart_reinvest_engine is None:
+            return position_size
+        try:
+            extra_usd = self.smart_reinvest_engine.request_reinvestment(
+                strategy=strategy,
+                regime=regime,
+                base_position_usd=position_size,
+                portfolio_value=account_balance,
+            )
+            if extra_usd > 0:
+                new_size = position_size + extra_usd
+                logger.info(
+                    "   🔄 SmartReinvest: $%.2f recycled capital added → "
+                    "position $%.2f → $%.2f",
+                    extra_usd, position_size, new_size,
+                )
+                return new_size
+        except Exception as _sri_err:
+            logger.debug("SmartReinvest augmentation error: %s", _sri_err)
+        return position_size
 
     def _update_safe_profit_mode(self, trade_pnl_usd: float) -> None:
         """
