@@ -878,6 +878,8 @@ def _run_bot_startup_and_trading():
                 health_manager.update_exchange_status(connected=0, expected=exchanges_configured)
 
             logger.info("=" * 70)
+            logger.info("🚀 NIJA SYSTEM FULLY OPERATIONAL — TRADING ENABLED")
+            logger.info("=" * 70)
 
             # Check if we should use independent multi-broker trading mode
             use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
