@@ -113,6 +113,25 @@ except ImportError:
         get_broker_performance_scorer = None  # type: ignore
         logger.warning("BrokerPerformanceScorer not available — performance-aware routing disabled")
 
+try:
+    from bot.execution_quality_filter import (
+        get_execution_quality_filter,
+        FilterVerdict,
+    )
+    _EQF_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_quality_filter import (
+            get_execution_quality_filter,
+            FilterVerdict,
+        )
+        _EQF_AVAILABLE = True
+    except ImportError:
+        _EQF_AVAILABLE = False
+        get_execution_quality_filter = None  # type: ignore
+        FilterVerdict = None  # type: ignore
+        logger.warning("ExecutionQualityFilter not available — AI execution quality filtering disabled")
+
 
 # ---------------------------------------------------------------------------
 # Asset-class detection helpers
@@ -403,6 +422,44 @@ class MultiBrokerExecutionRouter:
             return self._make_result(request, ac, broker.name, False, 0.0, 0.0,
                                      elapsed_ms, error)
 
+        # 3.5  AI execution-quality gate — filter before dispatch
+        eqf_filter = self._get_execution_quality_filter()
+        if eqf_filter is not None and not getattr(request, "skip_quality_filter", False):
+            try:
+                eqf_decision = eqf_filter.filter_trade(
+                    symbol=request.symbol,
+                    broker=broker.name,
+                    side=request.side,
+                    size_usd=request.size_usd,
+                    urgency=getattr(request, "urgency", 0.5),
+                )
+                if FilterVerdict is not None and eqf_decision.verdict == FilterVerdict.REJECT:
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    error = f"Execution quality filter REJECTED: {eqf_decision.reason}"
+                    if eqf_decision.suggested_broker:
+                        error += f" (try broker: {eqf_decision.suggested_broker})"
+                    logger.warning("🚫 %s", error)
+                    return self._make_result(request, ac, broker.name, False, 0.0, 0.0,
+                                             elapsed_ms, error)
+                if FilterVerdict is not None and eqf_decision.verdict == FilterVerdict.DEFER:
+                    logger.info(
+                        "⏳ Execution quality filter DEFERRED %s@%s — "
+                        "score=%.1f  retry_in=%ds  reason=%s",
+                        request.symbol, broker.name,
+                        eqf_decision.quality_score,
+                        eqf_decision.defer_seconds,
+                        eqf_decision.reason,
+                    )
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    error = (
+                        f"Execution quality filter DEFERRED (score={eqf_decision.quality_score:.1f},"
+                        f" retry_in={eqf_decision.defer_seconds}s): {eqf_decision.reason}"
+                    )
+                    return self._make_result(request, ac, broker.name, False, 0.0, 0.0,
+                                             elapsed_ms, error)
+            except Exception as _eqf_exc:
+                logger.debug("ExecutionQualityFilter raised (non-fatal): %s", _eqf_exc)
+
         # 4. Dispatch
         fill_price, filled_usd, dispatch_error = self._dispatch(request, broker)
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -427,6 +484,19 @@ class MultiBrokerExecutionRouter:
                 )
             except Exception:
                 pass  # scoring errors must never abort order flow
+
+        # 5b. Feed the execution quality filter with actual outcome
+        if eqf_filter is not None:
+            try:
+                eqf_filter.record_execution(
+                    symbol=request.symbol,
+                    broker=broker.name,
+                    success=success,
+                    slippage_bps=0.0,
+                    latency_ms=elapsed_ms,
+                )
+            except Exception:
+                pass
 
         # 6. Update stats & log
         with self._lock:
@@ -483,6 +553,15 @@ class MultiBrokerExecutionRouter:
                 pass
         return self._scorer
 
+    def _get_execution_quality_filter(self):
+        """Return the ExecutionQualityFilter singleton (lazy init)."""
+        if not _EQF_AVAILABLE:
+            return None
+        try:
+            return get_execution_quality_filter()
+        except Exception:
+            return None
+
     def _select_broker(
         self, asset_class: AssetClass, preferred: Optional[str]
     ) -> Optional[BrokerProfile]:
@@ -502,8 +581,6 @@ class MultiBrokerExecutionRouter:
            MIN_OBSERVATIONS``.
         4. Return ``qualified[0]`` if any qualify; otherwise return the
            static-priority fallback, ensuring a usable route always exists.
-        """
-        Select the best available broker for the asset class.
 
         Selection order:
         1. If a preferred broker is specified and available, use it.
