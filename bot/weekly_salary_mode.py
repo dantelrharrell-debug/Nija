@@ -10,16 +10,22 @@ How it works
 1. After each trade closes, call ``record_profit(pnl_usd)`` to grow the
    weekly profit pool.
 2. At the end of each ISO calendar week (or on demand via
-   ``try_pay_salary()``), the engine checks two conditions:
+   ``try_pay_salary()``), the engine checks three conditions:
 
    * The week's net profit is **≥ 0** (system is profitable).
-   * The accumulated pool contains **enough funds** to cover the salary.
+   * The accumulated pool contains **enough funds** to cover the capped payout.
+   * The ``EmergencyCapitalProtection`` engine is **not** active (account
+     is not in a drawdown protection mode of WARNING or higher).
 
-3. If both conditions pass, the configured ``weekly_salary_usd`` is
-   deducted from the pool and logged as a salary payment.  Any surplus
-   above the salary amount remains in the pool for the following week.
-4. If the system is *not* profitable, the payout is **skipped** and the
-   pool is carried forward — no salary is taken from base capital.
+3. If all conditions pass the actual payout is::
+
+       payout = min(weekly_profit * 0.5, weekly_salary_usd)
+
+   That amount is deducted from the pool and logged as a salary payment.
+   Any surplus above the payout remains in the pool for the following week.
+4. If the system is *not* profitable, or the capital protection engine is
+   active, the payout is **skipped** and the pool is carried forward — no
+   salary is ever taken from base capital.
 
 Architecture
 ------------
@@ -69,6 +75,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija.weekly_salary_mode")
+
+# ---------------------------------------------------------------------------
+# Optional: EmergencyCapitalProtection integration
+# ---------------------------------------------------------------------------
+
+try:
+    from bot.emergency_capital_protection import get_emergency_capital_protection
+    _ECP_AVAILABLE = True
+except ImportError:
+    try:
+        from emergency_capital_protection import get_emergency_capital_protection  # type: ignore
+        _ECP_AVAILABLE = True
+    except ImportError:
+        get_emergency_capital_protection = None  # type: ignore
+        _ECP_AVAILABLE = False
+        logger.debug("EmergencyCapitalProtection not available — salary always allowed when profitable")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -352,13 +374,47 @@ class WeeklySalaryMode:
                 )
                 return None
 
-            # Roll over internal week counter when crossing a week boundary
-            if self._week_has_ended(s.last_processed_week, current_week):
+            # Roll over internal week counter when transitioning FROM a previously
+            # processed week.  Guard against the first-ever call (empty
+            # last_processed_week) so we don't erase profits recorded before
+            # the first try_pay_salary() call.
+            if s.last_processed_week and self._week_has_ended(s.last_processed_week, current_week):
                 self._rollover_week(current_week)
 
             target_week = current_week if force else s.last_processed_week
             pool_before = s.pool_usd
             weekly_profit = s.current_week_profit_usd
+
+            # ----- Gate 0: emergency capital protection -----
+            if _ECP_AVAILABLE and get_emergency_capital_protection is not None:
+                try:
+                    ecp = get_emergency_capital_protection()
+                    if ecp.is_active():
+                        ecp_level = ecp.current_level().value
+                        payment = SalaryPayment(
+                            payment_id=str(uuid.uuid4()),
+                            iso_week=target_week,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            weekly_profit_usd=weekly_profit,
+                            salary_paid_usd=0.0,
+                            pool_before_usd=pool_before,
+                            pool_after_usd=pool_before,
+                            status="skipped_capital_protection",
+                            note=f"Emergency capital protection active (level={ecp_level}) — salary withheld to preserve capital",
+                        )
+                        s.weeks_skipped += 1
+                        s.last_processed_week = target_week
+                        s.payment_log.append(payment.to_dict())
+                        self._append_audit(payment)
+                        self._save_state()
+                        logger.warning(
+                            "🛡️  WeeklySalaryMode: salary BLOCKED (week %s) — "
+                            "EmergencyCapitalProtection level=%s",
+                            target_week, ecp_level,
+                        )
+                        return payment
+                except Exception as exc:
+                    logger.warning("WeeklySalaryMode: ECP check failed (%s) — proceeding", exc)
 
             # ----- Gate 1: profitability -----
             if weekly_profit < self._config.min_weekly_profit_usd:
@@ -389,8 +445,8 @@ class WeeklySalaryMode:
             # ----- Compute capped payout: min(weekly_profit * 0.5, salary_target) -----
             salary = min(weekly_profit * 0.5, self._config.weekly_salary_usd)
 
-            # ----- Gate 2: sufficient pool -----
-            if pool_before < salary:
+            # ----- Gate 2: sufficient pool (and non-zero payout) -----
+            if salary <= 0 or pool_before < salary:
                 status = "skipped_insufficient_pool"
                 payment = SalaryPayment(
                     payment_id=str(uuid.uuid4()),
@@ -451,8 +507,11 @@ class WeeklySalaryMode:
     def _maybe_rollover_week(self) -> None:
         """Roll over weekly counters if the calendar week has changed (no lock — caller holds it)."""
         current_week = self._current_iso_week()
+        if not self._state.last_processed_week:
+            # First-ever activity: stamp the current week so future transitions work.
+            self._state.last_processed_week = current_week
+            return
         if self._week_has_ended(self._state.last_processed_week, current_week):
-            # Don't call try_pay_salary here to avoid recursion — just reset the week counter.
             self._rollover_week(current_week)
 
     def _rollover_week(self, new_week: str) -> None:

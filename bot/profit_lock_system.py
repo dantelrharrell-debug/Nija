@@ -9,7 +9,7 @@ layer in the NIJA bot:
    (internally wraps ProfitLockEngine).
 2. **ProfitExtractionEngine** — auto-withdrawal of accumulated profits to
    configurable destinations (bank, stablecoins, treasury wallet).
-3. **WeeklySalaryMode** — fixed weekly payout ($1 250/week default) paid only
+3. **WeeklySalaryMode** — fixed weekly payout ($1,250/week default) paid only
    when the system is profitable; smooths operator income into predictable
    real-life cash flow.
 
@@ -88,6 +88,32 @@ except ImportError:
         _EXTRACTION_AVAILABLE = False
         logger.warning("ProfitExtractionEngine not available — auto-withdrawal disabled")
 
+try:
+    from bot.emergency_capital_protection import get_emergency_capital_protection, EmergencyCapitalProtection
+    _ECP_AVAILABLE = True
+except ImportError:
+    try:
+        from emergency_capital_protection import get_emergency_capital_protection, EmergencyCapitalProtection  # type: ignore
+        _ECP_AVAILABLE = True
+    except ImportError:
+        get_emergency_capital_protection = None  # type: ignore
+        EmergencyCapitalProtection = None  # type: ignore
+        _ECP_AVAILABLE = False
+        logger.warning("EmergencyCapitalProtection not available — capital protection disabled")
+
+try:
+    from bot.weekly_salary_mode import get_weekly_salary_mode, WeeklySalaryMode
+    _SALARY_AVAILABLE = True
+except ImportError:
+    try:
+        from weekly_salary_mode import get_weekly_salary_mode, WeeklySalaryMode  # type: ignore
+        _SALARY_AVAILABLE = True
+    except ImportError:
+        get_weekly_salary_mode = None  # type: ignore
+        WeeklySalaryMode = None  # type: ignore
+        _SALARY_AVAILABLE = False
+        logger.warning("WeeklySalaryMode not available — weekly salary payouts disabled")
+
 
 # ---------------------------------------------------------------------------
 # ProfitLockSystem
@@ -99,7 +125,9 @@ class ProfitLockSystem:
 
     Combines per-trade ratchet stops + automatic gain harvesting
     (``ProfitHarvestLayer``) with portfolio-level auto-withdrawal to
-    external destinations (``ProfitExtractionEngine``).
+    external destinations (``ProfitExtractionEngine``), fixed weekly salary
+    payouts (``WeeklySalaryMode``), and drawdown-driven capital protection
+    (``EmergencyCapitalProtection``).
 
     Obtain the singleton via ``get_profit_lock_system()``.
     """
@@ -129,12 +157,42 @@ class ProfitLockSystem:
         else:
             self._extraction = None
 
-        _active = sum([self._harvest is not None, self._extraction is not None])
+        # --- Emergency capital protection ---
+        if _ECP_AVAILABLE and get_emergency_capital_protection is not None:
+            try:
+                self._protection: Optional[EmergencyCapitalProtection] = get_emergency_capital_protection()
+                logger.info("✅ ProfitLockSystem: emergency capital protection active")
+            except Exception as exc:
+                logger.warning("ProfitLockSystem: capital protection init failed – %s", exc)
+                self._protection = None
+        else:
+            self._protection = None
+
+        # --- Weekly salary mode ---
+        if _SALARY_AVAILABLE and get_weekly_salary_mode is not None:
+            try:
+                self._salary: Optional[WeeklySalaryMode] = get_weekly_salary_mode()
+                logger.info("✅ ProfitLockSystem: weekly salary mode active")
+            except Exception as exc:
+                logger.warning("ProfitLockSystem: weekly salary mode init failed – %s", exc)
+                self._salary = None
+        else:
+            self._salary = None
+
+        _active = sum([
+            self._harvest is not None,
+            self._extraction is not None,
+            self._protection is not None,
+            self._salary is not None,
+        ])
         logger.info(
-            "🔒 ProfitLockSystem initialised (%d/%d subsystems active: harvest=%s, extraction=%s)",
-            _active, 2,
+            "🔒 ProfitLockSystem initialised (%d/4 subsystems active: "
+            "harvest=%s, extraction=%s, protection=%s, salary=%s)",
+            _active,
             "✓" if self._harvest else "✗",
             "✓" if self._extraction else "✗",
+            "✓" if self._protection else "✗",
+            "✓" if self._salary else "✗",
         )
 
     # ------------------------------------------------------------------
@@ -215,9 +273,9 @@ class ProfitLockSystem:
         """
         Record realised profit (or loss) after a position closes.
 
-        Winning trades are forwarded to the ``ProfitExtractionEngine`` which
-        accumulates gains and auto-withdraws them once the configured
-        threshold is reached.
+        Winning trades are forwarded to the ``ProfitExtractionEngine`` and
+        ``WeeklySalaryMode`` which accumulate gains.  All trades (win or loss)
+        are forwarded to ``EmergencyCapitalProtection`` for recovery tracking.
 
         The position is also removed from the harvest layer's tracking.
 
@@ -246,7 +304,21 @@ class ProfitLockSystem:
                     pnl_usd, symbol, pool,
                 )
             except Exception as exc:
-                logger.warning("ProfitLockSystem.record_closed_profit failed for %s: %s", symbol, exc)
+                logger.warning("ProfitLockSystem.record_closed_profit (extraction) failed for %s: %s", symbol, exc)
+
+        # Forward all P&L to the weekly salary pool
+        if self._salary is not None:
+            try:
+                self._salary.record_profit(pnl_usd=pnl_usd, symbol=symbol)
+            except Exception as exc:
+                logger.warning("ProfitLockSystem.record_closed_profit (salary) failed for %s: %s", symbol, exc)
+
+        # Notify the capital protection engine for recovery tracking
+        if self._protection is not None:
+            try:
+                self._protection.record_trade(pnl_usd=pnl_usd, is_win=pnl_usd > 0)
+            except Exception as exc:
+                logger.warning("ProfitLockSystem.record_closed_profit (protection) failed for %s: %s", symbol, exc)
 
     def remove_position(self, symbol: str) -> None:
         """
@@ -289,6 +361,22 @@ class ProfitLockSystem:
         else:
             lines.append("  ⚠️  Auto-withdrawal extraction engine: NOT AVAILABLE")
 
+        if self._protection is not None:
+            try:
+                lines.append(self._protection.get_report())
+            except Exception as exc:
+                lines.append(f"[EmergencyCapitalProtection report error: {exc}]")
+        else:
+            lines.append("  ⚠️  Emergency capital protection: NOT AVAILABLE")
+
+        if self._salary is not None:
+            try:
+                lines.append(self._salary.get_report())
+            except Exception as exc:
+                lines.append(f"[WeeklySalaryMode report error: {exc}]")
+        else:
+            lines.append("  ⚠️  Weekly salary mode: NOT AVAILABLE")
+
         lines.append("=" * 70)
         return "\n".join(lines)
 
@@ -301,6 +389,16 @@ class ProfitLockSystem:
     def extraction_engine(self) -> Optional["ProfitExtractionEngine"]:
         """Direct access to the underlying ProfitExtractionEngine (read-only)."""
         return self._extraction
+
+    @property
+    def protection_engine(self) -> Optional["EmergencyCapitalProtection"]:
+        """Direct access to the underlying EmergencyCapitalProtection (read-only)."""
+        return self._protection
+
+    @property
+    def salary_mode(self) -> Optional["WeeklySalaryMode"]:
+        """Direct access to the underlying WeeklySalaryMode (read-only)."""
+        return self._salary
 
 
 # ---------------------------------------------------------------------------
