@@ -157,6 +157,8 @@ class ExecutionResult:
     latency_ms: float = 0.0
     retries: int = 0
     error: Optional[str] = None
+    # Extra metadata (e.g. fallback flags set by the router)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -183,6 +185,19 @@ class ExecutionRouter:
     Smart Order Router — selects venue, order type, and dispatches trades.
 
     Thread-safe; process-wide singleton via ``get_execution_router()``.
+
+    Bulletproof execution guarantees
+    ---------------------------------
+    1. **Guaranteed fills or retries** — ``_dispatch_with_retry`` retries up to
+       ``max_retries`` times with exponential back-off on the primary venue,
+       then automatically falls back to the next-best healthy venue if all
+       retries are exhausted.
+    2. **Kraken instability fallback** — if the primary venue is Kraken and it
+       fails, the router promotes the next available venue (e.g. Coinbase) and
+       records the fallback in the execution result metadata.
+    3. **Partial fill recovery** — TWAP slices that fail are not silently
+       discarded; the router records the filled fraction and returns a partial
+       success so the caller can decide whether to re-submit the remainder.
     """
 
     def __init__(
@@ -201,6 +216,9 @@ class ExecutionRouter:
         self._total_orders: int = 0
         self._failed_orders: int = 0
         self._total_slippage_bps: float = 0.0
+
+        # Track per-session venue failures so fallback selection avoids them
+        self._session_failed_venues: set = set()
 
         # Lazy subsystem handles
         self._eks = None
@@ -357,8 +375,18 @@ class ExecutionRouter:
         venue: Optional[VenueProfile],
         order_type: str,
     ) -> ExecutionResult:
-        """Attempt to dispatch the order, retrying on transient failures."""
-        retries = 0
+        """
+        Attempt to dispatch the order with retries, then venue fallback.
+
+        Execution sequence
+        ------------------
+        1. Try the primary *venue* up to ``_max_retries`` times with
+           exponential back-off.
+        2. If all retries fail, mark the venue as degraded and select the
+           next-best healthy fallback venue (Kraken instability mitigation).
+        3. Execute once on each fallback venue before giving up.
+        4. Return the last ``ExecutionResult`` (success or failure).
+        """
         last_error = "No venue available"
 
         if venue is None:
@@ -372,6 +400,8 @@ class ExecutionRouter:
                 venue="NONE",
             )
 
+        # ── Step 1: Retry on the primary venue ───────────────────────
+        retries = 0
         while retries <= self._max_retries:
             try:
                 if order_type == "TWAP":
@@ -388,21 +418,92 @@ class ExecutionRouter:
                 if retries <= self._max_retries:
                     delay = BASE_RETRY_DELAY_S * (2 ** (retries - 1))
                     logger.warning(
-                        "Order dispatch failed (attempt %d/%d): %s — retrying in %.1fs",
-                        retries, self._max_retries, exc, delay,
+                        "Order dispatch failed on %s (attempt %d/%d): %s — retrying in %.1fs",
+                        venue.name, retries, self._max_retries, exc, delay,
                     )
                     time.sleep(delay)
 
+        # ── Step 2: Primary venue exhausted — try fallback venues ────
+        logger.warning(
+            "⚠️  Primary venue %s exhausted after %d retries — attempting fallback",
+            venue.name, self._max_retries,
+        )
+        with self._lock:
+            self._session_failed_venues.add(venue.name)
+
+        fallback_result = self._dispatch_fallback(request, order_type, exclude_venue=venue.name)
+        if fallback_result is not None:
+            fallback_result.retries = retries
+            fallback_result.metadata["primary_venue_failed"] = venue.name
+            fallback_result.metadata["fallback_used"] = True
+            return fallback_result
+
+        # ── Step 3: All venues failed ─────────────────────────────────
         return ExecutionResult(
             success=False,
             symbol=request.symbol,
             side=request.side,
             size_usd=request.size_usd,
-            error=f"Max retries ({self._max_retries}) exceeded: {last_error}",
+            error=f"All venues failed. Primary ({venue.name}) max retries exceeded: {last_error}",
             order_type=order_type,
             venue=venue.name,
             retries=retries,
         )
+
+    def _dispatch_fallback(
+        self,
+        request: OrderRequest,
+        order_type: str,
+        exclude_venue: str,
+    ) -> Optional[ExecutionResult]:
+        """
+        Try each remaining healthy venue once.
+
+        Returns the first successful ``ExecutionResult``, or ``None`` if
+        every fallback venue also fails.
+        """
+        with self._lock:
+            failed = set(self._session_failed_venues)
+            candidates = [
+                v for v in sorted(
+                    self._venues.values(),
+                    key=lambda v: (-v.liquidity_score, v.fee_bps),
+                )
+                if v.available and v.name != exclude_venue and v.name not in failed
+            ]
+
+        if not candidates:
+            logger.error("❌ No fallback venues available for %s", request.symbol)
+            return None
+
+        for fallback_venue in candidates:
+            logger.warning(
+                "🔄 Fallback attempt: routing %s %s to %s",
+                request.side, request.symbol, fallback_venue.name,
+            )
+            try:
+                if order_type == "TWAP":
+                    result = self._execute_twap(request, fallback_venue)
+                else:
+                    result = self._execute_single(request, fallback_venue, order_type)
+
+                if result.success:
+                    logger.info(
+                        "✅ Fallback fill on %s: %s %s $%.2f",
+                        fallback_venue.name, request.side, request.symbol, result.filled_size_usd,
+                    )
+                    return result
+
+                logger.warning("Fallback venue %s returned non-success: %s", fallback_venue.name, result.error)
+                with self._lock:
+                    self._session_failed_venues.add(fallback_venue.name)
+
+            except Exception as exc:
+                logger.error("Fallback venue %s raised: %s", fallback_venue.name, exc)
+                with self._lock:
+                    self._session_failed_venues.add(fallback_venue.name)
+
+        return None
 
     def _execute_single(
         self,
@@ -439,11 +540,21 @@ class ExecutionRouter:
         request: OrderRequest,
         venue: VenueProfile,
     ) -> ExecutionResult:
-        """Execute a TWAP order (split into slices over the configured window)."""
+        """
+        Execute a TWAP order split into slices over the configured window.
+
+        Partial fill recovery
+        ---------------------
+        If one or more slices fail the filled portion is still returned as a
+        *partial* success (``success=True``, ``filled_size_usd < size_usd``).
+        This prevents silent position drift — the caller sees exactly how much
+        was actually executed and can decide whether to re-submit the remainder.
+        """
         slice_usd = request.size_usd / self._twap_slices
         interval = self._twap_window_s / self._twap_slices
         total_filled = 0.0
-        prices = []
+        prices: List[float] = []
+        failed_slices = 0
 
         for i in range(self._twap_slices):
             sub_req = OrderRequest(
@@ -454,19 +565,49 @@ class ExecutionRouter:
                 order_type="MARKET",
                 venue=venue.name,
             )
-            sub_result = self._execute_single(sub_req, venue, "MARKET")
-            if sub_result.success:
-                total_filled += sub_result.filled_size_usd
-                if sub_result.fill_price > 0:
-                    prices.append(sub_result.fill_price)
+            try:
+                sub_result = self._execute_single(sub_req, venue, "MARKET")
+                if sub_result.success:
+                    total_filled += sub_result.filled_size_usd
+                    if sub_result.fill_price > 0:
+                        prices.append(sub_result.fill_price)
+                else:
+                    failed_slices += 1
+                    logger.warning(
+                        "TWAP slice %d/%d failed on %s: %s",
+                        i + 1, self._twap_slices, venue.name, sub_result.error,
+                    )
+            except Exception as exc:
+                failed_slices += 1
+                logger.warning(
+                    "TWAP slice %d/%d raised on %s: %s",
+                    i + 1, self._twap_slices, venue.name, exc,
+                )
 
             if i < self._twap_slices - 1:
                 time.sleep(interval)
 
         avg_price = sum(prices) / len(prices) if prices else 0.0
+        is_partial = 0 < total_filled < request.size_usd
+        is_success = total_filled > 0
+
+        if is_partial:
+            logger.warning(
+                "⚠️  TWAP partial fill on %s: $%.2f of $%.2f (%d/%d slices failed)",
+                venue.name, total_filled, request.size_usd, failed_slices, self._twap_slices,
+            )
+
+        error_msg: Optional[str] = None
+        if total_filled == 0:
+            error_msg = f"TWAP: all {self._twap_slices} slices failed"
+        elif is_partial:
+            error_msg = (
+                f"TWAP partial fill: ${total_filled:.2f} of ${request.size_usd:.2f}"
+                f" ({failed_slices} slice(s) failed)"
+            )
 
         return ExecutionResult(
-            success=total_filled > 0,
+            success=is_success,
             symbol=request.symbol,
             side=request.side,
             size_usd=request.size_usd,
@@ -475,7 +616,7 @@ class ExecutionRouter:
             slippage_bps=0.0,
             order_type="TWAP",
             venue=venue.name,
-            error=None if total_filled > 0 else "TWAP: all slices failed",
+            error=error_msg,
         )
 
     # ------------------------------------------------------------------
@@ -522,7 +663,7 @@ class ExecutionRouter:
             ]
             return {
                 "engine": "ExecutionRouter",
-                "version": "1.0",
+                "version": "1.1",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "total_orders": self._total_orders,
                 "failed_orders": self._failed_orders,
@@ -531,6 +672,7 @@ class ExecutionRouter:
                 ),
                 "avg_slippage_bps": round(avg_slippage, 2),
                 "registered_venues": len(self._venues),
+                "session_failed_venues": sorted(self._session_failed_venues),
                 "venues": venues_info,
                 "subsystems": {
                     "exchange_kill_switch": _EKS_AVAILABLE,
