@@ -548,14 +548,14 @@ RISK_CONFIG_INCOME = {
     'max_trade_size_usd': 70.0,  # $70 maximum trade (7% of $1000)
 
     # Circuit Breakers
-    'consecutive_loss_limit': 3,  # Stop after 3 consecutive losses
+    'consecutive_loss_limit': 2,  # Stop after 2 consecutive losses (tightened for consistency)
     'daily_trade_limit': 20,  # Maximum 20 trades per day (active but selective)
     'min_time_between_trades_sec': 180,  # 3 minutes minimum
 
     # Performance-Based Adjustments
     'reduce_size_on_losing_streak': True,
     'losing_streak_threshold': 2,  # Trigger after 2 losses
-    'size_reduction_factor': 0.65,
+    'size_reduction_factor': 0.5,  # Cut to 50% on streak (tightened for consistency)
 
     # System Behavior
     'optimized_position_sizing': True,  # Optimized position sizing

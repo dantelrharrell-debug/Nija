@@ -46,7 +46,7 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # OPTIMIZED MINIMUM: $5 for Coinbase (was $2, increased for profitability)
 MIN_BALANCE_TO_TRADE = 5.0  # $5 minimum (ensures fee-positive trades)
 MICRO_BALANCE_THRESHOLD = 50.0
-MICRO_BALANCE_POSITION_PCT = 0.50  # 50% max per position
+MICRO_BALANCE_POSITION_PCT = 0.85  # 85% for accounts < $50 (fast growth, down from prior 50%)
 
 # For very small accounts (< $5), bypass quality multipliers to ensure tradeable positions
 # Without this, quality multipliers can reduce positions below $1 minimum
@@ -74,16 +74,17 @@ STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for standard acco
 # - 20% max: Allows $58.76 → $11.75 max position (meets Kraken $10 minimum)
 # - 10pp bump limit: Allows 17% positions on $58.76 balance (10% tier max + 7% bump)
 
-# For $50-100: Trade with 50% positions (leave 50% reserve for safety)
-SMALL_BALANCE_POSITION_PCT = 0.50  # 50% max per position (leave 50% buffer)
+# For $50-100: Trade with 75% positions — keeps growth fast, reduces blow-up risk
+SMALL_BALANCE_POSITION_PCT = 0.75  # 75% for $50–$100 accounts
 
-# For $100-500: Trade with 40% positions (leave 60% reserve)
-MEDIUM_BALANCE_THRESHOLD = 500.0
-MEDIUM_BALANCE_POSITION_PCT = 0.40  # 40% max per position (leave 60% buffer)
+# For $100-300: Trade with 75% positions
+MEDIUM_BALANCE_THRESHOLD = 300.0
+MEDIUM_BALANCE_POSITION_PCT = 0.75  # 75% for $100–$300 accounts
 
-# For $500+: Normal position sizing (20-25% with reserves)
-NORMAL_MIN_POSITION_PCT = 0.10  # 10%
-NORMAL_MAX_POSITION_PCT = 0.20  # 20% (reduced from 25%, more conservative)
+# For $300+: Standard sizing — steady compounding
+NORMAL_POSITION_PCT = 0.60       # 60% — consistent returns over chasing spikes
+NORMAL_MIN_POSITION_PCT = NORMAL_POSITION_PCT   # kept for backward-compat
+NORMAL_MAX_POSITION_PCT = NORMAL_POSITION_PCT   # kept for backward-compat
 
 # ============================================================================
 # PROFIT TARGETS (Must exceed fees) - OPTIMIZED FOR PROFITABILITY
@@ -174,22 +175,29 @@ def get_position_size_pct(account_balance: float) -> float:
     """
     Get recommended position size % based on account balance.
 
+    Tiers (tuned for consistency — fast growth without blow-up risk):
+      < $5    → 0%    (below minimum, don't trade)
+      < $50   → 85%   (very small: deploy most capital, growth-focused)
+      < $100  → 75%   (small: slightly more conservative)
+      < $300  → 75%   (building: steady compounding)
+      $300+   → 60%   (established: consistent returns over spikes)
+
     Args:
         account_balance: Current account balance in USD
 
     Returns:
-        Position size as decimal (e.g., 0.50 = 50%)
+        Position size as decimal (e.g., 0.75 = 75%)
     """
     if account_balance < MIN_BALANCE_TO_TRADE:
         return 0.0  # Don't trade
     elif account_balance < MICRO_BALANCE_THRESHOLD:
-        return MICRO_BALANCE_POSITION_PCT  # 50% for $2-50
+        return MICRO_BALANCE_POSITION_PCT   # 85% for < $50
     elif account_balance < SMALL_ACCOUNT_THRESHOLD:
-        return SMALL_BALANCE_POSITION_PCT  # 50% for $50-100
+        return SMALL_BALANCE_POSITION_PCT   # 75% for $50–$100
     elif account_balance < MEDIUM_BALANCE_THRESHOLD:
-        return MEDIUM_BALANCE_POSITION_PCT  # 40% for $100-500
+        return MEDIUM_BALANCE_POSITION_PCT  # 75% for $100–$300
     else:
-        return NORMAL_MAX_POSITION_PCT  # 20% for $500+
+        return NORMAL_MAX_POSITION_PCT      # 60% for $300+
 
 
 def get_min_profit_target(use_limit_order: bool = True, account_balance: float = 100.0) -> float:

@@ -70,7 +70,7 @@ KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exc
 # OPTIMIZATION: Balance between signal generation and trade quality
 # Previous emergency relaxations went too far (0.50 confidence = low quality trades)
 # New strategy: Moderate confidence for better win rate while maintaining signal flow
-MIN_CONFIDENCE = 0.70  # RESTORED: Quality confidence threshold (was progressively reduced: 0.75 original → 0.50 emergency → 0.60 "optimized")
+MIN_CONFIDENCE = 0.75  # Consistency-tuned: higher bar filters marginal setups (was 0.70)
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Import emergency liquidation for capital preservation (FIX 3)

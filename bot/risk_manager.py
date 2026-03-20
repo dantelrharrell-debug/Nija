@@ -670,32 +670,22 @@ class AdaptiveRiskManager:
         win_rate = self.get_win_rate(lookback=10)
 
         # OPTIMIZED: More aggressive reduction on losing streaks
-        # Previous logic was too lenient, allowing continued losses
+        # Consistency-tuned streak sizing: cut fast on losses, never boost on wins
         if streak_type == 'losing':
             # Reduce size progressively on losing streaks
             if streak_length >= 4:
-                streak_multiplier = 0.3  # Cut to 30% after 4+ losses (OPTIMIZED: was 0.5 at 3+)
-            elif streak_length == 3:
-                streak_multiplier = 0.5  # 50% after 3 losses (OPTIMIZED: was 0.5 at 3+)
-            elif streak_length == 2:
-                streak_multiplier = 0.7  # 70% after 2 losses (unchanged)
+                streak_multiplier = 0.3   # Cut to 30% after 4+ losses
+            elif streak_length >= 2:
+                streak_multiplier = 0.5   # Cut to 50% after 2+ losses
             else:
-                streak_multiplier = 0.85  # 85% after 1 loss (unchanged)
+                streak_multiplier = 0.85  # 85% after 1 loss
 
             # Additional reduction if win rate is poor
             if win_rate < 0.40:
                 streak_multiplier *= 0.7  # Further 30% reduction if win rate < 40%
                 logger.warning(f"⚠️ Poor win rate ({win_rate*100:.0f}%) - reducing position size")
-        elif streak_type == 'winning':
-            # OPTIMIZED: More conservative increases on winning streaks
-            # Previous logic could lead to overconfidence
-            if streak_length >= 5 and win_rate > 0.65:
-                streak_multiplier = 1.15  # 15% boost after 5+ wins with good win rate (OPTIMIZED: was 1.1 at 3+)
-            elif streak_length >= 3 and win_rate > 0.60:
-                streak_multiplier = 1.10  # 10% boost after 3+ wins with decent win rate (OPTIMIZED: was 1.1 at 3+)
-            else:
-                streak_multiplier = 1.0  # No boost for short streaks
         else:
+            # Winning streak or neutral: hold steady — no overconfidence boost
             streak_multiplier = 1.0
 
         breakdown['streak_type'] = streak_type
