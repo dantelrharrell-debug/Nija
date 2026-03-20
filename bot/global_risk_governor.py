@@ -86,7 +86,7 @@ logger = logging.getLogger("nija.global_risk_governor")
 # Constants – all overridable via constructor kwargs
 # ---------------------------------------------------------------------------
 
-DEFAULT_MAX_DAILY_LOSS_PCT: float = 3.0          # halt if daily loss > 3% of equity
+DEFAULT_MAX_DAILY_LOSS_PCT: float = 5.0          # halt if daily loss > 5% of equity (MAX_DAILY_LOSS)
 DEFAULT_MAX_CONSECUTIVE_LOSSES: int = 5          # halt after 5 consecutive losses
 DEFAULT_EQUITY_MA_WINDOW: int = 20               # equity-curve MA window (trades)
 DEFAULT_MAX_OPEN_POSITIONS: int = 12             # max simultaneous open positions
