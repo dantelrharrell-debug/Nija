@@ -111,6 +111,19 @@ except ImportError:
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
 
+# Import Broker Circuit Breaker for Kraken API reliability
+try:
+    from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState
+    _CIRCUIT_BREAKER_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_circuit_breaker import get_circuit_breaker, BrokerHealthState
+        _CIRCUIT_BREAKER_AVAILABLE = True
+    except ImportError:
+        _CIRCUIT_BREAKER_AVAILABLE = False
+        get_circuit_breaker = None
+        BrokerHealthState = None
+
 # Import stdout suppression utility for pykrakenapi
 try:
     from bot.stdout_utils import suppress_pykrakenapi_prints
@@ -903,21 +916,106 @@ class KrakenBrokerAdapter(BrokerInterface):
         self.api = None
         self.kraken_api = None
 
+        # Circuit breaker for this adapter instance (one breaker per adapter)
+        # Provides: exponential back-off with jitter, health-state tracking,
+        # and hard trading pause when the Kraken API is persistently unstable.
+        self._circuit_breaker = None
+        if _CIRCUIT_BREAKER_AVAILABLE and get_circuit_breaker is not None:
+            cb_name = f"Kraken-{id(self)}"
+            self._circuit_breaker = get_circuit_breaker(
+                cb_name,
+                failure_threshold=5,
+                recovery_timeout=60.0,
+                success_threshold=2,
+                max_retry_delay=30.0,
+            )
+
+        # Flag indicating whether the secondary (fallback) krakenex instance
+        # has been initialised.  Created lazily in _kraken_api_call_with_fallback.
+        self._secondary_api = None
+
     def _kraken_api_call(self, method: str, params: dict = None):
         """
-        Helper method to make Kraken API calls with global serialization lock.
+        Make a Kraken API call with:
 
-        This method wraps all query_private calls with the global API lock
-        to ensure only ONE Kraken API call happens at a time across all accounts.
+        * Global serialisation lock (one call at a time, avoids nonce races).
+        * **Circuit breaker** — opens after 5 consecutive failures, pauses
+          trading for 60 s, then enters HALF-OPEN test mode.
+        * **Secondary endpoint fallback** — if the primary krakenex instance
+          raises a connection / network error, a fresh secondary instance is
+          created (new TCP session) and the call is retried once.
 
         Args:
-            method: Kraken API method name
+            method: Kraken API method name  (e.g. ``'Balance'``, ``'AddOrder'``)
             params: Optional parameters dict
 
         Returns:
-            API response
+            API response dict
         """
-        # Suppress pykrakenapi's print() statements
+        # ── Guard: circuit breaker health check ──────────────────────
+        if self._circuit_breaker is not None and not self._circuit_breaker.is_trading_allowed():
+            status = self._circuit_breaker.get_status()
+            raise Exception(
+                f"Kraken API circuit breaker OPEN — trading paused. "
+                f"Recovery in ~{max(0, self._circuit_breaker.recovery_timeout):.0f}s. "
+                f"State: {status['circuit_state']}"
+            )
+
+        try:
+            result = self._kraken_api_call_primary(method, params)
+            # Record success for circuit-breaker health tracking
+            if self._circuit_breaker is not None:
+                self._circuit_breaker._record_success()
+            return result
+
+        except Exception as primary_exc:
+            primary_msg = str(primary_exc).lower()
+
+            # ── Record failure ────────────────────────────────────────
+            if self._circuit_breaker is not None:
+                self._circuit_breaker._record_failure(primary_exc)
+
+            # ── Secondary endpoint fallback ───────────────────────────
+            # Only attempt fallback for transient network / connection errors.
+            # Hard errors (invalid nonce, insufficient funds, …) are re-raised
+            # immediately so the caller can handle them correctly.
+            _is_network_error = any(
+                kw in primary_msg for kw in (
+                    'timeout', 'connection', 'network', 'remote end closed',
+                    'remotedisconnected', 'connection reset', 'broken pipe',
+                    'eof', 'ssl', 'read timed out', 'service unavailable',
+                    '503', '504',
+                )
+            )
+
+            if not _is_network_error:
+                raise  # Re-raise non-network errors without fallback
+
+            logger.warning(
+                f"⚠️ Kraken primary connection failed ({primary_exc}). "
+                "Attempting secondary endpoint fallback …"
+            )
+
+            try:
+                result = self._kraken_api_call_secondary(method, params)
+                logger.info("✅ Kraken secondary endpoint fallback succeeded")
+                # Count this as a success (primary failed but secondary worked)
+                if self._circuit_breaker is not None:
+                    self._circuit_breaker._record_success()
+                return result
+
+            except Exception as secondary_exc:
+                logger.error(
+                    f"❌ Kraken secondary endpoint also failed: {secondary_exc}"
+                )
+                # Record second failure so circuit breaker accumulates properly
+                if self._circuit_breaker is not None:
+                    self._circuit_breaker._record_failure(secondary_exc)
+                # Raise the *original* primary exception for consistent error messages
+                raise primary_exc from secondary_exc
+
+    def _kraken_api_call_primary(self, method: str, params: dict = None):
+        """Execute a Kraken API call via the primary krakenex instance."""
         with suppress_pykrakenapi_prints():
             if get_kraken_api_lock is not None:
                 api_lock = get_kraken_api_lock()
@@ -932,6 +1030,42 @@ class KrakenBrokerAdapter(BrokerInterface):
                     return self.api.query_private(method, params)
                 else:
                     return self.api.query_private(method)
+
+    def _kraken_api_call_secondary(self, method: str, params: dict = None):
+        """
+        Execute a Kraken API call via a *secondary* (fresh) krakenex instance.
+
+        A fresh instance opens a new TCP session to ``api.kraken.com``,
+        bypassing any stale keep-alive or SSL state from the primary connection.
+        The same credentials and global nonce manager are reused.
+        """
+        import krakenex  # local import — only needed on fallback path
+
+        if self._secondary_api is None:
+            self._secondary_api = krakenex.API(
+                key=self.api_key or "",
+                secret=self.api_secret or "",
+            )
+            # Attach the same global nonce manager so nonces remain monotonic
+            if get_global_kraken_nonce is not None:
+                def _global_nonce():
+                    return str(get_global_kraken_nonce())
+                self._secondary_api._nonce = _global_nonce
+            logger.info("🔌 Kraken secondary API instance created (fallback endpoint)")
+
+        with suppress_pykrakenapi_prints():
+            if get_kraken_api_lock is not None:
+                api_lock = get_kraken_api_lock()
+                with api_lock:
+                    if params:
+                        return self._secondary_api.query_private(method, params)
+                    else:
+                        return self._secondary_api.query_private(method)
+            else:
+                if params:
+                    return self._secondary_api.query_private(method, params)
+                else:
+                    return self._secondary_api.query_private(method)
 
     def connect(self) -> bool:
         """Connect to Kraken API."""
