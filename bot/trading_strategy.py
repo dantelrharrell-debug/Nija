@@ -2094,12 +2094,19 @@ class TradingStrategy:
             logger.info("=" * 70)
 
             # Count active trading accounts
-            active_platform_count = 1 if self.broker else 0
+            # A platform broker is only "active" if it is set AND connected
+            _broker_connected = self.broker is not None and getattr(self.broker, 'connected', False)
+            active_platform_count = 1 if _broker_connected else 0
             active_user_count = 0
 
             # Platform account status
-            if self.broker:
+            if _broker_connected:
                 logger.info(f"✅ PLATFORM ACCOUNT: TRADING (Broker: {self.broker.broker_type.value.upper()})")
+            elif self.broker:
+                logger.info(
+                    f"❌ PLATFORM ACCOUNT: NOT TRADING "
+                    f"(Broker: {self.broker.broker_type.value.upper()} — not connected)"
+                )
             else:
                 logger.info("❌ PLATFORM ACCOUNT: NOT TRADING (No broker connected)")
 

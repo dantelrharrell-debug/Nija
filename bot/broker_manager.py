@@ -9080,8 +9080,15 @@ class BrokerManager:
         #
         # Auto-set first broker as primary ONLY if no primary is set yet
         # This maintains backward compatibility while removing Coinbase preference
+        #
+        # BUGFIX (Mar 2026): set_primary_broker() returns False when _platform_locked=True
+        # (which is set just above for platform brokers). This left active_broker=None
+        # causing get_primary_broker() to always return None and the bot to show
+        # "NO TRADING ACTIVE". Fix: set active_broker directly here so the first
+        # connected platform broker is always usable as the primary.
         if self.active_broker is None:
-            self.set_primary_broker(broker.broker_type)
+            self.active_broker = broker
+            self.primary_broker_type = broker.broker_type
             logger.info(f"   First broker {broker.broker_type.value} set as primary (for legacy compatibility)")
 
         # NOTE: Removed automatic Coinbase priority logic
@@ -9129,10 +9136,20 @@ class BrokerManager:
         """
         Get the current primary/active broker.
 
+        Falls back to platform_broker if active_broker is not set (e.g. when
+        the _platform_locked guard prevented set_primary_broker() from running
+        during add_broker() — the platform_broker attribute is always set for
+        any broker with account_type=="platform").
+
         Returns:
             BaseBroker instance or None if no broker is active
         """
-        return self.active_broker
+        if self.active_broker is not None:
+            return self.active_broker
+        # Fallback: use the last registered platform broker
+        if self.platform_broker is not None:
+            return self.platform_broker
+        return self.primary_broker
 
     def select_primary_platform_broker(self):
         """
@@ -9185,7 +9202,8 @@ class BrokerManager:
                     logger.info(f"   ✅ Kraken: PRIMARY for all new entries")
                     logger.info(f"   ✅ Coinbase: EXIT-ONLY (emergency sells, position closures)")
                     logger.info("=" * 70)
-                    self.set_primary_broker(BrokerType.KRAKEN)
+                    self.active_broker = kraken
+                    self.primary_broker_type = BrokerType.KRAKEN
                     return
                 else:
                     logger.warning(f"⚠️ Kraken not available for promotion")
@@ -9193,6 +9211,29 @@ class BrokerManager:
             else:
                 logger.warning("⚠️ Kraken broker not configured - cannot promote to PRIMARY")
                 logger.warning("   Add Kraken credentials to enable PRIMARY broker fallback")
+
+            # BUGFIX (Mar 2026): When Kraken cannot be promoted, fall back to ANY connected,
+            # non-exit-only broker rather than leaving active_broker pointing at a broken one.
+            # This ensures Coinbase (or another exchange) is used when Kraken is unavailable.
+            current_active_type = (
+                self.active_broker.broker_type if self.active_broker is not None else None
+            )
+            for fb_type, fb_broker in self.brokers.items():
+                if (fb_broker.connected
+                        and not fb_broker.exit_only_mode
+                        and fb_type != current_active_type):
+                    logger.info(
+                        f"🔄 Switching primary broker to {fb_type.value} "
+                        f"(fallback — {current_primary} is unavailable)"
+                    )
+                    self.active_broker = fb_broker
+                    self.primary_broker_type = fb_type
+                    return
+
+            logger.warning(
+                f"⚠️ No connected, non-exit-only broker available as fallback "
+                f"(staying with {current_primary})"
+            )
         else:
             logger.debug(f"✅ Primary broker ({current_primary}) is ready for entries")
 
