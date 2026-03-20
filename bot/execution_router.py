@@ -303,6 +303,10 @@ class ExecutionRouter:
                 self._fill_history = self._fill_history[-1000:]
 
         if result.success:
+            symbol = request.symbol
+            side = request.side
+            size_usd = request.size_usd
+            logger.info(f"🚀 TRADE EXECUTED: {symbol} {side} ${size_usd}")
             logger.info(
                 "✅ Order filled: %s %s $%.2f @ %.6f | slippage %.1f bps | %s | %.0f ms",
                 request.side, request.symbol, result.filled_size_usd,

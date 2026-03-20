@@ -10,9 +10,9 @@ How it works
 ------------
 Capital is divided into **rungs**, much like a physical ladder:
 
-  Rung 1 — SEED    ($15 – $49)   : 80% position, 3.0% target, 1.5% SL,  1 max pos, 3 trades/session
-  Rung 2 — SPROUT  ($50 – $99)   : 75% position, 2.5% target, 1.25% SL, 1 max pos, 4 trades/session
-  Rung 3 — SAPLING ($100 – $249) : 65% position, 2.0% target, 1.0% SL,  2 max pos, 4 trades/session
+  Rung 1 — SEED    ($15 – $49)   : 90% position, 3.0% target, 1.5% SL,  1 max pos, ~5 trades/session (guideline)
+  Rung 2 — SPROUT  ($50 – $99)   : 85% position, 2.5% target, 1.25% SL, 1 max pos, ~6 trades/session (guideline)
+  Rung 3 — SAPLING ($100 – $249) : 70% position, 2.0% target, 1.0% SL,  2 max pos, ~6 trades/session (guideline)
   Rung 4 — TREE    ($250 – $499) : 55% position, 1.8% target, 0.9% SL,  3 max pos, 5 trades/session
   Rung 5 — GROVE   ($500 – $999) : 45% position, 1.5% target, 0.75% SL, 4 max pos, 5 trades/session
   Rung 6 — FOREST  ($1 000+)     : 35% position, 1.2% target, 0.6% SL,  6 max pos, 6 trades/session
@@ -80,8 +80,10 @@ class LadderRung:
         stop_loss_pct:     Stop-loss per trade as a percentage of entry price
                            (e.g. ``1.5`` = 1.5 %).  Maintained at ≈ 2 : 1 R:R.
         max_positions:     Maximum concurrent open positions on this rung.
-        trades_per_session: Target number of trades per compounding session.
-                           Kept small (1–6) to concentrate capital.
+        trades_per_session: Recommended number of high-conviction trades per session.
+                           This is a guideline to maintain focus, not a hard cap enforced
+                           by the engine. The per-symbol cooldown (MICRO_CAP_TRADE_COOLDOWN)
+                           controls actual re-entry frequency independently.
     """
     name: str
     entry_balance: float
@@ -128,29 +130,29 @@ class LadderRung:
 
 LADDER_RUNGS: List[LadderRung] = [
     # Rung 1 — SEED: $15–$49
-    # Absolute concentration: one trade at a time, 80% of capital, 3% target.
+    # Absolute concentration: one trade at a time, 90% of capital, 3% target.
     # Mirrors the micro-cap compounding mode settings.
     LadderRung(
         name="SEED",
         entry_balance=15.0,
         target_balance=50.0,
-        position_size_pct=0.80,
+        position_size_pct=0.90,
         profit_target_pct=3.0,
         stop_loss_pct=1.5,
         max_positions=1,
-        trades_per_session=3,
+        trades_per_session=5,
     ),
     # Rung 2 — SPROUT: $50–$99
-    # Still highly concentrated; slightly relaxed target as spreads tighten.
+    # Still highly concentrated; matches SEED sizing to maximise compounding speed.
     LadderRung(
         name="SPROUT",
         entry_balance=50.0,
         target_balance=100.0,
-        position_size_pct=0.75,
+        position_size_pct=0.85,
         profit_target_pct=2.5,
         stop_loss_pct=1.25,
         max_positions=1,
-        trades_per_session=4,
+        trades_per_session=6,
     ),
     # Rung 3 — SAPLING: $100–$249
     # Two positions allowed; fee drag drops, so target can relax further.
@@ -158,11 +160,11 @@ LADDER_RUNGS: List[LadderRung] = [
         name="SAPLING",
         entry_balance=100.0,
         target_balance=250.0,
-        position_size_pct=0.65,
+        position_size_pct=0.70,
         profit_target_pct=2.0,
         stop_loss_pct=1.0,
         max_positions=2,
-        trades_per_session=4,
+        trades_per_session=6,
     ),
     # Rung 4 — TREE: $250–$499
     # Begin diversifying; meaningful capital per position ($50–$80+).

@@ -106,6 +106,9 @@ HARD_WEEKLY_STOP_PCT = 10.0      # 10% weekly loss → weekly kill switch fires
 HARD_MAX_LEVERAGE = 3.0          # 3x leverage cap — no 10x / 20x
 SAFETY_CLAMP_PCT = 0.25          # Hard ceiling: position_size ≤ 25% of account_balance
 
+# Safety guard: absolute maximum daily loss across all accounts
+MAX_DAILY_LOSS = 0.05            # 5% of portfolio — hard ceiling, triggers full trading halt
+
 
 class AdaptiveRiskManager:
     """
