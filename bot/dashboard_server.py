@@ -102,6 +102,19 @@ except ImportError:
         AI_MONITORING_AVAILABLE = False
         register_ai_monitoring = None
 
+# Import Capital Concentration Engine dashboard routes
+try:
+    from capital_concentration_engine import register_capital_concentration_routes
+    _CC_ROUTES_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.capital_concentration_engine import register_capital_concentration_routes
+        _CC_ROUTES_AVAILABLE = True
+    except ImportError:
+        logger.warning("Capital Concentration Engine not available - dashboard routes not registered")
+        _CC_ROUTES_AVAILABLE = False
+        register_capital_concentration_routes = None  # type: ignore[assignment]
+
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 10  # 10 seconds
 
@@ -2110,6 +2123,19 @@ if __name__ == "__main__":
             logger.warning(f"⚠️ Could not register AI Monitoring API: {e}")
     else:
         logger.warning("⚠️ AI Monitoring API not available")
+
+    # Register Capital Concentration Engine real-time dashboard routes
+    if _CC_ROUTES_AVAILABLE and register_capital_concentration_routes:
+        try:
+            register_capital_concentration_routes(app)
+            logger.info(
+                "✅ Capital Concentration routes registered "
+                "(/api/v1/capital-concentration/{dashboard,ranking,multipliers,live-status,health})"
+            )
+        except Exception as _cce_dash_err:
+            logger.warning("⚠️ Could not register Capital Concentration routes: %s", _cce_dash_err)
+    else:
+        logger.warning("⚠️ Capital Concentration Engine dashboard routes not available")
 
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")

@@ -284,6 +284,31 @@ except ImportError:
     except ImportError:
         AI_CAPITAL_ALLOCATOR_AVAILABLE = False
         get_ai_capital_allocator = None
+
+# Import Capital Concentration Engine — concentration mode, account ranking,
+# kill-weak accounts, live-execution verification, Kelly sizing, dashboard
+try:
+    from capital_concentration_engine import get_capital_concentration_engine
+    CAPITAL_CONCENTRATION_AVAILABLE = True
+    logger.info(
+        "✅ Capital Concentration Engine loaded - "
+        "concentration mode + account ranking + kill-weak + Kelly sizing active"
+    )
+except ImportError:
+    try:
+        from bot.capital_concentration_engine import get_capital_concentration_engine
+        CAPITAL_CONCENTRATION_AVAILABLE = True
+        logger.info(
+            "✅ Capital Concentration Engine loaded - "
+            "concentration mode + account ranking + kill-weak + Kelly sizing active"
+        )
+    except ImportError:
+        CAPITAL_CONCENTRATION_AVAILABLE = False
+        get_capital_concentration_engine = None  # type: ignore[assignment]
+        logger.warning(
+            "⚠️ Capital Concentration Engine not available - "
+            "concentration mode / account ranking / kill-weak disabled"
+        )
 try:
     from ai_market_regime_forecaster import get_ai_market_regime_forecaster
     AI_REGIME_FORECASTER_AVAILABLE = True
@@ -1385,6 +1410,21 @@ class TradingStrategy:
                 self.win_rate_maximizer = None
         else:
             self.win_rate_maximizer = None
+
+        # Initialize Capital Concentration Engine — concentration mode, account ranking,
+        # kill-weak accounts, live-execution verification, Kelly sizing, dashboard
+        if CAPITAL_CONCENTRATION_AVAILABLE and get_capital_concentration_engine is not None:
+            try:
+                self.capital_concentration_engine = get_capital_concentration_engine()
+                logger.info(
+                    "✅ Capital Concentration Engine initialized - "
+                    "concentration mode / account ranking / kill-weak / Kelly sizing active"
+                )
+            except Exception as _cce_err:
+                logger.warning("⚠️ Failed to initialize Capital Concentration Engine: %s", _cce_err)
+                self.capital_concentration_engine = None
+        else:
+            self.capital_concentration_engine = None
 
         # Initialize Profit Lock System — ratchet stops + auto-withdrawal of secured gains
         if PROFIT_LOCK_SYSTEM_AVAILABLE and _get_profit_lock_system is not None:
@@ -8378,6 +8418,14 @@ class TradingStrategy:
             # Never raise to keep bot loop alive
             logger.error(f"Error in trading cycle: {e}", exc_info=True)
 
+    def _get_primary_broker_id(self) -> str:
+        """Return a stable string identifier for the currently active broker."""
+        if hasattr(self, 'broker') and self.broker:
+            btype = getattr(self.broker, 'broker_type', None)
+            if btype is not None:
+                return str(btype.value).lower() if hasattr(btype, 'value') else str(btype).lower()
+        return "primary"
+
     def record_trade_with_advanced_manager(self, symbol: str, profit_usd: float, is_win: bool):
         """
         Record a completed trade with the advanced trading manager.
@@ -8501,6 +8549,18 @@ class TradingStrategy:
                 )
             except Exception as _wmx_err:
                 logger.debug("Win Rate Maximizer record_outcome skipped for %s: %s", symbol, _wmx_err)
+
+        # 📊 CAPITAL CONCENTRATION ENGINE — update concentration mode, account ranking,
+        # kill-weak state, and Kelly sizing stats after every closed trade
+        if hasattr(self, 'capital_concentration_engine') and self.capital_concentration_engine is not None:
+            try:
+                self.capital_concentration_engine.record_trade(
+                    account_id=self._get_primary_broker_id(),
+                    pnl_usd=profit_usd,
+                    is_win=is_win,
+                )
+            except Exception as _cce_err:
+                logger.debug("Capital Concentration Engine record_trade skipped for %s: %s", symbol, _cce_err)
 
         # 🔒 PROFIT LOCK SYSTEM — record realised profit and trigger auto-withdrawal if threshold met
         if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:
