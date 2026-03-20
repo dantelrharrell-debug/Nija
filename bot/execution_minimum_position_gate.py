@@ -50,6 +50,19 @@ except ImportError:
         MICRO_ACCOUNT_THRESHOLD = 5.0
         logger.warning("⚠️ Fee-aware config not available - using default minimums")
 
+# Import adaptive minimum sizing for confidence-aware enforcement
+try:
+    from bot.adaptive_minimum_sizing import get_adaptive_minimum_sizer
+    ADAPTIVE_MIN_SIZING_AVAILABLE = True
+except ImportError:
+    try:
+        from adaptive_minimum_sizing import get_adaptive_minimum_sizer
+        ADAPTIVE_MIN_SIZING_AVAILABLE = True
+    except ImportError:
+        ADAPTIVE_MIN_SIZING_AVAILABLE = False
+        get_adaptive_minimum_sizer = None  # type: ignore
+        logger.warning("⚠️ Adaptive minimum sizing not available - using static minimums")
+
 
 class ExecutionMinimumPositionGate:
     """
@@ -272,6 +285,90 @@ class ExecutionMinimumPositionGate:
         
         return True, f"Balance ${balance:.2f} sufficient for {tier_name} tier trading"
     
+    def validate_with_confidence(
+        self,
+        position_size_usd: float,
+        balance: float,
+        confidence: float,
+        broker_name: str = "coinbase",
+        symbol: str = "UNKNOWN",
+        user_id: Optional[str] = None,
+    ) -> Tuple[bool, str, Dict]:
+        """
+        Confidence-aware position size validation (adaptive minimum sizing).
+
+        Combines the standard tier/balance check with the adaptive minimum engine:
+
+        * High-confidence signals may be bumped up to the broker minimum instead
+          of being rejected, ensuring quality setups are never silently dropped.
+        * Low-confidence signals face a *higher* minimum than the raw broker floor,
+          preventing weak trades from sneaking through.
+
+        Falls back to the standard ``validate_position_size`` when the adaptive
+        minimum sizing module is unavailable.
+
+        Args:
+            position_size_usd: Proposed position size in USD.
+            balance:           Current account balance in USD.
+            confidence:        Normalised signal confidence in [0.0, 1.0].
+            broker_name:       Broker / exchange name (e.g. 'coinbase').
+            symbol:            Trading symbol (for logging).
+            user_id:           Optional user identifier.
+
+        Returns:
+            Tuple[bool, str, Dict]: (is_valid, reason, details)
+            The ``details`` dict also carries:
+                ``adaptive_min``       – float (adaptive minimum used)
+                ``bumped``             – bool (True if size was bumped to broker_min)
+                ``recommended_size``   – float (use this size if bumped is True)
+        """
+        # Always run the base tier / balance check first
+        is_valid, base_reason, details = self.validate_position_size(
+            position_size_usd, balance, symbol=symbol, user_id=user_id
+        )
+
+        # Enrich details with confidence info
+        details["confidence"] = confidence
+        details["broker_name"] = broker_name
+
+        if not ADAPTIVE_MIN_SIZING_AVAILABLE:
+            # Graceful degradation – just return the standard result
+            details["adaptive_min"] = details.get("min_size_usd", 0.0)
+            details["bumped"] = False
+            details["recommended_size"] = position_size_usd
+            return is_valid, base_reason, details
+
+        # Run adaptive minimum check
+        sizer = get_adaptive_minimum_sizer()
+        broker_min = sizer.get_broker_minimum(broker_name)
+        bump_result = sizer.get_minimum_bump_recommendation(
+            position_size_usd=position_size_usd,
+            broker_min=broker_min,
+            confidence=confidence,
+            account_balance=balance,
+        )
+
+        details["adaptive_min"] = bump_result["adaptive_min"]
+        details["bumped"] = bump_result["bumped"]
+        details["recommended_size"] = bump_result["recommended_size"]
+
+        # If the adaptive check passes but the base check failed → let base win
+        # (tier/balance checks are hard limits).
+        if not is_valid:
+            return False, base_reason, details
+
+        # If the adaptive check fails (weak signal) → reject even though base passed
+        if not bump_result["valid"]:
+            logger.warning(
+                f"❌ ADAPTIVE MINIMUM: {bump_result['reason']} "
+                f"| symbol={symbol} user={user_id or 'unknown'}"
+            )
+            return False, bump_result["reason"], details
+
+        # Trade is valid (possibly with a bumped size)
+        reason = bump_result["reason"] if bump_result["bumped"] else base_reason
+        return True, reason, details
+
     def get_recommended_position_size(self, balance: float) -> Dict:
         """
         Get recommended position size range for monitoring/UI.
