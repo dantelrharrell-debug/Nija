@@ -1154,8 +1154,11 @@ class MultiAccountBrokerManager:
 
             # --- Step 3: Verify platform presence before connecting the user ---
             # Use the PAL singleton to confirm that NIJA platform credentials exist
-            # for this exchange.  If they are absent we cannot safely operate in
-            # multi-user SaaS mode, so we block the standalone fallback.
+            # for this exchange.  If they are absent we fall back to USER-ONLY mode
+            # so the user account can still trade independently.
+            # Default False; set to True only when falling back to USER-ONLY mode
+            # (no platform credentials configured for this exchange).
+            allow_user_trading = False
             if not platform_connected:
                 # Retry before concluding the platform is absent — it may still
                 # be completing its own connection handshake.
@@ -1164,11 +1167,8 @@ class MultiAccountBrokerManager:
                     _pal = get_platform_account_layer() if get_platform_account_layer is not None else None
                     _has_platform = _pal.has_platform_account(broker_type.value) if _pal is not None else False
                     if not _has_platform:
-                        logger.warning(f"⚠️  Platform not detected — blocking standalone fallback")
-                        logger.warning(f"   User: {user.name} ({user.user_id}) [{broker_type.value.upper()}]")
-                        logger.warning(f"   Configure {broker_type.value.upper()}_PLATFORM_API_KEY / SECRET")
-                        logger.warning(f"   to enable multi-user SaaS trading for this exchange.")
-                        continue
+                        logger.warning("⚠️ Falling back to USER-ONLY mode")
+                        allow_user_trading = True
 
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken
@@ -1182,6 +1182,8 @@ class MultiAccountBrokerManager:
             logger.info(f"📊 Connecting {user.name} ({user.user_id}) to {broker_type.value.title()}...")
             if platform_connected:
                 logger.info(f"   ✅ Platform {broker_type.value.upper()} is connected (correct priority)")
+            elif allow_user_trading:
+                logger.info(f"   ℹ️  No platform account for {broker_type.value.upper()} — running in USER-ONLY mode")
             else:
                 logger.info(f"   ℹ️  Platform {broker_type.value.upper()} is present but not yet connected")
             # Flush to ensure this message appears before connection attempt logs
