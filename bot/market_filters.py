@@ -39,6 +39,40 @@ TOP_10_HIGH_LIQUIDITY_SYMBOLS = {
 # Backward-compatible alias (kept for any external references)
 TOP_20_HIGH_LIQUIDITY_SYMBOLS = TOP_10_HIGH_LIQUIDITY_SYMBOLS
 
+# Per-symbol minimum 24-hour trading volume threshold (USD).
+#
+# Overrides the generic `min_volume_usd` default ($100 k) used in
+# `check_pair_quality()`.  List coins whose natural liquidity is much lower
+# OR higher than the global default so the scanner doesn't silently exclude
+# thinly-traded pairs or apply an insufficient bar to liquid majors.
+#
+# Values are minimum *USD* 24-hour volume.  A coin not listed here falls back
+# to whatever `min_volume_usd` is passed to `check_pair_quality()` (default
+# $100 k).  Both dash-style ("XDC-USD") and no-dash ("XDCUSD") variants are
+# included so callers with either format get a hit.
+MIN_VOLUME_BY_SYMBOL: Dict[str, float] = {
+    # ── Low-liquidity long-tail tokens ─────────────────────────────────────
+    # These have sparse Coinbase volume; the global $100 k default would
+    # silently exclude them despite being legitimately tradeable.
+    "XDCUSD":      100,      # XDC Network  – very sparse Coinbase volume
+    "XDC-USD":     100,
+    "ALGOUSD":     500,      # Algorand      – low but valid volume
+    "ALGO-USD":    500,
+    "XLMUSD":    1_000,      # Stellar       – moderate volume
+    "XLM-USD":   1_000,
+    "ATOMUSD":   5_000,      # Cosmos        – medium volume
+    "ATOM-USD":  5_000,
+    "DOTUSD":   10_000,      # Polkadot      – medium volume
+    "DOT-USD":  10_000,
+    # ── High-liquidity majors (explicit floor prevents stale-data passes) ──
+    "BTCUSD":  1_000_000,    # Bitcoin  – must have ≥ $1 M/day to be valid
+    "BTC-USD": 1_000_000,
+    "ETHUSD":    500_000,    # Ethereum – must have ≥ $500 k/day
+    "ETH-USD":   500_000,
+    "SOLUSD":    100_000,    # Solana   – must have ≥ $100 k/day
+    "SOL-USD":   100_000,
+}
+
 
 def is_high_liquidity_symbol(symbol: str) -> bool:
     """
@@ -664,10 +698,15 @@ def check_pair_quality(symbol, bid_price, ask_price, volume_24h=None, atr_pct=No
 
     # Check volume if provided
     if volume_24h is not None:
-        if volume_24h >= min_volume_usd:
-            reasons_passed.append(f'Good volume (${volume_24h:,.0f} > ${min_volume_usd:,.0f})')
+        # Per-symbol override takes priority over the generic min_volume_usd
+        # so that low-liquidity coins (e.g. XDCUSD) are not silently excluded
+        # by the global $100 k default, and that liquid majors are held to a
+        # higher bar.
+        effective_min_volume = MIN_VOLUME_BY_SYMBOL.get(symbol, min_volume_usd)
+        if volume_24h >= effective_min_volume:
+            reasons_passed.append(f'Good volume (${volume_24h:,.0f} > ${effective_min_volume:,.0f})')
         else:
-            reasons_failed.append(f'Low volume (${volume_24h:,.0f} < ${min_volume_usd:,.0f})')
+            reasons_failed.append(f'Low volume (${volume_24h:,.0f} < ${effective_min_volume:,.0f})')
 
     # Check ATR if provided
     if atr_pct is not None:

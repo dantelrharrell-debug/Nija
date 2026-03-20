@@ -103,7 +103,7 @@ MARKET_ORDER_MIN_PROFIT_TARGET = 0.030  # 3.0% minimum target (was 2.5%, increas
 LIMIT_ORDER_MIN_PROFIT_TARGET = 0.025   # 2.5% minimum target (was 2.0%, increased for safety margin)
 
 # Trailing stop activation (only trail after this profit)
-TRAILING_ACTIVATION_MIN = LIMIT_ORDER_MIN_PROFIT_TARGET  # 2.0%
+TRAILING_ACTIVATION_MIN = LIMIT_ORDER_MIN_PROFIT_TARGET  # 2.5%
 
 # Take profit levels (scaled above fee threshold)
 TP1_TARGET = 0.030  # 3.0% - covers fees + small profit
