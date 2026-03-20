@@ -44,15 +44,92 @@ EXCHANGE_MIN_TRADE_USD = {
 }
 
 MIN_BASE_SIZES = {
-    # Coinbase minimums (approximate - updated Jan 2026)
-    # NOTE: USD values in comments are examples at Jan 2026 prices and will change
-    'BTC': 0.00001,  # Example: ~$0.45 at $45k BTC
-    'ETH': 0.0001,   # Example: ~$0.30 at $3k ETH
-    'SOL': 0.01,     # Example: ~$1.00 at $100 SOL
-    'XRP': 1.0,      # Example: ~$0.50 at $0.50 XRP
-    'ADA': 1.0,      # Example: ~$0.50 at $0.50 ADA
-    'DOGE': 1.0,     # Example: ~$0.10 at $0.10 DOGE
+    # Coinbase minimum order sizes in base currency (updated Mar 2026).
+    # Where Coinbase publishes an explicit minimum, that value is used;
+    # otherwise a conservative estimate is applied.
+    # NOTE: USD values in comments are approximate at Mar 2026 prices.
+
+    # ── Tier 1: Major, high-price assets ───────────────────────────────────
+    'BTC':   0.000001,  # ~$0.06 at $60k BTC  (Coinbase: 0.000001)
+    'ETH':   0.0001,    # ~$0.30 at $3k ETH
+    'BNB':   0.001,     # ~$0.60 at $600 BNB
+
+    # ── Tier 2: Mid-range assets ($50–$500) ────────────────────────────────
+    'SOL':   0.01,      # ~$1.50 at $150 SOL
+    'AVAX':  0.01,      # ~$0.30 at $30 AVAX
+    'LINK':  0.01,      # ~$0.15 at $15 LINK
+    'DOT':   0.01,      # ~$0.07 at $7 DOT
+    'LTC':   0.001,     # ~$0.08 at $80 LTC
+    'BCH':   0.001,     # ~$0.50 at $500 BCH
+    'UNI':   0.01,      # ~$0.10 at $10 UNI
+    'AAVE':  0.001,     # ~$0.10 at $100 AAVE
+    'ATOM':  0.01,      # ~$0.10 at $10 ATOM
+    'FIL':   0.01,      # ~$0.05 at $5 FIL
+    'ICP':   0.01,      # ~$0.10 at $10 ICP
+
+    # ── Tier 3: Sub-$5 assets ──────────────────────────────────────────────
+    'XRP':   1.0,       # ~$0.50 at $0.50 XRP
+    'ADA':   1.0,       # ~$0.40 at $0.40 ADA
+    'DOGE':  1.0,       # ~$0.15 at $0.15 DOGE
+    'MATIC': 1.0,       # ~$0.70 at $0.70 MATIC
+    'XLM':   1.0,       # ~$0.10 at $0.10 XLM
+    'ALGO':  1.0,       # ~$0.15 at $0.15 ALGO
+    'VET':   1.0,       # ~$0.03 at $0.03 VET
+    'HBAR':  1.0,       # ~$0.07 at $0.07 HBAR
+    'EOS':   1.0,       # ~$0.75 at $0.75 EOS
+    'TRX':   1.0,       # ~$0.10 at $0.10 TRX
+    'CHZ':   1.0,       # ~$0.10 at $0.10 CHZ
+
+    # ── Tier 4: Very low-price assets (need large base qty) ───────────────
+    # These coins require a larger minimum unit count due to their small
+    # per-unit price; using the generic 0.0001 fallback would silently allow
+    # dust orders that Coinbase rejects.
+    'XDC':   100.0,     # ~$5 at $0.05 XDC  (Coinbase explicit minimum)
+    'SHIB':  1_000_000, # ~$25 at $0.000025 SHIB
+    'PEPE':  1_000_000, # ~$10 at $0.00001 PEPE
+    'BONK':  1_000_000, # ~$25 at $0.000025 BONK
+    'MANA':  1.0,       # ~$0.40 at $0.40 MANA (Decentraland)
 }
+
+
+def _extract_base_currency(symbol: str) -> str:
+    """Extract the base currency from a trading pair symbol.
+
+    Handles dash-style (``"BTC-USD"``, ``"BTC/USD"``) and compact
+    (``"BTCUSD"``) formats.  Quote suffixes are stripped in longest-first
+    order so that ``"USDCUSD"`` → ``"USDC"`` rather than ``"USDC"`` being
+    stripped as ``"USD"``.
+
+    Args:
+        symbol: Trading pair in any common format.
+
+    Returns:
+        Base currency ticker string (e.g. ``"BTC"``).
+    """
+    if '-' in symbol or '/' in symbol:
+        return symbol.split('-')[0].split('/')[0]
+    # Compact format: strip known quote suffixes longest-first to avoid
+    # partial matches (e.g. USDC before USD).
+    for suffix in ('USDT', 'USDC', 'USD', 'BTC', 'ETH'):
+        if symbol.endswith(suffix) and len(symbol) > len(suffix):
+            return symbol[: -len(suffix)]
+    return symbol
+
+
+def get_min_base_size(symbol: str) -> float:
+    """Return the minimum base-currency order quantity for *symbol*.
+
+    Handles both dash-style (``"BTC-USD"``, ``"BTC/USD"``) and compact
+    (``"BTCUSD"``) formats so callers don't need to normalise beforehand.
+    Falls back to ``0.0001`` when the base currency is not listed.
+
+    Args:
+        symbol: Trading pair in any common format.
+
+    Returns:
+        Minimum order size in base currency units.
+    """
+    return MIN_BASE_SIZES.get(_extract_base_currency(symbol), 0.0001)
 
 
 def get_exchange_min_trade_size(exchange: str = 'coinbase') -> float:
@@ -160,8 +237,8 @@ def calculate_user_position_size(
 
         elif size_type == 'base' and symbol:
             # For crypto-denominated trades, check against exchange minimums
-            base_currency = symbol.split('-')[0] if '-' in symbol else symbol
-            min_base = MIN_BASE_SIZES.get(base_currency, 0.0001)
+            min_base = get_min_base_size(symbol)
+            base_currency = _extract_base_currency(symbol)
 
             if user_size < min_base:
                 logger.warning(f"   ⚠️  Position too small: {user_size} {base_currency} < {min_base} minimum")
@@ -226,8 +303,8 @@ def validate_position_size(
                 }
 
         elif size_type == 'base' and symbol:
-            base_currency = symbol.split('-')[0] if '-' in symbol else symbol
-            min_base = MIN_BASE_SIZES.get(base_currency, 0.0001)
+            min_base = get_min_base_size(symbol)
+            base_currency = _extract_base_currency(symbol)
 
             if size < min_base:
                 return {

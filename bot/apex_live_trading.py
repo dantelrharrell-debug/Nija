@@ -275,16 +275,22 @@ class ApexLiveTrader:
         if gross_profit_pct <= 0:
             return None
 
-        # Default round-trip fee (Coinbase: ~0.6% entry + ~0.6% exit + ~0.2% spread = ~1.4%)
-        DEFAULT_ROUND_TRIP_FEE = 0.014
+        # Round-trip fee sourced from the authoritative fee_aware_config so
+        # this function stays in sync with execution_engine.py automatically.
+        try:
+            from fee_aware_config import MARKET_ORDER_ROUND_TRIP as _ROUND_TRIP_FEE
+        except ImportError:
+            _ROUND_TRIP_FEE = 0.014  # 1.4% Coinbase conservative fallback
 
-        # FEE-AWARE profit thresholds (GROSS profit needed for NET profitability)
-        # Each threshold ensures NET profit after round-trip fees
+        # FEE-AWARE profit thresholds aligned with execution_engine.py
+        # (Coinbase high-fee path: 2.0 / 2.5 / 3.5 / 5.0%).
+        # Levels 3 and 4 were previously 3.0% and 4.0%, which closed too
+        # early and sacrificed meaningful upside — fixed here.
         exit_levels = [
             (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~0.6% NET
             (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~1.1% NET
-            (0.030, 0.25, 'tp_exit_3.0pct'),   # Exit 25% at 3.0% gross → ~1.6% NET
-            (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~2.6% NET
+            (0.035, 0.25, 'tp_exit_3.5pct'),   # Exit 25% at 3.5% gross → ~2.1% NET
+            (0.050, 0.50, 'tp_exit_5.0pct'),   # Exit 50% at 5.0% gross → ~3.6% NET
         ]
 
         for gross_threshold, exit_pct, exit_flag in exit_levels:
@@ -298,11 +304,11 @@ class ApexLiveTrader:
                 position[exit_flag] = True
 
                 # Calculate expected NET profit for this exit
-                expected_net_pct = gross_threshold - DEFAULT_ROUND_TRIP_FEE
+                expected_net_pct = gross_threshold - _ROUND_TRIP_FEE
 
                 logger.info(f"✅ FEE-AWARE profit exit triggered: {symbol} {side}")
                 logger.info(f"  Gross profit: {gross_profit_pct*100:.2f}% ≥ {gross_threshold*100:.1f}% threshold")
-                logger.info(f"  Est. fees: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%")
+                logger.info(f"  Est. fees: {_ROUND_TRIP_FEE*100:.1f}%")
                 logger.info(f"  NET profit: ~{expected_net_pct*100:.1f}% (meets profit criteria)")
                 logger.info(f"  Exiting: {exit_pct*100:.0f}% of position")
 
