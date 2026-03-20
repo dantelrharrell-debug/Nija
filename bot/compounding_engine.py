@@ -59,8 +59,8 @@ class TierConfig:
 
 
 TIER_CONFIGS: Dict[GrowthTier, TierConfig] = {
-    GrowthTier.SEED: TierConfig("SEED", 0, 1_000, 0.60, 0.40, 1.25, 0.30),
-    GrowthTier.STARTER: TierConfig("STARTER", 1_000, 5_000, 0.70, 0.30, 1.50, 0.35),
+    GrowthTier.SEED: TierConfig("SEED", 0, 1_000, 0.80, 0.20, 1.50, 0.50),
+    GrowthTier.STARTER: TierConfig("STARTER", 1_000, 5_000, 0.85, 0.15, 1.75, 0.40),
     GrowthTier.GROWTH: TierConfig("GROWTH", 5_000, 25_000, 0.80, 0.20, 1.75, 0.40),
     GrowthTier.SCALE: TierConfig("SCALE", 25_000, 100_000, 0.85, 0.15, 2.00, 0.45),
     GrowthTier.ELITE: TierConfig("ELITE", 100_000, float("inf"), 0.90, 0.10, 2.50, 0.50),
