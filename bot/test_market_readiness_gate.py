@@ -103,13 +103,13 @@ def test_cautious_mode_blocked():
     
     gate = MarketReadinessGate(state_file="/tmp/test_market_readiness_cautious_blocked.json")
     
-    # Same marginal conditions but low entry score
+    # Same marginal conditions but score below the new threshold (70)
     atr = 70.0
     current_price = 15000.0
     adx = 22.0
     volume_percentile = 50.0
     spread_pct = 0.0012
-    entry_score = 75  # Below 85 threshold
+    entry_score = 60  # Below 70 threshold (was 75 below old 85 threshold)
     
     mode, conditions, details = gate.check_market_readiness(
         atr=atr,
@@ -126,7 +126,7 @@ def test_cautious_mode_blocked():
     print(f"Min Entry Score: {details.get('min_entry_score', 'N/A')}")
     
     assert mode == MarketMode.CAUTIOUS, "Should be CAUTIOUS mode"
-    assert not details['allow_entries'], "Should block low-score entries"
+    assert not details['allow_entries'], "Should block entries below score threshold"
     print("✅ CAUTIOUS mode blocking test PASSED")
 
 

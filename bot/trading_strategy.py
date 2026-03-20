@@ -4545,6 +4545,25 @@ class TradingStrategy:
             mode_label = "MASTER (full strategy)"
         logger.info(f"🔄 Trading cycle mode: {mode_label}")
 
+        # 🔄 BACKGROUND PLATFORM RECONNECT — self-heal disconnected platform brokers.
+        # Only runs in MASTER mode (not user mode) and only on every 5th cycle to avoid
+        # hammering the API, but still recovers quickly after a transient startup failure.
+        # Note: cycle_count is incremented at the end of each run_cycle call (see below),
+        # so this check fires on cycles 0, 5, 10 … which is the correct periodic cadence.
+        if not user_mode and hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+            try:
+                _cycle = getattr(self, 'cycle_count', 0)
+                if _cycle % 5 == 0:
+                    for _bt, _pb in list(self.multi_account_manager.platform_brokers.items()):
+                        if _pb is not None and not _pb.connected:
+                            logger.info(
+                                f"🔄 Cycle {_cycle}: Platform {_bt.value.upper()} is offline — "
+                                "attempting background reconnect…"
+                            )
+                            self.multi_account_manager.try_reconnect_platform_broker(_bt)
+            except Exception as _reconnect_err:
+                logger.debug(f"Background platform reconnect check error: {_reconnect_err}")
+
         # ⏱️ Scan-cycle timing: record overall start time
         cycle_start_time = time.time()
         
@@ -6906,6 +6925,11 @@ class TradingStrategy:
                         'sector_cap': 0,
                     }
 
+                    # 📡 SIGNAL TRACE — collect near-miss signals for end-of-cycle reporting.
+                    # Each entry: {'symbol': str, 'score': float, 'reason': str, 'direction': str}
+                    # Only the top-3 closest-to-entry symbols are shown to keep logs concise.
+                    _near_miss_signals: list = []
+
                     # ═══════════════════════════════════════════════════════
                     # PRIORITY SELECTION — phase 1: collect validated signals
                     # ═══════════════════════════════════════════════════════
@@ -7296,6 +7320,22 @@ class TradingStrategy:
                                 else:
                                     filter_stats['no_entry_signal'] += 1
                                     logger.debug(f"   {symbol}: No signal - {reason}")
+
+                                # 📡 NEAR-MISS CAPTURE: record signals that have a score so
+                                # the end-of-cycle summary can show "closest to entry" symbols.
+                                _NEAR_MISS_REASON_MAX = 80  # max chars for reason string in near-miss report
+                                _nm_score = analysis.get('score', analysis.get('enhanced_score', None))
+                                if _nm_score is not None:
+                                    try:
+                                        _nm_score_f = float(_nm_score)
+                                        _near_miss_signals.append({
+                                            'symbol': symbol,
+                                            'score': _nm_score_f,
+                                            'reason': reason[:_NEAR_MISS_REASON_MAX] if reason else 'no signal',
+                                            'direction': analysis.get('direction', analysis.get('trend', '?')),
+                                        })
+                                    except (TypeError, ValueError):
+                                        pass
                                 continue
 
                             # Execute buy actions
@@ -7630,7 +7670,8 @@ class TradingStrategy:
                                             continue
                                         elif mode == MarketMode.CAUTIOUS:
                                             if not details['allow_entries']:
-                                                logger.info(f"   ⚠️  {symbol}: CAUTIOUS MODE - Entry blocked (score {entry_score:.0f} < 85)")
+                                                _min_score_req = details.get('min_entry_score', 70)
+                                                logger.info(f"   ⚠️  {symbol}: CAUTIOUS MODE - Entry blocked (score {entry_score:.0f} < {_min_score_req})")
                                                 filter_stats['market_filter'] += 1
                                                 continue
                                             else:
@@ -7640,7 +7681,7 @@ class TradingStrategy:
                                                 position_size = position_size * cautious_multiplier
                                                 logger.info(f"   ⚠️  {symbol}: CAUTIOUS MODE - Position size reduced to {cautious_multiplier*100:.0f}%")
                                                 logger.info(f"      Original: ${original_size:.2f} → Cautious: ${position_size:.2f}")
-                                                logger.info(f"      Entry score: {entry_score:.0f}/100 (A+ setup)")
+                                                logger.info(f"      Entry score: {entry_score:.0f}/100")
                                         elif mode == MarketMode.AGGRESSIVE:
                                             logger.debug(f"   🚀 {symbol}: AGGRESSIVE MODE - Full position sizing")
                                         
@@ -8253,6 +8294,19 @@ class TradingStrategy:
                         logger.info(f"      🏷️  Sector cap (40%): {filter_stats['sector_cap']}")
                     if filter_stats.get('entry_guardrails', 0) > 0:
                         logger.info(f"      🛡️  Entry guardrails: {filter_stats['entry_guardrails']}")
+
+                    # 📡 SIGNAL TRACE — show top-3 near-miss symbols so users can see
+                    # which pairs are closest to triggering a trade and why they didn't.
+                    if _near_miss_signals:
+                        _top_near_misses = sorted(
+                            _near_miss_signals, key=lambda x: x['score'], reverse=True
+                        )[:3]
+                        logger.info("   📡 SIGNAL TRACE — closest to entry this cycle:")
+                        for _nm in _top_near_misses:
+                            logger.info(
+                                f"      • {_nm['symbol']} | score {_nm['score']:.1f}/100 "
+                                f"| dir:{_nm['direction']} | {_nm['reason']}"
+                            )
 
                     # EXPLICIT: Log waiting status when no signals found
                     if filter_stats['signals_found'] == 0:

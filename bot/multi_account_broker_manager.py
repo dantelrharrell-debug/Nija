@@ -494,7 +494,7 @@ class MultiAccountBrokerManager:
     def _wait_and_retry_platform_connection(
         self,
         broker_type: BrokerType,
-        retries: int = 3,
+        retries: int = 15,
         wait_secs: float = 2.0,
     ) -> bool:
         """
@@ -505,20 +505,36 @@ class MultiAccountBrokerManager:
         reports as connected; ``False`` if it is still offline after all
         retries.
 
+        The default retry window is 15 × 2 s = 30 s, which gives the
+        Platform broker enough time to complete its own internal retry loop.
+        The Platform's KrakenBroker.connect() uses exponential back-off:
+        attempt 1 at T+0, then waits 5s, 10s, 20s, 40s between retries—
+        up to ~75 s total for 5 attempts.  30 s of user-side polling covers
+        the first 2–3 Platform retry windows, which is sufficient for most
+        transient failures (nonce errors, brief network blips).
+
         Args:
             broker_type: Exchange to check.
             retries: Number of additional attempts before giving up.
+                     Default raised from 3 → 15 (30 s total window).
             wait_secs: Seconds to wait between each attempt.
 
         Returns:
             bool: True if platform became connected within the retry window.
         """
         broker_name = broker_type.value.upper()
+        # Only log a progress line every 5 attempts to avoid flooding the log
+        # while still giving visibility into the wait.
         for attempt in range(1, retries + 1):
-            logger.info(
-                f"   ⏳ Platform {broker_name} not connected yet — "
-                f"waiting {wait_secs:.0f}s before retry {attempt}/{retries}..."
-            )
+            if attempt == 1 or attempt % 5 == 0:
+                logger.info(
+                    f"   ⏳ Platform {broker_name} not connected yet — "
+                    f"waiting {wait_secs:.0f}s before retry {attempt}/{retries}..."
+                )
+            else:
+                logger.debug(
+                    f"   ⏳ Platform {broker_name} retry {attempt}/{retries}..."
+                )
             time.sleep(wait_secs)
             if self.is_platform_connected(broker_type):
                 logger.info(
@@ -625,6 +641,36 @@ class MultiAccountBrokerManager:
         """
         self._balance_cache.clear()
         logger.debug("Balance cache cleared for new trading cycle")
+
+    def try_reconnect_platform_broker(self, broker_type: BrokerType) -> bool:
+        """
+        Attempt to reconnect a platform broker that is registered but not connected.
+
+        This is called from the main trading loop as a background self-heal so
+        that a transient startup failure (network blip, nonce error, rate-limit)
+        does not permanently prevent the Platform account from trading.
+
+        Returns True if the broker is now connected after the attempt; False
+        if it is still offline (caller should retry on the next cycle).
+        """
+        broker = self._platform_brokers.get(broker_type)
+        if broker is None:
+            return False
+        if broker.connected:
+            return True  # Already connected – nothing to do
+
+        broker_name = broker_type.value.upper()
+        logger.info(f"🔄 Background reconnect: attempting to reconnect Platform {broker_name}…")
+        try:
+            if broker.connect():
+                logger.info(f"   ✅ Platform {broker_name} reconnected successfully")
+                return True
+            else:
+                logger.debug(f"   ⚠️  Platform {broker_name} reconnect attempt failed (will retry later)")
+                return False
+        except Exception as exc:
+            logger.debug(f"   ⚠️  Platform {broker_name} reconnect error: {exc}")
+            return False
 
     def get_platform_balance(self, broker_type: Optional[BrokerType] = None) -> float:
         """
