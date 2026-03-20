@@ -285,6 +285,20 @@ except ImportError:
         AI_CAPITAL_ALLOCATOR_AVAILABLE = False
         get_ai_capital_allocator = None
 
+# Import CapitalAllocator — cycle-oriented allocation layer (Steps 2/3/5)
+try:
+    from capital_allocator import get_capital_allocator as _get_capital_allocator
+    CAPITAL_ALLOCATOR_AVAILABLE = True
+    logger.info("✅ CapitalAllocator loaded - cycle-oriented capital budgeting active")
+except ImportError:
+    try:
+        from bot.capital_allocator import get_capital_allocator as _get_capital_allocator
+        CAPITAL_ALLOCATOR_AVAILABLE = True
+        logger.info("✅ CapitalAllocator loaded - cycle-oriented capital budgeting active")
+    except ImportError:
+        CAPITAL_ALLOCATOR_AVAILABLE = False
+        _get_capital_allocator = None
+
 # Import Capital Concentration Engine — concentration mode, account ranking,
 # kill-weak accounts, live-execution verification, Kelly sizing, dashboard
 try:
@@ -1481,6 +1495,17 @@ class TradingStrategy:
                 self.profit_lock_system = None
         else:
             self.profit_lock_system = None
+
+        # Initialize CapitalAllocator — cycle-oriented Step 2/3/5 allocation layer
+        if CAPITAL_ALLOCATOR_AVAILABLE and _get_capital_allocator is not None:
+            try:
+                self._capital_allocator = _get_capital_allocator()
+                logger.info("✅ CapitalAllocator initialized — performance-based cycle budgeting active")
+            except Exception as _ca_init_err:
+                logger.warning("⚠️ Failed to initialize CapitalAllocator: %s", _ca_init_err)
+                self._capital_allocator = None
+        else:
+            self._capital_allocator = None
 
         # Initialize Market Regime Controller — meta-layer: "Should we trade now?"
         if REGIME_CONTROLLER_AVAILABLE and get_regime_controller is not None:
@@ -5236,6 +5261,17 @@ class TradingStrategy:
             balance_duration = time.time() - balance_start_time
             logger.info(f"⏱️  [TIMING] Balance update: {balance_duration:.2f}s")
 
+            # ── CYCLE STEP 2: CapitalAllocator.rebalance() ──────────────────
+            # Compute per-strategy capital budgets using live total_capital.
+            # Must run after balance refresh (Step 1) and before entry sizing
+            # (Step 3) so all position-size calculations use fresh budgets.
+            if self._capital_allocator is not None:
+                try:
+                    self._capital_allocator.rebalance(total_capital=total_capital)
+                except Exception as _ca_reb_err:
+                    logger.warning("⚠️ CapitalAllocator.rebalance failed: %s", _ca_reb_err)
+            # ────────────────────────────────────────────────────────────────
+
             # ── PER-ACCOUNT POSITION CAP (CONSOLIDATION MODE) ─────────────────
             # Derive the effective position cap from the live account balance.
             # This enforces the force-consolidation rule:
@@ -7528,6 +7564,27 @@ class TradingStrategy:
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
 
+                                # ── CYCLE STEP 3: Cap size by CapitalAllocator budget ──
+                                # get_allocated_capital() returns strategy_allocation ÷
+                                # max_concurrent_positions so no single trade over-draws the
+                                # strategy's bucket even when multiple signals fire together.
+                                if self._capital_allocator is not None:
+                                    try:
+                                        _ca_budget = self._capital_allocator.get_allocated_capital("APEX_V71")
+                                        if _ca_budget > 0 and position_size > _ca_budget:
+                                            logger.info(
+                                                "   📐 %s: CapitalAllocator capped size "
+                                                "$%.2f → $%.2f (budget=$%.2f)",
+                                                symbol, position_size, _ca_budget, _ca_budget,
+                                            )
+                                            position_size = _ca_budget
+                                    except Exception as _ca_size_err:
+                                        logger.debug(
+                                            "CapitalAllocator sizing cap skipped for %s: %s",
+                                            symbol, _ca_size_err,
+                                        )
+                                # ──────────────────────────────────────────────────────
+
                                 # ═══════════════════════════════════════════════════════
                                 # MICRO-CAP COMPOUNDING CONFIG — applied BEFORE volatility
                                 # sizing and risk engine (correct pipeline order).
@@ -8764,6 +8821,22 @@ class TradingStrategy:
                 self.profit_lock_system.record_closed_profit(symbol=symbol, pnl_usd=profit_usd)
             except Exception as _pls_close_err:
                 logger.debug("ProfitLockSystem.record_closed_profit skipped for %s: %s", symbol, _pls_close_err)
+
+        # ── CYCLE STEP 5: Feed result back into CapitalAllocator ──────────
+        # Updates per-strategy performance scores (EMA return, win-rate,
+        # profit-factor, Sharpe) so the next rebalance() shifts more capital
+        # toward better-performing strategies automatically.
+        if hasattr(self, '_capital_allocator') and self._capital_allocator is not None:
+            try:
+                self._capital_allocator.record_result(
+                    strategy="APEX_V71",
+                    pnl_usd=profit_usd,
+                    is_win=is_win,
+                    position_size_usd=abs(profit_usd) if profit_usd else 100.0,
+                )
+            except Exception as _ca_rec_err:
+                logger.debug("CapitalAllocator.record_result skipped for %s: %s", symbol, _ca_rec_err)
+        # ──────────────────────────────────────────────────────────────────
 
         # 🔍 CAPITAL FRAGMENTATION GUARD — Leak #3: update account-level performance
         if hasattr(self, 'fragmentation_guard') and self.fragmentation_guard is not None:

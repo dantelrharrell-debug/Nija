@@ -135,6 +135,19 @@ except ImportError:
         _DAILY_WITHDRAWAL_AVAILABLE = False
         logger.warning("DailyProfitWithdrawalEngine not available — daily pay-yourself lock disabled")
 
+try:
+    from bot.profit_visibility_tracker import get_profit_visibility_tracker, ProfitVisibilityTracker
+    _VISIBILITY_AVAILABLE = True
+except ImportError:
+    try:
+        from profit_visibility_tracker import get_profit_visibility_tracker, ProfitVisibilityTracker  # type: ignore
+        _VISIBILITY_AVAILABLE = True
+    except ImportError:
+        get_profit_visibility_tracker = None  # type: ignore
+        ProfitVisibilityTracker = None  # type: ignore
+        _VISIBILITY_AVAILABLE = False
+        logger.warning("ProfitVisibilityTracker not available — realized/locked/withdrawable tracking disabled")
+
 
 # ---------------------------------------------------------------------------
 # ProfitLockSystem
@@ -213,22 +226,38 @@ class ProfitLockSystem:
         else:
             self._daily_withdrawal = None
 
+        # --- Profit visibility tracker (realized / locked / withdrawable) ---
+        if _VISIBILITY_AVAILABLE and get_profit_visibility_tracker is not None:
+            try:
+                self._visibility: Optional[ProfitVisibilityTracker] = (
+                    get_profit_visibility_tracker()
+                )
+                logger.info("✅ ProfitLockSystem: profit visibility tracker active")
+            except Exception as exc:
+                logger.warning("ProfitLockSystem: visibility tracker init failed – %s", exc)
+                self._visibility = None
+        else:
+            self._visibility = None
+
         _active = sum([
             self._harvest is not None,
             self._extraction is not None,
             self._protection is not None,
             self._salary is not None,
             self._daily_withdrawal is not None,
+            self._visibility is not None,
         ])
         logger.info(
-            "🔒 ProfitLockSystem initialised (%d/5 subsystems active: "
-            "harvest=%s, extraction=%s, protection=%s, salary=%s, daily_withdrawal=%s)",
+            "🔒 ProfitLockSystem initialised (%d/6 subsystems active: "
+            "harvest=%s, extraction=%s, protection=%s, salary=%s, "
+            "daily_withdrawal=%s, visibility=%s)",
             _active,
             "✓" if self._harvest else "✗",
             "✓" if self._extraction else "✗",
             "✓" if self._protection else "✗",
             "✓" if self._salary else "✗",
             "✓" if self._daily_withdrawal else "✗",
+            "✓" if self._visibility else "✗",
         )
 
     # ------------------------------------------------------------------
@@ -267,6 +296,13 @@ class ProfitLockSystem:
             except Exception as exc:
                 logger.warning("ProfitLockSystem.register_position failed for %s: %s", symbol, exc)
 
+        # Initialise a zero lock entry in the visibility tracker
+        if self._visibility is not None:
+            try:
+                self._visibility.update_locked(symbol, 0.0)
+            except Exception as exc:
+                logger.debug("ProfitLockSystem.register_position (visibility) failed for %s: %s", symbol, exc)
+
     def update_position(self, symbol: str, current_price: float) -> Optional[str]:
         """
         Process a price update for an open position.
@@ -295,6 +331,12 @@ class ProfitLockSystem:
                     decision.current_tier,
                     decision.cumulative_harvested_usd,
                 )
+                # Sync locked amount with the harvest layer's cumulative figure
+                if self._visibility is not None:
+                    try:
+                        self._visibility.update_locked(symbol, decision.cumulative_harvested_usd)
+                    except Exception as exc:
+                        logger.debug("ProfitLockSystem.update_position (visibility) failed for %s: %s", symbol, exc)
             if decision.floor_hit:
                 logger.info(
                     "🔒 ProfitLockSystem: ratchet floor hit for %s — signalling close",
@@ -315,6 +357,9 @@ class ProfitLockSystem:
         Winning trades are forwarded to both the ``ProfitExtractionEngine``
         (pool-based auto-withdrawal) and the ``DailyProfitWithdrawalEngine``
         (daily "pay yourself" lock).
+
+        The ``ProfitVisibilityTracker`` is updated for every closed trade so
+        that realized, locked, and withdrawable figures stay current.
 
         The position is also removed from the harvest layer's tracking.
 
@@ -342,6 +387,12 @@ class ProfitLockSystem:
                     "💵 ProfitLockSystem: recorded $%.2f profit from %s (extraction pool=$%.2f)",
                     pnl_usd, symbol, pool,
                 )
+                # Mirror the updated extraction pool into the visibility tracker
+                if self._visibility is not None:
+                    try:
+                        self._visibility.set_withdrawable(pool)
+                    except Exception as exc:
+                        logger.debug("ProfitLockSystem: visibility.set_withdrawable failed: %s", exc)
             except Exception as exc:
                 logger.warning("ProfitLockSystem.record_closed_profit (extraction) failed for %s: %s", symbol, exc)
 
@@ -374,6 +425,18 @@ class ProfitLockSystem:
             except Exception as exc:
                 logger.warning(
                     "ProfitLockSystem.record_closed_profit(daily_withdrawal) failed for %s: %s",
+                    symbol, exc,
+                )
+
+        # Update realized profit and release the position's lock entry in the
+        # visibility tracker (applies to both wins and losses)
+        if self._visibility is not None:
+            try:
+                self._visibility.record_realized(symbol=symbol, pnl_usd=pnl_usd)
+                self._visibility.remove_position_lock(symbol)
+            except Exception as exc:
+                logger.debug(
+                    "ProfitLockSystem.record_closed_profit (visibility) failed for %s: %s",
                     symbol, exc,
                 )
 
@@ -519,8 +582,37 @@ class ProfitLockSystem:
         else:
             lines.append("  ⚠️  Daily profit withdrawal lock: NOT AVAILABLE")
 
+        if self._visibility is not None:
+            try:
+                lines.append(self._visibility.get_report())
+            except Exception as exc:
+                lines.append(f"[ProfitVisibilityTracker report error: {exc}]")
+        else:
+            lines.append("  ⚠️  Profit visibility tracker: NOT AVAILABLE")
+
         lines.append("=" * 70)
         return "\n".join(lines)
+
+    def get_profit_metrics(self) -> dict:
+        """
+        Return a dictionary with realized, locked, and withdrawable profit figures.
+
+        Provides a single call to get true performance visibility::
+
+            metrics = system.get_profit_metrics()
+            print(metrics["realized_profit_usd"])     # cumulative net P&L
+            print(metrics["locked_profit_usd"])       # secured in open positions
+            print(metrics["withdrawable_profit_usd"]) # ready to sweep
+
+        Returns an empty dict if the visibility tracker is unavailable.
+        """
+        if self._visibility is None:
+            return {}
+        try:
+            return self._visibility.get_metrics()
+        except Exception as exc:
+            logger.warning("ProfitLockSystem.get_profit_metrics failed: %s", exc)
+            return {}
 
     @property
     def harvest_layer(self) -> Optional["ProfitHarvestLayer"]:
@@ -546,6 +638,11 @@ class ProfitLockSystem:
     def daily_withdrawal(self) -> Optional["DailyProfitWithdrawalEngine"]:
         """Direct access to the DailyProfitWithdrawalEngine (read-only)."""
         return self._daily_withdrawal
+
+    @property
+    def visibility_tracker(self) -> Optional["ProfitVisibilityTracker"]:
+        """Direct access to the underlying ProfitVisibilityTracker (read-only)."""
+        return self._visibility
 
 
 # ---------------------------------------------------------------------------
