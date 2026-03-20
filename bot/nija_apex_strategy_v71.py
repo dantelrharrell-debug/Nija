@@ -84,6 +84,20 @@ _DEFAULT_MIN_ORDER_USD = 10.0  # Conservative fallback for any unlisted broker
 MIN_CONFIDENCE = 0.75  # Consistency-tuned: higher bar filters marginal setups (was 0.70)
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
+# Import adaptive minimum sizing engine (Mar 2026)
+try:
+    from adaptive_minimum_sizing import get_adaptive_minimum_sizer, AdaptiveMinimumSizer
+    ADAPTIVE_MIN_SIZING_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.adaptive_minimum_sizing import get_adaptive_minimum_sizer, AdaptiveMinimumSizer
+        ADAPTIVE_MIN_SIZING_AVAILABLE = True
+    except ImportError:
+        ADAPTIVE_MIN_SIZING_AVAILABLE = False
+        get_adaptive_minimum_sizer = None  # type: ignore
+        AdaptiveMinimumSizer = None  # type: ignore
+        logger.warning("Adaptive minimum sizing module not available – using static broker minimums")
+
 # Import emergency liquidation for capital preservation (FIX 3)
 try:
     from emergency_liquidation import EmergencyLiquidator
@@ -555,53 +569,118 @@ class NIJAApexStrategyV71:
                 self.execution_engine.broker_client = new_broker_client
                 logger.debug(f"Updated execution engine broker to {self._get_broker_name()}")
 
-    def _validate_trade_quality(self, position_size: float, score: float) -> Dict:
+    def _validate_trade_quality(self, position_size: float, score: float,
+                                account_balance: float = 0.0) -> Dict:
         """
         Validate trade quality based on position size and confidence threshold.
 
+        Implements adaptive minimum sizing (Mar 2026):
+            min_order = max(broker_min, strategy_min_based_on_edge)
+
+        • High-confidence signals may be bumped up to broker_min rather than
+          skipped, ensuring strong setups are never missed due to sizing.
+        • Low-confidence signals require a *larger* minimum than the raw
+          broker floor, preventing weak trades that technically clear the
+          exchange minimum.
+
         Args:
-            position_size: Calculated position size in USD
-            score: Entry signal quality score (higher = better)
+            position_size:    Calculated position size in USD
+            score:            Entry signal quality score (higher = better)
+            account_balance:  Current account balance in USD (used for bump safety)
 
         Returns:
-            Dictionary with 'valid' (bool), 'reason' (str), and 'confidence' (float)
+            Dictionary with 'valid' (bool), 'reason' (str), 'confidence' (float),
+            and optionally 'recommended_size' (float, when a bump was applied).
         """
         # Normalize position_size in case it's a tuple
         position_size = scalar(position_size)
 
-        # Check broker-specific minimum position size (FIX: Jan 24, 2026)
-        # Kraken requires $10 minimum, others typically $2
         broker_name = self._get_broker_name()
         broker_minimum = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
-        if float(position_size) < broker_minimum:
-            logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below {broker_name} minimum ${broker_minimum:.2f}")
-            return {
-                'valid': False,
-                'reason': f'Position too small: ${position_size:.2f} < ${broker_minimum:.2f} minimum for {broker_name} (increase account size for better trading)',
-                'confidence': 0.0
-            }
-
-        # Calculate and check confidence threshold (0.60 minimum)
-        # Score is a quality metric (higher = better setup)
-        # Normalize score to 0-1 range for confidence check
+        # Normalise confidence early (needed for adaptive minimum calculation)
         confidence = min(score / MAX_ENTRY_SCORE, 1.0)
-        # FIX: Guard against tuple returns (defensive programming)
-        confidence = scalar(confidence)
+        confidence = float(scalar(confidence))
 
-        if float(confidence) < MIN_CONFIDENCE:
-            logger.info(f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below minimum {MIN_CONFIDENCE:.2f}")
+        # ── Adaptive minimum sizing (Mar 2026) ──────────────────────────────
+        # Use the adaptive minimum sizer when available; fall back to the
+        # original static broker-minimum check for robustness.
+        if ADAPTIVE_MIN_SIZING_AVAILABLE:
+            sizer = get_adaptive_minimum_sizer()
+            validation = sizer.validate_trade(
+                position_size_usd=float(position_size),
+                score=float(score),
+                max_entry_score=MAX_ENTRY_SCORE,
+                broker_name=broker_name,
+                account_balance=float(account_balance) if account_balance else 0.0,
+            )
+            adaptive_min = validation["adaptive_min"]
+
+            if not validation["valid"]:
+                logger.info(
+                    f"   ⏭️  Adaptive minimum gate: {validation['reason']}"
+                )
+                return {
+                    "valid": False,
+                    "reason": validation["reason"],
+                    "confidence": confidence,
+                    "adaptive_min": adaptive_min,
+                }
+
+            # Bump applied: use the recommended (bumped) size downstream
+            if validation["bumped"]:
+                logger.info(
+                    f"   🔼 Minimum bump applied: ${position_size:.2f} → "
+                    f"${validation['recommended_size']:.2f} "
+                    f"(confidence={confidence:.2f})"
+                )
+                return {
+                    "valid": True,
+                    "reason": validation["reason"],
+                    "confidence": confidence,
+                    "recommended_size": validation["recommended_size"],
+                    "adaptive_min": adaptive_min,
+                }
+        else:
+            # ── Fallback: original static broker-minimum check ───────────────
+            if float(position_size) < broker_minimum:
+                logger.info(
+                    f"   ⏭️  Skipping trade: Position ${position_size:.2f} below "
+                    f"{broker_name} minimum ${broker_minimum:.2f}"
+                )
+                return {
+                    "valid": False,
+                    "reason": (
+                        f"Position too small: ${position_size:.2f} < "
+                        f"${broker_minimum:.2f} minimum for {broker_name} "
+                        f"(increase account size for better trading)"
+                    ),
+                    "confidence": 0.0,
+                }
+
+        # ── Confidence threshold gate (unchanged) ───────────────────────────
+        if confidence < MIN_CONFIDENCE:
+            logger.info(
+                f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below "
+                f"minimum {MIN_CONFIDENCE:.2f}"
+            )
             return {
-                'valid': False,
-                'reason': f'Confidence too low: {confidence:.2f} < {MIN_CONFIDENCE:.2f} (weak entry signal)',
-                'confidence': confidence
+                "valid": False,
+                "reason": (
+                    f"Confidence too low: {confidence:.2f} < {MIN_CONFIDENCE:.2f} "
+                    f"(weak entry signal)"
+                ),
+                "confidence": confidence,
             }
 
-        logger.info(f"   ✅ Trade approved: Size=${position_size:.2f}, Confidence={confidence:.2f}")
+        logger.info(
+            f"   ✅ Trade approved: Size=${position_size:.2f}, "
+            f"Confidence={confidence:.2f}"
+        )
         return {
-            'valid': True,
-            'reason': 'Trade quality validated',
-            'confidence': confidence
+            "valid": True,
+            "reason": "Trade quality validated",
+            "confidence": confidence,
         }
 
     def _check_kraken_confidence(self, broker_name: str, validation: Dict) -> Optional[Dict]:
@@ -1709,7 +1788,8 @@ class NIJAApexStrategyV71:
                         }
 
                     # Validate trade quality (position size and confidence)
-                    validation = self._validate_trade_quality(position_size, risk_score)
+                    validation = self._validate_trade_quality(position_size, risk_score,
+                                                             account_balance=account_balance)
                     if not validation['valid']:
                         return {
                             'action': 'hold',
@@ -1960,7 +2040,8 @@ class NIJAApexStrategyV71:
                         }
 
                     # Validate trade quality (position size and confidence)
-                    validation = self._validate_trade_quality(position_size, risk_score)
+                    validation = self._validate_trade_quality(position_size, risk_score,
+                                                             account_balance=account_balance)
                     if not validation['valid']:
                         return {
                             'action': 'hold',

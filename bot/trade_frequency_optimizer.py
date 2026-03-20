@@ -260,15 +260,27 @@ class TradeFrequencyOptimizer:
         self,
         current_time: datetime = None,
         volatility_regime: str = "normal",
-        signal_density: float = None
+        signal_density: float = None,
+        account_balance: float = None,
+        broker_name: str = "coinbase",
     ) -> int:
         """
-        Calculate optimal scan interval based on conditions
+        Calculate optimal scan interval based on conditions.
+
+        Extended (Mar 2026) with balance-relative adjustment:
+        Accounts that have very little capital relative to the broker minimum
+        benefit from slower scanning (fewer wasted API calls), while well-funded
+        accounts benefit from faster scanning to catch more opportunities.
 
         Args:
-            current_time: Current datetime
+            current_time:      Current datetime
             volatility_regime: Current volatility regime
-            signal_density: Recent signal density (signals per hour)
+            signal_density:    Recent signal density (signals per hour)
+            account_balance:   Current account balance in USD (optional).
+                               When provided, the balance/broker_min ratio is
+                               used to further tune the interval.
+            broker_name:       Broker name used to look up the minimum order
+                               size (default 'coinbase').
 
         Returns:
             Optimal scan interval in seconds
@@ -290,6 +302,34 @@ class TradeFrequencyOptimizer:
             elif signal_density <= 2:  # <2 signals/hour = quiet
                 multiplier *= 1.10  # 10% slower
 
+        # ── Balance-relative adjustment (Mar 2026) ────────────────────────
+        # Use the adaptive minimum sizer's scan-interval helper when an account
+        # balance is supplied.  This prevents idle accounts from being over-
+        # scanned and ensures well-capitalised accounts are scanned quickly.
+        if account_balance is not None and account_balance > 0:
+            try:
+                try:
+                    from bot.adaptive_minimum_sizing import get_adaptive_minimum_sizer
+                except ImportError:
+                    from adaptive_minimum_sizing import get_adaptive_minimum_sizer
+                sizer = get_adaptive_minimum_sizer()
+                balance_adj = sizer.get_scan_interval_adjustment(
+                    account_balance,
+                    broker_name,
+                    base_interval_seconds=self.base_scan_interval,
+                )
+                # Blend: weight = 0.4 balance-adj, 0.6 existing signal/vol logic
+                balance_multiplier = balance_adj["multiplier"]
+                multiplier = multiplier * 0.60 + balance_multiplier * 0.40
+                logger.debug(
+                    f"Balance-relative interval adjustment: "
+                    f"balance=${account_balance:.0f} broker={broker_name} "
+                    f"balance_mult={balance_multiplier:.2f} "
+                    f"blended_mult={multiplier:.2f}"
+                )
+            except Exception as _e:
+                logger.debug(f"Balance-relative scan adjustment unavailable: {_e}")
+
         # Calculate final interval
         interval = int(self.base_scan_interval * multiplier)
 
@@ -297,6 +337,71 @@ class TradeFrequencyOptimizer:
         interval = max(30, min(300, interval))
 
         return interval
+
+    def get_balance_trade_capacity(
+        self,
+        account_balance: float,
+        broker_name: str = "coinbase",
+        confidence: float = 1.0,
+    ) -> Dict:
+        """
+        Return trade-capacity information for the current balance.
+
+        Delegates to ``AdaptiveMinimumSizer.get_trade_capacity`` and returns the
+        result as a plain dict so callers do not need to import the sizer directly.
+
+        Args:
+            account_balance: Available cash balance (USD).
+            broker_name:     Exchange / broker name.
+            confidence:      Expected signal confidence (affects adaptive_min).
+
+        Returns:
+            Dict with ``adaptive_min``, ``max_concurrent``, ``idle_risk``,
+            ``utilisation_pct``, and ``recommendation``.
+        """
+        try:
+            try:
+                from bot.adaptive_minimum_sizing import get_adaptive_minimum_sizer
+            except ImportError:
+                from adaptive_minimum_sizing import get_adaptive_minimum_sizer
+            sizer = get_adaptive_minimum_sizer()
+            broker_min = sizer.get_broker_minimum(broker_name)
+            return sizer.get_trade_capacity(account_balance, broker_min, confidence)
+        except Exception as _e:
+            logger.warning(f"Trade capacity check unavailable: {_e}")
+            return {
+                "adaptive_min": 0.0,
+                "max_concurrent": 0,
+                "idle_risk": account_balance <= 0,
+                "utilisation_pct": 0.0,
+                "recommendation": "Adaptive minimum sizing module not available.",
+            }
+
+    def is_account_idle_risk(
+        self,
+        account_balance: float,
+        broker_name: str = "coinbase",
+        confidence: float = 1.0,
+    ) -> bool:
+        """
+        Return True if the account balance is too low to open even one trade at
+        the adaptive minimum size for the given broker and confidence level.
+
+        When True the caller should consider:
+        * Depositing more funds.
+        * Consolidating capital from other brokers.
+        * Reducing the target broker's effective minimum (e.g. switch brokers).
+
+        Args:
+            account_balance: Available cash balance (USD).
+            broker_name:     Broker name.
+            confidence:      Expected signal confidence.
+
+        Returns:
+            bool – True if account is at idle risk.
+        """
+        capacity = self.get_balance_trade_capacity(account_balance, broker_name, confidence)
+        return capacity.get("idle_risk", False)
 
     def record_signal(
         self,
