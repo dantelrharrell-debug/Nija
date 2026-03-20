@@ -620,6 +620,7 @@ class ForcedPositionCleanup:
         
         logger.info(f"   📊 Active Positions (after dust cleanup): {current_count}")
         
+        cap_failed_total = 0
         if current_count > self.max_positions:
             logger.warning(f"   🔒 USER cap exceeded: {current_count}/{self.max_positions}")
             # Log alert for monitoring systems
@@ -628,7 +629,7 @@ class ForcedPositionCleanup:
             # Identify positions to close to meet cap
             cap_excess_positions = self.identify_cap_excess_positions(non_dust_positions)
             
-            # Close excess positions across all brokers
+            # Close excess positions across all brokers, tracking failures
             for cap_pos in cap_excess_positions:
                 symbol = cap_pos['symbol']
                 broker = broker_positions_map.get(symbol)
@@ -636,6 +637,7 @@ class ForcedPositionCleanup:
                     account_id = self._get_account_id(user_id, broker)
                     success, failed = self.execute_cleanup([cap_pos], broker, account_id, is_startup)
                     cap_closed_total += success
+                    cap_failed_total += failed
         else:
             logger.info(f"   ✅ Under cap (no action needed)")
         
@@ -674,6 +676,9 @@ class ForcedPositionCleanup:
                 all_failures = set(refresh_failures + final_refresh_failures)
                 logger.error(f"      Failed brokers: {', '.join(all_failures)}")
                 logger.error(f"   💡 RECOMMENDATION: Retry cleanup or manually verify these brokers")
+            elif cap_failed_total > 0:
+                logger.error(f"   ⚠️  POSSIBLE CAUSE: {cap_failed_total} position close operation(s) failed (broker API errors)")
+                logger.error(f"   💡 RECOMMENDATION: Check broker API connectivity and retry cleanup once connected")
             else:
                 logger.error(f"   ⚠️  POSSIBLE CAUSE: Position close operations failed")
                 logger.error(f"   💡 RECOMMENDATION: Check broker API status and retry cleanup")
@@ -687,6 +692,8 @@ class ForcedPositionCleanup:
         logger.info(f"      Initial: {total_user_positions} positions")
         logger.info(f"      Dust closed: {dust_closed_total}")
         logger.info(f"      Cap excess closed: {cap_closed_total}")
+        if cap_failed_total > 0:
+            logger.warning(f"      Cap excess close failures: {cap_failed_total} (broker API errors)")
         logger.info(f"      Final: {final_count} positions")
         if dust_closed_total > 0 or cap_closed_total > 0:
             logger.warning(f"      🧹 Cleanup executed for user {user_id}")

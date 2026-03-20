@@ -445,6 +445,26 @@ class MultiAccountBrokerManager:
         user_brokers = self.user_brokers.get(user_id, {})
         return user_brokers.get(broker_type)
 
+    def get_all_brokers(self) -> List[Tuple[str, BaseBroker]]:
+        """
+        Get all broker instances as (account_id, broker) tuples.
+
+        Returns platform brokers and user brokers in a unified list for
+        iteration by components like the continuous dust monitor.
+
+        Returns:
+            List of (account_id, broker) tuples where account_id is a
+            unique identifier for the account (e.g. 'KRAKEN' for platform,
+            'tania_gilbert_KRAKEN' for user accounts).
+        """
+        result = []
+        for broker_type, broker in self._platform_brokers.items():
+            result.append((broker_type.value, broker))
+        for user_id, user_broker_dict in self.user_brokers.items():
+            for broker_type, broker in user_broker_dict.items():
+                result.append((f"{user_id}_{broker_type.value}", broker))
+        return result
+
     def is_platform_connected(self, broker_type: BrokerType) -> bool:
         """
         Check if a platform account is connected for a given broker type.
