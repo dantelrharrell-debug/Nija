@@ -445,6 +445,51 @@ except ImportError:
         get_slippage_protector = None
         SlippageProtector = None
 
+# Import Net Profit Gate — Leak #1 fix: reject signals where profit < (spread+slip+fee)×2
+try:
+    from net_profit_gate import get_net_profit_gate, NetProfitGate
+    NET_PROFIT_GATE_AVAILABLE = True
+    logger.info("✅ Net Profit Gate loaded")
+except ImportError:
+    try:
+        from bot.net_profit_gate import get_net_profit_gate, NetProfitGate
+        NET_PROFIT_GATE_AVAILABLE = True
+        logger.info("✅ Net Profit Gate loaded")
+    except ImportError:
+        NET_PROFIT_GATE_AVAILABLE = False
+        get_net_profit_gate = None
+        NetProfitGate = None
+
+# Import Latency Drift Guard — Leak #2 fix: reject stale signals where price drifted
+try:
+    from latency_drift_guard import get_latency_drift_guard, LatencyDriftGuard
+    LATENCY_DRIFT_GUARD_AVAILABLE = True
+    logger.info("✅ Latency Drift Guard loaded")
+except ImportError:
+    try:
+        from bot.latency_drift_guard import get_latency_drift_guard, LatencyDriftGuard
+        LATENCY_DRIFT_GUARD_AVAILABLE = True
+        logger.info("✅ Latency Drift Guard loaded")
+    except ImportError:
+        LATENCY_DRIFT_GUARD_AVAILABLE = False
+        get_latency_drift_guard = None
+        LatencyDriftGuard = None
+
+# Import Capital Fragmentation Guard — Leak #3 fix: pause underperforming accounts
+try:
+    from capital_fragmentation_guard import get_fragmentation_guard, CapitalFragmentationGuard
+    FRAGMENTATION_GUARD_AVAILABLE = True
+    logger.info("✅ Capital Fragmentation Guard loaded")
+except ImportError:
+    try:
+        from bot.capital_fragmentation_guard import get_fragmentation_guard, CapitalFragmentationGuard
+        FRAGMENTATION_GUARD_AVAILABLE = True
+        logger.info("✅ Capital Fragmentation Guard loaded")
+    except ImportError:
+        FRAGMENTATION_GUARD_AVAILABLE = False
+        get_fragmentation_guard = None
+        CapitalFragmentationGuard = None
+
 # Import Crypto Sector Taxonomy — used for sector-level capital allocation caps
 try:
     from crypto_sector_taxonomy import get_sector, get_sector_name
@@ -1474,6 +1519,39 @@ class TradingStrategy:
         else:
             self.slippage_protector = None
 
+        # Leak #1 fix: Net Profit Gate — blocks signals where profit < costs×2
+        if NET_PROFIT_GATE_AVAILABLE and get_net_profit_gate is not None:
+            try:
+                self.net_profit_gate = get_net_profit_gate()
+                logger.info("✅ Net Profit Gate initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Net Profit Gate: {e}")
+                self.net_profit_gate = None
+        else:
+            self.net_profit_gate = None
+
+        # Leak #2 fix: Latency Drift Guard — stamps signal price, rejects on drift
+        if LATENCY_DRIFT_GUARD_AVAILABLE and get_latency_drift_guard is not None:
+            try:
+                self.latency_drift_guard = get_latency_drift_guard()
+                logger.info("✅ Latency Drift Guard initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Latency Drift Guard: {e}")
+                self.latency_drift_guard = None
+        else:
+            self.latency_drift_guard = None
+
+        # Leak #3 fix: Capital Fragmentation Guard — pauses underperforming accounts
+        if FRAGMENTATION_GUARD_AVAILABLE and get_fragmentation_guard is not None:
+            try:
+                self.fragmentation_guard = get_fragmentation_guard()
+                logger.info("✅ Capital Fragmentation Guard initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Capital Fragmentation Guard: {e}")
+                self.fragmentation_guard = None
+        else:
+            self.fragmentation_guard = None
+
         # Initialize Volatility Position Sizer — ATR-based position size scaling
         if VOLATILITY_POSITION_SIZING_AVAILABLE and get_volatility_position_sizer is not None:
             try:
@@ -1581,6 +1659,13 @@ class TradingStrategy:
         # Stores recent total cycle durations (seconds) to compute a moving average.
         # Uses a fixed-length deque so memory stays bounded regardless of runtime.
         self._cycle_durations = collections.deque(maxlen=20)  # rolling window of 20 cycles
+
+        # Zero-signal streak tracking (Leak #4 — over-filter monitor)
+        # Count consecutive cycles where no qualifying entry signal was found.
+        # A high streak usually means filters are too tight or markets are quiet.
+        self._zero_signal_streak: int = 0
+        # Alert after this many consecutive zero-signal cycles
+        self._zero_signal_alert_threshold: int = 10
 
         # Initialize advanced trading features placeholder
         # NOTE: Advanced modules will be initialized AFTER first live balance fetch
@@ -4991,8 +5076,14 @@ class TradingStrategy:
                 balance_data = {'trading_balance': active_broker.get_account_balance()}
             account_balance = balance_data.get('trading_balance', 0.0)
 
-            # ═══════════════════════════════════════════════════════
-            # MICRO-CAP COMPOUNDING CONFIG — Step 2 of correct order
+            # Leak #5 fix: switch profit-lock mode based on account size
+            # Under $1K → GROWTH (suspend withdrawals, maximise compounding)
+            # At/above $1K → EXTRACTION (enable daily withdrawal + salary payout)
+            if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:
+                try:
+                    self.profit_lock_system.set_account_balance(account_balance)
+                except Exception as _pls_mode_err:
+                    logger.debug("ProfitLockSystem.set_account_balance skipped: %s", _pls_mode_err)
             # Correct order: balance fetch → micro-cap config →
             #                volatility position sizing → risk engine → trade execution
             # This config is used later in the entry loop to override position size,
@@ -8077,6 +8168,56 @@ class TradingStrategy:
                                         # Non-fatal: allow trade if slippage check fails
 
                                 # ═══════════════════════════════════════════════════════
+                                # NET PROFIT GATE — Leak #1 fix
+                                # Reject signals where expected profit < (spread + slippage
+                                # + fees) × safety_multiple (default 2×).
+                                # ═══════════════════════════════════════════════════════
+                                if hasattr(self, 'net_profit_gate') and self.net_profit_gate is not None:
+                                    try:
+                                        _npg_spread = analysis.get('spread_pct', 0.001) or 0.001
+                                        # Primary take-profit as a fraction
+                                        _npg_tp_list = analysis.get('take_profit', []) or []
+                                        _npg_entry_p = analysis.get('entry_price', 0.0) or 0.0
+                                        if _npg_tp_list and _npg_entry_p > 0:
+                                            _npg_tp = float(_npg_tp_list[0]) if isinstance(_npg_tp_list, list) else float(_npg_tp_list)
+                                            _npg_profit_pct = abs(_npg_tp - _npg_entry_p) / _npg_entry_p
+                                        else:
+                                            _npg_profit_pct = analysis.get('profit_target_pct', 0.0) or 0.0
+                                        _npg_ok, _npg_reason = self.net_profit_gate.check(
+                                            symbol=symbol,
+                                            profit_target_pct=_npg_profit_pct,
+                                            spread_pct=_npg_spread,
+                                        )
+                                        if not _npg_ok:
+                                            filter_stats['market_filter'] = (
+                                                filter_stats.get('market_filter', 0) + 1
+                                            )
+                                            continue
+                                    except Exception as _npg_err:
+                                        logger.debug(
+                                            f"   ⚠️ Net Profit Gate check skipped for {symbol}: {_npg_err}"
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
+                                # LATENCY DRIFT GUARD — Leak #2 fix
+                                # Stamp the current price; reject if the market has moved
+                                # too far by the time execution begins.
+                                # ═══════════════════════════════════════════════════════
+                                _drift_token = None
+                                if hasattr(self, 'latency_drift_guard') and self.latency_drift_guard is not None:
+                                    try:
+                                        _drift_price = float(df['close'].iloc[-1])
+                                        _drift_token = self.latency_drift_guard.stamp_signal(
+                                            symbol, _drift_price
+                                        )
+                                        analysis['_drift_token'] = _drift_token
+                                        analysis['_drift_signal_price'] = _drift_price
+                                    except Exception as _dg_err:
+                                        logger.debug(
+                                            f"   ⚠️ Latency Drift Guard stamp skipped for {symbol}: {_dg_err}"
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
                                 # PRIORITY SELECTION — queue signal for post-scan ranking
                                 # ═══════════════════════════════════════════════════════
                                 # All gates have passed. Store the fully-sized signal so
@@ -8201,6 +8342,31 @@ class TradingStrategy:
                             _ps_analysis = _sig_data['analysis']
                             _ps_position_size = _sig_data['position_size']
                             _ps_action = _sig_data['action']
+
+                            # Leak #2 — verify price hasn't drifted since signal was stamped
+                            if hasattr(self, 'latency_drift_guard') and self.latency_drift_guard is not None:
+                                _drift_token = _ps_analysis.get('_drift_token')
+                                if _drift_token:
+                                    try:
+                                        _exec_price = _ps_analysis.get('entry_price') or _ps_analysis.get('price') or 0.0
+                                        if _exec_price > 0:
+                                            _drift_ok, _drift_reason = self.latency_drift_guard.check_drift(
+                                                _drift_token, float(_exec_price)
+                                            )
+                                            if not _drift_ok:
+                                                logger.warning(
+                                                    "   ⏩ LATENCY DRIFT: %s skipped — %s",
+                                                    _ps_symbol, _drift_reason,
+                                                )
+                                                filter_stats['market_filter'] = (
+                                                    filter_stats.get('market_filter', 0) + 1
+                                                )
+                                                continue
+                                        else:
+                                            self.latency_drift_guard.clear(_drift_token)
+                                    except Exception as _drift_exec_err:
+                                        logger.debug("Drift guard execution check skipped: %s", _drift_exec_err)
+                                        self.latency_drift_guard.clear(_drift_token)
 
                             logger.info(
                                 f"   🎯 Executing priority signal "
@@ -8357,10 +8523,40 @@ class TradingStrategy:
 
                     # EXPLICIT: Log waiting status when no signals found
                     if filter_stats['signals_found'] == 0:
+                        self._zero_signal_streak += 1
                         logger.info("")
                         logger.info("   ⏳ WAITING FOR PLATFORM ENTRY")
                         logger.info("   → No qualifying signals found in this cycle")
+                        logger.info(
+                            "   → Zero-signal streak: %d cycle(s)", self._zero_signal_streak
+                        )
                         logger.info("   → Will continue monitoring markets...")
+                        if self._zero_signal_streak >= self._zero_signal_alert_threshold:
+                            _filterable = [
+                                (k, v) for k, v in filter_stats.items()
+                                if k not in ('total', 'signals_found', 'cache_hits')
+                                and isinstance(v, (int, float))
+                            ]
+                            if _filterable:
+                                dominant_filter = max(_filterable, key=lambda x: x[1])
+                            else:
+                                dominant_filter = ("unknown", 0)
+                            logger.warning(
+                                "⚠️ OVER-FILTER ALERT: %d consecutive cycles with 0 signals. "
+                                "Dominant filter: '%s' (%d). "
+                                "Consider loosening entry criteria if markets are active.",
+                                self._zero_signal_streak,
+                                dominant_filter[0],
+                                dominant_filter[1],
+                            )
+                    else:
+                        # Signals found — reset the streak
+                        if self._zero_signal_streak > 0:
+                            logger.info(
+                                "   ✅ Zero-signal streak reset (was %d cycles)",
+                                self._zero_signal_streak,
+                            )
+                        self._zero_signal_streak = 0
 
                 except Exception as e:
                     logger.error(f"Error during market scan: {e}", exc_info=True)
@@ -8568,6 +8764,17 @@ class TradingStrategy:
                 self.profit_lock_system.record_closed_profit(symbol=symbol, pnl_usd=profit_usd)
             except Exception as _pls_close_err:
                 logger.debug("ProfitLockSystem.record_closed_profit skipped for %s: %s", symbol, _pls_close_err)
+
+        # 🔍 CAPITAL FRAGMENTATION GUARD — Leak #3: update account-level performance
+        if hasattr(self, 'fragmentation_guard') and self.fragmentation_guard is not None:
+            try:
+                self.fragmentation_guard.record_trade(
+                    account_id=self._get_primary_broker_id(),
+                    pnl_usd=profit_usd,
+                    is_win=is_win,
+                )
+            except Exception as _fg_err:
+                logger.debug("Fragmentation guard record_trade skipped for %s: %s", symbol, _fg_err)
 
         if not self.advanced_manager:
             return

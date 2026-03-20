@@ -391,8 +391,86 @@ class ProfitLockSystem:
                 logger.debug("ProfitLockSystem.remove_position failed for %s: %s", symbol, exc)
 
     # ------------------------------------------------------------------
-    # Diagnostics
+    # Balance-based mode switching  (Leak #5 — growth vs extraction)
     # ------------------------------------------------------------------
+
+    # Balance thresholds for mode switching (with hysteresis to prevent oscillation)
+    _EXTRACTION_MODE_THRESHOLD_USD: float = 1_000.0   # switch to EXTRACTION at/above $1 000
+    _GROWTH_MODE_THRESHOLD_USD: float = 950.0          # switch back to GROWTH below $950
+
+    def set_account_balance(self, balance_usd: float) -> str:
+        """
+        Switch between *growth mode* and *extraction mode* based on account
+        balance, with hysteresis to prevent rapid toggling near the threshold.
+
+        Rule
+        ----
+        * **balance < $950** → *GROWTH MODE*
+          - Daily withdrawals and weekly salary are suspended so every dollar
+            compounds back into the account.
+          - Ratchet-floor locks remain active (protect gains in flight), but
+            profit extraction is paused.
+
+        * **balance ≥ $1 000** → *EXTRACTION MODE*
+          - Daily withdrawals and weekly salary are re-enabled to start
+            paying the operator.
+
+        * **$950 ≤ balance < $1 000** → *no change* (hysteresis band)
+
+        Returns the current mode string ("GROWTH" or "EXTRACTION") for logging.
+
+        Args:
+            balance_usd: Current account equity in USD.
+        """
+        # Determine new mode with hysteresis
+        current_mode = getattr(self, '_current_mode', None)
+
+        if balance_usd >= self._EXTRACTION_MODE_THRESHOLD_USD:
+            new_mode = "EXTRACTION"
+        elif balance_usd < self._GROWTH_MODE_THRESHOLD_USD:
+            new_mode = "GROWTH"
+        else:
+            # Hysteresis band — keep current mode unchanged
+            new_mode = current_mode or "GROWTH"
+
+        if new_mode == current_mode:
+            return new_mode  # No change — skip subsystem calls
+
+        self._current_mode = new_mode  # type: ignore[attr-defined]
+
+        if new_mode == "GROWTH":
+            # Suspend withdrawal / salary to maximise compounding
+            if self._daily_withdrawal is not None:
+                try:
+                    self._daily_withdrawal.set_enabled(False)
+                except AttributeError:
+                    pass  # engine doesn't support dynamic toggling — silently skip
+            if self._salary is not None:
+                try:
+                    self._salary.set_enabled(False)
+                except AttributeError:
+                    pass
+        else:
+            # Re-enable withdrawal / salary now that we have meaningful capital
+            if self._daily_withdrawal is not None:
+                try:
+                    self._daily_withdrawal.set_enabled(True)
+                except AttributeError:
+                    pass
+            if self._salary is not None:
+                try:
+                    self._salary.set_enabled(True)
+                except AttributeError:
+                    pass
+
+        logger.info(
+            "💡 ProfitLockSystem mode changed → %s (balance=$%.2f, "
+            "extract_threshold=$%.0f, growth_threshold=$%.0f)",
+            new_mode, balance_usd,
+            self._EXTRACTION_MODE_THRESHOLD_USD,
+            self._GROWTH_MODE_THRESHOLD_USD,
+        )
+        return new_mode
 
     def get_report(self) -> str:
         """Return a combined status report from all active subsystems."""

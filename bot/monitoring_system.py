@@ -16,10 +16,11 @@ Date: December 19, 2025
 import logging
 import time
 import json
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Any, Deque
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,9 @@ class Alert:
     data: Dict[str, Any]
 
 
+WIN_RATE_WINDOW = 50  # number of recent trades used for rolling win-rate
+
+
 @dataclass
 class PerformanceMetrics:
     """Performance tracking"""
@@ -83,12 +87,40 @@ class PerformanceMetrics:
     consecutive_losses: int = 0
     last_trade_time: Optional[str] = None
 
+    # Execution tracking
+    execution_attempts: int = 0
+    execution_successes: int = 0
+
+    # Rolling window for last-50-trade win rate (stored as list for JSON serialisation)
+    recent_outcomes: List[bool] = field(default_factory=list)
+
     @property
     def win_rate(self) -> float:
         """Calculate win rate percentage"""
         if self.total_trades == 0:
             return 0.0
         return (self.winning_trades / self.total_trades) * 100
+
+    @property
+    def rolling_win_rate(self) -> float:
+        """Win rate over the last WIN_RATE_WINDOW (50) trades"""
+        if not self.recent_outcomes:
+            return 0.0
+        return (sum(self.recent_outcomes) / len(self.recent_outcomes)) * 100
+
+    @property
+    def avg_profit_per_trade(self) -> float:
+        """Average net profit (or loss) across all closed trades"""
+        if self.total_trades == 0:
+            return 0.0
+        return (self.total_profit - self.total_loss) / self.total_trades
+
+    @property
+    def execution_success_rate(self) -> float:
+        """Percentage of order attempts that were successfully filled"""
+        if self.execution_attempts == 0:
+            return 0.0
+        return (self.execution_successes / self.execution_attempts) * 100
 
     @property
     def profit_factor(self) -> float:
@@ -135,13 +167,6 @@ class PerformanceMetrics:
         win_rate = self.win_rate / 100.0  # Convert to decimal
         loss_rate = 1.0 - win_rate
         return (win_rate * self.average_win) - (loss_rate * self.average_loss)
-
-    @property
-    def average_loss(self) -> float:
-        """Average losing trade"""
-        if self.losing_trades == 0:
-            return 0.0
-        return self.total_loss / self.losing_trades
 
 
 class MonitoringSystem:
@@ -260,6 +285,11 @@ class MonitoringSystem:
         self.metrics.total_fees += fees
         self.metrics.last_trade_time = datetime.now().isoformat()
 
+        # Maintain rolling window of last WIN_RATE_WINDOW outcomes
+        self.metrics.recent_outcomes.append(is_win)
+        if len(self.metrics.recent_outcomes) > WIN_RATE_WINDOW:
+            self.metrics.recent_outcomes = self.metrics.recent_outcomes[-WIN_RATE_WINDOW:]
+
         if is_win:
             self.metrics.winning_trades += 1
             self.metrics.total_profit += profit
@@ -303,7 +333,30 @@ class MonitoringSystem:
                 )
 
         self._save_state()
-        logger.info(f"📈 Trade recorded: {symbol} {'WIN' if is_win else 'LOSS'} ${profit:.2f}")
+        logger.info(
+            f"📈 Trade recorded: {symbol} {'WIN' if is_win else 'LOSS'} ${profit:.2f} | "
+            f"Avg profit/trade: ${self.metrics.avg_profit_per_trade:+.2f} | "
+            f"Win rate (last {len(self.metrics.recent_outcomes)}): "
+            f"{self.metrics.rolling_win_rate:.1f}% | "
+            f"Execution success: {self.metrics.execution_success_rate:.1f}%"
+        )
+
+    def record_execution_attempt(self, symbol: str, success: bool):
+        """Record an order execution attempt and whether it was successfully filled.
+
+        Args:
+            symbol:  Trading pair (e.g. 'BTC-USD'), used for log context.
+            success: True when the order was confirmed filled, False on failure.
+        """
+        self.metrics.execution_attempts += 1
+        if success:
+            self.metrics.execution_successes += 1
+        self._save_state()
+        logger.info(
+            f"{'✅' if success else '❌'} Execution {'success' if success else 'failure'}: "
+            f"{symbol} | Success rate: {self.metrics.execution_success_rate:.1f}% "
+            f"({self.metrics.execution_successes}/{self.metrics.execution_attempts})"
+        )
 
     def record_error(self, error_type: str, error_message: str):
         """Record an error"""
@@ -351,10 +404,17 @@ class MonitoringSystem:
             "performance": {
                 "total_trades": self.metrics.total_trades,
                 "win_rate": self.metrics.win_rate,
+                "rolling_win_rate_last_50": self.metrics.rolling_win_rate,
+                "avg_profit_per_trade": self.metrics.avg_profit_per_trade,
                 "profit_factor": self.metrics.profit_factor,
                 "net_profit": self.metrics.net_profit,
                 "consecutive_wins": self.metrics.consecutive_wins,
                 "consecutive_losses": self.metrics.consecutive_losses
+            },
+            "execution": {
+                "attempts": self.metrics.execution_attempts,
+                "successes": self.metrics.execution_successes,
+                "success_rate_pct": self.metrics.execution_success_rate,
             },
             "errors": {
                 "total": self.error_count,
@@ -579,23 +639,30 @@ class MonitoringSystem:
    Change:   ${self.last_balance - self.start_balance:+.2f} ({((self.last_balance - self.start_balance) / self.start_balance * 100) if self.start_balance > 0 else 0:+.1f}%)
 
 📊 PERFORMANCE:
-   Total Trades:        {self.metrics.total_trades}
-   Wins / Losses:       {self.metrics.winning_trades} / {self.metrics.losing_trades}
-   Win Rate:            {self.metrics.win_rate:.1f}%
-   Profit Factor:       {self.metrics.profit_factor:.2f}
+   Total Trades:               {self.metrics.total_trades}
+   Wins / Losses:              {self.metrics.winning_trades} / {self.metrics.losing_trades}
+   Win Rate (all-time):        {self.metrics.win_rate:.1f}%
+   Win Rate (last {WIN_RATE_WINDOW}):         {self.metrics.rolling_win_rate:.1f}%
+   Avg Profit / Trade:         ${self.metrics.avg_profit_per_trade:+.2f}
+   Profit Factor:              {self.metrics.profit_factor:.2f}
 
-   Gross Profit:        ${self.metrics.total_profit:.2f}
-   Gross Loss:          ${self.metrics.total_loss:.2f}
-   Total Fees:          ${self.metrics.total_fees:.2f}
-   Net Profit:          ${self.metrics.net_profit:+.2f}
+   Gross Profit:               ${self.metrics.total_profit:.2f}
+   Gross Loss:                 ${self.metrics.total_loss:.2f}
+   Total Fees:                 ${self.metrics.total_fees:.2f}
+   Net Profit:                 ${self.metrics.net_profit:+.2f}
 
-   Largest Win:         ${self.metrics.largest_win:.2f}
-   Largest Loss:        ${self.metrics.largest_loss:.2f}
-   Average Win:         ${self.metrics.average_win:.2f}
-   Average Loss:        ${self.metrics.average_loss:.2f}
+   Largest Win:                ${self.metrics.largest_win:.2f}
+   Largest Loss:               ${self.metrics.largest_loss:.2f}
+   Average Win:                ${self.metrics.average_win:.2f}
+   Average Loss:               ${self.metrics.average_loss:.2f}
 
-   Consecutive Wins:    {self.metrics.consecutive_wins}
-   Consecutive Losses:  {self.metrics.consecutive_losses}
+   Consecutive Wins:           {self.metrics.consecutive_wins}
+   Consecutive Losses:         {self.metrics.consecutive_losses}
+
+⚙️  EXECUTION:
+   Attempts:                   {self.metrics.execution_attempts}
+   Successes:                  {self.metrics.execution_successes}
+   Success Rate:               {self.metrics.execution_success_rate:.1f}%
 
 🔧 SYSTEM:
    API Calls:           {self.api_call_count}
