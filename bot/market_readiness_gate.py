@@ -133,7 +133,7 @@ class MarketReadinessGate:
     # Position sizing for CAUTIOUS mode
     CAUTIOUS_SIZE_MIN = 0.15          # 15%
     CAUTIOUS_SIZE_MAX = 0.25          # 25%
-    CAUTIOUS_MIN_SCORE = 85           # Only A+ setups
+    CAUTIOUS_MIN_SCORE = 70           # Matches enhanced entry scorer min (was 85, lowered for micro-cap consistency)
     
     # IDLE mode triggers
     IDLE_ATR_MAX = 0.004              # 0.4%
@@ -419,7 +419,7 @@ class MarketReadinessGate:
             }
             
             if allow_entry:
-                logger.info(f"⚠️ CAUTIOUS MODE: Limited trading (20% size, score≥85)")
+                logger.info(f"⚠️ CAUTIOUS MODE: Limited trading (20% size, score≥{self.CAUTIOUS_MIN_SCORE})")
             else:
                 logger.info(f"⚠️ CAUTIOUS MODE: Entry score {entry_score:.0f} < {self.CAUTIOUS_MIN_SCORE} (blocked)")
             

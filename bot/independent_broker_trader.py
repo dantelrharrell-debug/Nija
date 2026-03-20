@@ -956,6 +956,13 @@ class IndependentBrokerTrader:
                     if user_config is None:
                         logger.warning(f"   ⚠️  {broker_name}: no user_config found for {user_id} — defaulting active_trading=True")
                     is_active_trading = user_config.active_trading if user_config is not None else True
+                    # A user runs in "independent" mode when their config has
+                    # independent_trading: true.  Note that active_trading is already
+                    # confirmed True at this point (the loop continues/skips if False),
+                    # so we only need to check the independent_trading flag here.
+                    is_independent = (
+                        user_config.independent_trading if user_config is not None else False
+                    )
 
                     if not is_active_trading:
                         logger.info(f"   ⏸️  {broker_name} (USER): active_trading=false — skipping new entries (recovery mode)")
@@ -972,10 +979,19 @@ class IndependentBrokerTrader:
                         stop_flag.wait(150)
                         continue
 
-                    # Execute trading cycle for THIS user broker only (thread-safe)
-                    # USER accounts ONLY do position management (exits), NOT entry signals
-                    logger.info(f"   {broker_name} (USER): Running position management (NO signal generation)...")
-                    self.trading_strategy.run_cycle(broker=broker, user_mode=True)
+                    # Execute trading cycle for THIS user broker only (thread-safe).
+                    # When independent_trading is enabled the user runs the full APEX strategy
+                    # (user_mode=False) so it generates its own signals rather than waiting for
+                    # the platform to publish them.  This is the correct behaviour for accounts
+                    # configured with "independent_trading": true.
+                    # When independent_trading is disabled the account runs in position-management
+                    # mode only (user_mode=True) and relies on copy-trade signals from the platform.
+                    if is_independent:
+                        logger.info(f"   {broker_name} (USER): Running INDEPENDENT strategy (APEX signal generation)...")
+                        self.trading_strategy.run_cycle(broker=broker, user_mode=False)
+                    else:
+                        logger.info(f"   {broker_name} (USER): Running position management only (copy-trade mode)...")
+                        self.trading_strategy.run_cycle(broker=broker, user_mode=True)
 
                     # Mark as healthy
                     if user_id not in self.user_broker_health:
