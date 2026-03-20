@@ -503,6 +503,8 @@ class UnifiedExecutionEngine:
                 error_message="Integration pending: Actual broker execution not yet wired up"
             )
 
+            size_usd = size
+            logger.info(f"🚀 TRADE EXECUTED: {symbol} {side} ${size_usd}")
             logger.info(f"✅ Trade executed successfully on {exchange.upper()}")
             logger.info(f"   Order ID: {result.order_id}")
 
