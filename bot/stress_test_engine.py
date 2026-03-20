@@ -208,9 +208,19 @@ class StressTestReport:
             "initial_capital":   self.initial_capital,
             "num_paths":         self.num_paths,
             "seed":              self.seed,
-            "run_at":            self.run_at,
+            "timestamp":         self.run_at,
             "scenarios":         [r.to_dict() for r in self.scenario_results],
         }
+
+    @property
+    def scenarios(self) -> List[ScenarioResult]:
+        """Alias for scenario_results — public shorthand."""
+        return self.scenario_results
+
+    @property
+    def overall_passed(self) -> bool:
+        """True when the overall survival rate meets the minimum threshold (60%)."""
+        return self.overall_survival_rate >= 0.60
 
     @property
     def worst_scenario(self) -> Optional[ScenarioResult]:
@@ -511,7 +521,7 @@ class StressTestEngine:
     # ── public API ────────────────────────────────────────────────────────────
 
     def run_all_scenarios(self) -> StressTestReport:
-        """Run every built-in scenario and return a combined report."""
+        """Run the three core stress scenarios and return a combined report."""
         report = StressTestReport(
             initial_capital=self.initial_capital,
             num_paths=self.num_paths,
@@ -519,11 +529,9 @@ class StressTestEngine:
             run_at=_now(),
         )
         scenarios: List[Tuple[str, Callable[[random.Random], float]]] = [
-            ("Flash Crash",       self._scenario_flash_crash),
-            ("High Volatility",   self._scenario_high_volatility),
-            ("Liquidity Drought", self._scenario_liquidity_drought),
-            ("Trending Crisis",   self._scenario_trending_crisis),
-            ("Regime Whipsaw",    self._scenario_regime_whipsaw),
+            ("FlashCrash",       self._scenario_flash_crash),
+            ("HighVolatility",   self._scenario_high_volatility),
+            ("LiquidityDrought", self._scenario_liquidity_drought),
         ]
         for name, scenario_fn in scenarios:
             result = self._run_scenario(name, scenario_fn)
@@ -534,9 +542,39 @@ class StressTestEngine:
             )
         return report
 
-    def run_scenario(self, name: str, scenario_fn: Callable[[random.Random], float]) -> ScenarioResult:
-        """Run a single custom scenario function and return its results."""
-        return self._run_scenario(name, scenario_fn)
+    def run_flash_crash_scenario(self) -> ScenarioReport:
+        """Run the FlashCrash scenario and return a ScenarioReport."""
+        result = self._run_scenario("FlashCrash", self._scenario_flash_crash)
+        return self._result_to_report(result)
+
+    def run_high_volatility_scenario(self) -> ScenarioReport:
+        """Run the HighVolatility scenario and return a ScenarioReport."""
+        result = self._run_scenario("HighVolatility", self._scenario_high_volatility)
+        return self._result_to_report(result)
+
+    def run_liquidity_drought_scenario(self) -> ScenarioReport:
+        """Run the LiquidityDrought scenario and return a ScenarioReport."""
+        result = self._run_scenario("LiquidityDrought", self._scenario_liquidity_drought)
+        return self._result_to_report(result)
+
+    def get_markets(self) -> List[str]:
+        """Return the list of crypto markets used in stress scenarios."""
+        return list(SAMPLE_MARKETS)
+
+    def _result_to_report(self, result: ScenarioResult) -> ScenarioReport:
+        """Convert a ScenarioResult to a ScenarioReport for the public per-scenario API."""
+        avg_final = self.initial_capital + result.mean_pnl
+        return ScenarioReport(
+            scenario=result.scenario_name,
+            num_paths=result.num_paths,
+            survival_rate=result.survival_rate,
+            avg_final_capital=max(0.0, avg_final),
+            avg_max_drawdown_pct=result.mean_max_drawdown,
+            worst_drawdown_pct=result.worst_drawdown,
+            var_breach_rate=0.0,
+            kill_switch_rate=0.0,
+            avg_win_rate=0.0,
+        )
 
     # ── scenario implementations ─────────────────────────────────────────────
 

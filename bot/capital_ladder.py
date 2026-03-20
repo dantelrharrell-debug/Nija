@@ -10,9 +10,9 @@ How it works
 ------------
 Capital is divided into **rungs**, much like a physical ladder:
 
-  Rung 1 — SEED    ($15 – $49)   : 90% position, 3.0% target, 1.5% SL,  1 max pos, 5 trades/session
-  Rung 2 — SPROUT  ($50 – $99)   : 85% position, 2.5% target, 1.25% SL, 1 max pos, 6 trades/session
-  Rung 3 — SAPLING ($100 – $249) : 70% position, 2.0% target, 1.0% SL,  2 max pos, 6 trades/session
+  Rung 1 — SEED    ($15 – $49)   : 90% position, 3.0% target, 1.5% SL,  1 max pos, ~5 trades/session (guideline)
+  Rung 2 — SPROUT  ($50 – $99)   : 85% position, 2.5% target, 1.25% SL, 1 max pos, ~6 trades/session (guideline)
+  Rung 3 — SAPLING ($100 – $249) : 70% position, 2.0% target, 1.0% SL,  2 max pos, ~6 trades/session (guideline)
   Rung 4 — TREE    ($250 – $499) : 55% position, 1.8% target, 0.9% SL,  3 max pos, 5 trades/session
   Rung 5 — GROVE   ($500 – $999) : 45% position, 1.5% target, 0.75% SL, 4 max pos, 5 trades/session
   Rung 6 — FOREST  ($1 000+)     : 35% position, 1.2% target, 0.6% SL,  6 max pos, 6 trades/session
