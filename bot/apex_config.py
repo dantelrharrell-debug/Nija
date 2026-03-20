@@ -1156,3 +1156,47 @@ STRATEGY_INFO = {
     'target_win_rate': '58% - 62%',
     'target_expectancy': '+0.45R - +0.65R',
 }
+
+# ═══════════════════════════════════════════════════════════════════
+# SCALING CONFIGURATION  (Priority 4 — Unlock TRUE scaling)
+# ═══════════════════════════════════════════════════════════════════
+#
+# To unlock the compounding effect described in Priority 4 of the
+# system improvement roadmap:
+#
+# 1. Add one or more funded accounts (each $100 – $500) to the broker
+#    manager via the ADDITIONAL_ACCOUNTS list below.
+# 2. Increase ACCOUNT_TARGET_BALANCE_USD once the system is stable and
+#    consistent for 30+ days (aim for $500+ per account).
+# 3. The capital_protection_layer automatically enforces safe per-symbol
+#    and total-exposure limits across ALL accounts, so scaling is safe.
+#
+# Fields in ADDITIONAL_ACCOUNTS entries:
+#   account_id  — unique label used in logs and position tracking
+#   broker_type — "kraken" (currently supported) or "coinbase"
+#   env_key     — environment variable prefix for API credentials
+#                 (the layer will read {env_key}_API_KEY / _API_SECRET)
+#   target_usd  — desired funded amount per account
+
+SCALING_CONFIG = {
+    # Minimum per-account balance required before trading begins
+    'min_account_balance_usd': 50.0,
+
+    # Target per-account balance for full compounding effect
+    'account_target_balance_usd': 500.0,
+
+    # Maximum number of concurrent funded accounts
+    'max_funded_accounts': 5,
+
+    # Additional accounts to activate (each requires separate Kraken API keys).
+    # Uncomment and populate when you are ready to add a new funded account.
+    'additional_accounts': [
+        # Example — uncomment and fill in real values to activate:
+        # {
+        #     "account_id": "kraken_account_2",
+        #     "broker_type": "kraken",
+        #     "env_key": "KRAKEN_ACCOUNT2",   # reads KRAKEN_ACCOUNT2_API_KEY / _API_SECRET
+        #     "target_usd": 200.0,
+        # },
+    ],
+}

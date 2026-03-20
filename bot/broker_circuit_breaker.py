@@ -314,6 +314,32 @@ class BrokerCircuitBreaker:
         self.health_state = BrokerHealthState.HEALTHY
         self.last_state_change = datetime.now()
 
+    # ------------------------------------------------------------------
+    # Public wrappers for recording call outcomes.
+    # Callers outside this module should use these methods rather than
+    # the private _record_success / _record_failure helpers so that the
+    # implementation remains encapsulated.
+    # ------------------------------------------------------------------
+
+    def record_success(self) -> None:
+        """Record a successful API call (public interface)."""
+        self._record_success()
+
+    def record_failure(self, error: Exception) -> None:
+        """Record a failed API call (public interface)."""
+        self._record_failure(error)
+
+    def recovery_time_remaining(self) -> float:
+        """
+        Return seconds remaining before the circuit exits OPEN state.
+
+        Returns 0.0 if the circuit is not open or if recovery is already due.
+        """
+        if self.state != CircuitState.OPEN or self.last_failure_time is None:
+            return 0.0
+        elapsed = (datetime.now() - self.last_failure_time).total_seconds()
+        return max(0.0, self.recovery_timeout - elapsed)
+
 
 # Global registry of circuit breakers per broker
 _circuit_breakers: Dict[str, BrokerCircuitBreaker] = {}
