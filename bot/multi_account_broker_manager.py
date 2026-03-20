@@ -141,6 +141,13 @@ class MultiAccountBrokerManager:
         # Track last Kraken balance API call time for rate limiting
         self._last_kraken_balance_call: float = 0.0
 
+        # Sticky connection: track last time each platform broker was seen connected.
+        # Within STICKY_CONNECTION_WINDOW seconds of a confirmed connection, treat
+        # the broker as connected even if the live check briefly flips False (avoids
+        # transient disconnects blocking a full trading cycle).
+        self._last_platform_connected_time: Dict[BrokerType, float] = {}
+        self.STICKY_CONNECTION_WINDOW: float = 60.0  # seconds
+
         # User metadata storage for audit and reporting
         # Structure: {user_id: {'name': str, 'enabled': bool, 'brokers': {BrokerType: bool}}}
         self._user_metadata: Dict[str, Dict] = {}
@@ -477,8 +484,24 @@ class MultiAccountBrokerManager:
             
             connected_status = broker_obj.connected
             logger.debug(f"🔍 Platform broker check for {broker_type.value}: broker={broker_obj.__class__.__name__}, connected={connected_status}")
-            
-            return connected_status
+
+            if connected_status:
+                # Update sticky connection timestamp on confirmed connection
+                self._last_platform_connected_time[broker_type] = time.time()
+                return True
+
+            # Sticky connection grace window: if the broker was connected very
+            # recently (within STICKY_CONNECTION_WINDOW seconds), treat it as
+            # still connected to absorb transient API hiccups.
+            last_seen = self._last_platform_connected_time.get(broker_type, 0.0)
+            if (time.time() - last_seen) < self.STICKY_CONNECTION_WINDOW:
+                logger.debug(
+                    f"🔍 Platform broker {broker_type.value} sticky-connected "
+                    f"(last seen {time.time() - last_seen:.1f}s ago, window={self.STICKY_CONNECTION_WINDOW}s)"
+                )
+                return True
+
+            return False
             
         except Exception:
             # Use logger.exception() to automatically include traceback

@@ -803,6 +803,148 @@ class MultiBrokerExecutionRouter:
         )
 
     # ------------------------------------------------------------------
+    # Multi-broker broadcast execution
+    # ------------------------------------------------------------------
+
+    def _select_all_brokers(
+        self, asset_class: AssetClass
+    ) -> List[BrokerProfile]:
+        """Return all available brokers for *asset_class*, sorted by priority."""
+        with self._lock:
+            candidates = [
+                b for b in self._brokers.values()
+                if asset_class in b.asset_classes and b.available
+            ]
+        candidates.sort(key=lambda b: b.priority)
+        return candidates
+
+    def route_all(self, request: RouteRequest) -> List[RouteResult]:
+        """
+        Broadcast a trade signal to **every** available connected broker for
+        the detected asset class.
+
+        This is the multi-account execution path.  Each broker receives an
+        independent fill attempt; successes and failures are reported
+        separately so the caller can act on partial fills.
+
+        The per-broker size is the same ``request.size_usd`` that was passed
+        in.  Use :class:`~bot.cross_account_capital_allocator.CrossAccountCapitalAllocator`
+        upstream to scale each user's size before calling this method.
+
+        Returns:
+            List of :class:`RouteResult` — one entry per broker attempted,
+            in priority order.  An empty list means no brokers were available.
+        """
+        t0 = time.monotonic()
+
+        # Determine asset class
+        if request.asset_class:
+            try:
+                ac = AssetClass(request.asset_class.lower())
+            except ValueError:
+                ac = detect_asset_class(request.symbol)
+        else:
+            ac = detect_asset_class(request.symbol)
+
+        brokers = self._select_all_brokers(ac)
+        if not brokers:
+            logger.warning(
+                "route_all: no available brokers for asset_class=%s", ac.value
+            )
+            return []
+
+        logger.info(
+            "🔀 route_all: broadcasting %s %s to %d broker(s): %s",
+            request.side.upper(),
+            request.symbol,
+            len(brokers),
+            ", ".join(b.name for b in brokers),
+        )
+
+        results: List[RouteResult] = []
+        for broker in brokers:
+            # Validate minimum notional per broker
+            if request.size_usd < broker.min_notional_usd:
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                error = (
+                    f"Order size ${request.size_usd:.2f} below minimum "
+                    f"notional ${broker.min_notional_usd:.2f} for {broker.name}"
+                )
+                logger.warning("route_all: skipping %s — %s", broker.name, error)
+                results.append(
+                    self._make_result(
+                        request, ac, broker.name, False, 0.0, 0.0, elapsed_ms, error
+                    )
+                )
+                continue
+
+            # Dispatch
+            fill_price, filled_usd, dispatch_error = self._dispatch(request, broker)
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            success = dispatch_error is None and fill_price > 0
+
+            result = self._make_result(
+                request, ac, broker.name, success,
+                fill_price, filled_usd, elapsed_ms, dispatch_error,
+            )
+            results.append(result)
+
+            # Feed performance scorer
+            scorer = self._get_scorer()
+            if scorer is not None:
+                try:
+                    scorer.record_order_result(
+                        broker=broker.name,
+                        success=success,
+                        latency_ms=elapsed_ms,
+                        slippage_bps=0.0,
+                        error=dispatch_error,
+                    )
+                except Exception:
+                    pass
+
+            # Update stats
+            with self._lock:
+                self._stats["total_routes"] += 1
+                if success:
+                    self._stats["successful_routes"] += 1
+                    logger.info(
+                        "✅ [route_all] %s %s filled via %s at %.4f (%.2f USD, %.0f ms)",
+                        request.side.upper(), request.symbol, broker.name,
+                        fill_price, filled_usd, elapsed_ms,
+                    )
+                else:
+                    self._stats["failed_routes"] += 1
+                    logger.error(
+                        "❌ [route_all] %s %s via %s failed: %s",
+                        request.side.upper(), request.symbol, broker.name,
+                        dispatch_error,
+                    )
+                if broker.name in self._brokers:
+                    self._brokers[broker.name].observation_count += 1
+                self._route_log.append({
+                    "timestamp": result.timestamp,
+                    "symbol": request.symbol,
+                    "side": request.side,
+                    "size_usd": request.size_usd,
+                    "asset_class": ac.value,
+                    "broker": broker.name,
+                    "success": success,
+                    "fill_price": fill_price,
+                    "latency_ms": elapsed_ms,
+                    "error": dispatch_error,
+                })
+                if len(self._route_log) > 1000:
+                    self._route_log = self._route_log[-500:]
+
+        successes = sum(1 for r in results if r.success)
+        logger.info(
+            "🔀 route_all complete: %d/%d brokers succeeded for %s %s",
+            successes, len(results), request.side.upper(), request.symbol,
+        )
+        return results
+
+    # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
 
