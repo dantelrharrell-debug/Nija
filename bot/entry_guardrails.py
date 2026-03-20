@@ -541,7 +541,107 @@ class ExchangeLatencyGuard:
 
 
 # ===========================================================================
-# Composite helper — run all three in one call
+# 4. Signal Confidence Filter
+# ===========================================================================
+
+
+class SignalConfidenceFilter:
+    """
+    Block entries when signal confidence or quality falls below minimum
+    thresholds.
+
+    Prevents the bot from trading on marginal or noisy signals that have
+    a lower probability of success — a primary driver of inconsistent
+    returns.  Two complementary dimensions are checked:
+
+    - **Confidence** (0–1 float): normalised AI / scoring confidence that
+      the signal is a genuine edge.  A value below ``min_confidence``
+      rejects the trade outright.
+    - **Quality** (0–100 float): composite signal quality score from the
+      entry-scoring system.  A value below ``min_quality`` rejects the
+      trade.
+
+    Both thresholds must be met; the trade is blocked if either fails.
+    """
+
+    def __init__(
+        self,
+        min_confidence: float = 0.75,
+        min_quality: float = 65.0,
+    ):
+        """
+        Args:
+            min_confidence: Minimum signal confidence on a 0–1 scale
+                (default 0.75 = 75 %).  Signals below this are considered
+                too uncertain to trade.
+            min_quality: Minimum signal quality score on a 0–100 scale
+                (default 65.0).  Scores below this indicate weak setups.
+        """
+        self.min_confidence = min_confidence
+        self.min_quality = min_quality
+
+        logger.info(
+            "🔒 SignalConfidenceFilter initialized "
+            f"(min_confidence={min_confidence:.2f}, min_quality={min_quality:.1f})"
+        )
+
+    def check(
+        self,
+        symbol: str,
+        confidence: float,
+        quality: float = 0.0,
+    ) -> GuardrailResult:
+        """
+        Evaluate signal confidence and quality for a candidate trade.
+
+        Args:
+            symbol: Trading pair being evaluated.
+            confidence: Signal confidence score (0–1).
+            quality: Signal quality score (0–100).  Pass 0.0 to skip the
+                quality check (useful when quality data is unavailable).
+
+        Returns:
+            GuardrailResult.
+        """
+        failures: List[str] = []
+        details: Dict = {
+            "confidence": confidence,
+            "min_confidence": self.min_confidence,
+            "quality": quality,
+            "min_quality": self.min_quality,
+        }
+
+        # --- Confidence check ---
+        if confidence < self.min_confidence:
+            failures.append(
+                f"Confidence {confidence:.2f} < min {self.min_confidence:.2f}"
+            )
+
+        # --- Quality check (skip when quality is not supplied) ---
+        if 0.0 < quality < self.min_quality:
+            failures.append(
+                f"Quality {quality:.1f} < min {self.min_quality:.1f}"
+            )
+
+        if failures:
+            reason = " | ".join(failures)
+            logger.info(
+                f"   🔒 SIGNAL CONFIDENCE FILTER blocked {symbol}: {reason}"
+            )
+            return GuardrailResult(passed=False, reason=reason, details=details)
+
+        return GuardrailResult(
+            passed=True,
+            reason="Signal confidence checks passed",
+            details=details,
+        )
+
+
+
+
+
+# ===========================================================================
+# Composite helper — run all four in one call
 # ===========================================================================
 
 
@@ -550,37 +650,57 @@ def run_all_guardrails(
     correlation_filter: PortfolioCorrelationFilter,
     liquidity_filter: LiquidityFilter,
     latency_guard: ExchangeLatencyGuard,
+    signal_confidence_filter: Optional[SignalConfidenceFilter] = None,
     candidate_symbol: str,
     open_position_symbols: List[str],
     volume_24h_usd: float,
     bid: float,
     ask: float,
     position_size_usd: Optional[float] = None,
+    signal_confidence: float = 1.0,
+    signal_quality: float = 0.0,
 ) -> Tuple[bool, str]:
     """
-    Run all three guardrails and return a single pass/fail decision.
+    Run all guardrails and return a single pass/fail decision.
 
     Args:
-        correlation_filter: Initialised PortfolioCorrelationFilter.
-        liquidity_filter:   Initialised LiquidityFilter.
-        latency_guard:      Initialised ExchangeLatencyGuard.
-        candidate_symbol:   Symbol about to be entered.
-        open_position_symbols: Symbols of currently open positions.
-        volume_24h_usd:     24-hour USD volume.
-        bid:                Current best bid.
-        ask:                Current best ask.
-        position_size_usd:  Proposed position size in USD.
+        correlation_filter:       Initialised PortfolioCorrelationFilter.
+        liquidity_filter:         Initialised LiquidityFilter (volume + spread).
+        latency_guard:            Initialised ExchangeLatencyGuard.
+        signal_confidence_filter: Optional SignalConfidenceFilter.  When
+            provided, confidence and quality are validated before the trade.
+        candidate_symbol:         Symbol about to be entered.
+        open_position_symbols:    Symbols of currently open positions.
+        volume_24h_usd:           24-hour USD volume.
+        bid:                      Current best bid.
+        ask:                      Current best ask.
+        position_size_usd:        Proposed position size in USD.
+        signal_confidence:        Signal confidence score (0–1) passed to
+            SignalConfidenceFilter.  Default 1.0 (no penalty when filter
+            is not provided or when confidence is unknown).
+        signal_quality:           Signal quality score (0–100) passed to
+            SignalConfidenceFilter.  Pass 0.0 to skip the quality check.
 
     Returns:
-        (passed: bool, reason: str)  ``passed`` is True only when all three
+        (passed: bool, reason: str)  ``passed`` is True only when all
         guardrails allow the entry.
     """
-    # 1. Latency (checked first – cheapest, most time-sensitive)
+    # 1. Latency (cheapest, most time-sensitive — run first)
     lat = latency_guard.check(candidate_symbol)
     if not lat.passed:
         return False, f"[Latency] {lat.reason}"
 
-    # 2. Liquidity
+    # 2. Signal confidence + quality (fast, no I/O — run before network checks)
+    if signal_confidence_filter is not None:
+        sig = signal_confidence_filter.check(
+            symbol=candidate_symbol,
+            confidence=signal_confidence,
+            quality=signal_quality,
+        )
+        if not sig.passed:
+            return False, f"[SignalConfidence] {sig.reason}"
+
+    # 3. Liquidity (volume check + spread filter)
     liq = liquidity_filter.check(
         symbol=candidate_symbol,
         volume_24h_usd=volume_24h_usd,
@@ -591,7 +711,7 @@ def run_all_guardrails(
     if not liq.passed:
         return False, f"[Liquidity] {liq.reason}"
 
-    # 3. Correlation
+    # 4. Correlation
     corr = correlation_filter.check(
         candidate_symbol=candidate_symbol,
         open_position_symbols=open_position_symbols,
