@@ -2375,7 +2375,7 @@ class CoinbaseBroker(BaseBroker):
                 token = jwt.encode(payload, private_key, algorithm='ES256',
                                   headers={'kid': api_key, 'nonce': str(int(time.time()))})
                 headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-                response = requests.get(f"https://api.coinbase.com/v2/accounts", headers=headers)
+                response = requests.get(f"https://api.coinbase.com/v2/accounts", headers=headers, timeout=10)
 
                 if response.status_code == 200:
                     data = response.json()
