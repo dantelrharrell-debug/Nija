@@ -66,6 +66,17 @@ except ImportError:
 # Broker-specific minimum position sizes (Jan 24, 2026)
 KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
 
+# Minimum order sizes per broker (USD).  Keeps all four check-sites in sync
+# and prevents sub-minimum orders from being scored, sized, or submitted.
+BROKER_MIN_ORDER_USD: Dict[str, float] = {
+    'coinbase': 25.0,   # Coinbase minimum — high fees make <$25 unprofitable
+    'kraken':   10.0,   # Kraken exchange requirement
+    'binance':  10.0,   # Binance minimum notional
+    'okx':      10.0,   # OKX minimum notional
+    'alpaca':    1.0,   # Alpaca (stocks/crypto) minimum
+}
+_DEFAULT_MIN_ORDER_USD = 10.0  # Conservative fallback for any unlisted broker
+
 # Trade quality thresholds (Jan 29, 2026 - OPTIMIZED FOR WIN RATE)
 # OPTIMIZATION: Balance between signal generation and trade quality
 # Previous emergency relaxations went too far (0.50 confidence = low quality trades)
@@ -561,7 +572,7 @@ class NIJAApexStrategyV71:
         # Check broker-specific minimum position size (FIX: Jan 24, 2026)
         # Kraken requires $10 minimum, others typically $2
         broker_name = self._get_broker_name()
-        broker_minimum = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
+        broker_minimum = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
         if float(position_size) < broker_minimum:
             logger.info(f"   ⏭️  Skipping trade: Position ${position_size:.2f} below {broker_name} minimum ${broker_minimum:.2f}")
@@ -1569,7 +1580,7 @@ class NIJAApexStrategyV71:
             broker_name = self._get_broker_name()
 
             # Kraken requires $10 minimum, others typically allow smaller sizes
-            min_required_balance = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
+            min_required_balance = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
             # Calculate maximum possible position size
             # For small accounts (<$100), use 20% to meet broker minimums
@@ -1614,7 +1625,7 @@ class NIJAApexStrategyV71:
                     risk_score = self._get_risk_score(score, metadata)
 
                     # Get broker context for intelligent minimum position adjustments
-                    broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
+                    broker_min = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
                     # Extract regime confidence for GOD MODE+ adaptive risk (if available)
                     regime_confidence = metadata.get('regime_confidence', None) if metadata else None
@@ -1868,7 +1879,7 @@ class NIJAApexStrategyV71:
                     risk_score = self._get_risk_score(score, metadata)
 
                     # Get broker context for intelligent minimum position adjustments
-                    broker_min = KRAKEN_MIN_POSITION_USD if broker_name == 'kraken' else MIN_POSITION_USD
+                    broker_min = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
                     # Extract regime confidence for GOD MODE+ adaptive risk (if available)
                     regime_confidence = metadata.get('regime_confidence', None) if metadata else None

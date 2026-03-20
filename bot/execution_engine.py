@@ -655,6 +655,35 @@ class ExecutionEngine:
             # Log entry attempt
             logger.info(f"Executing {side} entry: {symbol} size=${position_size:.2f}")
 
+            # ── HARD MINIMUM ORDER FILTER ─────────────────────────────────────
+            # Unconditional guard: rejects sub-minimum orders before any further
+            # processing.  Prevents broker rejections, wasted API cycles, and
+            # log noise regardless of whether the notional-gate module loaded.
+            # Values intentionally inlined (not imported from strategy) so this
+            # backstop remains self-contained even if other modules fail to load.
+            # Keep in sync with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
+            _HARD_MIN_BY_BROKER = {
+                'coinbase': 25.0,
+                'kraken':   10.0,
+                'binance':  10.0,
+                'okx':      10.0,
+                'alpaca':    1.0,
+            }
+            _hard_broker_key = ''
+            if self.broker_client and hasattr(self.broker_client, 'broker_type'):
+                _bt = self.broker_client.broker_type
+                _hard_broker_key = (
+                    _bt.value if hasattr(_bt, 'value') else str(_bt)
+                ).lower()
+            _hard_min = _HARD_MIN_BY_BROKER.get(_hard_broker_key, 10.0)
+            if position_size < _hard_min:
+                logger.debug(
+                    f"⏭️  Skipping {symbol}: size ${position_size:.2f} < "
+                    f"${_hard_min:.2f} minimum for "
+                    f"{_hard_broker_key or 'broker'}"
+                )
+                return None
+
             # ✅ ENHANCEMENT #1: MINIMUM NOTIONAL GATE
             # Check if entry size meets minimum notional requirements
             if MIN_NOTIONAL_GATE_AVAILABLE and get_minimum_notional_gate:
