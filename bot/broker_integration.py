@@ -954,10 +954,11 @@ class KrakenBrokerAdapter(BrokerInterface):
         """
         # ── Guard: circuit breaker health check ──────────────────────
         if self._circuit_breaker is not None and not self._circuit_breaker.is_trading_allowed():
+            remaining = self._circuit_breaker.recovery_time_remaining()
             status = self._circuit_breaker.get_status()
             raise Exception(
                 f"Kraken API circuit breaker OPEN — trading paused. "
-                f"Recovery in ~{max(0, self._circuit_breaker.recovery_timeout):.0f}s. "
+                f"Recovery in ~{remaining:.0f}s. "
                 f"State: {status['circuit_state']}"
             )
 
@@ -965,7 +966,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             result = self._kraken_api_call_primary(method, params)
             # Record success for circuit-breaker health tracking
             if self._circuit_breaker is not None:
-                self._circuit_breaker._record_success()
+                self._circuit_breaker.record_success()
             return result
 
         except Exception as primary_exc:
@@ -973,18 +974,21 @@ class KrakenBrokerAdapter(BrokerInterface):
 
             # ── Record failure ────────────────────────────────────────
             if self._circuit_breaker is not None:
-                self._circuit_breaker._record_failure(primary_exc)
+                self._circuit_breaker.record_failure(primary_exc)
 
             # ── Secondary endpoint fallback ───────────────────────────
             # Only attempt fallback for transient network / connection errors.
             # Hard errors (invalid nonce, insufficient funds, …) are re-raised
             # immediately so the caller can handle them correctly.
-            _is_network_error = any(
-                kw in primary_msg for kw in (
-                    'timeout', 'connection', 'network', 'remote end closed',
-                    'remotedisconnected', 'connection reset', 'broken pipe',
-                    'eof', 'ssl', 'read timed out', 'service unavailable',
-                    '503', '504',
+            _is_network_error = (
+                isinstance(primary_exc, (ConnectionError, TimeoutError, OSError))
+                or any(
+                    kw in primary_msg for kw in (
+                        'timeout', 'connection', 'network', 'remote end closed',
+                        'remotedisconnected', 'connection reset', 'broken pipe',
+                        'eof', 'ssl', 'read timed out', 'service unavailable',
+                        '503', '504',
+                    )
                 )
             )
 
@@ -1001,7 +1005,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.info("✅ Kraken secondary endpoint fallback succeeded")
                 # Count this as a success (primary failed but secondary worked)
                 if self._circuit_breaker is not None:
-                    self._circuit_breaker._record_success()
+                    self._circuit_breaker.record_success()
                 return result
 
             except Exception as secondary_exc:
@@ -1010,7 +1014,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 )
                 # Record second failure so circuit breaker accumulates properly
                 if self._circuit_breaker is not None:
-                    self._circuit_breaker._record_failure(secondary_exc)
+                    self._circuit_breaker.record_failure(secondary_exc)
                 # Raise the *original* primary exception for consistent error messages
                 raise primary_exc from secondary_exc
 

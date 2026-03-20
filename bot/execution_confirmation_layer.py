@@ -255,7 +255,7 @@ class ExecutionConfirmationLayer:
             symbol=symbol,
             side=side,
             expected_size=size,
-            placed_at=datetime.utcnow(),
+            placed_at=datetime.now(),
         )
 
         remaining = size
@@ -310,7 +310,7 @@ class ExecutionConfirmationLayer:
 
             if fill_ratio >= (1.0 - self.partial_fill_tolerance):
                 result.status = FillStatus.FILLED
-                result.confirmed_at = datetime.utcnow()
+                result.confirmed_at = datetime.now()
                 logger.info(f"✅ [{symbol}] FULL FILL confirmed ({result.filled_pct:.1f}%)")
                 break
 

@@ -78,7 +78,7 @@ class TradeValidationResult:
     max_symbol_exposure_pct: float = DEFAULT_MAX_SYMBOL_EXPOSURE_PCT
     max_total_exposure_pct: float = DEFAULT_MAX_TOTAL_EXPOSURE_PCT
 
-    checked_at: datetime = field(default_factory=datetime.utcnow)
+    checked_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict:
         return {
