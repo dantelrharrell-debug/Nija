@@ -611,6 +611,22 @@ except ImportError:
         logger.warning("⚠️ Regime Capital Allocator not available - regime allocation disabled")
         get_regime_capital_allocator = None
 
+# Import Market Regime Engine — per-candle BULL/CHOP/CRASH aggression control
+try:
+    from market_regime_engine import get_market_regime_engine, Regime as RegimeEngineRegime
+    MARKET_REGIME_ENGINE_AVAILABLE = True
+    logger.info("✅ Market Regime Engine loaded - bull/chop/crash aggression active")
+except ImportError:
+    try:
+        from bot.market_regime_engine import get_market_regime_engine, Regime as RegimeEngineRegime
+        MARKET_REGIME_ENGINE_AVAILABLE = True
+        logger.info("✅ Market Regime Engine loaded - bull/chop/crash aggression active")
+    except ImportError:
+        MARKET_REGIME_ENGINE_AVAILABLE = False
+        logger.warning("⚠️ Market Regime Engine not available - regime aggression disabled")
+        get_market_regime_engine = None
+        RegimeEngineRegime = None
+
 # Import Global Drawdown Circuit Breaker — system-wide halt on deep drawdown
 try:
     from global_drawdown_circuit_breaker import get_global_drawdown_cb, ProtectionLevel
@@ -1706,6 +1722,17 @@ class TradingStrategy:
         else:
             self.regime_controller = None
             self._regime_snapshot = None
+
+        # Initialize Market Regime Engine — per-candle BULL/CHOP/CRASH aggression
+        if MARKET_REGIME_ENGINE_AVAILABLE and get_market_regime_engine is not None:
+            try:
+                self.regime_engine = get_market_regime_engine()
+                logger.info("✅ Market Regime Engine initialized - bull/chop/crash aggression active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Market Regime Engine: {e}")
+                self.regime_engine = None
+        else:
+            self.regime_engine = None
 
         # Initialize Risk Budget Engine — risk-first position sizing with performance scaling
         if RISK_BUDGET_ENGINE_AVAILABLE and RiskBudgetEngine is not None:
@@ -7644,6 +7671,21 @@ class TradingStrategy:
                                 if col in df.columns:
                                     df[col] = pd.to_numeric(df[col], errors='coerce')
 
+                            # Feed latest candle into Market Regime Engine so it can
+                            # maintain its rolling ATR / ADX / volume baseline and
+                            # continuously update the BULL / CHOP / CRASH classification.
+                            if MARKET_REGIME_ENGINE_AVAILABLE and hasattr(self, 'regime_engine') and self.regime_engine is not None:
+                                try:
+                                    _re_candle = df.iloc[-1]
+                                    self.regime_engine.update(
+                                        close=float(_re_candle['close']),
+                                        high=float(_re_candle['high']),
+                                        low=float(_re_candle['low']),
+                                        volume=float(_re_candle['volume']) if 'volume' in df.columns else 0.0,
+                                    )
+                                except Exception as _re_feed_err:
+                                    logger.debug("Regime engine candle update failed for %s: %s", symbol, _re_feed_err)
+
                             # FIX #4: PAIR QUALITY FILTER - Check spread, volume, and ATR before analyzing
                             # Only run if check_pair_quality is available (imported at module level)
                             if check_pair_quality is not None:
@@ -8333,6 +8375,81 @@ class TradingStrategy:
                                             )
                                     except Exception as _rca_err:
                                         logger.debug("Regime Capital Allocator skipped for %s: %s", symbol, _rca_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # MARKET REGIME ENGINE — bull / chop / crash aggression
+                                # Applies per-candle BULL/CHOP/CRASH behaviour multipliers
+                                # sourced from the MarketRegimeEngine singleton (ATR ratio +
+                                # ADX + volume surge).
+                                #
+                                #   Regime │ size_mult │ freq_mult │ stop_mult
+                                #   ───────┼───────────┼───────────┼──────────
+                                #   BULL   │   1.50×   │   1.25×   │   0.90×  (larger, tighter)
+                                #   CHOP   │   0.60×   │   0.50×   │   1.10×  (smaller, wider)
+                                #   CRASH  │   0.25×   │   0.20×   │   1.50×  (minimal, very wide)
+                                # ═══════════════════════════════════════════════════════
+                                if MARKET_REGIME_ENGINE_AVAILABLE and hasattr(self, 'regime_engine') and self.regime_engine is not None:
+                                    try:
+                                        _re_regime = self.regime_engine.current_regime
+                                        _re_conf = self.regime_engine.confidence
+                                        _re_behavior = self.regime_engine.behavior
+                                        _re_size_mult = _re_behavior.position_size_multiplier
+                                        _re_freq_mult = _re_behavior.trade_frequency_multiplier
+                                        _re_stop_mult = _re_behavior.stop_loss_multiplier
+                                        _re_label = _re_behavior.label
+
+                                        # Only apply when the engine has enough data to
+                                        # produce a meaningful classification.
+                                        if _re_conf > 0.0 and (RegimeEngineRegime is None or _re_regime != RegimeEngineRegime.UNKNOWN):
+                                            # ── Trade-frequency gate ──────────────────────
+                                            # In CHOP (0.50) or CRASH (0.20) regimes, honour
+                                            # the multiplier by randomly skipping that fraction
+                                            # of signals, preserving high-quality entries.
+                                            if _re_freq_mult < 1.0:
+                                                if random.random() > _re_freq_mult:
+                                                    logger.info(
+                                                        f"   🔀 {symbol}: REGIME ENGINE ({_re_label}) — "
+                                                        f"trade skipped via freq gate "
+                                                        f"(freq={_re_freq_mult:.2f}, conf={_re_conf:.0%})"
+                                                    )
+                                                    filter_stats['market_filter'] = filter_stats.get('market_filter', 0) + 1
+                                                    continue
+
+                                            # ── Position-size scaling ─────────────────────
+                                            if _re_size_mult != 1.0:
+                                                _pre_re_size = position_size
+                                                position_size *= _re_size_mult
+                                                logger.info(
+                                                    f"   📊 {symbol}: Regime Engine ({_re_label}) "
+                                                    f"size {_re_size_mult:.2f}× — "
+                                                    f"${_pre_re_size:.2f}→${position_size:.2f} "
+                                                    f"(conf={_re_conf:.0%})"
+                                                )
+
+                                            # ── Stop-loss width adjustment ────────────────
+                                            # Tighten in BULL (0.90×) to lock profits faster;
+                                            # widen in CHOP/CRASH to avoid premature stops.
+                                            if _re_stop_mult != 1.0:
+                                                _re_entry_price = analysis.get('entry_price', 0.0) or float(df['close'].iloc[-1])
+                                                _re_action = analysis.get('action', '')
+                                                for _sl_key in ('stop_loss', 'stop_price'):
+                                                    _sl_val = analysis.get(_sl_key, 0.0)
+                                                    if _sl_val and _sl_val > 0 and _re_entry_price > 0:
+                                                        if _re_action in ('enter_long', 'buy'):
+                                                            _sl_dist = _re_entry_price - _sl_val
+                                                            _new_sl = _re_entry_price - (_sl_dist * _re_stop_mult)
+                                                        else:
+                                                            _sl_dist = _sl_val - _re_entry_price
+                                                            _new_sl = _re_entry_price + (_sl_dist * _re_stop_mult)
+                                                        analysis[_sl_key] = _new_sl
+                                                        logger.debug(
+                                                            "   🛡️ %s: Regime Engine stop-loss (%s) "
+                                                            "%.2f× — %.6f→%.6f",
+                                                            symbol, _sl_key,
+                                                            _re_stop_mult, _sl_val, _new_sl,
+                                                        )
+                                    except Exception as _re_err:
+                                        logger.debug("Market Regime Engine aggression skipped for %s: %s", symbol, _re_err)
 
                                 # ═══════════════════════════════════════════════════════
                                 # VOLATILITY-WEIGHTED CAPITAL ROUTER — inverse-vol sizing
