@@ -339,6 +339,20 @@ except ImportError:
         logger.warning("⚠️ Account-Level Capital Flow not available - account-level allocation disabled")
 
 try:
+    from global_capital_brain import get_global_capital_brain
+    GLOBAL_CAPITAL_BRAIN_AVAILABLE = True
+    logger.info("✅ Global Capital Brain loaded - capital routing + efficiency score + snowball mode active")
+except ImportError:
+    try:
+        from bot.global_capital_brain import get_global_capital_brain
+        GLOBAL_CAPITAL_BRAIN_AVAILABLE = True
+        logger.info("✅ Global Capital Brain loaded - capital routing + efficiency score + snowball mode active")
+    except ImportError:
+        GLOBAL_CAPITAL_BRAIN_AVAILABLE = False
+        get_global_capital_brain = None  # type: ignore[assignment]
+        logger.warning("⚠️ Global Capital Brain not available - capital routing disabled")
+
+try:
     from ai_market_regime_forecaster import get_ai_market_regime_forecaster
     AI_REGIME_FORECASTER_AVAILABLE = True
     logger.info("✅ AI Market Regime Forecaster loaded - early regime-change prediction active")
@@ -1513,6 +1527,21 @@ class TradingStrategy:
                 self.account_flow_layer = None
         else:
             self.account_flow_layer = None
+
+        # Initialize Global Capital Brain — top-level routing + efficiency score +
+        # snowball mode + smarter reallocation (sits above all other capital layers)
+        if GLOBAL_CAPITAL_BRAIN_AVAILABLE and get_global_capital_brain is not None:
+            try:
+                self.global_capital_brain = get_global_capital_brain()
+                logger.info(
+                    "✅ Global Capital Brain initialized - "
+                    "capital routing + efficiency score + snowball mode + reallocation active"
+                )
+            except Exception as _gcb_err:
+                logger.warning("⚠️ Failed to initialize Global Capital Brain: %s", _gcb_err)
+                self.global_capital_brain = None
+        else:
+            self.global_capital_brain = None
 
         # Initialize Profit Lock System — ratchet stops + auto-withdrawal of secured gains
         if PROFIT_LOCK_SYSTEM_AVAILABLE and _get_profit_lock_system is not None:
