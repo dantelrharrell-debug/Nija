@@ -71,6 +71,12 @@ except ImportError:
         raise
 
 
+# Hard global position-size cap.  No matter how many multipliers stack
+# (compounding × volatility × regime × signal_strength), the final USD
+# position can never exceed this fraction of available balance.
+GLOBAL_MAX_POSITION_PCT: float = 0.25
+
+
 @dataclass
 class PositionSizingParams:
     """Parameters for position sizing calculation"""
@@ -240,7 +246,8 @@ class CapitalScalingIntegration:
             'drawdown_protection': 1.0,
             'volatility_adjustment': 1.0,
             'regime_adjustment': 1.0,
-            'frozen_limit_applied': False  # Track if we hit the frozen limit
+            'frozen_limit_applied': False,  # Track if we hit the frozen limit
+            'global_cap_applied': False,    # Track if GLOBAL_MAX_POSITION_PCT was applied
         }
         
         # Apply capital scaling engine adjustments
@@ -288,6 +295,19 @@ class CapitalScalingIntegration:
             )
             final_size_usd = frozen_max_position_usd
             scaling_factors['frozen_limit_applied'] = True
+
+        # 🔒 HARD GLOBAL CAP — ensures stacked multipliers (compounding × volatility
+        # × regime × signal) never push a single trade above GLOBAL_MAX_POSITION_PCT
+        # of available balance, regardless of any individual limit setting.
+        global_max_usd = params.available_balance * GLOBAL_MAX_POSITION_PCT
+        if final_size_usd > global_max_usd:
+            logger.info(
+                f"🔒 Global position cap applied: ${final_size_usd:.2f} → "
+                f"${global_max_usd:.2f} ({GLOBAL_MAX_POSITION_PCT*100:.0f}% of "
+                f"${params.available_balance:.2f})"
+            )
+            final_size_usd = global_max_usd
+            scaling_factors['global_cap_applied'] = True
         
         # Calculate position size in base currency units
         position_size_base = final_size_usd / params.current_price if params.current_price > 0 else 0.0

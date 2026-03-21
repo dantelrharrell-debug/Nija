@@ -114,6 +114,11 @@ INSIGHT_FRACTION: float = 0.10     # fraction of target pool replaced by shared 
 MAX_PNL_HISTORY: int = 500         # rolling window of per-genome trade results
 MAX_EVOLUTION_HISTORY: int = 100   # stored evolution cycle summaries per regime
 
+# Evolution safety gates — prevent overfitting on small / noisy samples
+MIN_TRADES_BEFORE_EVOLVE: int = 50   # total trades per-regime population before evolving
+MIN_WIN_RATE_THRESHOLD: float = 0.55 # population aggregate win rate required to evolve
+BASELINE_GENOME_COUNT: int = 2       # frozen reference genomes per regime population
+
 # Fitness normalisation anchors
 # Sharpe normalization: maps [-1, 3] → [0, 1] via (sharpe + 1) / 4.
 # Most crypto strategies have Sharpe in roughly -1 (poor) to 3 (excellent).
@@ -280,6 +285,9 @@ class RegimePopulation:
         self._generation: int = 0
         self._evolution_history: List[Dict[str, Any]] = []
         self._next_idx: int = 0
+        # Evolution safety tracking
+        self._total_recorded_trades: int = 0
+        self._frozen_baselines: List[RegimeGenome] = []
         self._init_population(size)
 
     # --- Initialisation ---
@@ -306,6 +314,9 @@ class RegimePopulation:
             )
             self._population.append(genome)
         self._next_idx = size
+        # Freeze the first BASELINE_GENOME_COUNT genomes as permanent references
+        for g in self._population[:BASELINE_GENOME_COUNT]:
+            self._frozen_baselines.append(deepcopy(g))
 
     # --- Trade recording ---
 
@@ -319,13 +330,63 @@ class RegimePopulation:
         genome = self.find_genome(genome_id)
         if genome is not None:
             genome.record_trade(pnl_pct)
+            self._total_recorded_trades += 1
             return True
         return False
 
     # --- Evolution ---
 
     def evolve_cycle(self) -> Dict[str, Any]:
-        """Run one full evolution cycle on this regime's population."""
+        """Run one full evolution cycle on this regime's population.
+
+        Gated by:
+
+        1. ``MIN_TRADES_BEFORE_EVOLVE`` total trades recorded for this regime.
+        2. Aggregate population win rate ≥ ``MIN_WIN_RATE_THRESHOLD``.
+
+        Frozen baseline genomes are re-injected after each successful cycle.
+        """
+        # ── Gate 1: require MIN_TRADES_BEFORE_EVOLVE total trades ─────────────
+        if self._total_recorded_trades < MIN_TRADES_BEFORE_EVOLVE:
+            logger.info(
+                "🧬 [%s] Evolution skipped — %d / %d trades required",
+                self.regime,
+                self._total_recorded_trades,
+                MIN_TRADES_BEFORE_EVOLVE,
+            )
+            return {
+                "regime": self.regime,
+                "skipped": True,
+                "reason": (
+                    f"Not enough trades: {self._total_recorded_trades} / "
+                    f"{MIN_TRADES_BEFORE_EVOLVE}"
+                ),
+                "generation": self._generation,
+            }
+
+        # ── Gate 2: require aggregate win rate ≥ MIN_WIN_RATE_THRESHOLD ───────
+        total_t = sum(g.trade_count for g in self._population)
+        total_w = sum(g.win_count for g in self._population)
+        agg_win_rate = (total_w / total_t) if total_t > 0 else 0.0
+        if agg_win_rate < MIN_WIN_RATE_THRESHOLD:
+            logger.info(
+                "🧬 [%s] Evolution skipped — win rate %.1f%% < %.0f%% threshold",
+                self.regime,
+                agg_win_rate * 100,
+                MIN_WIN_RATE_THRESHOLD * 100,
+            )
+            return {
+                "regime": self.regime,
+                "skipped": True,
+                "reason": (
+                    f"Aggregate win rate {agg_win_rate:.2%} below "
+                    f"threshold {MIN_WIN_RATE_THRESHOLD:.2%}"
+                ),
+                "generation": self._generation,
+                "aggregate_win_rate": round(agg_win_rate, 4),
+            }
+
+        # Score fitness, then sort, then evolve
         for g in self._population:
             g.compute_fitness()
 
@@ -350,6 +411,29 @@ class RegimePopulation:
 
         self._generation += 1
         self._population = offspring[: len(self._population)]
+
+        # Re-inject frozen baselines — replace the tail (weakest) entries so
+        # reference strategies are always present in the gene pool.
+        baseline_ids = {b.genome_id for b in self._frozen_baselines}
+        existing_ids = {g.genome_id for g in self._population}
+        missing = [b for b in self._frozen_baselines if b.genome_id not in existing_ids]
+        if missing:
+            non_baseline = [g for g in self._population if g.genome_id not in baseline_ids]
+            non_baseline.sort(key=lambda g: g.fitness)
+            for baseline in missing:
+                if non_baseline:
+                    worst = non_baseline.pop(0)
+                    idx = next(
+                        (i for i, g in enumerate(self._population)
+                         if g.genome_id == worst.genome_id),
+                        None,
+                    )
+                    if idx is not None:
+                        self._population[idx] = deepcopy(baseline)
+            logger.debug(
+                "🧬 [%s] %d frozen baseline(s) re-injected",
+                self.regime, len(missing),
+            )
 
         summary = self._build_summary()
         self._evolution_history.append(summary)

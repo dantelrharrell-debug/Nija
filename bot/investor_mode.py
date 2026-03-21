@@ -79,6 +79,10 @@ logger = logging.getLogger("nija.investor_mode")
 DEFAULT_MANAGEMENT_FEE_PCT: float = 2.0    # % per year
 DEFAULT_PERFORMANCE_FEE_PCT: float = 20.0  # % of gains above HWM
 DEFAULT_DATA_DIR: Path = Path("data/investor_mode")
+# Audit trail — every distribution is appended here for compliance review
+DISTRIBUTION_AUDIT_LOG: Path = Path("data/investor_mode/distribution_audit.jsonl")
+# Minimum allowed account value after allocation (prevents negative edge cases)
+MIN_ACCOUNT_VALUE_USD: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Data-classes
@@ -205,6 +209,9 @@ class InvestorModeEngine:
     def __init__(self, data_dir: Optional[Path] = None) -> None:
         self._data_dir: Path = Path(data_dir) if data_dir else DEFAULT_DATA_DIR
         self._data_dir.mkdir(parents=True, exist_ok=True)
+
+        # Audit log for every profit distribution event
+        self._audit_log: Path = self._data_dir / "distribution_audit.jsonl"
 
         # Registry: investor_id → InvestorAccount
         self._accounts: Dict[str, InvestorAccount] = {}
@@ -413,6 +420,8 @@ class InvestorModeEngine:
             return {}
 
         allocations: Dict[str, float] = {}
+        audit_records: List[Dict] = []
+        ts = datetime.now(timezone.utc).isoformat()
 
         for investor_id in account_ids:
             lock = self._get_lock(investor_id)
@@ -422,16 +431,45 @@ class InvestorModeEngine:
                     continue
 
                 weight = account.current_value_usd / total_aum
-                allocated = pnl_usd * weight
+                # Round to 2 d.p. to prevent cumulative floating-point drift
+                allocated = round(pnl_usd * weight, 2)
                 allocations[investor_id] = allocated
 
-                account.current_value_usd += allocated
-                account.total_profit_usd += allocated
-                account.profit_history.append({
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                new_value = account.current_value_usd + allocated
+                # Guard against negative allocation edge cases
+                if new_value < MIN_ACCOUNT_VALUE_USD:
+                    logger.warning(
+                        "💼 Investor %s: allocation would make value negative "
+                        "(%.2f + %.2f = %.2f); clamping to 0",
+                        investor_id,
+                        account.current_value_usd,
+                        allocated,
+                        new_value,
+                    )
+                    allocated = -account.current_value_usd  # wipe to zero
+                    new_value = MIN_ACCOUNT_VALUE_USD
+
+                account.current_value_usd = new_value
+                account.total_profit_usd = round(account.total_profit_usd + allocated, 2)
+                profit_record = {
+                    "timestamp": ts,
                     "pnl_usd": allocated,
                     "symbol": symbol,
-                    "note": note or f"portfolio profit: {symbol}" if symbol else "portfolio profit",
+                    "note": note or (f"portfolio profit: {symbol}" if symbol else "portfolio profit"),
+                }
+                account.profit_history.append(profit_record)
+
+                # Build audit entry (before fee deduction so gross amounts are recorded)
+                audit_records.append({
+                    "timestamp": ts,
+                    "investor_id": investor_id,
+                    "total_pnl_usd": pnl_usd,
+                    "allocated_usd": allocated,
+                    "weight": round(weight, 6),
+                    "value_before": round(account.current_value_usd - allocated, 2),
+                    "value_after": round(account.current_value_usd, 2),
+                    "symbol": symbol,
+                    "note": profit_record["note"],
                 })
 
                 # Immediately collect performance fees on new profits
@@ -440,11 +478,26 @@ class InvestorModeEngine:
 
                 self._save_account(account)
 
-        logger.debug(
+        logger.info(
             "📊 portfolio P&L $%.2f distributed to %d investor(s)",
             pnl_usd, len(allocations),
         )
+
+        # Append every distribution to the JSONL audit trail
+        self._append_distribution_audit(audit_records)
+
         return allocations
+
+    def _append_distribution_audit(self, records: List[Dict]) -> None:
+        """Append distribution records to the JSONL audit trail."""
+        if not records:
+            return
+        try:
+            with self._audit_log.open("a") as fh:
+                for rec in records:
+                    fh.write(json.dumps(rec) + "\n")
+        except OSError as exc:
+            logger.error("Could not write distribution audit log: %s", exc)
 
     # ------------------------------------------------------------------
     # Fee calculation and collection

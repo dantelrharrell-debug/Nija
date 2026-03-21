@@ -105,6 +105,31 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 AUDIT_LOG = DATA_DIR / "capital_scaling_trigger.jsonl"
 
 # ---------------------------------------------------------------------------
+# Optional dependency: Global Drawdown Circuit Breaker
+#
+# When the system-wide drawdown has triggered a HALT, capital scaling must be
+# blocked regardless of what the local Sharpe / drawdown metrics say.
+# We import lazily to avoid circular dependencies.
+# ---------------------------------------------------------------------------
+
+def _get_global_drawdown_cb():  # type: ignore[return]
+    """Return the global drawdown circuit breaker singleton, or None."""
+    try:
+        try:
+            from global_drawdown_circuit_breaker import (
+                get_global_drawdown_cb,
+                ProtectionLevel,
+            )
+        except ImportError:
+            from bot.global_drawdown_circuit_breaker import (
+                get_global_drawdown_cb,
+                ProtectionLevel,
+            )
+        return get_global_drawdown_cb(), ProtectionLevel
+    except Exception:
+        return None, None
+
+# ---------------------------------------------------------------------------
 # Data containers
 # ---------------------------------------------------------------------------
 
@@ -323,6 +348,30 @@ class CapitalScalingTrigger:
         sharpe = self._sharpe_ratio()
         drawdown = self._current_drawdown_pct
         trades_since = self._trades_since_last_scale
+
+        # ── Gate -1: Global Drawdown Circuit Breaker HALT ──────────────
+        # The system-wide drawdown guard ALWAYS wins over local scaling
+        # logic.  If the circuit breaker is at HALT (≥ 20 % drawdown),
+        # block scaling unconditionally.
+        try:
+            _cb, _ProtectionLevel = _get_global_drawdown_cb()
+            if _cb is not None and _ProtectionLevel is not None:
+                if _cb.get_current_level() == _ProtectionLevel.HALT:
+                    return ScaleDecision(
+                        approved=False,
+                        reason=(
+                            "Global Drawdown Circuit Breaker is HALT — "
+                            "capital scaling blocked until drawdown recovers"
+                        ),
+                        current_capital=current_capital,
+                        recommended_capital=self._allocated_capital,
+                        scale_factor=self._allocated_capital / self.base_capital,
+                        sharpe_ratio=sharpe,
+                        drawdown_pct=drawdown,
+                        trades_since_last_scale=trades_since,
+                    )
+        except Exception as _cb_exc:
+            logger.debug("Could not check global drawdown CB: %s", _cb_exc)
 
         # ── Gate 0: Profit Threshold Unlock ────────────────────────────
         if not self._is_scaling_unlocked(current_capital):
