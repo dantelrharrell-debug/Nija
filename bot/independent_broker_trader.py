@@ -595,6 +595,13 @@ class IndependentBrokerTrader:
             try:
                 logger.info(f"🔄 {broker_name} - Cycle #{cycle_count}")
 
+                # Guard: ensure the platform broker is still in CONNECTED state before trading
+                if self.multi_account_manager and not self.multi_account_manager.is_platform_connected(broker_type):
+                    logger.warning(f"⛔ {broker_name}: Trading paused — platform not connected")
+                    self.update_broker_health(broker_name, 'degraded', 'Platform not connected')
+                    stop_flag.wait(30)
+                    continue
+
                 # Check if broker is still funded
                 try:
                     balance = broker.get_account_balance()
@@ -811,6 +818,19 @@ class IndependentBrokerTrader:
             try:
                 cycle_count += 1
                 logger.info(f"🔄 {broker_name} (USER) - Cycle #{cycle_count}")
+
+                # Guard: ensure the platform broker is still CONNECTED before user trades
+                if self.multi_account_manager and not self.multi_account_manager.is_platform_connected(broker_type):
+                    logger.warning(f"⛔ {broker_name} (USER): Trading paused — platform not connected")
+                    if user_id not in self.user_broker_health:
+                        self.user_broker_health[user_id] = {}
+                    self.user_broker_health[user_id][broker_name] = {
+                        'status': 'degraded',
+                        'error': 'Platform not connected',
+                        'last_check': datetime.now()
+                    }
+                    stop_flag.wait(30)
+                    continue
 
                 # Check if broker is still funded
                 try:
