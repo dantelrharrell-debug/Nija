@@ -88,10 +88,12 @@ Architecture
     │                                                                     │
     │  run_hierarchy_check(current_account_id, all_accounts,             │
     │                       is_account_alive, strategy_approved,         │
-    │                       base_position_size) → HierarchyDecision      │
+    │                       base_position_size,                          │
+    │                       account_balance=0.0) → HierarchyDecision     │
     │    → THE unified entry point: runs all 4 layers in order,          │
     │      short-circuits on first failure, returns a HierarchyDecision  │
     │      with per-layer traceability and the final position size.       │
+    │      Hard-caps final size at MAX_POSITION_PCT (25%) of balance.    │
     │                                                                     │
     │  get_report() → dict                                               │
     │    → full snapshot for dashboards / logging                         │
@@ -189,6 +191,11 @@ PROFIT_FACTOR_CAP: float = 4.0
 
 # Normalisation cap for Sharpe (maps [-cap, +cap] → [0, 1])
 SHARPE_CAP: float = 3.0
+
+# Hard global position-size cap: final position can never exceed this fraction
+# of account balance, regardless of how snowball / volatility / regime multipliers
+# stack on top of each other.
+MAX_POSITION_PCT: float = 0.25
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +813,7 @@ class GlobalCapitalBrain:
         strategy_approved: bool,
         base_position_size: float,
         strategy_reason: str = "",
+        account_balance: float = 0.0,
     ) -> HierarchyDecision:
         """
         Run the full four-layer Capital Brain decision hierarchy.
@@ -816,7 +824,7 @@ class GlobalCapitalBrain:
             Layer 1 — GLOBAL   : Is this the best account right now?
             Layer 2 — ACCOUNT  : Is this account healthy enough to trade?
             Layer 3 — STRATEGY : Did the strategy gate approve this signal?
-            Layer 4 — TRADE    : Apply Capital Snowball multiplier.
+            Layer 4 — TRADE    : Apply Capital Snowball multiplier + hard cap.
 
         Args:
             current_account_id: The account attempting to place a trade.
@@ -829,6 +837,12 @@ class GlobalCapitalBrain:
             base_position_size: Raw position size in USD before snowball scaling.
             strategy_reason:    Rejection reason from the strategy gate (optional,
                                 used only when ``strategy_approved=False``).
+            account_balance:    Current account balance in USD (optional).  When
+                                provided, the hard ``MAX_POSITION_PCT`` cap is
+                                enforced on the final position size so that
+                                stacked multipliers (snowball × volatility ×
+                                regime × compounding) can never overshoot 25 %
+                                of available capital.
 
         Returns:
             :class:`HierarchyDecision` — a fully traced result with one entry
@@ -910,10 +924,34 @@ class GlobalCapitalBrain:
             f"win_streak={win_streak} → {snowball_mult:.1f}× multiplier"
             if snowball_mult > 1.0 else ""
         )
+
+        # ── Hard global position cap — prevents stacked multipliers from
+        #    oversizing a trade.  All of: snowball × volatility × regime ×
+        #    compounding must never push the position above MAX_POSITION_PCT
+        #    of the available account balance.
+        cap_applied = False
+        if account_balance > 0:
+            hard_cap_usd = account_balance * MAX_POSITION_PCT
+            if final_size > hard_cap_usd:
+                logger.info(
+                    "[Brain] 🔒 %s: hard cap applied — $%.2f → $%.2f "
+                    "(MAX_POSITION_PCT=%.0f%% × balance=$%.2f)",
+                    current_account_id,
+                    final_size,
+                    hard_cap_usd,
+                    MAX_POSITION_PCT * 100,
+                    account_balance,
+                )
+                final_size = round(hard_cap_usd, 4)
+                cap_applied = True
+
         layers.append(LayerResult(
             layer="trade",
             approved=True,
-            reason=snowball_reason,
+            reason=(
+                snowball_reason
+                + (" [hard cap applied]" if cap_applied else "")
+            ).strip(),
             multiplier=snowball_mult,
         ))
 

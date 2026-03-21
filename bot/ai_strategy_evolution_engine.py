@@ -92,7 +92,12 @@ CROSSOVER_RATE: float = 0.70       # probability of crossover vs. cloning
 MUTATION_RATE: float = 0.20        # probability each gene mutates
 MUTATION_SIGMA: float = 0.15       # Gaussian σ for continuous gene mutation
 ELITISM_COUNT: int = 2             # top-N genomes preserved each generation
-MIN_TRADES_FOR_FITNESS: int = 10   # minimum trades before fitness is meaningful
+MIN_TRADES_FOR_FITNESS: int = 10   # minimum trades per genome before fitness is meaningful
+
+# Evolution safety gates — prevent overfitting on small / noisy samples
+MIN_TRADES_BEFORE_EVOLVE: int = 50   # total trades across population before any cycle runs
+MIN_WIN_RATE_THRESHOLD: float = 0.55 # population aggregate win rate required to evolve
+BASELINE_GENOME_COUNT: int = 2       # number of initial genomes frozen as permanent baselines
 
 # Risk-adjusted fitness normalisation window
 # Maps return/volatility ratio from [-1, 3] → [0, 1]
@@ -316,10 +321,19 @@ class AIStrategyEvolutionEngine:
         self._current_regime: str = "UNKNOWN"
         self._regime_scale: float = REGIME_CAPITAL_SCALE["UNKNOWN"]
 
+        # Evolution safety tracking
+        self._total_recorded_trades: int = 0
+        # Frozen baseline snapshots — deep-copied at init, never overwritten.
+        # These reference strategies are re-injected after each cycle to
+        # prevent the entire population from drifting toward short-term noise.
+        self._frozen_baselines: List[StrategyGenome] = []
+
         self._init_population(population_size)
         logger.info(
-            "🧬 AIStrategyEvolutionEngine initialised with %d genomes.",
+            "🧬 AIStrategyEvolutionEngine initialised with %d genomes "
+            "(%d baseline(s) frozen).",
             population_size,
+            len(self._frozen_baselines),
         )
 
     # ------------------------------------------------------------------
@@ -333,6 +347,9 @@ class AIStrategyEvolutionEngine:
                 params=self._random_params(),
             )
             self._population.append(genome)
+        # Freeze the first BASELINE_GENOME_COUNT genomes as permanent references
+        for g in self._population[:BASELINE_GENOME_COUNT]:
+            self._frozen_baselines.append(deepcopy(g))
 
     def _random_params(self) -> Dict[str, float]:
         params: Dict[str, float] = {}
@@ -357,6 +374,7 @@ class AIStrategyEvolutionEngine:
             genome = self._find_genome(genome_id)
             if genome is not None:
                 genome.record_trade(pnl_pct)
+                self._total_recorded_trades += 1
             else:
                 logger.debug("⚠️ record_trade: genome %s not found.", genome_id)
 
@@ -375,9 +393,61 @@ class AIStrategyEvolutionEngine:
         Run one full evolution cycle:
         score → select → crossover → mutate → replace.
 
+        Evolution is gated by two safety checks to prevent overfitting on
+        short-term noise:
+
+        1. **Minimum trades** — at least ``MIN_TRADES_BEFORE_EVOLVE`` trades
+           must have been recorded across the whole population before any
+           genetic operators run.
+        2. **Minimum win rate** — the population aggregate win rate must be
+           ≥ ``MIN_WIN_RATE_THRESHOLD`` (0.55) before allowing evolution.
+
+        After each cycle the frozen baseline genomes are re-injected at the
+        bottom of the population (replacing the weakest non-baseline entries)
+        so there are always reference strategies in the gene pool.
+
         Returns a report dict with population statistics.
         """
         with self._lock:
+            # ── Gate 1: require MIN_TRADES_BEFORE_EVOLVE total trades ─────────
+            if self._total_recorded_trades < MIN_TRADES_BEFORE_EVOLVE:
+                skipped_summary = {
+                    "skipped": True,
+                    "reason": (
+                        f"Not enough trades to evolve: "
+                        f"{self._total_recorded_trades} / {MIN_TRADES_BEFORE_EVOLVE}"
+                    ),
+                    "generation": self._generation,
+                    "total_recorded_trades": self._total_recorded_trades,
+                }
+                logger.info(
+                    "🧬 Evolution skipped — %d / %d trades required",
+                    self._total_recorded_trades,
+                    MIN_TRADES_BEFORE_EVOLVE,
+                )
+                return skipped_summary
+
+            # ── Gate 2: require aggregate win rate ≥ MIN_WIN_RATE_THRESHOLD ───
+            total_t = sum(g.trade_count for g in self._population)
+            total_w = sum(g.win_count for g in self._population)
+            agg_win_rate = (total_w / total_t) if total_t > 0 else 0.0
+            if agg_win_rate < MIN_WIN_RATE_THRESHOLD:
+                skipped_summary = {
+                    "skipped": True,
+                    "reason": (
+                        f"Aggregate win rate {agg_win_rate:.2%} below "
+                        f"threshold {MIN_WIN_RATE_THRESHOLD:.2%}"
+                    ),
+                    "generation": self._generation,
+                    "aggregate_win_rate": round(agg_win_rate, 4),
+                }
+                logger.info(
+                    "🧬 Evolution skipped — aggregate win rate %.1f%% < %.0f%% threshold",
+                    agg_win_rate * 100,
+                    MIN_WIN_RATE_THRESHOLD * 100,
+                )
+                return skipped_summary
+
             # 1. Score fitness
             for g in self._population:
                 g.compute_fitness()
@@ -407,6 +477,31 @@ class AIStrategyEvolutionEngine:
 
             self._generation += 1
             self._population = offspring[:len(self._population)]
+
+            # 5. Re-inject frozen baselines — replace the tail (weakest) entries
+            #    so reference strategies are always present in the gene pool.
+            baseline_ids = {b.genome_id for b in self._frozen_baselines}
+            existing_ids = {g.genome_id for g in self._population}
+            missing = [b for b in self._frozen_baselines if b.genome_id not in existing_ids]
+            if missing:
+                # Sort population best-first; we want to replace the weakest
+                # (tail) non-baseline entries, so pop() from the end (O(1)).
+                non_baseline = [g for g in self._population if g.genome_id not in baseline_ids]
+                non_baseline.sort(key=lambda g: g.fitness, reverse=True)
+                for baseline in missing:
+                    if non_baseline:
+                        worst = non_baseline.pop()  # O(1) — remove from end
+                        idx = next(
+                            (i for i, g in enumerate(self._population)
+                             if g.genome_id == worst.genome_id),
+                            None,
+                        )
+                        if idx is not None:
+                            self._population[idx] = deepcopy(baseline)
+                logger.debug(
+                    "🧬 %d frozen baseline(s) re-injected into population",
+                    len(missing),
+                )
 
             summary = self._build_summary()
             self._evolution_history.append(summary)
