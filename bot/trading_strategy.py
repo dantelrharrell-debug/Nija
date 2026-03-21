@@ -565,6 +565,68 @@ except ImportError:
         get_volatility_position_sizer = None
         VolatilityPositionSizer = None
 
+# Import Cross-Broker Arbitrage Monitor — venue price divergence awareness
+try:
+    from cross_broker_arbitrage_monitor import get_arb_monitor, ArbSignalStrength
+    CROSS_BROKER_ARB_AVAILABLE = True
+    logger.info("✅ Cross-Broker Arbitrage Monitor loaded - multi-venue price divergence active")
+except ImportError:
+    try:
+        from bot.cross_broker_arbitrage_monitor import get_arb_monitor, ArbSignalStrength
+        CROSS_BROKER_ARB_AVAILABLE = True
+        logger.info("✅ Cross-Broker Arbitrage Monitor loaded - multi-venue price divergence active")
+    except ImportError:
+        CROSS_BROKER_ARB_AVAILABLE = False
+        logger.warning("⚠️ Cross-Broker Arbitrage Monitor not available - single-venue mode")
+        get_arb_monitor = None
+        ArbSignalStrength = None
+
+# Import Volatility-Weighted Capital Router — inverse-volatility capital sizing
+try:
+    from volatility_weighted_capital_router import get_volatility_router
+    VOLATILITY_CAPITAL_ROUTER_AVAILABLE = True
+    logger.info("✅ Volatility-Weighted Capital Router loaded - inverse-vol sizing active")
+except ImportError:
+    try:
+        from bot.volatility_weighted_capital_router import get_volatility_router
+        VOLATILITY_CAPITAL_ROUTER_AVAILABLE = True
+        logger.info("✅ Volatility-Weighted Capital Router loaded - inverse-vol sizing active")
+    except ImportError:
+        VOLATILITY_CAPITAL_ROUTER_AVAILABLE = False
+        logger.warning("⚠️ Volatility-Weighted Capital Router not available")
+        get_volatility_router = None
+
+# Import Regime Capital Allocator — regime-driven capital allocation shifts
+try:
+    from regime_capital_allocator import get_regime_capital_allocator
+    REGIME_CAPITAL_ALLOCATOR_AVAILABLE = True
+    logger.info("✅ Regime Capital Allocator loaded - regime→allocation mapping active")
+except ImportError:
+    try:
+        from bot.regime_capital_allocator import get_regime_capital_allocator
+        REGIME_CAPITAL_ALLOCATOR_AVAILABLE = True
+        logger.info("✅ Regime Capital Allocator loaded - regime→allocation mapping active")
+    except ImportError:
+        REGIME_CAPITAL_ALLOCATOR_AVAILABLE = False
+        logger.warning("⚠️ Regime Capital Allocator not available - regime allocation disabled")
+        get_regime_capital_allocator = None
+
+# Import Global Drawdown Circuit Breaker — system-wide halt on deep drawdown
+try:
+    from global_drawdown_circuit_breaker import get_global_drawdown_cb, ProtectionLevel
+    GLOBAL_DRAWDOWN_CB_AVAILABLE = True
+    logger.info("✅ Global Drawdown Circuit Breaker loaded - system-wide halt active")
+except ImportError:
+    try:
+        from bot.global_drawdown_circuit_breaker import get_global_drawdown_cb, ProtectionLevel
+        GLOBAL_DRAWDOWN_CB_AVAILABLE = True
+        logger.info("✅ Global Drawdown Circuit Breaker loaded - system-wide halt active")
+    except ImportError:
+        GLOBAL_DRAWDOWN_CB_AVAILABLE = False
+        logger.warning("⚠️ Global Drawdown Circuit Breaker not available - system drawdown halt disabled")
+        get_global_drawdown_cb = None
+        ProtectionLevel = None
+
 # Import Micro-Cap Compounding Config — applies before risk engine and position sizing
 try:
     from micro_capital_config import (
@@ -1711,6 +1773,49 @@ class TradingStrategy:
         else:
             self.volatility_position_sizer = None
 
+        # Initialize Cross-Broker Arbitrage Monitor
+        if CROSS_BROKER_ARB_AVAILABLE and get_arb_monitor is not None:
+            try:
+                self.arb_monitor = get_arb_monitor()
+                logger.info("✅ Cross-Broker Arbitrage Monitor initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Cross-Broker Arbitrage Monitor: {e}")
+                self.arb_monitor = None
+        else:
+            self.arb_monitor = None
+
+        # Initialize Volatility-Weighted Capital Router
+        if VOLATILITY_CAPITAL_ROUTER_AVAILABLE and get_volatility_router is not None:
+            try:
+                self.volatility_capital_router = get_volatility_router()
+                logger.info("✅ Volatility-Weighted Capital Router initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Volatility-Weighted Capital Router: {e}")
+                self.volatility_capital_router = None
+        else:
+            self.volatility_capital_router = None
+
+        # Initialize Regime Capital Allocator
+        if REGIME_CAPITAL_ALLOCATOR_AVAILABLE and get_regime_capital_allocator is not None:
+            try:
+                self.regime_capital_allocator = get_regime_capital_allocator()
+                logger.info("✅ Regime Capital Allocator initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Regime Capital Allocator: {e}")
+                self.regime_capital_allocator = None
+        else:
+            self.regime_capital_allocator = None
+
+        # Initialize Global Drawdown Circuit Breaker
+        if GLOBAL_DRAWDOWN_CB_AVAILABLE and get_global_drawdown_cb is not None:
+            try:
+                self.global_drawdown_cb = get_global_drawdown_cb()
+                logger.info("✅ Global Drawdown Circuit Breaker initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Global Drawdown Circuit Breaker: {e}")
+                self.global_drawdown_cb = None
+        else:
+            self.global_drawdown_cb = None
         # Initialize Capital Scaling Engine — auto-increases deposits into winning accounts
         if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
             try:
@@ -4851,6 +4956,42 @@ class TradingStrategy:
             except Exception as _gov_exc:
                 logger.debug("Global Risk Governor check skipped: %s", _gov_exc)
 
+        # ✅ LAYER 0c: GLOBAL DRAWDOWN CIRCUIT BREAKER — system-wide halt on deep drawdown
+        # Monitors aggregate equity and blocks new entries when portfolio drawdown is too deep.
+        if GLOBAL_DRAWDOWN_CB_AVAILABLE and get_global_drawdown_cb and not user_mode:
+            try:
+                _gdcb = get_global_drawdown_cb()
+                _gdcb_balance = 0.0
+                if active_broker and hasattr(active_broker, 'get_balance'):
+                    try:
+                        _gdcb_bal_result = active_broker.get_balance()
+                        if _gdcb_bal_result and not _gdcb_bal_result[1]:
+                            _gdcb_balance = float(_gdcb_bal_result[0])
+                    except Exception:
+                        pass
+                if _gdcb_balance > 0:
+                    _gdcb_decision = _gdcb.update_equity(_gdcb_balance)
+                    if not _gdcb_decision.allow_new_entries:
+                        logger.warning("=" * 80)
+                        logger.warning("🛑 GLOBAL DRAWDOWN CIRCUIT BREAKER: NEW ENTRIES HALTED")
+                        logger.warning("=" * 80)
+                        logger.warning(f"   Level: {_gdcb_decision.level.value}")
+                        logger.warning(f"   Drawdown: {_gdcb_decision.drawdown_pct:.2f}%")
+                        logger.warning(f"   Reason: {_gdcb_decision.reason}")
+                        logger.warning("   Mode: Position management only (exits/stops)")
+                        logger.warning("=" * 80)
+                        user_mode = True
+                    elif _gdcb_decision.drawdown_pct >= 5.0:
+                        logger.warning(
+                            "⚠️ Global Drawdown CB: %s — drawdown=%.2f%% "
+                            "(size mult=%.2f)",
+                            _gdcb_decision.level.value,
+                            _gdcb_decision.drawdown_pct,
+                            _gdcb_decision.position_size_multiplier,
+                        )
+            except Exception as _gdcb_exc:
+                logger.debug("Global Drawdown Circuit Breaker check skipped: %s", _gdcb_exc)
+
         # CRITICAL SAFETY CHECK: Verify trading is allowed before ANY operations
         if self.safety:
             trading_allowed, reason = self.safety.is_trading_allowed()
@@ -7477,6 +7618,20 @@ class TradingStrategy:
                                     bid_price = current_price * (1 - estimated_spread_pct / 2)
                                     ask_price = current_price * (1 + estimated_spread_pct / 2)
 
+                                    # Feed Cross-Broker Arbitrage Monitor with primary broker price
+                                    if CROSS_BROKER_ARB_AVAILABLE and hasattr(self, 'arb_monitor') and self.arb_monitor is not None:
+                                        try:
+                                            _primary_broker_name = (
+                                                active_broker.broker_type.value
+                                                if hasattr(active_broker, 'broker_type')
+                                                else "primary"
+                                            )
+                                            self.arb_monitor.update_price(
+                                                _primary_broker_name, symbol, bid_price, ask_price
+                                            )
+                                        except Exception:
+                                            pass
+
                                     # Calculate ATR percentage if available
                                     atr_pct = None
                                     if 'atr' in df.columns and len(df) > 0:
@@ -8099,6 +8254,102 @@ class TradingStrategy:
                                             "AI Market Regime Forecaster skipped for %s: %s",
                                             symbol, _fc_err,
                                         )
+
+                                # ═══════════════════════════════════════════════════════
+                                # REGIME CAPITAL ALLOCATOR — regime-driven sizing shift
+                                # ═══════════════════════════════════════════════════════
+                                if REGIME_CAPITAL_ALLOCATOR_AVAILABLE and hasattr(self, 'regime_capital_allocator') and self.regime_capital_allocator is not None:
+                                    try:
+                                        _rca_regime = (
+                                            str(_regime_result.regime)
+                                            if _regime_result and hasattr(_regime_result, 'regime')
+                                            else "UNKNOWN"
+                                        )
+                                        _rca_conf = (
+                                            float(_regime_result.confidence)
+                                            if _regime_result and hasattr(_regime_result, 'confidence')
+                                            else 0.6
+                                        )
+                                        self.regime_capital_allocator.update_regime(
+                                            _rca_regime, _rca_conf
+                                        )
+                                        _rca_params = self.regime_capital_allocator.get_allocation_params()
+                                        if not _rca_params.allow_new_entries:
+                                            logger.info(
+                                                f"   🔄 {symbol}: REGIME ALLOCATOR BLOCK — "
+                                                f"regime={_rca_params.regime} ({_rca_params.description})"
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        if _rca_params.position_size_multiplier != 1.0:
+                                            _pre_rca = position_size
+                                            position_size *= _rca_params.position_size_multiplier
+                                            logger.info(
+                                                f"   🔄 {symbol}: Regime Allocator size "
+                                                f"{_rca_params.regime} "
+                                                f"({_rca_params.position_size_multiplier:.2f}x) "
+                                                f"${_pre_rca:.2f}→${position_size:.2f}"
+                                            )
+                                    except Exception as _rca_err:
+                                        logger.debug("Regime Capital Allocator skipped for %s: %s", symbol, _rca_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # VOLATILITY-WEIGHTED CAPITAL ROUTER — inverse-vol sizing
+                                # ═══════════════════════════════════════════════════════
+                                if VOLATILITY_CAPITAL_ROUTER_AVAILABLE and hasattr(self, 'volatility_capital_router') and self.volatility_capital_router is not None:
+                                    try:
+                                        _atr_raw = analysis.get('atr', 0.0)
+                                        _close_price = float(df['close'].iloc[-1]) if df is not None and len(df) > 0 else 0.0
+                                        if _close_price > 0 and _atr_raw > 0:
+                                            _atr_pct = (_atr_raw / _close_price) * 100.0
+                                            self.volatility_capital_router.update_volatility(symbol, _atr_pct)
+                                        _vol_mult = self.volatility_capital_router.get_size_multiplier(symbol)
+                                        if _vol_mult != 1.0:
+                                            _pre_vol = position_size
+                                            position_size *= _vol_mult
+                                            logger.info(
+                                                f"   📊 {symbol}: Volatility Router size "
+                                                f"({_vol_mult:.2f}x) "
+                                                f"${_pre_vol:.2f}→${position_size:.2f}"
+                                            )
+                                    except Exception as _vol_err:
+                                        logger.debug("Volatility-Weighted Capital Router skipped for %s: %s", symbol, _vol_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # GLOBAL DRAWDOWN CIRCUIT BREAKER — per-trade size scale
+                                # ═══════════════════════════════════════════════════════
+                                if GLOBAL_DRAWDOWN_CB_AVAILABLE and hasattr(self, 'global_drawdown_cb') and self.global_drawdown_cb is not None:
+                                    try:
+                                        _gdcb_mult = self.global_drawdown_cb.get_position_size_multiplier()
+                                        if _gdcb_mult < 1.0:
+                                            _pre_gdcb = position_size
+                                            position_size *= _gdcb_mult
+                                            logger.info(
+                                                f"   🛡️ {symbol}: Global Drawdown CB size "
+                                                f"({_gdcb_mult:.2f}x) "
+                                                f"${_pre_gdcb:.2f}→${position_size:.2f}"
+                                            )
+                                    except Exception as _gdcb2_err:
+                                        logger.debug("Global Drawdown CB size scaling skipped for %s: %s", symbol, _gdcb2_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # CROSS-BROKER ARBITRAGE MONITOR — best venue selection
+                                # ═══════════════════════════════════════════════════════
+                                if CROSS_BROKER_ARB_AVAILABLE and hasattr(self, 'arb_monitor') and self.arb_monitor is not None:
+                                    try:
+                                        _arb_signal = self.arb_monitor.get_arb_signal(symbol)
+                                        if _arb_signal.venue_count >= 2:
+                                            logger.debug(
+                                                "   🔀 %s: ArbitrageMonitor spread_gap=%.3f%% "
+                                                "best_buy=%s best_sell=%s strength=%s",
+                                                symbol,
+                                                _arb_signal.spread_gap_pct,
+                                                _arb_signal.best_buy_venue,
+                                                _arb_signal.best_sell_venue,
+                                                _arb_signal.strength.value,
+                                            )
+                                    except Exception as _arb_err:
+                                        logger.debug("Cross-Broker Arb Monitor skipped for %s: %s", symbol, _arb_err)
 
                                 # ═══════════════════════════════════════════════════════
                                 # RISK BUDGET ENGINE — risk-first position size override
@@ -9199,6 +9450,12 @@ class TradingStrategy:
             except Exception as _fg_err:
                 logger.debug("Fragmentation guard record_trade skipped for %s: %s", symbol, _fg_err)
 
+        # Feed Global Drawdown Circuit Breaker trade outcome (drives recovery step-down)
+        if GLOBAL_DRAWDOWN_CB_AVAILABLE and hasattr(self, 'global_drawdown_cb') and self.global_drawdown_cb is not None:
+            try:
+                self.global_drawdown_cb.record_trade(pnl_usd=profit_usd, is_win=is_win)
+            except Exception as _gdcb_rt_err:
+                logger.debug("Global Drawdown CB record_trade skipped for %s: %s", symbol, _gdcb_rt_err)
         # 📈 CAPITAL SCALING ENGINE — record trade for auto-compounding and drawdown tracking
         if hasattr(self, 'capital_scaling_engine') and self.capital_scaling_engine is not None:
             try:
