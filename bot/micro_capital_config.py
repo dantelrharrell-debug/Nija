@@ -377,14 +377,83 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
 # ============================================================================
 # DYNAMIC SCALING BASED ON EQUITY
 # ============================================================================
+#
+# Position-size percentage tiers and max-positions unlock tiers are the
+# single-source-of-truth values defined in smart_scaling_engine.py.
+# Import them here so the rest of this module (and any callers) can
+# reference the constants without duplicating them.
+
+try:
+    from bot.smart_scaling_engine import (
+        POSITION_SIZE_TIER_MICRO   as POSITION_SIZE_PCT_TIER_MICRO,
+        POSITION_SIZE_TIER_SMALL   as POSITION_SIZE_PCT_TIER_SMALL,
+        POSITION_SIZE_TIER_MID     as POSITION_SIZE_PCT_TIER_MID,
+        POSITION_SIZE_TIER_GROWTH  as POSITION_SIZE_PCT_TIER_GROWTH,
+        POSITION_SIZE_TIER_ELITE   as POSITION_SIZE_PCT_TIER_ELITE,
+        POS_UNLOCK_TIER_4,
+        POS_UNLOCK_TIER_5,
+        POS_UNLOCK_TIER_6,
+        BASE_MAX_POSITIONS,
+    )
+    # Convert fractional values (0.30) to percentage values (30.0) for
+    # backward-compat callers that expect percentages.
+    POSITION_SIZE_PCT_TIER_MICRO  = POSITION_SIZE_PCT_TIER_MICRO  * 100
+    POSITION_SIZE_PCT_TIER_SMALL  = POSITION_SIZE_PCT_TIER_SMALL  * 100
+    POSITION_SIZE_PCT_TIER_MID    = POSITION_SIZE_PCT_TIER_MID    * 100
+    POSITION_SIZE_PCT_TIER_GROWTH = POSITION_SIZE_PCT_TIER_GROWTH * 100
+    POSITION_SIZE_PCT_TIER_ELITE  = POSITION_SIZE_PCT_TIER_ELITE  * 100
+except ImportError as _import_err:
+    logger.warning("smart_scaling_engine unavailable – using inline tier constants: %s", _import_err)
+    POSITION_SIZE_PCT_TIER_MICRO   = 30.0
+    POSITION_SIZE_PCT_TIER_SMALL   = 25.0
+    POSITION_SIZE_PCT_TIER_MID     = 22.0
+    POSITION_SIZE_PCT_TIER_GROWTH  = 20.0
+    POSITION_SIZE_PCT_TIER_ELITE   = 18.0
+    POS_UNLOCK_TIER_4              = 150.0
+    POS_UNLOCK_TIER_5              = 300.0
+    POS_UNLOCK_TIER_6              = 600.0
+    BASE_MAX_POSITIONS             = 3
+
+
+def get_position_size_pct(equity: float) -> float:
+    """
+    Return the recommended position-size percentage for the given equity level.
+
+    Values are sourced from smart_scaling_engine.POSITION_SIZE_TIER_* constants
+    (single source of truth):
+      <$100   → 30 %  (aggressive early compounding)
+      <$250   → 25 %
+      <$500   → 22 %
+      <$1000  → 20 %
+      $1000+  → 18 %
+
+    Args:
+        equity: Current account balance in USD.
+
+    Returns:
+        Position size as a percentage of deployable capital (e.g. 25.0 = 25 %).
+    """
+    if equity < 100.0:
+        return POSITION_SIZE_PCT_TIER_MICRO
+    if equity < 250.0:
+        return POSITION_SIZE_PCT_TIER_SMALL
+    if equity < 500.0:
+        return POSITION_SIZE_PCT_TIER_MID
+    if equity < 1000.0:
+        return POSITION_SIZE_PCT_TIER_GROWTH
+    return POSITION_SIZE_PCT_TIER_ELITE
+
 
 def get_dynamic_config(equity: float) -> Dict:
     """
     Get configuration that scales dynamically based on account equity.
-    
+
+    Uses the SmartScalingEngine tiers (March 2026) for both
+    ``position_size_pct`` and ``max_positions``.
+
     Args:
         equity: Current account equity/balance
-        
+
     Returns:
         Dict with dynamically adjusted configuration values
     """
@@ -395,8 +464,7 @@ def get_dynamic_config(equity: float) -> Dict:
     }
 
     # Micro-cap compounding mode: balance < $100
-    # Takes full precedence over all other tiers; standard tiers ($250/$500/$1000)
-    # only apply once the balance reaches $100 or above.
+    # Takes full precedence over all other tiers.
     compounding = get_micro_cap_compounding_config(equity)
     if compounding:
         config['max_positions'] = compounding['max_positions']
@@ -405,33 +473,38 @@ def get_dynamic_config(equity: float) -> Dict:
         config['stop_loss_pct'] = compounding['stop_loss_pct']
         config['micro_cap_compounding_active'] = True
         return config
-    
 
-    # Micro account position scaling: $100–$499 → 3 to 8 positions (linear)
-    # Replaces the old step-wise approach ($250→3, $500→4) with a smooth range.
-    if equity < 500:
-        micro_range_min = MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD  # $100
-        micro_range_max = 500.0
-        progress = (equity - micro_range_min) / (micro_range_max - micro_range_min)
-        progress = max(0.0, min(1.0, progress))
-        positions = round(MIN_POSITIONS + (MAX_POSITIONS - MIN_POSITIONS) * progress)
-        config['max_positions'] = max(MIN_POSITIONS, min(MAX_POSITIONS, positions))
-        logger.info(
-            f"Equity ${equity:.2f}: Micro account mode — {config['max_positions']} positions "
-            f"(3–8 range, progress={progress:.2f})"
-        )
+    # ── Position-size percentage (March 2026 tiers) ────────────────────────
+    config['position_size_pct'] = get_position_size_pct(equity)
 
-    # Scaling at $500
-    if equity >= 500:
-        config['max_positions'] = MAX_POSITIONS
-        logger.info(f"Equity ${equity:.2f}: Scaled to {MAX_POSITIONS} positions")
-    
-    # Scaling at $1000
-    if equity >= 1000:
-        config['max_positions'] = 6
-        config['risk_per_trade'] = 5.0
+    # ── Max-positions auto-unlock (March 2026 tiers) ───────────────────────
+    # Delegate to SmartScalingEngine when available; fall back to inline logic.
+    try:
+        from bot.smart_scaling_engine import get_smart_scaling_engine
+        config['max_positions'] = get_smart_scaling_engine().get_max_positions(equity)
+    except ImportError as exc:
+        logger.warning("SmartScalingEngine unavailable – using inline position unlock: %s", exc)
+        if equity >= POS_UNLOCK_TIER_6:
+            config['max_positions'] = 6
+        elif equity >= POS_UNLOCK_TIER_5:
+            config['max_positions'] = 5
+        elif equity >= POS_UNLOCK_TIER_4:
+            config['max_positions'] = 4
+        else:
+            config['max_positions'] = BASE_MAX_POSITIONS
+
+    # ── Leverage unlock at $1000 ───────────────────────────────────────────
+    if equity >= 1000.0:
+        config['risk_per_trade']   = 5.0
         config['leverage_enabled'] = True
-        logger.info(f"Equity ${equity:.2f}: Scaled to 6 positions, 5% risk, leverage enabled")
+
+    logger.info(
+        "Equity $%.2f → position_size_pct=%.0f%% max_positions=%d leverage=%s",
+        equity,
+        config['position_size_pct'],
+        config['max_positions'],
+        config['leverage_enabled'],
+    )
 
     config['micro_cap_compounding_active'] = False
     return config
