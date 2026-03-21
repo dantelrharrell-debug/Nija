@@ -2075,6 +2075,186 @@ def restart_bot():
         }), 500
 
 
+
+
+# ---------------------------------------------------------------------------
+# Business Intelligence Layer — owner-level performance overview
+# ---------------------------------------------------------------------------
+
+@app.route('/api/business-intelligence', methods=['GET'])
+def get_business_intelligence():
+    """
+    Business Intelligence Layer — owner-level metrics dashboard.
+
+    Returns:
+    * Lifetime profit summary
+    * Monthly Recurring Revenue (MRR) estimate
+    * Withdrawal totals
+    * Risk exposure snapshot
+    * Strategy performance summary
+
+    All figures are computed from available NIJA subsystem data where
+    possible, with graceful fallback when subsystems are not loaded.
+    """
+    try:
+        from datetime import timezone as _tz
+        import glob as _glob
+
+        now = datetime.now(_tz.utc)
+        result: dict = {
+            "timestamp": now.isoformat(),
+            "lifetime_profit_usd": 0.0,
+            "mrr_usd": 0.0,
+            "total_withdrawals_usd": 0.0,
+            "salary_paid_lifetime_usd": 0.0,
+            "risk_exposure": {},
+            "strategy_performance": {},
+            "capital_summary": {},
+            "regime": "UNKNOWN",
+        }
+
+        # ── Lifetime profit / P&L ─────────────────────────────────────
+        try:
+            from profit_lock_system import get_profit_lock_system as _get_pls
+            pls = _get_pls()
+            report = pls.get_report()
+            # Extract numeric values from profit lock system report if available
+            if hasattr(pls, 'extraction_engine'):
+                eng = pls.extraction_engine
+                if hasattr(eng, 'total_extracted'):
+                    result["total_withdrawals_usd"] = float(eng.total_extracted)
+        except Exception:
+            pass
+
+        # ── Weekly salary totals ───────────────────────────────────────
+        try:
+            from weekly_salary_mode import get_weekly_salary_mode as _get_wsm
+            wsm = _get_wsm()
+            result["salary_paid_lifetime_usd"] = float(wsm.total_salary_paid_usd)
+            result["total_withdrawals_usd"] = max(
+                result["total_withdrawals_usd"],
+                result["salary_paid_lifetime_usd"],
+            )
+        except Exception:
+            pass
+
+        # ── MRR: estimate from salary / withdrawal pace ────────────────
+        try:
+            salary_data_dir = DATA_DIR / "weekly_salary"
+            audit_path = salary_data_dir / "salary_audit.jsonl"
+            if audit_path.exists():
+                import json as _json
+                monthly_paid: list = []
+                with open(audit_path, encoding="utf-8") as _f:
+                    for _line in _f:
+                        _line = _line.strip()
+                        if not _line:
+                            continue
+                        try:
+                            rec = _json.loads(_line)
+                            if rec.get("status") == "paid" and rec.get("salary_paid_usd", 0) > 0:
+                                # Parse week → assign to month
+                                _ts = rec.get("timestamp", "")
+                                _paid = float(rec.get("salary_paid_usd", 0))
+                                if _ts:
+                                    _dt = datetime.fromisoformat(_ts.replace("Z", "+00:00"))
+                                    _month_key = f"{_dt.year}-{_dt.month:02d}"
+                                    monthly_paid.append((_month_key, _paid))
+                        except Exception:
+                            pass
+                if monthly_paid:
+                    from collections import defaultdict as _dd
+                    by_month: dict = _dd(float)
+                    for _mk, _pv in monthly_paid:
+                        by_month[_mk] += _pv
+                    # MRR = average of last 3 months
+                    sorted_months = sorted(by_month.items(), reverse=True)[:3]
+                    if sorted_months:
+                        result["mrr_usd"] = sum(v for _, v in sorted_months) / len(sorted_months)
+        except Exception:
+            pass
+
+        # ── Risk exposure ──────────────────────────────────────────────
+        try:
+            from global_risk_governor import get_global_risk_governor as _get_grg
+            grg = _get_grg()
+            if hasattr(grg, 'get_status'):
+                status = grg.get_status()
+                result["risk_exposure"] = {
+                    "governor_status": str(status),
+                }
+        except Exception:
+            pass
+
+        try:
+            from global_drawdown_circuit_breaker import get_global_drawdown_cb as _get_gdcb
+            gdcb = _get_gdcb()
+            if hasattr(gdcb, 'current_level'):
+                result["risk_exposure"]["drawdown_level"] = str(gdcb.current_level())
+        except Exception:
+            pass
+
+        # ── Market regime ──────────────────────────────────────────────
+        try:
+            from market_regime_engine import get_market_regime_engine as _get_mre
+            mre = _get_mre()
+            result["regime"] = mre.current_regime.value
+            result["regime_metrics"] = mre.metrics
+        except Exception:
+            pass
+
+        # ── Capital summary ────────────────────────────────────────────
+        try:
+            from capital_allocator import get_capital_allocator as _get_ca
+            ca = _get_ca()
+            if hasattr(ca, 'get_allocated_capital'):
+                result["capital_summary"]["allocator"] = "active"
+        except Exception:
+            pass
+
+        # ── Strategy A/B tester ────────────────────────────────────────
+        try:
+            from strategy_split_tester import get_strategy_split_tester as _get_sst
+            sst = _get_sst()
+            winner, delta = sst.get_winner()
+            result["strategy_performance"]["active_strategy"] = sst.get_active_strategy()
+            result["strategy_performance"]["ab_winner"] = winner
+            result["strategy_performance"]["ab_score_delta"] = round(delta, 2)
+        except Exception:
+            pass
+
+        # ── Lifetime P&L from trade audit logs ────────────────────────
+        try:
+            audit_files = list(DATA_DIR.glob("*trade*.jsonl")) + list(DATA_DIR.glob("*pnl*.jsonl"))
+            total_pnl = 0.0
+            for af in audit_files[:5]:  # cap at 5 files to avoid timeout
+                try:
+                    import json as _json2
+                    with open(af, encoding="utf-8") as _f2:
+                        for _line2 in _f2:
+                            _line2 = _line2.strip()
+                            if not _line2:
+                                continue
+                            try:
+                                rec2 = _json2.loads(_line2)
+                                pnl_val = rec2.get("pnl_usd") or rec2.get("pnl") or 0
+                                total_pnl += float(pnl_val)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            if total_pnl != 0.0:
+                result["lifetime_profit_usd"] = round(total_pnl, 2)
+        except Exception:
+            pass
+
+        return jsonify(result)
+
+    except Exception as exc:
+        logger.error("Error building business intelligence response: %s", exc)
+        return jsonify({"error": "Failed to build business intelligence data"}), 500
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
