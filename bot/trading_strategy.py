@@ -339,6 +339,20 @@ except ImportError:
         logger.warning("⚠️ Account-Level Capital Flow not available - account-level allocation disabled")
 
 try:
+    from global_capital_brain import get_global_capital_brain
+    GLOBAL_CAPITAL_BRAIN_AVAILABLE = True
+    logger.info("✅ Global Capital Brain loaded - capital routing + efficiency score + snowball mode active")
+except ImportError:
+    try:
+        from bot.global_capital_brain import get_global_capital_brain
+        GLOBAL_CAPITAL_BRAIN_AVAILABLE = True
+        logger.info("✅ Global Capital Brain loaded - capital routing + efficiency score + snowball mode active")
+    except ImportError:
+        GLOBAL_CAPITAL_BRAIN_AVAILABLE = False
+        get_global_capital_brain = None  # type: ignore[assignment]
+        logger.warning("⚠️ Global Capital Brain not available - capital routing disabled")
+
+try:
     from ai_market_regime_forecaster import get_ai_market_regime_forecaster
     AI_REGIME_FORECASTER_AVAILABLE = True
     logger.info("✅ AI Market Regime Forecaster loaded - early regime-change prediction active")
@@ -1575,6 +1589,21 @@ class TradingStrategy:
                 self.account_flow_layer = None
         else:
             self.account_flow_layer = None
+
+        # Initialize Global Capital Brain — top-level routing + efficiency score +
+        # snowball mode + smarter reallocation (sits above all other capital layers)
+        if GLOBAL_CAPITAL_BRAIN_AVAILABLE and get_global_capital_brain is not None:
+            try:
+                self.global_capital_brain = get_global_capital_brain()
+                logger.info(
+                    "✅ Global Capital Brain initialized - "
+                    "capital routing + efficiency score + snowball mode + reallocation active"
+                )
+            except Exception as _gcb_err:
+                logger.warning("⚠️ Failed to initialize Global Capital Brain: %s", _gcb_err)
+                self.global_capital_brain = None
+        else:
+            self.global_capital_brain = None
 
         # Initialize Profit Lock System — ratchet stops + auto-withdrawal of secured gains
         if PROFIT_LOCK_SYSTEM_AVAILABLE and _get_profit_lock_system is not None:
@@ -7605,6 +7634,12 @@ class TradingStrategy:
                             # (updated at lines 3418 and 3440 from selected entry broker)
                             broker_balance = total_capital if self.pro_mode_enabled else account_balance
 
+                            # Strategy-gate result placeholders — populated by the WIN RATE MAXIMIZER
+                            # block inside the PLATFORM branch and consumed by the Capital Brain
+                            # hierarchy check in the entry-execution block below.
+                            _wmx_approved: bool = True
+                            _wmx_reason: str = ""
+
                             # ═══════════════════════════════════════════════════════
                             # MASTER STRATEGY ROUTER — ONE signal, not per-user signals
                             # Platform: generates signal via APEX and publishes it.
@@ -7645,9 +7680,12 @@ class TradingStrategy:
                                     analysis = self.quality_gate.filter_strategy_signal(analysis, df)
 
                                 # ═══════════════════════════════════════════════════════
-                                # LAYER 3: WIN RATE MAXIMIZER
+                                # LAYER 3: WIN RATE MAXIMIZER  (strategy signal quality)
                                 # ═══════════════════════════════════════════════════════
-                                # Multi-layer gate: signal quality score, risk caps, profit consistency
+                                # Multi-layer gate: signal quality score, risk caps, profit
+                                # consistency.  Result is stored in _wmx_approved / _wmx_reason
+                                # and fed into the Capital Brain hierarchy check below so the
+                                # full Global→Account→Strategy→Trade pipeline is traced there.
                                 if hasattr(self, 'win_rate_maximizer') and self.win_rate_maximizer:
                                     _wmx_action = analysis.get('action', 'hold')
                                     if _wmx_action in ('enter_long', 'enter_short'):
@@ -7662,6 +7700,11 @@ class TradingStrategy:
                                             )
                                             if not _wmx_approved:
                                                 logger.info(f"   🚫 Win Rate Maximizer REJECTED {symbol}: {_wmx_reason}")
+                                                # Convert analysis to 'hold' so:
+                                                #   (a) near-miss capture fires correctly below, and
+                                                #   (b) the entry-execution block is not reached.
+                                                # _wmx_approved=False is also passed to the Capital Brain
+                                                # hierarchy check so the Strategy layer is traced there.
                                                 analysis = {'action': 'hold', 'reason': f'Win Rate Maximizer: {_wmx_reason}'}
                                         except Exception as _wmx_err:
                                             logger.debug("Win Rate Maximizer approve_trade skipped for %s: %s", symbol, _wmx_err)
@@ -7761,27 +7804,90 @@ class TradingStrategy:
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
 
                                 # ═══════════════════════════════════════════════════════
-                                # ACCOUNT-LEVEL CAPITAL FLOW — kill gate
-                                # Block entry immediately when this account's drawdown has
-                                # triggered the kill-weak-accounts circuit breaker.
+                                # GLOBAL CAPITAL BRAIN — UNIFIED DECISION HIERARCHY
+                                #
+                                #   Layer 1 — GLOBAL   : Is this the best account?
+                                #   Layer 2 — ACCOUNT  : Is this account healthy?
+                                #   Layer 3 — STRATEGY : Did the strategy gate pass?
+                                #   Layer 4 — TRADE    : Apply Capital Snowball sizing.
+                                #
+                                # Single call.  Single result.  First failure short-circuits.
+                                # When all four layers pass, final_position_size already
+                                # includes the snowball multiplier.
                                 # ═══════════════════════════════════════════════════════
-                                if hasattr(self, 'account_flow_layer') and self.account_flow_layer is not None:
+                                if hasattr(self, 'global_capital_brain') and self.global_capital_brain is not None:
                                     try:
-                                        _acct_id = self._get_primary_broker_id()
-                                        if not self.account_flow_layer.is_account_tradeable(_acct_id):
+                                        _brain_acct_id = self._get_primary_broker_id()
+
+                                        # Layer 2 input: account health from account_flow_layer
+                                        _brain_acct_alive = True
+                                        if hasattr(self, 'account_flow_layer') and self.account_flow_layer is not None:
+                                            try:
+                                                _brain_acct_alive = self.account_flow_layer.is_account_tradeable(_brain_acct_id)
+                                            except Exception:
+                                                pass
+
+                                        _hierarchy = self.global_capital_brain.run_hierarchy_check(
+                                            current_account_id=_brain_acct_id,
+                                            all_accounts=[_brain_acct_id],
+                                            is_account_alive=_brain_acct_alive,
+                                            strategy_approved=_wmx_approved,
+                                            strategy_reason=_wmx_reason,
+                                            base_position_size=position_size,
+                                        )
+
+                                        if not _hierarchy.approved:
+                                            _layer_emoji = {
+                                                "global": "🌐", "account": "☠️",
+                                                "strategy": "🚫", "trade": "📊",
+                                            }.get(_hierarchy.blocked_at or "", "🧠")
                                             logger.warning(
-                                                "   ☠️  %s: ACCOUNT KILLED — drawdown exceeded "
-                                                "kill threshold; entry blocked by account-level "
-                                                "capital flow",
-                                                symbol,
+                                                "   %s %s: CAPITAL BRAIN [%s] BLOCKED — %s",
+                                                _layer_emoji, symbol,
+                                                (_hierarchy.blocked_at or "").upper(),
+                                                _hierarchy.rejection_reason,
                                             )
                                             filter_stats['market_filter'] += 1
                                             continue
-                                    except Exception as _afl_kill_err:
+
+                                        # All layers passed — apply snowball-adjusted size
+                                        if _hierarchy.final_position_size > 0:
+                                            if _hierarchy.snowball_multiplier > 1.0:
+                                                logger.info(
+                                                    "   🚀 %s: Capital Snowball %.1f× "
+                                                    "(win_streak=%d) — size $%.2f → $%.2f",
+                                                    symbol,
+                                                    _hierarchy.snowball_multiplier,
+                                                    _hierarchy.win_streak,
+                                                    position_size,
+                                                    _hierarchy.final_position_size,
+                                                )
+                                            position_size = _hierarchy.final_position_size
+
+                                    except Exception as _brain_err:
                                         logger.debug(
-                                            "Account kill-gate check skipped for %s: %s",
-                                            symbol, _afl_kill_err,
+                                            "Capital Brain hierarchy check skipped for %s: %s",
+                                            symbol, _brain_err,
                                         )
+                                else:
+                                    # Brain unavailable — fall back to standalone account kill-gate
+                                    if hasattr(self, 'account_flow_layer') and self.account_flow_layer is not None:
+                                        try:
+                                            _acct_id = self._get_primary_broker_id()
+                                            if not self.account_flow_layer.is_account_tradeable(_acct_id):
+                                                logger.warning(
+                                                    "   ☠️  %s: ACCOUNT KILLED — drawdown exceeded "
+                                                    "kill threshold; entry blocked by account-level "
+                                                    "capital flow",
+                                                    symbol,
+                                                )
+                                                filter_stats['market_filter'] += 1
+                                                continue
+                                        except Exception as _afl_kill_err:
+                                            logger.debug(
+                                                "Account kill-gate check skipped for %s: %s",
+                                                symbol, _afl_kill_err,
+                                            )
 
                                 # ── CYCLE STEP 3: Cap size by CapitalAllocator budget ──
                                 # get_allocated_capital() returns strategy_allocation ÷
@@ -9153,6 +9259,18 @@ class TradingStrategy:
                 )
             except Exception as _cce_err:
                 logger.debug("Capital Concentration Engine record_trade skipped for %s: %s", symbol, _cce_err)
+
+        # 🧠 GLOBAL CAPITAL BRAIN — update efficiency score, win streak, snowball
+        # state, and reallocation counters after every closed trade
+        if hasattr(self, 'global_capital_brain') and self.global_capital_brain is not None:
+            try:
+                self.global_capital_brain.record_trade(
+                    account_id=self._get_primary_broker_id(),
+                    pnl_usd=profit_usd,
+                    is_win=is_win,
+                )
+            except Exception as _gcb_err:
+                logger.debug("Global Capital Brain record_trade skipped for %s: %s", symbol, _gcb_err)
 
         # 🔒 PROFIT LOCK SYSTEM — record realised profit and trigger auto-withdrawal if threshold met
         if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:
