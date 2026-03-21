@@ -57,17 +57,27 @@ class RetryHandler:
         '404',
     )
 
-    def __init__(self, max_attempts: int = 3, base_delay: float = 2.0):
+    def __init__(self, max_attempts: int = 5, base_delay: float = 2.0,
+                 timeout: float = 10, backoff_factor: float = 2.5):
         """
         Initialize retry handler.
 
         Args:
-            max_attempts: Maximum retry attempts
-            base_delay: Base delay in seconds (doubles each retry)
+            max_attempts: Maximum retry attempts (default: 5)
+            base_delay: Base delay in seconds
+            timeout: Request timeout in seconds (default: 10)
+            backoff_factor: Multiplier applied to delay after each failure (default: 2.5)
         """
         self.max_attempts = max_attempts
         self.base_delay = base_delay
-        logger.info(f"🔄 Retry handler initialized: {max_attempts} attempts, {base_delay}s base delay")
+        # timeout is exposed for callers to pass to requests/httpx when making
+        # HTTP calls; it is not enforced internally by this class.
+        self.timeout = timeout
+        self.backoff_factor = backoff_factor
+        logger.info(
+            f"🔄 Retry handler initialized: {max_attempts} attempts, "
+            f"{base_delay}s base delay, {timeout}s timeout, {backoff_factor}x backoff"
+        )
 
     def retry_on_failure(self, operation_name: str = "API call"):
         """
@@ -106,7 +116,7 @@ class RetryHandler:
                                 )
                                 logger.info(f"🔄 Retrying in {delay}s...")
                                 time.sleep(delay)
-                                delay = min(delay * 2, 30)  # Cap at 30s
+                                delay = min(delay * self.backoff_factor, 30)  # Cap at 30s
                                 continue
 
                         # Non-retryable or max attempts reached
@@ -270,4 +280,4 @@ class RetryHandler:
 
 
 # Global retry handler instance
-retry_handler = RetryHandler(max_attempts=3, base_delay=2.0)
+retry_handler = RetryHandler(max_attempts=5, base_delay=2.0, timeout=10, backoff_factor=2.5)
