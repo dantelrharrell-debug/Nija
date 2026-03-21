@@ -608,6 +608,66 @@ except ImportError:
             """Fallback when micro_capital_config is unavailable: base 1.0% + spread."""
             return MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT + spread_pct * 100.0
 
+# Import Capital Scaling Engine — automatically increases deposits into winning accounts
+try:
+    from capital_scaling_engine import get_capital_engine
+    CAPITAL_SCALING_ENGINE_AVAILABLE = True
+    logger.info("✅ Capital Scaling Engine loaded - auto-deposit compounding active")
+except ImportError:
+    try:
+        from bot.capital_scaling_engine import get_capital_engine
+        CAPITAL_SCALING_ENGINE_AVAILABLE = True
+        logger.info("✅ Capital Scaling Engine loaded - auto-deposit compounding active")
+    except ImportError:
+        CAPITAL_SCALING_ENGINE_AVAILABLE = False
+        get_capital_engine = None
+        logger.warning("⚠️ Capital Scaling Engine not available - auto-compounding disabled")
+
+# Import External Capital Mode — handles multiple users / investors
+try:
+    from investor_mode import get_investor_mode_engine
+    INVESTOR_MODE_AVAILABLE = True
+    logger.info("✅ External Capital Mode (Investor Mode) loaded - multi-investor tracking active")
+except ImportError:
+    try:
+        from bot.investor_mode import get_investor_mode_engine
+        INVESTOR_MODE_AVAILABLE = True
+        logger.info("✅ External Capital Mode (Investor Mode) loaded - multi-investor tracking active")
+    except ImportError:
+        INVESTOR_MODE_AVAILABLE = False
+        get_investor_mode_engine = None
+        logger.warning("⚠️ External Capital Mode not available - investor tracking disabled")
+
+# Import Tiered Risk Engine — conservative vs aggressive capital pools
+try:
+    from core.tiered_risk_engine import TieredRiskEngine
+    TIERED_RISK_ENGINE_AVAILABLE = True
+    logger.info("✅ Tiered Risk Engine loaded - conservative/aggressive capital pool gating active")
+except ImportError:
+    try:
+        from tiered_risk_engine import TieredRiskEngine
+        TIERED_RISK_ENGINE_AVAILABLE = True
+        logger.info("✅ Tiered Risk Engine loaded - conservative/aggressive capital pool gating active")
+    except ImportError:
+        TIERED_RISK_ENGINE_AVAILABLE = False
+        TieredRiskEngine = None
+        logger.warning("⚠️ Tiered Risk Engine not available - risk-tier gating disabled")
+
+# Import AI Strategy Evolution Engine — system evolves its own strategies
+try:
+    from ai_strategy_evolution_engine import get_ai_strategy_evolution_engine
+    AI_STRATEGY_EVOLUTION_AVAILABLE = True
+    logger.info("✅ AI Strategy Evolution Engine loaded - autonomous strategy mutation active")
+except ImportError:
+    try:
+        from bot.ai_strategy_evolution_engine import get_ai_strategy_evolution_engine
+        AI_STRATEGY_EVOLUTION_AVAILABLE = True
+        logger.info("✅ AI Strategy Evolution Engine loaded - autonomous strategy mutation active")
+    except ImportError:
+        AI_STRATEGY_EVOLUTION_AVAILABLE = False
+        get_ai_strategy_evolution_engine = None
+        logger.warning("⚠️ AI Strategy Evolution Engine not available - strategy mutation disabled")
+
 load_dotenv()
 
 # Position adoption safety constants
@@ -617,6 +677,11 @@ MISSING_ENTRY_PRICE_MULTIPLIER = 1.01  # 1% above current = -0.99% immediate P&L
 
 # Maximum number of open orders to display in logs when positions are being adopted
 MAX_DISPLAYED_ORDERS = 5  # Show first 5 orders, summarize remaining
+
+# Capital engine constants
+_DEFAULT_BASE_CAPITAL: float = 100.0        # fallback when BASE_CAPITAL env var is not set
+_TRADING_FEE_PCT: float = 0.001             # 0.1% fee estimate used for compounding calculations
+_AI_EVOLUTION_CYCLE_TRADES: int = 20        # run a genetic evolution cycle every N closed trades
 
 # Import BrokerType and AccountType at module level for use throughout the class
 # These are needed in _register_kraken_for_retry and other methods outside __init__
@@ -1645,6 +1710,59 @@ class TradingStrategy:
                 self.volatility_position_sizer = None
         else:
             self.volatility_position_sizer = None
+
+        # Initialize Capital Scaling Engine — auto-increases deposits into winning accounts
+        if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
+            try:
+                _base_cap = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
+                self.capital_scaling_engine = get_capital_engine(
+                    base_capital=_base_cap,
+                    strategy=os.environ.get("COMPOUNDING_STRATEGY", "moderate"),
+                )
+                logger.info("✅ Capital Scaling Engine initialized (base_capital=$%.2f)", _base_cap)
+            except Exception as _cse_err:
+                logger.warning("⚠️ Failed to initialize Capital Scaling Engine: %s", _cse_err)
+                self.capital_scaling_engine = None
+        else:
+            self.capital_scaling_engine = None
+
+        # Initialize External Capital Mode — handles multiple users / investors
+        if INVESTOR_MODE_AVAILABLE and get_investor_mode_engine is not None:
+            try:
+                self.investor_mode_engine = get_investor_mode_engine()
+                logger.info("✅ External Capital Mode (Investor Mode) initialized")
+            except Exception as _ime_err:
+                logger.warning("⚠️ Failed to initialize Investor Mode Engine: %s", _ime_err)
+                self.investor_mode_engine = None
+        else:
+            self.investor_mode_engine = None
+
+        # Initialize Tiered Risk Engine — conservative vs aggressive capital pools
+        if TIERED_RISK_ENGINE_AVAILABLE and TieredRiskEngine is not None:
+            try:
+                _risk_tier = os.environ.get("RISK_PROFILE", "INVESTOR").upper()
+                _total_cap = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
+                self.tiered_risk_engine = TieredRiskEngine(
+                    user_tier=_risk_tier,
+                    total_capital=_total_cap,
+                )
+                logger.info("✅ Tiered Risk Engine initialized (tier=%s)", _risk_tier)
+            except Exception as _tre_err:
+                logger.warning("⚠️ Failed to initialize Tiered Risk Engine: %s", _tre_err)
+                self.tiered_risk_engine = None
+        else:
+            self.tiered_risk_engine = None
+
+        # Initialize AI Strategy Evolution Engine — system evolves its own strategies
+        if AI_STRATEGY_EVOLUTION_AVAILABLE and get_ai_strategy_evolution_engine is not None:
+            try:
+                self.ai_strategy_evolution_engine = get_ai_strategy_evolution_engine()
+                logger.info("✅ AI Strategy Evolution Engine initialized - genetic mutation active")
+            except Exception as _asee_err:
+                logger.warning("⚠️ Failed to initialize AI Strategy Evolution Engine: %s", _asee_err)
+                self.ai_strategy_evolution_engine = None
+        else:
+            self.ai_strategy_evolution_engine = None
 
         # FIX #2: Initialize forced stop-loss executor
         try:
@@ -4747,6 +4865,33 @@ class TradingStrategy:
                 logger.warning("=" * 70)
                 # Allow position management (exits/stops) but block new entries
                 user_mode = True  # Force user mode to disable new entries
+
+        # 🏦 TIERED RISK ENGINE — conservative vs aggressive capital pool gate
+        if not user_mode and hasattr(self, 'tiered_risk_engine') and self.tiered_risk_engine is not None:
+            try:
+                _open_positions = len(getattr(self, 'open_positions', {}))
+                _market_vol = 50.0  # neutral default volatility (0-100 scale)
+                _trade_size = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL))) * 0.05
+                _tier_ok, _tier_level, _tier_msg = self.tiered_risk_engine.validate_trade(
+                    trade_size=_trade_size,
+                    current_positions=_open_positions,
+                    market_volatility=_market_vol,
+                )
+                if not _tier_ok:
+                    logger.warning("🛑 TIERED RISK ENGINE: entries blocked — %s", _tier_msg)
+                    user_mode = True
+            except Exception as _tre_gate_err:
+                logger.debug("Tiered Risk Engine gate check skipped: %s", _tre_gate_err)
+
+        # 📈 CAPITAL SCALING ENGINE — block entries if drawdown protection halted trading
+        if not user_mode and hasattr(self, 'capital_scaling_engine') and self.capital_scaling_engine is not None:
+            try:
+                _cse_ok, _cse_reason = self.capital_scaling_engine.can_trade()
+                if not _cse_ok:
+                    logger.warning("🛑 CAPITAL SCALING ENGINE: entries blocked — %s", _cse_reason)
+                    user_mode = True
+            except Exception as _cse_gate_err:
+                logger.debug("Capital Scaling Engine gate check skipped: %s", _cse_gate_err)
 
         # Log mode for clarity.  Distinguish between:
         #   USER   — caller explicitly requested user mode (copy-trade accounts)
@@ -9053,6 +9198,82 @@ class TradingStrategy:
                 )
             except Exception as _fg_err:
                 logger.debug("Fragmentation guard record_trade skipped for %s: %s", symbol, _fg_err)
+
+        # 📈 CAPITAL SCALING ENGINE — record trade for auto-compounding and drawdown tracking
+        if hasattr(self, 'capital_scaling_engine') and self.capital_scaling_engine is not None:
+            try:
+                _fees = abs(profit_usd) * _TRADING_FEE_PCT  # approximate exchange fees
+                _new_cap = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
+                try:
+                    _broker = getattr(self, 'broker', None)
+                    if _broker:
+                        _bal = _broker.get_balance()
+                        if isinstance(_bal, (int, float)) and _bal > 0:
+                            _new_cap = float(_bal)
+                except Exception:
+                    pass
+                self.capital_scaling_engine.record_trade(
+                    profit=profit_usd,
+                    fees=_fees,
+                    is_win=is_win,
+                    new_capital=_new_cap,
+                )
+            except Exception as _cse_rec_err:
+                logger.debug("Capital Scaling Engine record_trade skipped for %s: %s", symbol, _cse_rec_err)
+
+        # 💼 EXTERNAL CAPITAL MODE — distribute portfolio P&L to all registered investors
+        if hasattr(self, 'investor_mode_engine') and self.investor_mode_engine is not None:
+            try:
+                self.investor_mode_engine.record_portfolio_profit(
+                    pnl_usd=profit_usd,
+                    symbol=symbol,
+                )
+            except Exception as _ime_rec_err:
+                logger.debug("Investor Mode record_portfolio_profit skipped for %s: %s", symbol, _ime_rec_err)
+
+        # 🔒 TIERED RISK ENGINE — update daily P&L tracking for drawdown guard
+        if hasattr(self, 'tiered_risk_engine') and self.tiered_risk_engine is not None:
+            try:
+                self.tiered_risk_engine.update_daily_pnl(pnl=profit_usd)
+            except Exception as _tre_rec_err:
+                logger.debug("Tiered Risk Engine update_daily_pnl skipped for %s: %s", symbol, _tre_rec_err)
+
+        # 🧬 AI STRATEGY EVOLUTION ENGINE — feed live result to genetic fitness scoring
+        if hasattr(self, 'ai_strategy_evolution_engine') and self.ai_strategy_evolution_engine is not None:
+            try:
+                _current_capital = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
+                _pnl_pct = (profit_usd / _current_capital * 100.0) if _current_capital > 0 else 0.0
+                _best_genome = self.ai_strategy_evolution_engine.get_best_genome()
+                _genome_id = _best_genome.genome_id if _best_genome else "genome-000"
+                _regime = "UNKNOWN"
+                try:
+                    if hasattr(self, 'market_regime_controller') and self.market_regime_controller:
+                        _regime = str(getattr(self.market_regime_controller, 'current_regime', "UNKNOWN"))
+                except Exception:
+                    pass
+                self.ai_strategy_evolution_engine.record_trade(
+                    genome_id=_genome_id,
+                    pnl_pct=_pnl_pct,
+                    is_win=is_win,
+                    regime=_regime,
+                )
+                # Trigger an evolution cycle every 20 trades to mutate strategies
+                _trade_count = getattr(self, '_ai_evolution_trade_count', 0) + 1
+                self._ai_evolution_trade_count = _trade_count
+                if _trade_count % _AI_EVOLUTION_CYCLE_TRADES == 0:
+                    try:
+                        _evo_summary = self.ai_strategy_evolution_engine.evolve_cycle()
+                        logger.info(
+                            "🧬 AI Evolution cycle triggered (trade #%d) — "
+                            "gen=%s champion_fitness=%.4f",
+                            _trade_count,
+                            _evo_summary.get("generation", "?"),
+                            _evo_summary.get("champion_fitness", 0.0),
+                        )
+                    except Exception as _evo_err:
+                        logger.debug("AI evolution cycle skipped: %s", _evo_err)
+            except Exception as _asee_rec_err:
+                logger.debug("AI Strategy Evolution record_trade skipped for %s: %s", symbol, _asee_rec_err)
 
         if not self.advanced_manager:
             return
