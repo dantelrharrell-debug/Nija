@@ -201,11 +201,17 @@ class StartupReadinessGate:
         False — timed out before gate opened, or gate was force-closed.
         """
         effective_timeout = timeout_s if timeout_s is not None else self._default_timeout_s
-        deadline = time.monotonic() + effective_timeout
+        t_start = time.monotonic()
+        deadline = t_start + effective_timeout
 
         with self._cond:
-            # Trigger the open check on entry: handles the case where zero
-            # components were registered and signal_ready was never called.
+            # Trigger the open check on entry.  This handles two cases:
+            # 1. Zero components were ever registered and signal_ready was never
+            #    called — the gate should open immediately rather than blocking
+            #    until the caller times out.
+            # 2. All components were already signalled before this thread reached
+            #    wait_until_ready — re-running the check is idempotent because
+            #    _check_and_open() short-circuits instantly when _gate_open is True.
             if not self._gate_open and not self._gate_forced_closed:
                 self._check_and_open()
 
@@ -219,11 +225,12 @@ class StartupReadinessGate:
                     break
                 self._cond.wait(timeout=remaining)
 
+            elapsed = time.monotonic() - t_start
+
             if self._gate_forced_closed:
-                elapsed = effective_timeout - (deadline - time.monotonic())
                 logger.error(
                     "❌ Startup readiness gate is FORCE CLOSED after %.1fs — trading blocked",
-                    max(0.0, elapsed),
+                    elapsed,
                 )
                 return False
 
@@ -233,8 +240,8 @@ class StartupReadinessGate:
             # Timed out
             pending = self._required - self._ready
             logger.error(
-                "❌ Startup readiness gate TIMED OUT after %.0fs — pending components: %s",
-                effective_timeout,
+                "❌ Startup readiness gate TIMED OUT after %.1fs — pending components: %s",
+                elapsed,
                 ", ".join(sorted(pending)) if pending else "<none>",
             )
             return False
