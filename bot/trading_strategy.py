@@ -4197,7 +4197,8 @@ class TradingStrategy:
             from bot.nija_global_integration import get_nija_global
             log_dir    = os.getenv("COMPLIANCE_LOG_DIR",    "logs/compliance")
             report_dir = os.getenv("COMPLIANCE_REPORT_DIR", "logs/reports")
-            dry_run    = os.getenv("DRY_RUN", "true").lower() in ("true", "1", "yes")
+            # LIVE TRADING MODE: dry-run disabled by default. Set DRY_RUN=true to enable paper trading.
+            dry_run    = os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes")
             quorum     = int(os.getenv("STRATEGY_QUORUM", "2"))
             min_conf   = float(os.getenv("MIN_SIGNAL_CONFIDENCE", "0.45"))
 
