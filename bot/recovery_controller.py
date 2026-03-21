@@ -231,6 +231,26 @@ class RecoveryController:
             self._trading_enabled = False
             self._safe_mode = True
             self._log_state_change("RECOVERY_MODE env var active at startup")
+        else:
+            # ── Auto-recovery: clear stale RECOVERY/SAFE_MODE state on restart ──
+            # If the persisted state is RECOVERY or SAFE_MODE and the RECOVERY_MODE
+            # env var is NOT set, the bot was likely left in that state by a previous
+            # session crash.  Automatically promote to NORMAL so entries are not
+            # permanently blocked across restarts without an explicit operator command.
+            # EMERGENCY_HALT is intentionally excluded — that always requires a manual
+            # resume() call to ensure a human reviews the situation.
+            if self._current_state in (FailureState.RECOVERY, FailureState.SAFE_MODE):
+                logger.warning(
+                    "🔄 Auto-recovery: persisted state was '%s' but RECOVERY_MODE env "
+                    "is not set — resetting to NORMAL so entries are allowed. "
+                    "Set RECOVERY_MODE=true (or '1' or 'yes') in .env to keep the bot "
+                    "in recovery mode across restarts.",
+                    self._current_state.value,
+                )
+                self._current_state = FailureState.NORMAL
+                self._trading_enabled = True
+                self._safe_mode = False
+                self._log_state_change("Auto-recovery: stale restricted state cleared on startup")
     
     def _save_state(self):
         """Persist recovery state"""

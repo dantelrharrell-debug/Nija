@@ -91,10 +91,7 @@ logger = logging.getLogger("nija.strategy_allocation_engine")
 # ---------------------------------------------------------------------------
 
 DEFAULT_STRATEGIES: List[str] = [
-    "ApexTrend",
-    "MeanReversion",
-    "MomentumBreakout",
-    "LiquidityReversal",
+    "APEX_V71",
 ]
 
 MIN_ALLOCATION: float = 0.05   # 5 % floor per strategy

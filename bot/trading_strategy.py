@@ -1845,7 +1845,7 @@ class TradingStrategy:
         # Initialize Tiered Risk Engine — conservative vs aggressive capital pools
         if TIERED_RISK_ENGINE_AVAILABLE and TieredRiskEngine is not None:
             try:
-                _risk_tier = os.environ.get("RISK_PROFILE", "INVESTOR").upper()
+                _risk_tier = os.environ.get("RISK_PROFILE", "STARTER").upper()
                 _total_cap = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
                 self.tiered_risk_engine = TieredRiskEngine(
                     user_tier=_risk_tier,
@@ -5013,7 +5013,13 @@ class TradingStrategy:
             try:
                 _open_positions = len(getattr(self, 'open_positions', {}))
                 _market_vol = 50.0  # neutral default volatility (0-100 scale)
-                _trade_size = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL))) * 0.05
+                # Use the actual account balance to compute a realistic representative
+                # trade size for the gate check.  The old formula (BASE_CAPITAL * 0.05)
+                # produced a hardcoded $5 test trade that was always below the INVESTOR
+                # tier minimum ($20), causing the gate to set user_mode=True and block
+                # all new entries.  user_mode disables entry scanning for the entire cycle,
+                # so this single bad gate was silently preventing every trade.
+                _trade_size = get_dynamic_min_position_size(account_balance)
                 _tier_ok, _tier_level, _tier_msg = self.tiered_risk_engine.validate_trade(
                     trade_size=_trade_size,
                     current_positions=_open_positions,
