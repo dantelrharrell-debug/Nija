@@ -4355,6 +4355,15 @@ class TradingStrategy:
 
         broker_name = self._get_broker_name(broker)
 
+        # Skip USER accounts entirely - they are copy trading accounts, not entry sources
+        # PLATFORM = primary (generates entries), USER = secondary (receives copied trades)
+        # hasattr guard is needed because broker uses duck typing (not a strict base class)
+        if hasattr(broker, 'account_type') and broker.account_type == AccountType.USER:
+            user_id = getattr(broker, 'user_id', None) or 'missing_user_id'
+            skip_msg = f"ENTRY BLOCKED → broker=USER_{user_id} | reason=user account (copy trading only)"
+            logger.info(f"   ⏭️  {skip_msg}")
+            return False, f"USER account (copy trading only)"
+
         if not broker.connected:
             veto_reason = f"{broker_name.upper()} not connected"
             logger.info(f"🚫 TRADE VETO: {veto_reason}")
@@ -4476,6 +4485,7 @@ class TradingStrategy:
                 self.last_veto_reason = veto_reason
                 return False, veto_reason
 
+            logger.info(f"   ✅ ENTRY ALLOWED → broker=PLATFORM | balance=${balance:.2f} >= ${min_balance:.2f} min")
             return True, f"Eligible (${balance:.2f} >= ${min_balance:.2f} min)"
         except Exception as e:
             veto_reason = f"{broker_name.upper()} balance check failed: {e}"
@@ -7141,9 +7151,11 @@ class TradingStrategy:
                     logger.info(f"   ✅ CONDITION PASSED: Under position cap ({len(current_positions)}/{effective_max_positions})")
 
                 if account_balance < MIN_BALANCE_TO_TRADE_USD:
-                    can_enter = False
-                    skip_reasons.append(f"Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
-                    logger.warning(f"   ❌ CONDITION FAILED: Insufficient balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})")
+                    # NOTE: This is informational only. The per-broker balance is checked
+                    # inside _is_broker_eligible_for_entry (AFTER broker selection), which
+                    # is the authoritative gate. The active_broker here may be a USER account
+                    # whose balance is not relevant to PLATFORM entry decisions.
+                    logger.info(f"   ℹ️  Active broker balance ${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f} minimum (entry broker balance verified below)")
                 else:
                     logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
 
@@ -7162,8 +7174,19 @@ class TradingStrategy:
                         all_brokers = dict(getattr(self.multi_account_manager, 'platform_brokers', {}))
 
                     # Add current active broker if not in multi_account_manager
+                    # CRITICAL: Never add USER accounts to entry broker candidates —
+                    # USER accounts are copy-trading (secondary) and must not generate entries.
                     if active_broker and hasattr(active_broker, 'broker_type'):
-                        all_brokers[active_broker.broker_type] = active_broker
+                        _acct_type = getattr(active_broker, 'account_type', None)
+                        if _acct_type == AccountType.USER:
+                            _uid = getattr(active_broker, 'user_id', None) or 'missing_user_id'
+                            _bname = self._get_broker_name(active_broker).upper()
+                            logger.info(
+                                f"      ⏭️  ENTRY BLOCKED → broker=USER_{_uid}_{_bname} "
+                                f"| reason=user account (copy trading only)"
+                            )
+                        else:
+                            all_brokers[active_broker.broker_type] = active_broker
 
                     # CRITICAL FIX (Jan 24, 2026): Log if no brokers are available for selection
                     # This helps diagnose why no trades are executing
