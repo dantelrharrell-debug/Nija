@@ -1,6 +1,6 @@
 """
-NIJA Startup Readiness Gate — Race-Condition-Free Boot Sequencer
-================================================================
+NIJA Startup Readiness Gate — Deadlock-Free Boot Sequencer
+==========================================================
 
 Fixes the startup race condition where trading threads begin executing
 orders before critical subsystems (broker connection, market data feed,
@@ -38,13 +38,28 @@ initialisation starts. Once *all* registered components have called
 ``signal_ready(name)``, the gate opens and all waiting threads unblock
 simultaneously.
 
-Thread-safety
--------------
-All public methods are protected by a ``threading.Lock``.  The gate uses
-``threading.Event`` for efficient waiting with no busy-polling.
+Deadlock prevention
+-------------------
+The rewrite eliminates all known deadlock and eternal-block scenarios:
+
+1. Uses a single ``threading.Condition`` instead of a ``Lock`` plus two
+   separate ``Event`` objects.  ``Condition.notify_all()`` wakes every
+   blocked waiter atomically; no second "unblock" event is needed.
+
+2. Every read of shared state (``_gate_open``, ``_gate_forced_closed``,
+   ``_required``, ``_ready``) happens *inside* the Condition lock so no
+   thread can observe a torn or stale view.
+
+3. ``wait_until_ready`` triggers ``_check_and_open`` on entry.  This
+   handles the case where zero components were ever registered: the gate
+   opens immediately instead of blocking until the caller times out.
+
+4. ``wait_until_ready`` uses a single ``Condition.wait(timeout)`` call
+   rather than polling in 0.5 s slices, so ``force_close`` unblocks
+   waiters instantly rather than after up to 0.5 s.
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 2.0
 Date: March 2026
 """
 
@@ -61,7 +76,7 @@ logger = logging.getLogger("nija.startup_readiness_gate")
 
 class StartupReadinessGate:
     """
-    Thread-safe readiness gate that serialises the bot startup sequence.
+    Thread-safe, deadlock-free readiness gate for the bot startup sequence.
 
     Usage pattern
     -------------
@@ -89,23 +104,21 @@ class StartupReadinessGate:
     """
 
     def __init__(self, default_timeout_s: float = 120.0) -> None:
-        self._lock = threading.Lock()
-        self._event = threading.Event()
+        # Single Condition replaces Lock + two Events.
+        # All state is read/written while holding _cond; notify_all() wakes
+        # every blocked waiter so no separate "unblock event" is needed.
+        self._cond = threading.Condition(threading.Lock())
         self._default_timeout_s = default_timeout_s
 
         self._required: Set[str] = set()
         self._ready: Set[str] = set()
-        self._failed: Dict[str, str] = {}   # component → failure reason
-        self._gate_forced_open: bool = False
-        self._gate_forced_closed: bool = False
+        self._failed: Dict[str, str] = {}      # component → failure reason
+        self._gate_open: bool = False           # True once the gate has opened
+        self._gate_forced_open: bool = False    # True if opened via force_open()
+        self._gate_forced_closed: bool = False  # True if permanently closed
         self._opened_at: Optional[datetime] = None
         self._registered_at: Dict[str, datetime] = {}
         self._signalled_at: Dict[str, datetime] = {}
-
-        # Separate event used only to unblock waiters when force_close() is called.
-        # Keeping it separate from _event preserves the invariant that
-        # _event.is_set() ↔ "gate is genuinely open (ready)".
-        self._close_unblock_event = threading.Event()
 
         logger.info("✅ StartupReadinessGate initialised (timeout=%.0fs)", default_timeout_s)
 
@@ -120,10 +133,12 @@ class StartupReadinessGate:
         Call this *before* spawning trading threads so the gate is fully
         configured when threads call ``wait_until_ready``.
         """
-        with self._lock:
+        with self._cond:
             self._required.add(name)
             self._registered_at[name] = datetime.now(timezone.utc)
-            logger.debug("📋 Registered component: %s (%d total required)", name, len(self._required))
+            logger.debug(
+                "📋 Registered component: %s (%d total required)", name, len(self._required)
+            )
 
     # ------------------------------------------------------------------
     # Signalling
@@ -137,7 +152,7 @@ class StartupReadinessGate:
         If *name* was not previously registered, it is accepted anyway so
         that callers do not need to be strictly ordered.
         """
-        with self._lock:
+        with self._cond:
             if name not in self._required:
                 logger.debug(
                     "signal_ready('%s') — component not pre-registered; accepting anyway", name
@@ -146,9 +161,12 @@ class StartupReadinessGate:
 
             self._ready.add(name)
             self._signalled_at[name] = datetime.now(timezone.utc)
-            logger.info("✅ Component ready: %s (%d/%d)", name, len(self._ready), len(self._required))
+            logger.info(
+                "✅ Component ready: %s (%d/%d)", name, len(self._ready), len(self._required)
+            )
 
             self._check_and_open()
+            self._cond.notify_all()
 
     def signal_failed(self, name: str, reason: str = "") -> None:
         """
@@ -158,7 +176,7 @@ class StartupReadinessGate:
         healthy components can still open the gate.  The failure is logged
         at WARNING level and is included in the status report.
         """
-        with self._lock:
+        with self._cond:
             self._failed[name] = reason or "unknown failure"
             self._required.discard(name)
             logger.warning(
@@ -167,6 +185,7 @@ class StartupReadinessGate:
                 reason or "no reason given",
             )
             self._check_and_open()
+            self._cond.notify_all()
 
     # ------------------------------------------------------------------
     # Waiting
@@ -181,61 +200,56 @@ class StartupReadinessGate:
         True  — gate opened (all required components are ready).
         False — timed out before gate opened, or gate was force-closed.
         """
-        if self._gate_forced_closed:
-            logger.error("Startup readiness gate is FORCE CLOSED — trading blocked")
-            return False
-
         effective_timeout = timeout_s if timeout_s is not None else self._default_timeout_s
+        t_start = time.monotonic()
+        deadline = t_start + effective_timeout
 
-        # Fast path: already open
-        if self._event.is_set():
-            return True
+        with self._cond:
+            # Trigger the open check on entry.  This handles two cases:
+            # 1. Zero components were ever registered and signal_ready was never
+            #    called — the gate should open immediately rather than blocking
+            #    until the caller times out.
+            # 2. All components were already signalled before this thread reached
+            #    wait_until_ready — re-running the check is idempotent because
+            #    _check_and_open() short-circuits instantly when _gate_open is True.
+            if not self._gate_open and not self._gate_forced_closed:
+                self._check_and_open()
 
-        t0 = time.monotonic()
-        logger.info(
-            "⏳ Waiting for startup readiness gate (timeout=%.0fs) …", effective_timeout
-        )
+            # Wait until the gate opens, is force-closed, or the deadline passes.
+            # Condition.wait() atomically releases the lock and sleeps; it
+            # re-acquires the lock before returning, so all state reads below
+            # are safe without an additional lock acquisition.
+            while not self._gate_open and not self._gate_forced_closed:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._cond.wait(timeout=remaining)
 
-        # Wait for either the readiness event OR the force-close unblock event.
-        # We poll in short increments so we notice force_close quickly without
-        # busy-spinning.
-        deadline = t0 + effective_timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            # Wait in slices of up to 0.5 s so force-close is noticed quickly.
-            slice_s = min(0.5, remaining)
-            if self._event.wait(timeout=slice_s):
-                break                       # gate opened normally
+            elapsed = time.monotonic() - t_start
+
             if self._gate_forced_closed:
-                break                       # gate was force-closed
-            if self._close_unblock_event.is_set():
-                break                       # unblocked by force_close
+                logger.error(
+                    "❌ Startup readiness gate is FORCE CLOSED after %.1fs — trading blocked",
+                    elapsed,
+                )
+                return False
 
-        elapsed = time.monotonic() - t0
+            if self._gate_open:
+                return True
 
-        if self._gate_forced_closed:
-            logger.error(
-                "❌ Startup readiness gate is FORCE CLOSED after %.1fs — trading blocked", elapsed
-            )
-            return False
-
-        opened = self._event.is_set()
-        if opened:
-            logger.info("🚀 Startup readiness gate OPENED after %.1fs", elapsed)
-        else:
+            # Timed out
             pending = self._required - self._ready
             logger.error(
                 "❌ Startup readiness gate TIMED OUT after %.1fs — pending components: %s",
                 elapsed,
                 ", ".join(sorted(pending)) if pending else "<none>",
             )
-        return opened
+            return False
 
     def is_ready(self) -> bool:
         """Return True if the gate is currently open (non-blocking)."""
-        return self._event.is_set()
+        with self._cond:
+            return self._gate_open and not self._gate_forced_closed
 
     # ------------------------------------------------------------------
     # Manual overrides
@@ -248,10 +262,11 @@ class StartupReadinessGate:
         Use with caution — this bypasses the readiness guarantee.  Only
         appropriate for emergency situations or unit tests.
         """
-        with self._lock:
+        with self._cond:
             self._gate_forced_open = True
+            self._gate_open = True
             self._opened_at = datetime.now(timezone.utc)
-            self._event.set()
+            self._cond.notify_all()
             logger.warning("⚠️  StartupReadinessGate FORCE OPENED: %s", reason)
 
     def force_close(self, reason: str = "manual override") -> None:
@@ -260,14 +275,10 @@ class StartupReadinessGate:
 
         New calls to ``wait_until_ready`` will return False immediately.
         Existing blocked calls will unblock and return False.
-
-        Note: ``_close_unblock_event`` is set to wake blocked waiters.
-        ``_event`` (the normal ready signal) is deliberately NOT set here so
-        that ``is_ready()`` continues to return False.
         """
-        with self._lock:
+        with self._cond:
             self._gate_forced_closed = True
-            self._close_unblock_event.set()   # unblock waiters without setting the ready event
+            self._cond.notify_all()  # wake all waiters so they observe the closed state
             logger.error("🔒 StartupReadinessGate FORCE CLOSED: %s", reason)
 
     def reset(self) -> None:
@@ -277,17 +288,17 @@ class StartupReadinessGate:
         Useful when the bot performs a warm restart without a full process
         restart.  Clears all component registrations and signals.
         """
-        with self._lock:
+        with self._cond:
             self._required.clear()
             self._ready.clear()
             self._failed.clear()
+            self._gate_open = False
             self._gate_forced_open = False
             self._gate_forced_closed = False
             self._opened_at = None
             self._registered_at.clear()
             self._signalled_at.clear()
-            self._event.clear()
-            self._close_unblock_event.clear()
+            self._cond.notify_all()
             logger.info("🔄 StartupReadinessGate RESET")
 
     # ------------------------------------------------------------------
@@ -296,10 +307,10 @@ class StartupReadinessGate:
 
     def get_status(self) -> Dict:
         """Return a serialisable snapshot of the gate's current state."""
-        with self._lock:
+        with self._cond:
             pending = sorted(self._required - self._ready)
             return {
-                "gate_open": self._event.is_set() and not self._gate_forced_closed,
+                "gate_open": self._gate_open and not self._gate_forced_closed,
                 "forced_open": self._gate_forced_open,
                 "forced_closed": self._gate_forced_closed,
                 "required_count": len(self._required),
@@ -316,28 +327,32 @@ class StartupReadinessGate:
     # ------------------------------------------------------------------
 
     def _check_and_open(self) -> None:
-        """Open the gate if all required components are ready (call under lock)."""
-        if self._event.is_set():
-            return  # already open
-        if self._gate_forced_closed:
-            return
+        """
+        Open the gate if all conditions are met.
 
-        # Gate opens when all required components have signalled ready
-        # (failed components are removed from _required, so they don't block)
-        if self._required and self._required.issubset(self._ready):
+        Must be called while holding ``self._cond``.  Callers are
+        responsible for calling ``self._cond.notify_all()`` after this
+        returns so that waiting threads are woken.
+        """
+        if self._gate_open or self._gate_forced_closed:
+            return  # already open or permanently closed
+
+        if not self._required:
+            # Nothing registered — open immediately to avoid an eternal block.
+            self._gate_open = True
             self._opened_at = datetime.now(timezone.utc)
-            self._event.set()
+            logger.info(
+                "🚀 No components registered — startup gate opened immediately at %s",
+                self._opened_at.isoformat(),
+            )
+        elif self._required.issubset(self._ready):
+            # Every required component has signalled ready
+            # (failed components are removed from _required so they don't block).
+            self._gate_open = True
+            self._opened_at = datetime.now(timezone.utc)
             logger.info(
                 "🚀 All %d component(s) ready — startup gate OPENED at %s",
                 len(self._ready),
-                self._opened_at.isoformat(),
-            )
-        elif not self._required:
-            # Nothing was registered — open immediately to avoid eternal block
-            self._opened_at = datetime.now(timezone.utc)
-            self._event.set()
-            logger.info(
-                "🚀 No components registered — startup gate opened immediately at %s",
                 self._opened_at.isoformat(),
             )
 
