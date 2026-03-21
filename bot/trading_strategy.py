@@ -5867,6 +5867,17 @@ class TradingStrategy:
                             # AUTO-EXIT small positions (under $1) - these are likely losers
                             if position_value < MIN_POSITION_VALUE:
                                 logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < ${MIN_POSITION_VALUE})")
+                                # HARD IGNORE: Permanently blacklist sub-$1 positions.
+                                # MIN_POSITION_VALUE is $2, so positions in the $1–$2 range are
+                                # auto-exited but NOT blacklisted.  Only truly sub-$1 amounts
+                                # (pure dust) are permanently excluded from future trading.
+                                if position_value < 1.0 and hasattr(self, 'dust_blacklist') and self.dust_blacklist:
+                                    logger.warning(f"   🚫 HARD IGNORE: Blacklisting {symbol} (${position_value:.4f} < $1.00) — permanently excluded")
+                                    self.dust_blacklist.add_to_blacklist(
+                                        symbol=symbol,
+                                        usd_value=position_value,
+                                        reason=f"sub-$1 position (${position_value:.4f}) — permanently ignored"
+                                    )
                                 positions_to_exit.append({
                                     'symbol': symbol,
                                     'quantity': quantity,
