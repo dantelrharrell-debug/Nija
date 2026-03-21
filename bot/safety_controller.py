@@ -123,23 +123,32 @@ class SafetyController:
             return
             
         # Check #4: Live capital verification (required for real trading)
+        # Supports two equivalent authorization methods:
+        #   LIVE_CAPITAL_VERIFIED=true  — explicit opt-in via safety gate
+        #   LIVE_TRADING=1              — legacy alias used in .env.example and diagnostics
         live_capital_verified = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower() in ('true', '1', 'yes')
+        live_trading_value = os.getenv('LIVE_TRADING', '0')
+        live_trading_enabled = live_trading_value.lower() in ('true', '1', 'yes')
+        live_authorized = live_capital_verified or live_trading_enabled
         
         # Check #5: Credential validation
         self._credentials_configured = self._check_credentials()
         
         # Determine final mode
-        if live_capital_verified and self._credentials_configured:
+        if live_authorized and self._credentials_configured:
             self._mode = TradingMode.LIVE
             logger.info("=" * 70)
             logger.info("🟢 LIVE TRADING MODE ACTIVE")
             logger.info("=" * 70)
             logger.info("   REAL MONEY TRADING ENABLED")
-            logger.info("   LIVE_CAPITAL_VERIFIED: ✅ TRUE")
+            if live_capital_verified:
+                logger.info("   LIVE_CAPITAL_VERIFIED: ✅ TRUE")
+            else:
+                logger.info(f"   LIVE_TRADING: ✅ {live_trading_value} (alias for LIVE_CAPITAL_VERIFIED)")
             logger.info("   Credentials: ✅ CONFIGURED")
             logger.info("=" * 70)
             self._log_state_change("LIVE trading mode activated")
-        elif self._credentials_configured and not live_capital_verified:
+        elif self._credentials_configured and not live_authorized:
             # Credentials exist but safety lock is on
             self._mode = TradingMode.MONITOR
             logger.info("=" * 70)
