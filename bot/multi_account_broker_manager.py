@@ -148,6 +148,11 @@ class MultiAccountBrokerManager:
         self._last_platform_connected_time: Dict[BrokerType, float] = {}
         self.STICKY_CONNECTION_WINDOW: float = 60.0  # seconds
 
+        # Connection flag dict — keyed by broker name string (e.g. 'kraken').
+        # Set to True immediately after a platform broker registers successfully.
+        # Used alongside _platform_brokers to surface flag/registry mismatches.
+        self._platform_connected: Dict[str, bool] = {}
+
         # User metadata storage for audit and reporting
         # Structure: {user_id: {'name': str, 'enabled': bool, 'brokers': {BrokerType: bool}}}
         self._user_metadata: Dict[str, Dict] = {}
@@ -233,6 +238,8 @@ class MultiAccountBrokerManager:
         
         # Register the broker instance
         self._platform_brokers[broker_type] = broker
+        # Mirror into the string-keyed flag dict so _platform_connected stays in sync
+        self._platform_connected[broker_type.value] = True
         # Mark in the global broker registry so any module can check is_platform()
         if broker_registry is not None:
             broker_registry[broker_type.value]["platform"] = True
@@ -579,6 +586,10 @@ class MultiAccountBrokerManager:
                     f"   ⏳ Platform {broker_name} retry {attempt}/{retries}..."
                 )
             time.sleep(wait_secs)
+            logger.info(
+                f"DEBUG: platform_connected_flag={self._platform_connected.get(broker_type.value)} "
+                f"broker_exists={bool(self._platform_brokers.get(broker_type))}"
+            )
             if self.is_platform_connected(broker_type):
                 logger.info(
                     f"   ✅ Platform {broker_name} connected on retry {attempt}"
