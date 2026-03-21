@@ -114,6 +114,22 @@ except ImportError:
 DEFAULT_WEEKLY_SALARY_USD: float = 1_250.0
 DEFAULT_DATA_DIR: Path = Path("data/weekly_salary")
 
+# Adaptive salary equity tiers: (min_equity_usd, weekly_salary_usd)
+# Salary scales up as equity grows; interpolated between breakpoints.
+ADAPTIVE_SALARY_TIERS: list = [
+    (0.0,        50.0),    # < $1,000   → minimal payout
+    (1_000.0,   200.0),    # ~$1k       → $200 / week
+    (5_000.0,   500.0),    # ~$5k       → $500 / week
+    (10_000.0, 1_000.0),   # ~$10k      → $1,000 / week
+    (50_000.0, 2_500.0),   # ~$50k      → $2,500 / week
+    (100_000.0, 5_000.0),  # ~$100k     → $5,000 / week
+    (500_000.0, 15_000.0), # ~$500k     → $15,000 / week
+]
+
+# During drawdown: salary is reduced by this multiplier per 5 % drawdown step
+DRAWDOWN_SALARY_REDUCTION_PER_STEP: float = 0.20  # 20 % reduction per step
+DRAWDOWN_STEP_PCT: float = 0.05                    # each step = 5 % drawdown
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -125,6 +141,8 @@ class SalaryConfig:
     """Configuration for the weekly salary mode."""
 
     #: Fixed salary to attempt to pay each week (USD).
+    #: When ``adaptive_salary=True`` this acts as a *fallback floor* if equity
+    #: data has not been provided yet.
     weekly_salary_usd: float = DEFAULT_WEEKLY_SALARY_USD
 
     #: Minimum weekly net profit required before a salary is paid.
@@ -136,6 +154,10 @@ class SalaryConfig:
 
     #: Directory used for persistent state / audit log.
     data_dir: Optional[str] = None
+
+    #: When True, weekly salary scales automatically with account equity
+    #: using the ADAPTIVE_SALARY_TIERS table and reduces during drawdowns.
+    adaptive_salary: bool = True
 
     def validate(self) -> None:
         if self.weekly_salary_usd <= 0:
@@ -238,6 +260,10 @@ class WeeklySalaryMode:
 
         self._state = self._load_state()
 
+        # Adaptive salary tracking
+        self._current_equity_usd: float = 0.0
+        self._equity_peak_usd: float = 0.0
+
         logger.info("=" * 70)
         logger.info("💵  Weekly Salary Mode initialised")
         logger.info("    Salary target : $%.2f / week", self._config.weekly_salary_usd)
@@ -297,6 +323,76 @@ class WeeklySalaryMode:
     # ------------------------------------------------------------------
     # Core public API
     # ------------------------------------------------------------------
+
+    def update_equity(self, account_balance_usd: float) -> float:
+        """
+        Inform the engine of the current total account equity.
+
+        This drives the adaptive salary calculation:
+        * Salary target scales up as equity grows (see ``ADAPTIVE_SALARY_TIERS``).
+        * Salary target is reduced during drawdown phases to preserve capital.
+
+        Call this after each balance refresh (e.g. every trading cycle).
+
+        Returns the adaptive salary target for the current equity level.
+        """
+        if account_balance_usd <= 0:
+            return self._config.weekly_salary_usd
+
+        with self._lock:
+            self._current_equity_usd = account_balance_usd
+            if account_balance_usd > self._equity_peak_usd:
+                self._equity_peak_usd = account_balance_usd
+
+        target = self._compute_adaptive_salary_target(
+            account_balance_usd, self._equity_peak_usd
+        )
+        logger.debug(
+            "WeeklySalaryMode: equity updated $%.2f (peak=$%.2f) → adaptive target $%.2f/wk",
+            account_balance_usd, self._equity_peak_usd, target,
+        )
+        return target
+
+    @staticmethod
+    def _compute_adaptive_salary_target(
+        equity_usd: float, peak_equity_usd: float = 0.0
+    ) -> float:
+        """
+        Compute the adaptive weekly salary target based on account equity.
+
+        Tiers (interpolated):
+        * ~$1 k  → $200 / week
+        * ~$10 k → $1 000 / week
+        * ~$100 k → $5 000 / week
+
+        Additionally, during drawdown the salary is reduced:
+        * Every 5 % drop from peak reduces the target by 20 %.
+        * At 25 %+ drawdown the salary drops to 0 (capital preservation).
+        """
+        tiers = ADAPTIVE_SALARY_TIERS
+        if equity_usd <= tiers[0][0]:
+            base_target = tiers[0][1]
+        elif equity_usd >= tiers[-1][0]:
+            base_target = tiers[-1][1]
+        else:
+            # Linear interpolation between adjacent tier breakpoints
+            base_target = tiers[0][1]
+            for i in range(len(tiers) - 1):
+                low_eq, low_sal = tiers[i]
+                high_eq, high_sal = tiers[i + 1]
+                if low_eq <= equity_usd < high_eq:
+                    t = (equity_usd - low_eq) / (high_eq - low_eq)
+                    base_target = low_sal + t * (high_sal - low_sal)
+                    break
+
+        # Drawdown reduction
+        if peak_equity_usd > 0 and equity_usd < peak_equity_usd:
+            drawdown_pct = (peak_equity_usd - equity_usd) / peak_equity_usd
+            steps = int(drawdown_pct / DRAWDOWN_STEP_PCT)
+            reduction = min(steps * DRAWDOWN_SALARY_REDUCTION_PER_STEP, 1.0)
+            base_target = base_target * (1.0 - reduction)
+
+        return max(base_target, 0.0)
 
     def record_profit(self, pnl_usd: float, symbol: str = "", note: str = "") -> float:
         """
@@ -458,7 +554,14 @@ class WeeklySalaryMode:
                 return payment
 
             # ----- Compute capped payout: min(weekly_profit * 0.5, salary_target) -----
-            salary = min(weekly_profit * 0.5, self._config.weekly_salary_usd)
+            # Use adaptive target if enabled and equity is known; fall back to config.
+            if self._config.adaptive_salary and self._current_equity_usd > 0:
+                salary_target = self._compute_adaptive_salary_target(
+                    self._current_equity_usd, self._equity_peak_usd
+                )
+            else:
+                salary_target = self._config.weekly_salary_usd
+            salary = min(weekly_profit * 0.5, salary_target)
 
             # ----- Gate 2: sufficient pool (and non-zero payout) -----
             if salary <= 0 or pool_before < salary:
@@ -502,8 +605,10 @@ class WeeklySalaryMode:
                 pool_after_usd=s.pool_usd,
                 status="paid",
                 note=(
-                    f"Payout = min(${weekly_profit:.2f}×0.5, ${self._config.weekly_salary_usd:.2f}) "
+                    f"Payout = min(${weekly_profit:.2f}×0.5, ${salary_target:.2f}) "
                     f"= ${salary:.2f} — pool surplus=${s.pool_usd:.2f}"
+                    + (f" [adaptive target from equity=${self._current_equity_usd:,.0f}]"
+                       if self._config.adaptive_salary and self._current_equity_usd > 0 else "")
                 ),
             )
             s.payment_log.append(payment.to_dict())
@@ -513,9 +618,11 @@ class WeeklySalaryMode:
             logger.info(
                 "✅  WeeklySalaryMode: salary PAID (week %s) — $%.2f  "
                 "| Pool: $%.2f → $%.2f  | Week profit: $%.2f  "
-                "| Formula: min(%.2f×0.5, %.2f)",
+                "| Formula: min(%.2f×0.5, %.2f)%s",
                 target_week, salary, pool_before, s.pool_usd, weekly_profit,
-                weekly_profit, self._config.weekly_salary_usd,
+                weekly_profit, salary_target,
+                f" [adaptive equity=${self._current_equity_usd:,.0f}]"
+                if self._config.adaptive_salary and self._current_equity_usd > 0 else "",
             )
             if _TEXT_ALERT_AVAILABLE:
                 try:
@@ -580,10 +687,23 @@ class WeeklySalaryMode:
             weeks_total = s.weeks_paid + s.weeks_skipped
             pay_rate = (s.weeks_paid / weeks_total * 100) if weeks_total else 0.0
 
+            # Determine effective salary target (adaptive or fixed)
+            if self._config.adaptive_salary and self._current_equity_usd > 0:
+                effective_target = self._compute_adaptive_salary_target(
+                    self._current_equity_usd, self._equity_peak_usd
+                )
+                adaptive_note = (
+                    f"  Adaptive (equity=${self._current_equity_usd:,.0f}, "
+                    f"peak=${self._equity_peak_usd:,.0f})"
+                )
+            else:
+                effective_target = self._config.weekly_salary_usd
+                adaptive_note = "  Fixed (equity not yet provided)"
+
             # Project the payout the engine would issue right now
             projected_payout = min(
                 s.current_week_profit_usd * 0.5,
-                self._config.weekly_salary_usd,
+                effective_target,
             )
             profit_gate_ok = s.current_week_profit_usd >= self._config.min_weekly_profit_usd
             pool_covers = s.pool_usd >= projected_payout
@@ -593,15 +713,17 @@ class WeeklySalaryMode:
                 "💵  WEEKLY SALARY MODE — STATUS REPORT",
                 "=" * 70,
                 f"  Status            : {'🟢 ENABLED' if self._config.enabled else '🔴 DISABLED'}",
+                f"  Adaptive Mode     : {'🟢 ON' if self._config.adaptive_salary else '🔴 OFF'}",
                 f"  Current Week      : {current_week}",
-                f"  Weekly Target     : ${self._config.weekly_salary_usd:,.2f}",
+                f"  Weekly Target     : ${effective_target:,.2f}",
+                adaptive_note,
                 f"  Min Profit Gate   : ${self._config.min_weekly_profit_usd:,.2f}",
                 "-" * 70,
                 "  📊  CURRENT WEEK",
                 f"  Week Net Profit   : ${s.current_week_profit_usd:,.2f}",
                 f"  Profit Gate Pass  : {'✅ YES' if profit_gate_ok else '❌ NO'}",
                 f"  Projected Payout  : ${projected_payout:,.2f}  "
-                f"[min(${s.current_week_profit_usd:,.2f}×0.5, ${self._config.weekly_salary_usd:,.2f})]",
+                f"[min(${s.current_week_profit_usd:,.2f}×0.5, ${effective_target:,.2f})]",
                 "-" * 70,
                 "  🏦  SALARY POOL",
                 f"  Pool Balance      : ${s.pool_usd:,.2f}",
