@@ -9221,6 +9221,11 @@ class TradingStrategy:
             else:
                 # Enhanced diagnostic logging to understand why entries are blocked
                 reasons = []
+                if user_mode:
+                    if explicit_user_mode:
+                        reasons.append("user mode (copy-trade account)")
+                    else:
+                        reasons.append("safety checks forced management-only mode")
                 if entries_blocked:
                     reasons.append("STOP_ALL_ENTRIES.conf exists")
                 if len(current_positions) >= effective_max_positions:
@@ -9248,23 +9253,25 @@ class TradingStrategy:
             self.cycle_count += 1
             
             # SAFETY VERIFICATION: Check position count at end of cycle
+            # Use the already-filtered current_positions count to avoid false violations.
+            # Raw broker.get_positions() returns ALL crypto holdings on the exchange
+            # (including dust/unsellable positions filtered earlier in the cycle), which
+            # can exceed effective_max_positions even when the bot is within its cap.
             try:
-                if active_broker:
-                    final_positions = active_broker.get_positions()
-                    final_count = len(final_positions)
-                    
-                    if final_count > effective_max_positions:
-                        logger.error(f"")
-                        logger.error(f"❌ SAFETY VIOLATION DETECTED AT END OF CYCLE!")
-                        logger.error(f"   Position count: {final_count}")
-                        logger.error(f"   Maximum allowed: {effective_max_positions}")
-                        logger.error(f"   Excess positions: {final_count - effective_max_positions}")
-                        logger.error(f"   ⚠️ CRITICAL: Cap enforcement failed - this should never happen!")
-                        logger.error(f"")
-                    elif final_count == effective_max_positions:
-                        logger.info(f"✅ Position cap verification: At cap ({final_count}/{effective_max_positions})")
-                    else:
-                        logger.info(f"✅ Position cap verification: Under cap ({final_count}/{effective_max_positions})")
+                final_count = len(current_positions)
+
+                if final_count > effective_max_positions:
+                    logger.error(f"")
+                    logger.error(f"❌ SAFETY VIOLATION DETECTED AT END OF CYCLE!")
+                    logger.error(f"   Position count: {final_count}")
+                    logger.error(f"   Maximum allowed: {effective_max_positions}")
+                    logger.error(f"   Excess positions: {final_count - effective_max_positions}")
+                    logger.error(f"   ⚠️ CRITICAL: Cap enforcement failed - this should never happen!")
+                    logger.error(f"")
+                elif final_count == effective_max_positions:
+                    logger.info(f"✅ Position cap verification: At cap ({final_count}/{effective_max_positions})")
+                else:
+                    logger.info(f"✅ Position cap verification: Under cap ({final_count}/{effective_max_positions})")
             except Exception as verify_err:
                 logger.debug(f"Position count verification skipped: {verify_err}")
 
