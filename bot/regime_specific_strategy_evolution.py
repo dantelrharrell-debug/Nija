@@ -418,11 +418,12 @@ class RegimePopulation:
         existing_ids = {g.genome_id for g in self._population}
         missing = [b for b in self._frozen_baselines if b.genome_id not in existing_ids]
         if missing:
+            # Sort best-first so we pop() the weakest from the end (O(1)).
             non_baseline = [g for g in self._population if g.genome_id not in baseline_ids]
-            non_baseline.sort(key=lambda g: g.fitness)
+            non_baseline.sort(key=lambda g: g.fitness, reverse=True)
             for baseline in missing:
                 if non_baseline:
-                    worst = non_baseline.pop(0)
+                    worst = non_baseline.pop()  # O(1) — remove from end
                     idx = next(
                         (i for i, g in enumerate(self._population)
                          if g.genome_id == worst.genome_id),

@@ -449,6 +449,9 @@ class InvestorModeEngine:
                     allocated = -account.current_value_usd  # wipe to zero
                     new_value = MIN_ACCOUNT_VALUE_USD
 
+                # Capture value_before before updating the account
+                value_before = account.current_value_usd
+
                 account.current_value_usd = new_value
                 account.total_profit_usd = round(account.total_profit_usd + allocated, 2)
                 profit_record = {
@@ -466,7 +469,7 @@ class InvestorModeEngine:
                     "total_pnl_usd": pnl_usd,
                     "allocated_usd": allocated,
                     "weight": round(weight, 6),
-                    "value_before": round(account.current_value_usd - allocated, 2),
+                    "value_before": round(value_before, 2),
                     "value_after": round(account.current_value_usd, 2),
                     "symbol": symbol,
                     "note": profit_record["note"],
