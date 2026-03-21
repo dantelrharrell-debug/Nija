@@ -323,6 +323,21 @@ except ImportError:
             "⚠️ Capital Concentration Engine not available - "
             "concentration mode / account ranking / kill-weak disabled"
         )
+# Import Account-Level Capital Flow — connects CCE + AIAllocator into one entry point
+try:
+    from account_level_capital_flow import get_account_level_capital_flow
+    ACCOUNT_FLOW_AVAILABLE = True
+    logger.info("✅ Account-Level Capital Flow loaded - account ranking + kill-weak + AI weights connected")
+except ImportError:
+    try:
+        from bot.account_level_capital_flow import get_account_level_capital_flow
+        ACCOUNT_FLOW_AVAILABLE = True
+        logger.info("✅ Account-Level Capital Flow loaded - account ranking + kill-weak + AI weights connected")
+    except ImportError:
+        ACCOUNT_FLOW_AVAILABLE = False
+        get_account_level_capital_flow = None  # type: ignore[assignment]
+        logger.warning("⚠️ Account-Level Capital Flow not available - account-level allocation disabled")
+
 try:
     from ai_market_regime_forecaster import get_ai_market_regime_forecaster
     AI_REGIME_FORECASTER_AVAILABLE = True
@@ -1484,6 +1499,20 @@ class TradingStrategy:
                 self.capital_concentration_engine = None
         else:
             self.capital_concentration_engine = None
+
+        # Initialize Account-Level Capital Flow — connects CCE + AIAllocator
+        if ACCOUNT_FLOW_AVAILABLE and get_account_level_capital_flow is not None:
+            try:
+                self.account_flow_layer = get_account_level_capital_flow()
+                logger.info(
+                    "✅ Account-Level Capital Flow initialized - "
+                    "account ranking + kill-weak + AI weights active"
+                )
+            except Exception as _afl_err:
+                logger.warning("⚠️ Failed to initialize Account-Level Capital Flow: %s", _afl_err)
+                self.account_flow_layer = None
+        else:
+            self.account_flow_layer = None
 
         # Initialize Profit Lock System — ratchet stops + auto-withdrawal of secured gains
         if PROFIT_LOCK_SYSTEM_AVAILABLE and _get_profit_lock_system is not None:
@@ -5140,6 +5169,17 @@ class TradingStrategy:
                 except Exception as _cgt_err:
                     logger.warning("⚠️ Could not update capital growth throttle: %s", _cgt_err)
 
+            # 🏦 ACCOUNT-LEVEL CAPITAL FLOW — refresh equity + AI weights each cycle
+            # Keeps drawdown tracking, kill-weak state, and EMA allocation scores current.
+            if hasattr(self, 'account_flow_layer') and self.account_flow_layer is not None:
+                try:
+                    self.account_flow_layer.update(
+                        account_id=self._get_primary_broker_id(),
+                        balance_usd=account_balance,
+                    )
+                except Exception as _afl_cycle_err:
+                    logger.debug("Account-Level Capital Flow update skipped: %s", _afl_cycle_err)
+
             # ✅ CRITICAL FIX (Jan 22, 2026): Update capital dynamically BEFORE allocation
             # Capital must be fetched live, not stuck at initialization value
             # This ensures failsafes and allocators use current real balance
@@ -7564,6 +7604,29 @@ class TradingStrategy:
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
 
+                                # ═══════════════════════════════════════════════════════
+                                # ACCOUNT-LEVEL CAPITAL FLOW — kill gate
+                                # Block entry immediately when this account's drawdown has
+                                # triggered the kill-weak-accounts circuit breaker.
+                                # ═══════════════════════════════════════════════════════
+                                if hasattr(self, 'account_flow_layer') and self.account_flow_layer is not None:
+                                    try:
+                                        _acct_id = self._get_primary_broker_id()
+                                        if not self.account_flow_layer.is_account_tradeable(_acct_id):
+                                            logger.warning(
+                                                "   ☠️  %s: ACCOUNT KILLED — drawdown exceeded "
+                                                "kill threshold; entry blocked by account-level "
+                                                "capital flow",
+                                                symbol,
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                    except Exception as _afl_kill_err:
+                                        logger.debug(
+                                            "Account kill-gate check skipped for %s: %s",
+                                            symbol, _afl_kill_err,
+                                        )
+
                                 # ── CYCLE STEP 3: Cap size by CapitalAllocator budget ──
                                 # get_allocated_capital() returns strategy_allocation ÷
                                 # max_concurrent_positions so no single trade over-draws the
@@ -7839,6 +7902,30 @@ class TradingStrategy:
                                     except Exception as _vol_err:
                                         logger.debug(
                                             f"   ⚠️ Volatility Position Sizing skipped for {symbol}: {_vol_err}"
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
+                                # ACCOUNT-LEVEL CAPITAL FLOW — concentration × AI-weight multiplier
+                                # Boosts capital into hot/top-ranked accounts (win-rate > 70%)
+                                # and reduces it for weakened accounts approaching kill threshold.
+                                # ═══════════════════════════════════════════════════════
+                                if hasattr(self, 'account_flow_layer') and self.account_flow_layer is not None:
+                                    try:
+                                        _afl_acct_id = self._get_primary_broker_id()
+                                        _afl_mult = self.account_flow_layer.get_size_multiplier(_afl_acct_id)
+                                        if _afl_mult != 1.0 and _afl_mult > 0:
+                                            _afl_pre = position_size
+                                            position_size = position_size * _afl_mult
+                                            logger.info(
+                                                "   🏦 %s: Account-Level Flow %.2fx "
+                                                "(acct=%s) — $%.2f → $%.2f",
+                                                symbol, _afl_mult, _afl_acct_id,
+                                                _afl_pre, position_size,
+                                            )
+                                    except Exception as _afl_size_err:
+                                        logger.debug(
+                                            "Account-Level Capital Flow sizing skipped for %s: %s",
+                                            symbol, _afl_size_err,
                                         )
 
                                 # ═══════════════════════════════════════════════════════
