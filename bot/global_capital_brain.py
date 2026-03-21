@@ -2,18 +2,32 @@
 NIJA Global Capital Brain
 ==========================
 
-The top-level decision layer that sits *above* every other capital engine.
-It answers one question before every trade:
+The final top-level decision layer that unifies every capital-routing
+concern into one strict four-layer pipeline executed before each trade:
 
-    "Is THIS the best account to deploy capital into RIGHT NOW?"
+    ┌──────────────────────────────────────────────────────────────────┐
+    │          CAPITAL BRAIN — DECISION HIERARCHY                      │
+    │                                                                  │
+    │  Layer 1 — GLOBAL   : Is this the best account right now?        │
+    │  Layer 2 — ACCOUNT  : Is this account healthy enough to trade?   │
+    │  Layer 3 — STRATEGY : Did the strategy gate approve this signal? │
+    │  Layer 4 — TRADE    : How much capital to deploy? (snowball)     │
+    │                                                                  │
+    │  Single call: brain.run_hierarchy_check(...)                     │
+    │  Single result: HierarchyDecision                                │
+    └──────────────────────────────────────────────────────────────────┘
 
-If not — the trade is skipped, concentrating winners and stopping dilution.
+The pipeline short-circuits at the first failed layer so Capital never
+flows into a bad account, a bad condition, or a bad signal.  When all
+four layers pass, the brain also hands back the final (snowball-adjusted)
+position size so the caller never has to apply multipliers separately.
 
-Four interrelated subsystems work together:
+Four interrelated subsystems
+-----------------------------
 
   1. Global Capital Routing
      Before any entry: ``best_account = brain.get_preferred_account(all_accounts)``
-     If ``current_account != best_account`` the trade is rejected here so capital
+     If ``current_account != best_account`` the trade is skipped so capital
      naturally concentrates in the highest-performing account.
 
   2. Capital Efficiency Score
@@ -72,6 +86,13 @@ Architecture
     │         → Optional[ReallocationDecision]                           │
     │    → non-None when 25–50 % of capital should move out              │
     │                                                                     │
+    │  run_hierarchy_check(current_account_id, all_accounts,             │
+    │                       is_account_alive, strategy_approved,         │
+    │                       base_position_size) → HierarchyDecision      │
+    │    → THE unified entry point: runs all 4 layers in order,          │
+    │      short-circuits on first failure, returns a HierarchyDecision  │
+    │      with per-layer traceability and the final position size.       │
+    │                                                                     │
     │  get_report() → dict                                               │
     │    → full snapshot for dashboards / logging                         │
     └─────────────────────────────────────────────────────────────────────┘
@@ -88,21 +109,34 @@ Usage
     brain.record_trade("coinbase", pnl_usd=42.0, is_win=True,
                        profit_factor=2.1, sharpe=1.4, drawdown_pct=3.5)
 
-    # Before every new entry:
-    ok, reason = brain.should_trade("coinbase", ["coinbase", "kraken"])
-    if not ok:
-        continue   # skip — capital should flow elsewhere
+    # ── Unified hierarchy check before every new entry ─────────────────
+    # Collect layer inputs from the engines that own them:
+    is_alive   = account_flow_layer.is_account_tradeable("coinbase")
+    strat_ok   = win_rate_maximizer.approve_trade(...)  # already ran above
 
-    # Scale position by snowball multiplier:
-    position_usd *= brain.get_snowball_multiplier("coinbase")
+    decision = brain.run_hierarchy_check(
+        current_account_id="coinbase",
+        all_accounts=["coinbase", "kraken"],
+        is_account_alive=is_alive,
+        strategy_approved=strat_ok,
+        base_position_size=500.0,
+    )
 
-    # Check whether reallocation is warranted:
-    reco = brain.check_reallocation("coinbase", ["coinbase", "kraken"])
+    if not decision.approved:
+        logger.info("BLOCKED [%s] — %s", decision.blocked_at, decision.rejection_reason)
+        continue
+
+    # decision.final_position_size already has the snowball multiplier applied
+    place_order(size_usd=decision.final_position_size)
+
+    # Check whether reallocation is warranted for a stagnant account:
+    reco = brain.check_reallocation("coinbase", ["coinbase", "kraken"],
+                                    balance_usd=10_000.0)
     if reco:
         logger.warning("Reallocation recommended: %s", reco)
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 2.0
 Date: March 2026
 """
 
@@ -179,6 +213,83 @@ class ReallocationDecision:
             "amount_usd": round(self.amount_usd, 4),
             "reason": self.reason,
             "recommended_at": self.recommended_at,
+        }
+
+
+@dataclass
+class LayerResult:
+    """
+    Outcome of a single layer inside the Capital Brain decision hierarchy.
+
+    Attributes:
+        layer:       Human-readable layer name, e.g. ``"global"``.
+        approved:    ``True`` when this layer allowed the trade to proceed.
+        reason:      Short explanation (populated on rejection, empty on pass).
+        multiplier:  Position-size multiplier contributed by this layer
+                     (1.0 for gate-only layers, > 1 for the trade/snowball layer).
+    """
+    layer: str
+    approved: bool
+    reason: str = ""
+    multiplier: float = 1.0
+
+    def to_dict(self) -> Dict:
+        return {
+            "layer": self.layer,
+            "approved": self.approved,
+            "reason": self.reason,
+            "multiplier": round(self.multiplier, 4),
+        }
+
+
+@dataclass
+class HierarchyDecision:
+    """
+    Result of a full Capital Brain hierarchy check.
+
+    The four layers are evaluated in strict order:
+    ``global → account → strategy → trade``.  The pipeline short-circuits
+    at the first failure so ``approved`` is ``True`` only when all four
+    layers pass.
+
+    Attributes:
+        approved:             ``True`` when all layers passed.
+        blocked_at:           Name of the layer that blocked the trade, or
+                              ``None`` when approved.
+        rejection_reason:     Human-readable reason from the blocking layer.
+        final_position_size:  Base size × snowball multiplier.  Meaningful
+                              only when ``approved`` is ``True``.
+        snowball_multiplier:  The Trade-layer multiplier that was applied
+                              (1.0 / 1.5× / 2.0×).
+        win_streak:           Current win streak of the evaluated account.
+        layers:               Per-layer :class:`LayerResult` list (always
+                              four entries, in pipeline order).
+        account_id:           Account that was evaluated.
+        evaluated_at:         ISO-8601 timestamp.
+    """
+    approved: bool
+    blocked_at: Optional[str]
+    rejection_reason: str
+    final_position_size: float
+    snowball_multiplier: float
+    win_streak: int
+    layers: List[LayerResult]
+    account_id: str
+    evaluated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    def to_dict(self) -> Dict:
+        return {
+            "approved": self.approved,
+            "blocked_at": self.blocked_at,
+            "rejection_reason": self.rejection_reason,
+            "final_position_size": round(self.final_position_size, 4),
+            "snowball_multiplier": round(self.snowball_multiplier, 4),
+            "win_streak": self.win_streak,
+            "layers": [lr.to_dict() for lr in self.layers],
+            "account_id": self.account_id,
+            "evaluated_at": self.evaluated_at,
         }
 
 
@@ -684,6 +795,148 @@ class GlobalCapitalBrain:
             amount_usd=amount,
             reason=reason,
         )
+
+    # ── Unified Decision Hierarchy (Feature: Global→Account→Strategy→Trade) ──
+
+    def run_hierarchy_check(
+        self,
+        current_account_id: str,
+        all_accounts: List[str],
+        is_account_alive: bool,
+        strategy_approved: bool,
+        base_position_size: float,
+        strategy_reason: str = "",
+    ) -> HierarchyDecision:
+        """
+        Run the full four-layer Capital Brain decision hierarchy.
+
+        Evaluates layers in strict order and short-circuits at the first
+        failure.  The pipeline is::
+
+            Layer 1 — GLOBAL   : Is this the best account right now?
+            Layer 2 — ACCOUNT  : Is this account healthy enough to trade?
+            Layer 3 — STRATEGY : Did the strategy gate approve this signal?
+            Layer 4 — TRADE    : Apply Capital Snowball multiplier.
+
+        Args:
+            current_account_id: The account attempting to place a trade.
+            all_accounts:       All known account_ids (including current).
+            is_account_alive:   Result from ``account_flow_layer.is_account_tradeable()``.
+                                Supply ``True`` when the account-flow engine is unavailable.
+            strategy_approved:  Result from ``win_rate_maximizer.approve_trade()`` (or
+                                equivalent strategy gate).  Supply ``True`` when the
+                                strategy gate was not run / not available.
+            base_position_size: Raw position size in USD before snowball scaling.
+            strategy_reason:    Rejection reason from the strategy gate (optional,
+                                used only when ``strategy_approved=False``).
+
+        Returns:
+            :class:`HierarchyDecision` — a fully traced result with one entry
+            per layer and the final (snowball-adjusted) position size.
+        """
+        layers: List[LayerResult] = []
+
+        # ── Layer 1: GLOBAL — Capital routing ─────────────────────────────────
+        global_ok, global_reason = self.should_trade(current_account_id, all_accounts)
+        layers.append(LayerResult(
+            layer="global",
+            approved=global_ok,
+            reason=global_reason,
+        ))
+        if not global_ok:
+            return HierarchyDecision(
+                approved=False,
+                blocked_at="global",
+                rejection_reason=global_reason,
+                final_position_size=0.0,
+                snowball_multiplier=1.0,
+                win_streak=self._get_win_streak(current_account_id),
+                layers=layers + [
+                    LayerResult(layer="account",  approved=False, reason="pipeline short-circuited"),
+                    LayerResult(layer="strategy", approved=False, reason="pipeline short-circuited"),
+                    LayerResult(layer="trade",    approved=False, reason="pipeline short-circuited"),
+                ],
+                account_id=current_account_id,
+            )
+
+        # ── Layer 2: ACCOUNT — Health check ───────────────────────────────────
+        acct_reason = "" if is_account_alive else "account killed — drawdown exceeded kill threshold"
+        layers.append(LayerResult(
+            layer="account",
+            approved=is_account_alive,
+            reason=acct_reason,
+        ))
+        if not is_account_alive:
+            return HierarchyDecision(
+                approved=False,
+                blocked_at="account",
+                rejection_reason=acct_reason,
+                final_position_size=0.0,
+                snowball_multiplier=1.0,
+                win_streak=self._get_win_streak(current_account_id),
+                layers=layers + [
+                    LayerResult(layer="strategy", approved=False, reason="pipeline short-circuited"),
+                    LayerResult(layer="trade",    approved=False, reason="pipeline short-circuited"),
+                ],
+                account_id=current_account_id,
+            )
+
+        # ── Layer 3: STRATEGY — Signal quality gate ────────────────────────────
+        strat_reason = strategy_reason if not strategy_approved else ""
+        layers.append(LayerResult(
+            layer="strategy",
+            approved=strategy_approved,
+            reason=strat_reason,
+        ))
+        if not strategy_approved:
+            return HierarchyDecision(
+                approved=False,
+                blocked_at="strategy",
+                rejection_reason=strat_reason or "strategy gate rejected signal",
+                final_position_size=0.0,
+                snowball_multiplier=1.0,
+                win_streak=self._get_win_streak(current_account_id),
+                layers=layers + [
+                    LayerResult(layer="trade", approved=False, reason="pipeline short-circuited"),
+                ],
+                account_id=current_account_id,
+            )
+
+        # ── Layer 4: TRADE — Capital Snowball sizing ───────────────────────────
+        snowball_mult = self.get_snowball_multiplier(current_account_id)
+        final_size = round(base_position_size * snowball_mult, 4)
+        win_streak = self._get_win_streak(current_account_id)
+        snowball_reason = (
+            f"win_streak={win_streak} → {snowball_mult:.1f}× multiplier"
+            if snowball_mult > 1.0 else ""
+        )
+        layers.append(LayerResult(
+            layer="trade",
+            approved=True,
+            reason=snowball_reason,
+            multiplier=snowball_mult,
+        ))
+
+        logger.debug(
+            "[Brain] ✅ %s hierarchy APPROVED — snowball=%.1f× final_size=$%.2f",
+            current_account_id, snowball_mult, final_size,
+        )
+        return HierarchyDecision(
+            approved=True,
+            blocked_at=None,
+            rejection_reason="",
+            final_position_size=final_size,
+            snowball_multiplier=snowball_mult,
+            win_streak=win_streak,
+            layers=layers,
+            account_id=current_account_id,
+        )
+
+    def _get_win_streak(self, account_id: str) -> int:
+        """Return the current win streak for *account_id* (thread-safe)."""
+        with self._lock:
+            state = self._accounts.get(account_id)
+            return state.win_streak if state else 0
 
     # ── Full report ───────────────────────────────────────────────────────────
 
