@@ -73,6 +73,15 @@ except ImportError:
 
 logger = logging.getLogger('nija.multi_account')
 
+
+class ConnectionState(Enum):
+    """Explicit connection state for platform brokers."""
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    FAILED = "failed"
+
+
 # Root nija logger for flushing all handlers
 # Child loggers (like 'nija.multi_account', 'nija.broker') propagate to this logger
 # but don't have their own handlers, so we need to flush the root logger's handlers
@@ -110,6 +119,10 @@ class MultiAccountBrokerManager:
         # Platform account brokers - registered once globally and marked immutable
         self._platform_brokers: Dict[BrokerType, BaseBroker] = {}
         self._platform_brokers_locked: bool = False
+
+        # Connection state machine for platform brokers
+        # Tracks each broker through DISCONNECTED → CONNECTING → CONNECTED / FAILED
+        self._platform_state: Dict[str, ConnectionState] = {}
 
         # User account brokers - structure: {user_id: {BrokerType: BaseBroker}}
         self.user_brokers: Dict[str, Dict[BrokerType, BaseBroker]] = {}
@@ -290,9 +303,14 @@ class MultiAccountBrokerManager:
                 logger.warning(f"⚠️  Unsupported broker type for platform: {broker_type.value}")
                 return None
 
+            # Mark state as CONNECTING before attempting the handshake
+            self._platform_state[broker_type.value] = ConnectionState.CONNECTING
+            logger.info(f"   🔄 Platform {broker_type.value.upper()} state: CONNECTING")
+
             # Connect the broker
             if broker.connect():
                 self._platform_brokers[broker_type] = broker
+                self._platform_state[broker_type.value] = ConnectionState.CONNECTED
                 # Mark in the global broker registry so any module can check is_platform()
                 if broker_registry is not None:
                     broker_registry[broker_type.value]["platform"] = True
@@ -301,10 +319,12 @@ class MultiAccountBrokerManager:
                 logger.info(f"   Platform broker registered once, globally")
                 return broker
             else:
+                self._platform_state[broker_type.value] = ConnectionState.FAILED
                 logger.warning(f"⚠️  Failed to connect platform broker: {broker_type.value}")
                 return None
 
         except Exception as e:
+            self._platform_state[broker_type.value] = ConnectionState.FAILED
             logger.error(f"❌ Error adding platform broker {broker_type.value}: {e}")
             return None
 
@@ -476,6 +496,11 @@ class MultiAccountBrokerManager:
         """
         Check if a platform account is connected for a given broker type.
 
+        Uses the explicit ConnectionState machine first for a fast, race-condition-free
+        answer.  Falls back to inspecting the live broker object (with the sticky
+        window) when no state entry exists (e.g. broker registered externally before
+        this feature was deployed).
+
         Args:
             broker_type: Type of broker to check
 
@@ -487,33 +512,39 @@ class MultiAccountBrokerManager:
             if broker_type is None:
                 logger.error("❌ is_platform_connected called with broker_type=None")
                 return False
-                
-            # Debug logging to diagnose false warnings
+
+            # Fast path: use the explicit ConnectionState machine
+            state = self._platform_state.get(broker_type.value)
+            if state is not None:
+                logger.debug(f"🔍 Platform broker check for {broker_type.value}: state={state.value}")
+                return state == ConnectionState.CONNECTED
+
+            # Fallback: no state entry yet — check the live broker object
             broker_in_dict = broker_type in self.platform_brokers
-            
+
             if not broker_in_dict:
                 logger.debug(f"🔍 Platform broker check for {broker_type.value}: NOT in platform_brokers dict")
-                # Format registered brokers efficiently without creating intermediate list
                 registered = ', '.join(bt.value for bt in self.platform_brokers.keys()) if self.platform_brokers else 'none'
                 logger.debug(f"   Registered platform brokers: {registered}")
                 return False
-            
+
             broker_obj = self.platform_brokers[broker_type]
-            
+
             # Defensive check: Ensure broker object exists and has connected attribute
             if broker_obj is None:
                 logger.debug(f"🔍 Platform broker check for {broker_type.value}: broker object is None")
                 return False
-            
+
             if not hasattr(broker_obj, 'connected'):
                 logger.debug(f"🔍 Platform broker check for {broker_type.value}: broker has no 'connected' attribute")
                 return False
-            
+
             connected_status = broker_obj.connected
             logger.debug(f"🔍 Platform broker check for {broker_type.value}: broker={broker_obj.__class__.__name__}, connected={connected_status}")
 
             if connected_status:
-                # Update sticky connection timestamp on confirmed connection
+                # Sync state machine and update sticky connection timestamp
+                self._platform_state[broker_type.value] = ConnectionState.CONNECTED
                 self._last_platform_connected_time[broker_type] = time.time()
                 return True
 
@@ -529,7 +560,7 @@ class MultiAccountBrokerManager:
                 return True
 
             return False
-            
+
         except Exception:
             # Use logger.exception() to automatically include traceback
             # Safe fallback for broker name in case broker_type is malformed
@@ -537,7 +568,7 @@ class MultiAccountBrokerManager:
                 broker_name = broker_type.value
             except (AttributeError, TypeError):
                 broker_name = str(broker_type) if broker_type else "Unknown"
-            
+
             logger.exception(f"❌ Error checking platform broker connection for {broker_name}: This is unexpected - please report this error")
             return False
 
@@ -599,6 +630,40 @@ class MultiAccountBrokerManager:
             f"   ⚠️  Platform {broker_name} still not connected after "
             f"{retries} retries ({int(retries * wait_secs)}s total)"
         )
+        return False
+
+    def wait_for_platform_ready(self, broker_type: BrokerType, timeout: int = 30) -> bool:
+        """
+        Block until the platform broker is fully connected or the timeout expires.
+
+        Reads from the explicit ConnectionState machine so it reacts immediately
+        when the connection handshake completes, with no guessing or retry counting.
+
+        Args:
+            broker_type: Exchange to wait for.
+            timeout: Maximum seconds to wait before giving up (default: 30).
+
+        Returns:
+            bool: True if platform reached CONNECTED state within the timeout.
+        """
+        broker_name = broker_type.value.upper()
+        start = time.time()
+
+        while time.time() - start < timeout:
+            state = self._platform_state.get(broker_type.value)
+            logger.info(f"⏳ Platform {broker_name} state: {state.value if state else 'unknown'}")
+
+            if state == ConnectionState.CONNECTED:
+                logger.info(f"✅ Platform {broker_name} fully ready")
+                return True
+
+            if state == ConnectionState.FAILED:
+                logger.error(f"❌ Platform {broker_name} failed to connect")
+                return False
+
+            time.sleep(1)
+
+        logger.error(f"⛔ Timeout waiting for platform {broker_name} to become ready ({timeout}s)")
         return False
 
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
@@ -1183,6 +1248,17 @@ class MultiAccountBrokerManager:
             dict: Summary of connected users by brokerage
                   Format: {brokerage: [user_ids]}
         """
+        # HARD BLOCK: wait for every registered platform broker to reach CONNECTED
+        # before touching any user accounts.  This eliminates race conditions where
+        # user connections are attempted while the platform handshake is still in
+        # progress (CONNECTING state).
+        for broker_type in list(self._platform_brokers.keys()):
+            if not self.wait_for_platform_ready(broker_type):
+                logger.warning(
+                    f"⚠️ Skipping user connections — platform {broker_type.value.upper()} not ready"
+                )
+                return {}
+
         # Import user loader
         try:
             from config.user_loader import get_user_config_loader
@@ -1260,9 +1336,10 @@ class MultiAccountBrokerManager:
             # (no platform credentials configured for this exchange).
             allow_user_trading = False
             if not platform_connected:
-                # Retry before concluding the platform is absent — it may still
-                # be completing its own connection handshake.
-                platform_connected = self._wait_and_retry_platform_connection(broker_type)
+                # Use the state-machine-based hard wait instead of the legacy
+                # retry loop.  This returns True only when the state reaches
+                # CONNECTED (not just "not failed yet").
+                platform_connected = self.wait_for_platform_ready(broker_type)
                 if not platform_connected:
                     _pal = get_platform_account_layer() if get_platform_account_layer is not None else None
                     _has_platform = _pal.has_platform_account(broker_type.value) if _pal is not None else False
