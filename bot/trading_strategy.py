@@ -1410,6 +1410,74 @@ def get_balance_based_max_positions(balance: float) -> int:
 MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_dynamic_min_position_size() instead)
 MIN_BALANCE_TO_TRADE_USD = 10.0  # Minimum account balance to allow trading ($10 matches minimum position size)
 
+# ── MICRO ACCOUNT PERFORMANCE BOOSTERS (Mar 2026) ─────────────────────────
+# Four features designed to maximise growth for small accounts.  They operate
+# independently but can activate simultaneously for accounts ≤ $500.
+#
+# Feature 1 & 2 (Auto dust cleanup / Forced capital consolidation):
+#   • Global cadence : every FORCED_CLEANUP_INTERVAL cycles (~15 min)
+#   • Micro cadence  : every MICRO_CLEANUP_INTERVAL cycles (~7.5 min) when
+#                      balance < MICRO_CLEANUP_BALANCE_THRESHOLD
+#   The auto-cleanup engine (Feature 1) liquidates dust (<$2) back to USDT,
+#   while the forced-cleanup engine (Feature 2) merges micro-positions so
+#   free capital is consolidated for the next entry.
+#   Both use the same MICRO_CLEANUP_INTERVAL so they always fire together.
+#
+# Feature 3 (Trade frequency booster):
+#   • Accounts below MICRO_FREQ_BOOST_THRESHOLD always scan MARKET_BATCH_SIZE_MAX
+#     markets per cycle, bypassing the gradual warmup ramp.  Rotation is
+#     preserved — the extended batch is appended from the current rotation
+#     offset rather than restarting from index 0.
+#
+# Feature 4 ($100→$1K accelerator mode):
+#   • For accounts in [ACCELERATOR_MIN_BALANCE, ACCELERATOR_MAX_BALANCE) that
+#     are NOT already in micro-cap compounding mode (which has its own sizing),
+#     position size is boosted to ACCELERATOR_POSITION_PCT of balance (25%)
+#     instead of the default DYNAMIC_POSITION_SIZE_PCT (18%).
+#   • Micro-cap compounding mode takes precedence because it handles the
+#     $15–$500 range with its own optimised profit-target and stop-loss logic.
+#     The accelerator mode fills the $500–$1 000 gap where micro-cap config
+#     is no longer active but accounts still benefit from larger positions.
+#
+# Priority / precedence when ranges overlap ($100–$500):
+#   micro-cap compounding config (if active) > accelerator mode > default sizing
+#   cleanup interval : MICRO_CLEANUP_INTERVAL (micro) > FORCED_CLEANUP_INTERVAL (global)
+#   scan batch       : MARKET_BATCH_SIZE_MAX (micro, freq-boosted) ≥ adaptive batch
+MICRO_CLEANUP_BALANCE_THRESHOLD = 500.0   # Aggressive cleanup threshold (USD)
+MICRO_CLEANUP_INTERVAL         = 3        # Cleanup every 3 cycles for micro accounts (~7.5 min)
+MICRO_FREQ_BOOST_THRESHOLD     = 500.0    # Always use max batch scan below this balance
+ACCELERATOR_MIN_BALANCE        = 100.0    # Lower bound of $100→$1K accelerator range
+ACCELERATOR_MAX_BALANCE        = 1000.0   # Upper bound of $100→$1K accelerator range
+# NOTE: ACCELERATOR_POSITION_PCT is expressed as a percentage (e.g. 25.0 = 25%).
+# DYNAMIC_POSITION_SIZE_PCT (used elsewhere) is a fraction (e.g. 0.18 = 18%).
+# get_accelerator_position_size_pct() always returns a percentage for consistency.
+ACCELERATOR_POSITION_PCT       = 25.0     # Position-size % in accelerator mode (vs 18% normal)
+
+
+def get_accelerator_position_size_pct(balance: float) -> float:
+    """Return elevated position-size percentage for the $100→$1K accelerator mode.
+
+    Both the in-range return value (``ACCELERATOR_POSITION_PCT``) and the
+    out-of-range fallback (``DYNAMIC_POSITION_SIZE_PCT × 100``) are expressed as
+    **percentages** (e.g. 25.0 = 25%).  Multiply by ``account_balance / 100.0``
+    to obtain a dollar position size.
+
+    Note: ``DYNAMIC_POSITION_SIZE_PCT`` is stored as a fraction (0.18) while
+    ``ACCELERATOR_POSITION_PCT`` is stored as a percentage (25.0).  This
+    function normalises both to percentages so callers always receive the same
+    unit regardless of which branch executes.
+
+    Args:
+        balance: Current account balance in USD.
+
+    Returns:
+        Position-size percentage (e.g. 25.0 for 25%).
+    """
+    if ACCELERATOR_MIN_BALANCE <= balance < ACCELERATOR_MAX_BALANCE:
+        return ACCELERATOR_POSITION_PCT
+    # DYNAMIC_POSITION_SIZE_PCT is a fraction (e.g. 0.18); convert to percentage.
+    return DYNAMIC_POSITION_SIZE_PCT * 100.0
+
 # FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
 # UPDATE (Jan 22, 2026): Aligned with new tier structure and $10 minimum trade size
 # Kraken enforces $10 minimum trade size per exchange rules
@@ -5194,7 +5262,15 @@ class TradingStrategy:
             # 2. Excess positions over hard cap (retroactive enforcement)
             # Runs across ALL accounts (platform + users)
             run_startup_cleanup = hasattr(self, 'cycle_count') and self.cycle_count == 0
-            run_periodic_cleanup = hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % FORCED_CLEANUP_INTERVAL == 0)
+            # Feature 2 (Forced capital consolidation / Feature 1 aggressive dust cleanup):
+            # Micro accounts (< MICRO_CLEANUP_BALANCE_THRESHOLD) use a shorter interval so
+            # capital is freed up faster and available for the next entry.
+            _cleanup_interval = (
+                MICRO_CLEANUP_INTERVAL
+                if account_balance < MICRO_CLEANUP_BALANCE_THRESHOLD
+                else FORCED_CLEANUP_INTERVAL
+            )
+            run_periodic_cleanup = hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % _cleanup_interval == 0)
             
             # Optional trade-based trigger: Cleanup after N trades
             run_trade_based_cleanup = False
@@ -7150,14 +7226,10 @@ class TradingStrategy:
                 else:
                     logger.info(f"   ✅ CONDITION PASSED: Under position cap ({len(current_positions)}/{effective_max_positions})")
 
-                if account_balance < MIN_BALANCE_TO_TRADE_USD:
-                    # NOTE: This is informational only. The per-broker balance is checked
-                    # inside _is_broker_eligible_for_entry (AFTER broker selection), which
-                    # is the authoritative gate. The active_broker here may be a USER account
-                    # whose balance is not relevant to PLATFORM entry decisions.
-                    logger.info(f"   ℹ️  Active broker balance ${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f} minimum (entry broker balance verified below)")
-                else:
-                    logger.info(f"   ✅ CONDITION PASSED: Sufficient balance (${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f})")
+                # NOTE: Balance check is intentionally deferred until AFTER broker selection.
+                # The authoritative balance gate is applied once we know which broker was
+                # selected and have fetched its live balance (see below).
+                logger.info("   ℹ️  Balance check deferred – will be validated against selected broker balance")
 
                 # BROKER-AWARE ENTRY GATING (Jan 22, 2025)
                 # Check broker eligibility - must not be in EXIT_ONLY mode and meet balance requirements
@@ -7291,6 +7363,24 @@ class TradingStrategy:
 
                         account_balance = balance_data.get('trading_balance', 0.0)
 
+                        # ── SELECTED BROKER BALANCE CHECK ──────────────────────
+                        # This is the AUTHORITATIVE balance gate.  We now have the
+                        # live balance from the selected entry broker; block entry
+                        # immediately if it is below the trading floor.
+                        if account_balance < MIN_BALANCE_TO_TRADE_USD:
+                            can_enter = False
+                            _bal_reason = (
+                                f"insufficient balance on {entry_broker_name.upper()}: "
+                                f"${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f}"
+                            )
+                            skip_reasons.append(_bal_reason)
+                            logger.warning(f"   ❌ CONDITION FAILED: {_bal_reason}")
+                        else:
+                            logger.info(
+                                f"   ✅ CONDITION PASSED: {entry_broker_name.upper()} balance "
+                                f"${account_balance:.2f} >= ${MIN_BALANCE_TO_TRADE_USD:.2f} minimum"
+                            )
+
                         # ═══════════════════════════════════════════════════════
                         # GLOBAL CAPITAL MANAGER — register account balance
                         # Enables proportional allocation & cross-account risk
@@ -7401,11 +7491,13 @@ class TradingStrategy:
 
             # ENTRY CHECK debug log — emitted before the entry gate to make the
             # decision transparent in the logs regardless of the outcome.
+            # NOTE: balance gate is now encoded inside `can_enter` (applied against
+            # the selected broker's live balance above), so we do NOT re-check
+            # `account_balance >= MIN_BALANCE_TO_TRADE_USD` here.
             allow_entries = (
                 not user_mode
                 and not entries_blocked
                 and len(current_positions) < effective_max_positions
-                and account_balance >= MIN_BALANCE_TO_TRADE_USD
                 and can_enter
             )
             if allow_entries:
@@ -7416,14 +7508,12 @@ class TradingStrategy:
                 block_reason = "STOP_ALL_ENTRIES.conf active"
             elif len(current_positions) >= effective_max_positions:
                 block_reason = f"position_cap ({len(current_positions)}/{effective_max_positions})"
-            elif account_balance < MIN_BALANCE_TO_TRADE_USD:
-                block_reason = f"low_balance (${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD:.2f})"
             else:
                 block_reason = "; ".join(skip_reasons) if skip_reasons else "unknown"
             logger.info(f"ENTRY CHECK → allowed={allow_entries}, reason={block_reason}")
 
             # Continue with market scanning if conditions passed
-            if not user_mode and not entries_blocked and len(current_positions) < effective_max_positions and account_balance >= MIN_BALANCE_TO_TRADE_USD and can_enter:
+            if not user_mode and not entries_blocked and len(current_positions) < effective_max_positions and can_enter:
                 logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{effective_max_positions}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
 
                 # Get top market candidates (limit scan to prevent timeouts)
@@ -7467,6 +7557,28 @@ class TradingStrategy:
 
                     # Use rotation to scan different markets each cycle
                     markets_to_scan = self._get_rotated_markets(all_products)
+
+                    # Feature 3: Trade frequency booster — for micro accounts (< MICRO_FREQ_BOOST_THRESHOLD)
+                    # always scan the maximum batch so more opportunities are evaluated each cycle.
+                    # Rotation is preserved: extra markets are appended starting from the current
+                    # rotation offset (set by _get_rotated_markets) so we do NOT restart from index 0.
+                    if account_balance < MICRO_FREQ_BOOST_THRESHOLD:
+                        _boost_size = min(MARKET_BATCH_SIZE_MAX, len(all_products))
+                        if len(markets_to_scan) < _boost_size:
+                            _extra_needed = _boost_size - len(markets_to_scan)
+                            _total_mkts = len(all_products)
+                            # self.market_rotation_offset was already advanced by _get_rotated_markets
+                            _next_start = self.market_rotation_offset
+                            _extra = [
+                                all_products[(_next_start + _i) % _total_mkts]
+                                for _i in range(_extra_needed)
+                            ]
+                            markets_to_scan = markets_to_scan + _extra
+                            logger.info(
+                                f"   🔥 Micro-account frequency boost: scanning {_boost_size} markets "
+                                f"(+{_extra_needed} appended from rotation, "
+                                f"balance=${account_balance:.2f} < ${MICRO_FREQ_BOOST_THRESHOLD:.0f})"
+                            )
 
                     # FIX #3 (Jan 20, 2026): Kraken markets already filtered at startup
                     # No need to filter again during scan - markets_to_scan already contains only supported pairs
@@ -8173,6 +8285,30 @@ class TradingStrategy:
                                     else:
                                         # Entry price not available; just update position_size in analysis
                                         analysis['position_size'] = position_size
+
+                                # ── $100 → $1K ACCELERATOR MODE ────────────────────────
+                                # Feature 4: Boost position-size percentage for accounts in the
+                                # $100–$1 000 range to compound capital faster toward the $1 000
+                                # milestone.
+                                #
+                                # Mutual exclusivity with micro-cap compounding mode:
+                                # Micro-cap compounding (_micro_cap_config is not None) handles
+                                # accounts in the $15–$500 range with its own optimised sizing,
+                                # stop-loss, and profit-target logic.  The accelerator mode is
+                                # intentionally skipped when micro-cap config is active so the
+                                # two sizing regimes do not conflict.  In practice the accelerator
+                                # primarily activates for accounts in the $500–$1 000 gap where
+                                # micro-cap config is no longer loaded.
+                                if _micro_cap_config is None and ACCELERATOR_MIN_BALANCE <= account_balance < ACCELERATOR_MAX_BALANCE:
+                                    _accel_pct = get_accelerator_position_size_pct(account_balance)
+                                    _accel_size = account_balance * _accel_pct / 100.0
+                                    if _accel_size > position_size:
+                                        logger.info(
+                                            f"   🔥 {symbol}: $100→$1K accelerator mode — "
+                                            f"size {_accel_pct:.0f}% of ${account_balance:.2f} = "
+                                            f"${_accel_size:.2f} (was ${position_size:.2f})"
+                                        )
+                                        position_size = _accel_size
 
                                 # ═══════════════════════════════════════════════════════
                                 # CAPITAL GROWTH THROTTLE — Steps 2 & 3 of correct order
