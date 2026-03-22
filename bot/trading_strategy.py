@@ -952,7 +952,19 @@ MIN_CANDLES_REQUIRED = 90  # Minimum candles needed for analysis (relaxed from 1
 # Manual delay must be >= 6s to avoid conflicts and ensure proper rate limiting
 POSITION_CHECK_DELAY = 0.5  # 500ms delay between position checks (was 0.3s)
 SELL_ORDER_DELAY = 0.7      # 700ms delay between sell orders (was 0.5s)
-MARKET_SCAN_DELAY = 8.0     # 8000ms delay between market scans (increased from 6.5s to 8.0s for better rate limiting)
+# LATENCY OPTIMISATION: MARKET_SCAN_DELAY is the dominant cycle cost.
+# Default 8.0s safely clears the RateLimiter floor (6s minimum) with a 2s buffer.
+# Operators can lower to 6.5s via env-var NIJA_MARKET_SCAN_DELAY (min 6.0s enforced).
+# At 30 markets: 8.0s→240s vs 6.5s→195s — saves ~45s per cycle.
+try:
+    _raw_scan_delay = float(os.environ.get("NIJA_MARKET_SCAN_DELAY", "8.0"))
+except (ValueError, TypeError):
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "NIJA_MARKET_SCAN_DELAY has an invalid value; defaulting to 8.0s"
+    )
+    _raw_scan_delay = 8.0
+MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLimiter minimum
                             # CRITICAL: Must be >= 7.5s to align with RateLimiter (8 req/min for get_candles)
                             # The 0.5s buffer (8.0s vs 7.5s) accounts for jitter and processing time
                             # At 8.0s delay, we scan at ~0.125 req/s which prevents both 429 and 403 errors
@@ -2060,6 +2072,11 @@ class TradingStrategy:
         # Stores recent total cycle durations (seconds) to compute a moving average.
         # Uses a fixed-length deque so memory stays bounded regardless of runtime.
         self._cycle_durations = collections.deque(maxlen=20)  # rolling window of 20 cycles
+
+        # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────────
+        # Forces an initial deployment signal on cycle 0 when balance is healthy,
+        # so the bot never stalls silently on fresh startup.
+        self._first_trade_executed: bool = False  # set True after first confirmed entry
 
         # Zero-signal streak tracking (Leak #4 — over-filter monitor)
         # Count consecutive cycles where no qualifying entry signal was found.
@@ -4976,6 +4993,11 @@ class TradingStrategy:
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
 
+        # SAFETY: account_balance MUST be defined before any reference — even if
+        # entry is skipped early.  All downstream code uses `account_balance is not
+        # None` guards so 0.0 is the safe sentinel when the broker is unavailable.
+        account_balance: float = 0.0
+
         # Remember whether the caller explicitly requested user mode so we can
         # distinguish it from user_mode being forced True by safety checks later.
         explicit_user_mode = user_mode
@@ -5294,7 +5316,7 @@ class TradingStrategy:
             # capital is freed up faster and available for the next entry.
             _cleanup_interval = (
                 MICRO_CLEANUP_INTERVAL
-                if account_balance < MICRO_CLEANUP_BALANCE_THRESHOLD
+                if account_balance is not None and account_balance < MICRO_CLEANUP_BALANCE_THRESHOLD
                 else FORCED_CLEANUP_INTERVAL
             )
             run_periodic_cleanup = hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % _cleanup_interval == 0)
@@ -5559,11 +5581,36 @@ class TradingStrategy:
             # FIX #1: Update portfolio state from broker data
             # Get detailed balance including crypto holdings
             # PRO MODE: Also calculate total capital (free balance + position values)
-            if hasattr(active_broker, 'get_account_balance_detailed'):
-                balance_data = active_broker.get_account_balance_detailed()
+            # TIMEOUT FALLBACK: if live fetch fails, fall back to cached balance.
+            try:
+                if hasattr(active_broker, 'get_account_balance_detailed'):
+                    balance_data = active_broker.get_account_balance_detailed()
+                else:
+                    balance_data = {'trading_balance': active_broker.get_account_balance()}
+            except Exception as _bal_fetch_err:
+                logger.warning(f"⚠️  Balance fetch failed ({_bal_fetch_err}); using cached balance")
+                _cached = (
+                    active_broker._last_known_balance
+                    if hasattr(active_broker, '_last_known_balance') and active_broker._last_known_balance is not None
+                    else account_balance  # already 0.0 from cycle-start sentinel
+                )
+                balance_data = {'trading_balance': _cached or 0.0}
+            account_balance = balance_data.get('trading_balance', 0.0) or 0.0
+
+            # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────
+            # On cycle 0 (fresh startup), if the account has sufficient balance and
+            # no positions are open yet, force entry-mode so the bot deploys capital
+            # right away rather than waiting for warmup/filter ramp-up to finish.
+            if (
+                not self._first_trade_executed
+                and getattr(self, 'cycle_count', 0) == 0
+                and account_balance >= MIN_BALANCE_TO_TRADE_USD
+                and not user_mode
+            ):
+                logger.info("🚀 FIRST TRADE GUARANTEE: cycle 0 — forcing entry scan to deploy capital")
+                _first_trade_override = True
             else:
-                balance_data = {'trading_balance': active_broker.get_account_balance()}
-            account_balance = balance_data.get('trading_balance', 0.0)
+                _first_trade_override = False
 
             # Leak #5 fix: switch profit-lock mode based on account size
             # Under $1K → GROWTH (suspend withdrawals, maximise compounding)
@@ -7388,13 +7435,13 @@ class TradingStrategy:
                                 logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
                                 balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
 
-                        account_balance = balance_data.get('trading_balance', 0.0)
+                        account_balance = balance_data.get('trading_balance', 0.0) or 0.0
 
                         # ── SELECTED BROKER BALANCE CHECK ──────────────────────
                         # This is the AUTHORITATIVE balance gate.  We now have the
                         # live balance from the selected entry broker; block entry
                         # immediately if it is below the trading floor.
-                        if account_balance < MIN_BALANCE_TO_TRADE_USD:
+                        if account_balance is not None and account_balance < MIN_BALANCE_TO_TRADE_USD:
                             can_enter = False
                             _bal_reason = (
                                 f"insufficient balance on {entry_broker_name.upper()}: "
@@ -7585,11 +7632,26 @@ class TradingStrategy:
                     # Use rotation to scan different markets each cycle
                     markets_to_scan = self._get_rotated_markets(all_products)
 
+                    # FIRST TRADE GUARANTEE: bypass warmup batch-size cap on cycle 0
+                    # so the bot scans a meaningful number of markets immediately.
+                    # Rotation offset from _get_rotated_markets is respected so we
+                    # do not always restart from index 0.
+                    if _first_trade_override and len(markets_to_scan) < MARKET_BATCH_SIZE_MAX:
+                        _boost = min(MARKET_BATCH_SIZE_MAX, len(all_products))
+                        _extra_needed = _boost - len(markets_to_scan)
+                        _next_start = self.market_rotation_offset
+                        _extra = [
+                            all_products[(_next_start + _i) % len(all_products)]
+                            for _i in range(_extra_needed)
+                        ]
+                        markets_to_scan = markets_to_scan + _extra
+                        logger.info(f"   🚀 First-trade override: scanning {_boost} markets (bypassing warmup cap, rotation offset={_next_start})")
+
                     # Feature 3: Trade frequency booster — for micro accounts (< MICRO_FREQ_BOOST_THRESHOLD)
                     # always scan the maximum batch so more opportunities are evaluated each cycle.
                     # Rotation is preserved: extra markets are appended starting from the current
                     # rotation offset (set by _get_rotated_markets) so we do NOT restart from index 0.
-                    if account_balance < MICRO_FREQ_BOOST_THRESHOLD:
+                    if account_balance is not None and account_balance < MICRO_FREQ_BOOST_THRESHOLD:
                         _boost_size = min(MARKET_BATCH_SIZE_MAX, len(all_products))
                         if len(markets_to_scan) < _boost_size:
                             _extra_needed = _boost_size - len(markets_to_scan)
@@ -9318,6 +9380,10 @@ class TradingStrategy:
                             if _ps_success:
                                 logger.info(f"   ✅ Position opened: {_ps_symbol}")
                                 _trades_executed_this_cycle += 1
+                                # Mark first trade as executed (first-trade guarantee flag)
+                                if not self._first_trade_executed:
+                                    self._first_trade_executed = True
+                                    logger.info("🚀 FIRST TRADE GUARANTEE: initial deployment confirmed ✅")
 
                                 # 🔒 PROFIT LOCK SYSTEM — register new position for ratchet tracking
                                 if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:
@@ -9512,7 +9578,7 @@ class TradingStrategy:
                     reasons.append("STOP_ALL_ENTRIES.conf exists")
                 if len(current_positions) >= effective_max_positions:
                     reasons.append(f"Position cap reached ({len(current_positions)}/{effective_max_positions})")
-                if account_balance < MIN_BALANCE_TO_TRADE_USD:
+                if account_balance is not None and account_balance < MIN_BALANCE_TO_TRADE_USD:
                     reasons.append(f"Balance ${account_balance:.2f} < ${MIN_BALANCE_TO_TRADE_USD} minimum (need buffer for fees)")
 
                 reason_str = ", ".join(reasons) if reasons else "Unknown reason"
@@ -9634,6 +9700,39 @@ class TradingStrategy:
                 logger.debug("Portfolio Profit Engine not available — skipping portfolio profit recording")
         except Exception as e:
             logger.warning(f"Failed to record trade in Portfolio Profit Engine: {e}")
+
+        # Auto-Reinvest Engine — split profit into reinvest vs withdraw buckets
+        try:
+            from bot.auto_reinvest_engine import get_auto_reinvest_engine as _get_are
+            _are_decision = _get_are().process_profit(
+                symbol=symbol,
+                gross_profit=profit_usd,
+                fees=0.0,
+                is_win=is_win,
+            )
+            if not _are_decision.skipped:
+                logger.info(
+                    "💰 AutoReinvest [%s] reinvest=$%.4f withdraw=$%.4f",
+                    symbol, _are_decision.reinvest_usd, _are_decision.withdraw_usd,
+                )
+        except ImportError:
+            try:
+                from auto_reinvest_engine import get_auto_reinvest_engine as _get_are
+                _are_decision = _get_are().process_profit(
+                    symbol=symbol,
+                    gross_profit=profit_usd,
+                    fees=0.0,
+                    is_win=is_win,
+                )
+                if not _are_decision.skipped:
+                    logger.info(
+                        "💰 AutoReinvest [%s] reinvest=$%.4f withdraw=$%.4f",
+                        symbol, _are_decision.reinvest_usd, _are_decision.withdraw_usd,
+                    )
+            except ImportError:
+                logger.debug("AutoReinvestEngine not available — skipping reinvest split")
+        except Exception as _are_err:
+            logger.debug("AutoReinvestEngine record skipped: %s", _are_err)
 
         # Record with Self-Learning Strategy Allocator
         try:
