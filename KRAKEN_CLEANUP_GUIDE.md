@@ -2,7 +2,171 @@
 
 ## Overview
 
-The `clean_kraken.py` script performs a complete cleanup of a Kraken trading account, preparing it for a fresh start. This is Step 1 of the restart process.
+Two cleanup scripts are provided:
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/clean_kraken_all_accounts.py` | **Per-account cleanup** for Tania, Daivon, and Platform — shows true balance for each account, sells ≥ $1, cancels orders, ignores dust. **Use this one.** |
+| `scripts/clean_kraken.py` | Single-account cleanup (legacy, platform credentials only) |
+
+---
+
+## `clean_kraken_all_accounts.py` — Per-Account Cleanup
+
+### What It Does (for EACH account)
+
+| Step | Action |
+|------|--------|
+| **True Balance** | Fetches the real total: USD cash + USD value of every crypto holding |
+| **Step 1** | Sells everything ≥ $1.00 → converts to USD |
+| **Step 2** | Cancels all open orders → unlocks any held funds |
+| **Step 3** | Leaves dust (< $1.00) alone forever |
+| **Ideal State Check** | Reports whether the account meets the target: 0–3 positions · $50–$200 USD · no dust |
+
+### Ideal State per Account
+
+```
+✅ 0–3 open positions
+✅ $50–$200 clean USD
+✅ No dust clutter
+```
+
+### Accounts Processed
+
+| Account | API Key Env Var | API Secret Env Var |
+|---------|----------------|-------------------|
+| Tania | `KRAKEN_USER_TANIA_API_KEY` | `KRAKEN_USER_TANIA_API_SECRET` |
+| Daivon | `KRAKEN_USER_DAIVON_API_KEY` | `KRAKEN_USER_DAIVON_API_SECRET` |
+| Platform | `KRAKEN_PLATFORM_API_KEY` | `KRAKEN_PLATFORM_API_SECRET` |
+
+Accounts without credentials set are skipped with a warning.
+
+### Usage
+
+```bash
+# Dry-run first — see what would happen, no trades executed
+python scripts/clean_kraken_all_accounts.py --dry-run
+
+# Run cleanup on all three accounts
+python scripts/clean_kraken_all_accounts.py
+
+# Run cleanup on one specific account
+python scripts/clean_kraken_all_accounts.py --account tania
+python scripts/clean_kraken_all_accounts.py --account daivon
+python scripts/clean_kraken_all_accounts.py --account platform
+```
+
+### Output Example
+
+```
+████████████████████████████████████████████████████████████████████████████████
+  ACCOUNT: TANIA
+████████████████████████████████████████████████████████████████████████████████
+
+✅ Connected (Tania)
+
+────────────────────────────────────────────────────────────
+  💵 TRUE BALANCE — BEFORE CLEANUP
+────────────────────────────────────────────────────────────
+  USD / USDT cash  :      $45.12
+  Crypto holdings  :
+    • ETH       0.05000000  @  $   2500.0000  =      $125.00
+    • SOL       2.00000000  @  $    100.0000  =      $200.00
+    • XRP       3.00000000  (price unavailable — not counted in total)
+  🔒 Open orders   : 1 order(s) — funds may be locked until cancelled
+────────────────────────────────────────────────────────────
+  TOTAL            :      $370.12
+────────────────────────────────────────────────────────────
+
+================================================================================
+  STEP 1: Sell Anything ≥ $1.00 → Convert to USD
+================================================================================
+
+📋 Found 2 position(s) to sell (≥ $1.00):
+   • [MARKET] ETH: 0.05000000 @ $2500.0000 = $125.00
+   • [MARKET] SOL: 2.00000000 @ $100.0000 = $200.00
+
+   🔴 Processing ETH: 0.05000000 (≈$125.00)...
+      ✅ SOLD via market order (ID: 1234567890...)
+   🔴 Processing SOL: 2.00000000 (≈$200.00)...
+      ✅ SOLD via market order (ID: 0987654321...)
+
+📊 Step 1 Summary: 2 sold/converted, 0 failed
+
+================================================================================
+  STEP 2: Cancel Open Orders → Unlock Held Funds
+================================================================================
+
+📋 Found 1 open order(s):
+   • ETHUSD: buy 0.01000000 (limit) — ID: ABCD1234...
+
+🔴 Cancelling all orders...
+   ✅ Cancelled: ETHUSD (ID: ABCD1234...)
+
+📊 Step 2 Summary: 1 cancelled, 0 failed
+
+================================================================================
+  STEP 3: Dust Report (< $1.00 → Ignored Forever)
+================================================================================
+
+✅ No significant crypto positions remain
+⏭️  1 dust position(s) < $1.00 — permanently ignored:
+   • XRP: 3.00000000 ≈ $0.8200
+
+⏳ Waiting 5s for orders to settle…
+
+================================================================================
+  IDEAL STATE CHECK — Tania
+================================================================================
+
+────────────────────────────────────────────────────────────
+  💵 TRUE BALANCE — AFTER CLEANUP
+────────────────────────────────────────────────────────────
+  USD / USDT cash  :      $370.12
+  Crypto holdings  : none
+────────────────────────────────────────────────────────────
+  TOTAL            :      $370.12
+────────────────────────────────────────────────────────────
+
+✅ Positions   : 0 (target: 0–3)
+⚠️  USD balance : $370.12 (target: $50–$200)
+✅ Dust clutter: 0 item(s) (target: 0)
+
+========================================
+  ⚠️  NOT YET IDEAL
+========================================
+
+================================================================================
+  FINAL SUMMARY
+================================================================================
+
+  Tania      │ true total $  370.12 │ USD $  370.12 │ 0 pos │ 0 dust │ ⚠️  NEEDS ATTENTION
+  Daivon     │ true total $  125.44 │ USD $  125.44 │ 0 pos │ 0 dust │ ✅ IDEAL
+  Platform   │ true total $   60.53 │ USD $   60.53 │ 0 pos │ 1 dust │ ✅ IDEAL
+
+⚠️  One or more accounts have not reached ideal state.
+   • If USD < $50:  deposit or allow the bot to compound profits
+   • If USD > $200: review profit-taking / withdrawal settings
+   • If positions > 3: re-run cleanup or adjust bot position cap
+```
+
+### True Balance Explained
+
+The **true balance** is the only number that matters:
+
+```
+True Balance = USD cash + Σ(crypto quantity × current market price)
+```
+
+- Positions whose price **cannot be fetched** are listed but **excluded from the total** (conservative).
+- Funds locked in open orders are flagged — they are already counted in either the USD cash or crypto value depending on order direction.
+
+---
+
+## `clean_kraken.py` — Single Account (Legacy)
+
+> ⚠️ Use `clean_kraken_all_accounts.py` for per-account cleanup.  
+> `clean_kraken.py` is retained for platform-credential-only use.
 
 ## What It Does
 
