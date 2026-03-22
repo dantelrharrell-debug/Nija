@@ -5894,6 +5894,20 @@ class TradingStrategy:
             else:
                 _first_trade_override = False
 
+            # ── FIRST TRADE FILTER BYPASS ─────────────────────────────────────
+            # Until the very first confirmed entry is recorded, relax AI confidence
+            # and MTF confirmation gates so a perfectionist filter stack never
+            # prevents the bot from deploying capital at all.
+            # Condition: first trade not yet executed AND balance is workable (> $50).
+            # Both flags reset to False the moment _first_trade_executed flips True
+            # (see the post-execution block that sets self._first_trade_executed).
+            _bypass_ai_for_first_trade = False
+            _bypass_mtf_for_first_trade = False
+            if not self._first_trade_executed and account_balance > 50.0 and not user_mode:
+                logger.info("🚀 FIRST TRADE OVERRIDE ACTIVE — bypassing AI and MTF filters until first entry")
+                _bypass_ai_for_first_trade = True
+                _bypass_mtf_for_first_trade = True
+
             # Leak #5 fix: switch profit-lock mode based on account size
             # Under $1K → GROWTH (suspend withdrawals, maximise compounding)
             # At/above $1K → EXTRACTION (enable daily withdrawal + salary payout)
@@ -8576,6 +8590,7 @@ class TradingStrategy:
                                     and hasattr(self, 'mtf_confirmation')
                                     and self.mtf_confirmation is not None
                                     and analysis.get('action') in ('enter_long', 'enter_short')
+                                    and not _bypass_mtf_for_first_trade
                                 ):
                                     try:
                                         _mtf_side = (
@@ -9130,12 +9145,34 @@ class TradingStrategy:
                                             # In CHOP (0.50) or CRASH (0.20) regimes, honour
                                             # the multiplier by randomly skipping that fraction
                                             # of signals, preserving high-quality entries.
+                                            #
+                                            # Micro-account relaxation (balance < $150):
+                                            #   Smaller accounts cannot afford the same skip
+                                            #   rates as large accounts — missing trades hurts
+                                            #   growth more than the regime risk does.
+                                            #   CHOP : skip rate 0.25 (vs 0.50 default)
+                                            #          → effective freq_mult floor = 0.75
+                                            #   CRASH: skip rate 0.50 (vs 0.80 default)
+                                            #          → effective freq_mult floor = 0.50
                                             if _re_freq_mult < 1.0:
-                                                if random.random() > _re_freq_mult:
+                                                _effective_freq_mult = _re_freq_mult
+                                                if account_balance < 150.0:
+                                                    _regime_str = (
+                                                        _re_regime.value
+                                                        if hasattr(_re_regime, 'value')
+                                                        else str(_re_regime)
+                                                    )
+                                                    if _regime_str == "CHOP":
+                                                        _effective_freq_mult = max(_re_freq_mult, 0.75)
+                                                    elif _regime_str == "CRASH":
+                                                        _effective_freq_mult = max(_re_freq_mult, 0.50)
+                                                if random.random() > _effective_freq_mult:
                                                     logger.info(
                                                         f"   🔀 {symbol}: REGIME ENGINE ({_re_label}) — "
                                                         f"trade skipped via freq gate "
-                                                        f"(freq={_re_freq_mult:.2f}, conf={_re_conf:.0%})"
+                                                        f"(freq={_effective_freq_mult:.2f}"
+                                                        f"{' [micro-relaxed]' if account_balance < 150.0 and _effective_freq_mult != _re_freq_mult else ''}"
+                                                        f", conf={_re_conf:.0%})"
                                                     )
                                                     filter_stats['market_filter'] = filter_stats.get('market_filter', 0) + 1
                                                     continue
@@ -9398,6 +9435,28 @@ class TradingStrategy:
                                         _conf_score = _conf_result.get("score", 65.0)
                                         _conf_action = _conf_result.get("recommended_action", "EXECUTE")
 
+                                        # ── Micro Mode Relaxation ─────────────────────
+                                        # For accounts below $150, lower the effective
+                                        # thresholds so small accounts see enough trade
+                                        # opportunities to compound capital:
+                                        #   MIN_AI_CONFIDENCE = 0.55  (score ≥ 55 → allow)
+                                        #   MIN_SIGNAL_SCORE  = 50    (scaling floor)
+                                        _micro_ai_threshold = 55.0   # 0.55 × 100
+                                        _micro_signal_floor = 50.0   # MIN_SIGNAL_SCORE
+                                        _is_micro_account = account_balance < 150.0
+                                        if (
+                                            _is_micro_account
+                                            and _conf_action == "SKIP"
+                                            and _conf_score >= _micro_ai_threshold
+                                        ):
+                                            logger.info(
+                                                f"   🔓 {symbol}: Micro Mode Relaxation — "
+                                                f"AI SKIP overridden "
+                                                f"(score={_conf_score:.1f} ≥ {_micro_ai_threshold:.0f} "
+                                                f"micro threshold, balance=${account_balance:.0f})"
+                                            )
+                                            _conf_action = "EXECUTE"
+
                                         # Block trades where confidence engine recommends SKIP
                                         if _conf_action == "SKIP":
                                             logger.info(
@@ -9410,8 +9469,11 @@ class TradingStrategy:
                                             )
                                             continue
 
-                                        # Scale position size by confidence: 0.65→1.0 maps to 0.80×→1.10×
-                                        _conf_min_score = 65.0
+                                        # Scale position size by confidence.
+                                        # Micro accounts use a lower score floor (50) so
+                                        # the scaling range starts at MIN_SIGNAL_SCORE.
+                                        # Standard accounts use 65 as the floor.
+                                        _conf_min_score = _micro_signal_floor if _is_micro_account else 65.0
                                         _conf_max_score = 100.0
                                         _conf_min_mult = 0.80
                                         _conf_max_mult = 1.10
