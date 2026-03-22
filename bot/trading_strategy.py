@@ -924,7 +924,7 @@ load_dotenv()
 # Position adoption safety constants
 # When entry price is missing from exchange, use current_price * this multiplier
 # This creates an immediate small loss to trigger aggressive exit management
-MISSING_ENTRY_PRICE_MULTIPLIER = 1.01  # 1% above current = -0.99% immediate P&L
+MISSING_ENTRY_PRICE_MULTIPLIER = 1.0  # Use current price as entry price (neutral P&L)
 
 # Maximum number of open orders to display in logs when positions are being adopted
 MAX_DISPLAYED_ORDERS = 5  # Show first 5 orders, summarize remaining
@@ -1193,8 +1193,8 @@ DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = dus
 # Exit strategy constants (no entry price required)
 # CRITICAL FIX (Jan 13, 2026): Aggressive RSI thresholds to sell faster
 MIN_POSITION_VALUE = DUST_POSITION_USD  # Auto-exit positions under this USD value (was $1, now $2)
-RSI_OVERBOUGHT_THRESHOLD = 55  # Exit when RSI exceeds this (lock gains) - LOWERED from 60 for faster profit-taking
-RSI_OVERSOLD_THRESHOLD = 45  # Exit when RSI below this (cut losses) - RAISED from 40 for faster loss-cutting
+RSI_OVERBOUGHT_THRESHOLD = 70  # Exit when RSI exceeds this (lock gains) — standard overbought level
+RSI_OVERSOLD_THRESHOLD = 30  # Exit when RSI below this (cut losses) — standard oversold level
 DEFAULT_RSI = 50  # Default RSI value when indicators unavailable
 
 # Time-based exit thresholds (prevent indefinite holding)
@@ -1441,8 +1441,7 @@ MIN_LOSS_FLOOR = -0.0005  # -0.05% - only ignore bid/ask spread noise (was -0.25
 # Auto-import safety default constants (FIX #1 - Jan 19, 2026)
 # When auto-importing orphaned positions without real entry price, use safety default
 # This creates immediate negative P&L to flag position as losing for aggressive exit
-SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.01  # Assume entry was 1% higher than current price
-                                          # Creates -0.99% immediate P&L, flagging as loser
+SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.0   # Use current price as entry price (neutral — no artificial P&L)
 
 # Position management constants - PROFITABILITY FIX (Dec 28, 2025)
 # Updated Jan 20, 2026: Raised minimum to $5 for safer trade sizing
