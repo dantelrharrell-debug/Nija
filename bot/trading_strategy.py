@@ -643,6 +643,81 @@ except ImportError:
         get_global_drawdown_cb = None
         ProtectionLevel = None
 
+# ── Phase 3: Dynamic Stop-Loss Tightener ────────────────────────────────────
+try:
+    from dynamic_stop_loss_tightener import get_dynamic_stop_tightener
+    DYNAMIC_STOP_TIGHTENER_AVAILABLE = True
+    logger.info("✅ Phase 3: Dynamic Stop-Loss Tightener loaded")
+except ImportError:
+    try:
+        from bot.dynamic_stop_loss_tightener import get_dynamic_stop_tightener
+        DYNAMIC_STOP_TIGHTENER_AVAILABLE = True
+        logger.info("✅ Phase 3: Dynamic Stop-Loss Tightener loaded")
+    except ImportError:
+        DYNAMIC_STOP_TIGHTENER_AVAILABLE = False
+        get_dynamic_stop_tightener = None  # type: ignore
+        logger.warning("⚠️ Phase 3: Dynamic Stop-Loss Tightener not available")
+
+# ── Phase 3: Partial TP Ladder ───────────────────────────────────────────────
+try:
+    from partial_tp_ladder import get_partial_tp_ladder
+    PARTIAL_TP_LADDER_AVAILABLE = True
+    logger.info("✅ Phase 3: Partial TP Ladder loaded")
+except ImportError:
+    try:
+        from bot.partial_tp_ladder import get_partial_tp_ladder
+        PARTIAL_TP_LADDER_AVAILABLE = True
+        logger.info("✅ Phase 3: Partial TP Ladder loaded")
+    except ImportError:
+        PARTIAL_TP_LADDER_AVAILABLE = False
+        get_partial_tp_ladder = None  # type: ignore
+        logger.warning("⚠️ Phase 3: Partial TP Ladder not available")
+
+# ── Phase 3: News / Event Volatility Filter ──────────────────────────────────
+try:
+    from news_volatility_filter import get_news_volatility_filter
+    NEWS_VOLATILITY_FILTER_AVAILABLE = True
+    logger.info("✅ Phase 3: News/Event Volatility Filter loaded")
+except ImportError:
+    try:
+        from bot.news_volatility_filter import get_news_volatility_filter
+        NEWS_VOLATILITY_FILTER_AVAILABLE = True
+        logger.info("✅ Phase 3: News/Event Volatility Filter loaded")
+    except ImportError:
+        NEWS_VOLATILITY_FILTER_AVAILABLE = False
+        get_news_volatility_filter = None  # type: ignore
+        logger.warning("⚠️ Phase 3: News/Event Volatility Filter not available")
+
+# ── Phase 3: Multi-Timeframe Confirmation AI ─────────────────────────────────
+try:
+    from multi_timeframe_confirmation import get_mtf_confirmation
+    MTF_CONFIRMATION_AVAILABLE = True
+    logger.info("✅ Phase 3: Multi-Timeframe Confirmation AI loaded")
+except ImportError:
+    try:
+        from bot.multi_timeframe_confirmation import get_mtf_confirmation
+        MTF_CONFIRMATION_AVAILABLE = True
+        logger.info("✅ Phase 3: Multi-Timeframe Confirmation AI loaded")
+    except ImportError:
+        MTF_CONFIRMATION_AVAILABLE = False
+        get_mtf_confirmation = None  # type: ignore
+        logger.warning("⚠️ Phase 3: Multi-Timeframe Confirmation AI not available")
+
+# ── Phase 3: Abnormal Market Kill Switch ─────────────────────────────────────
+try:
+    from abnormal_market_kill_switch import get_abnormal_market_ks
+    ABNORMAL_MARKET_KS_AVAILABLE = True
+    logger.info("✅ Phase 3: Abnormal Market Kill Switch loaded")
+except ImportError:
+    try:
+        from bot.abnormal_market_kill_switch import get_abnormal_market_ks
+        ABNORMAL_MARKET_KS_AVAILABLE = True
+        logger.info("✅ Phase 3: Abnormal Market Kill Switch loaded")
+    except ImportError:
+        ABNORMAL_MARKET_KS_AVAILABLE = False
+        get_abnormal_market_ks = None  # type: ignore
+        logger.warning("⚠️ Phase 3: Abnormal Market Kill Switch not available")
+
 # Import Micro-Cap Compounding Config — applies before risk engine and position sizing
 try:
     from micro_capital_config import (
@@ -2006,7 +2081,62 @@ class TradingStrategy:
                 self.global_drawdown_cb = None
         else:
             self.global_drawdown_cb = None
-        # Initialize Capital Scaling Engine — auto-increases deposits into winning accounts
+
+        # ── Phase 3: Dynamic Stop-Loss Tightener ─────────────────────────────
+        if DYNAMIC_STOP_TIGHTENER_AVAILABLE and get_dynamic_stop_tightener is not None:
+            try:
+                self.dynamic_stop_tightener = get_dynamic_stop_tightener()
+                logger.info("✅ Phase 3: Dynamic Stop-Loss Tightener initialized")
+            except Exception as _e:
+                logger.warning("⚠️ Phase 3: Dynamic Stop-Loss Tightener init failed: %s", _e)
+                self.dynamic_stop_tightener = None
+        else:
+            self.dynamic_stop_tightener = None
+
+        # ── Phase 3: Partial TP Ladder ────────────────────────────────────────
+        if PARTIAL_TP_LADDER_AVAILABLE and get_partial_tp_ladder is not None:
+            try:
+                self.partial_tp_ladder = get_partial_tp_ladder()
+                logger.info("✅ Phase 3: Partial TP Ladder initialized")
+            except Exception as _e:
+                logger.warning("⚠️ Phase 3: Partial TP Ladder init failed: %s", _e)
+                self.partial_tp_ladder = None
+        else:
+            self.partial_tp_ladder = None
+
+        # ── Phase 3: News / Event Volatility Filter ───────────────────────────
+        if NEWS_VOLATILITY_FILTER_AVAILABLE and get_news_volatility_filter is not None:
+            try:
+                self.news_volatility_filter = get_news_volatility_filter()
+                logger.info("✅ Phase 3: News/Event Volatility Filter initialized")
+            except Exception as _e:
+                logger.warning("⚠️ Phase 3: News/Event Volatility Filter init failed: %s", _e)
+                self.news_volatility_filter = None
+        else:
+            self.news_volatility_filter = None
+
+        # ── Phase 3: Multi-Timeframe Confirmation AI ──────────────────────────
+        if MTF_CONFIRMATION_AVAILABLE and get_mtf_confirmation is not None:
+            try:
+                self.mtf_confirmation = get_mtf_confirmation()
+                logger.info("✅ Phase 3: Multi-Timeframe Confirmation AI initialized")
+            except Exception as _e:
+                logger.warning("⚠️ Phase 3: MTF Confirmation init failed: %s", _e)
+                self.mtf_confirmation = None
+        else:
+            self.mtf_confirmation = None
+
+        # ── Phase 3: Abnormal Market Kill Switch ──────────────────────────────
+        if ABNORMAL_MARKET_KS_AVAILABLE and get_abnormal_market_ks is not None:
+            try:
+                self.abnormal_market_ks = get_abnormal_market_ks()
+                logger.info("✅ Phase 3: Abnormal Market Kill Switch initialized")
+            except Exception as _e:
+                logger.warning("⚠️ Phase 3: Abnormal Market Kill Switch init failed: %s", _e)
+                self.abnormal_market_ks = None
+        else:
+            self.abnormal_market_ks = None
+
         if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
             try:
                 _base_cap = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
@@ -5261,6 +5391,18 @@ class TradingStrategy:
             except Exception as _gdcb_exc:
                 logger.debug("Global Drawdown Circuit Breaker check skipped: %s", _gdcb_exc)
 
+        # ✅ LAYER 0d: PHASE 3 — ABNORMAL MARKET KILL SWITCH
+        # Automatically halts trading on flash crashes, extreme volatility,
+        # volume explosions, API error storms, or consecutive-loss streaks.
+        if ABNORMAL_MARKET_KS_AVAILABLE and hasattr(self, 'abnormal_market_ks') and self.abnormal_market_ks is not None:
+            try:
+                _aks_triggered, _aks_reason = self.abnormal_market_ks.check_and_trigger()
+                if _aks_triggered:
+                    logger.critical("🚨 PHASE 3 ABNORMAL MARKET KILL SWITCH ACTIVE: %s", _aks_reason)
+                    user_mode = True  # Block new entries until operator resets
+            except Exception as _aks_exc:
+                logger.debug("Abnormal Market Kill Switch check skipped: %s", _aks_exc)
+
         # CRITICAL SAFETY CHECK: Verify trading is allowed before ANY operations
         if self.safety:
             trading_allowed, reason = self.safety.is_trading_allowed()
@@ -6263,6 +6405,105 @@ class TradingStrategy:
                                                 logger.debug(
                                                     "ProfitLockSystem.update_position skipped for %s: %s",
                                                     symbol, _pls_upd_err,
+                                                )
+
+                                        # ═══════════════════════════════════════════════
+                                        # PHASE 3 — DYNAMIC STOP-LOSS TIGHTENER
+                                        # Ratchets the stop upward as the position profits.
+                                        # ═══════════════════════════════════════════════
+                                        if (
+                                            DYNAMIC_STOP_TIGHTENER_AVAILABLE
+                                            and hasattr(self, 'dynamic_stop_tightener')
+                                            and self.dynamic_stop_tightener is not None
+                                            and entry_price > 0
+                                        ):
+                                            try:
+                                                _pos_side_dst = position.get('side', 'long')
+                                                _init_stop_dst = position.get('stop_loss', 0.0)
+                                                _dst_result = self.dynamic_stop_tightener.update(
+                                                    position_id=symbol,
+                                                    current_price=current_price,
+                                                    entry_price=entry_price,
+                                                    initial_stop=_init_stop_dst if _init_stop_dst > 0 else None,
+                                                    side=_pos_side_dst,
+                                                )
+                                                if _dst_result.stop_moved:
+                                                    logger.info(
+                                                        "   📐 Phase 3 DynamicStop: %s stop "
+                                                        "%.4f → %.4f  [%s]",
+                                                        symbol,
+                                                        _dst_result.old_stop,
+                                                        _dst_result.new_stop,
+                                                        _dst_result.tightening_stage,
+                                                    )
+                                                    # Check if tightened stop is now hit
+                                                    _dst_side = _pos_side_dst.lower()
+                                                    _dst_stop_hit = (
+                                                        (_dst_side == 'long' and current_price <= _dst_result.new_stop)
+                                                        or (_dst_side == 'short' and current_price >= _dst_result.new_stop)
+                                                    )
+                                                    if _dst_stop_hit:
+                                                        positions_to_exit.append({
+                                                            'symbol': symbol,
+                                                            'quantity': quantity,
+                                                            'reason': (
+                                                                f"Phase 3 DynamicStop triggered: "
+                                                                f"stop={_dst_result.new_stop:.4f}  "
+                                                                f"[{_dst_result.tightening_stage}]"
+                                                            ),
+                                                            'broker': position_broker,
+                                                            'broker_label': broker_label,
+                                                        })
+                                            except Exception as _dst_exc:
+                                                logger.debug(
+                                                    "Phase 3 DynamicStop check skipped for %s: %s",
+                                                    symbol, _dst_exc,
+                                                )
+
+                                        # ═══════════════════════════════════════════════
+                                        # PHASE 3 — PARTIAL TP LADDER
+                                        # Take profits in tranches as price advances.
+                                        # ═══════════════════════════════════════════════
+                                        if (
+                                            PARTIAL_TP_LADDER_AVAILABLE
+                                            and hasattr(self, 'partial_tp_ladder')
+                                            and self.partial_tp_ladder is not None
+                                            and entry_price > 0
+                                            and quantity > 0
+                                        ):
+                                            try:
+                                                _pos_side_tpl = position.get('side', 'long')
+                                                _tpl_action = self.partial_tp_ladder.update(
+                                                    position_id=symbol,
+                                                    current_price=current_price,
+                                                    entry_price=entry_price,
+                                                    side=_pos_side_tpl,
+                                                )
+                                                if _tpl_action is not None:
+                                                    _tpl_qty = quantity * _tpl_action.exit_pct
+                                                    logger.info(
+                                                        "   💰 Phase 3 TPLadder: %s — %s triggered "
+                                                        "(+%.2f%%)  exit %.0f%% of position (%.8f units)",
+                                                        symbol,
+                                                        _tpl_action.label,
+                                                        _tpl_action.profit_pct,
+                                                        _tpl_action.exit_pct * 100,
+                                                        _tpl_qty,
+                                                    )
+                                                    positions_to_exit.append({
+                                                        'symbol': symbol,
+                                                        'quantity': _tpl_qty,
+                                                        'reason': (
+                                                            f"Phase 3 PartialTP {_tpl_action.label}: "
+                                                            f"+{_tpl_action.profit_pct:.2f}%"
+                                                        ),
+                                                        'broker': position_broker,
+                                                        'broker_label': broker_label,
+                                                    })
+                                            except Exception as _tpl_exc:
+                                                logger.debug(
+                                                    "Phase 3 PartialTPLadder check skipped for %s: %s",
+                                                    symbol, _tpl_exc,
                                                 )
 
                                         # ✅ USER-DEFINED TAKE-PROFIT / STOP-LOSS RULES
@@ -7940,6 +8181,17 @@ class TradingStrategy:
                                 error_counter += 1
                                 filter_stats['insufficient_data'] += 1
 
+                                # PHASE 3: Record API error in abnormal market detector
+                                if (
+                                    ABNORMAL_MARKET_KS_AVAILABLE
+                                    and hasattr(self, 'abnormal_market_ks')
+                                    and self.abnormal_market_ks is not None
+                                ):
+                                    try:
+                                        self.abnormal_market_ks.record_api_error()
+                                    except Exception:
+                                        pass
+
                                 # Degrade API health score on errors
                                 self.api_health_score = max(0, self.api_health_score - 5)
 
@@ -8000,6 +8252,27 @@ class TradingStrategy:
                                     )
                                 except Exception as _re_feed_err:
                                     logger.debug("Regime engine candle update failed for %s: %s", symbol, _re_feed_err)
+
+                            # PHASE 3: Feed bar into Abnormal Market Kill Switch detector
+                            if (
+                                ABNORMAL_MARKET_KS_AVAILABLE
+                                and hasattr(self, 'abnormal_market_ks')
+                                and self.abnormal_market_ks is not None
+                            ):
+                                try:
+                                    _aks_candle = df.iloc[-1]
+                                    self.abnormal_market_ks.update_market(
+                                        symbol=symbol,
+                                        close=float(_aks_candle['close']),
+                                        high=float(_aks_candle['high']),
+                                        low=float(_aks_candle['low']),
+                                        volume=float(_aks_candle['volume']) if 'volume' in df.columns else 0.0,
+                                    )
+                                except Exception as _aks_feed_err:
+                                    logger.debug(
+                                        "AbnormalMarketKillSwitch update_market failed for %s: %s",
+                                        symbol, _aks_feed_err,
+                                    )
 
                             # FIX #4: PAIR QUALITY FILTER - Check spread, volume, and ATR before analyzing
                             # Only run if check_pair_quality is available (imported at module level)
@@ -8251,7 +8524,60 @@ class TradingStrategy:
                                         except Exception as _wmx_err:
                                             logger.debug("Win Rate Maximizer approve_trade skipped for %s: %s", symbol, _wmx_err)
 
-                                # Publish platform signal so all user accounts can read it
+                                # ═══════════════════════════════════════════════════════
+                                # PHASE 3 — LAYER 4a: NEWS / EVENT VOLATILITY FILTER
+                                # ═══════════════════════════════════════════════════════
+                                # Block entries during news-driven volatility spikes.
+                                # Feed bar data to the filter EVERY cycle, then gate entries.
+                                if (
+                                    NEWS_VOLATILITY_FILTER_AVAILABLE
+                                    and hasattr(self, 'news_volatility_filter')
+                                    and self.news_volatility_filter is not None
+                                    and analysis.get('action') in ('enter_long', 'enter_short')
+                                ):
+                                    try:
+                                        _nvf = self.news_volatility_filter
+                                        # Feed current bar
+                                        _last_close = float(df['close'].iloc[-1]) if 'close' in df.columns and len(df) > 0 else 0.0
+                                        _last_vol   = float(df['volume'].iloc[-1]) if 'volume' in df.columns and len(df) > 0 else 0.0
+                                        _nvf.update(symbol=symbol, close=_last_close, volume=_last_vol)
+                                        # Check if entry allowed
+                                        _nvf_ok, _nvf_reason = _nvf.can_enter(symbol=symbol)
+                                        if not _nvf_ok:
+                                            logger.info(
+                                                "   📰 PHASE 3 News/Volatility Filter BLOCKED %s: %s",
+                                                symbol, _nvf_reason,
+                                            )
+                                            analysis = {'action': 'hold', 'reason': f'NewsVolatilityFilter: {_nvf_reason}'}
+                                    except Exception as _nvf_exc:
+                                        logger.debug("News Volatility Filter check skipped for %s: %s", symbol, _nvf_exc)
+
+                                # ═══════════════════════════════════════════════════════
+                                # PHASE 3 — LAYER 4b: MULTI-TIMEFRAME CONFIRMATION AI
+                                # ═══════════════════════════════════════════════════════
+                                # Only allow entry when higher timeframes agree on direction.
+                                if (
+                                    MTF_CONFIRMATION_AVAILABLE
+                                    and hasattr(self, 'mtf_confirmation')
+                                    and self.mtf_confirmation is not None
+                                    and analysis.get('action') in ('enter_long', 'enter_short')
+                                ):
+                                    try:
+                                        _mtf_side = (
+                                            'long' if analysis.get('action') == 'enter_long'
+                                            else 'short'
+                                        )
+                                        _mtf_result = self.mtf_confirmation.confirm(df=df, signal_side=_mtf_side)
+                                        if not _mtf_result.confirmed:
+                                            logger.info(
+                                                "   🔭 PHASE 3 MTF Confirmation BLOCKED %s: %s",
+                                                symbol, _mtf_result.summary,
+                                            )
+                                            analysis = {'action': 'hold', 'reason': f'MTFConfirmation: {_mtf_result.summary}'}
+                                    except Exception as _mtf_exc:
+                                        logger.debug("MTF Confirmation check skipped for %s: %s", symbol, _mtf_exc)
+
+
                                 if MASTER_STRATEGY_ROUTER_AVAILABLE and get_master_strategy_router:
                                     try:
                                         _msr = get_master_strategy_router()
@@ -9711,6 +10037,66 @@ class TradingStrategy:
                                         )
 
                                 # ═══════════════════════════════════════════════════════
+                                # PHASE 3 — DYNAMIC STOP TIGHTENER + PARTIAL TP LADDER
+                                # Register new position with Phase 3 position managers.
+                                # ═══════════════════════════════════════════════════════
+                                _p3_entry_price = float(
+                                    _ps_analysis.get('entry_price')
+                                    or _ps_analysis.get('price')
+                                    or 0.0
+                                )
+                                _p3_stop = float(
+                                    _ps_analysis.get('stop_loss')
+                                    or _ps_analysis.get('stop')
+                                    or 0.0
+                                )
+                                _p3_side = 'long' if _ps_action == 'enter_long' else 'short'
+                                if _p3_entry_price > 0:
+                                    if (
+                                        DYNAMIC_STOP_TIGHTENER_AVAILABLE
+                                        and hasattr(self, 'dynamic_stop_tightener')
+                                        and self.dynamic_stop_tightener is not None
+                                        and _p3_stop > 0
+                                    ):
+                                        try:
+                                            self.dynamic_stop_tightener.register_position(
+                                                position_id=_ps_symbol,
+                                                entry_price=_p3_entry_price,
+                                                initial_stop=_p3_stop,
+                                                side=_p3_side,
+                                            )
+                                            logger.debug(
+                                                "Phase 3 DynamicStopTightener: registered %s",
+                                                _ps_symbol,
+                                            )
+                                        except Exception as _dst_reg_err:
+                                            logger.debug(
+                                                "Phase 3 DynamicStopTightener.register_position skipped: %s",
+                                                _dst_reg_err,
+                                            )
+
+                                    if (
+                                        PARTIAL_TP_LADDER_AVAILABLE
+                                        and hasattr(self, 'partial_tp_ladder')
+                                        and self.partial_tp_ladder is not None
+                                    ):
+                                        try:
+                                            self.partial_tp_ladder.register_position(
+                                                position_id=_ps_symbol,
+                                                entry_price=_p3_entry_price,
+                                                side=_p3_side,
+                                            )
+                                            logger.debug(
+                                                "Phase 3 PartialTPLadder: registered %s",
+                                                _ps_symbol,
+                                            )
+                                        except Exception as _tpl_reg_err:
+                                            logger.debug(
+                                                "Phase 3 PartialTPLadder.register_position skipped: %s",
+                                                _tpl_reg_err,
+                                            )
+
+                                # ═══════════════════════════════════════════════════════
                                 # COPY TRADE ENGINE — broadcast platform trade to users
                                 # Only the platform account triggers copy broadcasting.
                                 # ═══════════════════════════════════════════════════════
@@ -10155,7 +10541,19 @@ class TradingStrategy:
                 self.global_drawdown_cb.record_trade(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _gdcb_rt_err:
                 logger.debug("Global Drawdown CB record_trade skipped for %s: %s", symbol, _gdcb_rt_err)
-        # 📈 CAPITAL SCALING ENGINE — record trade for auto-compounding and drawdown tracking
+
+        # PHASE 3 — Abnormal Market Kill Switch: feed trade outcome
+        if hasattr(self, 'abnormal_market_ks') and self.abnormal_market_ks is not None:
+            try:
+                self.abnormal_market_ks.record_trade(pnl_usd=profit_usd, is_win=is_win)
+                # Also de-register closed position from Phase 3 managers
+                if hasattr(self, 'dynamic_stop_tightener') and self.dynamic_stop_tightener is not None:
+                    self.dynamic_stop_tightener.remove_position(symbol)
+                if hasattr(self, 'partial_tp_ladder') and self.partial_tp_ladder is not None:
+                    self.partial_tp_ladder.remove_position(symbol)
+            except Exception as _aks_rt_err:
+                logger.debug("Phase 3 AbnormalMarketKS record_trade skipped for %s: %s", symbol, _aks_rt_err)
+
         if hasattr(self, 'capital_scaling_engine') and self.capital_scaling_engine is not None:
             try:
                 _fees = abs(profit_usd) * _TRADING_FEE_PCT  # approximate exchange fees
