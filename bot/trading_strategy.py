@@ -821,6 +821,89 @@ except ImportError:
         get_ai_strategy_evolution_engine = None
         logger.warning("⚠️ AI Strategy Evolution Engine not available - strategy mutation disabled")
 
+# ── Phase 2: Adaptive Take-Profit Scaling ─────────────────────────────────────
+# Dynamically expands/contracts profit targets based on trend strength &
+# volatility so winners are locked more aggressively in strong trends.
+try:
+    from adaptive_profit_target_engine import (
+        get_adaptive_profit_engine,
+        AdaptiveProfitTargetEngine,
+    )
+    ADAPTIVE_TP_AVAILABLE = True
+    logger.info("✅ Adaptive TP Engine loaded — dynamic profit-target scaling active")
+except ImportError:
+    try:
+        from bot.adaptive_profit_target_engine import (
+            get_adaptive_profit_engine,
+            AdaptiveProfitTargetEngine,
+        )
+        ADAPTIVE_TP_AVAILABLE = True
+        logger.info("✅ Adaptive TP Engine loaded — dynamic profit-target scaling active")
+    except ImportError:
+        ADAPTIVE_TP_AVAILABLE = False
+        get_adaptive_profit_engine = None
+        AdaptiveProfitTargetEngine = None
+        logger.warning("⚠️ Adaptive TP Engine not available — static profit targets in use")
+
+# ── Phase 2: Trade Clustering — stack wins in strong trends ───────────────────
+# Increases position size during confirmed trending phases where the bot has
+# accumulated consecutive wins, safely ramping back to 1× on the first loss.
+try:
+    from trade_cluster_engine import get_trade_cluster_engine, TradeClusterEngine
+    TRADE_CLUSTER_AVAILABLE = True
+    logger.info("✅ Trade Cluster Engine loaded — trend-stacking active")
+except ImportError:
+    try:
+        from bot.trade_cluster_engine import get_trade_cluster_engine, TradeClusterEngine
+        TRADE_CLUSTER_AVAILABLE = True
+        logger.info("✅ Trade Cluster Engine loaded — trend-stacking active")
+    except ImportError:
+        TRADE_CLUSTER_AVAILABLE = False
+        get_trade_cluster_engine = None
+        TradeClusterEngine = None
+        logger.warning("⚠️ Trade Cluster Engine not available — trend-stacking disabled")
+
+# ── Phase 2: AI Confidence-Based Position Sizing ──────────────────────────────
+# Scores every trade on a 0-100 scale and scales position size proportionally
+# so high-conviction setups receive more capital than marginal ones.
+try:
+    from ai_trade_confidence_engine import get_ai_trade_confidence_engine
+    AI_CONFIDENCE_SIZING_AVAILABLE = True
+    logger.info("✅ AI Confidence Engine loaded — confidence-based position sizing active")
+except ImportError:
+    try:
+        from bot.ai_trade_confidence_engine import get_ai_trade_confidence_engine
+        AI_CONFIDENCE_SIZING_AVAILABLE = True
+        logger.info("✅ AI Confidence Engine loaded — confidence-based position sizing active")
+    except ImportError:
+        AI_CONFIDENCE_SIZING_AVAILABLE = False
+        get_ai_trade_confidence_engine = None
+        logger.warning("⚠️ AI Confidence Engine not available — confidence sizing disabled")
+
+# ── Phase 2: Capital Routing Across Multiple Brokers ──────────────────────────
+# Continuously monitors broker performance scores and shifts capital allocation
+# weights toward the best-performing brokers via EMA blending + hysteresis.
+try:
+    from auto_broker_capital_shifter import (
+        get_auto_broker_capital_shifter,
+        ShiftPolicy,
+    )
+    AUTO_BROKER_SHIFTER_AVAILABLE = True
+    logger.info("✅ Auto Broker Capital Shifter loaded — multi-broker routing active")
+except ImportError:
+    try:
+        from bot.auto_broker_capital_shifter import (
+            get_auto_broker_capital_shifter,
+            ShiftPolicy,
+        )
+        AUTO_BROKER_SHIFTER_AVAILABLE = True
+        logger.info("✅ Auto Broker Capital Shifter loaded — multi-broker routing active")
+    except ImportError:
+        AUTO_BROKER_SHIFTER_AVAILABLE = False
+        get_auto_broker_capital_shifter = None
+        ShiftPolicy = None
+        logger.warning("⚠️ Auto Broker Capital Shifter not available — equal broker weighting")
+
 load_dotenv()
 
 # Position adoption safety constants
@@ -2105,6 +2188,64 @@ class TradingStrategy:
                 self.ai_strategy_evolution_engine = None
         else:
             self.ai_strategy_evolution_engine = None
+
+        # ── Phase 2: Adaptive Take-Profit Scaling ─────────────────────────────
+        if ADAPTIVE_TP_AVAILABLE and get_adaptive_profit_engine is not None:
+            try:
+                self.adaptive_tp_engine = get_adaptive_profit_engine()
+                logger.info("✅ Phase 2 — Adaptive TP Engine initialized")
+            except Exception as _ate_err:
+                logger.warning("⚠️ Failed to initialize Adaptive TP Engine: %s", _ate_err)
+                self.adaptive_tp_engine = None
+        else:
+            self.adaptive_tp_engine = None
+
+        # ── Phase 2: Trade Clustering ──────────────────────────────────────────
+        if TRADE_CLUSTER_AVAILABLE and get_trade_cluster_engine is not None:
+            try:
+                self.trade_cluster_engine = get_trade_cluster_engine()
+                logger.info("✅ Phase 2 — Trade Cluster Engine initialized")
+            except Exception as _tce_err:
+                logger.warning("⚠️ Failed to initialize Trade Cluster Engine: %s", _tce_err)
+                self.trade_cluster_engine = None
+        else:
+            self.trade_cluster_engine = None
+
+        # ── Phase 2: AI Confidence-Based Position Sizing ──────────────────────
+        if AI_CONFIDENCE_SIZING_AVAILABLE and get_ai_trade_confidence_engine is not None:
+            try:
+                self.ai_confidence_engine = get_ai_trade_confidence_engine()
+                logger.info("✅ Phase 2 — AI Confidence Engine initialized")
+            except Exception as _ace_err:
+                logger.warning("⚠️ Failed to initialize AI Confidence Engine: %s", _ace_err)
+                self.ai_confidence_engine = None
+        else:
+            self.ai_confidence_engine = None
+
+        # ── Phase 2: Auto Broker Capital Shifter ──────────────────────────────
+        if AUTO_BROKER_SHIFTER_AVAILABLE and get_auto_broker_capital_shifter is not None:
+            try:
+                self.broker_capital_shifter = get_auto_broker_capital_shifter()
+                # Pre-register known broker names with equal initial allocation.
+                # The shifter will reweight them as real performance data arrives.
+                _known_brokers = [
+                    b.value for b in BrokerType
+                    if b.value in ("coinbase", "kraken", "binance", "okx")
+                ]
+                for _b in _known_brokers:
+                    try:
+                        self.broker_capital_shifter.register_broker(
+                            _b,
+                            initial_allocation=round(1.0 / len(_known_brokers), 4),
+                        )
+                    except Exception:
+                        pass
+                logger.info("✅ Phase 2 — Auto Broker Capital Shifter initialized")
+            except Exception as _abcs_err:
+                logger.warning("⚠️ Failed to initialize Auto Broker Capital Shifter: %s", _abcs_err)
+                self.broker_capital_shifter = None
+        else:
+            self.broker_capital_shifter = None
 
         # FIX #2: Initialize forced stop-loss executor
         try:
@@ -8901,6 +9042,51 @@ class TradingStrategy:
                                         logger.debug("Regime Capital Allocator skipped for %s: %s", symbol, _rca_err)
 
                                 # ═══════════════════════════════════════════════════════
+                                # PHASE 2: ADAPTIVE TAKE-PROFIT SCALING
+                                # Dynamically expands profit targets in strong trends and
+                                # contracts them in weak/diverging conditions so that
+                                # winners are locked in more aggressively.
+                                # ═══════════════════════════════════════════════════════
+                                if ADAPTIVE_TP_AVAILABLE and hasattr(self, 'adaptive_tp_engine') and self.adaptive_tp_engine is not None:
+                                    try:
+                                        _atp_entry = analysis.get('entry_price', 0.0) or float(df['close'].iloc[-1])
+                                        _atp_side = "long" if action == "enter_long" else "short"
+                                        _atp_indicators = getattr(self, '_last_indicators', {}) or {}
+                                        _atp_regime = "normal"
+                                        if MARKET_REGIME_ENGINE_AVAILABLE and hasattr(self, 'regime_engine') and self.regime_engine is not None:
+                                            try:
+                                                _re_val = self.regime_engine.current_regime
+                                                _atp_regime = str(_re_val.value).lower() if hasattr(_re_val, 'value') else str(_re_val).lower()
+                                            except Exception:
+                                                pass
+                                        _atp_atr = float(analysis.get('atr', 0.0) or 0.0) or None
+                                        _atp_result = self.adaptive_tp_engine.calculate_adaptive_targets(
+                                            entry_price=_atp_entry,
+                                            side=_atp_side,
+                                            df=df,
+                                            indicators=_atp_indicators,
+                                            current_regime=_atp_regime,
+                                            atr=_atp_atr,
+                                        )
+                                        # Replace the primary take-profit in analysis with the
+                                        # adaptive TP3 target (3% base, scaled by trend + vol).
+                                        _atp_targets = _atp_result.get('targets', {})
+                                        if _atp_targets:
+                                            _atp_primary = _atp_targets.get('tp3') or _atp_targets.get('tp2') or _atp_targets.get('tp1')
+                                            if _atp_primary and _atp_primary.get('price'):
+                                                analysis['take_profit'] = [_atp_primary['price']]
+                                                _atp_mult = _atp_result.get('combined_multiplier', 1.0)
+                                                logger.info(
+                                                    f"   🎯 {symbol}: Adaptive TP "
+                                                    f"({_atp_result.get('trend_strength', '?').upper()} trend "
+                                                    f"{_atp_mult:.2f}× mult) → "
+                                                    f"${_atp_primary['price']:.4f} "
+                                                    f"({_atp_primary['percentage']*100:.2f}%)"
+                                                )
+                                    except Exception as _atp_err:
+                                        logger.debug("Adaptive TP Engine skipped for %s: %s", symbol, _atp_err)
+
+                                # ═══════════════════════════════════════════════════════
                                 # MARKET REGIME ENGINE — bull / chop / crash aggression
                                 # Applies per-candle BULL/CHOP/CRASH behaviour multipliers
                                 # sourced from the MarketRegimeEngine singleton (ATR ratio +
@@ -9177,6 +9363,119 @@ class TradingStrategy:
                                             "GlobalCapitalManager allocation skipped for %s: %s",
                                             symbol, _gcm_err,
                                         )
+
+                                # ═══════════════════════════════════════════════════════
+                                # PHASE 2: AI CONFIDENCE-BASED POSITION SIZING
+                                # Scale position size proportionally to trade confidence
+                                # score (0–100).  High-conviction setups (≥80) get a 10%
+                                # boost; low-conviction setups (< 65) are reduced.
+                                # ═══════════════════════════════════════════════════════
+                                if AI_CONFIDENCE_SIZING_AVAILABLE and hasattr(self, 'ai_confidence_engine') and self.ai_confidence_engine is not None:
+                                    try:
+                                        _conf_side = "long" if action == "enter_long" else "short"
+                                        _conf_indicators = getattr(self, '_last_indicators', {}) or {}
+                                        _conf_result = self.ai_confidence_engine.evaluate(
+                                            df=df,
+                                            indicators=_conf_indicators,
+                                            side=_conf_side,
+                                            symbol=symbol,
+                                        )
+                                        _conf_score = _conf_result.get("score", 65.0)
+                                        _conf_action = _conf_result.get("recommended_action", "EXECUTE")
+
+                                        # Block trades where confidence engine recommends SKIP
+                                        if _conf_action == "SKIP":
+                                            logger.info(
+                                                f"   🧠 {symbol}: AI Confidence SKIP "
+                                                f"(score={_conf_score:.1f}/100) — "
+                                                f"{_conf_result.get('reason', '')}"
+                                            )
+                                            filter_stats['market_filter'] = (
+                                                filter_stats.get('market_filter', 0) + 1
+                                            )
+                                            continue
+
+                                        # Scale position size by confidence: 0.65→1.0 maps to 0.80×→1.10×
+                                        _conf_min_score = 65.0
+                                        _conf_max_score = 100.0
+                                        _conf_min_mult = 0.80
+                                        _conf_max_mult = 1.10
+                                        _normalized = max(0.0, min(1.0, (_conf_score - _conf_min_score) / (_conf_max_score - _conf_min_score)))
+                                        _conf_mult = _conf_min_mult + (_conf_max_mult - _conf_min_mult) * _normalized
+                                        if abs(_conf_mult - 1.0) >= 0.01:
+                                            _pre_conf = position_size
+                                            position_size *= _conf_mult
+                                            logger.info(
+                                                f"   🧠 {symbol}: AI Confidence sizing "
+                                                f"(score={_conf_score:.1f}/100 → {_conf_mult:.2f}×) "
+                                                f"${_pre_conf:.2f} → ${position_size:.2f}"
+                                            )
+                                    except Exception as _conf_err:
+                                        logger.debug("AI Confidence sizing skipped for %s: %s", symbol, _conf_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # PHASE 2: TRADE CLUSTERING — stack wins in strong trends
+                                # When the bot has accumulated consecutive wins in a BULL
+                                # regime with high ADX, ramp up position size by up to
+                                # 1.5× to concentrate capital into the trend.
+                                # ═══════════════════════════════════════════════════════
+                                if TRADE_CLUSTER_AVAILABLE and hasattr(self, 'trade_cluster_engine') and self.trade_cluster_engine is not None:
+                                    try:
+                                        _cluster_adx = float(analysis.get('adx', 0.0) or 0.0)
+                                        _cluster_regime = "UNKNOWN"
+                                        if MARKET_REGIME_ENGINE_AVAILABLE and hasattr(self, 'regime_engine') and self.regime_engine is not None:
+                                            try:
+                                                _re = self.regime_engine.current_regime
+                                                _cluster_regime = str(_re.value) if hasattr(_re, 'value') else str(_re)
+                                            except Exception:
+                                                pass
+                                        _cluster_mult = self.trade_cluster_engine.get_cluster_multiplier(
+                                            adx=_cluster_adx,
+                                            regime=_cluster_regime,
+                                        )
+                                        if _cluster_mult > 1.0:
+                                            _pre_cluster = position_size
+                                            position_size *= _cluster_mult
+                                            _cluster_status = self.trade_cluster_engine.get_status()
+                                            logger.info(
+                                                f"   🔗 {symbol}: Trade Cluster ({_cluster_status.state}) "
+                                                f"consecutive_wins={_cluster_status.consecutive_wins} "
+                                                f"({_cluster_mult:.2f}×) "
+                                                f"${_pre_cluster:.2f} → ${position_size:.2f}"
+                                            )
+                                    except Exception as _cluster_err:
+                                        logger.debug("Trade Cluster sizing skipped for %s: %s", symbol, _cluster_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # PHASE 2: CAPITAL ROUTING ACROSS BROKERS
+                                # Apply the broker-specific allocation weight so capital
+                                # flows toward best-performing brokers over time.
+                                # ═══════════════════════════════════════════════════════
+                                if AUTO_BROKER_SHIFTER_AVAILABLE and hasattr(self, 'broker_capital_shifter') and self.broker_capital_shifter is not None:
+                                    try:
+                                        _broker_label = self._get_broker_name(active_broker)
+                                        _broker_allocs = self.broker_capital_shifter.get_allocations()
+                                        if _broker_allocs and _broker_label in _broker_allocs:
+                                            _num_brokers = len(_broker_allocs)
+                                            _equal_share = 1.0 / _num_brokers if _num_brokers > 0 else 1.0
+                                            _broker_alloc = _broker_allocs[_broker_label]
+                                            # Convert allocation fraction to a multiplier relative to
+                                            # the equal-share baseline so a well-performing broker
+                                            # gets a multiplier > 1.0 and a poor broker gets < 1.0.
+                                            _broker_mult = _broker_alloc / _equal_share if _equal_share > 0 else 1.0
+                                            # Clamp to a sensible range
+                                            _broker_mult = max(0.50, min(2.0, _broker_mult))
+                                            if abs(_broker_mult - 1.0) >= 0.02:
+                                                _pre_broker = position_size
+                                                position_size *= _broker_mult
+                                                logger.info(
+                                                    f"   🏦 {symbol}: Broker Capital Routing "
+                                                    f"({_broker_label} alloc={_broker_alloc:.1%} "
+                                                    f"mult={_broker_mult:.2f}×) "
+                                                    f"${_pre_broker:.2f} → ${position_size:.2f}"
+                                                )
+                                    except Exception as _bcs_err:
+                                        logger.debug("Broker Capital Shifter sizing skipped for %s: %s", symbol, _bcs_err)
 
                                 # Calculate dynamic minimum based on account balance and
                                 # brokerage-specific minimums (Option B – prevent dust at creation)
@@ -10329,6 +10628,33 @@ class TradingStrategy:
                         logger.debug("AI evolution cycle skipped: %s", _evo_err)
             except Exception as _asee_rec_err:
                 logger.debug("AI Strategy Evolution record_trade skipped for %s: %s", symbol, _asee_rec_err)
+
+        # ── Phase 2: Trade Clustering — record outcome ─────────────────────
+        if TRADE_CLUSTER_AVAILABLE and hasattr(self, 'trade_cluster_engine') and self.trade_cluster_engine is not None:
+            try:
+                self.trade_cluster_engine.record_outcome(is_win=is_win, pnl_usd=profit_usd)
+            except Exception as _tce_rec_err:
+                logger.debug("Trade Cluster Engine record_outcome skipped for %s: %s", symbol, _tce_rec_err)
+
+        # ── Phase 2: Adaptive TP — record win streak for streak multiplier ──
+        if ADAPTIVE_TP_AVAILABLE and hasattr(self, 'adaptive_tp_engine') and self.adaptive_tp_engine is not None:
+            try:
+                self.adaptive_tp_engine.record_trade_result(is_win=is_win)
+            except Exception as _atp_rec_err:
+                logger.debug("Adaptive TP Engine record_trade_result skipped for %s: %s", symbol, _atp_rec_err)
+
+        # ── Phase 2: Auto Broker Capital Shifter — periodic evaluation ──────
+        # Evaluate on every closed trade so allocations stay current.
+        if AUTO_BROKER_SHIFTER_AVAILABLE and hasattr(self, 'broker_capital_shifter') and self.broker_capital_shifter is not None:
+            try:
+                _shift_result = self.broker_capital_shifter.evaluate()
+                if _shift_result.shifted:
+                    logger.info(
+                        "🔀 Broker Capital Shift applied — %s",
+                        _shift_result.reason,
+                    )
+            except Exception as _bcs_rec_err:
+                logger.debug("Auto Broker Capital Shifter evaluate skipped after trade: %s", _bcs_rec_err)
 
         if not self.advanced_manager:
             return
