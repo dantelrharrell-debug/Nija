@@ -1596,6 +1596,16 @@ def get_balance_based_max_positions(balance: float) -> int:
 MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_dynamic_min_position_size() instead)
 MIN_BALANCE_TO_TRADE_USD = 10.0  # Minimum account balance to allow trading ($10 matches minimum position size)
 
+# ── FIRST TRADE FORCE TRIGGER ──────────────────────────────────────────────
+# After this many consecutive zero-signal cycles while the first trade has not
+# yet been confirmed, the force trigger activates and bypasses soft gates
+# (regime controller, score threshold) so capital is deployed promptly.
+# Overridable via FIRST_TRADE_FORCE_TIMEOUT_CYCLES env var.
+try:
+    FIRST_TRADE_FORCE_TIMEOUT_CYCLES = int(os.getenv('FIRST_TRADE_FORCE_TIMEOUT_CYCLES', '3'))
+except ValueError:
+    FIRST_TRADE_FORCE_TIMEOUT_CYCLES = 3
+
 # ── MICRO ACCOUNT PERFORMANCE BOOSTERS (Mar 2026) ─────────────────────────
 # Four features designed to maximise growth for small accounts.  They operate
 # independently but can activate simultaneously for accounts ≤ $500.
@@ -2353,7 +2363,12 @@ class TradingStrategy:
         # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────────
         # Forces an initial deployment signal on cycle 0 when balance is healthy,
         # so the bot never stalls silently on fresh startup.
+        # Both flags are read and written only inside run_cycle(), which is called
+        # from a single dedicated trading-loop thread — no lock needed.
         self._first_trade_executed: bool = False  # set True after first confirmed entry
+        # Activated after FIRST_TRADE_FORCE_TIMEOUT_CYCLES consecutive zero-signal
+        # cycles before the first trade — bypasses regime controller and score gates.
+        self._first_trade_force_active: bool = False
 
         # Zero-signal streak tracking (Leak #4 — over-filter monitor)
         # Count consecutive cycles where no qualifying entry signal was found.
@@ -5953,9 +5968,11 @@ class TradingStrategy:
             account_balance = balance_data.get('trading_balance', 0.0) or 0.0
 
             # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────
-            # On cycle 0 (fresh startup), if the account has sufficient balance and
-            # no positions are open yet, force entry-mode so the bot deploys capital
-            # right away rather than waiting for warmup/filter ramp-up to finish.
+            # Two paths both result in _first_trade_override = True, which expands
+            # the market scan to the full list so the bot deploys capital promptly:
+            #   1. Cycle 0 (fresh startup) with sufficient balance.
+            #   2. Any later cycle where the force trigger is active (set after
+            #      FIRST_TRADE_FORCE_TIMEOUT_CYCLES consecutive zero-signal cycles).
             if (
                 not self._first_trade_executed
                 and getattr(self, 'cycle_count', 0) == 0
@@ -5963,6 +5980,18 @@ class TradingStrategy:
                 and not user_mode
             ):
                 logger.info("🚀 FIRST TRADE GUARANTEE: cycle 0 — forcing entry scan to deploy capital")
+                _first_trade_override = True
+            elif (
+                not self._first_trade_executed
+                and self._first_trade_force_active
+                and account_balance >= MIN_BALANCE_TO_TRADE_USD
+                and not user_mode
+            ):
+                logger.warning(
+                    "🚨 FIRST TRADE FORCE TRIGGER: expanding market scan to full list "
+                    "(zero-signal streak=%d, bypassing regime + score gates)",
+                    self._zero_signal_streak,
+                )
                 _first_trade_override = True
             else:
                 _first_trade_override = False
@@ -9052,12 +9081,19 @@ class TradingStrategy:
                                 # The regime controller evaluates the GLOBAL market
                                 # environment after the scan loop.  Its decision from
                                 # the PREVIOUS cycle is used here to gate entries.
+                                # Exception: bypass regime block when the first-trade
+                                # force trigger is active so initial capital is deployed.
                                 if not _regime_entries_allowed:
-                                    logger.info(
-                                        f"   🚫 {symbol}: REGIME BLOCK — {_regime_result.reason if _regime_result else 'unfavorable market conditions'}"
-                                    )
-                                    filter_stats['market_filter'] += 1
-                                    continue
+                                    if not self._first_trade_executed and self._first_trade_force_active:
+                                        logger.info(
+                                            f"   ⚡ {symbol}: REGIME BLOCK overridden by first-trade force trigger"
+                                        )
+                                    else:
+                                        logger.info(
+                                            f"   🚫 {symbol}: REGIME BLOCK — {_regime_result.reason if _regime_result else 'unfavorable market conditions'}"
+                                        )
+                                        filter_stats['market_filter'] += 1
+                                        continue
 
                                 # Apply regime-based position-size multiplier
                                 if _regime_size_multiplier != 1.0 and _regime_size_multiplier > 0:
@@ -10270,6 +10306,7 @@ class TradingStrategy:
                                 # Mark first trade as executed (first-trade guarantee flag)
                                 if not self._first_trade_executed:
                                     self._first_trade_executed = True
+                                    self._first_trade_force_active = False  # force trigger no longer needed
                                     logger.info("🚀 FIRST TRADE GUARANTEE: initial deployment confirmed ✅")
 
                                 # 🔒 PROFIT LOCK SYSTEM — register new position for ratchet tracking
@@ -10484,6 +10521,25 @@ class TradingStrategy:
                             "   → Zero-signal streak: %d cycle(s)", self._zero_signal_streak
                         )
                         logger.info("   → Will continue monitoring markets...")
+
+                        # ── FIRST TRADE FORCE TRIGGER activation ──────────────
+                        # If the bot still hasn't placed its first trade and the
+                        # zero-signal streak has reached the configured timeout,
+                        # activate the force trigger so the next cycle bypasses
+                        # the regime controller and score-threshold gates.
+                        if (
+                            not self._first_trade_executed
+                            and not self._first_trade_force_active
+                            and self._zero_signal_streak >= FIRST_TRADE_FORCE_TIMEOUT_CYCLES
+                        ):
+                            self._first_trade_force_active = True
+                            logger.warning(
+                                "🚨 FIRST TRADE FORCE TRIGGER ACTIVATED — %d consecutive cycles "
+                                "with no entry signal. Regime controller and score-threshold gates "
+                                "will be bypassed until the first trade executes.",
+                                self._zero_signal_streak,
+                            )
+
                         if self._zero_signal_streak >= self._zero_signal_alert_threshold:
                             _filterable = [
                                 (k, v) for k, v in filter_stats.items()
