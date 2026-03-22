@@ -97,7 +97,7 @@ ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol
 
 MAX_CONCURRENT_TRADES = 4   # Maximum simultaneous open trades
 CAPITAL_PER_TRADE = 20.0    # Percentage of total capital allocated per trade (%)
-ENTRY_SCAN_INTERVAL = 20    # Seconds between entry-opportunity scans
+ENTRY_SCAN_INTERVAL = 15    # Seconds between entry-opportunity scans (was 20 – faster for micro growth)
 MONITOR_INTERVAL = 45       # Seconds between open-position monitoring cycles
 
 # ============================================================================
@@ -119,15 +119,16 @@ EQUITY_WEIGHT = 0.30
 # SIGNAL FILTERING
 # ============================================================================
 
-MIN_SIGNAL_SCORE = 0.75  # Minimum signal quality score (75%)
-MIN_AI_CONFIDENCE = 0.70  # Minimum AI confidence level (70%)
+MIN_SIGNAL_SCORE = 0.68  # Minimum signal quality score on 0-1 scale (was 0.75). NOTE: this is overridden
+                         # by the 0-100 scale MIN_SIGNAL_SCORE in the ADVANCED OPTIMIZATION block below.
+MIN_AI_CONFIDENCE = 0.65  # Minimum AI confidence level (65% — was 70%, more signals while maintaining quality gate)
 MIN_RISK_REWARD = 1.8  # Minimum risk/reward ratio
 
 # ============================================================================
 # TRADING PAIRS
 # ============================================================================
 
-TRADE_ONLY = ["BTC", "ETH", "SOL"]  # Only trade these major cryptocurrencies
+TRADE_ONLY = ["BTC", "ETH", "SOL", "XRP", "ADA"]  # Major liquid cryptocurrencies (expanded for more opportunities)
 
 # ============================================================================
 # ADVANCED FEATURES
@@ -155,7 +156,7 @@ MAX_CONSECUTIVE_LOSSES = 3  # Maximum consecutive losses before pause
 # CAPITAL ALLOCATION
 # ============================================================================
 
-FORCE_CASH_BUFFER = 15.0  # Keep 15% of capital unallocated
+FORCE_CASH_BUFFER = 10.0  # Keep 10% of capital unallocated (was 15% — deploy more capital for faster growth)
 
 # ============================================================================
 # EXCHANGE PRIORITY
@@ -176,49 +177,49 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 #
 #   - max_positions    = 1      (one trade at a time — maximum concentration)
 #   - position_size    = 90%    (maximise capital per trade; e.g. $39 of a $43 account)
-#   - profit_target    = 3.0%   (meaningful per-trade gain to compound quickly)
-#   - stop_loss        = 1.5%   (half of profit target → 2:1 R:R ratio)
-#   - trade_cooldown   = 900s   (15-min per-symbol re-entry gate)
+#   - profit_target    = 2.5%   (realistic per-trade target to compound quickly)
+#   - stop_loss        = 1.5%   (below profit target → ≥1.67:1 R:R ratio)
+#   - trade_cooldown   = 600s   (10-min per-symbol re-entry gate — was 15 min)
 #
 # Adaptive Profit Scaling:
-#   The profit target may scale UP above the 3.0% base during favourable
+#   The profit target may scale UP above the 2.5% base during favourable
 #   conditions (consecutive wins, elevated volatility). The base target is
-#   always the floor — it never drops below 3.0%.
+#   always the floor — it never drops below 2.5%.
 #   Scale caps at MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT (8.0%).
 #   - profit_target    = base_target + spread + streak_bonus  (fully dynamic)
-#                          base_target  = 3.0%
+#                          base_target  = 2.5%
 #                          spread       = current market spread
 #                          streak_bonus = +0.2% per consecutive win (capped at +1.0%)
 #                          After any loss: win_streak resets to 0 → no streak bonus
-#   - stop_loss        = 1.5%   (half of base profit target → 2:1 R:R ratio on base)
-#   - trade_cooldown   = 900s   (15-min per-symbol cooldown between trades)
+#   - stop_loss        = 1.5%   (below base profit target → ≥1.67:1 R:R ratio on base)
+#   - trade_cooldown   = 600s   (10-min per-symbol cooldown between trades)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
 MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position — maximum capital concentration
 MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 90.0   # 90% of capital per trade (maximise compounding speed)
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 3.0    # 3.0% profit target (floor — do not lower)
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (2:1 R:R)
-MICRO_CAP_TRADE_COOLDOWN = 900                   # 15-min per-symbol re-entry gate
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R)
+MICRO_CAP_TRADE_COOLDOWN = 600                   # 10-min per-symbol re-entry gate (was 900 s / 15 min)
 
 # Tiered profit targets for micro-cap compounding mode
-MICRO_CAP_TP1_PCT = 3.0   # Target 1: 3.0% — partial exit + activate trailing stop
-MICRO_CAP_TP2_PCT = 4.5   # Target 2: 4.5% — second partial exit
+MICRO_CAP_TP1_PCT = 2.5   # Target 1: 2.5% — partial exit + activate trailing stop (was 3.0%)
+MICRO_CAP_TP2_PCT = 3.5   # Target 2: 3.5% — second partial exit (was 4.5%)
 MICRO_CAP_TP3_PCT = 6.0   # Target 3: 6.0% — final exit / full runner target
-MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT = 3.0  # Trailing stop activates after 3% profit (TP1)
+MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT = 2.5  # Trailing stop activates after 2.5% profit (was 3.0%)
 
 # Adaptive Profit Scaling — scales target UP in favourable conditions only
 MICRO_CAP_ADAPTIVE_PROFIT_SCALING = True         # Enable adaptive profit scaling
-MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT = 3.0          # Minimum profit target (equals base — never lower)
+MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT = 2.5          # Minimum profit target (equals base — was 3.0%)
 MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT = 8.0          # Maximum profit target under scaling (raised for fast scaling)
 MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE = 0.2 # Extra % per consecutive winning trade (up from 0.1)
 MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE = True # Also scale with market volatility
 
 # MICRO-CAP COMPOUNDING MODE HELPERS
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 3.0  # 3.0% base profit target (spread + streak bonus added at runtime)
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 2.5  # 2.5% base profit target (was 3.0% — spread + streak bonus added at runtime)
 # Backward-compatible alias used as the static fallback when no spread data is available
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (2:1 R:R vs base target)
-MICRO_CAP_TRADE_COOLDOWN = 900                   # 15-min per-symbol re-entry cooldown
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R vs base target)
+MICRO_CAP_TRADE_COOLDOWN = 600                   # 10-min per-symbol re-entry cooldown (was 900 s)
 
 # Win-streak bonus applied on top of (base + spread) while on a hot streak.
 # The bonus is reset to 0 whenever a trade ends in a loss so the bot does not
@@ -316,17 +317,17 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
 
     Compounding mode rules (concentrated capital — 3–5 trades per session):
       - max_positions    = 1      (one trade at a time — maximum concentration)
-      - position_size    = 80%    (concentrate capital; e.g. $34 of a $43 account)
-      - stop_loss        = 1.5%   (half of TP1 → 2:1 R:R)
-      - tp1              = 3.0%   (partial exit + trailing stop activation)
-      - tp2              = 4.5%   (second partial exit)
+      - position_size    = 90%    (concentrate capital; e.g. $66 of a $74 account)
+      - stop_loss        = 1.5%   (below TP1 → ≥1.67:1 R:R)
+      - tp1              = 2.5%   (partial exit + trailing stop activation — was 3.0%)
+      - tp2              = 3.5%   (second partial exit — was 4.5%)
       - tp3              = 6.0%   (final exit / full runner target)
-      - trailing_stop_activation = 3.0%  (trailing stop kicks in at TP1)
-      - trade_cooldown   = 1800s  (30-min gate → 3–5 trades per session)
+      - trailing_stop_activation = 2.5%  (trailing stop kicks in at TP1)
+      - trade_cooldown   = 600s   (10-min gate → up to 6 trades/hr — was 900 s)
       - adaptive_profit_scaling = True
-      - profit_target    = base (3.0%) + current market spread + streak bonus
+      - profit_target    = base (2.5%) + current market spread + streak bonus
                            (computed at entry time via get_spread_adjusted_profit_target())
-      - stop_loss        = 1.5%   (half of base profit target → 2:1 R:R)
+      - stop_loss        = 1.5%   (below base profit target → ≥1.67:1 R:R)
 
     The 'profit_target_pct' key in the returned dict holds the *base* target only.
     Callers must call get_spread_adjusted_profit_target(spread_pct, win_streak) at entry
@@ -533,8 +534,8 @@ ENABLE_ADVANCED_OPTIMIZER = True  # Master switch for optimization system
 
 # Signal Scoring & Ranking
 ENABLE_SIGNAL_SCORING = True  # Optimize and rank entry signals
-MIN_SIGNAL_SCORE = 60.0  # Minimum score to trade (0-100)
-MIN_SIGNAL_CONFIDENCE = 0.60  # Minimum confidence (0-1)
+MIN_SIGNAL_SCORE = 55.0  # Minimum score to trade (0-100) — was 60, lowered for more quality setups
+MIN_SIGNAL_CONFIDENCE = 0.55  # Minimum confidence (0-1) — was 0.60
 
 # Dynamic Volatility-Based Sizing
 ENABLE_VOLATILITY_SIZING = True  # Adjust sizes based on volatility
@@ -817,7 +818,7 @@ def get_config_summary(equity: Optional[float] = None) -> str:
    • Target 2 (TP2):         {MICRO_CAP_TP2_PCT:.1f}%  (second partial exit)
    • Target 3 (TP3):         {MICRO_CAP_TP3_PCT:.1f}%  (final exit / runner target)
    • Trailing Stop:          activates after {MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT:.1f}% profit (TP1)
-   • Trade Cooldown:         {MICRO_CAP_TRADE_COOLDOWN}s  (theoretical max ~{3600 // MICRO_CAP_TRADE_COOLDOWN} trades/hr)
+   • Trade Cooldown:         {MICRO_CAP_TRADE_COOLDOWN}s per symbol  (theoretical max ~{3600 // MICRO_CAP_TRADE_COOLDOWN} re-entries/hr per symbol)
    • Adaptive Profit Scaling:{adaptive_label}  [{MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT:.1f}% – {MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT:.1f}%]
    • Adaptive Base Target:   {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT:.1f}% (base) + spread + streak bonus (used for dynamic scaling only)
 """
