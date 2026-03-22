@@ -10050,12 +10050,40 @@ class TradingStrategy:
                                 # the post-scan priority executor can rank all candidates
                                 # by score and deploy capital in the highest-probability
                                 # setups first (instead of first-found order).
+                                #
+                                # 🔥 SMART FIRST TRADE SELECTION metrics:
+                                # Store liquidity, spread, and trend data so the first
+                                # trade (pre-deployment) is ranked by the best overall
+                                # market quality rather than signal score alone.
+                                try:
+                                    _sft_adx_raw = df['adx'].iloc[-1] if 'adx' in df.columns and len(df) > 0 else None
+                                    _sft_adx = float(_sft_adx_raw) if _sft_adx_raw is not None and pd.notna(_sft_adx_raw) else 0.0
+                                except Exception:
+                                    _sft_adx = 0.0
+                                try:
+                                    if 'volume' in df.columns and len(df) >= 20:
+                                        _sft_vol_raw = df['volume'].rolling(window=20).mean().iloc[-1]
+                                    elif 'volume' in df.columns and len(df) > 0:
+                                        _sft_vol_raw = df['volume'].mean()
+                                    else:
+                                        _sft_vol_raw = None
+                                    _sft_volume = float(_sft_vol_raw) if _sft_vol_raw is not None and pd.notna(_sft_vol_raw) else 0.0
+                                except Exception:
+                                    _sft_volume = 0.0
+                                try:
+                                    _sft_spread = float(analysis.get('spread_pct') or 0.001)
+                                except Exception:
+                                    _sft_spread = 0.001
+
                                 pending_signals.append({
                                     'symbol': symbol,
                                     'analysis': analysis,
                                     'position_size': position_size,
                                     'entry_score': entry_score,
                                     'action': action,
+                                    '_sft_adx': _sft_adx,
+                                    '_sft_volume': _sft_volume,
+                                    '_sft_spread': _sft_spread,
                                 })
                                 logger.info(
                                     f"   📋 Signal queued (score={entry_score:.1f}, "
@@ -10125,6 +10153,13 @@ class TradingStrategy:
                     # ones that fit within the remaining position slots.  This
                     # ensures capital is always deployed in the highest-
                     # probability setups rather than the first found.
+                    #
+                    # 🔥 SMART FIRST TRADE SELECTION (pre-deployment):
+                    # Before the first trade has been executed, rank candidates
+                    # by a composite quality score:
+                    #   40% — highest liquidity  (avg volume)
+                    #   30% — best spread        (lowest spread_pct)
+                    #   30% — strongest trend    (ADX)
                     # ═══════════════════════════════════════════════════════
                     if pending_signals:
                         # current_positions was fetched at the start of this cycle. Because
@@ -10136,16 +10171,44 @@ class TradingStrategy:
                         _slots_available = max(
                             0, effective_max_positions - len(current_positions)
                         )
-                        _ranked_signals = sorted(
-                            pending_signals,
-                            key=lambda x: x['entry_score'],
-                            reverse=True,
-                        )
-                        logger.info("")
-                        logger.info(
-                            f"🏆 PRIORITY SELECTION: {len(_ranked_signals)} signal(s) collected, "
-                            f"{_slots_available} slot(s) available"
-                        )
+
+                        if not self._first_trade_executed and len(pending_signals) > 1:
+                            # 🔥 SMART FIRST TRADE SELECTION
+                            # Normalise the three quality dimensions across all candidates
+                            # then build a weighted composite score for ranking.
+                            _sft_vols    = [s.get('_sft_volume', 0.0) for s in pending_signals]
+                            _sft_adxs    = [s.get('_sft_adx',    0.0) for s in pending_signals]
+                            _sft_spreads = [s.get('_sft_spread',  0.001) for s in pending_signals]
+
+                            _sft_max_vol    = max(_sft_vols)    or 1e-9
+                            _sft_max_adx    = max(_sft_adxs)    or 1e-9
+                            _sft_max_spread = max(_sft_spreads) or 1e-9
+
+                            def _smart_score(sig: dict) -> float:
+                                vol_norm    = sig.get('_sft_volume', 0.0) / _sft_max_vol
+                                adx_norm    = sig.get('_sft_adx',    0.0) / _sft_max_adx
+                                # Lower spread → higher score (inverted)
+                                spread_norm = 1.0 - (sig.get('_sft_spread', 0.001) / _sft_max_spread)
+                                return 0.40 * vol_norm + 0.30 * spread_norm + 0.30 * adx_norm
+
+                            _ranked_signals = sorted(pending_signals, key=_smart_score, reverse=True)
+                            logger.info("")
+                            logger.info(
+                                f"🔥 SMART FIRST TRADE SELECTION: {len(_ranked_signals)} candidate(s), "
+                                f"{_slots_available} slot(s) available — "
+                                f"ranking by liquidity (40%) + spread (30%) + trend strength (30%)"
+                            )
+                        else:
+                            _ranked_signals = sorted(
+                                pending_signals,
+                                key=lambda x: x['entry_score'],
+                                reverse=True,
+                            )
+                            logger.info("")
+                            logger.info(
+                                f"🏆 PRIORITY SELECTION: {len(_ranked_signals)} signal(s) collected, "
+                                f"{_slots_available} slot(s) available"
+                            )
                         for _rank_i, _rank_sig in enumerate(_ranked_signals[:3], start=1):
                             logger.info(
                                 f"   #{_rank_i}: {_rank_sig['symbol']} "
