@@ -349,6 +349,54 @@ def sweep_dust(brokers: List, dust_threshold_usd: float = 1.00) -> Dict[str, int
 # STEP 5: Delete position tracking files
 # ============================================================================
 
+def reset_cached_balances(brokers: Optional[List] = None) -> int:
+    """
+    Clear all in-memory balance caches so the next fetch hits the exchange API.
+
+    Resets:
+        • broker._last_known_balance  on every provided broker instance
+        • multi_account_manager._balance_cache  (via clear_balance_cache())
+
+    Args:
+        brokers: List of connected broker instances whose ``_last_known_balance``
+                 attribute should be cleared.  Pass None to skip per-broker reset.
+
+    Returns:
+        Number of caches that were cleared.
+    """
+    cleared = 0
+
+    # Per-broker last-known-balance cache
+    for broker in (brokers or []):
+        if hasattr(broker, '_last_known_balance'):
+            broker._last_known_balance = None
+            cleared += 1
+            logger.warning(
+                f"🔄 Cleared cached balance on {getattr(broker, 'broker_type', type(broker).__name__)}"
+            )
+
+    # Multi-account manager balance cache (import lazily to avoid circular deps)
+    try:
+        try:
+            from bot.multi_account_broker_manager import get_multi_account_manager
+        except ImportError:
+            from multi_account_broker_manager import get_multi_account_manager as get_multi_account_manager
+        manager = get_multi_account_manager()
+        if manager and hasattr(manager, 'clear_balance_cache'):
+            manager.clear_balance_cache()
+            cleared += 1
+            logger.warning("🔄 Cleared multi-account manager balance cache")
+    except Exception as exc:
+        logger.debug(f"Multi-account balance cache reset skipped: {exc}")
+
+    if cleared:
+        logger.warning(f"✅ Reset {cleared} balance cache(s)")
+    else:
+        logger.info("ℹ️  No balance caches found to reset")
+
+    return cleared
+
+
 def delete_position_files(extra_paths: Optional[List[str]] = None) -> List[str]:
     """
     Delete positions.json and related position-tracking files.
@@ -404,10 +452,11 @@ def run_emergency_reset(
         3. Liquidate all positions
         4. Sweep dust
         5. Delete position tracking files
+        6. Reset cached balances
 
     Args:
         brokers: List of connected broker instances.  If None, only steps that
-                 do not require a broker (1 & 5) are executed.
+                 do not require a broker (1, 5 & 6) are executed.
         dust_threshold_usd: USD value threshold for dust positions (step 4).
         extra_position_files: Additional file paths to delete (step 5).
         stop_reason: Reason string recorded in the kill-switch log.
@@ -419,6 +468,7 @@ def run_emergency_reset(
             positions_liquidated  (dict: broker→count)
             dust_swept            (dict: broker→count)
             files_deleted         (list of str)
+            caches_cleared        (int)
             completed_at          (ISO-8601 str)
     """
     logger.warning("=" * 70)
@@ -432,17 +482,18 @@ def run_emergency_reset(
         'positions_liquidated': {},
         'dust_swept': {},
         'files_deleted': [],
+        'caches_cleared': 0,
         'completed_at': None,
     }
 
     # ── Step 1: Stop the bot ──────────────────────────────────────────────
-    logger.warning("STEP 1/5: Stopping bot…")
+    logger.warning("STEP 1/6: Stopping bot…")
     summary['kill_switch_activated'] = stop_bot(stop_reason)
 
     active_brokers = brokers or []
 
     # ── Step 2: Cancel open orders ────────────────────────────────────────
-    logger.warning("STEP 2/5: Cancelling all open orders…")
+    logger.warning("STEP 2/6: Cancelling all open orders…")
     if active_brokers:
         summary['orders_cancelled'] = cancel_all_open_orders(active_brokers)
     else:
@@ -453,7 +504,7 @@ def run_emergency_reset(
         time.sleep(1.0)
 
     # ── Step 3: Liquidate all positions ───────────────────────────────────
-    logger.warning("STEP 3/5: Liquidating all positions…")
+    logger.warning("STEP 3/6: Liquidating all positions…")
     if active_brokers:
         summary['positions_liquidated'] = liquidate_all_positions(active_brokers)
     else:
@@ -463,15 +514,19 @@ def run_emergency_reset(
         time.sleep(1.0)
 
     # ── Step 4: Sweep dust ────────────────────────────────────────────────
-    logger.warning("STEP 4/5: Sweeping dust positions…")
+    logger.warning("STEP 4/6: Sweeping dust positions…")
     if active_brokers:
         summary['dust_swept'] = sweep_dust(active_brokers, dust_threshold_usd)
     else:
         logger.info("   No brokers provided; skipping dust sweep")
 
     # ── Step 5: Delete position files ─────────────────────────────────────
-    logger.warning("STEP 5/5: Deleting position tracking files…")
+    logger.warning("STEP 5/6: Deleting position tracking files…")
     summary['files_deleted'] = delete_position_files(extra_position_files)
+
+    # ── Step 6: Reset cached balances ─────────────────────────────────────
+    logger.warning("STEP 6/6: Resetting cached balances…")
+    summary['caches_cleared'] = reset_cached_balances(active_brokers if active_brokers else None)
 
     # ── Final summary ─────────────────────────────────────────────────────
     summary['completed_at'] = datetime.now(timezone.utc).isoformat()
@@ -489,6 +544,7 @@ def run_emergency_reset(
         logger.warning(f"   Positions liquidated : {total_liquidated}")
         logger.warning(f"   Dust swept           : {total_swept}")
     logger.warning(f"   Files deleted        : {len(summary['files_deleted'])}")
+    logger.warning(f"   Caches cleared       : {summary['caches_cleared']}")
     logger.warning(f"   Duration             : {elapsed:.1f}s")
     logger.warning("=" * 70)
 
