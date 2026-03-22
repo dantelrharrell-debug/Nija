@@ -72,15 +72,17 @@ class TradeFrequencyOptimizer:
         self.config = config or {}
 
         # Base scan interval (seconds)
-        self.base_scan_interval = self.config.get('base_scan_interval', 150)  # 2.5 minutes default
+        self.base_scan_interval = self.config.get('base_scan_interval', 90)  # 1.5 minutes (was 2.5 min — faster for micro growth)
 
         # Scan interval multipliers per opportunity window
+        # Crypto trades 24/7 so LOW/MINIMAL windows use smaller slowdowns than
+        # traditional markets (stocks, forex) that close overnight / on weekends.
         self.interval_multipliers = {
-            OpportunityWindow.PEAK: 0.50,  # 50% faster (75 seconds)
-            OpportunityWindow.HIGH: 0.75,  # 25% faster (112.5 seconds)
-            OpportunityWindow.NORMAL: 1.00,  # Normal speed (150 seconds)
-            OpportunityWindow.LOW: 1.50,  # 50% slower (225 seconds)
-            OpportunityWindow.MINIMAL: 2.00,  # 100% slower (300 seconds)
+            OpportunityWindow.PEAK: 0.40,     # 60% faster (36 s)  — was 0.50
+            OpportunityWindow.HIGH: 0.60,     # 40% faster (54 s)  — was 0.75
+            OpportunityWindow.NORMAL: 1.00,   # Normal speed (90 s)
+            OpportunityWindow.LOW: 1.10,      # 10% slower (99 s)  — was 1.50; crypto is 24/7
+            OpportunityWindow.MINIMAL: 1.40,  # 40% slower (126 s) — was 2.00; weekends still active
         }
 
         # Signal quality thresholds
@@ -97,9 +99,13 @@ class TradeFrequencyOptimizer:
         }
 
         # Opportunity window detection
-        self.peak_hours_utc = [(13, 16)]  # London-NY overlap
-        self.high_hours_utc = [(8, 13), (16, 21)]  # London and NY sessions
-        self.low_hours_utc = [(0, 8)]  # Asia session
+        # Crypto trades 24/7; peak window extended to cover full London-NY overlap.
+        # Asia session (LOW) is narrowed — meaningful crypto volume occurs there too.
+        # Hours 22-23 UTC are not in any explicit list and fall through to the
+        # default return of OpportunityWindow.NORMAL (see detect_opportunity_window).
+        self.peak_hours_utc = [(12, 17)]  # Extended London-NY overlap (was 13-16)
+        self.high_hours_utc = [(7, 12), (17, 22)]  # London open + NY afternoon (was 8-13, 16-21)
+        self.low_hours_utc = [(0, 7)]  # Early Asia only (was 0-8); hours 22-23 → NORMAL (default)
 
         # Signal history for density calculation
         self.signal_history: List[Dict] = []
@@ -333,8 +339,10 @@ class TradeFrequencyOptimizer:
         # Calculate final interval
         interval = int(self.base_scan_interval * multiplier)
 
-        # Ensure reasonable bounds (30 seconds to 5 minutes)
-        interval = max(30, min(300, interval))
+        # Ensure reasonable bounds (15 seconds to 5 minutes).
+        # With base=90 s and PEAK multiplier=0.40 the lowest achievable value
+        # is ~36 s, so the 15 s floor is a safety net only.
+        interval = max(15, min(300, interval))
 
         return interval
 
