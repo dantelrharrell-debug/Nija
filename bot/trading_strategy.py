@@ -1187,6 +1187,7 @@ MIN_POSITION_USD = 10.0   # Minimum entry size ($10 ensures fee efficiency and m
 #   • sold immediately if the exchange permits (notional >= exchange minimum)
 #   • or added to the permanent dust blacklist so it is ignored forever
 DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = dust)
+EXCHANGE_MINIMUM_ORDER_USD = 1.00  # Hard floor: exchange rejects orders below this USD value
 
 # ============================================================================
 
@@ -5804,7 +5805,9 @@ class TradingStrategy:
             # 🌀 CONTINUOUS DUST MONITOR (Option A): Time-based dust sweep
             # Checks all accounts every DUST_SWEEP_INTERVAL_MINUTES (default 30 min)
             # and closes any position < DUST_THRESHOLD_USD. Each action is audit-logged.
-            if hasattr(self, 'continuous_dust_monitor') and self.continuous_dust_monitor:
+            # FIX: Run dust sweeper ONLY on startup (cycle 0) — not every cycle.
+            if (hasattr(self, 'continuous_dust_monitor') and self.continuous_dust_monitor
+                    and hasattr(self, 'cycle_count') and self.cycle_count == 0):
                 try:
                     # Build (account_id, broker) list for this cycle
                     _cdm_brokers = []
@@ -6914,6 +6917,10 @@ class TradingStrategy:
                                         # This should NEVER be reached in normal operation
                                         # Only triggers at -5.0% to catch extreme edge cases
                                         if pnl_percent <= catastrophic_stop:
+                                            # PROTECTIVE SELL DUST GATE: skip if position is dust (< exchange minimum)
+                                            if position_value < EXCHANGE_MINIMUM_ORDER_USD:
+                                                logger.info(f"🚫 SKIPPING PROTECTIVE SELL — {symbol} is dust (${position_value:.4f})")
+                                                continue
                                             logger.warning(f"   🚨 CATASTROPHIC PROTECTIVE FAILSAFE TRIGGERED: {symbol} at {pnl_percent*100:.2f}% (threshold: {catastrophic_stop*100:.1f}%)")
                                             logger.warning(f"   💥 TIER 3: Last resort capital preservation - severe loss detected!")
                                             logger.warning(f"   🛡️ PROTECTIVE EXIT MODE — Risk Management Override Active")
@@ -7678,6 +7685,28 @@ class TradingStrategy:
                             logger.error(f"  ❌ SKIPPING: Invalid symbol (value: {symbol}, type: {type(symbol)})")
                             # Store descriptive string for logging - will be displayed in summary
                             failed_sells.append(f"INVALID_SYMBOL({symbol})")
+                            continue
+
+                        # ── HARD GATE: block sells below exchange minimum ($1.00) ──────────
+                        # Compute size_usd from pos_data if available; fall back to price lookup.
+                        _gate_size_usd = pos_data.get('size_usd', 0.0)
+                        if _gate_size_usd <= 0.0 and quantity > 0:
+                            try:
+                                _gate_price = (
+                                    exit_broker.get_current_price(symbol)
+                                    if hasattr(exit_broker, 'get_current_price') else 0.0
+                                )
+                                if _gate_price and _gate_price > 0:
+                                    _gate_size_usd = quantity * _gate_price
+                            except Exception:
+                                pass
+                        # NOTE: _gate_size_usd == 0 means price is unavailable — allow the sell
+                        # attempt to proceed so the exchange provides its own rejection message.
+                        if 0 < _gate_size_usd < EXCHANGE_MINIMUM_ORDER_USD:
+                            logger.warning(
+                                f"🚫 HARD BLOCK: {symbol} below exchange minimum "
+                                f"(${_gate_size_usd:.4f}) — skipping sell"
+                            )
                             continue
 
                         try:
