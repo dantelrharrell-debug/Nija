@@ -133,7 +133,7 @@ class RecoveryController:
         
         # Core state variables - AUTHORITATIVE
         self._current_state = FailureState.NORMAL
-        self._trading_enabled = False  # DISABLED by default for safety
+        self._trading_enabled = True  # ENABLED by default
         self._safe_mode = False
         self._capital_safety_level = CapitalSafetyLevel.SAFE
         

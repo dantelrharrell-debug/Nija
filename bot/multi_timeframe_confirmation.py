@@ -76,7 +76,7 @@ class MTFConfig:
     ema_slow: int = 21
 
     # Min fraction of TFs that must agree for a confirmed signal
-    min_agreement_ratio: float = 0.70
+    min_agreement_ratio: float = 0.60
 
     # RSI thresholds
     rsi_oversold: float = 40.0
