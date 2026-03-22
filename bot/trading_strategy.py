@@ -2054,7 +2054,6 @@ class TradingStrategy:
         else:
             self.abnormal_market_ks = None
 
-
         if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
             try:
                 _base_cap = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
@@ -9814,7 +9813,6 @@ class TradingStrategy:
                                             symbol=_ps_symbol,
                                             side=_ps_copy_side,
                                             platform_size_usd=_ps_position_size,
-
                                         ))
                                         _ps_copy_count = len([
                                             r for r in (_ps_copy_results or [])
@@ -10256,7 +10254,6 @@ class TradingStrategy:
                     self.partial_tp_ladder.remove_position(symbol)
             except Exception as _aks_rt_err:
                 logger.debug("Phase 3 AbnormalMarketKS record_trade skipped for %s: %s", symbol, _aks_rt_err)
-
 
         if hasattr(self, 'capital_scaling_engine') and self.capital_scaling_engine is not None:
             try:
