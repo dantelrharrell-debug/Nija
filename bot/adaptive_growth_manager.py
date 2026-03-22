@@ -175,10 +175,10 @@ class AdaptiveGrowthManager:
         Returns:
             Minimum USD amount per single position (hard floor)
         """
-        # Hard floor: $2.00 minimum per position
-        # At $2.00: Coinbase fee (0.6%) = $0.012, need 1% gain = very achievable
-        # At $1.00: Fee = $0.006, profit margin too thin, slippage kills it
-        MIN_POSITION_USD = 2.00
+        # Hard floor: $10.00 minimum per position
+        # At $10.00: Coinbase fee (0.6%) = $0.06 one-way, $0.12 round-trip (~1.2% to break even)
+        # Positions below $10 are not fee-efficient and hurt compounding
+        MIN_POSITION_USD = 10.00
         return MIN_POSITION_USD
 
     def get_max_position_usd(self) -> float:

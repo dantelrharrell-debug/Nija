@@ -94,7 +94,7 @@ DEFAULT_ATR_RISK_PCT: float = 0.01  # 1 % per trade
 ABSOLUTE_MAX_RISK_PCT: float = 0.10  # 10 %
 
 #: Hard floor — never open a position smaller than this USD amount.
-MIN_POSITION_USD: float = 1.0
+MIN_POSITION_USD: float = 10.0
 
 
 # ---------------------------------------------------------------------------

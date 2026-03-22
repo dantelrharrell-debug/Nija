@@ -1153,19 +1153,19 @@ MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each c
 # positions simultaneously.  Lower values = fewer but larger, more meaningful
 # trades.  Balance-aware sub-limits are enforced via
 # get_balance_based_max_positions() below.
-MAX_TOTAL_POSITIONS = 5   # HARD GLOBAL CAP: maximum concurrent open positions
+MAX_TOTAL_POSITIONS = 3   # HARD GLOBAL CAP: maximum concurrent open positions
 MAX_SECTOR_ALLOCATION = 0.4  # 40% of total capital — cap per sector to prevent concentration risk
 
 # Balance thresholds for the per-account position cap.
-# Micro accounts (< BALANCE_THRESHOLD_MICRO) are capped at 3 positions.
-# Small accounts (< BALANCE_THRESHOLD_SMALL) are capped at 5 positions.
-# Larger accounts use MAX_TOTAL_POSITIONS (5).
-BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → max 3 positions
-BALANCE_THRESHOLD_SMALL = 500.0   # Below this balance → max 5 positions
+# Micro accounts (< BALANCE_THRESHOLD_MICRO) are capped at 2 positions.
+# Small accounts (< BALANCE_THRESHOLD_SMALL) are capped at 3 positions.
+# Larger accounts use MAX_TOTAL_POSITIONS (3).
+BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → max 2 positions
+BALANCE_THRESHOLD_SMALL = 500.0   # Below this balance → max 3 positions
 
 # Minimum USD notional for any NEW entry order.  Orders below this value are
 # rejected at source to prevent dust accumulation and unproductive fee spend.
-MIN_POSITION_USD = 5.0    # Minimum entry size ($5 prevents $1 dust trades)
+MIN_POSITION_USD = 10.0   # Minimum entry size ($10 ensures fee efficiency and meaningful compounding)
 
 # Dust cleanup threshold for EXISTING positions.  Any open position whose
 # current market value falls below this level is marked for cleanup:
@@ -1469,10 +1469,10 @@ if INCUBATION_MODE:
         # Incubation mode always implies spot-only
         SPOT_ONLY = True
         logger.info("🐣 INCUBATION_MODE: SPOT_ONLY enforced automatically")
-    # Cap max positions to the incubation ceiling of 5 if the env is not already lower
-    if MAX_POSITIONS_ALLOWED > 5:
-        MAX_POSITIONS_ALLOWED = 5
-        logger.info("🐣 INCUBATION_MODE: MAX_POSITIONS_ALLOWED capped at 5")
+    # Cap max positions to the incubation ceiling of 3 if the env is not already lower
+    if MAX_POSITIONS_ALLOWED > 3:
+        MAX_POSITIONS_ALLOWED = 3
+        logger.info("🐣 INCUBATION_MODE: MAX_POSITIONS_ALLOWED capped at 3")
 
 # Forced cleanup interval (cycles between cleanup runs)
 # Default: 6 cycles (~15 minutes at 2.5 min/cycle) - For maximum safety optics
@@ -1558,10 +1558,10 @@ def get_balance_based_max_positions(balance: float) -> int:
     Return the maximum number of concurrent open positions allowed for the
     given account balance.
 
-    Per-account position cap (force consolidation on micro accounts):
-      • balance  < BALANCE_THRESHOLD_MICRO ($150)  → 3 positions  (micro / starter)
-      • balance  < BALANCE_THRESHOLD_SMALL ($500)  → 5 positions  (small accounts)
-      • otherwise                                  → MAX_TOTAL_POSITIONS (= 5)
+    Per-account position cap (force consolidation on all accounts):
+      • balance  < BALANCE_THRESHOLD_MICRO ($150)  → 2 positions  (micro / starter)
+      • balance  < BALANCE_THRESHOLD_SMALL ($500)  → 3 positions  (small accounts)
+      • otherwise                                  → MAX_TOTAL_POSITIONS (= 3)
 
     The returned value is always capped at MAX_TOTAL_POSITIONS so it is safe
     to use as a direct replacement for the global MAX_POSITIONS_ALLOWED
@@ -1582,9 +1582,9 @@ def get_balance_based_max_positions(balance: float) -> int:
         balance = 0.0
 
     if balance < BALANCE_THRESHOLD_MICRO:
-        cap = 3
+        cap = 2
     elif balance < BALANCE_THRESHOLD_SMALL:
-        cap = 5
+        cap = 3
     else:
         cap = MAX_TOTAL_POSITIONS
 
@@ -5674,16 +5674,15 @@ class TradingStrategy:
                 except Exception as _cdm_run_err:
                     logger.warning(f"⚠️  Continuous dust monitor sweep failed: {_cdm_run_err}")
 
-            # ── AUTO-CLEANUP ENGINE: 1-step dust liquidation + micro-merge ──────────
-            # Runs every FORCED_CLEANUP_INTERVAL cycles (same cadence as forced cleanup)
-            # or on startup (cycle 0) to boot with a clean slate.
+            # ── AUTO-CLEANUP ENGINE: startup-only dust liquidation ───────────────
+            # Runs only on startup (cycle 0) to boot with a clean slate.
+            # Periodic dust sweep selling has been DISABLED because it was
+            # interrupting compounding by liquidating micro positions ($2-$10)
+            # that were intentionally opened and should be left to grow.
             _ace_run = (
                 hasattr(self, 'auto_cleanup_engine') and self.auto_cleanup_engine
                 and hasattr(self, 'cycle_count')
-                and (
-                    self.cycle_count == 0
-                    or self.cycle_count % FORCED_CLEANUP_INTERVAL == 0
-                )
+                and self.cycle_count == 0
             )
             if _ace_run and active_broker:
                 try:

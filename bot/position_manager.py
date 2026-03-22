@@ -86,7 +86,7 @@ _TIER_TABLE: List[Tuple[float, int, float, float, float, float]] = [
 SCALE_IN_SPLITS: Tuple[float, ...] = (0.50, 0.30, 0.20)
 
 # Absolute floor: never size below this regardless of tier
-ABS_MIN_POSITION_USD: float = 5.0
+ABS_MIN_POSITION_USD: float = 10.0
 
 
 # ---------------------------------------------------------------------------
