@@ -718,6 +718,21 @@ except ImportError:
         get_abnormal_market_ks = None  # type: ignore
         logger.warning("⚠️ Phase 3: Abnormal Market Kill Switch not available")
 
+# ── Auto-Tuning AI Layer — win/loss streak threshold self-adjuster ────────────
+try:
+    from auto_tuning_ai_layer import get_auto_tuning_ai_layer
+    AUTO_TUNING_AI_AVAILABLE = True
+    logger.info("✅ Auto-Tuning AI Layer loaded — self-adjusting thresholds active")
+except ImportError:
+    try:
+        from bot.auto_tuning_ai_layer import get_auto_tuning_ai_layer
+        AUTO_TUNING_AI_AVAILABLE = True
+        logger.info("✅ Auto-Tuning AI Layer loaded — self-adjusting thresholds active")
+    except ImportError:
+        AUTO_TUNING_AI_AVAILABLE = False
+        get_auto_tuning_ai_layer = None  # type: ignore
+        logger.warning("⚠️ Auto-Tuning AI Layer not available — static thresholds in use")
+
 # Import Micro-Cap Compounding Config — applies before risk engine and position sizing
 try:
     from micro_capital_config import (
@@ -2146,6 +2161,17 @@ class TradingStrategy:
                 self.abnormal_market_ks = None
         else:
             self.abnormal_market_ks = None
+
+        # ── Auto-Tuning AI Layer ───────────────────────────────────────────────
+        if AUTO_TUNING_AI_AVAILABLE and get_auto_tuning_ai_layer is not None:
+            try:
+                self.auto_tuning_ai = get_auto_tuning_ai_layer()
+                logger.info("✅ Auto-Tuning AI Layer initialized — thresholds will self-adjust")
+            except Exception as _e:
+                logger.warning("⚠️ Auto-Tuning AI Layer init failed: %s", _e)
+                self.auto_tuning_ai = None
+        else:
+            self.auto_tuning_ai = None
 
         if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
             try:
@@ -9387,6 +9413,75 @@ class TradingStrategy:
                                         logger.debug("Global Drawdown CB size scaling skipped for %s: %s", symbol, _gdcb2_err)
 
                                 # ═══════════════════════════════════════════════════════
+                                # AUTO-TUNING AI LAYER — win/loss streak self-adjuster
+                                # Increases aggression when winning; tightens when losing.
+                                # Adjusts position size, stop-loss distance, confidence
+                                # gate, and take-profit distance based on rolling win-rate
+                                # and consecutive streak (tune level: -3 … +3).
+                                # ═══════════════════════════════════════════════════════
+                                if AUTO_TUNING_AI_AVAILABLE and hasattr(self, 'auto_tuning_ai') and self.auto_tuning_ai is not None:
+                                    try:
+                                        _tuned = self.auto_tuning_ai.get_tuned_params()
+                                        _at_entry = analysis.get('entry_price', 0.0) or float(df['close'].iloc[-1])
+                                        _at_action = analysis.get('action', '')
+
+                                        # ── Position-size scaling ─────────────────────
+                                        if _tuned.position_size_multiplier != 1.0:
+                                            _pre_at_size = position_size
+                                            position_size *= _tuned.position_size_multiplier
+                                            logger.info(
+                                                "   🤖 %s: Auto-Tuning AI (%s) "
+                                                "size ×%.2f — $%.2f→$%.2f "
+                                                "(win_rate=%.0f%% level=%+d)",
+                                                symbol,
+                                                _tuned.level_label,
+                                                _tuned.position_size_multiplier,
+                                                _pre_at_size,
+                                                position_size,
+                                                _tuned.win_rate * 100,
+                                                _tuned.tune_level,
+                                            )
+
+                                        # ── Stop-loss distance scaling ────────────────
+                                        _at_sl_mult = _tuned.stop_loss_multiplier
+                                        if _at_sl_mult != 1.0:
+                                            for _at_sl_key in ('stop_loss', 'stop_price'):
+                                                _at_sl_val = analysis.get(_at_sl_key, 0.0)
+                                                if _at_sl_val and _at_sl_val > 0 and _at_entry > 0:
+                                                    if _at_action in ('enter_long', 'buy'):
+                                                        _at_sl_dist = _at_entry - _at_sl_val
+                                                        analysis[_at_sl_key] = _at_entry - (_at_sl_dist * _at_sl_mult)
+                                                    else:
+                                                        _at_sl_dist = _at_sl_val - _at_entry
+                                                        analysis[_at_sl_key] = _at_entry + (_at_sl_dist * _at_sl_mult)
+                                                    logger.debug(
+                                                        "   🤖 %s: Auto-Tuning AI sl ×%.2f %s %.6f→%.6f",
+                                                        symbol, _at_sl_mult, _at_sl_key,
+                                                        _at_sl_val, analysis[_at_sl_key],
+                                                    )
+
+                                        # ── Take-profit distance scaling ──────────────
+                                        _at_tp_mult = _tuned.take_profit_multiplier
+                                        if _at_tp_mult != 1.0:
+                                            _at_tp_list = analysis.get('take_profit', [])
+                                            if isinstance(_at_tp_list, list) and _at_entry > 0:
+                                                _new_tp_list = []
+                                                for _tp_price in _at_tp_list:
+                                                    if _tp_price and _tp_price > 0:
+                                                        if _at_action in ('enter_long', 'buy'):
+                                                            _tp_dist = _tp_price - _at_entry
+                                                            _new_tp_list.append(_at_entry + _tp_dist * _at_tp_mult)
+                                                        else:
+                                                            _tp_dist = _at_entry - _tp_price
+                                                            _new_tp_list.append(_at_entry - _tp_dist * _at_tp_mult)
+                                                    else:
+                                                        _new_tp_list.append(_tp_price)
+                                                if _new_tp_list:
+                                                    analysis['take_profit'] = _new_tp_list
+                                    except Exception as _at_err:
+                                        logger.debug("Auto-Tuning AI Layer skipped for %s: %s", symbol, _at_err)
+
+                                # ═══════════════════════════════════════════════════════
                                 # CROSS-BROKER ARBITRAGE MONITOR — best venue selection
                                 # ═══════════════════════════════════════════════════════
                                 if CROSS_BROKER_ARB_AVAILABLE and hasattr(self, 'arb_monitor') and self.arb_monitor is not None:
@@ -10973,6 +11068,14 @@ class TradingStrategy:
                     )
             except Exception as _bcs_rec_err:
                 logger.debug("Auto Broker Capital Shifter evaluate skipped after trade: %s", _bcs_rec_err)
+
+        # 🤖 AUTO-TUNING AI LAYER — feed trade outcome to update performance score
+        # This drives the win/loss streak analysis that self-adjusts all thresholds.
+        if AUTO_TUNING_AI_AVAILABLE and hasattr(self, 'auto_tuning_ai') and self.auto_tuning_ai is not None:
+            try:
+                self.auto_tuning_ai.record_trade(pnl_usd=profit_usd, is_win=is_win)
+            except Exception as _at_rec_err:
+                logger.debug("Auto-Tuning AI Layer record_trade skipped for %s: %s", symbol, _at_rec_err)
 
         if not self.advanced_manager:
             return
