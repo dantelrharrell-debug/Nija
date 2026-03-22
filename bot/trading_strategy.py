@@ -6052,9 +6052,13 @@ class TradingStrategy:
                                 old_balance = account_balance
                                 new_balance = active_broker.get_account_balance()
                                 # Always update balance regardless of whether it increased
-                                account_balance = new_balance
-                                if new_balance > old_balance:
-                                    logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${new_balance:.2f} (+${new_balance - old_balance:.2f})")
+                                # SAFETY: guard against None return from get_account_balance()
+                                if new_balance is None:
+                                    logger.warning("   ⚠️ Kraken balance refresh returned None — keeping previous balance")
+                                    new_balance = old_balance
+                                account_balance = float(new_balance or 0.0)
+                                if account_balance > old_balance:
+                                    logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
                             except Exception as balance_err:
                                 logger.debug(f"   Could not refresh balance: {balance_err}")
                 except Exception as cleanup_err:
@@ -7969,6 +7973,18 @@ class TradingStrategy:
             logger.info(f"ENTRY CHECK → allowed={allow_entries}, reason={block_reason}")
 
             # Continue with market scanning if conditions passed
+            # SAFETY: Re-normalize account_balance before any comparisons/formatting.
+            # This catches any unexpected None that slipped past the earlier guards
+            # (e.g. a future code path that re-assigns without a float() wrapper).
+            if not isinstance(account_balance, (int, float)):
+                logger.warning(
+                    "⚠️ account_balance is unexpectedly non-numeric (%r) before entry scan — "
+                    "resetting to 0.0.  Check balance-fetch paths above for a missing None guard.",
+                    account_balance,
+                )
+                account_balance = 0.0
+            else:
+                account_balance = float(account_balance or 0.0)
             if not user_mode and not entries_blocked and len(current_positions) < effective_max_positions and can_enter:
                 logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{effective_max_positions}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
 
@@ -9666,7 +9682,12 @@ class TradingStrategy:
                                                 # Update free balance after rotation
                                                 try:
                                                     time.sleep(1.0)  # Wait for balances to update
-                                                    account_balance = active_broker.get_account_balance()
+                                                    # SAFETY: guard against None return from get_account_balance()
+                                                    _rotation_balance = active_broker.get_account_balance()
+                                                    if _rotation_balance is None:
+                                                        logger.warning("   ⚠️ Rotation balance refresh returned None — keeping previous balance")
+                                                        _rotation_balance = account_balance
+                                                    account_balance = float(_rotation_balance or 0.0)
                                                     logger.info(f"   💰 Updated free balance: ${account_balance:.2f}")
                                                 except Exception:
                                                     pass
