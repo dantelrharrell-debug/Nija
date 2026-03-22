@@ -4829,6 +4829,27 @@ class TradingStrategy:
                             self.last_veto_reason = veto_reason
                             return False, veto_reason
 
+                # Last-resort fallback: use any cached balance (even stale) rather
+                # than hard-blocking the broker when the live fetch failed.
+                _cached_last_resort = getattr(broker, '_last_known_balance', None)
+                if _cached_last_resort is not None:
+                    broker_type_lr = broker.broker_type if hasattr(broker, 'broker_type') else None
+                    min_balance_lr = BROKER_MIN_BALANCE.get(broker_type_lr, MIN_BALANCE_TO_TRADE_USD)
+                    logger.warning(
+                        f"   ⚠️  {broker_name} balance fetch failed — using cached balance for eligibility: "
+                        f"${_cached_last_resort:.2f} (min=${min_balance_lr:.2f})"
+                    )
+                    if _cached_last_resort >= min_balance_lr:
+                        return True, f"Eligible (stale cached ${_cached_last_resort:.2f} >= ${min_balance_lr:.2f} min)"
+                    veto_reason = (
+                        f"{broker_name.upper()} cached balance ${_cached_last_resort:.2f} "
+                        f"< ${min_balance_lr:.2f} minimum"
+                    )
+                    logger.info(f"🚫 TRADE VETO: {veto_reason}")
+                    self.veto_count_session += 1
+                    self.last_veto_reason = veto_reason
+                    return False, veto_reason
+
                 veto_reason = f"{broker_name.upper()} balance fetch failed: timeout or error"
                 logger.info(f"🚫 TRADE VETO: {veto_reason}")
                 self.veto_count_session += 1
