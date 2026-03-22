@@ -115,6 +115,19 @@ except ImportError:
         _CC_ROUTES_AVAILABLE = False
         register_capital_concentration_routes = None  # type: ignore[assignment]
 
+# Import Profit Compounding Dashboard blueprint
+try:
+    from profit_compounding_dashboard import register_compounding_dashboard
+    _COMPOUNDING_DASH_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.profit_compounding_dashboard import register_compounding_dashboard
+        _COMPOUNDING_DASH_AVAILABLE = True
+    except ImportError:
+        logger.warning("Profit Compounding Dashboard not available")
+        _COMPOUNDING_DASH_AVAILABLE = False
+        register_compounding_dashboard = None  # type: ignore[assignment]
+
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 10  # 10 seconds
 
@@ -2317,6 +2330,15 @@ if __name__ == "__main__":
     else:
         logger.warning("⚠️ Capital Concentration Engine dashboard routes not available")
 
+    # Register Profit Compounding Dashboard
+    if _COMPOUNDING_DASH_AVAILABLE and register_compounding_dashboard:
+        try:
+            register_compounding_dashboard(app)
+        except Exception as _cd_err:
+            logger.warning("⚠️ Could not register Profit Compounding Dashboard: %s", _cd_err)
+    else:
+        logger.warning("⚠️ Profit Compounding Dashboard not available")
+
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")
     print("👥 Users Dashboard: http://localhost:5001/users")
@@ -2324,6 +2346,7 @@ if __name__ == "__main__":
     print("🎯 Control Center: http://localhost:5001/control-center")
     print("📈 Performance Dashboard: http://localhost:5001/performance")
     print("🧠 AI Monitoring: http://localhost:5001/ai/regime")
+    print("💰 Compounding Dashboard: http://localhost:5001/compounding/dashboard")
     print(f"🔄 Auto-refresh every {AUTO_REFRESH_INTERVAL} seconds")
     print("\nPress Ctrl+C to stop\n")
 
