@@ -95,7 +95,7 @@ ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol
 # market_structure_filter.py for the scoring logic).
 # ============================================================================
 
-MAX_CONCURRENT_TRADES = 4   # Maximum simultaneous open trades
+MAX_CONCURRENT_TRADES = 3   # Maximum simultaneous open trades
 CAPITAL_PER_TRADE = 20.0    # Percentage of total capital allocated per trade (%)
 ENTRY_SCAN_INTERVAL = 15    # Seconds between entry-opportunity scans (was 20 – faster for micro growth)
 MONITOR_INTERVAL = 45       # Seconds between open-position monitoring cycles
