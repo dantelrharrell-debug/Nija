@@ -1,7 +1,35 @@
 #!/usr/bin/env python3
 """
+
+Multi-account variant of clean_kraken.py.
+
+Finds every Kraken credential set in the environment (platform + numbered user
+slots) and runs the full cleanup sequence on each account:
+
+    1. Cancel all open orders
+    2. Force-sell all positions above Kraken's $10 minimum
+    3. Sweep dust (convert sub-minimum balances to USD)
+    4. Verify cleanup
+    5. Report ideal-state
+
+After processing all accounts:
+    6. Delete positions.json / open_positions.json (reset persisted state)
+
+Ideal-state logic (updated — $200 upper cap removed):
+    ✅ IDEAL  =  usd_balance >= $50  AND  positions <= 3
+
+Usage:
+    python scripts/clean_kraken_all_accounts.py [--dry-run]
+
+Options:
+    --dry-run    Show what would be done without executing any trades
+
+Requirements:
+    Set at least one of the following in your environment:
+        KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET
+        KRAKEN_API_KEY + KRAKEN_API_SECRET
+        KRAKEN_USER1_API_KEY + KRAKEN_USER1_API_SECRET  (and so on up to USER9)
 Per-Account Kraken Cleanup
-==========================
 Performs a clean-slate cleanup for each Kraken account (Tania, Daivon, Platform)
 and reports the TRUE balance for each account before and after cleanup.
 

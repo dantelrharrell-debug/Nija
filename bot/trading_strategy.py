@@ -5699,7 +5699,49 @@ class TradingStrategy:
             run_trade_based_cleanup = False
             if FORCED_CLEANUP_AFTER_N_TRADES and hasattr(self, 'trades_since_last_cleanup'):
                 run_trade_based_cleanup = self.trades_since_last_cleanup >= FORCED_CLEANUP_AFTER_N_TRADES
-            
+
+            # 🔄 STARTUP STATE RESET: On first cycle, clear ALL stale state so
+            # the bot boots with a completely clean slate:
+            #   • positions.json  (and related open_positions.json)
+            #   • in-memory position tracker
+            #   • cached balances (broker._last_known_balance +
+            #                      multi_account_manager._balance_cache)
+            # This implements the requirement:
+            #   "if startup: run_clean_kraken_all_accounts()"
+            if run_startup_cleanup:
+                try:
+                    # ── 1. Delete persisted position files ──────────────────
+                    try:
+                        from emergency_reset import delete_position_files
+                    except ImportError:
+                        from bot.emergency_reset import delete_position_files
+                    _deleted = delete_position_files()
+                    if _deleted:
+                        logger.warning(
+                            f"🗑️  STARTUP: Deleted {len(_deleted)} stale position file(s): {_deleted}"
+                        )
+
+                    # ── 2. Clear in-memory position tracker ─────────────────
+                    if active_broker and hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                        with active_broker.position_tracker.lock:
+                            active_broker.position_tracker.positions.clear()
+                        logger.warning("🔄 STARTUP: In-memory position tracker cleared")
+
+                    # ── 3. Reset cached balances ────────────────────────────
+                    # Broker-level last-known-balance cache
+                    if active_broker and hasattr(active_broker, '_last_known_balance'):
+                        active_broker._last_known_balance = None
+                        logger.warning("🔄 STARTUP: Broker cached balance cleared")
+                    # Multi-account manager in-memory balance cache
+                    if (hasattr(self, 'multi_account_manager') and self.multi_account_manager and
+                            hasattr(self.multi_account_manager, 'clear_balance_cache')):
+                        self.multi_account_manager.clear_balance_cache()
+                        logger.warning("🔄 STARTUP: Multi-account balance cache cleared")
+
+                    logger.warning("✅ STARTUP: Full state reset complete — clean slate ready")
+                except Exception as _reset_err:
+                    logger.warning(f"⚠️  STARTUP: State reset error (non-fatal): {_reset_err}")
+
             if hasattr(self, 'forced_cleanup') and self.forced_cleanup and (run_startup_cleanup or run_periodic_cleanup or run_trade_based_cleanup):
                 # Determine cleanup reason for logging
                 if run_startup_cleanup:
