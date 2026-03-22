@@ -132,6 +132,7 @@ class MultiTimeframeConfirmation:
         self,
         df: pd.DataFrame,
         signal_side: str,
+        min_agreement_ratio: float | None = None,
     ) -> MTFResult:
         """
         Evaluate multi-timeframe agreement for the proposed trade side.
@@ -144,6 +145,10 @@ class MultiTimeframeConfirmation:
             Rows should be in **ascending** chronological order.
         signal_side:
             ``"long"`` or ``"short"`` — the proposed entry direction.
+        min_agreement_ratio:
+            Override the configured agreement threshold for this call only.
+            Useful for micro accounts that need a relaxed gate (e.g. 0.6
+            instead of the default 0.70).  ``None`` keeps the config value.
 
         Returns
         -------
@@ -193,7 +198,11 @@ class MultiTimeframeConfirmation:
 
         bull_ratio = bullish_votes / total
         bear_ratio = bearish_votes / total
-        min_ratio = self._cfg.min_agreement_ratio
+        min_ratio = (
+            min_agreement_ratio
+            if min_agreement_ratio is not None
+            else self._cfg.min_agreement_ratio
+        )
 
         if bull_ratio >= min_ratio:
             direction = "bullish"
