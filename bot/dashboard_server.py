@@ -128,6 +128,19 @@ except ImportError:
         _COMPOUNDING_DASH_AVAILABLE = False
         register_compounding_dashboard = None  # type: ignore[assignment]
 
+# Import Phase 5 Live Performance Tuner dashboard blueprint
+try:
+    from phase5_live_performance_tuner import register_phase5_dashboard
+    _PHASE5_DASH_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.phase5_live_performance_tuner import register_phase5_dashboard
+        _PHASE5_DASH_AVAILABLE = True
+    except ImportError:
+        logger.warning("Phase 5 Live Performance Tuner dashboard not available")
+        _PHASE5_DASH_AVAILABLE = False
+        register_phase5_dashboard = None  # type: ignore[assignment]
+
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 10  # 10 seconds
 
@@ -2339,6 +2352,15 @@ if __name__ == "__main__":
     else:
         logger.warning("⚠️ Profit Compounding Dashboard not available")
 
+    # Register Phase 5 Live Performance Tuner Dashboard
+    if _PHASE5_DASH_AVAILABLE and register_phase5_dashboard:
+        try:
+            register_phase5_dashboard(app)
+        except Exception as _p5_err:
+            logger.warning("⚠️ Could not register Phase 5 dashboard: %s", _p5_err)
+    else:
+        logger.warning("⚠️ Phase 5 Live Performance Tuner dashboard not available")
+
     print("🚀 Starting NIJA Dashboard Server...")
     print("📊 Dashboard will be available at: http://localhost:5001")
     print("👥 Users Dashboard: http://localhost:5001/users")
@@ -2347,6 +2369,7 @@ if __name__ == "__main__":
     print("📈 Performance Dashboard: http://localhost:5001/performance")
     print("🧠 AI Monitoring: http://localhost:5001/ai/regime")
     print("💰 Compounding Dashboard: http://localhost:5001/compounding/dashboard")
+    print("⚡ Phase 5 Live Tuner: http://localhost:5001/phase5/dashboard")
     print(f"🔄 Auto-refresh every {AUTO_REFRESH_INTERVAL} seconds")
     print("\nPress Ctrl+C to stop\n")
 
