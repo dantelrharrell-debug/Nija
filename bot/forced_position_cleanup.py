@@ -24,6 +24,11 @@ logger = logging.getLogger("nija.cleanup")
 # Minimum USD value below which we skip closing (exchange won't accept the order)
 EXCHANGE_MIN_CLOSE_USD = 1.00
 
+# Hard floor for the dust-ignore block — positions below this USD value can
+# NEVER be filled by any exchange (Coinbase, Kraken, Binance all reject
+# sub-$1 market orders).
+EXCHANGE_MIN_SELL_USD: float = 1.00
+
 
 class CleanupType(Enum):
     """Types of cleanup operations"""
@@ -66,6 +71,10 @@ class ForcedPositionCleanup:
         self.max_positions = max_positions
         self.dry_run = dry_run
         self.has_run_startup = False  # Track if startup cleanup has run
+
+        # In-memory permanent blacklist — symbols added here are NEVER attempted
+        # again in execute_cleanup, preventing the infinite retry loop.
+        self._dust_blacklist: set = set()
         
         # Parse cancel_conditions if provided
         self.cancel_conditions = self._parse_cancel_conditions(cancel_conditions) if cancel_conditions else None
@@ -425,16 +434,46 @@ class ForcedPositionCleanup:
         successful = 0
         failed = 0
         skipped = 0
-        
+
+        # Dedup guard — never process the same symbol twice in one cleanup run
+        processed_symbols: set = set()
+
         for pos_data in positions_to_close:
             symbol = pos_data['symbol']
+
+            # DEDUP GUARD: skip repeated entries for the same symbol
+            if symbol in processed_symbols:
+                logger.debug("   ⏭️ %s already processed this cleanup run — skipping", symbol)
+                continue
+            processed_symbols.add(symbol)
+
             cleanup_type = pos_data['cleanup_type']
             reason = pos_data['reason']
             pnl_pct = pos_data.get('pnl_pct', 0) or 0  # Handle None values
             size_usd = pos_data.get('size_usd', 0)
             # Retrieve quantity so the broker receives the exact amount to sell (base_size)
             base_size = pos_data.get('quantity') or pos_data.get('base_size')
-            
+
+            # ── HARD BLOCK: permanent dust blacklist ──────────────────────────
+            # Positions below EXCHANGE_MIN_SELL_USD can NEVER be filled by any
+            # exchange.  Add to the in-memory blacklist and skip — do NOT record
+            # as a LOSS (it was never a trade).
+            if size_usd > 0 and size_usd < EXCHANGE_MIN_SELL_USD:
+                logger.warning(
+                    f"   🚫 PERMANENT DUST IGNORE: {symbol} (${size_usd:.4f}) — "
+                    f"below exchange minimum ${EXCHANGE_MIN_SELL_USD:.2f}. Blacklisted."
+                )
+                self._dust_blacklist.add(symbol)
+                skipped += 1
+                continue  # NEVER try again — not recorded as LOSS
+
+            # Skip if this symbol was already blacklisted in a previous run
+            if symbol in self._dust_blacklist:
+                logger.debug("   ⏭️ %s is in dust blacklist — skipping permanently", symbol)
+                skipped += 1
+                continue
+
+            # All positions reaching here are tradeable — label WIN or LOSS only
             outcome = "WIN" if pnl_pct > 0 else "LOSS"
             
             logger.warning(f"")
@@ -448,15 +487,6 @@ class ForcedPositionCleanup:
             logger.warning(f"   PROFIT_STATUS = PENDING → CONFIRMED")
             logger.warning(f"   OUTCOME = {outcome}")
 
-            # Skip positions below exchange minimum – these cannot be filled and will always fail
-            if size_usd > 0 and size_usd < EXCHANGE_MIN_CLOSE_USD:
-                logger.warning(
-                    f"   ⚠️  SKIPPED: {symbol} (${size_usd:.4f}) is below exchange minimum "
-                    f"(${EXCHANGE_MIN_CLOSE_USD:.2f}). Position too small to sell – monitoring."
-                )
-                skipped += 1
-                continue
-            
             # Check if we should cancel open orders for this position
             should_cancel = self._should_cancel_open_orders(pos_data, is_startup)
             

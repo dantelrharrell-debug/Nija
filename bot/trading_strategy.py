@@ -2296,6 +2296,12 @@ class TradingStrategy:
         self.unsellable_positions = {}  # Dict of symbol -> timestamp when marked unsellable
         self.unsellable_retry_timeout = UNSELLABLE_RETRY_HOURS * 3600  # Convert hours to seconds
 
+        # In-memory dust blacklist — fast O(1) check in the trading loop.
+        # Symbols added here (< $1) are PERMANENTLY skipped for position analysis
+        # and new entries.  Populated at startup from DustBlacklist and during
+        # DustSweeperV2 sweeps.
+        self._dust_blacklist: set = set()
+
         # Track failed broker connections for error reporting
         self.failed_brokers = {}  # Dict of BrokerType -> broker instance for failed connections
 
@@ -3148,6 +3154,30 @@ class TradingStrategy:
                 except Exception as _ace_err:
                     logger.warning(f"⚠️  Auto-Cleanup Engine not available: {_ace_err}")
                     self.auto_cleanup_engine = None
+
+                # ── DUST SWEEPER V2 (permanent dust kill) ──────────────────────
+                try:
+                    from bot.dust_sweeper_v2 import get_dust_sweeper_v2
+                    _dsv2_dry = os.getenv('DUST_SWEEPER_DRY_RUN', 'false').lower() in ('true', '1', 'yes')
+                    self.dust_sweeper_v2 = get_dust_sweeper_v2(
+                        dust_threshold_usd=float(os.getenv('DUST_SWEEPER_THRESHOLD_USD', '1.0')),
+                        dry_run=_dsv2_dry,
+                    )
+                    logger.info("🧹 Dust Sweeper V2 initialised (permanent dust-kill loop broken)")
+                except Exception as _dsv2_err:
+                    logger.warning(f"⚠️  Dust Sweeper V2 not available: {_dsv2_err}")
+                    self.dust_sweeper_v2 = None
+
+                # ── MICRO ACCOUNT OPTIMIZER (prevent dust at entry) ─────────────
+                try:
+                    from bot.micro_account_optimizer import get_micro_account_optimizer
+                    self.micro_account_optimizer = get_micro_account_optimizer(
+                        max_fee_pct=float(os.getenv('MICRO_OPT_MAX_FEE_PCT', '0.05'))
+                    )
+                    logger.info("💡 Micro Account Optimizer initialised (dust-at-creation prevention)")
+                except Exception as _mao_err:
+                    logger.warning(f"⚠️  Micro Account Optimizer not available: {_mao_err}")
+                    self.micro_account_optimizer = None
 
                 # ── PRO POSITION MANAGER (Kelly sizing + tiered scaling rules) ──────
                 try:
@@ -5667,6 +5697,28 @@ class TradingStrategy:
                     logger.error(traceback.format_exc())
                 logger.warning(f"")
 
+            # 🧹 DUST SWEEPER V2: permanent dust-kill — runs every cleanup cycle
+            if (run_startup_cleanup or run_periodic_cleanup or run_trade_based_cleanup):
+                if hasattr(self, 'dust_sweeper_v2') and self.dust_sweeper_v2 and active_broker:
+                    try:
+                        # current_positions may not be assigned yet (e.g. early-exit paths)
+                        try:
+                            _dsv2_positions = current_positions  # type: ignore[name-defined]
+                        except NameError:
+                            _dsv2_positions = []
+                        if _dsv2_positions:
+                            _dsv2_result = self.dust_sweeper_v2.sweep(active_broker, _dsv2_positions)
+                            # Sync newly blacklisted symbols into the fast in-memory set
+                            for _act in _dsv2_result.actions:
+                                if _act.action in ("BLACKLISTED", "ALREADY_BLACKLISTED"):
+                                    self._dust_blacklist.add(_act.symbol)
+                            if _dsv2_result.newly_blacklisted > 0 or _dsv2_result.consolidation_attempted:
+                                logger.warning(
+                                    f"🧹 DustSweeperV2: {_dsv2_result.summary()}"
+                                )
+                    except Exception as _dsv2_err:
+                        logger.warning(f"⚠️  DustSweeperV2 sweep failed: {_dsv2_err}")
+
             # 🌀 CONTINUOUS DUST MONITOR (Option A): Time-based dust sweep
             # Checks all accounts every DUST_SWEEP_INTERVAL_MINUTES (default 30 min)
             # and closes any position < DUST_THRESHOLD_USD. Each action is audit-logged.
@@ -6308,6 +6360,18 @@ class TradingStrategy:
                             if not symbol:
                                 continue
 
+                            # HARD SKIP: permanently blacklisted dust — never analyze or sell
+                            if symbol in self._dust_blacklist:
+                                logger.debug(f"   ⏭️ {symbol} in dust blacklist — permanently ignored")
+                                continue
+
+                            # Also sync from DustSweeperV2's blacklist if available
+                            if (hasattr(self, 'dust_sweeper_v2') and self.dust_sweeper_v2
+                                    and self.dust_sweeper_v2.is_blacklisted(symbol)):
+                                self._dust_blacklist.add(symbol)
+                                logger.debug(f"   ⏭️ {symbol} synced from DustSweeperV2 blacklist — skipping")
+                                continue
+
                             # Skip positions we know can't be sold (too small/dust)
                             # But allow retry after timeout in case position grew or API error was temporary
                             if symbol in self.unsellable_positions:
@@ -6359,13 +6423,26 @@ class TradingStrategy:
                                 # MIN_POSITION_VALUE is $2, so positions in the $1–$2 range are
                                 # auto-exited but NOT blacklisted.  Only truly sub-$1 amounts
                                 # (pure dust) are permanently excluded from future trading.
-                                if position_value < 1.0 and hasattr(self, 'dust_blacklist') and self.dust_blacklist:
+                                if position_value < 1.0:
                                     logger.warning(f"   🚫 HARD IGNORE: Blacklisting {symbol} (${position_value:.4f} < $1.00) — permanently excluded")
-                                    self.dust_blacklist.add_to_blacklist(
-                                        symbol=symbol,
-                                        usd_value=position_value,
-                                        reason=f"sub-$1 position (${position_value:.4f}) — permanently ignored"
-                                    )
+                                    # Fast in-memory set (used every cycle)
+                                    self._dust_blacklist.add(symbol)
+                                    # Persistent blacklist (survives restarts)
+                                    if hasattr(self, 'dust_blacklist') and self.dust_blacklist:
+                                        self.dust_blacklist.add_to_blacklist(
+                                            symbol=symbol,
+                                            usd_value=position_value,
+                                            reason=f"sub-$1 position (${position_value:.4f}) — permanently ignored"
+                                        )
+                                    # Also sync to DustSweeperV2
+                                    if hasattr(self, 'dust_sweeper_v2') and self.dust_sweeper_v2:
+                                        self.dust_sweeper_v2.add_to_blacklist(
+                                            symbol=symbol,
+                                            usd_value=position_value,
+                                            reason=f"sub-$1 detected in position loop (${position_value:.4f})"
+                                        )
+                                    # Do NOT queue for sell — exchange will reject it anyway
+                                    continue
                                 positions_to_exit.append({
                                     'symbol': symbol,
                                     'quantity': quantity,
@@ -9596,6 +9673,25 @@ class TradingStrategy:
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
                                     logger.info(f"      📊 Would need {breakeven_pct:.1f}% gain just to break even on fees")
                                     continue
+
+                                # ── MICRO ACCOUNT OPTIMIZER: dust-at-creation prevention ──
+                                # Gate the entry through the fee+drawdown survival check so the
+                                # position cannot become unsellable dust after a normal adverse move.
+                                if hasattr(self, 'micro_account_optimizer') and self.micro_account_optimizer:
+                                    try:
+                                        _mao_decision = self.micro_account_optimizer.gate_entry(
+                                            symbol=symbol,
+                                            position_size=position_size,
+                                            account_balance=account_balance,
+                                            broker_name=broker_name,
+                                        )
+                                        if not _mao_decision.allowed:
+                                            filter_stats['position_too_small'] += 1
+                                            logger.info(f"   ❌ [MicroAccountOptimizer] Entry blocked for {symbol}")
+                                            logger.info(f"      {_mao_decision.reason}")
+                                            continue
+                                    except Exception as _mao_err:
+                                        logger.debug("MicroAccountOptimizer gate skipped for %s: %s", symbol, _mao_err)
 
                                 # Warn if position is near the minimum but allowed
                                 if position_size < POSITION_SIZE_WARNING_THRESHOLD_USD:
