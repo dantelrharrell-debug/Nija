@@ -421,6 +421,18 @@ class HardControls:
             pass
         
         # CRITICAL LAYER 2: Check LIVE CAPITAL VERIFIED (master kill-switch)
+        # Re-read dynamically so that setting the env var (or loading .env) after
+        # module import is honoured without requiring a full restart.
+        live_verified = self._check_live_capital_verification()
+        if live_verified != self.live_capital_verified:
+            # State changed since init – update cached value and log
+            self.live_capital_verified = live_verified
+            if live_verified:
+                logger.warning("=" * 80)
+                logger.warning("🔴 LIVE CAPITAL VERIFIED: TRUE - REAL MONEY TRADING ENABLED")
+                logger.warning("=" * 80)
+            else:
+                logger.warning("LIVE CAPITAL VERIFIED changed to FALSE - trading disabled")
         if not self.live_capital_verified:
             return False, "🔴 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading."
 
@@ -478,9 +490,13 @@ class HardControls:
         """
         Check if LIVE CAPITAL VERIFIED is enabled.
 
+        Re-reads the environment variable dynamically so that setting (or
+        loading) the value after module import is honoured without restart.
+
         Returns:
             bool: True if live capital trading is verified and enabled
         """
+        self.live_capital_verified = self._check_live_capital_verification()
         return self.live_capital_verified
 
     def get_verification_status(self) -> Dict[str, any]:

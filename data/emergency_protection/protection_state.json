@@ -1,0 +1,10 @@
+{
+  "level": "NORMAL",
+  "peak_balance_usd": 1000,
+  "low_balance_usd": 0.0,
+  "consecutive_wins": 0,
+  "total_escalations": 0,
+  "total_recoveries": 0,
+  "last_updated": "2026-03-23T07:25:14.374965+00:00",
+  "event_log": []
+}
