@@ -500,6 +500,25 @@ class ProPositionManager:
                 symbol, size_usd, self.total_open_usd, self.open_count,
             )
 
+    def sync_position(self, symbol: str, size_usd: float) -> None:
+        """
+        Sync an adopted / externally-opened position into the live state.
+
+        Unlike ``record_opened`` (which accumulates scale-in legs),
+        ``sync_position`` performs a direct idempotent assignment so that
+        re-running adoption on subsequent cycles never inflates the tracked
+        size.  The scale-in leg counter is left unchanged; if no leg is
+        recorded yet the symbol is treated as leg 1.
+        """
+        with self._lock:
+            self._open_positions[symbol] = size_usd
+            if symbol not in self._scale_in_legs:
+                self._scale_in_legs[symbol] = 1
+            logger.debug(
+                "🔄 Synced adopted position: %s $%.2f | total_open=$%.2f | positions=%d",
+                symbol, size_usd, self.total_open_usd, self.open_count,
+            )
+
     def record_closed(self, symbol: str, realized_pnl_usd: float = 0.0) -> None:
         with self._lock:
             removed = self._open_positions.pop(symbol, 0.0)

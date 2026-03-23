@@ -3776,7 +3776,35 @@ class TradingStrategy:
                 'adoption_completed': True  # 🔒 GUARDRAIL FLAG
             }
             self.position_adoption_status[adoption_key] = adoption_status
-            
+
+            # ── SYNC INTERNAL STATE ──────────────────────────────────────────
+            # Keep strategy-level counters consistent with adopted positions so
+            # position-cap checks and first-trade gates see accurate data.
+            self.current_positions = adopted_positions
+            self.open_positions_count = len(adopted_positions)
+
+            # Sync ProPositionManager's live state if it is initialised
+            if hasattr(self, 'pro_position_manager') and self.pro_position_manager is not None:
+                try:
+                    for pos in adopted_positions:
+                        symbol = pos.get('symbol', '')
+                        size_usd = float(pos.get('size_usd') or 0.0)
+                        if symbol and size_usd > 0:
+                            self.pro_position_manager.sync_position(symbol, size_usd)
+                    logger.info(
+                        f"   ✅ ProPositionManager synced: {self.pro_position_manager.open_count} position(s)"
+                    )
+                except Exception as _ppm_sync_err:
+                    logger.warning(f"   ⚠️  ProPositionManager sync skipped: {_ppm_sync_err}")
+
+            # HARD BLOCK: disable first_trade_override when positions already exist
+            if self.open_positions_count > 0:
+                self._first_trade_executed = True
+                logger.info(
+                    f"🔒 FIRST TRADE OVERRIDE DISABLED: {self.open_positions_count} open position(s) "
+                    f"already exist — first-trade guarantee not needed"
+                )
+
             logger.info(f"   ✅ Adoption recorded for {adoption_key}")
             logger.info("─" * 70)
             
@@ -5513,7 +5541,15 @@ class TradingStrategy:
         # 🏦 TIERED RISK ENGINE — conservative vs aggressive capital pool gate
         if not user_mode and hasattr(self, 'tiered_risk_engine') and self.tiered_risk_engine is not None:
             try:
-                _open_positions = len(getattr(self, 'open_positions', {}))
+                # Use synced position count (from adoption or previous cycle) so the
+                # tiered risk engine sees the real position count, not a stale internal dict.
+                # Explicit is-not-None check is required so a legitimate 0 isn't overridden.
+                if hasattr(self, 'open_positions_count') and self.open_positions_count is not None:
+                    _open_positions = self.open_positions_count
+                elif hasattr(self, 'current_positions') and self.current_positions is not None:
+                    _open_positions = len(self.current_positions)
+                else:
+                    _open_positions = len(getattr(self, 'open_positions', {}))
                 _market_vol = 50.0  # neutral default volatility (0-100 scale)
                 # Use the actual account balance to compute a realistic representative
                 # trade size for the gate check.  The old formula (BASE_CAPITAL * 0.05)
@@ -6065,6 +6101,18 @@ class TradingStrategy:
                 _first_trade_override = True
             else:
                 _first_trade_override = False
+
+            # ── HARD BLOCK: real positions disable first-trade override ────────
+            # If the broker already has open positions (adopted or otherwise),
+            # capital is already deployed — the first-trade guarantee must NOT fire.
+            _actual_open_positions = len(current_positions)
+            if _actual_open_positions > 0:
+                _first_trade_override = False
+                logger.info(
+                    "🔒 FIRST TRADE OVERRIDE DISABLED: %d real open position(s) exist "
+                    "— first-trade guarantee not needed",
+                    _actual_open_positions,
+                )
 
             # ── FIRST TRADE FILTER BYPASS ─────────────────────────────────────
             # Until the very first confirmed entry is recorded, relax AI confidence
