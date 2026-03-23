@@ -678,6 +678,37 @@ class BaseBroker(ABC):
             raise ValueError("close_position requires a quantity or base_size")
         return self.place_market_order(symbol, side, quantity, size_type)
 
+    def get_asset_balance(self, base_asset: str) -> float:
+        """Return the held quantity of *base_asset* (e.g. 'BTC', 'ETH').
+
+        Default implementation scans ``get_positions()`` for any entry whose
+        symbol starts with *base_asset* and returns its ``quantity`` /
+        ``base_size`` / ``size`` field.  Brokers with a dedicated balance API
+        should override this method.
+
+        Returns 0.0 when the asset is not found or on any error.
+        """
+        try:
+            positions = self.get_positions() or []
+            for pos in positions:
+                sym = pos.get('symbol', '')
+                # Accept both "BTC-USD" and "BTC/USD" notations
+                pos_base = sym.split('-')[0].split('/')[0]
+                if pos_base.upper() == base_asset.upper():
+                    # Use explicit None checks so a legitimate 0.0 holding
+                    # does not accidentally trigger the next fallback field.
+                    for field in ('quantity', 'base_size', 'size'):
+                        val = pos.get(field)
+                        if val is not None:
+                            return float(val)
+                    return 0.0
+        except Exception as exc:
+            logging.warning(
+                "get_asset_balance(%s): error scanning positions: %s",
+                base_asset, exc,
+            )
+        return 0.0
+
     def cancel_all_orders(self) -> int:
         """Cancel all open orders. Optional method, brokers can override.
 
