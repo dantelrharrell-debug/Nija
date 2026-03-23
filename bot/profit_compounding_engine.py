@@ -17,6 +17,7 @@ Version: 1.0
 Date: January 28, 2026
 """
 
+import threading
 import logging
 from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass, field
@@ -485,6 +486,29 @@ def get_compounding_engine(base_capital: float,
         )
 
     return ProfitCompoundingEngine(base_capital, config)
+
+
+# ---------------------------------------------------------------------------
+# Singleton factory
+# ---------------------------------------------------------------------------
+
+_compounding_instance: Optional[ProfitCompoundingEngine] = None
+_compounding_lock = threading.Lock()
+
+
+def get_profit_compounding_engine(base_capital: float = 1000.0,
+                                  strategy: str = "moderate") -> ProfitCompoundingEngine:
+    """Return (or create) the process-wide :class:`ProfitCompoundingEngine` singleton.
+
+    ``base_capital`` and ``strategy`` are only used on the **first** call;
+    subsequent calls return the existing instance unchanged.
+    """
+    global _compounding_instance
+    if _compounding_instance is None:
+        with _compounding_lock:
+            if _compounding_instance is None:
+                _compounding_instance = get_compounding_engine(base_capital, strategy)
+    return _compounding_instance
 
 
 if __name__ == "__main__":

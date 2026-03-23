@@ -808,6 +808,37 @@ except ImportError:
         get_dynamic_sniper_thresholds = None  # type: ignore
         logger.warning("⚠️ Dynamic Sniper Thresholds not available — static sniper gates in use")
 
+# ── AI Trade Quality Filter — ML-powered scalp quality gate ──────────────────
+try:
+    from ai_trade_quality_filter import get_ai_trade_quality_filter, TradeFeatures as AITradeFeatures
+    AI_TRADE_QUALITY_FILTER_AVAILABLE = True
+    logger.info("✅ AI Trade Quality Filter loaded — ML scalp quality gate active")
+except ImportError:
+    try:
+        from bot.ai_trade_quality_filter import get_ai_trade_quality_filter, TradeFeatures as AITradeFeatures
+        AI_TRADE_QUALITY_FILTER_AVAILABLE = True
+        logger.info("✅ AI Trade Quality Filter loaded — ML scalp quality gate active")
+    except ImportError:
+        AI_TRADE_QUALITY_FILTER_AVAILABLE = False
+        get_ai_trade_quality_filter = None  # type: ignore
+        AITradeFeatures = None  # type: ignore
+        logger.warning("⚠️ AI Trade Quality Filter not available — ML scalp filtering disabled")
+
+# ── Profit Compounding Engine — auto-compound profits into position sizing ────
+try:
+    from profit_compounding_engine import get_profit_compounding_engine
+    PROFIT_COMPOUNDING_ENGINE_AVAILABLE = True
+    logger.info("✅ Profit Compounding Engine loaded — auto-compounding position sizing active")
+except ImportError:
+    try:
+        from bot.profit_compounding_engine import get_profit_compounding_engine
+        PROFIT_COMPOUNDING_ENGINE_AVAILABLE = True
+        logger.info("✅ Profit Compounding Engine loaded — auto-compounding position sizing active")
+    except ImportError:
+        PROFIT_COMPOUNDING_ENGINE_AVAILABLE = False
+        get_profit_compounding_engine = None  # type: ignore
+        logger.warning("⚠️ Profit Compounding Engine not available — static position sizing in use")
+
 # ── HF Micro Scalping Mode — high-frequency 30s scan, low confidence gate ─────
 try:
     from hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode
@@ -2391,6 +2422,37 @@ class TradingStrategy:
                 self.auto_tuning_ai = None
         else:
             self.auto_tuning_ai = None
+
+        # ── AI Trade Quality Filter — ML-powered scalp quality gate ──────────
+        if AI_TRADE_QUALITY_FILTER_AVAILABLE and get_ai_trade_quality_filter is not None:
+            try:
+                self.ai_trade_quality_filter = get_ai_trade_quality_filter()
+                logger.info("✅ AI Trade Quality Filter initialized — ML scalp filtering active")
+            except Exception as _e:
+                logger.warning("⚠️ AI Trade Quality Filter init failed: %s", _e)
+                self.ai_trade_quality_filter = None
+        else:
+            self.ai_trade_quality_filter = None
+
+        # ── Profit Compounding Engine — auto-compound profits into sizing ─────
+        if PROFIT_COMPOUNDING_ENGINE_AVAILABLE and get_profit_compounding_engine is not None:
+            try:
+                _base_cap_pce = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
+                _strategy_pce = os.environ.get("COMPOUNDING_STRATEGY", "moderate")
+                self.profit_compounding_engine = get_profit_compounding_engine(
+                    base_capital=_base_cap_pce,
+                    strategy=_strategy_pce,
+                )
+                logger.info(
+                    "✅ Profit Compounding Engine initialized — "
+                    "auto-compounding position sizing active (base=$%.2f, strategy=%s)",
+                    _base_cap_pce, _strategy_pce,
+                )
+            except Exception as _pce_err:
+                logger.warning("⚠️ Profit Compounding Engine init failed: %s", _pce_err)
+                self.profit_compounding_engine = None
+        else:
+            self.profit_compounding_engine = None
 
         if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
             try:
@@ -9426,6 +9488,100 @@ class TradingStrategy:
                                             symbol, _sf_exc,
                                         )
 
+                                # ═══════════════════════════════════════════════════════
+                                # AI TRADE QUALITY FILTER — ML scalp quality gate
+                                # Predicts win probability from RSI, ADX, regime, entry
+                                # score, and signal features.  Rejects low-quality scalps
+                                # before capital is committed.  Falls back to heuristics
+                                # when the ML model is not yet trained.
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    AI_TRADE_QUALITY_FILTER_AVAILABLE
+                                    and hasattr(self, 'ai_trade_quality_filter')
+                                    and self.ai_trade_quality_filter is not None
+                                    and analysis.get('action') in ('enter_long', 'enter_short')
+                                    and AITradeFeatures is not None
+                                ):
+                                    try:
+                                        _aqf = self.ai_trade_quality_filter
+                                        _aqf_indicators = getattr(self, '_last_indicators', {}) or {}
+                                        _aqf_now = datetime.now()
+
+                                        # Build feature vector from available data
+                                        _aqf_rsi9  = float(_aqf_indicators.get('rsi_9',  _aqf_indicators.get('rsi', 50.0)) or 50.0)
+                                        _aqf_rsi14 = float(_aqf_indicators.get('rsi_14', _aqf_indicators.get('rsi', 50.0)) or 50.0)
+                                        _aqf_adx   = float(_aqf_indicators.get('adx', 0.0) or 0.0)
+                                        _aqf_atr   = float(_aqf_indicators.get('atr_pct', 0.01) or 0.01)
+                                        _aqf_vol   = float(_aqf_indicators.get('price_volatility', _aqf_atr) or _aqf_atr)
+                                        _aqf_ema_align   = float(_aqf_indicators.get('ema_alignment', 0.5) or 0.5)
+                                        _aqf_trend_str   = float(_aqf_indicators.get('trend_strength', 0.5) or 0.5)
+                                        _aqf_reg_conf    = float(_aqf_indicators.get('regime_confidence', 0.5) or 0.5)
+                                        _aqf_reg_dur     = int(_aqf_indicators.get('regime_duration', 1) or 1)
+                                        _aqf_entry_score = int(analysis.get('score', 3) or 3)
+                                        _aqf_dist_ma     = float(_aqf_indicators.get('distance_from_ma', 0.0) or 0.0)
+                                        _aqf_vol_ratio   = float(_aqf_indicators.get('volume_ratio', 1.0) or 1.0)
+                                        _aqf_sig_conf    = float(analysis.get('confidence', 0.65) or 0.65)
+                                        _aqf_vote_count  = int(analysis.get('vote_count', 1) or 1)
+                                        _aqf_mkt_vol     = float(_aqf_indicators.get('market_volatility', _aqf_atr) or _aqf_atr)
+
+                                        _aqf_features = AITradeFeatures(
+                                            rsi_9=_aqf_rsi9,
+                                            rsi_14=_aqf_rsi14,
+                                            adx=_aqf_adx,
+                                            atr_pct=_aqf_atr,
+                                            price_volatility=_aqf_vol,
+                                            ema_alignment=_aqf_ema_align,
+                                            trend_strength=_aqf_trend_str,
+                                            regime_confidence=_aqf_reg_conf,
+                                            regime_duration=_aqf_reg_dur,
+                                            entry_score=_aqf_entry_score,
+                                            distance_from_ma=_aqf_dist_ma,
+                                            volume_ratio=_aqf_vol_ratio,
+                                            hour_of_day=_aqf_now.hour,
+                                            day_of_week=_aqf_now.weekday(),
+                                            market_volatility=_aqf_mkt_vol,
+                                            signal_confidence=_aqf_sig_conf,
+                                            signal_vote_count=_aqf_vote_count,
+                                        )
+
+                                        _aqf_prediction = _aqf.predict(_aqf_features, current_time=_aqf_now)
+
+                                        if not _aqf_prediction.should_execute:
+                                            logger.info(
+                                                "   🧠 AI Trade Quality Filter REJECTED %s: "
+                                                "win_prob=%.1f%% confidence=%.1f%% (threshold=%.0f%%)",
+                                                symbol,
+                                                _aqf_prediction.win_probability * 100,
+                                                _aqf_prediction.confidence * 100,
+                                                _aqf.min_win_probability * 100,
+                                            )
+                                            analysis = {
+                                                'action': 'hold',
+                                                'reason': (
+                                                    f'AITradeQualityFilter: win_prob='
+                                                    f'{_aqf_prediction.win_probability:.1%}'
+                                                ),
+                                            }
+                                            filter_stats['market_filter'] = (
+                                                filter_stats.get('market_filter', 0) + 1
+                                            )
+                                        else:
+                                            logger.debug(
+                                                "   🧠 AI Trade Quality Filter APPROVED %s: "
+                                                "win_prob=%.1f%%",
+                                                symbol,
+                                                _aqf_prediction.win_probability * 100,
+                                            )
+                                            # Cache features for outcome recording
+                                            if not hasattr(self, '_last_ai_trade_features'):
+                                                self._last_ai_trade_features = {}
+                                            self._last_ai_trade_features[symbol] = _aqf_features
+                                    except Exception as _aqf_exc:
+                                        logger.debug(
+                                            "AI Trade Quality Filter check skipped for %s: %s",
+                                            symbol, _aqf_exc,
+                                        )
+
 
                                 if MASTER_STRATEGY_ROUTER_AVAILABLE and get_master_strategy_router:
                                     try:
@@ -10156,6 +10312,47 @@ class TradingStrategy:
                                                     analysis['take_profit'] = _new_tp_list
                                     except Exception as _at_err:
                                         logger.debug("Auto-Tuning AI Layer skipped for %s: %s", symbol, _at_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # PROFIT COMPOUNDING ENGINE — auto-compound position sizing
+                                # Grows position size proportionally as account profits
+                                # compound.  Multiplier = current_capital / base_capital
+                                # (capped at max_position_size_multiplier, default 2×).
+                                # Only applies when the engine has seen meaningful growth
+                                # (multiplier > 1.0) to avoid scaling into drawdowns.
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    PROFIT_COMPOUNDING_ENGINE_AVAILABLE
+                                    and hasattr(self, 'profit_compounding_engine')
+                                    and self.profit_compounding_engine is not None
+                                ):
+                                    try:
+                                        _pce = self.profit_compounding_engine
+                                        _pce_mult = _pce.get_compound_multiplier()
+                                        # Only boost sizing when we have compounded profits
+                                        if _pce_mult > 1.0:
+                                            _pce_capped = min(
+                                                _pce_mult,
+                                                _pce.config.max_position_size_multiplier,
+                                            )
+                                            _pre_pce = position_size
+                                            position_size *= _pce_capped
+                                            logger.info(
+                                                "   💰 %s: Profit Compounding Engine "
+                                                "size ×%.2f — $%.2f→$%.2f "
+                                                "(compound_mult=%.2f× ROI=%.1f%%)",
+                                                symbol,
+                                                _pce_capped,
+                                                _pre_pce,
+                                                position_size,
+                                                _pce_mult,
+                                                _pce.get_roi_percentage(),
+                                            )
+                                    except Exception as _pce_err:
+                                        logger.debug(
+                                            "Profit Compounding Engine sizing skipped for %s: %s",
+                                            symbol, _pce_err,
+                                        )
 
                                 # ═══════════════════════════════════════════════════════
                                 # CROSS-BROKER ARBITRAGE MONITOR — best venue selection
@@ -11770,6 +11967,35 @@ class TradingStrategy:
                 self.dynamic_sniper_thresholds.record_trade(won=is_win)
             except Exception as _dst_rec_err:
                 logger.debug("Dynamic Sniper Thresholds record_trade skipped for %s: %s", symbol, _dst_rec_err)
+
+        # 🧠 AI TRADE QUALITY FILTER — feed outcome so model can learn & retrain
+        if (AI_TRADE_QUALITY_FILTER_AVAILABLE
+                and hasattr(self, 'ai_trade_quality_filter')
+                and self.ai_trade_quality_filter is not None):
+            try:
+                _aqf_last = getattr(self, '_last_ai_trade_features', {}).get(symbol)
+                if _aqf_last is not None:
+                    self.ai_trade_quality_filter.add_trade_outcome(
+                        features=_aqf_last,
+                        won=is_win,
+                        pnl=profit_usd,
+                    )
+            except Exception as _aqf_rec_err:
+                logger.debug("AI Trade Quality Filter add_trade_outcome skipped for %s: %s", symbol, _aqf_rec_err)
+
+        # 💰 PROFIT COMPOUNDING ENGINE — feed outcome to update capital & compounding state
+        if (PROFIT_COMPOUNDING_ENGINE_AVAILABLE
+                and hasattr(self, 'profit_compounding_engine')
+                and self.profit_compounding_engine is not None):
+            try:
+                _pce_fees = abs(profit_usd) * _TRADING_FEE_PCT  # approximate exchange fees
+                self.profit_compounding_engine.record_trade(
+                    profit=profit_usd,
+                    fees=_pce_fees,
+                    is_win=is_win,
+                )
+            except Exception as _pce_rec_err:
+                logger.debug("Profit Compounding Engine record_trade skipped for %s: %s", symbol, _pce_rec_err)
 
         if not self.advanced_manager:
             return
