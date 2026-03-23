@@ -321,9 +321,17 @@ class ForcedPositionCleanup:
         excess_positions = []
         for i in range(excess_count):
             pos = ranked_positions[i]
+            # Preserve base asset quantity so execute_cleanup can pass it as
+            # base_size to close_position() (fixes missing quantity on CAP_EXCEEDED)
+            quantity = (
+                pos.get('quantity') or
+                pos.get('base_size') or
+                pos.get('size')
+            )
             excess_positions.append({
                 'symbol': pos['symbol'],
                 'size_usd': pos.get('size_usd', 0) or pos.get('usd_value', 0),
+                'quantity': quantity,
                 'pnl_pct': pos.get('pnl_pct', 0),
                 'cleanup_type': CleanupType.CAP_EXCEEDED.value,
                 'reason': f'Position cap exceeded ({len(positions)}/{self.max_positions})',
@@ -468,8 +476,12 @@ class ForcedPositionCleanup:
             reason = pos_data['reason']
             pnl_pct = pos_data.get('pnl_pct', 0) or 0  # Handle None values
             size_usd = pos_data.get('size_usd', 0)
-            # Retrieve quantity so the broker receives the exact amount to sell (base_size)
-            base_size = pos_data.get('quantity') or pos_data.get('base_size')
+            # Normalize base asset size — check all field names used across brokers
+            base_size = (
+                pos_data.get('base_size') or
+                pos_data.get('quantity') or
+                pos_data.get('size')
+            )
 
             # ── HARD BLOCK: permanent dust blacklist (check BEFORE size test) ─
             # Symbols already blacklisted are skipped immediately — never retry.
@@ -526,12 +538,26 @@ class ForcedPositionCleanup:
                 continue
             
             try:
-                # Attempt to close the position, passing base_size so the broker
-                # knows the exact quantity to sell (fixes missing quantity bug)
-                if base_size is not None:
-                    result = broker.close_position(symbol, base_size=base_size)
-                else:
-                    result = broker.close_position(symbol)
+                # Fix #3 — Emergency fallback: if base_size is still unknown,
+                # query the broker for the actual held quantity.
+                if not base_size:
+                    base_asset = symbol.split('-')[0].split('/')[0]
+                    logger.warning(
+                        f"   ⚠️ No base_size for {symbol}, "
+                        f"forcing market sell using live balance"
+                    )
+                    base_size = broker.get_asset_balance(base_asset)
+                    if not base_size or base_size <= 0:
+                        logger.error(f"   ❌ Missing size for {symbol} — skipping")
+                        failed += 1
+                        # Fix #4 — stop retrying on first failure to prevent
+                        # an infinite cleanup loop within a single cycle.
+                        logger.error(
+                            "🚨 Cleanup failed — stopping further attempts this cycle"
+                        )
+                        break
+
+                result = broker.close_position(symbol, base_size=base_size)
                 
                 if result and result.get('status') in ['filled', 'success']:
                     logger.warning(f"   ✅ CLOSED SUCCESSFULLY")
@@ -540,6 +566,12 @@ class ForcedPositionCleanup:
                     error = result.get('error', 'Unknown error') if result else 'No result'
                     logger.error(f"   ❌ CLOSE FAILED: {error}")
                     failed += 1
+                    # Fix #4 — stop retrying on first failure to prevent
+                    # an infinite cleanup loop within a single cycle.
+                    logger.error(
+                        "🚨 Cleanup failed — stopping further attempts this cycle"
+                    )
+                    break
                 
                 # Rate limiting
                 time.sleep(0.5)
@@ -547,6 +579,11 @@ class ForcedPositionCleanup:
             except Exception as e:
                 logger.error(f"   ❌ CLOSE FAILED: {e}")
                 failed += 1
+                # Fix #4 — stop retrying on first failure
+                logger.error(
+                    "🚨 Cleanup failed — stopping further attempts this cycle"
+                )
+                break
         
         logger.warning(f"")
         logger.warning(f"🧹 Cleanup executed: {account_id}")
