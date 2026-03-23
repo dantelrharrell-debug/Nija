@@ -718,6 +718,21 @@ except ImportError:
         get_abnormal_market_ks = None  # type: ignore
         logger.warning("⚠️ Phase 3: Abnormal Market Kill Switch not available")
 
+# ── Sniper Filter — final pre-execution quality gate ─────────────────────────
+try:
+    from sniper_filter import get_sniper_filter
+    SNIPER_FILTER_AVAILABLE = True
+    logger.info("✅ Sniper Filter loaded — final pre-execution quality gate active")
+except ImportError:
+    try:
+        from bot.sniper_filter import get_sniper_filter
+        SNIPER_FILTER_AVAILABLE = True
+        logger.info("✅ Sniper Filter loaded — final pre-execution quality gate active")
+    except ImportError:
+        SNIPER_FILTER_AVAILABLE = False
+        get_sniper_filter = None  # type: ignore
+        logger.warning("⚠️ Sniper Filter not available — entry quality gate disabled")
+
 # ── Auto-Tuning AI Layer — win/loss streak threshold self-adjuster ────────────
 try:
     from auto_tuning_ai_layer import get_auto_tuning_ai_layer
@@ -2187,6 +2202,17 @@ class TradingStrategy:
                 self.abnormal_market_ks = None
         else:
             self.abnormal_market_ks = None
+
+        # ── Sniper Filter ──────────────────────────────────────────────────────
+        if SNIPER_FILTER_AVAILABLE and get_sniper_filter is not None:
+            try:
+                self.sniper_filter = get_sniper_filter()
+                logger.info("✅ Sniper Filter initialized — final pre-execution gate active")
+            except Exception as _e:
+                logger.warning("⚠️ Sniper Filter init failed: %s", _e)
+                self.sniper_filter = None
+        else:
+            self.sniper_filter = None
 
         # ── Auto-Tuning AI Layer ───────────────────────────────────────────────
         if AUTO_TUNING_AI_AVAILABLE and get_auto_tuning_ai_layer is not None:
@@ -8907,6 +8933,62 @@ class TradingStrategy:
                                     except Exception as _mtf_exc:
                                         logger.debug("MTF Confirmation check skipped for %s: %s", symbol, _mtf_exc)
 
+                                # ═══════════════════════════════════════════════════════
+                                # LAYER 5 — SNIPER FILTER: final pre-execution quality gate
+                                # ═══════════════════════════════════════════════════════
+                                # All four pillars must pass: MTF trend alignment, momentum
+                                # trigger (breakout + volume spike), liquidity (spread), and
+                                # confidence threshold.  Chop / sideways / thin-book conditions
+                                # trigger an instant veto.
+                                if (
+                                    SNIPER_FILTER_AVAILABLE
+                                    and hasattr(self, 'sniper_filter')
+                                    and self.sniper_filter is not None
+                                    and analysis.get('action') in ('enter_long', 'enter_short')
+                                ):
+                                    try:
+                                        _sf_side = (
+                                            'long' if analysis.get('action') == 'enter_long'
+                                            else 'short'
+                                        )
+                                        # Resolve confidence: prefer explicit 'confidence' key, then
+                                        # normalise 'score' (0-5 scale → 0-1), fallback to 0.65.
+                                        _raw_conf = analysis.get('confidence')
+                                        if _raw_conf is None:
+                                            _raw_score = analysis.get('score')
+                                            _raw_conf = (_raw_score / 5.0) if _raw_score else 0.65
+                                        _sf_confidence = float(_raw_conf)
+                                        _sf_close = float(df['close'].iloc[-1]) if len(df) > 0 else 0.0
+                                        _sf_spread = float(analysis.get('spread_pct', 0.001) or 0.001)
+                                        _sf_bid = _sf_close * (1.0 - _sf_spread / 2.0)
+                                        _sf_ask = _sf_close * (1.0 + _sf_spread / 2.0)
+
+                                        _sf_result = self.sniper_filter.check(
+                                            symbol=symbol,
+                                            df=df,
+                                            signal_side=_sf_side,
+                                            confidence=_sf_confidence,
+                                            bid=_sf_bid,
+                                            ask=_sf_ask,
+                                        )
+                                        if not _sf_result.passed:
+                                            logger.info(
+                                                "   🎯 SNIPER FILTER BLOCKED %s: %s",
+                                                symbol, _sf_result.reason,
+                                            )
+                                            analysis = {
+                                                'action': 'hold',
+                                                'reason': f'SniperFilter: {_sf_result.reason}',
+                                            }
+                                            filter_stats['sniper_filter'] = (
+                                                filter_stats.get('sniper_filter', 0) + 1
+                                            )
+                                    except Exception as _sf_exc:
+                                        logger.debug(
+                                            "Sniper Filter check skipped for %s: %s",
+                                            symbol, _sf_exc,
+                                        )
+
 
                                 if MASTER_STRATEGY_ROUTER_AVAILABLE and get_master_strategy_router:
                                     try:
@@ -10739,6 +10821,8 @@ class TradingStrategy:
                         logger.info(f"      🏷️  Sector cap (40%): {filter_stats['sector_cap']}")
                     if filter_stats.get('entry_guardrails', 0) > 0:
                         logger.info(f"      🛡️  Entry guardrails: {filter_stats['entry_guardrails']}")
+                    if filter_stats.get('sniper_filter', 0) > 0:
+                        logger.info(f"      🎯 Sniper filter: {filter_stats['sniper_filter']}")
 
                     # 📡 SIGNAL TRACE — show top-3 near-miss symbols so users can see
                     # which pairs are closest to triggering a trade and why they didn't.
