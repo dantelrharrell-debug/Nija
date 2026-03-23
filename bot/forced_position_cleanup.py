@@ -29,6 +29,10 @@ EXCHANGE_MIN_CLOSE_USD = 1.00
 # sub-$1 market orders).
 EXCHANGE_MIN_SELL_USD: float = 1.00
 
+# PERFECT CLEANUP FLOW: how long (hours) an unsellable position is excluded from
+# cap math before getting a fresh sell attempt.
+UNSELLABLE_DECAY_HOURS: float = 12.0
+
 
 class CleanupType(Enum):
     """Types of cleanup operations"""
@@ -84,6 +88,14 @@ class ForcedPositionCleanup:
         # again in execute_cleanup, preventing the infinite retry loop.
         self._dust_blacklist: set = set()
 
+        # PERFECT CLEANUP FLOW + CAP RESOLUTION ENGINE:
+        # Maps symbol -> Unix timestamp when it was first marked unsellable.
+        # Entries are evicted automatically after UNSELLABLE_DECAY_HOURS so the
+        # position gets a fresh close attempt once the decay window expires.
+        # While active, the symbol is excluded from cap math so unsellable
+        # positions never permanently block new legitimate entries.
+        self._unsellable_positions: Dict[str, float] = {}
+
         # Post-cleanup state — force re-synced after every cleanup run so
         # callers always have an accurate view of open positions.
         self.current_positions: List[Dict] = []
@@ -131,7 +143,81 @@ class ForcedPositionCleanup:
                 logger.info(f"   Cancellation Mode: NUCLEAR (startup-only)")
             else:
                 logger.info(f"   Cancellation Mode: ALWAYS")
-    
+
+    # ------------------------------------------------------------------
+    # Unsellable-position helpers  (PERFECT CLEANUP FLOW / CAP RESOLUTION)
+    # ------------------------------------------------------------------
+
+    def _expire_stale_unsellables(self) -> None:
+        """Evict unsellable entries whose UNSELLABLE_DECAY_HOURS window has passed."""
+        now = time.time()
+        expired = [
+            sym for sym, ts in self._unsellable_positions.items()
+            if (now - ts) >= UNSELLABLE_DECAY_HOURS * 3600
+        ]
+        for sym in expired:
+            del self._unsellable_positions[sym]
+            logger.info(
+                "♻️  Unsellable decay expired for %s — fresh close attempt allowed", sym
+            )
+
+    def _mark_unsellable(self, symbol: str) -> None:
+        """Tag *symbol* as unsellable (first tag wins — preserves original timestamp)."""
+        if symbol not in self._unsellable_positions:
+            self._unsellable_positions[symbol] = time.time()
+            logger.warning(
+                "🔒 CAP RESOLUTION: %s marked unsellable for %.0fh — "
+                "excluded from cap math until decay expires",
+                symbol, UNSELLABLE_DECAY_HOURS,
+            )
+
+    def _is_tradable(self, symbol: str) -> bool:
+        """Return True when *symbol* is NOT in the active unsellable window."""
+        return symbol not in self._unsellable_positions
+
+    def _filter_tradable(self, positions: List[Dict]) -> List[Dict]:
+        """
+        Return only the positions that are currently tradable.
+
+        CAP RESOLUTION ENGINE: unsellable positions are excluded from this
+        list so they do not inflate the cap count and block new entries.
+        """
+        tradable = [p for p in positions if self._is_tradable(p.get("symbol", ""))]
+        excluded = len(positions) - len(tradable)
+        if excluded:
+            logger.info(
+                "🔒 CAP RESOLUTION: %d unsellable position(s) excluded from cap math",
+                excluded,
+            )
+        return tradable
+
+    def _is_position_closable(self, pos_data: Dict, broker) -> bool:
+        """
+        Thin wrapper around ``auto_cleanup_engine.is_position_closable`` with a
+        graceful fallback when the import is unavailable.
+
+        Normalizes the position dict so it contains the ``quantity`` / ``base_size``
+        fields that the underlying checker expects.
+        """
+        # Build a normalised dict the checker understands
+        base_size = (
+            pos_data.get("base_size")
+            or pos_data.get("quantity")
+            or pos_data.get("size")
+            or pos_data.get("balance")
+        )
+        normalised = dict(pos_data, base_size=base_size)
+
+        try:
+            from bot.auto_cleanup_engine import is_position_closable
+            return is_position_closable(normalised, broker)
+        except Exception as exc:
+            logger.debug("_is_position_closable: auto_cleanup_engine unavailable (%s), using fallback", exc)
+            # Fallback: position is closable iff it has a positive base quantity and
+            # its USD value meets the exchange minimum.
+            size_usd = pos_data.get("size_usd", 0) or pos_data.get("usd_value", 0)
+            return bool(base_size) and float(base_size) > 0 and size_usd >= EXCHANGE_MIN_SELL_USD
+
     def _parse_cancel_conditions(self, conditions_str: str) -> Dict[str, Union[float, bool]]:
         """
         Parse cancellation conditions from string format.
@@ -438,7 +524,15 @@ class ForcedPositionCleanup:
                        is_startup: bool = False) -> Tuple[int, int, int]:
         """
         Execute cleanup by closing positions and optionally cancelling open orders.
-        
+
+        PERFECT CLEANUP FLOW:
+        - ``is_position_closable()`` is evaluated BEFORE ANY close attempt in
+          every code path (including the kill-all startup path).
+        - A position that fails the closable check is marked unsellable for
+          UNSELLABLE_DECAY_HOURS and skipped without retrying.
+        - Failed API closes are also marked unsellable and the loop continues
+          (no ``break`` on first failure — zero loops, zero retries).
+
         Args:
             positions_to_close: List of positions with cleanup metadata
             broker: Broker instance to execute trades
@@ -504,6 +598,19 @@ class ForcedPositionCleanup:
                 skipped += 1
                 continue  # NEVER try again — not recorded as LOSS
 
+            # ── PERFECT CLEANUP FLOW: closable guard BEFORE any close attempt ──
+            # This check runs in EVERY code path — normal dust, cap-excess, and
+            # kill-all — before any cancel_orders or close_position call is made.
+            if not self._is_position_closable(pos_data, broker):
+                logger.warning(
+                    "   🚫 NOT CLOSABLE: %s (base_size below exchange minimum) — "
+                    "marking unsellable for %.0fh, skipping",
+                    symbol, UNSELLABLE_DECAY_HOURS,
+                )
+                self._mark_unsellable(symbol)
+                skipped += 1
+                continue  # PERFECT CLEANUP FLOW: no retry
+
             # All positions reaching here are tradeable — label WIN or LOSS only
             outcome = "WIN" if pnl_pct > 0 else "LOSS"
             
@@ -538,7 +645,7 @@ class ForcedPositionCleanup:
                 continue
             
             try:
-                # Fix #3 — Emergency fallback: if base_size is still unknown,
+                # Emergency fallback: if base_size is still unknown,
                 # query the broker for the actual held quantity.
                 if not base_size:
                     base_asset = symbol.split('-')[0].split('/')[0]
@@ -548,14 +655,10 @@ class ForcedPositionCleanup:
                     )
                     base_size = broker.get_asset_balance(base_asset)
                     if not base_size or base_size <= 0:
-                        logger.error(f"   ❌ Missing size for {symbol} — skipping")
+                        logger.error(f"   ❌ Missing size for {symbol} — marking unsellable, skipping")
+                        self._mark_unsellable(symbol)
                         failed += 1
-                        # Fix #4 — stop retrying on first failure to prevent
-                        # an infinite cleanup loop within a single cycle.
-                        logger.error(
-                            "🚨 Cleanup failed — stopping further attempts this cycle"
-                        )
-                        break
+                        continue  # PERFECT CLEANUP FLOW: no break, continue to next position
 
                 result = broker.close_position(symbol, base_size=base_size)
                 
@@ -565,34 +668,28 @@ class ForcedPositionCleanup:
                 else:
                     error = result.get('error', 'Unknown error') if result else 'No result'
                     logger.error(f"   ❌ CLOSE FAILED: {error}")
+                    # PERFECT CLEANUP FLOW: mark unsellable and continue — no break
+                    self._mark_unsellable(symbol)
                     failed += 1
-                    # Fix #4 — stop retrying on first failure to prevent
-                    # an infinite cleanup loop within a single cycle.
-                    logger.error(
-                        "🚨 Cleanup failed — stopping further attempts this cycle"
-                    )
-                    break
                 
                 # Rate limiting
                 time.sleep(0.5)
                 
             except Exception as e:
                 logger.error(f"   ❌ CLOSE FAILED: {e}")
+                # PERFECT CLEANUP FLOW: mark unsellable and continue — no break
+                self._mark_unsellable(symbol)
                 failed += 1
-                # Fix #4 — stop retrying on first failure
-                logger.error(
-                    "🚨 Cleanup failed — stopping further attempts this cycle"
-                )
-                break
         
         logger.warning(f"")
         logger.warning(f"🧹 Cleanup executed: {account_id}")
         logger.warning(f"   Successful: {successful}")
-        logger.warning(f"   Skipped (below exchange minimum): {skipped}")
-        logger.warning(f"   Failed: {failed}")
+        logger.warning(f"   Skipped (below exchange minimum / unsellable): {skipped}")
+        logger.warning(f"   Failed (marked unsellable): {failed}")
         logger.warning(f"")
         
         return successful, failed, skipped
+
     
     def _cleanup_user_all_brokers(self, 
                                   user_id: str,
@@ -694,17 +791,19 @@ class ForcedPositionCleanup:
             logger.warning(f"   ⚠️  Position refresh failed for {len(refresh_failures)} broker(s): {', '.join(refresh_failures)}")
             logger.warning(f"   ⚠️  Cap enforcement may be incomplete - retry recommended")
         
-        # Filter out dust from cap check
+        # Filter out dust from cap check, then apply CAP RESOLUTION ENGINE:
+        # unsellable positions are excluded so they don't inflate the cap count.
         non_dust_positions = [
             p for p in all_user_positions 
             if (p.get('size_usd', 0) or p.get('usd_value', 0)) >= self.dust_threshold_usd
         ]
+        tradable_positions = self._filter_tradable(non_dust_positions)
         
         # Step 4: Enforce per-user position cap across all brokers
         cap_closed_total = 0
-        current_count = len(non_dust_positions)
+        current_count = len(tradable_positions)
         
-        logger.info(f"   📊 Active Positions (after dust cleanup): {current_count}")
+        logger.info(f"   📊 Active Tradable Positions (after dust cleanup): {current_count}")
         
         cap_failed_total = 0
         if current_count > self.max_positions:
@@ -713,7 +812,7 @@ class ForcedPositionCleanup:
             self._log_cap_violation_alert(user_id, current_count, self.max_positions)
             
             # Identify positions to close to meet cap
-            cap_excess_positions = self.identify_cap_excess_positions(non_dust_positions)
+            cap_excess_positions = self.identify_cap_excess_positions(tradable_positions)
             
             # Close excess positions across all brokers, tracking failures
             for cap_pos in cap_excess_positions:
@@ -851,6 +950,10 @@ class ForcedPositionCleanup:
             Cleanup result summary
         """
         logger.info(f"🔍 Scanning account: {account_id}")
+
+        # PERFECT CLEANUP FLOW: expire any unsellable entries whose 12h window
+        # has passed so stale exclusions never permanently block enforcement.
+        self._expire_stale_unsellables()
         
         if not broker or not hasattr(broker, 'get_positions'):
             logger.error(f"   ❌ Invalid broker for {account_id}")
@@ -989,16 +1092,21 @@ class ForcedPositionCleanup:
             logger.error(f"   ❌ Failed to refresh positions: {e}")
             positions = []
         
-        # Filter out dust positions from cap check
+        # Filter out dust positions from cap check, then apply CAP RESOLUTION ENGINE:
+        # unsellable positions are excluded so they don't inflate the cap count.
         non_dust_positions = [
             p for p in positions 
             if (p.get('size_usd', 0) or p.get('usd_value', 0)) >= self.dust_threshold_usd
         ]
+        tradable_positions = self._filter_tradable(non_dust_positions)
         
-        cap_excess_positions = self.identify_cap_excess_positions(non_dust_positions)
+        cap_excess_positions = self.identify_cap_excess_positions(tradable_positions)
         cap_closed = 0
         if cap_excess_positions:
-            logger.warning(f"   🔒 Position cap exceeded: {len(non_dust_positions)}/{self.max_positions}")
+            logger.warning(
+                f"   🔒 Position cap exceeded: {len(tradable_positions)} tradable"
+                f"/{self.max_positions} max  (unsellable excluded from count)"
+            )
             cap_success, cap_fail, _cap_skipped = self.execute_cleanup(
                 cap_excess_positions, broker, account_id, is_startup
             )
