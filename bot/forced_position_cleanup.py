@@ -38,6 +38,77 @@ class CleanupType(Enum):
     STAGNANT = "STAGNANT"  # No movement
 
 
+def is_position_closable(pos_data: Dict, broker: Any, base_size=None) -> bool:
+    """
+    Pre-flight gate: verify a position is actually closable before a market-sell
+    order is submitted to the broker.
+
+    Returns False (UNSELLABLE / HARD BLOCK) when any of the following are true:
+    - ``base_size`` is None or zero after all fallback resolution
+    - Position USD value is below the exchange-minimum floor
+    - Live broker balance for the base asset is zero (position already gone)
+
+    Returns True only when all three checks pass.
+
+    Args:
+        pos_data:  Position metadata dict as produced by identify_* helpers.
+        broker:    Broker instance; must expose ``get_asset_balance(asset)``.
+        base_size: Resolved quantity (post Fix-#3).  Falls back to pos_data
+                   fields when not supplied.
+    """
+    symbol   = pos_data.get('symbol', '')
+    size_usd = pos_data.get('size_usd', 0) or 0
+
+    # Resolve quantity from argument or position dict fields
+    resolved_size = base_size or (
+        pos_data.get('base_size') or
+        pos_data.get('quantity') or
+        pos_data.get('size')
+    )
+
+    # ── Check 1: must have a positive quantity ───────────────────────────────
+    try:
+        if not resolved_size or float(resolved_size) <= 0:
+            logger.debug(
+                "   is_position_closable: %s — zero / missing quantity (%s)",
+                symbol, resolved_size,
+            )
+            return False
+    except (TypeError, ValueError):
+        logger.debug(
+            "   is_position_closable: %s — non-numeric quantity (%s)",
+            symbol, resolved_size,
+        )
+        return False
+
+    # ── Check 2: USD value must clear the exchange floor ─────────────────────
+    if size_usd < EXCHANGE_MIN_SELL_USD:
+        logger.debug(
+            "   is_position_closable: %s — $%.4f below exchange floor $%.2f",
+            symbol, size_usd, EXCHANGE_MIN_SELL_USD,
+        )
+        return False
+
+    # ── Check 3: live broker balance must confirm we still hold the asset ────
+    try:
+        base_asset   = symbol.split('-')[0].split('/')[0]
+        live_balance = broker.get_asset_balance(base_asset)
+        if live_balance is not None and float(live_balance) <= 0:
+            logger.debug(
+                "   is_position_closable: %s — live balance is zero (already closed?)",
+                symbol,
+            )
+            return False
+    except Exception as exc:
+        # Non-fatal: balance API errors are surfaced by broker.close_position().
+        logger.debug(
+            "   is_position_closable: %s — balance check skipped (%s)",
+            symbol, exc,
+        )
+
+    return True
+
+
 class ForcedPositionCleanup:
     """
     Forces aggressive cleanup of dust positions and enforces hard position caps.
@@ -556,6 +627,23 @@ class ForcedPositionCleanup:
                             "🚨 Cleanup failed — stopping further attempts this cycle"
                         )
                         break
+
+                # ── HARD STOP: pre-flight closability gate ───────────────────
+                # Verify the position can actually be sold before touching the
+                # broker API.  An unsellable position (zero live balance, below
+                # exchange floor, or no valid quantity) is added to the dust
+                # blacklist so it is *never retried* in this or future cleanup
+                # cycles.  NOTE: this is intentionally permanent for the
+                # lifetime of the process.  If underlying conditions change
+                # (e.g. price recovers above the floor) a fresh bot restart
+                # will clear the in-memory blacklist and allow re-evaluation.
+                if not is_position_closable(pos_data, broker, base_size=base_size):
+                    logger.warning(
+                        f"🚫 HARD BLOCK (UNSELLABLE): {symbol} — skipping execution"
+                    )
+                    self._dust_blacklist.add(symbol)
+                    skipped += 1
+                    continue
 
                 result = broker.close_position(symbol, base_size=base_size)
                 
