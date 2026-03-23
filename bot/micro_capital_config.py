@@ -58,23 +58,21 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # ============================================================================
 
 # Pro-Level Optimization (Jan 30, 2026):
-# - MAX_POSITIONS = 8: Upper bound of the 3–8 position range for micro accounts
-# - MIN_POSITIONS = 3: Lower bound — applied at the base of the micro account range ($100)
+# - MAX_POSITIONS = 1: Single concurrent trade — maximum capital concentration
+# - MIN_POSITIONS = 1: Single concurrent trade — maximum capital concentration
 # - MAX_POSITION_PCT = 25%: Larger individual positions for small capital efficiency
 # - RISK_PER_TRADE = 0.9%: Balanced risk control per trade
 #
-# Micro account position scaling (Mar 2026):
-#   Balance $100–$500 → max_positions scales linearly from MIN_POSITIONS (3) to MAX_POSITIONS (8)
-#   This replaces the old fixed value of 4 with a dynamic 3–8 range so that accounts
-#   approaching $500 can diversify further while very small accounts stay concentrated.
+# Configuration (Mar 2026 — reset to single-trade mode):
+#   All balance ranges → max_positions = 1 (one trade at a time)
+#   This focuses capital on the highest-conviction trade while the compounding
+#   engine grows position sizes over time.
 #
-# NOTE: While MAX_POSITIONS × MAX_POSITION_PCT = 100% theoretical maximum,
+# NOTE: MAX_POSITION_PCT = 25% means each trade uses 25% of capital.
 # the risk_manager.py enforces max_total_exposure = 60% as a safeguard.
-# This configuration is optimized for fast-frequency trading where not all
-# positions will be at maximum size simultaneously.
 
-MIN_POSITIONS = 3  # Minimum concurrent positions for micro accounts (lower bound of 3–8 range)
-MAX_POSITIONS = 8  # Maximum concurrent positions for micro accounts (upper bound of 3–8 range)
+MIN_POSITIONS = 1  # Minimum concurrent positions for micro accounts (lower bound of 1–1 range)
+MAX_POSITIONS = 1  # Maximum concurrent positions for micro accounts (upper bound of 1–1 range)
 
 # Position sizing as percentage of capital
 MAX_POSITION_PCT = 25.0  # Maximum 25% of capital per position (OPTIMIZED for small capital fast-frequency)
@@ -95,7 +93,7 @@ ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol
 # market_structure_filter.py for the scoring logic).
 # ============================================================================
 
-MAX_CONCURRENT_TRADES = 3   # Maximum simultaneous open trades
+MAX_CONCURRENT_TRADES = 1   # Maximum simultaneous open trades
 CAPITAL_PER_TRADE = 20.0    # Percentage of total capital allocated per trade (%)
 ENTRY_SCAN_INTERVAL = 15    # Seconds between entry-opportunity scans (was 20 – faster for micro growth)
 MONITOR_INTERVAL = 45       # Seconds between open-position monitoring cycles
@@ -413,7 +411,7 @@ except ImportError as _import_err:
     POS_UNLOCK_TIER_4              = 150.0
     POS_UNLOCK_TIER_5              = 300.0
     POS_UNLOCK_TIER_6              = 600.0
-    BASE_MAX_POSITIONS             = 3
+    BASE_MAX_POSITIONS             = 1
 
 
 def get_position_size_pct(equity: float) -> float:

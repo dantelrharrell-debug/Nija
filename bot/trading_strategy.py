@@ -1168,15 +1168,14 @@ MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each c
 # positions simultaneously.  Lower values = fewer but larger, more meaningful
 # trades.  Balance-aware sub-limits are enforced via
 # get_balance_based_max_positions() below.
-MAX_TOTAL_POSITIONS = 3   # HARD GLOBAL CAP: maximum concurrent open positions
+MAX_TOTAL_POSITIONS = 1   # HARD GLOBAL CAP: maximum concurrent open positions
 MAX_SECTOR_ALLOCATION = 0.4  # 40% of total capital — cap per sector to prevent concentration risk
 
 # Balance thresholds for the per-account position cap.
-# Micro accounts (< BALANCE_THRESHOLD_MICRO) are capped at 2 positions.
-# Small accounts (< BALANCE_THRESHOLD_SMALL) are capped at 3 positions.
-# Larger accounts use MAX_TOTAL_POSITIONS (3).
-BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → max 2 positions
-BALANCE_THRESHOLD_SMALL = 500.0   # Below this balance → max 3 positions
+# All balance tiers are capped at MAX_TOTAL_POSITIONS = 1 (single-trade focus).
+# These thresholds are preserved for future reactivation if the position cap is raised.
+BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → max 1 position (reserved for future scaling)
+BALANCE_THRESHOLD_SMALL = 500.0   # Below this balance → max 1 position (reserved for future scaling)
 
 # Minimum USD notional for any NEW entry order.  Orders below this value are
 # rejected at source to prevent dust accumulation and unproductive fee spend.
@@ -1452,9 +1451,9 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.0   # Use current price as entry price (neut
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 # Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
-# Hard cap aligned with MAX_TOTAL_POSITIONS = 5 (global limit, force consolidation).
+# Hard cap aligned with MAX_TOTAL_POSITIONS = 1 (global limit, single-trade focus).
 # Per-balance sub-limits are enforced at runtime via get_balance_based_max_positions().
-HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (5)
+HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (1)
 _max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', str(MAX_CONCURRENT_TRADES))
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
@@ -1573,10 +1572,10 @@ def get_balance_based_max_positions(balance: float) -> int:
     Return the maximum number of concurrent open positions allowed for the
     given account balance.
 
-    Per-account position cap (force consolidation on all accounts):
-      • balance  < BALANCE_THRESHOLD_MICRO ($150)  → 2 positions  (micro / starter)
-      • balance  < BALANCE_THRESHOLD_SMALL ($500)  → 3 positions  (small accounts)
-      • otherwise                                  → MAX_TOTAL_POSITIONS (= 3)
+    Per-account position cap (single-trade focus):
+      • balance  < BALANCE_THRESHOLD_MICRO ($150)  → 1 position
+      • balance  < BALANCE_THRESHOLD_SMALL ($500)  → 1 position
+      • otherwise                                  → MAX_TOTAL_POSITIONS (= 1)
 
     The returned value is always capped at MAX_TOTAL_POSITIONS so it is safe
     to use as a direct replacement for the global MAX_POSITIONS_ALLOWED
@@ -3150,7 +3149,8 @@ class TradingStrategy:
                     self.forced_cleanup = ForcedPositionCleanup(
                         dust_threshold_usd=DUST_POSITION_USD,
                         max_positions=MAX_TOTAL_POSITIONS,
-                        dry_run=False
+                        dry_run=False,
+                        kill_all_on_startup=True
                     )
                     logger.info("🧹 Forced position cleanup engine initialized")
                 except Exception as cleanup_err:
@@ -6316,10 +6316,8 @@ class TradingStrategy:
 
             # ── PER-ACCOUNT POSITION CAP (CONSOLIDATION MODE) ─────────────────
             # Derive the effective position cap from the live account balance.
-            # This enforces the force-consolidation rule:
-            #   balance < $150  → max 3 positions  (micro/starter accounts)
-            #   balance < $500  → max 5 positions  (small accounts)
-            #   otherwise       → MAX_TOTAL_POSITIONS (global cap = 5)
+            # This enforces the single-trade-focus rule:
+            #   all balance tiers → max 1 position  (MAX_TOTAL_POSITIONS = 1)
             # The result is also capped at MAX_POSITIONS_ALLOWED so the user's
             # environment variable can only *lower* the cap, never raise it above
             # the global hard limit.

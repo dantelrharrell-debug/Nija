@@ -5,10 +5,10 @@
   "growth_max": 5000,
   "expansion_max": 25000,
 
-  "micro_trade_size": 5,
-  "growth_trade_size": 25,
-  "expansion_trade_size": 75,
-  "capital_engine_trade_size": 150,
+  "micro_trade_size": 80,
+  "growth_trade_size": 150,
+  "expansion_trade_size": 300,
+  "capital_engine_trade_size": 500,
 
-  "max_capital_per_trade_pct": 5
+  "max_capital_per_trade_pct": 25
 }

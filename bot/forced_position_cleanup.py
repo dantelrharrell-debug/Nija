@@ -55,7 +55,8 @@ class ForcedPositionCleanup:
                  dry_run: bool = False,
                  cancel_open_orders: bool = False,
                  startup_only: bool = False,
-                 cancel_conditions: Optional[str] = None):
+                 cancel_conditions: Optional[str] = None,
+                 kill_all_on_startup: bool = False):
         """
         Initialize forced cleanup engine.
         
@@ -66,11 +67,18 @@ class ForcedPositionCleanup:
             cancel_open_orders: If True, cancel open orders during cleanup
             startup_only: If True with cancel_open_orders, only cancel on first run (nuclear mode)
             cancel_conditions: Selective cancellation conditions (e.g., "usd_value<1.0,rank>max_positions")
+            kill_all_on_startup: If True, close ALL positions on the first startup cleanup run
+                                  (ignores dust threshold and position cap — wipes the slate clean).
+                                  Can also be activated via STARTUP_KILL_ALL_POSITIONS=true env var.
         """
         self.dust_threshold_usd = dust_threshold_usd
         self.max_positions = max_positions
         self.dry_run = dry_run
         self.has_run_startup = False  # Track if startup cleanup has run
+
+        # Kill-all-on-startup: env var overrides the constructor argument
+        _env_kill_all = os.getenv('STARTUP_KILL_ALL_POSITIONS', 'false').lower() in ['true', '1', 'yes']
+        self.kill_all_on_startup = kill_all_on_startup or _env_kill_all
 
         # In-memory permanent blacklist — symbols added here are NEVER attempted
         # again in execute_cleanup, preventing the infinite retry loop.
@@ -106,6 +114,10 @@ class ForcedPositionCleanup:
         logger.info(f"   Dust Threshold: ${dust_threshold_usd:.2f} USD")
         logger.info(f"   Max Positions: {max_positions}")
         logger.info(f"   Dry Run: {dry_run}")
+        if self.kill_all_on_startup:
+            logger.warning("⚠️  KILL-ALL-ON-STARTUP ENABLED — all positions will be closed on first boot")
+        else:
+            logger.info(f"   Kill All On Startup: {self.kill_all_on_startup}")
         logger.info(f"   Cancel Open Orders: {self.cancel_open_orders}")
         if self.cancel_open_orders:
             if self.cancel_conditions:
@@ -838,6 +850,46 @@ class ForcedPositionCleanup:
         # Step 1: Identify and close dust positions
         dust_positions = self.identify_dust_positions(positions)
         dust_closed = 0
+
+        # KILL-ALL MODE: On startup, close every position regardless of size or cap.
+        # This wipes the slate clean so the bot restarts with zero open positions.
+        if is_startup and self.kill_all_on_startup and not self.has_run_startup:
+            kill_all_positions = []
+            for pos in positions:
+                size_usd = pos.get('size_usd', 0) or pos.get('usd_value', 0)
+                quantity = pos.get('quantity') or pos.get('base_size') or pos.get('size') or pos.get('balance')
+                kill_all_positions.append({
+                    'symbol': pos['symbol'],
+                    'size_usd': size_usd,
+                    'quantity': quantity,
+                    'pnl_pct': pos.get('pnl_pct', 0),
+                    'cleanup_type': 'kill_all_startup',
+                    'reason': 'Startup kill-all: wiping slate clean for fresh start',
+                    'priority': 'CRITICAL',
+                })
+            if kill_all_positions:
+                logger.warning(f"   💀 KILL-ALL-ON-STARTUP: Closing all {len(kill_all_positions)} positions")
+                kill_success, kill_fail = self.execute_cleanup(
+                    kill_all_positions, broker, account_id, is_startup
+                )
+                dust_closed = kill_success
+                # Mark startup done and return early — no further cap check needed
+                self.has_run_startup = True
+                try:
+                    final_positions = broker.get_positions()
+                    final_count = len(final_positions)
+                except Exception:
+                    final_count = initial_count - dust_closed
+                logger.warning(f"   ✅ KILL-ALL COMPLETE: {initial_count} → {final_count} positions")
+                return {
+                    'account_id': account_id,
+                    'initial_positions': initial_count,
+                    'dust_closed': dust_closed,
+                    'cap_closed': 0,
+                    'final_positions': final_count,
+                    'status': 'kill_all_complete',
+                }
+
         if dust_positions:
             logger.warning(f"   🧹 Found {len(dust_positions)} dust positions")
             dust_success, dust_fail = self.execute_cleanup(
