@@ -180,15 +180,72 @@ def _start_health_server():
     except Exception as e:
         print(f"❌ Health server failed to start: {e}")
 
-# Try to load dotenv if available, but don't fail if not
+# Load .env and verify the result at runtime
+_dotenv_loaded = False
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    from pathlib import Path as _Path
+    _env_path = _Path(__file__).parent / ".env"
+    if _env_path.exists():
+        load_dotenv(str(_env_path))
+        _dotenv_loaded = True
+    else:
+        # No .env file — env vars must be injected by the platform (e.g. Railway)
+        load_dotenv()  # still call so any inline env exports are picked up
 except ImportError:
     pass  # dotenv not available, env vars should be set externally
 
-# Setup paths
+# Setup paths (must come before _verify_env so trading_state_machine is importable)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
+
+# Verify critical environment variables are present
+def _verify_env() -> None:
+    """Warn loudly if required runtime variables are absent after .env loading."""
+    import logging as _log
+    _ev = _log.getLogger("nija.env")
+    _ev.info("=" * 60)
+    if _dotenv_loaded:
+        _ev.info("✅ .env file loaded from disk")
+    else:
+        _ev.info("ℹ️  No .env file on disk — relying on platform environment variables")
+
+    _required = {
+        "COINBASE_API_KEY":    "Coinbase API key",
+        "COINBASE_API_SECRET": "Coinbase API secret",
+        "LIVE_CAPITAL_VERIFIED": "Live-trading safety gate",
+    }
+    _missing = [name for name in _required if not os.getenv(name)]
+    if _missing:
+        for name in _missing:
+            _ev.warning("⚠️  Missing required env var: %s (%s)", name, _required[name])
+        _ev.warning(
+            "⚠️  Set the above variables in your .env file (local) "
+            "or in the Railway Variables tab (production)."
+        )
+    else:
+        _ev.info("✅ All required environment variables are present")
+
+    # Auto-activate the trading state machine when LIVE_CAPITAL_VERIFIED=true
+    _lcv = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+    if _lcv in ("true", "1", "yes", "enabled"):
+        try:
+            from trading_state_machine import get_state_machine
+            _sm = get_state_machine()
+            if _sm.maybe_auto_activate():
+                _ev.info("✅ Trading state machine: auto-transitioned to LIVE_ACTIVE")
+            else:
+                _ev.info("ℹ️  Trading state machine: auto-activate skipped (already active or gate blocked)")
+        except Exception as _sm_err:
+            _ev.warning("⚠️  Could not auto-activate state machine: %s", _sm_err)
+    else:
+        _ev.info(
+            "🔒 LIVE_CAPITAL_VERIFIED is not 'true' — live trading remains OFF. "
+            "Set LIVE_CAPITAL_VERIFIED=true in .env to enable."
+        )
+    _ev.info("=" * 60)
+
+_verify_env()
+
 
 # Import after path setup
 from trading_strategy import TradingStrategy
