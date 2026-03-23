@@ -886,7 +886,21 @@ class ForcedPositionCleanup:
             if (p.get('size_usd', 0) or p.get('usd_value', 0)) >= self.dust_threshold_usd
         ]
         tradable_positions = self._filter_tradable(non_dust_positions)
-        
+
+        # Fix #2: if ALL positions are unsellable, skip cap enforcement entirely.
+        if not tradable_positions:
+            logger.info("✅ No tradable positions — skipping cleanup")
+            return [{
+                'account_id': user_id,
+                'user_id': user_id,
+                'user_total_initial': total_user_positions,
+                'initial_positions': total_user_positions,
+                'dust_closed': dust_closed_total,
+                'cap_closed': 0,
+                'final_positions': total_user_positions,
+                'status': 'skipped_no_tradable',
+            }]
+
         # Step 4: Enforce per-user position cap across all brokers
         cap_closed_total = 0
         current_count = len(tradable_positions)
@@ -937,12 +951,19 @@ class ForcedPositionCleanup:
                 final_refresh_failures.append(broker_type.value)
         
         final_count = len(all_user_positions_final)
-        
-        # SAFETY VERIFICATION: Ensure user is under cap
-        if final_count > self.max_positions:
-            logger.error(f"   ❌ SAFETY VIOLATION: User {user_id} final count {final_count} exceeds cap {self.max_positions}")
+        # Use tradable count for safety check — unsellable dust must not produce
+        # false "SAFETY VIOLATION" errors every cleanup cycle (Fix #1 companion).
+        final_tradable = self._filter_tradable([
+            p for p in all_user_positions_final
+            if (p.get('size_usd', 0) or p.get('usd_value', 0)) >= self.dust_threshold_usd
+        ])
+        final_tradable_count = len(final_tradable)
+
+        # SAFETY VERIFICATION: use tradable count — unsellable dust is excluded
+        if final_tradable_count > self.max_positions:
+            logger.error(f"   ❌ SAFETY VIOLATION: User {user_id} final tradable count {final_tradable_count} exceeds cap {self.max_positions}")
             logger.error(f"      This should never happen - per-user cleanup failed!")
-            
+
             # Provide diagnostic information
             if refresh_failures or final_refresh_failures:
                 logger.error(f"   ⚠️  POSSIBLE CAUSE: Some brokers failed to refresh positions")
@@ -956,7 +977,7 @@ class ForcedPositionCleanup:
                 logger.error(f"   ⚠️  POSSIBLE CAUSE: Position close operations failed")
                 logger.error(f"   💡 RECOMMENDATION: Check broker API status and retry cleanup")
         else:
-            logger.info(f"   ✅ SAFETY VERIFIED: User {user_id} final count {final_count} ≤ cap {self.max_positions}")
+            logger.info(f"   ✅ SAFETY VERIFIED: User {user_id} final tradable count {final_tradable_count} ≤ cap {self.max_positions}")
             if final_refresh_failures:
                 logger.warning(f"   ⚠️  Note: Some brokers failed final verification: {', '.join(final_refresh_failures)}")
         
@@ -1187,7 +1208,21 @@ class ForcedPositionCleanup:
             if (p.get('size_usd', 0) or p.get('usd_value', 0)) >= self.dust_threshold_usd
         ]
         tradable_positions = self._filter_tradable(non_dust_positions)
-        
+
+        # Fix #2: if ALL positions are unsellable, skip cap enforcement entirely.
+        if not tradable_positions:
+            logger.info("✅ No tradable positions — skipping cleanup")
+            if is_startup:
+                self.has_run_startup = True
+            return {
+                'account_id': account_id,
+                'initial_positions': initial_count,
+                'dust_closed': dust_closed,
+                'cap_closed': 0,
+                'final_positions': initial_count,
+                'status': 'skipped_no_tradable',
+            }
+
         cap_excess_positions = self.identify_cap_excess_positions(tradable_positions)
         cap_closed = 0
         if cap_excess_positions:
@@ -1211,17 +1246,24 @@ class ForcedPositionCleanup:
             final_positions = []
 
         final_count = len(final_positions)
+        # Use tradable count for the safety check so unsellable dust doesn't
+        # produce false "SAFETY VIOLATION" errors every cleanup cycle.
+        final_tradable = self._filter_tradable([
+            p for p in final_positions
+            if (p.get('size_usd', 0) or p.get('usd_value', 0)) >= self.dust_threshold_usd
+        ])
+        final_tradable_count = len(final_tradable)
 
         # ── FORCE RE-SYNC: update instance state so callers have latest view ─
         self.current_positions = final_positions
         self.open_positions_count = len(final_positions)
-        
-        # SAFETY VERIFICATION: Ensure we're actually under cap
-        if final_count > self.max_positions:
-            logger.error(f"   ❌ SAFETY VIOLATION: Final count {final_count} still exceeds cap {self.max_positions}")
+
+        # SAFETY VERIFICATION: use tradable count — unsellable dust is excluded
+        if final_tradable_count > self.max_positions:
+            logger.error(f"   ❌ SAFETY VIOLATION: Final tradable count {final_tradable_count} still exceeds cap {self.max_positions}")
             logger.error(f"      This should never happen - cleanup failed to enforce cap!")
         else:
-            logger.info(f"   ✅ SAFETY VERIFIED: Final count {final_count} ≤ cap {self.max_positions}")
+            logger.info(f"   ✅ SAFETY VERIFIED: Final tradable count {final_tradable_count} ≤ cap {self.max_positions}")
         
         return {
             'account_id': account_id,

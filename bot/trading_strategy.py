@@ -5972,8 +5972,21 @@ class TradingStrategy:
                 if account_balance is not None and account_balance < MICRO_CLEANUP_BALANCE_THRESHOLD
                 else FORCED_CLEANUP_INTERVAL
             )
-            run_periodic_cleanup = hasattr(self, 'cycle_count') and self.cycle_count > 0 and (self.cycle_count % _cleanup_interval == 0)
-            
+            # Fix #1: gate periodic cleanup on TRADABLE position count, not total.
+            # open_positions_count is always tradable-filtered (dust/unsellable excluded),
+            # so this prevents the cleanup loop caused by permanently unsellable dust.
+            _tradable_count = (
+                self.open_positions_count
+                if hasattr(self, 'open_positions_count') and self.open_positions_count is not None
+                else 0
+            )
+            _tradable_over_cap = _tradable_count > MAX_POSITIONS_ALLOWED
+            run_periodic_cleanup = (
+                hasattr(self, 'cycle_count') and self.cycle_count > 0
+                and (self.cycle_count % _cleanup_interval == 0)
+                and _tradable_over_cap
+            )
+
             # Optional trade-based trigger: Cleanup after N trades
             run_trade_based_cleanup = False
             if FORCED_CLEANUP_AFTER_N_TRADES and hasattr(self, 'trades_since_last_cleanup'):
@@ -6055,15 +6068,19 @@ class TradingStrategy:
                                 active_broker.name if hasattr(active_broker, 'name') else ''
                             )
                             _cleanup_all = self.forced_cleanup.current_positions or []
+                            # Stage 1: size-only floor filter
                             _cleanup_tradable = filter_tradable_positions(_cleanup_all, _cleanup_broker_name)
-                            _cleanup_dust = len(_cleanup_all) - len(_cleanup_tradable)
+                            # Stage 2 (Fix #3): also exclude unsellable positions so they
+                            # don't inflate open_positions_count and block new entries.
+                            _cleanup_tradable_final = self.forced_cleanup._filter_tradable(_cleanup_tradable)
+                            _cleanup_dust = len(_cleanup_all) - len(_cleanup_tradable_final)
                             if _cleanup_dust > 0:
                                 logger.info(
                                     f"   🧹 Post-cleanup tradable filter: excluded {_cleanup_dust} "
-                                    f"dust position(s) from counters"
+                                    f"dust/unsellable position(s) from counters"
                                 )
-                            self.current_positions = _cleanup_tradable
-                            self.open_positions_count = len(_cleanup_tradable)
+                            self.current_positions = _cleanup_tradable_final
+                            self.open_positions_count = len(_cleanup_tradable_final)
                     
                     # Reset trade counter after cleanup
                     if hasattr(self, 'trades_since_last_cleanup'):
