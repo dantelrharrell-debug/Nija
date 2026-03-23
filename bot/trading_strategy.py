@@ -748,6 +748,66 @@ except ImportError:
         get_auto_tuning_ai_layer = None  # type: ignore
         logger.warning("⚠️ Auto-Tuning AI Layer not available — static thresholds in use")
 
+# ── Auto Dust Sweeper — convert all dust to one target asset ─────────────────
+try:
+    from auto_dust_sweeper import get_auto_dust_sweeper
+    AUTO_DUST_SWEEPER_AVAILABLE = True
+    logger.info("✅ Auto Dust Sweeper loaded — dust consolidation to single asset active")
+except ImportError:
+    try:
+        from bot.auto_dust_sweeper import get_auto_dust_sweeper
+        AUTO_DUST_SWEEPER_AVAILABLE = True
+        logger.info("✅ Auto Dust Sweeper loaded — dust consolidation to single asset active")
+    except ImportError:
+        AUTO_DUST_SWEEPER_AVAILABLE = False
+        get_auto_dust_sweeper = None  # type: ignore
+        logger.warning("⚠️ Auto Dust Sweeper not available")
+
+# ── Profit Priority Cleanup — close losers first, preserve winners ─────────────
+try:
+    from profit_priority_cleanup import get_profit_priority_cleanup
+    PROFIT_PRIORITY_CLEANUP_AVAILABLE = True
+    logger.info("✅ Profit Priority Cleanup loaded — losers-first cleanup active")
+except ImportError:
+    try:
+        from bot.profit_priority_cleanup import get_profit_priority_cleanup
+        PROFIT_PRIORITY_CLEANUP_AVAILABLE = True
+        logger.info("✅ Profit Priority Cleanup loaded — losers-first cleanup active")
+    except ImportError:
+        PROFIT_PRIORITY_CLEANUP_AVAILABLE = False
+        get_profit_priority_cleanup = None  # type: ignore
+        logger.warning("⚠️ Profit Priority Cleanup not available")
+
+# ── Smart Position Consolidator — merge fragments into best winner ─────────────
+try:
+    from smart_position_consolidator import get_smart_position_consolidator
+    SMART_CONSOLIDATOR_AVAILABLE = True
+    logger.info("✅ Smart Position Consolidator loaded — fragment→winner merging active")
+except ImportError:
+    try:
+        from bot.smart_position_consolidator import get_smart_position_consolidator
+        SMART_CONSOLIDATOR_AVAILABLE = True
+        logger.info("✅ Smart Position Consolidator loaded — fragment→winner merging active")
+    except ImportError:
+        SMART_CONSOLIDATOR_AVAILABLE = False
+        get_smart_position_consolidator = None  # type: ignore
+        logger.warning("⚠️ Smart Position Consolidator not available")
+
+# ── Dynamic Sniper Thresholds — adaptive entry gates for more trades ──────────
+try:
+    from dynamic_sniper_thresholds import get_dynamic_sniper_thresholds
+    DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE = True
+    logger.info("✅ Dynamic Sniper Thresholds loaded — adaptive entry gates active")
+except ImportError:
+    try:
+        from bot.dynamic_sniper_thresholds import get_dynamic_sniper_thresholds
+        DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE = True
+        logger.info("✅ Dynamic Sniper Thresholds loaded — adaptive entry gates active")
+    except ImportError:
+        DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE = False
+        get_dynamic_sniper_thresholds = None  # type: ignore
+        logger.warning("⚠️ Dynamic Sniper Thresholds not available — static sniper gates in use")
+
 # Import Micro-Cap Compounding Config — applies before risk engine and position sizing
 try:
     from micro_capital_config import (
@@ -2270,6 +2330,42 @@ class TradingStrategy:
         else:
             self.sniper_filter = None
 
+        # ── Dynamic Sniper Thresholds — adapts sniper gates to enable more trades ──
+        if DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE and get_dynamic_sniper_thresholds is not None:
+            try:
+                self.dynamic_sniper_thresholds = get_dynamic_sniper_thresholds()
+                logger.info("✅ Dynamic Sniper Thresholds initialized — adaptive entry gates active")
+            except Exception as _e:
+                logger.warning("⚠️ Dynamic Sniper Thresholds init failed: %s", _e)
+                self.dynamic_sniper_thresholds = None
+        else:
+            self.dynamic_sniper_thresholds = None
+
+        # ── Profit Priority Cleanup — close losers first ──────────────────────
+        if PROFIT_PRIORITY_CLEANUP_AVAILABLE and get_profit_priority_cleanup is not None:
+            try:
+                self.profit_priority_cleanup = get_profit_priority_cleanup()
+                logger.info("✅ Profit Priority Cleanup initialized — losers-first cleanup active")
+            except Exception as _e:
+                logger.warning("⚠️ Profit Priority Cleanup init failed: %s", _e)
+                self.profit_priority_cleanup = None
+        else:
+            self.profit_priority_cleanup = None
+
+        # ── Smart Position Consolidator — merge fragments into best winner ────
+        if SMART_CONSOLIDATOR_AVAILABLE and get_smart_position_consolidator is not None:
+            try:
+                self.smart_position_consolidator = get_smart_position_consolidator(
+                    fragment_threshold_usd=float(os.getenv('SMART_CONSOLIDATOR_FRAGMENT_USD', '15.0')),
+                    dry_run=os.getenv('SMART_CONSOLIDATOR_DRY_RUN', 'false').lower() in ('true', '1', 'yes'),
+                )
+                logger.info("✅ Smart Position Consolidator initialized — fragment merging active")
+            except Exception as _e:
+                logger.warning("⚠️ Smart Position Consolidator init failed: %s", _e)
+                self.smart_position_consolidator = None
+        else:
+            self.smart_position_consolidator = None
+
         # ── Auto-Tuning AI Layer ───────────────────────────────────────────────
         if AUTO_TUNING_AI_AVAILABLE and get_auto_tuning_ai_layer is not None:
             try:
@@ -3304,6 +3400,28 @@ class TradingStrategy:
                 except Exception as _ace_err:
                     logger.warning(f"⚠️  Auto-Cleanup Engine not available: {_ace_err}")
                     self.auto_cleanup_engine = None
+
+                # ── AUTO DUST SWEEPER (convert all dust to single target asset) ─
+                if AUTO_DUST_SWEEPER_AVAILABLE and get_auto_dust_sweeper is not None:
+                    try:
+                        _ads_dry_run = os.getenv('AUTO_DUST_SWEEPER_DRY_RUN', 'false').lower() in ('true', '1', 'yes')
+                        _ads_target  = os.getenv('AUTO_DUST_SWEEPER_TARGET_ASSET', 'BTC-USD')
+                        _ads_dust_thr = float(os.getenv('AUTO_DUST_SWEEPER_THRESHOLD_USD', str(DUST_POSITION_USD)))
+                        self.auto_dust_sweeper = get_auto_dust_sweeper(
+                            dust_threshold_usd=_ads_dust_thr,
+                            target_asset=_ads_target,
+                            dry_run=_ads_dry_run,
+                        )
+                        logger.info(
+                            f"🧹 Auto Dust Sweeper initialised "
+                            f"(dust<${_ads_dust_thr:.2f}, target={_ads_target}, "
+                            f"dry_run={_ads_dry_run})"
+                        )
+                    except Exception as _ads_err:
+                        logger.warning(f"⚠️  Auto Dust Sweeper not available: {_ads_err}")
+                        self.auto_dust_sweeper = None
+                else:
+                    self.auto_dust_sweeper = None
 
                 # ── DUST SWEEPER V2 (permanent dust kill) ──────────────────────
                 try:
@@ -5979,6 +6097,30 @@ class TradingStrategy:
                     except Exception as _dsv2_err:
                         logger.warning(f"⚠️  DustSweeperV2 sweep failed: {_dsv2_err}")
 
+            # 📊 PROFIT PRIORITY CLEANUP — log cleanup priority ranking on periodic cycles
+            # Shows which positions are highest-priority to close (losers first).
+            if (
+                run_periodic_cleanup
+                and PROFIT_PRIORITY_CLEANUP_AVAILABLE
+                and hasattr(self, 'profit_priority_cleanup')
+                and self.profit_priority_cleanup is not None
+            ):
+                try:
+                    _ppc_positions = []
+                    try:
+                        _ppc_positions = active_broker.get_positions() or [] if active_broker else []
+                    except Exception:
+                        _ppc_positions = list(self.open_positions.values()) if hasattr(self, 'open_positions') else []
+                    if _ppc_positions:
+                        _ppc_summary = self.profit_priority_cleanup.get_cleanup_summary(_ppc_positions)
+                        logger.info(
+                            f"📊 PROFIT-PRIORITY CLEANUP: {_ppc_summary['total_positions']} positions "
+                            f"| losers={_ppc_summary['losers']} winners={_ppc_summary['winners']} "
+                            f"| top_close={_ppc_summary['top_close_candidates']}"
+                        )
+                except Exception as _ppc_err:
+                    logger.debug(f"Profit Priority Cleanup summary skipped: {_ppc_err}")
+
             # 🌀 CONTINUOUS DUST MONITOR (Option A): Time-based dust sweep
             # Checks all accounts every DUST_SWEEP_INTERVAL_MINUTES (default 30 min)
             # and closes any position < DUST_THRESHOLD_USD. Each action is audit-logged.
@@ -6046,6 +6188,64 @@ class TradingStrategy:
                         logger.info("🧹 Auto-cleanup: portfolio is clean (no dust/micro positions)")
                 except Exception as _ace_run_err:
                     logger.warning(f"⚠️  Auto-cleanup run failed: {_ace_run_err}")
+
+            # ── AUTO DUST SWEEPER: convert dust → single target asset ─────────
+            # Runs on startup AND every periodic cleanup cycle to ensure all
+            # sub-threshold positions are consolidated into the configured asset.
+            _ads_run = (
+                hasattr(self, 'auto_dust_sweeper') and self.auto_dust_sweeper
+                and active_broker
+                and (run_startup_cleanup or run_periodic_cleanup or run_trade_based_cleanup)
+            )
+            if _ads_run:
+                try:
+                    _ads_positions = []
+                    try:
+                        _ads_positions = active_broker.get_positions() or []
+                    except Exception:
+                        _ads_positions = list(self.open_positions.values()) if hasattr(self, 'open_positions') else []
+                    if _ads_positions:
+                        _ads_portfolio_val = getattr(self, 'current_balance', 0.0) or 0.0
+                        _ads_result = self.auto_dust_sweeper.sweep(
+                            broker=active_broker,
+                            positions=_ads_positions,
+                            portfolio_value_usd=_ads_portfolio_val,
+                        )
+                        if _ads_result.dust_sold > 0 or _ads_result.rebuy_attempted:
+                            logger.warning(
+                                f"🧹 AUTO-DUST-SWEEPER: {_ads_result.summary()}"
+                            )
+                except Exception as _ads_run_err:
+                    logger.warning(f"⚠️  Auto Dust Sweeper run failed: {_ads_run_err}")
+
+            # ── SMART POSITION CONSOLIDATOR: merge fragments into best winner ──
+            # Runs on periodic cleanup cycles to collapse small fragmented
+            # positions into the single best-performing open position.
+            _spc_run = (
+                hasattr(self, 'smart_position_consolidator') and self.smart_position_consolidator
+                and active_broker
+                and run_periodic_cleanup
+            )
+            if _spc_run:
+                try:
+                    _spc_positions = []
+                    try:
+                        _spc_positions = active_broker.get_positions() or []
+                    except Exception:
+                        _spc_positions = list(self.open_positions.values()) if hasattr(self, 'open_positions') else []
+                    if _spc_positions:
+                        _spc_portfolio_val = getattr(self, 'current_balance', 0.0) or 0.0
+                        _spc_result = self.smart_position_consolidator.consolidate(
+                            broker=active_broker,
+                            positions=_spc_positions,
+                            portfolio_value_usd=_spc_portfolio_val,
+                        )
+                        if _spc_result.fragments_consolidated > 0 or _spc_result.rebuy_attempted:
+                            logger.warning(
+                                f"🔗 SMART-CONSOLIDATOR: {_spc_result.summary()}"
+                            )
+                except Exception as _spc_run_err:
+                    logger.warning(f"⚠️  Smart Position Consolidator run failed: {_spc_run_err}")
 
             # CRITICAL FIX (Jan 24, 2026): Get positions from ALL connected brokers, not just active_broker
             # This ensures positions on all exchanges are monitored for stop-loss, profit-taking, etc.
@@ -8741,6 +8941,17 @@ class TradingStrategy:
                                         low=float(_re_candle['low']),
                                         volume=float(_re_candle['volume']) if 'volume' in df.columns else 0.0,
                                     )
+                                    # Propagate regime to Dynamic Sniper Thresholds for adaptive gates
+                                    if (
+                                        DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE
+                                        and hasattr(self, 'dynamic_sniper_thresholds')
+                                        and self.dynamic_sniper_thresholds is not None
+                                    ):
+                                        try:
+                                            _dst_regime = str(self.regime_engine.current_regime)
+                                            self.dynamic_sniper_thresholds.update_regime(_dst_regime)
+                                        except Exception:
+                                            pass
                                 except Exception as _re_feed_err:
                                     logger.debug("Regime engine candle update failed for %s: %s", symbol, _re_feed_err)
 
@@ -9076,6 +9287,8 @@ class TradingStrategy:
                                 # trigger (breakout + volume spike), liquidity (spread), and
                                 # confidence threshold.  Chop / sideways / thin-book conditions
                                 # trigger an instant veto.
+                                # Dynamic Sniper Thresholds adapt the gate when the bot is
+                                # under-trading (loosen) or on a losing streak (tighten).
                                 if (
                                     SNIPER_FILTER_AVAILABLE
                                     and hasattr(self, 'sniper_filter')
@@ -9099,14 +9312,46 @@ class TradingStrategy:
                                         _sf_bid = _sf_close * (1.0 - _sf_spread / 2.0)
                                         _sf_ask = _sf_close * (1.0 + _sf_spread / 2.0)
 
-                                        _sf_result = self.sniper_filter.check(
-                                            symbol=symbol,
-                                            df=df,
-                                            signal_side=_sf_side,
-                                            confidence=_sf_confidence,
-                                            bid=_sf_bid,
-                                            ask=_sf_ask,
+                                        # Use dynamic sniper thresholds when available
+                                        _dyn_sniper = (
+                                            getattr(self, 'dynamic_sniper_thresholds', None)
+                                            if DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE else None
                                         )
+                                        if _dyn_sniper is not None:
+                                            try:
+                                                _sf_adx = 0.0
+                                                if 'adx' in df.columns and len(df) > 0:
+                                                    _sf_adx = float(df['adx'].iloc[-1])
+                                                _sf_result = _dyn_sniper.check(
+                                                    symbol=symbol,
+                                                    df=df,
+                                                    signal_side=_sf_side,
+                                                    confidence=_sf_confidence,
+                                                    bid=_sf_bid,
+                                                    ask=_sf_ask,
+                                                    current_adx=_sf_adx,
+                                                )
+                                                if _sf_result is None:
+                                                    raise ValueError("DynamicSniperThresholds returned None")
+                                            except Exception:
+                                                # Fall back to static sniper filter
+                                                _sf_result = self.sniper_filter.check(
+                                                    symbol=symbol,
+                                                    df=df,
+                                                    signal_side=_sf_side,
+                                                    confidence=_sf_confidence,
+                                                    bid=_sf_bid,
+                                                    ask=_sf_ask,
+                                                )
+                                        else:
+                                            _sf_result = self.sniper_filter.check(
+                                                symbol=symbol,
+                                                df=df,
+                                                signal_side=_sf_side,
+                                                confidence=_sf_confidence,
+                                                bid=_sf_bid,
+                                                ask=_sf_ask,
+                                            )
                                         if not _sf_result.passed:
                                             logger.info(
                                                 "   🎯 SNIPER FILTER BLOCKED %s: %s",
@@ -11443,6 +11688,15 @@ class TradingStrategy:
                 self.auto_tuning_ai.record_trade(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _at_rec_err:
                 logger.debug("Auto-Tuning AI Layer record_trade skipped for %s: %s", symbol, _at_rec_err)
+
+        # 🎯 DYNAMIC SNIPER THRESHOLDS — feed outcome to adapt entry gates
+        if (DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE
+                and hasattr(self, 'dynamic_sniper_thresholds')
+                and self.dynamic_sniper_thresholds is not None):
+            try:
+                self.dynamic_sniper_thresholds.record_trade(won=is_win)
+            except Exception as _dst_rec_err:
+                logger.debug("Dynamic Sniper Thresholds record_trade skipped for %s: %s", symbol, _dst_rec_err)
 
         if not self.advanced_manager:
             return
