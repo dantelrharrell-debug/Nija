@@ -6168,6 +6168,32 @@ class TradingStrategy:
                     f"position(s) (< ${get_tradable_min_size(_cycle_broker_name):.2f}) "
                     f"from position counters"
                 )
+
+            # ── AUTO-CLEANUP ENGINE unsellable blacklist filter ───────────────
+            # Positions that AutoCleanupEngine confirmed are below the exchange's
+            # base-size minimum (skipped_unsellable) are permanently unsellable
+            # until price rises.  Exclude them from the cap count so they can
+            # never block new tradable entries.
+            _ace_blacklist = set()
+            if hasattr(self, 'auto_cleanup_engine') and self.auto_cleanup_engine:
+                try:
+                    _ace_blacklist = set(self.auto_cleanup_engine.symbol_blacklist)
+                except Exception:
+                    pass
+            if _ace_blacklist:
+                _before_ace = len(current_positions)
+                current_positions = [
+                    p for p in current_positions
+                    if p.get('symbol') not in _ace_blacklist
+                ]
+                _ace_filtered = _before_ace - len(current_positions)
+                if _ace_filtered > 0:
+                    logger.info(
+                        f"   🚫 Excluded {_ace_filtered} unsellable position(s) from cap count "
+                        f"(below exchange minimum — skipped_unsellable)"
+                    )
+            # ─────────────────────────────────────────────────────────────────
+
             # Keep self.current_positions and self.open_positions_count in sync.
             self.current_positions = current_positions
             self.open_positions_count = len(current_positions)
