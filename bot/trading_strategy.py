@@ -1230,6 +1230,20 @@ MIN_POSITION_USD = 10.0   # Minimum entry size ($10 ensures fee efficiency and m
 DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = dust)
 EXCHANGE_MINIMUM_ORDER_USD = 1.00  # Hard floor: exchange rejects orders below this USD value
 
+# "Tradable Positions Only" filter — minimum USD notional for a position to be
+# counted as open (affects position-cap checks, first-trade gate, etc.).
+# Positions below this size are dust: they cannot cover exchange fees and must
+# not inflate the open-position counter or block new entries.
+MIN_TRADABLE_POSITION_USD: float = 2.00  # global floor
+TRADABLE_MIN_POSITION_BY_BROKER: dict = {
+    # Exchange-specific floor for EXISTING positions (lower than new-order min).
+    'coinbase': 2.00,
+    'kraken':   2.00,
+    'binance':  2.00,
+    'okx':      2.00,
+    'alpaca':   1.00,  # Alpaca supports sub-$2 positions (fractional shares)
+}
+
 # ============================================================================
 
 # Exit strategy constants (no entry price required)
@@ -1607,6 +1621,48 @@ def get_dynamic_min_position_size(balance: float, broker_name: str = '') -> floa
     # Enforce: max(MIN_POSITION_USD floor, base floor, balance-based dynamic, brokerage minimum)
     # MIN_POSITION_USD is the absolute hard floor (prevents any sub-$5 entry regardless of config)
     return max(MIN_POSITION_USD, BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
+
+
+def get_tradable_min_size(broker_name: str = '') -> float:
+    """
+    Return the minimum USD notional for a position to be counted as tradable.
+
+    Looks up the exchange-specific floor in ``TRADABLE_MIN_POSITION_BY_BROKER``
+    (using a normalised, lower-case key) and falls back to the global
+    ``MIN_TRADABLE_POSITION_USD`` when the broker is unknown.
+
+    This is the single authoritative lookup used by ``filter_tradable_positions``
+    and by log messages so the logged threshold always matches the filter.
+    """
+    return TRADABLE_MIN_POSITION_BY_BROKER.get(
+        broker_name.lower() if broker_name else '',
+        MIN_TRADABLE_POSITION_USD,
+    )
+
+
+def filter_tradable_positions(positions: list, broker_name: str = '') -> list:
+    """
+    "Tradable Positions Only" filter.
+
+    Returns the subset of *positions* whose ``size_usd`` value meets the
+    exchange-specific (or global) minimum required for a position to be
+    considered open and tradable.  Positions below the threshold are dust:
+    they cannot be meaningfully managed or exited and must not count toward
+    position-cap checks, first-trade gates, or open-position counters.
+
+    Args:
+        positions:   Raw list of position dicts (each must have a ``size_usd`` key).
+        broker_name: Active broker/exchange name (e.g. ``'coinbase'``).
+                     Used to look up the exchange-specific floor via
+                     ``get_tradable_min_size``; falls back to
+                     ``MIN_TRADABLE_POSITION_USD`` when not found.
+
+    Returns:
+        Filtered list containing only positions whose ``size_usd`` (coerced to
+        ``float``) is ``>= min_size``.  Order is preserved.
+    """
+    min_size: float = get_tradable_min_size(broker_name)
+    return [p for p in positions if float(p.get('size_usd') or 0) >= min_size]
 
 
 def get_balance_based_max_positions(balance: float) -> int:
@@ -3837,8 +3893,19 @@ class TradingStrategy:
             # ── SYNC INTERNAL STATE ──────────────────────────────────────────
             # Keep strategy-level counters consistent with adopted positions so
             # position-cap checks and first-trade gates see accurate data.
-            self.current_positions = adopted_positions
-            self.open_positions_count = len(adopted_positions)
+            # Apply "Tradable Positions Only" filter: exclude dust positions
+            # (size_usd < MIN_TRADABLE_POSITION_USD) so they never inflate the
+            # open-position counter or falsely block new entries.
+            _tradable = filter_tradable_positions(adopted_positions, broker_name)
+            _dust_count = len(adopted_positions) - len(_tradable)
+            if _dust_count > 0:
+                logger.info(
+                    f"   🧹 Tradable-positions filter: excluded {_dust_count} dust position(s) "
+                    f"(< ${get_tradable_min_size(broker_name):.2f}) "
+                    f"from position counters"
+                )
+            self.current_positions = _tradable
+            self.open_positions_count = len(_tradable)
 
             # Sync ProPositionManager's live state if it is initialised
             if hasattr(self, 'pro_position_manager') and self.pro_position_manager is not None:
@@ -5864,8 +5931,21 @@ class TradingStrategy:
                             logger.warning(f"   ✅ Cleanup complete: {result['initial_positions']} → {result['final_positions']}")
                             # 🔥 HARD SYNC INTO STRATEGY: push post-cleanup state back so
                             # the strategy's position counters reflect the true broker state.
-                            self.current_positions = self.forced_cleanup.current_positions
-                            self.open_positions_count = self.forced_cleanup.open_positions_count
+                            # Apply "Tradable Positions Only" filter so dust left behind by
+                            # cleanup (positions that couldn't be sold) never inflate counters.
+                            _cleanup_broker_name = (
+                                active_broker.name if hasattr(active_broker, 'name') else ''
+                            )
+                            _cleanup_all = self.forced_cleanup.current_positions or []
+                            _cleanup_tradable = filter_tradable_positions(_cleanup_all, _cleanup_broker_name)
+                            _cleanup_dust = len(_cleanup_all) - len(_cleanup_tradable)
+                            if _cleanup_dust > 0:
+                                logger.info(
+                                    f"   🧹 Post-cleanup tradable filter: excluded {_cleanup_dust} "
+                                    f"dust position(s) from counters"
+                                )
+                            self.current_positions = _cleanup_tradable
+                            self.open_positions_count = len(_cleanup_tradable)
                     
                     # Reset trade counter after cleanup
                     if hasattr(self, 'trades_since_last_cleanup'):
@@ -6066,6 +6146,32 @@ class TradingStrategy:
                     logger.info(f"   🗑️  Filtered {blacklisted_count} blacklisted position(s) from count (permanent dust exclusion)")
                 
                 current_positions = non_blacklisted_positions
+
+            # ── "TRADABLE POSITIONS ONLY" SIZE FILTER ────────────────────────
+            # Remove any remaining positions whose USD notional is below the
+            # exchange-specific (or global) floor.  This catches positions that
+            # are too small to trade but were not yet in the unsellable/blacklist
+            # sets above (e.g. micro-holdings accumulated via airdrop or rounding).
+            # Filtering here prevents dust from inflating open_positions_count and
+            # falsely triggering the position-cap block that would halt new entries.
+            _cycle_broker_name = (
+                active_broker.name
+                if active_broker and hasattr(active_broker, 'name')
+                else ''
+            )
+            _before_size_filter = len(current_positions)
+            current_positions = filter_tradable_positions(current_positions, _cycle_broker_name)
+            _size_filtered = _before_size_filter - len(current_positions)
+            if _size_filtered > 0:
+                logger.info(
+                    f"   🧹 Tradable-size filter: excluded {_size_filtered} sub-minimum "
+                    f"position(s) (< ${get_tradable_min_size(_cycle_broker_name):.2f}) "
+                    f"from position counters"
+                )
+            # Keep self.current_positions and self.open_positions_count in sync.
+            self.current_positions = current_positions
+            self.open_positions_count = len(current_positions)
+            # ─────────────────────────────────────────────────────────────────
 
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
