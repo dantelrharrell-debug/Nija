@@ -20,6 +20,7 @@ Version: 1.0 (Path 1)
 Date: January 30, 2026
 """
 
+import threading
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional
@@ -529,3 +530,24 @@ class AITradeQualityFilter:
 
 # Global instance
 ai_trade_quality_filter = AITradeQualityFilter()
+
+# ---------------------------------------------------------------------------
+# Singleton factory
+# ---------------------------------------------------------------------------
+
+_filter_instance: Optional[AITradeQualityFilter] = None
+_filter_lock = threading.Lock()
+
+
+def get_ai_trade_quality_filter(**kwargs) -> AITradeQualityFilter:
+    """Return (or create) the process-wide :class:`AITradeQualityFilter` singleton.
+
+    Keyword arguments are forwarded to ``AITradeQualityFilter.__init__`` only
+    on the **first** call; subsequent calls return the existing instance.
+    """
+    global _filter_instance
+    if _filter_instance is None:
+        with _filter_lock:
+            if _filter_instance is None:
+                _filter_instance = AITradeQualityFilter(**kwargs)
+    return _filter_instance
