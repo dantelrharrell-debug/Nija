@@ -125,6 +125,8 @@ class TradingStateMachine:
         
         CRITICAL SAFETY: Even if persisted state was LIVE_ACTIVE,
         we NEVER auto-resume live trading after restart.
+        EMERGENCY_STOP is also cleared on restart — the kill switch
+        must be explicitly re-activated to halt trading again.
         """
         try:
             if os.path.exists(self._state_file):
@@ -144,6 +146,18 @@ class TradingStateMachine:
                 elif persisted_state == TradingState.LIVE_PENDING_CONFIRMATION:
                     # Also reset pending confirmation
                     logger.info("Previous state was LIVE_PENDING_CONFIRMATION, resetting to OFF")
+                    self._current_state = TradingState.OFF
+                elif persisted_state == TradingState.EMERGENCY_STOP:
+                    # SAFETY FIX: Clear stale EMERGENCY_STOP on restart so the bot is not
+                    # permanently locked out after a test trigger or accidental activation.
+                    # The kill switch file (EMERGENCY_STOP) is the authoritative signal;
+                    # if it is absent, the JSON state should not keep blocking trading.
+                    logger.warning(
+                        "⚠️  Previous state was EMERGENCY_STOP — resetting to OFF on restart"
+                    )
+                    logger.warning(
+                        "⚠️  If an emergency condition still exists, re-activate the kill switch"
+                    )
                     self._current_state = TradingState.OFF
                 else:
                     self._current_state = persisted_state
