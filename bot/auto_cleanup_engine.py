@@ -55,12 +55,86 @@ logger = logging.getLogger("nija.auto_cleanup")
 
 DUST_THRESHOLD_USD: float = 2.0    # Positions < $2 → immediate USDT liquidation
 MICRO_THRESHOLD_USD: float = 10.0  # Positions $2-$10 → merge or liquidate
-EXCHANGE_MIN_ORDER_USD: float = 1.0  # Skip if sell proceeds would be < $1
+EXCHANGE_MIN_ORDER_USD: float = 1.0  # Fallback: skip if sell proceeds would be < $1
+
+# Per-broker hard minimums for cleanup sells (exchange-enforced floor, not profitability floor).
+# Orders below these thresholds will be rejected by the exchange regardless of size.
+_BROKER_CLEANUP_MIN_USD: Dict[str, float] = {
+    "coinbase": 1.0,   # Coinbase rejects orders below ~$1 for spot cleanup
+    "kraken":   1.0,   # Kraken minimum notional for cleanup
+    "binance":  1.0,   # Binance NOTIONAL filter floor for spot cleanup
+    "okx":      1.0,   # OKX minimum notional for cleanup
+    "alpaca":   1.0,   # Alpaca minimum for cleanup
+}
+
+# Per-base-currency minimum base-quantity floors (exchange-specific).
+# If the position quantity is below this floor the exchange will reject the order.
+_SYMBOL_MIN_BASE_SIZE: Dict[str, float] = {
+    "BTC":  0.000001,  # 0.000001 BTC
+    "ETH":  0.00001,   # 0.00001 ETH
+    "SOL":  0.001,     # 0.001 SOL
+    "XRP":  0.1,       # 0.1 XRP
+    "ADA":  0.1,       # 0.1 ADA
+    "DOGE": 1.0,       # 1 DOGE
+    "SHIB": 1.0,       # 1 SHIB (minimum 1 unit)
+    "LTC":  0.0001,    # 0.0001 LTC
+    "BCH":  0.0001,    # 0.0001 BCH
+    "MATIC": 0.01,     # 0.01 MATIC
+    "LINK": 0.001,     # 0.001 LINK
+    "DOT":  0.01,      # 0.01 DOT
+    "AVAX": 0.001,     # 0.001 AVAX
+    "ATOM": 0.001,     # 0.001 ATOM
+}
+_DEFAULT_MIN_BASE_SIZE: float = 0.000001  # Conservative fallback for unknown coins
 
 # Best-asset ranking weights (higher score = better merge candidate)
 _W_PNL = 0.5          # Weight for unrealised P&L percentage
 _W_SIZE = 0.3         # Weight for position size (larger = more liquid merge target)
 _W_AGE_PENALTY = 0.2  # Penalty for very old positions (> 72 h) that might be stale
+
+
+# ---------------------------------------------------------------------------
+# Exchange-minimum helper functions
+# ---------------------------------------------------------------------------
+
+def get_tradable_min_size(broker_name: str) -> float:
+    """Return the exchange-specific minimum sell order size in USD.
+
+    Positions whose USD value is below this floor will be rejected by the
+    exchange.  Using a broker-specific value avoids hard-coding a single
+    global constant for every exchange.
+
+    Parameters
+    ----------
+    broker_name:
+        Lower-cased broker identifier (e.g. ``"coinbase"``, ``"kraken"``).
+
+    Returns
+    -------
+    float
+        Minimum USD notional required by the exchange for a sell order.
+    """
+    return _BROKER_CLEANUP_MIN_USD.get(broker_name.lower(), EXCHANGE_MIN_ORDER_USD)
+
+
+def get_min_base_order_size(symbol: str) -> float:
+    """Return the exchange-specific minimum *base-currency* quantity for a sell.
+
+    For example, Coinbase will reject a BTC-USD sell of less than 0.000001 BTC.
+    This guards against those hard minimums independently of the USD notional.
+
+    Parameters
+    ----------
+    symbol:
+        Trading-pair symbol in any common format (``"BTC-USD"``, ``"ETH/USDT"``).
+
+    Returns
+    -------
+    float
+        Minimum base-currency quantity required for a valid sell order.
+    """
+    base = symbol.split("-")[0].split("/")[0].upper()
+    return _SYMBOL_MIN_BASE_SIZE.get(base, _DEFAULT_MIN_BASE_SIZE)
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +211,19 @@ class AutoCleanupEngine:
         self.micro_threshold_usd = micro_threshold_usd
         self.dry_run = dry_run
         self._lock = threading.Lock()
+        # Symbols permanently skipped because they are below the exchange minimum
+        # and can never be liquidated via a normal market-sell.
+        self._symbol_blacklist: set = set()
 
         logger.info(
             "🧹 AutoCleanupEngine initialised | dust<$%.2f | micro<$%.2f | dry_run=%s",
             dust_threshold_usd, micro_threshold_usd, dry_run,
         )
+
+    @property
+    def symbol_blacklist(self) -> set:
+        """Read-only view of symbols blacklisted due to sub-minimum order size."""
+        return frozenset(self._symbol_blacklist)
 
     # ------------------------------------------------------------------
     # Public API
@@ -393,16 +475,45 @@ class AutoCleanupEngine:
         """
         Market-sell *position* back to USD/USDT.
 
-        When the USD value of the position is below EXCHANGE_MIN_ORDER_USD the
-        order is skipped to avoid guaranteed rejection errors.
+        Guard 1 – broker-specific USD minimum:
+            When the USD value of the position is below the exchange floor for
+            this broker the symbol is added to the blacklist and skipped to
+            avoid guaranteed rejection errors.
+
+        Guard 2 – exchange-specific base-size minimum:
+            When the base-currency quantity is below the exchange floor for
+            this symbol the order is skipped (without blacklisting, as the
+            value may recover with price movement).
         """
         symbol = position.get("symbol", "UNKNOWN")
         size_usd = self._get_size_usd(position)
         quantity = self._get_quantity(position)
 
-        if size_usd < EXCHANGE_MIN_ORDER_USD:
+        # ------------------------------------------------------------------
+        # Guard 1: broker-specific USD minimum → blacklist + skip
+        # ------------------------------------------------------------------
+        broker_name = getattr(broker, "broker_name", getattr(broker, "name", "unknown"))
+        tradable_min = get_tradable_min_size(broker_name)
+        if size_usd < tradable_min:
+            self._symbol_blacklist.add(symbol)
             msg = (
-                f"${size_usd:.4f} < exchange minimum ${EXCHANGE_MIN_ORDER_USD:.2f}"
+                f"${size_usd:.4f} < {broker_name} minimum ${tradable_min:.2f}"
+                f" – blacklisting and skipping {symbol}"
+            )
+            logger.warning("   ⚠️  %s", msg)
+            return CleanupAction(
+                symbol=symbol, action="SKIP",
+                size_usd=size_usd, quantity=quantity,
+                merge_target=None, success=False, message=msg,
+            )
+
+        # ------------------------------------------------------------------
+        # Guard 2: exchange-specific base-size minimum → skip only
+        # ------------------------------------------------------------------
+        min_base = get_min_base_order_size(symbol)
+        if quantity > 0 and quantity < min_base:
+            msg = (
+                f"base_size {quantity:.8f} < exchange minimum {min_base:.8f}"
                 f" – skipping {symbol}"
             )
             logger.warning("   ⚠️  %s", msg)
@@ -465,14 +576,42 @@ class AutoCleanupEngine:
 
         If the close order fails, the merge is aborted (no orphan buy).
         If the buy order fails, the freed USDT stays as cash (not an error).
+
+        Guard 1 – broker-specific USD minimum → blacklist + skip:
+            Prevents placing a sell that the exchange will reject outright.
+
+        Guard 2 – exchange-specific base-size minimum → skip only:
+            Prevents placing a sell whose base quantity is below the exchange floor.
         """
         symbol = position.get("symbol", "UNKNOWN")
         size_usd = self._get_size_usd(position)
         quantity = self._get_quantity(position)
 
-        if size_usd < EXCHANGE_MIN_ORDER_USD:
+        # ------------------------------------------------------------------
+        # Guard 1: broker-specific USD minimum → blacklist + skip
+        # ------------------------------------------------------------------
+        broker_name = getattr(broker, "broker_name", getattr(broker, "name", "unknown"))
+        tradable_min = get_tradable_min_size(broker_name)
+        if size_usd < tradable_min:
+            self._symbol_blacklist.add(symbol)
             msg = (
-                f"${size_usd:.4f} < exchange minimum ${EXCHANGE_MIN_ORDER_USD:.2f}"
+                f"${size_usd:.4f} < {broker_name} minimum ${tradable_min:.2f}"
+                f" – blacklisting and skipping merge of {symbol}"
+            )
+            logger.warning("   ⚠️  %s", msg)
+            return CleanupAction(
+                symbol=symbol, action="SKIP",
+                size_usd=size_usd, quantity=quantity,
+                merge_target=target_symbol, success=False, message=msg,
+            )
+
+        # ------------------------------------------------------------------
+        # Guard 2: exchange-specific base-size minimum → skip only
+        # ------------------------------------------------------------------
+        min_base = get_min_base_order_size(symbol)
+        if quantity > 0 and quantity < min_base:
+            msg = (
+                f"base_size {quantity:.8f} < exchange minimum {min_base:.8f}"
                 f" – skipping merge of {symbol}"
             )
             logger.warning("   ⚠️  %s", msg)
