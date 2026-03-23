@@ -136,7 +136,7 @@ def check_status():
     }
 
 
-def reset_to_off():
+def reset_to_off(force: bool = False):
     """Reset state machine to OFF state"""
     print_banner()
     print("🔄 RESETTING TO OFF STATE\n")
@@ -166,10 +166,13 @@ def reset_to_off():
     print("  • Stop all trading operations")
     print("  • Require manual re-activation")
     
-    confirm = input("\nProceed? (yes/no): ")
-    if confirm.lower() != 'yes':
-        print("\n❌ Reset cancelled\n")
-        return False
+    if not force:
+        confirm = input("\nProceed? (yes/no): ")
+        if confirm.lower() != 'yes':
+            print("\n❌ Reset cancelled\n")
+            return False
+    else:
+        print("\n⚡ --force flag detected — skipping confirmation prompt\n")
     
     # Perform reset
     try:
@@ -189,7 +192,7 @@ def reset_to_off():
         return False
 
 
-def restore_safe_mode():
+def restore_safe_mode(force: bool = False):
     """Restore trading to safe DRY_RUN mode"""
     print_banner()
     print("🔄 RESTORING TO SAFE MODE (DRY_RUN)\n")
@@ -229,11 +232,14 @@ def restore_safe_mode():
     print("  • Manually enable LIVE trading only when ready")
     print("=" * 80 + "\n")
     
-    # Confirm action
-    confirm = input("Proceed with safe restoration? (yes/no): ")
-    if confirm.lower() != 'yes':
-        print("\n❌ Restoration cancelled\n")
-        return False
+    # Confirm action (skip when --force is used for non-interactive environments)
+    if not force:
+        confirm = input("Proceed with safe restoration? (yes/no): ")
+        if confirm.lower() != 'yes':
+            print("\n❌ Restoration cancelled\n")
+            return False
+    else:
+        print("⚡ --force flag detected — skipping confirmation prompt\n")
     
     # Perform restoration
     state_machine = get_state_machine()
@@ -302,14 +308,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python safe_restore_trading.py status    # Check current status
-  python safe_restore_trading.py restore   # Restore to safe DRY_RUN mode
-  python safe_restore_trading.py reset     # Reset to OFF state only
+  python safe_restore_trading.py status           # Check current status
+  python safe_restore_trading.py restore          # Restore to safe DRY_RUN mode
+  python safe_restore_trading.py restore --force  # Restore without confirmation (CI/CD)
+  python safe_restore_trading.py reset            # Reset to OFF state only
+  python safe_restore_trading.py reset --force    # Reset without confirmation (CI/CD)
 
 Safety:
   • Never auto-enables LIVE trading
   • Defaults to DRY_RUN (simulation mode)
-  • Requires user confirmation
+  • Requires user confirmation (unless --force is set)
   • Validates state consistency
         """
     )
@@ -320,16 +328,23 @@ Safety:
         help='Action to perform'
     )
     
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        default=False,
+        help='Skip confirmation prompts (for non-interactive/CI environments)'
+    )
+    
     args = parser.parse_args()
     
     try:
         if args.action == 'status':
             check_status()
         elif args.action == 'reset':
-            success = reset_to_off()
+            success = reset_to_off(force=args.force)
             sys.exit(0 if success else 1)
         elif args.action == 'restore':
-            success = restore_safe_mode()
+            success = restore_safe_mode(force=args.force)
             sys.exit(0 if success else 1)
     except KeyboardInterrupt:
         print("\n\n❌ Cancelled by user\n")

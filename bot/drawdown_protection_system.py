@@ -377,7 +377,6 @@ class DrawdownProtectionSystem:
             Tuple of (can_trade, reason)
         """
         if self.state.protection_level == ProtectionLevel.HALT:
-            return (True, f"Minimal trading (10%) — drawdown {self.state.drawdown_pct:.2f}% exceeds {self.config.halt_threshold_pct:.1f}% threshold")
             return (True, f"Minimal trading ({self.config.halt_position_multiplier*100:.0f}%) due to {self.state.drawdown_pct:.2f}% drawdown (>{self.config.halt_threshold_pct:.1f}%)")
 
         # Check capital floor
