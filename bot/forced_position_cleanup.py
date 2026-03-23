@@ -876,6 +876,33 @@ class ForcedPositionCleanup:
                 })
             if kill_all_positions:
                 logger.warning(f"   💀 KILL-ALL-ON-STARTUP: Closing all {len(kill_all_positions)} positions")
+
+                # ── CANCEL ALL OPEN ORDERS FIRST ─────────────────────────────
+                # Free up any locked capital held by open limit/stop orders
+                # before closing positions so the sells go through cleanly.
+                try:
+                    if hasattr(broker, 'cancel_all_orders'):
+                        cancelled_count = broker.cancel_all_orders()
+                        if cancelled_count:
+                            logger.warning(f"   🗑️  KILL-ALL: Cancelled {cancelled_count} open order(s)")
+                        else:
+                            logger.info(f"   🗑️  KILL-ALL: No open orders to cancel")
+                except Exception as cancel_err:
+                    logger.warning(f"   ⚠️  KILL-ALL: cancel_all_orders failed (continuing): {cancel_err}")
+
+                # ── RE-FETCH BALANCE AFTER ORDER CANCELLATION ─────────────────
+                try:
+                    if hasattr(broker, 'get_balance'):
+                        balance = broker.get_balance()
+                    elif hasattr(broker, 'get_account_balance'):
+                        balance = broker.get_account_balance()
+                    else:
+                        balance = None
+                    if balance is not None:
+                        logger.info(f"   💰 KILL-ALL: Balance after order cancel: {balance}")
+                except Exception as bal_err:
+                    logger.warning(f"   ⚠️  KILL-ALL: balance re-fetch failed (continuing): {bal_err}")
+
                 kill_success, kill_fail, kill_skipped = self.execute_cleanup(
                     kill_all_positions, broker, account_id, is_startup
                 )

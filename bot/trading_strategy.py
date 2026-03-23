@@ -5862,6 +5862,10 @@ class TradingStrategy:
                         if active_broker:
                             result = self.forced_cleanup.cleanup_single_account(active_broker, "platform", is_startup=run_startup_cleanup)
                             logger.warning(f"   ✅ Cleanup complete: {result['initial_positions']} → {result['final_positions']}")
+                            # 🔥 HARD SYNC INTO STRATEGY: push post-cleanup state back so
+                            # the strategy's position counters reflect the true broker state.
+                            self.current_positions = self.forced_cleanup.current_positions
+                            self.open_positions_count = self.forced_cleanup.open_positions_count
                     
                     # Reset trade counter after cleanup
                     if hasattr(self, 'trades_since_last_cleanup'):
