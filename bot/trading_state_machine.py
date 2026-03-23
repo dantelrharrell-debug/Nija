@@ -67,6 +67,7 @@ class TradingStateMachine:
         TradingState.OFF: [
             TradingState.DRY_RUN,
             TradingState.LIVE_PENDING_CONFIRMATION,
+            TradingState.LIVE_ACTIVE,          # ← auto-activate path
             TradingState.EMERGENCY_STOP
         ],
         TradingState.DRY_RUN: [
@@ -322,6 +323,64 @@ class TradingStateMachine:
             except Exception as e:
                 logger.error(f"❌ Error executing state callback: {e}")
                 
+    def maybe_auto_activate(self) -> bool:
+        """
+        Auto-transition from OFF → LIVE_ACTIVE when all safety gates pass.
+
+        Gates (all must be true):
+          1. Current state is OFF
+          2. Environment variable LIVE_CAPITAL_VERIFIED is truthy
+          3. No active kill switch
+
+        Returns:
+            True  if the transition was performed (or already LIVE_ACTIVE)
+            False if any gate blocked it
+        """
+        with self._lock:
+            current = self._current_state
+
+        if current == TradingState.LIVE_ACTIVE:
+            return True  # already live
+
+        if current != TradingState.OFF:
+            logger.debug(
+                "maybe_auto_activate: state is %s (not OFF) — skipping", current.value
+            )
+            return False
+
+        # Gate 1: LIVE_CAPITAL_VERIFIED
+        lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+        if lcv not in ("true", "1", "yes", "enabled"):
+            logger.info(
+                "🔒 Auto-activate blocked: LIVE_CAPITAL_VERIFIED is not set to true "
+                "(current value: %r).  Set it in your .env to enable live trading.",
+                lcv,
+            )
+            return False
+
+        # Gate 2: kill switch must be inactive
+        try:
+            from kill_switch import get_kill_switch
+            if get_kill_switch().is_active():
+                logger.warning(
+                    "🔒 Auto-activate blocked: kill switch is active"
+                )
+                return False
+        except Exception as _ks_err:
+            logger.debug("maybe_auto_activate: could not check kill switch: %s", _ks_err)
+
+        # All gates passed — transition
+        try:
+            self.transition_to(
+                TradingState.LIVE_ACTIVE,
+                "Auto-activated: LIVE_CAPITAL_VERIFIED=true and no kill switch active",
+            )
+            logger.info("✅ Auto-activated: state transitioned OFF → LIVE_ACTIVE")
+            return True
+        except Exception as exc:
+            logger.error("❌ Auto-activate transition failed: %s", exc)
+            return False
+
     def get_state_history(self, limit: int = 10) -> list:
         """Get recent state transition history"""
         with self._lock:
