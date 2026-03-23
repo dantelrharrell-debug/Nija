@@ -87,6 +87,28 @@ _SYMBOL_MIN_BASE_SIZE: Dict[str, float] = {
 }
 _DEFAULT_MIN_BASE_SIZE: float = 0.000001  # Conservative fallback for unknown coins
 
+# Kraken per-symbol minimum BASE quantities.
+# Fallback when broker.get_min_order_size() is not available or returns None.
+# Source: https://support.kraken.com/hc/en-us/articles/205893708
+KRAKEN_MIN_ORDER_SIZE: Dict[str, float] = {
+    "AVAX-USD":  0.5,
+    "AAVE-USD":  0.02,
+    "HBAR-USD":  25.0,
+    "MOVR-USD":  0.5,
+    "ADA-USD":   10.0,
+    "SOL-USD":   0.5,
+    "DOT-USD":   1.0,
+    "MATIC-USD": 10.0,
+    "LINK-USD":  1.0,
+    "ATOM-USD":  0.5,
+    "DOGE-USD":  50.0,
+    "XRP-USD":   5.0,
+    "LTC-USD":   0.01,
+    "BCH-USD":   0.01,
+    "ETH-USD":   0.01,
+    "BTC-USD":   0.0001,
+}
+
 # Best-asset ranking weights (higher score = better merge candidate)
 _W_PNL = 0.5          # Weight for unrealised P&L percentage
 _W_SIZE = 0.3         # Weight for position size (larger = more liquid merge target)
@@ -137,6 +159,76 @@ def get_min_base_order_size(symbol: str) -> float:
     return _SYMBOL_MIN_BASE_SIZE.get(base, _DEFAULT_MIN_BASE_SIZE)
 
 
+def is_position_closable(position: Dict, broker: Any) -> bool:
+    """Return *True* when the position meets exchange minimum size requirements.
+
+    A position is considered **unsellable** (and therefore not closable via a
+    normal market-sell) when either:
+      1. The broker/exchange rejects orders whose USD notional is below its
+         hard floor, **or**
+      2. The base-currency quantity is below the exchange's per-asset minimum.
+
+    The function first asks the broker for its minimum via
+    ``broker.get_min_order_size(symbol)`` (Coinbase Advanced Trade API
+    exposes this).  When that call is unavailable or raises, it falls back to
+    ``KRAKEN_MIN_ORDER_SIZE`` (for the Kraken venue) and then to the generic
+    ``_SYMBOL_MIN_BASE_SIZE`` map.
+
+    Parameters
+    ----------
+    position:
+        Open position dict.  Must contain at minimum ``symbol`` and at least
+        one of ``base_size`` / ``quantity`` / ``size``.
+    broker:
+        Live broker instance.  Optionally exposes
+        ``get_min_order_size(symbol) -> float``.
+
+    Returns
+    -------
+    bool
+        ``True`` if the position can be closed; ``False`` if it is too small
+        to submit a valid sell order.
+    """
+    symbol = position.get("symbol", "UNKNOWN")
+    base_size = float(
+        position.get("base_size")
+        or position.get("quantity")
+        or position.get("size")
+        or position.get("balance")
+        or 0
+    )
+
+    if base_size <= 0:
+        return False  # Nothing to sell
+
+    # ------------------------------------------------------------------
+    # Try the broker's own API first (most accurate)
+    # ------------------------------------------------------------------
+    try:
+        min_volume = broker.get_min_order_size(symbol)
+        # Some adapters return a (size, type) tuple; normalise to scalar
+        if isinstance(min_volume, (tuple, list)):
+            min_volume = float(min_volume[0])
+        else:
+            min_volume = float(min_volume)
+        return base_size >= min_volume
+    except Exception:
+        pass  # Fall through to static maps
+
+    # ------------------------------------------------------------------
+    # Static fallback – Kraken per-symbol map then generic base-size map
+    # ------------------------------------------------------------------
+    broker_name = (
+        getattr(broker, "broker_name", None) or getattr(broker, "name", "")
+    ).lower()
+    if broker_name == "kraken" and symbol in KRAKEN_MIN_ORDER_SIZE:
+        min_volume = KRAKEN_MIN_ORDER_SIZE[symbol]
+    else:
+        min_volume = get_min_base_order_size(symbol)
+
+    return base_size >= min_volume
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -165,6 +257,7 @@ class CleanupResult:
     micro_merged: int
     micro_liquidated: int
     total_usd_recovered: float
+    skipped_unsellable: int = 0  # Positions below exchange minimum – cannot be sold
     actions: List[CleanupAction] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
 
@@ -174,7 +267,8 @@ class CleanupResult:
         return (
             f"AutoCleanup: scanned={self.total_positions_scanned} "
             f"dust={self.dust_found} micro={self.micro_found} "
-            f"actioned={total_actioned} recovered=${self.total_usd_recovered:.4f}"
+            f"actioned={total_actioned} recovered=${self.total_usd_recovered:.4f} "
+            f"skipped_unsellable={self.skipped_unsellable}"
         )
 
 
@@ -307,6 +401,8 @@ class AutoCleanupEngine:
         # Step 3: liquidate dust → USDT
         # ----------------------------------------------------------
         for entry in dust_entries:
+            if self._skip_if_unsellable(entry, broker, result):
+                continue
             action = self._liquidate_to_usdt(broker, entry, reason="DUST_LIQUIDATE")
             result.actions.append(action)
             if action.success:
@@ -317,6 +413,8 @@ class AutoCleanupEngine:
         # Step 4: merge / liquidate micro positions
         # ----------------------------------------------------------
         for entry in micro_entries:
+            if self._skip_if_unsellable(entry, broker, result):
+                continue
             if best_asset and best_asset != entry["symbol"]:
                 action = self._merge_into_asset(broker, entry, best_asset)
             else:
@@ -382,10 +480,18 @@ class AutoCleanupEngine:
                 exc,
             )
             # Inline fallback
+            # DUST = USD value below threshold  OR  base_size below exchange minimum
             dust, micro = [], []
             for pos in positions:
                 size = float(pos.get("size_usd") or pos.get("usd_value") or 0)
-                if 0 < size < self.dust_threshold_usd:
+                base_size = float(
+                    pos.get("base_size") or pos.get("quantity") or pos.get("size") or 0
+                )
+                symbol = pos.get("symbol", "")
+                min_base = get_min_base_order_size(symbol) if symbol else _DEFAULT_MIN_BASE_SIZE
+                # DUST = USD value below threshold OR base_size below exchange minimum
+                below_min_base = 0 < base_size < min_base
+                if (0 < size < self.dust_threshold_usd) or below_min_base:
                     dust.append(pos)
                 elif self.dust_threshold_usd <= size < self.micro_threshold_usd:
                     micro.append(pos)
@@ -468,6 +574,32 @@ class AutoCleanupEngine:
 
     def _get_size_usd(self, position: Dict) -> float:
         return float(position.get("size_usd") or position.get("usd_value") or 0)
+
+    def _skip_if_unsellable(
+        self, position: Dict, broker: Any, result: "CleanupResult"
+    ) -> bool:
+        """Check if *position* is below the exchange minimum and should be skipped.
+
+        When the position cannot be closed (base_size < exchange minimum), the
+        symbol is added to the blacklist, the skip counter is incremented, and
+        a SKIP action is appended to *result*.
+
+        Returns *True* when the caller should ``continue`` to the next position.
+        """
+        if not is_position_closable(position, broker):
+            symbol = position.get("symbol", "UNKNOWN")
+            logger.warning("🚫 UNSELLABLE (below exchange min): %s", symbol)
+            self._symbol_blacklist.add(symbol)
+            result.skipped_unsellable += 1
+            result.actions.append(CleanupAction(
+                symbol=symbol, action="SKIP",
+                size_usd=self._get_size_usd(position),
+                quantity=self._get_quantity(position),
+                merge_target=None, success=False,
+                message="Skipped: base_size below exchange minimum",
+            ))
+            return True
+        return False
 
     def _liquidate_to_usdt(
         self, broker: Any, position: Dict, reason: str
