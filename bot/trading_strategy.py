@@ -921,6 +921,33 @@ except ImportError:
 
 load_dotenv()
 
+# ============================================================================
+# TEMPORARILY DISABLED LAYERS
+# These systems are disabled for lean single-account operation.
+# To re-enable a layer, remove its override line (or set the flag to True).
+# ============================================================================
+AI_STRATEGY_EVOLUTION_AVAILABLE   = False  # ❌ AI Strategy Evolution Engine
+TRADE_CLUSTER_AVAILABLE           = False  # ❌ Trade Cluster Engine
+CROSS_BROKER_ARB_AVAILABLE        = False  # ❌ Cross-Exchange Arbitrage
+ACCOUNT_FLOW_AVAILABLE            = False  # ❌ Multi-account capital routing
+SECTOR_TAXONOMY_AVAILABLE         = False  # ❌ Sector allocation engine
+VOLATILITY_CAPITAL_ROUTER_AVAILABLE = False  # ❌ Volatility-weighted capital router
+KELLY_SIZING_ENABLED              = False  # ❌ Kelly sizing (too aggressive for small accounts)
+_disabled_layers = [
+    name for name, enabled in [
+        ("AI-Evolution",   AI_STRATEGY_EVOLUTION_AVAILABLE),
+        ("TradeCluster",   TRADE_CLUSTER_AVAILABLE),
+        ("CrossBrokerArb", CROSS_BROKER_ARB_AVAILABLE),
+        ("AccountFlow",    ACCOUNT_FLOW_AVAILABLE),
+        ("SectorAlloc",    SECTOR_TAXONOMY_AVAILABLE),
+        ("VolRouter",      VOLATILITY_CAPITAL_ROUTER_AVAILABLE),
+        ("KellySizing",    KELLY_SIZING_ENABLED),
+    ] if not enabled
+]
+if _disabled_layers:
+    logger.info("⚙️  DISABLED LAYERS: %s", " | ".join(_disabled_layers))
+# ============================================================================
+
 # Position adoption safety constants
 # When entry price is missing from exchange, use current_price * this multiplier
 # This creates an immediate small loss to trigger aggressive exit management
@@ -3221,27 +3248,31 @@ class TradingStrategy:
                     self.micro_account_optimizer = None
 
                 # ── PRO POSITION MANAGER (Kelly sizing + tiered scaling rules) ──────
-                try:
-                    from bot.position_manager import get_pro_position_manager
-                    _ppm_kelly = float(os.getenv('KELLY_FRACTION', '0.5'))
-                    _ppm_wr    = float(os.getenv('WIN_RATE_ESTIMATE', '0.55'))
-                    _ppm_aw    = float(os.getenv('AVG_WIN_PCT', '0.04'))
-                    _ppm_al    = float(os.getenv('AVG_LOSS_PCT', '0.02'))
-                    self.pro_position_manager = get_pro_position_manager(
-                        balance=platform_balance,
-                        win_rate=_ppm_wr,
-                        avg_win_pct=_ppm_aw,
-                        avg_loss_pct=_ppm_al,
-                        kelly_fraction=_ppm_kelly,
-                    )
-                    logger.info(
-                        f"🚀 Pro Position Manager initialised | tier={self.pro_position_manager.tier.tier.value} "
-                        f"| max_pos={self.pro_position_manager.tier.max_positions} "
-                        f"| kelly={_ppm_kelly}"
-                    )
-                except Exception as _ppm_err:
-                    logger.warning(f"⚠️  Pro Position Manager not available: {_ppm_err}")
+                if not KELLY_SIZING_ENABLED:
                     self.pro_position_manager = None
+                    logger.info("ℹ️  Pro Position Manager (Kelly sizing) disabled — using standard position sizing")
+                else:
+                    try:
+                        from bot.position_manager import get_pro_position_manager
+                        _ppm_kelly = float(os.getenv('KELLY_FRACTION', '0.5'))
+                        _ppm_wr    = float(os.getenv('WIN_RATE_ESTIMATE', '0.55'))
+                        _ppm_aw    = float(os.getenv('AVG_WIN_PCT', '0.04'))
+                        _ppm_al    = float(os.getenv('AVG_LOSS_PCT', '0.02'))
+                        self.pro_position_manager = get_pro_position_manager(
+                            balance=platform_balance,
+                            win_rate=_ppm_wr,
+                            avg_win_pct=_ppm_aw,
+                            avg_loss_pct=_ppm_al,
+                            kelly_fraction=_ppm_kelly,
+                        )
+                        logger.info(
+                            f"🚀 Pro Position Manager initialised | tier={self.pro_position_manager.tier.tier.value} "
+                            f"| max_pos={self.pro_position_manager.tier.max_positions} "
+                            f"| kelly={_ppm_kelly}"
+                        )
+                    except Exception as _ppm_err:
+                        logger.warning(f"⚠️  Pro Position Manager not available: {_ppm_err}")
+                        self.pro_position_manager = None
 
                 # Initialize broker failsafes (hard limits and circuit breakers)
                 # CRITICAL: Use ONLY master balance, not user balances
