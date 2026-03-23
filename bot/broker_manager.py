@@ -678,6 +678,35 @@ class BaseBroker(ABC):
             raise ValueError("close_position requires a quantity or base_size")
         return self.place_market_order(symbol, side, quantity, size_type)
 
+    def cancel_all_orders(self) -> int:
+        """Cancel all open orders. Optional method, brokers can override.
+
+        Default implementation uses duck typing: if the broker exposes
+        ``get_open_orders()`` and ``cancel_order(order_id)`` methods they are
+        called to enumerate and cancel every open order. Returns 0 when
+        neither method is available.
+
+        Returns:
+            int: Number of orders successfully cancelled.
+        """
+        cancelled = 0
+        try:
+            if hasattr(self, 'get_open_orders'):
+                orders = self.get_open_orders()
+                for order in (orders or []):
+                    order_id = (
+                        order.get('order_id') or order.get('id') or order.get('txid')
+                    )
+                    if order_id and hasattr(self, 'cancel_order'):
+                        try:
+                            if self.cancel_order(order_id):
+                                cancelled += 1
+                        except Exception:
+                            pass
+        except Exception as e:
+            logging.warning(f"cancel_all_orders: error listing/cancelling orders: {e}")
+        return cancelled
+
     def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
         """Get candle data. Optional method, brokers can override."""
         return []
@@ -2233,6 +2262,46 @@ class CoinbaseBroker(BaseBroker):
             dict: Detailed balance info with keys: usdc, usd, trading_balance, crypto, consumer_usd, consumer_usdc
         """
         return self._get_account_balance_detailed(verbose=verbose)
+
+    def cancel_all_orders(self) -> int:
+        """Cancel all open orders on Coinbase.
+
+        Uses the Coinbase Advanced Trade API to list and cancel every open
+        order. Delegates to the base-class default if the client is not yet
+        initialized.
+
+        Returns:
+            int: Number of orders successfully cancelled.
+        """
+        if self.client is None:
+            return 0
+
+        cancelled = 0
+        try:
+            resp = self.client.list_orders(order_status=["OPEN"])
+            orders = getattr(resp, 'orders', None)
+            if isinstance(resp, dict):
+                orders = resp.get('orders', [])
+            if not orders:
+                return 0
+
+            for order in orders:
+                order_id = (
+                    order.get('order_id') if isinstance(order, dict)
+                    else getattr(order, 'order_id', None)
+                )
+                if not order_id:
+                    continue
+                try:
+                    self.client.cancel_orders(order_ids=[order_id])
+                    logger.info(f"   ✅ Cancelled Coinbase order: {order_id}")
+                    cancelled += 1
+                except Exception as exc:
+                    logger.warning(f"   ⚠️ Could not cancel order {order_id}: {exc}")
+        except Exception as e:
+            logger.error(f"cancel_all_orders: Coinbase error: {e}")
+
+        return cancelled
 
     def is_available(self) -> bool:
         """
