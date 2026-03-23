@@ -658,16 +658,18 @@ class NIJAApexStrategyV71:
                     "confidence": 0.0,
                 }
 
-        # ── Confidence threshold gate (unchanged) ───────────────────────────
-        if confidence < MIN_CONFIDENCE:
+        # ── Confidence threshold gate ────────────────────────────────────────
+        # HF scalping mode lowers the bar to 0.55 via _hf_min_confidence.
+        _effective_min_confidence = getattr(self, '_hf_min_confidence', MIN_CONFIDENCE)
+        if confidence < _effective_min_confidence:
             logger.info(
                 f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below "
-                f"minimum {MIN_CONFIDENCE:.2f}"
+                f"minimum {_effective_min_confidence:.2f}"
             )
             return {
                 "valid": False,
                 "reason": (
-                    f"Confidence too low: {confidence:.2f} < {MIN_CONFIDENCE:.2f} "
+                    f"Confidence too low: {confidence:.2f} < {_effective_min_confidence:.2f} "
                     f"(weak entry signal)"
                 ),
                 "confidence": confidence,
@@ -1821,80 +1823,93 @@ class NIJAApexStrategyV71:
                         broker_name, score, validation, adx, eligibility, trend, reason
                     )
 
-                    # Calculate stop loss and take profit
-                    swing_low = self.risk_manager.find_swing_low(df, lookback=10)
-                    atr = scalar(indicators['atr'].iloc[-1])
-                    stop_loss = self.risk_manager.calculate_stop_loss(
-                        current_price, 'long', swing_low, atr
-                    )
-
-                    # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
-                    # Get broker-specific round-trip fee and use it for dynamic profit targets
-                    # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
-                    # - Expands targets in high volatility to capture bigger trends
-                    # - Contracts targets in low volatility to lock profits faster and avoid whipsaws
-                    # - Always maintains minimum fee coverage (1.8x broker fee)
-                    broker_capabilities = self._get_broker_capabilities(symbol)
-                    broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
-
-                    # Extract volatility bandwidth for adaptive profit targeting
-                    volatility_bandwidth = scalar(indicators['bb_bandwidth'].iloc[-1])
-
-                    tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'long',
-                        broker_fee_pct=broker_fee,
-                        use_limit_order=True,
-                        atr=atr,
-                        volatility_bandwidth=volatility_bandwidth
-                    )
-
-                    # Adjust TP levels based on regime if enhanced scoring is enabled
-                    if self.use_enhanced_scoring and self.current_regime:
-                        tp_levels = self.regime_detector.adjust_take_profit_levels(
-                            self.current_regime, tp_levels
+                    # ── HF Scalping: tight fixed stop/TP override ─────────────────
+                    # When active, bypass ATR-based targets and the R:R ratio gate
+                    # in favour of fixed-percentage scalp levels.
+                    if getattr(self, '_hf_scalp_active', False):
+                        _sl_pct = getattr(self, '_hf_stop_pct', 0.3) / 100.0
+                        _tp_pct = getattr(self, '_hf_tp_pct', 0.5) / 100.0
+                        stop_loss  = current_price * (1.0 - _sl_pct)
+                        tp_levels  = [current_price * (1.0 + _tp_pct)]
+                        logger.info(
+                            "   ⚡ [HF-SCALP LONG] %s — SL=%.4f (%.1f%%)  TP=%.4f (%.1f%%)",
+                            symbol, stop_loss, _sl_pct * 100, tp_levels[0], _tp_pct * 100,
+                        )
+                    else:
+                        # Calculate stop loss and take profit
+                        swing_low = self.risk_manager.find_swing_low(df, lookback=10)
+                        atr = scalar(indicators['atr'].iloc[-1])
+                        stop_loss = self.risk_manager.calculate_stop_loss(
+                            current_price, 'long', swing_low, atr
                         )
 
-                    # ═══════════════════════════════════════════════════════════════
-                    # LAYER 2: TRADE MATH VERIFICATION
-                    # ═══════════════════════════════════════════════════════════════
-                    # Verify trade has acceptable math before accepting signal
-                    # This is our last line of defense against poor-quality setups
-                    
-                    # Extract first target for ratio calculation
-                    first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
-                    
-                    # Compute reward and risk amounts
-                    risk_dollars = abs(current_price - stop_loss)
-                    reward_dollars = abs(first_target - current_price)
-                    
-                    # Calculate ratio (reward / risk)
-                    trade_ratio = reward_dollars / risk_dollars if risk_dollars > 0 else 0
-                    
-                    # Gate: Minimum acceptable ratio is 1.5
-                    MIN_ACCEPTABLE_RATIO = 1.5
-                    if trade_ratio < MIN_ACCEPTABLE_RATIO:
-                        logger.info(f"   ⏭️  Trade math rejected: ratio {trade_ratio:.2f} below {MIN_ACCEPTABLE_RATIO}")
-                        return {
-                            'action': 'hold',
-                            'reason': f'Poor trade math: {trade_ratio:.2f}:1 ratio (need {MIN_ACCEPTABLE_RATIO}:1)'
-                        }
-                    
-                    # Verify stop placement relative to noise
-                    if 'atr' in indicators:
-                        atr_value = scalar(indicators['atr'].iloc[-1])
-                        stop_distance = abs(current_price - stop_loss)
-                        
-                        # Stop should be at least 1.0x ATR (outside immediate noise)
-                        min_stop_distance = atr_value * 1.0
-                        if stop_distance < min_stop_distance:
-                            logger.info(f"   ⏭️  Stop too tight: {stop_distance:.4f} < {min_stop_distance:.4f} (ATR)")
+                        # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
+                        # Get broker-specific round-trip fee and use it for dynamic profit targets
+                        # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
+                        # - Expands targets in high volatility to capture bigger trends
+                        # - Contracts targets in low volatility to lock profits faster and avoid whipsaws
+                        # - Always maintains minimum fee coverage (1.8x broker fee)
+                        broker_capabilities = self._get_broker_capabilities(symbol)
+                        broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
+
+                        # Extract volatility bandwidth for adaptive profit targeting
+                        volatility_bandwidth = scalar(indicators['bb_bandwidth'].iloc[-1])
+
+                        tp_levels = self.risk_manager.calculate_take_profit_levels(
+                            current_price, stop_loss, 'long',
+                            broker_fee_pct=broker_fee,
+                            use_limit_order=True,
+                            atr=atr,
+                            volatility_bandwidth=volatility_bandwidth
+                        )
+
+                        # Adjust TP levels based on regime if enhanced scoring is enabled
+                        if self.use_enhanced_scoring and self.current_regime:
+                            tp_levels = self.regime_detector.adjust_take_profit_levels(
+                                self.current_regime, tp_levels
+                            )
+
+                        # ═══════════════════════════════════════════════════════════════
+                        # LAYER 2: TRADE MATH VERIFICATION
+                        # ═══════════════════════════════════════════════════════════════
+                        # Verify trade has acceptable math before accepting signal
+                        # This is our last line of defense against poor-quality setups
+
+                        # Extract first target for ratio calculation
+                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
+
+                        # Compute reward and risk amounts
+                        risk_dollars = abs(current_price - stop_loss)
+                        reward_dollars = abs(first_target - current_price)
+
+                        # Calculate ratio (reward / risk)
+                        trade_ratio = reward_dollars / risk_dollars if risk_dollars > 0 else 0
+
+                        # Gate: Minimum acceptable ratio is 1.5
+                        MIN_ACCEPTABLE_RATIO = 1.5
+                        if trade_ratio < MIN_ACCEPTABLE_RATIO:
+                            logger.info(f"   ⏭️  Trade math rejected: ratio {trade_ratio:.2f} below {MIN_ACCEPTABLE_RATIO}")
                             return {
                                 'action': 'hold',
-                                'reason': f'Stop inside noise zone (ATR {atr_value:.4f})'
+                                'reason': f'Poor trade math: {trade_ratio:.2f}:1 ratio (need {MIN_ACCEPTABLE_RATIO}:1)'
                             }
-                    
-                    # Log approval
-                    logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
+
+                        # Verify stop placement relative to noise
+                        if 'atr' in indicators:
+                            atr_value = scalar(indicators['atr'].iloc[-1])
+                            stop_distance = abs(current_price - stop_loss)
+
+                            # Stop should be at least 1.0x ATR (outside immediate noise)
+                            min_stop_distance = atr_value * 1.0
+                            if stop_distance < min_stop_distance:
+                                logger.info(f"   ⏭️  Stop too tight: {stop_distance:.4f} < {min_stop_distance:.4f} (ATR)")
+                                return {
+                                    'action': 'hold',
+                                    'reason': f'Stop inside noise zone (ATR {atr_value:.4f})'
+                                }
+
+                        # Log approval
+                        logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
 
                     # ── Smart Reinvest Cycles (LONG) ───────────────────────
                     # Re-deploy recycled locked profits only when all 7 conditions
@@ -2073,79 +2088,92 @@ class NIJAApexStrategyV71:
                         broker_name, score, validation, adx, eligibility, trend, reason
                     )
 
-                    # Calculate stop loss and take profit
-                    swing_high = self.risk_manager.find_swing_high(df, lookback=10)
-                    atr = scalar(indicators['atr'].iloc[-1])
-                    stop_loss = self.risk_manager.calculate_stop_loss(
-                        current_price, 'short', swing_high, atr
-                    )
-
-                    # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
-                    # Get broker-specific round-trip fee and use it for dynamic profit targets
-                    # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
-                    # - Expands targets in high volatility to capture bigger trends
-                    # - Contracts targets in low volatility to lock profits faster and avoid whipsaws
-                    # - Always maintains minimum fee coverage (1.8x broker fee)
-                    broker_capabilities = self._get_broker_capabilities(symbol)
-                    broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
-
-                    # Extract volatility bandwidth for adaptive profit targeting
-                    volatility_bandwidth = scalar(indicators['bb_bandwidth'].iloc[-1])
-
-                    tp_levels = self.risk_manager.calculate_take_profit_levels(
-                        current_price, stop_loss, 'short',
-                        broker_fee_pct=broker_fee,
-                        use_limit_order=True,
-                        atr=atr,
-                        volatility_bandwidth=volatility_bandwidth
-                    )
-
-                    # Adjust TP levels based on regime if enhanced scoring is enabled
-                    if self.use_enhanced_scoring and self.current_regime:
-                        tp_levels = self.regime_detector.adjust_take_profit_levels(
-                            self.current_regime, tp_levels
+                    # ── HF Scalping: tight fixed stop/TP override ─────────────────
+                    # When active, bypass ATR-based targets and the R:R ratio gate
+                    # in favour of fixed-percentage scalp levels.
+                    if getattr(self, '_hf_scalp_active', False):
+                        _sl_pct = getattr(self, '_hf_stop_pct', 0.3) / 100.0
+                        _tp_pct = getattr(self, '_hf_tp_pct', 0.5) / 100.0
+                        stop_loss  = current_price * (1.0 + _sl_pct)
+                        tp_levels  = [current_price * (1.0 - _tp_pct)]
+                        logger.info(
+                            "   ⚡ [HF-SCALP SHORT] %s — SL=%.4f (%.1f%%)  TP=%.4f (%.1f%%)",
+                            symbol, stop_loss, _sl_pct * 100, tp_levels[0], _tp_pct * 100,
+                        )
+                    else:
+                        # Calculate stop loss and take profit
+                        swing_high = self.risk_manager.find_swing_high(df, lookback=10)
+                        atr = scalar(indicators['atr'].iloc[-1])
+                        stop_loss = self.risk_manager.calculate_stop_loss(
+                            current_price, 'short', swing_high, atr
                         )
 
-                    # ═══════════════════════════════════════════════════════════════
-                    # LAYER 2: TRADE MATH VERIFICATION (SHORT)
-                    # ═══════════════════════════════════════════════════════════════
-                    # Verify trade has acceptable math before accepting signal
-                    
-                    # Extract first target for ratio calculation
-                    first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
-                    
-                    # Compute reward and risk amounts
-                    risk_dollars = abs(stop_loss - current_price)
-                    reward_dollars = abs(current_price - first_target)
-                    
-                    # Calculate ratio (reward / risk)
-                    trade_ratio = reward_dollars / risk_dollars if risk_dollars > 0 else 0
-                    
-                    # Gate: Minimum acceptable ratio is 1.5
-                    MIN_ACCEPTABLE_RATIO = 1.5
-                    if trade_ratio < MIN_ACCEPTABLE_RATIO:
-                        logger.info(f"   ⏭️  Trade math rejected: ratio {trade_ratio:.2f} below {MIN_ACCEPTABLE_RATIO}")
-                        return {
-                            'action': 'hold',
-                            'reason': f'Poor trade math: {trade_ratio:.2f}:1 ratio (need {MIN_ACCEPTABLE_RATIO}:1)'
-                        }
-                    
-                    # Verify stop placement relative to noise
-                    if 'atr' in indicators:
-                        atr_value = scalar(indicators['atr'].iloc[-1])
-                        stop_distance = abs(stop_loss - current_price)
-                        
-                        # Stop should be at least 1.0x ATR (outside immediate noise)
-                        min_stop_distance = atr_value * 1.0
-                        if stop_distance < min_stop_distance:
-                            logger.info(f"   ⏭️  Stop too tight: {stop_distance:.4f} < {min_stop_distance:.4f} (ATR)")
+                        # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
+                        # Get broker-specific round-trip fee and use it for dynamic profit targets
+                        # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
+                        # - Expands targets in high volatility to capture bigger trends
+                        # - Contracts targets in low volatility to lock profits faster and avoid whipsaws
+                        # - Always maintains minimum fee coverage (1.8x broker fee)
+                        broker_capabilities = self._get_broker_capabilities(symbol)
+                        broker_fee = broker_capabilities.get_round_trip_fee(use_limit_order=True) if broker_capabilities else None
+
+                        # Extract volatility bandwidth for adaptive profit targeting
+                        volatility_bandwidth = scalar(indicators['bb_bandwidth'].iloc[-1])
+
+                        tp_levels = self.risk_manager.calculate_take_profit_levels(
+                            current_price, stop_loss, 'short',
+                            broker_fee_pct=broker_fee,
+                            use_limit_order=True,
+                            atr=atr,
+                            volatility_bandwidth=volatility_bandwidth
+                        )
+
+                        # Adjust TP levels based on regime if enhanced scoring is enabled
+                        if self.use_enhanced_scoring and self.current_regime:
+                            tp_levels = self.regime_detector.adjust_take_profit_levels(
+                                self.current_regime, tp_levels
+                            )
+
+                        # ═══════════════════════════════════════════════════════════════
+                        # LAYER 2: TRADE MATH VERIFICATION (SHORT)
+                        # ═══════════════════════════════════════════════════════════════
+                        # Verify trade has acceptable math before accepting signal
+
+                        # Extract first target for ratio calculation
+                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
+
+                        # Compute reward and risk amounts
+                        risk_dollars = abs(stop_loss - current_price)
+                        reward_dollars = abs(current_price - first_target)
+
+                        # Calculate ratio (reward / risk)
+                        trade_ratio = reward_dollars / risk_dollars if risk_dollars > 0 else 0
+
+                        # Gate: Minimum acceptable ratio is 1.5
+                        MIN_ACCEPTABLE_RATIO = 1.5
+                        if trade_ratio < MIN_ACCEPTABLE_RATIO:
+                            logger.info(f"   ⏭️  Trade math rejected: ratio {trade_ratio:.2f} below {MIN_ACCEPTABLE_RATIO}")
                             return {
                                 'action': 'hold',
-                                'reason': f'Stop inside noise zone (ATR {atr_value:.4f})'
+                                'reason': f'Poor trade math: {trade_ratio:.2f}:1 ratio (need {MIN_ACCEPTABLE_RATIO}:1)'
                             }
-                    
-                    # Log approval
-                    logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
+
+                        # Verify stop placement relative to noise
+                        if 'atr' in indicators:
+                            atr_value = scalar(indicators['atr'].iloc[-1])
+                            stop_distance = abs(stop_loss - current_price)
+
+                            # Stop should be at least 1.0x ATR (outside immediate noise)
+                            min_stop_distance = atr_value * 1.0
+                            if stop_distance < min_stop_distance:
+                                logger.info(f"   ⏭️  Stop too tight: {stop_distance:.4f} < {min_stop_distance:.4f} (ATR)")
+                                return {
+                                    'action': 'hold',
+                                    'reason': f'Stop inside noise zone (ATR {atr_value:.4f})'
+                                }
+
+                        # Log approval
+                        logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
 
                     # ── Smart Reinvest Cycles (SHORT) ──────────────────────
                     # Re-deploy recycled locked profits only when all 7 conditions
