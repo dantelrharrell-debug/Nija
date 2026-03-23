@@ -20,18 +20,17 @@ Date: January 30, 2026
 # Minimum account balance required to trade
 # Below this threshold, trading is disabled to prevent overtrading with
 # insufficient capital for proper risk management
-MIN_BALANCE_REQUIRED = 75.00  # $75 minimum account balance
+MIN_BALANCE_REQUIRED = 1.00  # $1 minimum account balance (allows tiny-position accounts)
 
 # ============================================================================
 # POSITION SIZING
 # ============================================================================
 
 # Minimum trade size in USD
-# Ensures positions are large enough to:
-# 1. Cover trading fees profitably
-# 2. Allow meaningful profit potential
-# 3. Meet exchange minimum requirements
-MIN_TRADE_SIZE = 10.00  # $10 minimum per trade
+# Set to $1 to allow tiny positions when required.
+# ⚠️  Positions under $10 face significant fee pressure (~1.4% round-trip on Coinbase).
+# Raise this value to 10.0 on well-funded accounts for better fee efficiency.
+MIN_TRADE_SIZE = 1.00  # $1 minimum per trade (allows tiny positions when required)
 
 # Position risk as percentage of account (0.0 - 1.0)
 # This is the base risk percentage applied per position
