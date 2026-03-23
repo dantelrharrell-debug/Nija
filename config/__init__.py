@@ -44,7 +44,7 @@ class UserConfig:
             'blocked_pairs': [],    # Pairs to explicitly block
 
             # Position limits (USD)
-            'min_position_size': 10.0,
+            'min_position_size': 1.0,   # $1 minimum – allows tiny positions when required
             'max_position_size': 100.0,
             'max_total_exposure': 500.0,
 

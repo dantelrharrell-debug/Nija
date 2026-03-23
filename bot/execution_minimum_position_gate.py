@@ -79,20 +79,21 @@ class ExecutionMinimumPositionGate:
     """
     
     # Absolute minimum position sizes (USD) by tier
-    # These ensure positions are large enough to be profitable after fees
-    # NOTE: LOW_CAPITAL mode (< $100) uses average position monitoring instead
+    # Lowered to $1 to allow tiny positions when required.
+    # ⚠️  Positions under $10 face significant fee pressure (~1.4% round-trip on Coinbase).
+    # Raise individual tier values for stricter fee-efficiency enforcement.
     TIER_MINIMUM_USD = {
-        'STARTER': 7.50,   # $7.50 minimum for LOW_CAPITAL mode compatibility
-        'SAVER': 10.0,     # $10 minimum (Kraken minimum)
-        'INVESTOR': 20.0,  # $20 minimum (better fee efficiency)
-        'INCOME': 30.0,    # $30 minimum (optimal fee efficiency)
-        'LIVABLE': 50.0,   # $50 minimum (institutional approach)
-        'BALLER': 100.0,   # $100 minimum (capital deployment mode)
+        'STARTER': 1.0,    # $1 minimum – allows tiny positions when required
+        'SAVER': 1.0,      # $1 minimum – allows tiny positions when required
+        'INVESTOR': 1.0,   # $1 minimum – allows tiny positions when required
+        'INCOME': 1.0,     # $1 minimum – allows tiny positions when required
+        'LIVABLE': 1.0,    # $1 minimum – allows tiny positions when required
+        'BALLER': 1.0,     # $1 minimum – allows tiny positions when required
     }
     
-    # LOW_CAPITAL mode threshold - accounts below this use $7.50 average enforcement
+    # LOW_CAPITAL mode threshold - accounts below this use $1 average enforcement
     LOW_CAPITAL_THRESHOLD = 100.0  # Balance threshold
-    LOW_CAPITAL_MIN_POSITION = 7.50  # Minimum position size in LOW_CAPITAL mode
+    LOW_CAPITAL_MIN_POSITION = 1.0  # $1 minimum in LOW_CAPITAL mode (allows tiny positions)
     
     # Minimum percentage allocation (of account balance)
     # Prevents spreading capital too thin

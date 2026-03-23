@@ -1677,19 +1677,23 @@ except ValueError:
 # - $50 account: min trade = $10.00 (15% would be $7.50, floor enforced)
 # - $70 account: min trade = $10.50 (15% of $70)
 # - $100 account: min trade = $15.00 (15% of $100)
-# Minimum $10 per position ensures fee efficiency and meaningful compounding gains
-BASE_MIN_POSITION_SIZE_USD = 10.0  # Floor minimum ($10 - no trade under $10 for fee efficiency)
+# Minimum $1 per position – allows tiny positions when required.
+# ⚠️  Positions under $10 face significant fee pressure (~1.4% round-trip on Coinbase).
+# Raise this value (e.g. to 10.0) on well-funded accounts for better fee efficiency.
+BASE_MIN_POSITION_SIZE_USD = 1.0  # Floor minimum ($1 - allows tiny positions when required)
 DYNAMIC_POSITION_SIZE_PCT = 0.18  # 18% of balance per position (locked setting)
-POSITION_SIZE_WARNING_THRESHOLD_USD = 15.0  # Warn when position is under this amount (near floor)
+POSITION_SIZE_WARNING_THRESHOLD_USD = 10.0  # Warn when position is under this amount (near recommended minimum)
 
 # OPTION B: Brokerage-specific minimum trade sizes
 # Any trade that would create a position below this threshold is skipped,
 # preventing dust positions at creation time.
+# Values reflect actual exchange minimums; raise per-broker entries for stricter
+# fee-efficiency enforcement on well-funded accounts.
 BROKERAGE_MIN_TRADE_USD: dict = {
-    'coinbase': 10.0,   # Coinbase minimum ($10 for fee efficiency)
-    'kraken':   10.0,   # Kraken exchange minimum ($10 per exchange rules)
-    'binance':  10.0,   # Binance minimum
-    'okx':      10.0,   # OKX minimum
+    'coinbase': 1.0,    # Coinbase actual minimum (~$1); was $10 (fee-efficiency floor)
+    'kraken':   1.0,    # Kraken actual minimum; was $10 (Kraken exchange rules)
+    'binance':  1.0,    # Binance actual minimum; was $10
+    'okx':      1.0,    # OKX actual minimum; was $10
     'alpaca':   1.0,    # Alpaca minimum (stocks, lower fees)
 }
 
@@ -1812,7 +1816,7 @@ def get_balance_based_max_positions(balance: float) -> int:
 # DEPRECATED: Use get_dynamic_min_position_size() instead
 # This constant is maintained for backward compatibility only
 MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_dynamic_min_position_size() instead)
-MIN_BALANCE_TO_TRADE_USD = 10.0  # Minimum account balance to allow trading ($10 matches minimum position size)
+MIN_BALANCE_TO_TRADE_USD = 1.0  # Minimum account balance to allow trading ($1 allows tiny-position accounts)
 
 # ── FIRST TRADE FORCE TRIGGER ──────────────────────────────────────────────
 # After this many consecutive zero-signal cycles while the first trade has not

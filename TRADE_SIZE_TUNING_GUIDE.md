@@ -2,18 +2,46 @@
 
 ## Overview
 
-This guide explains the new trade sizing safety features implemented to increase trade size safely while maintaining profitability.
+This guide explains the trade sizing safety features and how to tune them for
+different account sizes, including the support for **tiny positions** when they
+are required.
 
-## Changes Implemented (Jan 20, 2026)
+## Changes Implemented (Mar 2026) – Tiny Position Support
 
-### Option A: Minimum Position Size ($5.00)
+The minimum trade size floor across all configuration files has been lowered
+from **$10** to **$1** so that the bot can trade tiny positions whenever they
+are required (e.g. very small accounts, dust-sweep operations, or deliberate
+micro-allocation strategies).
+
+> ⚠️  **Fee Warning**: Positions under $10 face significant fee pressure
+> (~1.4% round-trip on Coinbase).  Raise the minimums back to $10 on
+> well-funded accounts for better long-term profitability.
+
+### Files Updated
+
+| File | Constant | Old Value | New Value |
+|------|----------|-----------|-----------|
+| `bot/trading_strategy.py` | `BASE_MIN_POSITION_SIZE_USD` | $10 | $1 |
+| `bot/trading_strategy.py` | `BROKERAGE_MIN_TRADE_USD` (all) | $10 | $1 |
+| `bot/trading_strategy.py` | `MIN_BALANCE_TO_TRADE_USD` | $10 | $1 |
+| `bot/best_practice_config.py` | `MIN_TRADE_SIZE` | $10 | $1 |
+| `bot/best_practice_config.py` | `MIN_BALANCE_REQUIRED` | $75 | $1 |
+| `config/__init__.py` | `min_position_size` (default) | $10 | $1 |
+| `bot/execution_minimum_position_gate.py` | `TIER_MINIMUM_USD` (all tiers) | $7.50–$100 | $1 |
+| `bot/execution_minimum_position_gate.py` | `LOW_CAPITAL_MIN_POSITION` | $7.50 | $1 |
+
+---
+
+## Previous Implementation (Jan 20, 2026)
+
+### Option A: Minimum Position Size ($5.00 → raised to $10.00)
 
 **What it does:**
-- Blocks trades smaller than $5.00 from executing
+- Blocks trades smaller than $10.00 from executing
 - Prevents micro-trades that lose money to fees (~1.4% round-trip on Coinbase)
 - Ensures every trade has a realistic chance of being profitable
 
-**Where it's configured:**
+**Where it was configured:**
 - `bot/position_sizer.py`: `MIN_POSITION_USD = 5.0`
 - `bot/trading_strategy.py`: `MIN_POSITION_SIZE_USD = 5.0`
 - `bot/nija_apex_strategy_v71.py`: Uses `MIN_POSITION_USD` for validation
@@ -63,19 +91,26 @@ if confidence < MIN_CONFIDENCE:
 
 To change the minimum position size, edit these constants:
 
-**File: `bot/position_sizer.py`**
-```python
-MIN_POSITION_USD = 5.0  # Change to your desired minimum (e.g., 10.0 for $10)
-```
-
 **File: `bot/trading_strategy.py`**
 ```python
-MIN_POSITION_SIZE_USD = 5.0  # Keep in sync with position_sizer.py
-MIN_BALANCE_TO_TRADE_USD = 5.0  # Keep >= MIN_POSITION_SIZE_USD
+BASE_MIN_POSITION_SIZE_USD = 1.0  # $1 – allows tiny positions when required
+# Raise to 10.0 for fee-efficient trading on well-funded accounts
+```
+
+**File: `bot/best_practice_config.py`**
+```python
+MIN_TRADE_SIZE = 1.00  # $1 minimum per trade
+MIN_BALANCE_REQUIRED = 1.00  # $1 minimum account balance
+```
+
+**File: `config/__init__.py`** (UserConfig defaults)
+```python
+'min_position_size': 1.0,  # $1 – allows tiny positions when required
 ```
 
 **Recommendations by account size:**
-- **$50-100**: Keep at $5.00 minimum
+- **< $10**: $1.00 minimum (tiny positions allowed)
+- **$10-100**: Consider $2.00–$5.00 minimum
 - **$100-500**: Consider $10.00 minimum
 - **$500-1000**: Consider $15-20 minimum
 - **$1000+**: Consider $25-50 minimum
@@ -101,9 +136,9 @@ MIN_CONFIDENCE = 0.60  # Change to your desired threshold (0.0-1.0)
 
 **Trade Skipped (Position Too Small):**
 ```
-⏭️  Skipping trade: Position $3.50 below minimum $5.00
+⏭️  Skipping trade: Position $0.50 below minimum $1.00
 ```
-**Action:** Consider funding account with more capital for better trading
+**Action:** Fund account or lower the minimum further
 
 **Trade Skipped (Confidence Too Low):**
 ```
@@ -119,33 +154,26 @@ MIN_CONFIDENCE = 0.60  # Change to your desired threshold (0.0-1.0)
 
 ## Impact on Trading
 
-### Before These Changes
-- ❌ Bot could take $1-2 positions that lose money to fees
-- ❌ Bot could enter weak setups with low probability
-- ❌ Many small losing trades eating into profits
-- ❌ Poor overall profitability on small accounts
-
-### After These Changes
-- ✅ Minimum $5.00 position size ensures trades can be profitable
-- ✅ 60% confidence threshold filters weak entries
-- ✅ Fewer but higher-quality trades
-- ✅ Better overall profitability
-- ✅ Clear feedback on why trades are skipped
+### With Tiny Position Support (Mar 2026)
+- ✅ Minimum $1.00 position size – tiny positions tradeable when required
+- ✅ Small accounts (< $10) can participate
+- ⚠️  Fee impact is significant on sub-$10 positions (~1.4% round-trip)
+- ⚠️  Raise minimums on well-funded accounts for better profitability
 
 ## Examples
 
-### Example 1: Small Account ($50 balance)
+### Example 1: Tiny Account ($5 balance)
 
-**Scenario:** Bot calculates $3.50 position size based on account balance
+**Scenario:** Bot calculates $0.90 position size based on account balance
 
-**Before:** Would execute trade, likely lose money to fees
-**After:** Trade skipped with log:
+**Before (Jan 2026):** Trade skipped (below $10 minimum)
+**After (Mar 2026):** Trade executes (above $1 minimum)
+
+**Log:**
 ```
-⏭️  Skipping trade: Position $3.50 below minimum $5.00
-Reason: Position too small (increase account size for better trading)
+✅ Trade approved: Size=$0.90, Confidence=0.75
+⚠️  Small position – fee impact ~1.4%
 ```
-
-**Action:** Fund account to $75+ for consistent $5+ position sizes
 
 ### Example 2: Weak Entry Signal
 
@@ -177,22 +205,21 @@ Reason: Confidence too low (weak entry signal)
 ### Problem: No trades executing
 
 **Possible causes:**
-1. Account balance too small for $5 minimum positions
+1. Account balance too small for $1 minimum positions
 2. Confidence threshold too high (all signals filtered)
 3. Market conditions not meeting entry criteria
 
 **Solutions:**
-1. Fund account to $50+ minimum for consistent trading
-2. Lower MIN_CONFIDENCE to 0.50 if too restrictive
-3. Wait for better market conditions
+1. Lower MIN_CONFIDENCE to 0.50 if too restrictive
+2. Wait for better market conditions
 
 ### Problem: Too many trades skipped for size
 
-**Cause:** Account balance too small relative to position sizing logic
+**Cause:** Account balance extremely small (< $1)
 
 **Solution:**
-- Fund account to at least $50-100 for $5+ positions
-- Or temporarily lower MIN_POSITION_USD to $3.00 (not recommended - less profitable)
+- Fund account to at least $1 for minimum trading
+- Or lower BASE_MIN_POSITION_SIZE_USD further (not recommended)
 
 ### Problem: Too many trades skipped for confidence
 
@@ -224,16 +251,25 @@ Reason: Confidence too low (weak entry signal)
 
 ## Recommendations for Best Results
 
-1. **Account Size**: Minimum $50-100 for optimal results with $5 minimum positions
-2. **Confidence Threshold**: Start with 0.60, adjust after observing results
-3. **Monitor Logs**: Watch for patterns in skipped trades
-4. **Gradual Adjustments**: Make small changes and observe impact
-5. **Quality Over Quantity**: Fewer high-quality trades beat many low-quality trades
+1. **Account Size**: Fund to $50-100+ for optimal fee efficiency with larger positions
+2. **Tiny Positions**: Use $1 minimum only when required (dust sweeps, micro-accounts)
+3. **Confidence Threshold**: Start with 0.60, adjust after observing results
+4. **Monitor Logs**: Watch for patterns in skipped trades and fee impact on tiny positions
+5. **Gradual Adjustments**: Make small changes and observe impact
+6. **Quality Over Quantity**: Fewer high-quality trades beat many low-quality trades
 
 ## Version History
 
+- **Mar 2026**: Tiny position support
+  - `BASE_MIN_POSITION_SIZE_USD` lowered from $10 to $1
+  - `BROKERAGE_MIN_TRADE_USD` all entries lowered to $1
+  - `MIN_BALANCE_TO_TRADE_USD` lowered from $10 to $1
+  - `MIN_TRADE_SIZE` in best_practice_config.py lowered to $1
+  - `MIN_BALANCE_REQUIRED` in best_practice_config.py lowered to $1
+  - `min_position_size` default in config/__init__.py lowered to $1
+  - `TIER_MINIMUM_USD` and `LOW_CAPITAL_MIN_POSITION` in execution gate lowered to $1
 - **Jan 20, 2026**: Initial implementation
-  - MIN_POSITION_USD increased from $1.00 to $5.00
+  - MIN_POSITION_USD increased from $1.00 to $5.00 (later to $10)
   - MIN_CONFIDENCE threshold added at 0.60
   - Applied to both long and short entries
   - Clear logging for all trade decisions
@@ -241,3 +277,4 @@ Reason: Confidence too low (weak entry signal)
 ---
 
 **Questions?** Check logs for detailed feedback on every trade decision.
+
