@@ -10,10 +10,10 @@ throughput by:
   • Lowering volume filters (volume_threshold 0.10 → 0.05,
     volume_min_threshold 0.002 → 0.001)
   • Relaxing ADX minimum (15 → 8) and trend confirmation count (3 → 2)
-  • Setting tight profit targets 0.5 %–1 % for rapid realisation
-  • Setting tight stop-losses 0.3 %–0.6 %
+  • Setting tight profit targets 0.4 %–1 % for rapid realisation
+  • Setting tight stop-losses 0.25 %–0.6 %
   • Capping position hold time at 3 minutes so capital re-deploys quickly
-  • Enforcing a per-hour trade rate cap (default 20) to avoid overtrading
+  • Enforcing a per-hour trade rate cap (default 30) to avoid overtrading
 
 Activation
 ----------
@@ -99,10 +99,10 @@ class HFScalpConfig:
         volume_min_thr    0.001  (was 0.002 – 0.1 % of 20-candle avg)
         min_adx           8      (was 15)
         min_trend_conf    2/5    (was 3/5)
-        TAKE_PROFIT       0.5 %
-        STOP_LOSS         0.3 %
+        TAKE_PROFIT       0.4 %
+        STOP_LOSS         0.25 %
         SCAN_INTERVAL     30 s   (was 150 s)
-        MAX_TRADES/HR     20
+        MAX_TRADES/HR     30
     """
 
     # ── Master switch ──────────────────────────────────────────────────────────
@@ -163,18 +163,18 @@ class HFScalpConfig:
 
     # ── Profit / stop management ───────────────────────────────────────────────
     profit_target_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 0.5)
+        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 0.4)
     )
-    # env: HF_SCALP_PROFIT_TARGET_PCT  (0.5 % quick take-profit)
+    # env: HF_SCALP_PROFIT_TARGET_PCT  (0.4 % quick take-profit)
 
     stop_loss_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_STOP_LOSS_PCT", 0.3)
+        default_factory=lambda: _env_float("HF_SCALP_STOP_LOSS_PCT", 0.25)
     )
-    # env: HF_SCALP_STOP_LOSS_PCT  (0.3 % tight stop)
+    # env: HF_SCALP_STOP_LOSS_PCT  (0.25 % tight stop)
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     max_trades_per_hour: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MAX_TRADES_PER_HOUR", 20)
+        default_factory=lambda: _env_int("HF_SCALP_MAX_TRADES_PER_HOUR", 30)
     )
     # env: HF_SCALP_MAX_TRADES_PER_HOUR
 
