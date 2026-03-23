@@ -808,6 +808,21 @@ except ImportError:
         get_dynamic_sniper_thresholds = None  # type: ignore
         logger.warning("⚠️ Dynamic Sniper Thresholds not available — static sniper gates in use")
 
+# ── HF Micro Scalping Mode — high-frequency 30s scan, low confidence gate ─────
+try:
+    from hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode
+    HF_SCALPING_AVAILABLE = True
+    logger.info("✅ HF Scalping Mode loaded — high-frequency micro scalping available (set HF_SCALP_MODE=1)")
+except ImportError:
+    try:
+        from bot.hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode
+        HF_SCALPING_AVAILABLE = True
+        logger.info("✅ HF Scalping Mode loaded — high-frequency micro scalping available (set HF_SCALP_MODE=1)")
+    except ImportError:
+        HF_SCALPING_AVAILABLE = False
+        _get_hf_scalping_mode = None  # type: ignore
+        logger.warning("⚠️ HF Scalping Mode not available")
+
 # Import Micro-Cap Compounding Config — applies before risk engine and position sizing
 try:
     from micro_capital_config import (
@@ -3503,6 +3518,30 @@ class TradingStrategy:
 
                 # Initialize APEX strategy with primary broker
                 self.apex = NIJAApexStrategyV71(broker_client=self.broker)
+
+                # ── HF Scalping Mode — apply to APEX after construction ────────
+                # Patches confidence, ADX, volume, trend-confirmation thresholds
+                # and marks the instance so tight scalp TP/SL are used.
+                if HF_SCALPING_AVAILABLE and _get_hf_scalping_mode is not None:
+                    try:
+                        _hf = _get_hf_scalping_mode()
+                        _hf.apply_to_apex(self.apex)
+                        self.hf_scalping_mode = _hf
+                        if _hf.enabled:
+                            logger.info(
+                                "🚀 HF Scalping Mode ACTIVE — cycle=%ds  "
+                                "confidence≥%.2f  ADX≥%d  TP=%.1f%%  SL=%.1f%%",
+                                _hf.get_cycle_interval(),
+                                _hf.config.min_confidence,
+                                _hf.config.min_adx,
+                                _hf.config.profit_target_pct,
+                                _hf.config.stop_loss_pct,
+                            )
+                    except Exception as _hf_init_err:
+                        logger.warning("⚠️ HF Scalping Mode init skipped: %s", _hf_init_err)
+                        self.hf_scalping_mode = None
+                else:
+                    self.hf_scalping_mode = None
 
                 # Add delay before syncing positions to avoid rate limiting
                 time.sleep(0.5)
@@ -9431,6 +9470,16 @@ class TradingStrategy:
 
                             # Execute buy actions
                             if action in ['enter_long', 'enter_short']:
+                                # ── HF Scalping rate-limiter ──────────────────────────────
+                                # Check per-hour cap and per-entry cooldown before anything
+                                # else so the slot isn't consumed by later guards.
+                                if hasattr(self, 'hf_scalping_mode') and self.hf_scalping_mode is not None:
+                                    _hf_ok, _hf_reason = self.hf_scalping_mode.can_enter(symbol)
+                                    if not _hf_ok:
+                                        filter_stats['no_entry_signal'] += 1
+                                        logger.info("   ⏱️  [HF-SCALP] %s blocked — %s", symbol, _hf_reason)
+                                        continue
+
                                 # SPOT_ONLY / INCUBATION_MODE: block short entries
                                 if action == 'enter_short' and SPOT_ONLY:
                                     filter_stats['no_entry_signal'] += 1
@@ -11030,6 +11079,13 @@ class TradingStrategy:
                                     self._first_trade_executed = True
                                     self._first_trade_force_active = False  # force trigger no longer needed
                                     logger.info("🚀 FIRST TRADE GUARANTEE: initial deployment confirmed ✅")
+
+                                # ── HF Scalping: record entry for rate limiter ────────
+                                if hasattr(self, 'hf_scalping_mode') and self.hf_scalping_mode is not None:
+                                    try:
+                                        self.hf_scalping_mode.record_trade(_ps_symbol)
+                                    except Exception as _hf_rec_err:
+                                        logger.debug("HF scalp record_trade skipped for %s: %s", _ps_symbol, _hf_rec_err)
 
                                 # 🔒 PROFIT LOCK SYSTEM — register new position for ratchet tracking
                                 if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:

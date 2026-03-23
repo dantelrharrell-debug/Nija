@@ -15,6 +15,19 @@ import signal
 import threading
 import subprocess
 
+# ── HF Scalping Mode — import early so cycle interval is available ─────────
+# When HF_SCALP_MODE=1 the cycle interval drops from 150 s → 30 s and all
+# entry filters are tightened.  Falls back silently if the module is absent.
+try:
+    from bot.hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode_bot
+    _hf_bot = _get_hf_scalping_mode_bot()
+except Exception:
+    try:
+        from hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode_bot
+        _hf_bot = _get_hf_scalping_mode_bot()
+    except Exception:
+        _hf_bot = None
+
 # Import broker types for error reporting
 try:
     from bot.broker_manager import BrokerType
@@ -995,7 +1008,12 @@ def _run_bot_startup_and_trading():
 
             if not use_independent_trading:
                 # Single broker mode (original behavior)
-                logger.info("🚀 Starting single-broker trading loop (2.5 minute cadence)...")
+                _hf_cycle_secs = _hf_bot.get_cycle_interval() if _hf_bot is not None else 150
+                _hf_label = (
+                    f"HF scalping ({_hf_cycle_secs}s)" if (_hf_bot is not None and _hf_bot.enabled)
+                    else "2.5 minute"
+                )
+                logger.info(f"🚀 Starting single-broker trading loop ({_hf_label} cadence)...")
                 cycle_count = 0
 
                 while True:
@@ -1007,7 +1025,7 @@ def _run_bot_startup_and_trading():
                         
                         logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
                         strategy.run_cycle()
-                        time.sleep(150)  # 2.5 minutes
+                        time.sleep(_hf_cycle_secs)  # dynamic: 30 s (HF scalp) or 150 s (normal)
                     except KeyboardInterrupt:
                         _log_lifecycle_banner(
                             "⚠️  TRADING LOOP INTERRUPTED - Single-Broker Mode",
