@@ -130,7 +130,7 @@ class ValidationContext:
     
     # Exchange information
     exchange_name: str = "coinbase"
-    exchange_minimum_usd: float = 2.0
+    exchange_minimum_usd: float = 5.0
     
     # Trading state
     cooldown_until: Optional[datetime] = None
@@ -179,11 +179,11 @@ class DeterministicEntryValidator:
         
         # Exchange-specific minimums (USD)
         self.exchange_minimums = {
-            'coinbase': 2.0,
+            'coinbase': 5.0,
             'kraken': 10.50,  # $10 + fee buffer
             'binance': 10.0,
-            'okx': 1.0,
-            'alpaca': 1.0,
+            'okx': 5.0,
+            'alpaca': 5.0,
         }
         
         # Minimum balance to trade (absolute floor)

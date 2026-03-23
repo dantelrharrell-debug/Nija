@@ -45,9 +45,9 @@ logger = logging.getLogger("nija.auto_dust_sweeper")
 # Default configuration constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_DUST_THRESHOLD_USD: float = 2.0    # Positions below $2 are swept
+DEFAULT_DUST_THRESHOLD_USD: float = 3.0    # Positions below $3 are swept
 DEFAULT_TARGET_ASSET: str = "BTC-USD"       # Default consolidation asset
-MIN_REBUY_USD: float = 1.0                  # Minimum aggregated proceeds to trigger re-buy
+MIN_REBUY_USD: float = 5.0                  # Minimum aggregated proceeds to trigger re-buy
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +127,13 @@ class AutoDustSweeper:
         self.dry_run = dry_run
         self.min_rebuy_usd = min_rebuy_usd
         self._lock = threading.Lock()
+        # Accumulated proceeds from sweeps where we sold dust but couldn't yet
+        # reach min_rebuy_usd.  Persists across sweep cycles so that small
+        # proceeds from multiple runs are combined before the re-buy fires.
+        self._accumulated_proceeds: float = 0.0
         logger.info(
-            "🧹 AutoDustSweeper initialised | dust<$%.2f | target=%s | dry_run=%s",
-            dust_threshold_usd, target_asset, dry_run,
+            "🧹 AutoDustSweeper initialised | dust<$%.2f | target=%s | dry_run=%s | min_rebuy=$%.2f",
+            dust_threshold_usd, target_asset, dry_run, min_rebuy_usd,
         )
 
     # ------------------------------------------------------------------
@@ -235,18 +239,27 @@ class AutoDustSweeper:
                     result.errors.append(action.message)
 
         # Step 4 – re-buy target asset with aggregated proceeds
-        if result.proceeds_usd >= self.min_rebuy_usd:
-            rebuy_action = self._buy_target(broker, result.proceeds_usd)
+        # Accumulate proceeds across sweep cycles so that small amounts from
+        # multiple runs combine before we attempt the re-buy.
+        self._accumulated_proceeds += result.proceeds_usd
+        total_available = self._accumulated_proceeds
+
+        if total_available >= self.min_rebuy_usd:
+            rebuy_action = self._buy_target(broker, total_available)
             result.rebuy_attempted = True
             result.rebuy_success = rebuy_action.success
-            result.rebuy_usd = result.proceeds_usd if rebuy_action.success else 0.0
+            result.rebuy_usd = total_available if rebuy_action.success else 0.0
             result.actions.append(rebuy_action)
-            if not rebuy_action.success:
+            if rebuy_action.success:
+                # Reset accumulator after a successful re-buy
+                self._accumulated_proceeds = 0.0
+            else:
                 result.errors.append(rebuy_action.message)
         else:
             logger.info(
-                "🧹 AutoDustSweeper: proceeds $%.4f < min $%.2f – skipping re-buy",
-                result.proceeds_usd, self.min_rebuy_usd,
+                "🧹 AutoDustSweeper: accumulated $%.4f (need $%.2f for re-buy) — "
+                "holding proceeds for next sweep cycle",
+                total_available, self.min_rebuy_usd,
             )
 
         logger.info("🧹 AutoDustSweeper DONE | %s", result.summary())

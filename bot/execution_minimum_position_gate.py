@@ -79,21 +79,20 @@ class ExecutionMinimumPositionGate:
     """
     
     # Absolute minimum position sizes (USD) by tier
-    # Lowered to $1 to allow tiny positions when required.
-    # ⚠️  Positions under $10 face significant fee pressure (~1.4% round-trip on Coinbase).
-    # Raise individual tier values for stricter fee-efficiency enforcement.
+    # Raised to $5 to stay clear of exchange dust floors and avoid repeated
+    # order rejections.  Positions under $5 create dust and cannot be closed.
     TIER_MINIMUM_USD = {
-        'STARTER': 1.0,    # $1 minimum – allows tiny positions when required
-        'SAVER': 1.0,      # $1 minimum – allows tiny positions when required
-        'INVESTOR': 1.0,   # $1 minimum – allows tiny positions when required
-        'INCOME': 1.0,     # $1 minimum – allows tiny positions when required
-        'LIVABLE': 1.0,    # $1 minimum – allows tiny positions when required
-        'BALLER': 1.0,     # $1 minimum – allows tiny positions when required
+        'STARTER':  5.0,   # $5 minimum — avoids dust + exchange rejection
+        'SAVER':    5.0,   # $5 minimum — avoids dust + exchange rejection
+        'INVESTOR': 5.0,   # $5 minimum — avoids dust + exchange rejection
+        'INCOME':   5.0,   # $5 minimum — avoids dust + exchange rejection
+        'LIVABLE':  5.0,   # $5 minimum — avoids dust + exchange rejection
+        'BALLER':   5.0,   # $5 minimum — avoids dust + exchange rejection
     }
     
-    # LOW_CAPITAL mode threshold - accounts below this use $1 average enforcement
+    # LOW_CAPITAL mode threshold - accounts below this use $5 minimum
     LOW_CAPITAL_THRESHOLD = 100.0  # Balance threshold
-    LOW_CAPITAL_MIN_POSITION = 1.0  # $1 minimum in LOW_CAPITAL mode (allows tiny positions)
+    LOW_CAPITAL_MIN_POSITION = 5.0  # $5 minimum in LOW_CAPITAL mode
     
     # Minimum percentage allocation (of account balance)
     # Prevents spreading capital too thin

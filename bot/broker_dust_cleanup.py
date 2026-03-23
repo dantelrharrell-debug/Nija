@@ -21,12 +21,12 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 # Dust threshold - positions below this are considered dust
-DUST_THRESHOLD_USD = 1.00
+DUST_THRESHOLD_USD = 3.00
 
 # Exchange minimum order size – positions below this USD value cannot be filled
 # by most exchanges (including Coinbase) and will always be rejected.
 # Skip them during cleanup rather than generating repeated errors.
-EXCHANGE_MIN_CLOSE_USD = 1.00
+EXCHANGE_MIN_CLOSE_USD = 3.00
 
 
 @dataclass
