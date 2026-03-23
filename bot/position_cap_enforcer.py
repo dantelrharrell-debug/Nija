@@ -9,6 +9,7 @@ Runs before market entry to keep leverage under control.
 
 import os
 import sys
+import time
 import logging
 from typing import List, Dict, Tuple, Optional
 
@@ -47,6 +48,10 @@ class PositionCapEnforcer:
     - Sells positions in order until count <= max_allowed
     """
 
+    # How long (seconds) a failed-sell symbol stays in the unsellable set
+    # before being retried.  Mirrors UNSELLABLE_RETRY_HOURS in trading_strategy.py.
+    UNSELLABLE_RETRY_SECONDS = 12 * 3600  # 12 hours
+
     def __init__(self, max_positions: int = 5, broker: Optional[CoinbaseBroker] = None):
         """
         Initialize position cap enforcer.
@@ -57,7 +62,13 @@ class PositionCapEnforcer:
         """
         self.max_positions = max_positions
         self.broker = broker or CoinbaseBroker()
-        
+
+        # Track positions that cannot be sold (below min size, API errors, etc.)
+        # Maps symbol -> timestamp when it was first marked unsellable.
+        # Unsellable positions are excluded from the cap count so they don't
+        # permanently block new entries.
+        self._unsellable_positions: Dict[str, float] = {}
+
         # Initialize dust blacklist for permanent sub-$1 position exclusion
         self.dust_blacklist = get_dust_blacklist() if get_dust_blacklist else None
         
@@ -69,12 +80,23 @@ class PositionCapEnforcer:
     def get_current_positions(self) -> List[Dict]:
         """
         Fetch current crypto holdings from broker, filtering out:
+        - Symbols in the timed unsellable set (failed-sell retry window active)
         - Blacklisted symbols (permanently excluded dust positions)
         - New dust positions (< $1 USD value) which get added to blacklist
         
         Returns:
             List of position dicts: {'symbol', 'currency', 'balance', 'price', 'usd_value'}
         """
+        # Expire stale unsellable entries before filtering
+        _now = time.time()
+        expired = [
+            sym for sym, ts in list(self._unsellable_positions.items())
+            if _now - ts >= self.UNSELLABLE_RETRY_SECONDS
+        ]
+        for sym in expired:
+            del self._unsellable_positions[sym]
+            logger.info(f"🔄 {sym}: unsellable retry window expired — will attempt sell again")
+
         try:
             if not self.broker.connect():
                 logger.error("Failed to connect to broker")
@@ -86,7 +108,8 @@ class PositionCapEnforcer:
             result = []
             dust_count = 0
             blacklisted_count = 0
-            
+            unsellable_count = 0
+
             for pos in positions:
                 symbol = pos.get('symbol', '')
                 currency = pos.get('currency', symbol.split('-')[0] if '-' in symbol else symbol)
@@ -94,8 +117,18 @@ class PositionCapEnforcer:
 
                 if balance <= 0:
                     continue
-                
-                # Check permanent blacklist first
+
+                # Exclude symbols inside the unsellable retry window
+                if symbol in self._unsellable_positions:
+                    unsellable_count += 1
+                    elapsed_h = (_now - self._unsellable_positions[symbol]) / 3600
+                    logger.debug(
+                        f"   ⏭️ Excluding {symbol} from cap count "
+                        f"(marked unsellable {elapsed_h:.1f}h ago)"
+                    )
+                    continue
+
+                # Check permanent blacklist
                 if self.dust_blacklist and self.dust_blacklist.is_blacklisted(symbol):
                     blacklisted_count += 1
                     logger.debug(f"⛔ Skipping blacklisted symbol: {symbol}")
@@ -148,11 +181,15 @@ class PositionCapEnforcer:
                     continue
             
             # Log summary
-            if dust_count > 0 or blacklisted_count > 0:
+            if dust_count > 0 or blacklisted_count > 0 or unsellable_count > 0:
                 logger.info(f"📊 Position filtering summary:")
                 logger.info(f"   Valid positions: {len(result)}")
-                logger.info(f"   Dust positions found: {dust_count}")
-                logger.info(f"   Blacklisted positions skipped: {blacklisted_count}")
+                if dust_count:
+                    logger.info(f"   Dust positions found: {dust_count}")
+                if blacklisted_count:
+                    logger.info(f"   Blacklisted positions skipped: {blacklisted_count}")
+                if unsellable_count:
+                    logger.info(f"   Unsellable positions excluded: {unsellable_count}")
 
             return result
         except Exception as e:
@@ -199,6 +236,11 @@ class PositionCapEnforcer:
 
         Returns:
             True if successful, False otherwise
+
+        Side-effect:
+            On a confirmed "unsellable" failure (order below exchange minimum)
+            the symbol is added to ``_unsellable_positions`` so that subsequent
+            cap-count checks exclude it for ``UNSELLABLE_RETRY_SECONDS``.
         """
         symbol = position['symbol']
         balance = position['balance']
@@ -216,15 +258,27 @@ class PositionCapEnforcer:
             )
 
             if result and result.get('status') == 'filled':
+                # Successful sell — clear any stale unsellable entry
+                self._unsellable_positions.pop(symbol, None)
                 logger.info(f"✅ SOLD {currency}! Order placed.")
                 return True
             else:
                 error = result.get('error') if result else 'Unknown'
                 logger.error(f"❌ Sell failed for {currency}: {error}")
+                # Mark as unsellable so it doesn't count toward cap during retry window
+                if symbol not in self._unsellable_positions:
+                    self._unsellable_positions[symbol] = time.time()
+                    logger.info(
+                        f"   ⏳ {symbol} marked unsellable for "
+                        f"{self.UNSELLABLE_RETRY_SECONDS / 3600:.0f}h retry window"
+                    )
                 return False
 
         except Exception as e:
             logger.error(f"❌ Error selling {symbol}: {e}")
+            # Mark as unsellable on exception too
+            if symbol not in self._unsellable_positions:
+                self._unsellable_positions[symbol] = time.time()
             return False
 
     def enforce_cap(self) -> Tuple[bool, Dict]:
