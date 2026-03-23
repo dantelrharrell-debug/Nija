@@ -1316,14 +1316,14 @@ MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each c
 # positions simultaneously.  Lower values = fewer but larger, more meaningful
 # trades.  Balance-aware sub-limits are enforced via
 # get_balance_based_max_positions() below.
-MAX_TOTAL_POSITIONS = 1   # HARD GLOBAL CAP: maximum concurrent open positions
+MAX_TOTAL_POSITIONS = 2   # HARD GLOBAL CAP: maximum concurrent open positions
 MAX_SECTOR_ALLOCATION = 0.4  # 40% of total capital — cap per sector to prevent concentration risk
 
 # Balance thresholds for the per-account position cap.
-# All balance tiers are capped at MAX_TOTAL_POSITIONS = 1 (single-trade focus).
+# All balance tiers are capped at MAX_TOTAL_POSITIONS = 2 (dual-trade mode).
 # These thresholds are preserved for future reactivation if the position cap is raised.
 BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → max 1 position (reserved for future scaling)
-BALANCE_THRESHOLD_SMALL = 500.0   # Below this balance → max 1 position (reserved for future scaling)
+BALANCE_THRESHOLD_SMALL = 500.0   # $150–$500 range → max 2 positions; above $500 → MAX_TOTAL_POSITIONS
 
 # Minimum USD notional for any NEW entry order.  Orders below this value are
 # rejected at source to prevent dust accumulation and unproductive fee spend.
@@ -1613,9 +1613,9 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.0   # Use current price as entry price (neut
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 # Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
-# Hard cap aligned with MAX_TOTAL_POSITIONS = 1 (global limit, single-trade focus).
+# Hard cap aligned with MAX_TOTAL_POSITIONS = 2 (global limit, dual-trade mode).
 # Per-balance sub-limits are enforced at runtime via get_balance_based_max_positions().
-HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (1)
+HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (2)
 _max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', str(MAX_CONCURRENT_TRADES))
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
@@ -1776,10 +1776,10 @@ def get_balance_based_max_positions(balance: float) -> int:
     Return the maximum number of concurrent open positions allowed for the
     given account balance.
 
-    Per-account position cap (single-trade focus):
-      • balance  < BALANCE_THRESHOLD_MICRO ($150)  → 1 position
-      • balance  < BALANCE_THRESHOLD_SMALL ($500)  → 1 position
-      • otherwise                                  → MAX_TOTAL_POSITIONS (= 1)
+    Per-account position cap (dual-trade mode):
+      • balance  < BALANCE_THRESHOLD_MICRO ($150)                     → 1 position
+      • BALANCE_THRESHOLD_MICRO ≤ balance < BALANCE_THRESHOLD_SMALL   → 2 positions
+      • otherwise                                                      → MAX_TOTAL_POSITIONS (= 2)
 
     The returned value is always capped at MAX_TOTAL_POSITIONS so it is safe
     to use as a direct replacement for the global MAX_POSITIONS_ALLOWED
@@ -1800,9 +1800,9 @@ def get_balance_based_max_positions(balance: float) -> int:
         balance = 0.0
 
     if balance < BALANCE_THRESHOLD_MICRO:
-        cap = 2
+        cap = 1
     elif balance < BALANCE_THRESHOLD_SMALL:
-        cap = 3
+        cap = 2
     else:
         cap = MAX_TOTAL_POSITIONS
 

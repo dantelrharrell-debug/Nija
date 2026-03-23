@@ -94,7 +94,7 @@ class HFScalpConfig:
     Default values are chosen to guarantee trade flow while staying
     risk-managed:
 
-        MIN_CONFIDENCE    0.55   (was 0.75)
+        MIN_CONFIDENCE    0.50   (was 0.75)
         volume_threshold  0.05   (was 0.10 – 5 % of 5-candle avg)
         volume_min_thr    0.001  (was 0.002 – 0.1 % of 20-candle avg)
         min_adx           8      (was 15)
@@ -106,8 +106,8 @@ class HFScalpConfig:
     """
 
     # ── Master switch ──────────────────────────────────────────────────────────
-    enabled: bool = field(default_factory=lambda: _env_bool("HF_SCALP_MODE", False))
-    # env: HF_SCALP_MODE (1/true/yes to enable)
+    enabled: bool = field(default_factory=lambda: _env_bool("HF_SCALP_MODE", True))
+    # env: HF_SCALP_MODE (1/true/yes to enable; default True)
 
     # ── Timing ────────────────────────────────────────────────────────────────
     cycle_interval_seconds: int = field(
@@ -127,9 +127,9 @@ class HFScalpConfig:
 
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.55)
+        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.50)
     )
-    # env: HF_SCALP_MIN_CONFIDENCE  (0.55 vs normal 0.75)
+    # env: HF_SCALP_MIN_CONFIDENCE  (0.50 vs normal 0.75)
 
     kraken_min_confidence: float = field(
         default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.55)

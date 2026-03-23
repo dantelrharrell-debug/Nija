@@ -21,6 +21,7 @@ Date: January 30, 2026
 """
 
 import threading
+import os
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional
@@ -193,8 +194,9 @@ class AITradeQualityFilter:
         """
         self.config = config or {}
         
-        # Execution threshold
-        self.min_win_probability = self.config.get('min_win_probability', 0.60)  # 60%
+        # Execution threshold — env AI_MIN_WIN_PROB overrides config key
+        _default_win_prob = self.config.get('min_win_probability', 0.55)
+        self.min_win_probability = float(os.getenv('AI_MIN_WIN_PROB', str(_default_win_prob)))  # default 55%
         self.min_model_confidence = self.config.get('min_model_confidence', 0.70)  # 70%
         
         # Model parameters
