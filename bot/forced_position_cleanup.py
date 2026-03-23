@@ -83,6 +83,11 @@ class ForcedPositionCleanup:
         # In-memory permanent blacklist — symbols added here are NEVER attempted
         # again in execute_cleanup, preventing the infinite retry loop.
         self._dust_blacklist: set = set()
+
+        # Post-cleanup state — force re-synced after every cleanup run so
+        # callers always have an accurate view of open positions.
+        self.current_positions: List[Dict] = []
+        self.open_positions_count: int = 0
         
         # Parse cancel_conditions if provided
         self.cancel_conditions = self._parse_cancel_conditions(cancel_conditions) if cancel_conditions else None
@@ -422,7 +427,7 @@ class ForcedPositionCleanup:
                        positions_to_close: List[Dict],
                        broker,
                        account_id: str = "platform",
-                       is_startup: bool = False) -> Tuple[int, int]:
+                       is_startup: bool = False) -> Tuple[int, int, int]:
         """
         Execute cleanup by closing positions and optionally cancelling open orders.
         
@@ -433,10 +438,10 @@ class ForcedPositionCleanup:
             is_startup: Whether this is a startup cleanup
         
         Returns:
-            Tuple of (successful_closes, failed_closes)
+            Tuple of (successful_closes, failed_closes, skipped_dust)
         """
         if not positions_to_close:
-            return 0, 0
+            return 0, 0, 0
         
         logger.warning(f"")
         logger.warning(f"🧹 EXECUTING FORCED CLEANUP: {account_id}")
@@ -466,24 +471,26 @@ class ForcedPositionCleanup:
             # Retrieve quantity so the broker receives the exact amount to sell (base_size)
             base_size = pos_data.get('quantity') or pos_data.get('base_size')
 
-            # ── HARD BLOCK: permanent dust blacklist ──────────────────────────
+            # ── HARD BLOCK: permanent dust blacklist (check BEFORE size test) ─
+            # Symbols already blacklisted are skipped immediately — never retry.
+            if symbol in self._dust_blacklist:
+                logger.debug("   ⏭️ %s is in dust blacklist — skipping permanently", symbol)
+                skipped += 1
+                continue
+
+            # ── HARD BLOCK: new dust — blacklist + remove from system state ──
             # Positions below EXCHANGE_MIN_SELL_USD can NEVER be filled by any
             # exchange.  Add to the in-memory blacklist and skip — do NOT record
             # as a LOSS (it was never a trade).
             if size_usd > 0 and size_usd < EXCHANGE_MIN_SELL_USD:
                 logger.warning(
-                    f"   🚫 PERMANENT DUST IGNORE: {symbol} (${size_usd:.4f}) — "
-                    f"below exchange minimum ${EXCHANGE_MIN_SELL_USD:.2f}. Blacklisted."
+                    f"   🚫 BLACKLISTED DUST: {symbol} (${size_usd:.4f}) — "
+                    f"below exchange minimum ${EXCHANGE_MIN_SELL_USD:.2f}. "
+                    f"Removed from system state permanently."
                 )
                 self._dust_blacklist.add(symbol)
                 skipped += 1
                 continue  # NEVER try again — not recorded as LOSS
-
-            # Skip if this symbol was already blacklisted in a previous run
-            if symbol in self._dust_blacklist:
-                logger.debug("   ⏭️ %s is in dust blacklist — skipping permanently", symbol)
-                skipped += 1
-                continue
 
             # All positions reaching here are tradeable — label WIN or LOSS only
             outcome = "WIN" if pnl_pct > 0 else "LOSS"
@@ -548,7 +555,7 @@ class ForcedPositionCleanup:
         logger.warning(f"   Failed: {failed}")
         logger.warning(f"")
         
-        return successful, failed
+        return successful, failed, skipped
     
     def _cleanup_user_all_brokers(self, 
                                   user_id: str,
@@ -606,7 +613,7 @@ class ForcedPositionCleanup:
                 broker = broker_positions_map.get(symbol)
                 if broker:
                     account_id = self._get_account_id(user_id, broker)
-                    success, failed = self.execute_cleanup([dust_pos], broker, account_id, is_startup)
+                    success, failed, _skipped = self.execute_cleanup([dust_pos], broker, account_id, is_startup)
                     dust_closed_total += success
         
         # Step 3: Refresh positions after dust cleanup
@@ -677,7 +684,7 @@ class ForcedPositionCleanup:
                 broker = broker_positions_map.get(symbol)
                 if broker:
                     account_id = self._get_account_id(user_id, broker)
-                    success, failed = self.execute_cleanup([cap_pos], broker, account_id, is_startup)
+                    success, failed, _skipped = self.execute_cleanup([cap_pos], broker, account_id, is_startup)
                     cap_closed_total += success
                     cap_failed_total += failed
         else:
@@ -869,7 +876,7 @@ class ForcedPositionCleanup:
                 })
             if kill_all_positions:
                 logger.warning(f"   💀 KILL-ALL-ON-STARTUP: Closing all {len(kill_all_positions)} positions")
-                kill_success, kill_fail = self.execute_cleanup(
+                kill_success, kill_fail, kill_skipped = self.execute_cleanup(
                     kill_all_positions, broker, account_id, is_startup
                 )
                 dust_closed = kill_success
@@ -877,14 +884,28 @@ class ForcedPositionCleanup:
                 self.has_run_startup = True
                 try:
                     final_positions = broker.get_positions()
-                    final_count = len(final_positions)
                 except Exception:
-                    final_count = initial_count - dust_closed
-                logger.warning(f"   ✅ KILL-ALL COMPLETE: {initial_count} → {final_count} positions")
+                    final_positions = []
+
+                final_count = len(final_positions)
+
+                # ── FORCE RE-SYNC ────────────────────────────────────────────
+                self.current_positions = final_positions
+                self.open_positions_count = len(final_positions)
+
+                # ── CLEAN SLATE CHECK ────────────────────────────────────────
+                if kill_success + kill_skipped == initial_count:
+                    logger.info(
+                        f"   ✅ CLEAN SLATE (including {kill_skipped} dust exclusion(s)): "
+                        f"{initial_count} → {final_count} positions"
+                    )
+                else:
+                    logger.warning(f"   ✅ KILL-ALL COMPLETE: {initial_count} → {final_count} positions")
                 return {
                     'account_id': account_id,
                     'initial_positions': initial_count,
                     'dust_closed': dust_closed,
+                    'skipped_dust': kill_skipped,
                     'cap_closed': 0,
                     'final_positions': final_count,
                     'status': 'kill_all_complete',
@@ -892,7 +913,7 @@ class ForcedPositionCleanup:
 
         if dust_positions:
             logger.warning(f"   🧹 Found {len(dust_positions)} dust positions")
-            dust_success, dust_fail = self.execute_cleanup(
+            dust_success, dust_fail, _dust_skipped = self.execute_cleanup(
                 dust_positions, broker, account_id, is_startup
             )
             dust_closed = dust_success
@@ -914,7 +935,7 @@ class ForcedPositionCleanup:
         cap_closed = 0
         if cap_excess_positions:
             logger.warning(f"   🔒 Position cap exceeded: {len(non_dust_positions)}/{self.max_positions}")
-            cap_success, cap_fail = self.execute_cleanup(
+            cap_success, cap_fail, _cap_skipped = self.execute_cleanup(
                 cap_excess_positions, broker, account_id, is_startup
             )
             cap_closed = cap_success
@@ -923,12 +944,17 @@ class ForcedPositionCleanup:
         if is_startup:
             self.has_run_startup = True
         
-        # Final position count
+        # Final position count — FORCE RE-SYNC from broker
         try:
             final_positions = broker.get_positions()
-            final_count = len(final_positions)
         except Exception:
-            final_count = initial_count - dust_closed - cap_closed
+            final_positions = []
+
+        final_count = len(final_positions)
+
+        # ── FORCE RE-SYNC: update instance state so callers have latest view ─
+        self.current_positions = final_positions
+        self.open_positions_count = len(final_positions)
         
         # SAFETY VERIFICATION: Ensure we're actually under cap
         if final_count > self.max_positions:
