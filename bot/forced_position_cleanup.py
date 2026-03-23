@@ -22,12 +22,12 @@ from enum import Enum
 logger = logging.getLogger("nija.cleanup")
 
 # Minimum USD value below which we skip closing (exchange won't accept the order)
-EXCHANGE_MIN_CLOSE_USD = 1.00
+EXCHANGE_MIN_CLOSE_USD = 3.00
 
 # Hard floor for the dust-ignore block — positions below this USD value can
 # NEVER be filled by any exchange (Coinbase, Kraken, Binance all reject
-# sub-$1 market orders).
-EXCHANGE_MIN_SELL_USD: float = 1.00
+# sub-$3 market orders).
+EXCHANGE_MIN_SELL_USD: float = 3.00
 
 # PERFECT CLEANUP FLOW: how long (hours) an unsellable position is excluded from
 # cap math before getting a fresh sell attempt.
@@ -125,7 +125,7 @@ class ForcedPositionCleanup:
     """
     
     def __init__(self,
-                 dust_threshold_usd: float = 1.00,
+                 dust_threshold_usd: float = 3.00,
                  max_positions: int = 8,
                  dry_run: bool = False,
                  cancel_open_orders: bool = False,
@@ -649,11 +649,22 @@ class ForcedPositionCleanup:
             )
 
             # ── HARD BLOCK: permanent dust blacklist (check BEFORE size test) ─
-            # Symbols already blacklisted are skipped immediately — never retry.
+            # Symbols already blacklisted are skipped — UNLESS their current
+            # USD value has recovered above the exchange minimum, in which case
+            # we remove them from the blacklist and allow the close attempt.
             if symbol in self._dust_blacklist:
-                logger.debug("   ⏭️ %s is in dust blacklist — skipping permanently", symbol)
-                skipped += 1
-                continue
+                if size_usd >= EXCHANGE_MIN_SELL_USD:
+                    # Value has recovered — remove from blacklist and proceed
+                    self._dust_blacklist.discard(symbol)
+                    logger.info(
+                        "   ♻️  %s recovered to $%.4f — removed from dust blacklist, "
+                        "attempting close",
+                        symbol, size_usd,
+                    )
+                else:
+                    logger.debug("   ⏭️ %s is in dust blacklist — skipping permanently", symbol)
+                    skipped += 1
+                    continue
 
             # ── HARD BLOCK: new dust — blacklist + remove from system state ──
             # Positions below EXCHANGE_MIN_SELL_USD can NEVER be filled by any
@@ -663,11 +674,11 @@ class ForcedPositionCleanup:
                 logger.warning(
                     f"   🚫 BLACKLISTED DUST: {symbol} (${size_usd:.4f}) — "
                     f"below exchange minimum ${EXCHANGE_MIN_SELL_USD:.2f}. "
-                    f"Removed from system state permanently."
+                    f"Blacklisted — will retry automatically once value recovers above ${EXCHANGE_MIN_SELL_USD:.2f}."
                 )
                 self._dust_blacklist.add(symbol)
                 skipped += 1
-                continue  # NEVER try again — not recorded as LOSS
+                continue  # NEVER try again until value recovers
 
             # ── PERFECT CLEANUP FLOW: closable guard BEFORE any close attempt ──
             # This check runs in EVERY code path — normal dust, cap-excess, and

@@ -29,18 +29,31 @@ logger = logging.getLogger('nija.position_sizer')
 # Conservative: use $10.50 to ensure we're always above $10 after fees
 KRAKEN_MIN_TRADE_USD = 10.50  # $10 Kraken minimum + fee buffer
 
-# COINBASE: Lower minimums, use $2 general minimum
-COINBASE_MIN_TRADE_USD = 2.0
+# COINBASE: $5 minimum to stay well clear of exchange floor and avoid dust creation
+COINBASE_MIN_TRADE_USD = 5.0
 
 # Default minimum for other exchanges
-MIN_POSITION_USD = 2.0  # Minimum $2 USD value for any position (default)
+MIN_POSITION_USD = 5.0  # Minimum $5 USD value for any position (avoids dust + rejections)
 
 # Exchange-specific minimums (with fee buffers)
 EXCHANGE_MIN_TRADE_USD = {
     'kraken': KRAKEN_MIN_TRADE_USD,      # $10.50 (accounts for Kraken $10 min + fees)
-    'coinbase': COINBASE_MIN_TRADE_USD,  # $2.00
-    'okx': 1.0,                          # OKX has very low minimums
+    'coinbase': COINBASE_MIN_TRADE_USD,  # $5.00
+    'okx': 5.0,                          # Raised from $1 to $5 to avoid dust
     'binance': 10.0,                     # Binance also has ~$10 minimums
+}
+
+# Per-symbol exchange minimums — some assets have higher notional floors on
+# specific exchanges.  These take precedence over the exchange-level defaults
+# when the symbol's base currency matches.
+SYMBOL_MIN_TRADE_USD: dict = {
+    # Coinbase/general — symbols that have known higher rejection thresholds
+    'MOVR': 5.0,   # Moonriver — exchange floor makes sub-$5 orders fail
+    'HBAR': 5.0,   # Hedera — sub-$5 orders frequently rejected
+    'DOT':  5.0,   # Polkadot — sub-$5 orders frequently rejected
+    'BAND': 5.0,
+    'NMR':  5.0,
+    'RLC':  5.0,
 }
 
 MIN_BASE_SIZES = {
@@ -132,18 +145,32 @@ def get_min_base_size(symbol: str) -> float:
     return MIN_BASE_SIZES.get(_extract_base_currency(symbol), 0.0001)
 
 
-def get_exchange_min_trade_size(exchange: str = 'coinbase') -> float:
+def get_exchange_min_trade_size(exchange: str = 'coinbase', symbol: str = '') -> float:
     """
     Get minimum trade size for a specific exchange (with fee buffer included).
 
+    Also checks per-symbol overrides in SYMBOL_MIN_TRADE_USD so that assets
+    with known higher rejection thresholds (MOVR, HBAR, DOT, …) always return
+    the correct floor regardless of the exchange default.
+
     Args:
         exchange: Exchange name (kraken, coinbase, okx, binance, etc.)
+        symbol:   Optional trading pair (e.g. ``"HBAR-USD"``).  When supplied
+                  the per-symbol minimum is checked and the larger of the two
+                  values is returned.
 
     Returns:
         Minimum trade size in USD (includes fee buffer)
     """
     exchange_lower = exchange.lower()
-    return EXCHANGE_MIN_TRADE_USD.get(exchange_lower, MIN_POSITION_USD)
+    exchange_min = EXCHANGE_MIN_TRADE_USD.get(exchange_lower, MIN_POSITION_USD)
+
+    if symbol:
+        base = _extract_base_currency(symbol)
+        symbol_min = SYMBOL_MIN_TRADE_USD.get(base, 0.0)
+        return max(exchange_min, symbol_min)
+
+    return exchange_min
 
 
 def calculate_user_position_size(

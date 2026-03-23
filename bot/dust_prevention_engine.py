@@ -83,14 +83,14 @@ class DustPreventionEngine:
     AGE_FRESH_HOURS = 1.0
     
     # Dust threshold (USD value)
-    DUST_THRESHOLD_USD = 1.00  # Positions below $1 USD are considered dust
+    DUST_THRESHOLD_USD = 3.00  # Positions below $3 USD are considered dust
     
     def __init__(self, 
                  max_positions: int = 5,
                  stagnation_hours: float = 4.0,
                  min_pnl_movement: float = 0.002,
                  auto_dust_cleanup_enabled: bool = True,
-                 dust_threshold_usd: float = 1.00,
+                 dust_threshold_usd: float = 3.00,
                  enable_telemetry: bool = True,
                  enable_cleanup_metrics: bool = True):
         """

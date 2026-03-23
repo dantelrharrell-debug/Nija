@@ -42,12 +42,12 @@ logger = logging.getLogger("nija.dust_sweeper_v2")
 # ---------------------------------------------------------------------------
 
 # Exchange hard floor — positions below this USD value can NEVER be sold via
-# API (Coinbase, Kraken, Binance all reject sub-$1 market orders).
-EXCHANGE_MIN_SELL_USD: float = 1.00
+# API (Coinbase, Kraken, Binance all reject sub-$3 market orders reliably).
+EXCHANGE_MIN_SELL_USD: float = 3.00
 
 # Absolute dust floor — anything below this is blacklisted immediately and
-# not even attempted (exchange minimum is even higher than this in practice).
-DUST_BLACKLIST_USD: float = 1.00
+# not even attempted.
+DUST_BLACKLIST_USD: float = 3.00
 
 
 # ---------------------------------------------------------------------------
