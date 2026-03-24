@@ -1416,31 +1416,17 @@ class CoinbaseBroker(BaseBroker):
 
                         total_funds = balance_data.get('total_funds', 0.0)
 
-                        # FIX 2: FORCED EXIT OVERRIDES - Allow connection even when balance < minimum
-                        # This enables emergency sells to close losing positions
-                        # Only NEW ENTRIES are blocked, not EXITS
+                        # EXIT-ONLY MODE DISABLED: Allow full trading regardless of balance.
+                        # The balance check that previously forced exit_only_mode=True has been
+                        # removed so the bot can enter new positions at any balance level.
                         if total_funds < COINBASE_MINIMUM_BALANCE:
-                            logging.warning("=" * 70)
-                            logging.warning("⚠️ COINBASE: Account balance below minimum for NEW ENTRIES")
-                            logging.warning("=" * 70)
-                            logging.warning(f"   Your balance: ${total_funds:.2f}")
-                            logging.warning(f"   Minimum for entries: ${COINBASE_MINIMUM_BALANCE:.2f}")
-                            logging.warning(f"   ")
-                            logging.warning(f"   📋 Trading Mode: EXIT-ONLY")
-                            logging.warning(f"      ✅ Can SELL (close positions)")
-                            logging.warning(f"      ❌ Cannot BUY (new entries blocked)")
-                            logging.warning(f"   ")
-                            logging.warning(f"   💡 Solution: Use Kraken for new entries")
-                            logging.warning(f"      Kraken has 4x lower fees and is optimized for small accounts")
-                            logging.warning(f"   ")
-                            logging.warning(f"   ✅ Coinbase connection maintained for emergency exits")
-                            logging.warning("=" * 70)
-
-                            # Mark as EXIT-ONLY mode (not fully disabled)
-                            self.exit_only_mode = True
-                            # Keep connected = True so sells can execute
-                            self.connected = True
-                            return True
+                            logging.info(
+                                f"   ℹ️  Balance ${total_funds:.2f} is below soft minimum "
+                                f"${COINBASE_MINIMUM_BALANCE:.2f} — EXIT-ONLY mode is OFF, "
+                                f"full trading allowed."
+                            )
+                        self.exit_only_mode = False  # EXIT-ONLY mode permanently OFF
+                        self.connected = True
                     except Exception as balance_check_err:
                         # Balance check failed - this is CRITICAL, do NOT allow connection
                         # We cannot safely determine if account is too small
