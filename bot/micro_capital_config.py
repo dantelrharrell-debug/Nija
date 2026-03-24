@@ -177,7 +177,7 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 #   - position_size    = 90%    (maximise capital per trade; e.g. $39 of a $43 account)
 #   - profit_target    = 2.5%   (realistic per-trade target to compound quickly)
 #   - stop_loss        = 1.5%   (below profit target → ≥1.67:1 R:R ratio)
-#   - trade_cooldown   = 600s   (10-min per-symbol re-entry gate — was 15 min)
+#   - trade_cooldown   = 300s   (5-min per-symbol re-entry gate — was 10 min, tuned for faster trade flow)
 #
 # Adaptive Profit Scaling:
 #   The profit target may scale UP above the 2.5% base during favourable
@@ -190,14 +190,14 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 #                          streak_bonus = +0.2% per consecutive win (capped at +1.0%)
 #                          After any loss: win_streak resets to 0 → no streak bonus
 #   - stop_loss        = 1.5%   (below base profit target → ≥1.67:1 R:R ratio on base)
-#   - trade_cooldown   = 600s   (10-min per-symbol cooldown between trades)
+#   - trade_cooldown   = 300s   (5-min per-symbol cooldown between trades — tuned for faster trade flow)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
 MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position — maximum capital concentration
 MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 90.0   # 90% of capital per trade (maximise compounding speed)
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R)
-MICRO_CAP_TRADE_COOLDOWN = 600                   # 10-min per-symbol re-entry gate (was 900 s / 15 min)
+MICRO_CAP_TRADE_COOLDOWN = 300                   # 5-min per-symbol re-entry gate (was 600 s / 10 min — tuned for faster trade flow)
 
 # Tiered profit targets for micro-cap compounding mode
 MICRO_CAP_TP1_PCT = 2.5   # Target 1: 2.5% — partial exit + activate trailing stop (was 3.0%)
@@ -217,7 +217,7 @@ MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 2.5  # 2.5% base profit target (w
 # Backward-compatible alias used as the static fallback when no spread data is available
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R vs base target)
-MICRO_CAP_TRADE_COOLDOWN = 600                   # 10-min per-symbol re-entry cooldown (was 900 s)
+MICRO_CAP_TRADE_COOLDOWN = 300                   # 5-min per-symbol re-entry cooldown (was 600 s / 10 min — tuned for faster trade flow)
 
 # Win-streak bonus applied on top of (base + spread) while on a hot streak.
 # The bonus is reset to 0 whenever a trade ends in a loss so the bot does not

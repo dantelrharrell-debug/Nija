@@ -57,7 +57,10 @@ RECYCLER_TARGET: str = "BTC-USD"
 # continue to work; new code should prefer RECYCLER_TARGET.
 DEFAULT_TARGET_ASSET: str = RECYCLER_TARGET
 
+DEFAULT_DUST_THRESHOLD_USD: float = 5.0    # Positions below $5 are swept (matches MIN_REBUY_USD trigger)
+DEFAULT_TARGET_ASSET: str = "BTC-USD"       # Default consolidation asset
 MIN_REBUY_USD: float = 5.0                  # Minimum aggregated proceeds to trigger re-buy
+DUST_RECYCLER_TRIGGER_USD: float = 5.0     # Fire sweep proactively when total dust value ≥ this threshold
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +140,11 @@ class AutoDustSweeper:
         self.dry_run = dry_run
         self.min_rebuy_usd = min_rebuy_usd
         self._lock = threading.Lock()
-        # Accumulated proceeds from sweeps where we sold dust but couldn't yet
-        # reach min_rebuy_usd.  Persists across sweep cycles so that small
-        # proceeds from multiple runs are combined before the re-buy fires.
+        # Global (cross-symbol) accumulated proceeds from dust sales.
+        # This intentionally aggregates proceeds from ALL symbols sold across
+        # multiple sweep cycles — it is NOT tracked per symbol.  Once the
+        # total reaches min_rebuy_usd it fires a single re-buy into the
+        # target asset and the accumulator is reset to 0.
         self._accumulated_proceeds: float = 0.0
         logger.info(
             "🧹 AutoDustSweeper initialised | dust<$%.2f | target=%s | dry_run=%s | min_rebuy=$%.2f",
@@ -149,6 +154,62 @@ class AutoDustSweeper:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_total_dust_value(
+        positions: List[Dict],
+        threshold_usd: float = DEFAULT_DUST_THRESHOLD_USD,
+        exclude_symbol: Optional[str] = None,
+    ) -> float:
+        """Return the total USD value of all dust positions (value < threshold_usd).
+
+        Args:
+            positions:       Current open positions list.
+            threshold_usd:   Individual position threshold for "dust" classification.
+            exclude_symbol:  Optional symbol to exclude (e.g. the target/rebuy asset).
+
+        Returns:
+            Sum of USD values of all qualifying dust positions.
+        """
+        total = 0.0
+        for p in positions:
+            sym = p.get("symbol", "")
+            if exclude_symbol and sym == exclude_symbol:
+                continue
+            val = float(p.get("size_usd") or p.get("usd_value") or 0)
+            if 0 < val < threshold_usd:
+                total += val
+        return total
+
+    def should_trigger_now(self, positions: List[Dict]) -> bool:
+        """Return True when total dust value across all symbols ≥ DUST_RECYCLER_TRIGGER_USD.
+
+        Use this as a proactive every-cycle check so the recycler fires
+        the moment enough dust has accumulated — without waiting for the
+        next scheduled cleanup cycle.
+
+        The check aggregates across ALL symbols (not per symbol) by summing
+        positions whose individual value is below ``dust_threshold_usd``.
+        """
+        total_dust = self.get_total_dust_value(
+            positions,
+            threshold_usd=self.dust_threshold_usd,
+            exclude_symbol=self.target_asset,
+        )
+        # Also include the already-accumulated-but-not-yet-rebuyed proceeds
+        total_available = total_dust + self._accumulated_proceeds
+        if total_available >= DUST_RECYCLER_TRIGGER_USD:
+            logger.info(
+                "♻️  DustRecycler trigger: total_dust=$%.4f + accumulated=$%.4f → $%.4f ≥ $%.2f — firing sweep",
+                total_dust, self._accumulated_proceeds, total_available, DUST_RECYCLER_TRIGGER_USD,
+            )
+            return True
+        logger.debug(
+            "♻️  DustRecycler: total_dust=$%.4f + accumulated=$%.4f → $%.4f < $%.2f trigger (%.1f%% of threshold)",
+            total_dust, self._accumulated_proceeds, total_available, DUST_RECYCLER_TRIGGER_USD,
+            (total_available / DUST_RECYCLER_TRIGGER_USD * 100) if DUST_RECYCLER_TRIGGER_USD > 0 else 0,
+        )
+        return False
 
     def sweep(
         self,
@@ -206,6 +267,19 @@ class AutoDustSweeper:
             len(positions), portfolio_value_usd, self.target_asset,
         )
 
+        # Pre-sweep: log total dust value so the recycler trigger is visible
+        total_dust_usd = self.get_total_dust_value(
+            positions,
+            threshold_usd=self.dust_threshold_usd,
+            exclude_symbol=self.target_asset,
+        )
+        logger.info(
+            "♻️  DustRecycler: total_dust=$%.4f (threshold per-position=$%.2f, "
+            "trigger=$%.2f, accumulated=$%.4f)",
+            total_dust_usd, self.dust_threshold_usd,
+            DUST_RECYCLER_TRIGGER_USD, self._accumulated_proceeds,
+        )
+
         # Step 1 – identify dust positions (exclude the target asset itself)
         dust = [
             p for p in positions
@@ -249,8 +323,9 @@ class AutoDustSweeper:
                     result.errors.append(action.message)
 
         # Step 4 – re-buy target asset with aggregated proceeds
-        # Accumulate proceeds across sweep cycles so that small amounts from
-        # multiple runs combine before we attempt the re-buy.
+        # Accumulate proceeds across sweep cycles — this is intentionally
+        # global (cross-symbol, not per-symbol) so that tiny amounts from
+        # many different symbols combine into a single meaningful re-buy.
         self._accumulated_proceeds += result.proceeds_usd
         total_available = self._accumulated_proceeds
 
