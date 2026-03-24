@@ -3577,19 +3577,9 @@ class TradingStrategy:
                     logger.warning(f"⚠️  Failed to initialize dust blacklist: {blacklist_err}")
                     self.dust_blacklist = None
                 
-                # Initialize forced cleanup engine for aggressive dust and cap enforcement
-                try:
-                    from forced_position_cleanup import ForcedPositionCleanup
-                    self.forced_cleanup = ForcedPositionCleanup(
-                        dust_threshold_usd=DUST_POSITION_USD,
-                        max_positions=MAX_TOTAL_POSITIONS,
-                        dry_run=False,
-                        kill_all_on_startup=True
-                    )
-                    logger.info("🧹 Forced position cleanup engine initialized")
-                except Exception as cleanup_err:
-                    logger.warning(f"⚠️  Failed to initialize forced cleanup: {cleanup_err}")
-                    self.forced_cleanup = None
+                # DISABLED — ignoring dust completely
+                self.forced_cleanup = None
+                logger.info("🚫 Forced position cleanup disabled — dust positions will be ignored")
 
                 # Initialize continuous dust monitor (Option A – scheduled dust sweeps)
                 try:
@@ -6273,62 +6263,8 @@ class TradingStrategy:
                     logger.warning(f"⚠️  STARTUP: State reset error (non-fatal): {_reset_err}")
 
             if hasattr(self, 'forced_cleanup') and self.forced_cleanup and (run_startup_cleanup or run_periodic_cleanup or run_trade_based_cleanup):
-                # Determine cleanup reason for logging
-                if run_startup_cleanup:
-                    cleanup_reason = "STARTUP"
-                elif run_trade_based_cleanup:
-                    cleanup_reason = f"TRADE-BASED ({self.trades_since_last_cleanup} trades executed)"
-                else:
-                    cleanup_reason = f"PERIODIC (cycle {self.cycle_count})"
-                
-                logger.warning(f"")
-                logger.warning(f"🧹 FORCED CLEANUP TRIGGERED: {cleanup_reason}")
-                logger.warning(f"   Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                logger.warning(f"   Interval: Every {FORCED_CLEANUP_INTERVAL} cycles (~{FORCED_CLEANUP_INTERVAL * 2.5:.0f} minutes)")
-                if FORCED_CLEANUP_AFTER_N_TRADES:
-                    logger.warning(f"   Trade trigger: After {FORCED_CLEANUP_AFTER_N_TRADES} trades (current: {self.trades_since_last_cleanup})")
-                try:
-                    if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
-                        # Run cleanup across all accounts
-                        summary = self.forced_cleanup.cleanup_all_accounts(self.multi_account_manager, is_startup=run_startup_cleanup)
-                        logger.warning(f"   ✅ Cleanup complete: Reduced positions by {summary['reduction']}")
-                    else:
-                        # Single account mode - just cleanup platform
-                        logger.info(f"   Running single-account cleanup...")
-                        if active_broker:
-                            result = self.forced_cleanup.cleanup_single_account(active_broker, "platform", is_startup=run_startup_cleanup)
-                            logger.warning(f"   ✅ Cleanup complete: {result['initial_positions']} → {result['final_positions']}")
-                            # 🔥 HARD SYNC INTO STRATEGY: push post-cleanup state back so
-                            # the strategy's position counters reflect the true broker state.
-                            # Apply "Tradable Positions Only" filter so dust left behind by
-                            # cleanup (positions that couldn't be sold) never inflate counters.
-                            _cleanup_broker_name = (
-                                active_broker.name if hasattr(active_broker, 'name') else ''
-                            )
-                            _cleanup_all = self.forced_cleanup.current_positions or []
-                            # Stage 1: size-only floor filter
-                            _cleanup_tradable = filter_tradable_positions(_cleanup_all, _cleanup_broker_name)
-                            # Stage 2 (Fix #3): also exclude unsellable positions so they
-                            # don't inflate open_positions_count and block new entries.
-                            _cleanup_tradable_final = self.forced_cleanup._filter_tradable(_cleanup_tradable)
-                            _cleanup_dust = len(_cleanup_all) - len(_cleanup_tradable_final)
-                            if _cleanup_dust > 0:
-                                logger.info(
-                                    f"   🧹 Post-cleanup tradable filter: excluded {_cleanup_dust} "
-                                    f"dust/unsellable position(s) from counters"
-                                )
-                            self.current_positions = _cleanup_tradable_final
-                            self.open_positions_count = len(_cleanup_tradable_final)
-                    
-                    # Reset trade counter after cleanup
-                    if hasattr(self, 'trades_since_last_cleanup'):
-                        self.trades_since_last_cleanup = 0
-                        
-                except Exception as cleanup_err:
-                    logger.error(f"   ❌ Forced cleanup failed: {cleanup_err}")
-                    import traceback
-                    logger.error(traceback.format_exc())
-                logger.warning(f"")
+                # DISABLED — ignoring dust completely
+                pass
 
             # 🧹 DUST SWEEPER V2: permanent dust-kill — runs every cleanup cycle
             if (run_startup_cleanup or run_periodic_cleanup or run_trade_based_cleanup):
