@@ -19,7 +19,7 @@ logger = logging.getLogger("nija.enforcer")
 
 # Constants
 # ✅ REQUIREMENT 3: DUST EXCLUSION - If usd_value < MIN_POSITION_USD, IGNORE COMPLETELY
-DUST_THRESHOLD_USD = 2.00  # USD value threshold for dust positions (raised from $1 to $2)
+DUST_THRESHOLD_USD = 5.00  # USD value threshold for dust positions (raised to $5)
 MIN_POSITION_USD = DUST_THRESHOLD_USD  # Alias for clarity - positions below this are ignored
 
 # CAP RESOLUTION ENGINE: unsellable positions are excluded from cap math for this

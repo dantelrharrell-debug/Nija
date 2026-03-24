@@ -1357,19 +1357,20 @@ MIN_POSITION_USD = 10.0   # Minimum entry size ($10 ensures fee efficiency and m
 #   AutoDustSweeper ($5)      — recycles positions worth $2-$5 into BTC/ETH via
 #                               the dust-recycler trigger (total dust ≥ $5 across all symbols)
 DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = hard dust)
+DUST_POSITION_USD = 5.0   # Cleanup threshold for existing positions (< $5 = dust — SMART FIX: only count positions > $5)
 EXCHANGE_MINIMUM_ORDER_USD = 1.00  # Hard floor: exchange rejects orders below this USD value
 
 # "Tradable Positions Only" filter — minimum USD notional for a position to be
 # counted as open (affects position-cap checks, first-trade gate, etc.).
 # Positions below this size are dust: they cannot cover exchange fees and must
 # not inflate the open-position counter or block new entries.
-MIN_TRADABLE_POSITION_USD: float = 2.00  # global floor
+MIN_TRADABLE_POSITION_USD: float = 5.00  # global floor — SMART FIX: only count positions > $5
 TRADABLE_MIN_POSITION_BY_BROKER: dict = {
     # Exchange-specific floor for EXISTING positions (lower than new-order min).
-    'coinbase': 2.00,
-    'kraken':   2.00,
-    'binance':  2.00,
-    'okx':      2.00,
+    'coinbase': 5.00,
+    'kraken':   5.00,
+    'binance':  5.00,
+    'okx':      5.00,
     'alpaca':   1.00,  # Alpaca supports sub-$2 positions (fractional shares)
 }
 
