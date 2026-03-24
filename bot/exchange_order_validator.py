@@ -17,16 +17,20 @@ Key responsibilities
    returns ``0.0`` when the requested volume is below the exchange floor,
    signalling that the order must not be placed.
 
-4. **Single-call validator** – ``validate_order(symbol, volume)`` chains all
-   three steps and returns the normalised volume, or ``None`` when the order
-   cannot be placed (too small or reduced to zero by step rounding).
+4. **Minimum-notional enforcement** – ``enforce_min_notional(symbol, volume, price)``
+   returns ``0.0`` when the order's notional value (quantity × price) is below
+   the per-symbol floor (default $5.00 USD), preventing sub-minimum fills.
 
-5. **PERMANENT_DUST_UNSELLABLE flag** – when a SELL order's adjusted value is
+5. **Single-call validator** – ``validate_order(symbol, volume, price)`` chains
+   all four steps and returns the normalised volume, or ``None`` when the order
+   cannot be placed (too small or reduced to zero by step/notional rounding).
+
+6. **PERMANENT_DUST_UNSELLABLE flag** – when a SELL order's adjusted value is
    still below the minimum *after* full normalisation, the symbol is flagged
    permanently and excluded from every system (position counts, cleanup,
    further retries).  The flag survives restarts via a JSON sidecar file.
 
-6. **[ORDER NORMALIZED] audit log** – every time the requested quantity is
+7. **[ORDER NORMALIZED] audit log** – every time the requested quantity is
    adjusted, a structured log line is emitted so operators can trace exactly
    what changed and why::
 
@@ -92,35 +96,35 @@ logger = logging.getLogger("nija.exchange_order_validator")
 
 exchange_rules: Dict[str, Dict] = {
     # ── Major pairs ───────────────────────────────────────────────────────
-    "BTC":    {"step_size": 0.00000001, "precision": 8,  "min_volume": 0.00000001},
-    "ETH":    {"step_size": 0.000001,   "precision": 6,  "min_volume": 0.000001},
-    "SOL":    {"step_size": 0.001,      "precision": 3,  "min_volume": 0.001},
-    "AVAX":   {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01},
-    "DOT":    {"step_size": 0.1,        "precision": 1,  "min_volume": 0.1},
-    "LINK":   {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01},
-    "LTC":    {"step_size": 0.00000001, "precision": 8,  "min_volume": 0.00000001},
-    "BCH":    {"step_size": 0.00000001, "precision": 8,  "min_volume": 0.00000001},
-    "UNI":    {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01},
-    "APT":    {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01},
-    "ICP":    {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01},
-    "AAVE":   {"step_size": 0.001,      "precision": 3,  "min_volume": 0.001},
-    "ATOM":   {"step_size": 0.0001,     "precision": 4,  "min_volume": 0.0001},
-    "IMX":    {"step_size": 0.0001,     "precision": 4,  "min_volume": 0.0001},
-    "NEAR":   {"step_size": 0.00001,    "precision": 5,  "min_volume": 0.00001},
-    "RENDER": {"step_size": 0.1,        "precision": 1,  "min_volume": 0.1},
+    "BTC":    {"step_size": 0.00000001, "precision": 8,  "min_volume": 0.00000001, "min_notional": 5.0},
+    "ETH":    {"step_size": 0.000001,   "precision": 6,  "min_volume": 0.000001,   "min_notional": 5.0},
+    "SOL":    {"step_size": 0.001,      "precision": 3,  "min_volume": 0.001,      "min_notional": 5.0},
+    "AVAX":   {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01,       "min_notional": 5.0},
+    "DOT":    {"step_size": 0.1,        "precision": 1,  "min_volume": 0.1,        "min_notional": 5.0},
+    "LINK":   {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01,       "min_notional": 5.0},
+    "LTC":    {"step_size": 0.00000001, "precision": 8,  "min_volume": 0.00000001, "min_notional": 5.0},
+    "BCH":    {"step_size": 0.00000001, "precision": 8,  "min_volume": 0.00000001, "min_notional": 5.0},
+    "UNI":    {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01,       "min_notional": 5.0},
+    "APT":    {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01,       "min_notional": 5.0},
+    "ICP":    {"step_size": 0.01,       "precision": 2,  "min_volume": 0.01,       "min_notional": 5.0},
+    "AAVE":   {"step_size": 0.001,      "precision": 3,  "min_volume": 0.001,      "min_notional": 5.0},
+    "ATOM":   {"step_size": 0.0001,     "precision": 4,  "min_volume": 0.0001,     "min_notional": 5.0},
+    "IMX":    {"step_size": 0.0001,     "precision": 4,  "min_volume": 0.0001,     "min_notional": 5.0},
+    "NEAR":   {"step_size": 0.00001,    "precision": 5,  "min_volume": 0.00001,    "min_notional": 5.0},
+    "RENDER": {"step_size": 0.1,        "precision": 1,  "min_volume": 0.1,        "min_notional": 5.0},
     # ── Whole-number assets (step = 1) ────────────────────────────────────
-    "ADA":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "XRP":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "DOGE":   {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "XLM":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "HBAR":   {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "ZRX":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "CRV":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "FET":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "VET":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
-    "SHIB":   {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0},
+    "ADA":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "XRP":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "DOGE":   {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "XLM":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "HBAR":   {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "ZRX":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "CRV":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "FET":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "VET":    {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
+    "SHIB":   {"step_size": 1.0,        "precision": 0,  "min_volume": 1.0,        "min_notional": 5.0},
     # ── Fallback (used when base asset is not listed above) ───────────────
-    "DEFAULT": {"step_size": 0.01,      "precision": 2,  "min_volume": 0.01},
+    "DEFAULT": {"step_size": 0.01,      "precision": 2,  "min_volume": 0.01,       "min_notional": 5.0},
 }
 
 #: Hard floor for order *value* on Coinbase (USD).
@@ -241,17 +245,49 @@ def enforce_min_volume(symbol: str, volume: float) -> float:
     return volume
 
 
-def validate_order(symbol: str, volume: float) -> Optional[float]:
+def enforce_min_notional(symbol: str, volume: float, price: float) -> float:
+    """
+    Return ``0.0`` when the notional value (*volume* × *price*) is below the
+    minimum notional threshold for *symbol*, otherwise return *volume* unchanged.
+
+    A return value of ``0.0`` signals that the order must not be placed —
+    ``validate_order`` will return ``None`` in this case.
+
+    Parameters
+    ----------
+    symbol:
+        Coinbase product id or bare base asset name.
+    volume:
+        Candidate order quantity (base currency units).
+    price:
+        Current price in USD.  When ``0`` or negative the check is skipped
+        and *volume* is returned unchanged.
+
+    Returns
+    -------
+    float
+        *volume* if the notional meets the minimum; ``0.0`` otherwise.
+    """
+    if price <= 0 or volume <= 0:
+        return volume
+    rules = _get_rules(symbol)
+    min_notional = rules.get("min_notional", 5.0)
+    if volume * price < min_notional:
+        return 0.0
+    return volume
+
+
+def validate_order(symbol: str, volume: float, price: float = 0.0) -> Optional[float]:
     """
     **Call this before EVERY order.**
 
     Chains ``enforce_min_volume`` → ``round_to_step`` → ``apply_precision``
-    and returns the normalised volume, or ``None`` when the order cannot be
-    placed.
+    → ``enforce_min_notional`` and returns the normalised volume, or ``None``
+    when the order cannot be placed.
 
     Usage::
 
-        adjusted = validate_order("AVAX-USD", 0.38874957)
+        adjusted = validate_order("AVAX-USD", 0.38874957, price=35.50)
         if adjusted is None:
             return  # order blocked
 
@@ -266,6 +302,9 @@ def validate_order(symbol: str, volume: float) -> Optional[float]:
         Coinbase product id, e.g. ``"AVAX-USD"``.
     volume:
         Requested base-currency quantity.
+    price:
+        Current price in USD used for notional enforcement.  When omitted
+        (or ``0``), the notional check is skipped.
 
     Returns
     -------
@@ -287,6 +326,9 @@ def validate_order(symbol: str, volume: float) -> Optional[float]:
 
     # Step 3 — apply decimal precision
     volume = apply_precision(symbol, volume)
+
+    # Step 4 — enforce minimum notional value (qty × price ≥ min_notional)
+    volume = enforce_min_notional(symbol, volume, price)
 
     if volume <= 0:
         return None
@@ -644,15 +686,20 @@ class ExchangeOrderValidator:
             adjustments.append("min_volume")
 
         # ── 2a. Permanently unsellable? ───────────────────────────────────
+        _min_notional_symbol = rules.get("min_notional", 5.0)
         permanently_bad = (
             side_lower == "sell"
             and price > 0
-            and value_usd < PERMANENT_UNSELLABLE_USD
+            and value_usd < _min_notional_symbol
         )
 
         if permanently_bad:
             reason = " + ".join(adjustments) if adjustments else "min_volume"
             self.mark_permanently_unsellable(symbol, reason=reason, value_usd=value_usd)
+            logger.warning(
+                "🚫 PERMANENT_DUST_UNSELLABLE: %s — $%.2f < $%.2f min_notional",
+                symbol, value_usd, _min_notional_symbol,
+            )
             if adjusted != requested:
                 logger.info(
                     "[ORDER NORMALIZED] symbol=%s requested=%.8g adjusted=%.8g reason=%s",
