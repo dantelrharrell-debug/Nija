@@ -748,6 +748,21 @@ except ImportError:
         get_auto_tuning_ai_layer = None  # type: ignore
         logger.warning("⚠️ Auto-Tuning AI Layer not available — static thresholds in use")
 
+# ── Win-Rate / Frequency Tuner — optimise EV by balancing quality vs volume ──
+try:
+    from win_rate_frequency_tuner import get_win_rate_frequency_tuner
+    WIN_RATE_FREQUENCY_TUNER_AVAILABLE = True
+    logger.info("✅ Win-Rate/Frequency Tuner loaded — EV-per-hour optimisation active")
+except ImportError:
+    try:
+        from bot.win_rate_frequency_tuner import get_win_rate_frequency_tuner
+        WIN_RATE_FREQUENCY_TUNER_AVAILABLE = True
+        logger.info("✅ Win-Rate/Frequency Tuner loaded — EV-per-hour optimisation active")
+    except ImportError:
+        WIN_RATE_FREQUENCY_TUNER_AVAILABLE = False
+        get_win_rate_frequency_tuner = None  # type: ignore
+        logger.warning("⚠️ Win-Rate/Frequency Tuner not available")
+
 # ── Auto Dust Sweeper — convert all dust to one target asset ─────────────────
 try:
     from auto_dust_sweeper import get_auto_dust_sweeper, RECYCLER_TARGET
@@ -2427,6 +2442,20 @@ class TradingStrategy:
                 self.auto_tuning_ai = None
         else:
             self.auto_tuning_ai = None
+
+        # ── Win-Rate / Frequency Tuner — optimise EV by balancing quality vs volume
+        if WIN_RATE_FREQUENCY_TUNER_AVAILABLE and get_win_rate_frequency_tuner is not None:
+            try:
+                self.win_rate_frequency_tuner = get_win_rate_frequency_tuner()
+                logger.info(
+                    "✅ Win-Rate/Frequency Tuner initialized — "
+                    "confidence gate will self-tune for EV-per-hour"
+                )
+            except Exception as _e:
+                logger.warning("⚠️ Win-Rate/Frequency Tuner init failed: %s", _e)
+                self.win_rate_frequency_tuner = None
+        else:
+            self.win_rate_frequency_tuner = None
 
         # ── AI Trade Quality Filter — ML-powered scalp quality gate ──────────
         if AI_TRADE_QUALITY_FILTER_AVAILABLE and get_ai_trade_quality_filter is not None:
@@ -9430,6 +9459,40 @@ class TradingStrategy:
                                             _raw_score = analysis.get('score')
                                             _raw_conf = (_raw_score / 5.0) if _raw_score else 0.65
                                         _sf_confidence = float(_raw_conf)
+
+                                        # ── WIN-RATE / FREQUENCY TUNER — confidence nudge ──
+                                        # Adjusts the confidence gate to maximise EV-per-hour:
+                                        # loosens when win-rate is good but frequency is low,
+                                        # tightens when win-rate has fallen below the floor.
+                                        if (
+                                            WIN_RATE_FREQUENCY_TUNER_AVAILABLE
+                                            and hasattr(self, 'win_rate_frequency_tuner')
+                                            and self.win_rate_frequency_tuner is not None
+                                        ):
+                                            try:
+                                                _wrft_params = self.win_rate_frequency_tuner.get_params()
+                                                if _wrft_params.confidence_delta != 0.0:
+                                                    _sf_confidence_raw = _sf_confidence
+                                                    _sf_confidence = max(
+                                                        0.0,
+                                                        min(1.0, _sf_confidence + _wrft_params.confidence_delta),
+                                                    )
+                                                    logger.debug(
+                                                        "   📊 WinRateFreqTuner [%s]: conf "
+                                                        "%.3f→%.3f (delta=%+.3f mode=%s)",
+                                                        symbol,
+                                                        _sf_confidence_raw,
+                                                        _sf_confidence,
+                                                        _wrft_params.confidence_delta,
+                                                        _wrft_params.mode.value,
+                                                    )
+                                            except Exception as _wrft_err:
+                                                logger.debug(
+                                                    "WinRateFrequencyTuner confidence nudge "
+                                                    "skipped for %s: %s", symbol, _wrft_err
+                                                )
+
+
                                         _sf_close = float(df['close'].iloc[-1]) if len(df) > 0 else 0.0
                                         _sf_spread = float(analysis.get('spread_pct', 0.001) or 0.001)
                                         _sf_bid = _sf_close * (1.0 - _sf_spread / 2.0)
@@ -11963,6 +12026,18 @@ class TradingStrategy:
                 self.auto_tuning_ai.record_trade(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _at_rec_err:
                 logger.debug("Auto-Tuning AI Layer record_trade skipped for %s: %s", symbol, _at_rec_err)
+
+        # 📊 WIN-RATE / FREQUENCY TUNER — feed outcome to update EV-per-hour model
+        # Tunes the confidence gate to maximise expected value over time:
+        # loosens when win rate is healthy but frequency is low,
+        # tightens when win rate falls below the quality floor.
+        if (WIN_RATE_FREQUENCY_TUNER_AVAILABLE
+                and hasattr(self, 'win_rate_frequency_tuner')
+                and self.win_rate_frequency_tuner is not None):
+            try:
+                self.win_rate_frequency_tuner.record_trade(pnl_usd=profit_usd, is_win=is_win)
+            except Exception as _wrft_rec_err:
+                logger.debug("Win-Rate/Frequency Tuner record_trade skipped for %s: %s", symbol, _wrft_rec_err)
 
         # 🎯 DYNAMIC SNIPER THRESHOLDS — feed outcome to adapt entry gates
         if (DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE
