@@ -46,7 +46,10 @@ logger = logging.getLogger("nija.auto_dust_sweeper")
 # Default configuration constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_DUST_THRESHOLD_USD: float = 3.0    # Positions below $3 are swept
+# Positions below this value (in USD) are treated as dust and swept.
+# Aligned with MIN_REBUY_USD so the recycler triggers as soon as aggregated
+# dust is large enough to re-buy the target asset.
+DEFAULT_DUST_THRESHOLD_USD: float = 5.0    # Positions below $5 are swept
 
 # RECYCLER_TARGET: the top-tier asset that ALL dust and recycled profits are
 # consolidated into.  Choosing a high-liquidity asset (BTC-USD or ETH-USD)
@@ -58,8 +61,6 @@ RECYCLER_TARGET: str = "BTC-USD"
 # continue to work; new code should prefer RECYCLER_TARGET.
 DEFAULT_TARGET_ASSET: str = RECYCLER_TARGET
 
-DEFAULT_DUST_THRESHOLD_USD: float = 5.0    # Positions below $5 are swept (matches MIN_REBUY_USD trigger)
-DEFAULT_TARGET_ASSET: str = "BTC-USD"       # Default consolidation asset
 MIN_REBUY_USD: float = 5.0                  # Minimum aggregated proceeds to trigger re-buy
 DUST_RECYCLER_TRIGGER_USD: float = 5.0     # Fire sweep proactively when total dust value ≥ this threshold
 
