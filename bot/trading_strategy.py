@@ -886,6 +886,22 @@ except ImportError:
         get_profit_compounding_engine = None  # type: ignore
         logger.warning("⚠️ Profit Compounding Engine not available — static position sizing in use")
 
+# ── Performance Tracker — fees + slippage aware closed-trade stats ────────────
+try:
+    from performance_tracker import get_performance_tracker as _get_perf_tracker_ts, PERF_LOG_CYCLE_INTERVAL
+    PERFORMANCE_TRACKER_AVAILABLE = True
+    logger.info("✅ Performance Tracker loaded — fee/slippage-aware trade stats active")
+except ImportError:
+    try:
+        from bot.performance_tracker import get_performance_tracker as _get_perf_tracker_ts, PERF_LOG_CYCLE_INTERVAL
+        PERFORMANCE_TRACKER_AVAILABLE = True
+        logger.info("✅ Performance Tracker loaded — fee/slippage-aware trade stats active")
+    except ImportError:
+        PERFORMANCE_TRACKER_AVAILABLE = False
+        _get_perf_tracker_ts = None  # type: ignore
+        PERF_LOG_CYCLE_INTERVAL = 20
+        logger.warning("⚠️ Performance Tracker not available")
+
 # ── HF Micro Scalping Mode — high-frequency 30s scan, low confidence gate ─────
 try:
     from hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode
@@ -3704,6 +3720,15 @@ class TradingStrategy:
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to initialize broker failsafes: {e}")
                     self.failsafes = None
+
+                # 📊 PERFORMANCE TRACKER — record starting balance for growth tracking
+                if PERFORMANCE_TRACKER_AVAILABLE and _get_perf_tracker_ts is not None and platform_balance > 0:
+                    try:
+                        _get_perf_tracker_ts().set_starting_balance(platform_balance)
+                    except Exception as _pt_init_err:
+                        logger.debug("PerformanceTracker set_starting_balance skipped: %s", _pt_init_err)
+                elif PERFORMANCE_TRACKER_AVAILABLE and platform_balance <= 0:
+                    logger.debug("PerformanceTracker: skipping set_starting_balance — platform_balance=%.2f", platform_balance)
 
                 # Initialize market adaptation engine
                 try:
@@ -11878,6 +11903,16 @@ class TradingStrategy:
 
             # Increment cycle counter for warmup tracking
             self.cycle_count += 1
+
+            # 📊 PERFORMANCE TRACKER — log stats every PERF_LOG_CYCLE_INTERVAL cycles
+            if (PERFORMANCE_TRACKER_AVAILABLE
+                    and _get_perf_tracker_ts is not None
+                    and self.cycle_count % PERF_LOG_CYCLE_INTERVAL == 0):
+                try:
+                    _pt_balance = account_balance if account_balance else 0.0
+                    _get_perf_tracker_ts().log_stats(_pt_balance)
+                except Exception as _pt_log_err:
+                    logger.debug("PerformanceTracker log_stats skipped: %s", _pt_log_err)
             
             # SAFETY VERIFICATION: Check position count at end of cycle
             # Use the already-filtered current_positions count to avoid false violations.
