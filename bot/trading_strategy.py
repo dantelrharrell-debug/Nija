@@ -750,17 +750,18 @@ except ImportError:
 
 # ── Auto Dust Sweeper — convert all dust to one target asset ─────────────────
 try:
-    from auto_dust_sweeper import get_auto_dust_sweeper
+    from auto_dust_sweeper import get_auto_dust_sweeper, RECYCLER_TARGET
     AUTO_DUST_SWEEPER_AVAILABLE = True
     logger.info("✅ Auto Dust Sweeper loaded — dust consolidation to single asset active")
 except ImportError:
     try:
-        from bot.auto_dust_sweeper import get_auto_dust_sweeper
+        from bot.auto_dust_sweeper import get_auto_dust_sweeper, RECYCLER_TARGET
         AUTO_DUST_SWEEPER_AVAILABLE = True
         logger.info("✅ Auto Dust Sweeper loaded — dust consolidation to single asset active")
     except ImportError:
         AUTO_DUST_SWEEPER_AVAILABLE = False
         get_auto_dust_sweeper = None  # type: ignore
+        RECYCLER_TARGET = "BTC-USD"   # fallback when module is unavailable
         logger.warning("⚠️ Auto Dust Sweeper not available")
 
 # ── Profit Priority Cleanup — close losers first, preserve winners ─────────────
@@ -3486,7 +3487,7 @@ class TradingStrategy:
                 if AUTO_DUST_SWEEPER_AVAILABLE and get_auto_dust_sweeper is not None:
                     try:
                         _ads_dry_run = os.getenv('AUTO_DUST_SWEEPER_DRY_RUN', 'false').lower() in ('true', '1', 'yes')
-                        _ads_target  = os.getenv('AUTO_DUST_SWEEPER_TARGET_ASSET', 'BTC-USD')
+                        _ads_target  = os.getenv('AUTO_DUST_SWEEPER_TARGET_ASSET', RECYCLER_TARGET)
                         _ads_dust_thr = float(os.getenv('AUTO_DUST_SWEEPER_THRESHOLD_USD', str(DUST_POSITION_USD)))
                         self.auto_dust_sweeper = get_auto_dust_sweeper(
                             dust_threshold_usd=_ads_dust_thr,
