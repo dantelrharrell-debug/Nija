@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -61,6 +62,11 @@ DEFAULT_DUST_THRESHOLD_USD: float = 5.0    # Positions below $5 are swept (match
 DEFAULT_TARGET_ASSET: str = "BTC-USD"       # Default consolidation asset
 MIN_REBUY_USD: float = 5.0                  # Minimum aggregated proceeds to trigger re-buy
 DUST_RECYCLER_TRIGGER_USD: float = 5.0     # Fire sweep proactively when total dust value ≥ this threshold
+
+# EXECUTION LOOP STABILISER: minimum seconds between sweep attempts for the
+# same symbol.  Prevents the same unsellable dust position from being retried
+# on every scan cycle.
+CLEANUP_COOLDOWN: float = 300.0  # 5 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +152,10 @@ class AutoDustSweeper:
         # total reaches min_rebuy_usd it fires a single re-buy into the
         # target asset and the accumulator is reset to 0.
         self._accumulated_proceeds: float = 0.0
+        # EXECUTION LOOP STABILISER: symbol -> last sweep-attempt timestamp.
+        # _should_cleanup() uses this to enforce a CLEANUP_COOLDOWN window so
+        # unsellable / failed positions are never retried on every scan cycle.
+        self._cleanup_cooldown: Dict[str, float] = {}
         logger.info(
             "🧹 AutoDustSweeper initialised | dust<$%.2f | target=%s | dry_run=%s | min_rebuy=$%.2f",
             dust_threshold_usd, target_asset, dry_run, min_rebuy_usd,
@@ -311,7 +321,29 @@ class AutoDustSweeper:
         dust.sort(key=lambda p: float(p.get("pnl_pct") or 0))
 
         # Step 3 – sell each dust position
+        # processed_symbols: same-cycle dedup guard — a symbol cannot be
+        # attempted more than once per sweep run even if it appears multiple
+        # times in the dust list (e.g. from different position dict sources).
+        processed_symbols: set = set()
         for pos in dust:
+            symbol = pos.get("symbol", "")
+            if not symbol:
+                logger.warning("   ⚠️  Dust position missing symbol key — skipping")
+                result.dust_skipped += 1
+                continue
+
+            # SAME-CYCLE RETRY GUARD
+            if symbol in processed_symbols:
+                logger.debug("   ⏭️ %s already processed this sweep cycle — skipping", symbol)
+                result.dust_skipped += 1
+                continue
+            processed_symbols.add(symbol)
+
+            # CLEANUP_COOLDOWN GUARD: skip symbols attempted within the last 5 minutes
+            if not self._should_cleanup(symbol):
+                result.dust_skipped += 1
+                continue
+
             action = self._sell_dust(broker, pos)
             result.actions.append(action)
             if action.success:
@@ -353,6 +385,26 @@ class AutoDustSweeper:
     # ------------------------------------------------------------------
     # Execution helpers
     # ------------------------------------------------------------------
+
+    def _should_cleanup(self, symbol: str) -> bool:
+        """Return True when *symbol* is eligible for a sweep attempt this cycle.
+
+        Enforces CLEANUP_COOLDOWN (5 minutes) between attempts so positions that
+        were skipped or failed are not hammered on every 2.5-minute scan cycle.
+        The timestamp is stamped on the first True return so subsequent calls
+        within the cooldown window return False immediately.
+        """
+        now = time.time()
+        last = self._cleanup_cooldown.get(symbol)
+        if last is None or (now - last) > CLEANUP_COOLDOWN:
+            self._cleanup_cooldown[symbol] = now
+            return True
+        remaining = CLEANUP_COOLDOWN - (now - last)
+        logger.debug(
+            "   ⏳ %s in sweep cooldown (%.0fs remaining) — skipping this cycle",
+            symbol, remaining,
+        )
+        return False
 
     def _sell_dust(self, broker: Any, position: Dict) -> DustSweepAction:
         """Market-sell one dust position and return an audit record."""
