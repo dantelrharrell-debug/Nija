@@ -210,6 +210,28 @@ except ImportError:
         validate_trade_size = None
         auto_resize_trade = None
 
+# ── Exchange Order Validator — step-size normalisation + PERMANENT_DUST_UNSELLABLE ──
+try:
+    from bot.exchange_order_validator import (
+        get_exchange_order_validator,
+        validate_order as _eov_validate_order,
+    )
+    EXCHANGE_ORDER_VALIDATOR_AVAILABLE = True
+    logger.info("✅ Exchange Order Validator loaded — step-size normalisation + PERMANENT_DUST_UNSELLABLE active")
+except ImportError:
+    try:
+        from exchange_order_validator import (
+            get_exchange_order_validator,
+            validate_order as _eov_validate_order,
+        )
+        EXCHANGE_ORDER_VALIDATOR_AVAILABLE = True
+        logger.info("✅ Exchange Order Validator loaded — step-size normalisation + PERMANENT_DUST_UNSELLABLE active")
+    except ImportError:
+        EXCHANGE_ORDER_VALIDATOR_AVAILABLE = False
+        get_exchange_order_validator = None  # type: ignore
+        _eov_validate_order = None  # type: ignore
+        logger.warning("⚠️ Exchange Order Validator not available — order normalisation disabled")
+
 # Root nija logger for flushing all handlers
 # Child loggers (like 'nija.broker', 'nija.multi_account') propagate to this logger
 # but don't have their own handlers, so we need to flush the root logger's handlers
@@ -3062,6 +3084,97 @@ class CoinbaseBroker(BaseBroker):
                     logger.error(f"⚠️ Hardening validation error (allowing order): {hardening_error}")
                     logger.error(f"   This is a bug - hardening should never crash")
                     logger.error(f"   Order will proceed but hardening may not be enforced")
+
+            # ================================================================
+            # 🛡️ EXCHANGE ORDER VALIDATOR — step-size + PERMANENT_DUST_UNSELLABLE
+            # ================================================================
+            # Runs for EVERY order (buy, sell, cleanup, forced exit) BEFORE the
+            # API call.  Responsibilities:
+            #   1. Reject permanently-unsellable symbols immediately (no retry).
+            #   2. Normalise base-size SELL quantities to the exchange step size.
+            #   3. Normalise quote-size BUY amounts to 2 decimal places.
+            #   4. Mark symbols as PERMANENT_DUST_UNSELLABLE when adjusted value
+            #      is still below the exchange floor after normalisation.
+            #   5. Emit [ORDER NORMALIZED] log whenever quantity is adjusted.
+            # ================================================================
+            if EXCHANGE_ORDER_VALIDATOR_AVAILABLE:
+                try:
+                    _eov = get_exchange_order_validator()
+
+                    # Fast-path: block permanently flagged symbols immediately
+                    if _eov.is_permanently_unsellable(symbol):
+                        logger.warning(
+                            "🚫 PERMANENT_DUST_UNSELLABLE: %s — order blocked, "
+                            "excluded from all systems permanently",
+                            symbol,
+                        )
+                        return {
+                            "status": "unfilled",
+                            "error": "PERMANENT_DUST_UNSELLABLE",
+                            "message": (
+                                f"{symbol} is permanently marked as unsellable "
+                                "(below exchange minimum — will not retry)"
+                            ),
+                            "partial_fill": False,
+                            "filled_pct": 0.0,
+                        }
+
+                    # Determine current price for notional checks on base-size orders
+                    _eov_price = 0.0
+                    if size_type == "base":
+                        try:
+                            _eov_price = float(self.get_current_price(symbol) or 0)
+                        except Exception:
+                            _eov_price = 0.0
+
+                    # Full validation + normalisation
+                    _norm = _eov.validate_and_normalize(
+                        symbol=symbol,
+                        side=side,
+                        quantity=quantity,
+                        price=_eov_price,
+                        size_type=size_type,
+                        broker_ref=self,
+                    )
+
+                    if _norm.is_permanently_unsellable:
+                        logger.warning(
+                            "🚫 PERMANENT_DUST_UNSELLABLE: %s — $%.4f — order blocked permanently",
+                            symbol, _norm.value_usd,
+                        )
+                        return {
+                            "status": "unfilled",
+                            "error": "PERMANENT_DUST_UNSELLABLE",
+                            "message": (
+                                f"{symbol} value ${_norm.value_usd:.4f} is permanently "
+                                "below exchange minimum — will not retry"
+                            ),
+                            "partial_fill": False,
+                            "filled_pct": 0.0,
+                        }
+
+                    if not _norm.is_valid:
+                        logger.warning(
+                            "⚠️ ORDER BLOCKED by exchange validator: %s — %s",
+                            symbol, _norm.reason,
+                        )
+                        return {
+                            "status": "unfilled",
+                            "error": "ORDER_TOO_SMALL",
+                            "message": _norm.reason,
+                            "partial_fill": False,
+                            "filled_pct": 0.0,
+                        }
+
+                    # Apply normalised quantity for the rest of this method
+                    if _norm.adjusted_qty != quantity:
+                        quantity = _norm.adjusted_qty
+
+                except Exception as _eov_err:
+                    # Validator must never block a legitimate order due to its own bug
+                    logger.warning(
+                        "⚠️ Exchange order validator error (allowing order): %s", _eov_err
+                    )
 
             client_order_id = str(uuid.uuid4())
 
