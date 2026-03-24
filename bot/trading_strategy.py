@@ -931,18 +931,33 @@ except ImportError:
         logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
     except ImportError:
         MICRO_CAP_COMPOUNDING_AVAILABLE = False
-        MICRO_CAP_TRADE_COOLDOWN = 60  # Default: 60 seconds (matches config constant)
+        MICRO_CAP_TRADE_COOLDOWN = 300  # Default: 5 minutes (matches config constant)
         MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1
-        MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 25.0
-        MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 1.0
-        MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 0.6
-        MAX_CONCURRENT_TRADES = 4  # Default: matches micro_capital_config.MAX_CONCURRENT_TRADES
+        MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 95.0   # 95% — aggressive micro-compounding mode (balance < $150)
+        MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5
+        MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5
+        MAX_CONCURRENT_TRADES = 1  # Default: single-position micro mode
         logger.warning("⚠️ Micro-Cap Compounding Config not available - micro-cap mode disabled")
         get_micro_cap_compounding_config = None  # type: ignore
 
         def get_spread_adjusted_profit_target(spread_pct: float, win_streak: int = 0) -> float:
             """Fallback when micro_capital_config is unavailable: base 1.0% + spread."""
             return MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT + spread_pct * 100.0
+
+# Import Minimum Notional Gate — blocks entries that would create dust positions
+try:
+    from minimum_notional_gate import get_minimum_notional_gate
+    MINIMUM_NOTIONAL_GATE_AVAILABLE = True
+    logger.info("✅ Minimum Notional Gate loaded — notional-aware entry dust prevention active")
+except ImportError:
+    try:
+        from bot.minimum_notional_gate import get_minimum_notional_gate
+        MINIMUM_NOTIONAL_GATE_AVAILABLE = True
+        logger.info("✅ Minimum Notional Gate loaded — notional-aware entry dust prevention active")
+    except ImportError:
+        MINIMUM_NOTIONAL_GATE_AVAILABLE = False
+        get_minimum_notional_gate = None  # type: ignore
+        logger.warning("⚠️ Minimum Notional Gate not available - notional check disabled")
 
 # Import Capital Scaling Engine — automatically increases deposits into winning accounts
 try:
@@ -10857,6 +10872,29 @@ class TradingStrategy:
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
                                     logger.info(f"      📊 Would need {breakeven_pct:.1f}% gain just to break even on fees")
                                     continue
+
+                                # ── NOTIONAL-AWARE ENTRY GATE ───────────────────────────────────
+                                # Skip trade if position_size < min_notional * 1.2 (20% safety
+                                # buffer above the broker's exchange minimum).  Prevents future
+                                # dust creation entirely — better to skip than to open a position
+                                # that cannot survive a normal adverse move or be sold cleanly.
+                                if MINIMUM_NOTIONAL_GATE_AVAILABLE and get_minimum_notional_gate:
+                                    try:
+                                        _notional_gate = get_minimum_notional_gate()
+                                        _min_notional = _notional_gate.get_minimum_for_symbol(symbol, broker_name)
+                                        _notional_threshold = _min_notional * 1.2
+                                        if position_size < _notional_threshold:
+                                            filter_stats['position_too_small'] += 1
+                                            logger.info(f"   ❌ NOTIONAL GATE: Entry rejected for {symbol}")
+                                            logger.info(
+                                                f"      Position ${position_size:.2f} < "
+                                                f"${_notional_threshold:.2f} "
+                                                f"(min_notional=${_min_notional:.2f} × 1.2 safety buffer)"
+                                            )
+                                            logger.info(f"      Prevents dust accumulation at entry source")
+                                            continue
+                                    except Exception as _ng_err:
+                                        logger.debug("Notional gate check skipped for %s: %s", symbol, _ng_err)
 
                                 # ── MICRO ACCOUNT OPTIMIZER: dust-at-creation prevention ──
                                 # Gate the entry through the fee+drawdown survival check so the
