@@ -1405,9 +1405,9 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
 # 45s chosen to allow: 30s Kraken API timeout + 15s network/serialization buffer
 # Kraken get_account_balance makes 2 API calls (Balance + TradeBalance) with 1s minimum between calls
 # Under production load, Kraken regularly takes 15-20s to respond (within 30s API timeout)
-# If timeout occurs, cached balance is used as fallback (max age: 5 minutes)
+# If timeout occurs, cached balance is used as fallback (max age: 90 seconds — tightened from 5 minutes)
 BALANCE_FETCH_TIMEOUT = 45  # Maximum time to wait for balance fetch (must be > Kraken API timeout of 30s)
-CACHED_BALANCE_MAX_AGE_SECONDS = 300  # Use cached balance if fresh (5 minutes max staleness)
+CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness — tightened)
 
 # Market scanning rotation (prevents scanning same markets every cycle)
 # UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
@@ -6688,20 +6688,54 @@ class TradingStrategy:
             # FIX #1: Update portfolio state from broker data
             # Get detailed balance including crypto holdings
             # PRO MODE: Also calculate total capital (free balance + position values)
-            # TIMEOUT FALLBACK: if live fetch fails, fall back to cached balance.
+            # TIMEOUT FALLBACK: if live fetch fails, fall back to fresh-enough cached balance.
+            # BALANCE FRESHNESS: always use call_with_timeout so a slow/hung API call never
+            # blocks the whole trading cycle; only accept cached balance within
+            # CACHED_BALANCE_MAX_AGE_SECONDS (90 s) — staler data triggers a $0 sentinel so
+            # position-sizing uses a safe floor instead of a ghost reading.
             try:
                 if hasattr(active_broker, 'get_account_balance_detailed'):
-                    balance_data = active_broker.get_account_balance_detailed()
+                    _bal_result = call_with_timeout(
+                        active_broker.get_account_balance_detailed,
+                        timeout_seconds=BALANCE_FETCH_TIMEOUT,
+                    )
                 else:
-                    balance_data = {'trading_balance': active_broker.get_account_balance()}
+                    _bal_result = call_with_timeout(
+                        active_broker.get_account_balance,
+                        timeout_seconds=BALANCE_FETCH_TIMEOUT,
+                    )
+                if _bal_result[1] is not None:
+                    raise Exception(f"Balance fetch timed out or failed: {_bal_result[1]}")
+                if hasattr(active_broker, 'get_account_balance_detailed'):
+                    balance_data = _bal_result[0] or {}
+                else:
+                    balance_data = {'trading_balance': _bal_result[0]}
             except Exception as _bal_fetch_err:
-                logger.warning(f"⚠️  Balance fetch failed ({_bal_fetch_err}); using cached balance")
-                _cached = (
-                    active_broker._last_known_balance
-                    if hasattr(active_broker, '_last_known_balance') and active_broker._last_known_balance is not None
-                    else account_balance  # already 0.0 from cycle-start sentinel
-                )
-                balance_data = {'trading_balance': _cached or 0.0}
+                logger.warning(f"⚠️  Balance fetch failed ({_bal_fetch_err}); checking cache freshness")
+                _cached_balance = None
+                if (hasattr(active_broker, '_last_known_balance')
+                        and active_broker._last_known_balance is not None):
+                    if (hasattr(active_broker, '_balance_last_updated')
+                            and active_broker._balance_last_updated is not None):
+                        _cached_age = time.time() - active_broker._balance_last_updated
+                        if _cached_age <= CACHED_BALANCE_MAX_AGE_SECONDS:
+                            _cached_balance = active_broker._last_known_balance
+                            logger.warning(
+                                f"   ⚠️  Using cached balance (age={_cached_age:.0f}s): "
+                                f"${_cached_balance:.2f}"
+                            )
+                        else:
+                            logger.warning(
+                                f"   ❌ Cached balance is stale ({_cached_age:.0f}s > "
+                                f"{CACHED_BALANCE_MAX_AGE_SECONDS}s max) — using $0 sentinel"
+                            )
+                    else:
+                        # No timestamp available; use cached value but log the risk
+                        _cached_balance = active_broker._last_known_balance
+                        logger.warning(
+                            f"   ⚠️  Using cached balance (no timestamp): ${_cached_balance:.2f}"
+                        )
+                balance_data = {'trading_balance': _cached_balance or 0.0}
             account_balance = balance_data.get('trading_balance', 0.0) or 0.0
 
             # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────
@@ -7181,6 +7215,44 @@ class TradingStrategy:
                             quantity = position.get('quantity', 0)
                             position_value = current_price * quantity
 
+                            # ── GHOST / DUST HARD-DELETE ─────────────────────────────────────
+                            # Positions with zero quantity are "ghost" records left behind by
+                            # failed sells or rounding.  Positions worth less than the exchange
+                            # hard floor ($1) can never be sold and will never recover without
+                            # a price moon.  In both cases permanently remove the entry from
+                            # the position tracker so it does not reappear next cycle.
+                            _is_ghost = quantity <= 0
+                            _is_hard_dust = (
+                                not _is_ghost
+                                and position_value < EXCHANGE_MINIMUM_ORDER_USD
+                            )
+                            if _is_ghost or _is_hard_dust:
+                                if _is_ghost:
+                                    _reason = "zero quantity (ghost)"
+                                else:
+                                    _reason = f"${position_value:.4f} < ${EXCHANGE_MINIMUM_ORDER_USD:.2f} hard floor (dust)"
+                                logger.warning(
+                                    f"   🗑️  Hard-deleting {symbol}: {_reason}"
+                                )
+                                # Permanently remove from position tracker so it never comes back.
+                                # Prefer the broker that owns the position; fall back to active_broker.
+                                _pt = None
+                                if position_broker and hasattr(position_broker, 'position_tracker'):
+                                    _pt = position_broker.position_tracker
+                                elif active_broker and hasattr(active_broker, 'position_tracker'):
+                                    _pt = active_broker.position_tracker
+                                if _pt is not None:
+                                    try:
+                                        _pt.track_exit(symbol)
+                                        logger.info(f"   ✅ {symbol} removed from position tracker")
+                                    except Exception as _del_err:
+                                        logger.debug(f"   Could not remove {symbol} from tracker: {_del_err}")
+                                # Also add to permanent dust blacklist so it is excluded from
+                                # cap counts and entry-scan decisions even before next full cycle.
+                                self._dust_blacklist.add(symbol)
+                                continue
+                            # ─────────────────────────────────────────────────────────────────
+
                             logger.info(f"   {symbol} ({broker_label}): {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
 
                             # PROFITABILITY MODE: Aggressive exit on weak markets
@@ -7191,10 +7263,6 @@ class TradingStrategy:
                             # 1. Market conditions (if filter fails, exit immediately)
                             # 2. Small position size (anything under $1 should be exited)
                             # 3. RSI overbought/oversold (take profits or cut losses)
-
-                            # DUST DETECTION DISABLED AT ROOT — is_dust = False
-                            # Auto-exit for small positions is permanently disabled.
-                            # Positions under the dust threshold are left untouched.
 
                             # PROFIT-BASED EXIT LOGIC (NEW!)
                             # Check if we have entry price tracked for this position
@@ -9984,6 +10052,25 @@ class TradingStrategy:
                                         f"${account_balance:.2f} = ${_mc_position_size:.2f} "
                                         f"(was ${position_size:.2f})"
                                     )
+
+                                    # ── ALIGN WITH MIN ENTRY LOGIC ──────────────────────────
+                                    # Micro-cap sizing can compute a value below the exchange
+                                    # hard floor (EXCHANGE_MIN_ORDER_SIZE).  Enforce the floor
+                                    # here so the downstream minimum-size gate never rejects a
+                                    # micro-cap trade that was otherwise valid, and also avoid
+                                    # opening a position too small to be sold cleanly.
+                                    if _mc_position_size < EXCHANGE_MIN_ORDER_SIZE:
+                                        logger.info(
+                                            f"   ❌ {symbol}: Micro-cap position "
+                                            f"${_mc_position_size:.2f} below exchange minimum "
+                                            f"${EXCHANGE_MIN_ORDER_SIZE:.2f} — skipping "
+                                            f"(balance ${account_balance:.2f} too small for "
+                                            f"{_mc_pos_pct:.0f}% sizing)"
+                                        )
+                                        filter_stats['position_too_small'] += 1
+                                        continue
+                                    # ────────────────────────────────────────────────────────
+
                                     position_size = _mc_position_size
 
                                     # 4. Override stop_loss and profit_target in analysis dict
