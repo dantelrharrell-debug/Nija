@@ -263,6 +263,21 @@ except ImportError:
         logger.warning("⚠️ Profit Confirmation Logger not available - profit tracking disabled")
         ProfitConfirmationLogger = None
 
+# ── Performance Tracker — fees + slippage aware closed-trade recording ────────
+try:
+    from bot.performance_tracker import get_performance_tracker as _get_perf_tracker
+    PERFORMANCE_TRACKER_AVAILABLE = True
+    logger.info("✅ Performance Tracker loaded — fee/slippage-aware trade recording active")
+except ImportError:
+    try:
+        from performance_tracker import get_performance_tracker as _get_perf_tracker
+        PERFORMANCE_TRACKER_AVAILABLE = True
+        logger.info("✅ Performance Tracker loaded — fee/slippage-aware trade recording active")
+    except ImportError:
+        PERFORMANCE_TRACKER_AVAILABLE = False
+        _get_perf_tracker = None  # type: ignore
+        logger.warning("⚠️ Performance Tracker not available — closed-trade stats disabled")
+
 
 class ExecutionEngine:
     """
@@ -1228,6 +1243,41 @@ class ExecutionEngine:
                             )
                         except Exception as log_error:
                             logger.warning(f"Could not log profit confirmation: {log_error}")
+
+                    # ── PERFORMANCE TRACKER — record closed trade with fees & slippage ──
+                    if PERFORMANCE_TRACKER_AVAILABLE and _get_perf_tracker is not None:
+                        try:
+                            _pt = _get_perf_tracker()
+                            _pt_entry = position.get('entry_price', 0)
+                            _pt_qty = position.get('quantity', 0)
+                            _pt_side = position.get('side', 'long')
+                            _pt_pos_usd = position.get('position_size', 0)
+                            _pt_fee_rate = self._get_broker_round_trip_fee()
+                            _pt_fees = _pt_pos_usd * _pt_fee_rate
+
+                            # Compute slippage from actual fill vs. signal exit price
+                            _pt_actual_fill = self._extract_fill_price(result, symbol)
+                            if _pt_actual_fill and _pt_actual_fill > 0 and exit_price > 0:
+                                if _pt_side == 'long':
+                                    # Positive = we received more than expected (good)
+                                    _pt_slip = (_pt_actual_fill - exit_price) / exit_price * _pt_pos_usd
+                                else:
+                                    # Positive = we paid less than expected (good)
+                                    _pt_slip = (exit_price - _pt_actual_fill) / exit_price * _pt_pos_usd
+                            else:
+                                _pt_slip = 0.0
+
+                            _pt.record_trade(
+                                symbol=symbol,
+                                entry_price=_pt_entry,
+                                exit_price=exit_price,
+                                quantity=_pt_qty,
+                                side=_pt_side,
+                                fees_usd=_pt_fees,
+                                slippage_usd=_pt_slip,
+                            )
+                        except Exception as _pt_err:
+                            logger.debug("PerformanceTracker record_trade skipped for %s: %s", symbol, _pt_err)
 
                     # FIX #2: Immediate Position State Flush After Sell
                     # Instantly purge the internal position object - DO NOT wait for exchange refresh
