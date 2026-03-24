@@ -167,14 +167,14 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 # MIN_BALANCE_COINBASE = 10.0  # Coinbase disabled
 
 # ============================================================================
-# MICRO-CAP COMPOUNDING MODE (balance < $100)
+# MICRO-CAP COMPOUNDING MODE (balance < $150)
 # ============================================================================
 # High-performing compounding bots concentrate capital: rather than spreading
 # across dozens of small trades, this mode executes only high-conviction
 # trades per session, each using a large fraction of available capital.
 #
 #   - max_positions    = 1      (one trade at a time — maximum concentration)
-#   - position_size    = 90%    (maximise capital per trade; e.g. $39 of a $43 account)
+#   - position_size    = 95%    (maximise capital per trade; e.g. $47 of a $50 account)
 #   - profit_target    = 2.5%   (realistic per-trade target to compound quickly)
 #   - stop_loss        = 1.5%   (below profit target → ≥1.67:1 R:R ratio)
 #   - trade_cooldown   = 300s   (5-min per-symbol re-entry gate — was 10 min, tuned for faster trade flow)
@@ -192,9 +192,9 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 #   - stop_loss        = 1.5%   (below base profit target → ≥1.67:1 R:R ratio on base)
 #   - trade_cooldown   = 300s   (5-min per-symbol cooldown between trades — tuned for faster trade flow)
 
-MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 100.0  # Activate below $100
+MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 150.0  # Activate below $150 (matches BALANCE_THRESHOLD_MICRO)
 MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position — maximum capital concentration
-MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 90.0   # 90% of capital per trade (maximise compounding speed)
+MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 95.0   # 95% of capital per trade (maximise compounding speed)
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R)
 MICRO_CAP_TRADE_COOLDOWN = 300                   # 5-min per-symbol re-entry gate (was 600 s / 10 min — tuned for faster trade flow)
@@ -311,11 +311,11 @@ def get_adaptive_profit_target(win_streak: int = 0, volatility_factor: float = 1
 def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union[bool, float, int]]]:
     """
     Return the micro-cap compounding mode configuration when the account
-    balance is below the activation threshold ($100 by default).
+    balance is below the activation threshold ($150 by default).
 
     Compounding mode rules (concentrated capital — 3–5 trades per session):
       - max_positions    = 1      (one trade at a time — maximum concentration)
-      - position_size    = 90%    (concentrate capital; e.g. $66 of a $74 account)
+      - position_size    = 95%    (concentrate capital; e.g. $95 of a $100 account)
       - stop_loss        = 1.5%   (below TP1 → ≥1.67:1 R:R)
       - tp1              = 2.5%   (partial exit + trailing stop activation — was 3.0%)
       - tp2              = 3.5%   (second partial exit — was 4.5%)
@@ -420,7 +420,7 @@ def get_position_size_pct(equity: float) -> float:
 
     Values are sourced from smart_scaling_engine.POSITION_SIZE_TIER_* constants
     (single source of truth):
-      <$100   → 30 %  (aggressive early compounding)
+      <$150   → 95 %  (aggressive micro-compounding: 95% of balance, single position)
       <$250   → 25 %
       <$500   → 22 %
       <$1000  → 20 %
@@ -432,8 +432,8 @@ def get_position_size_pct(equity: float) -> float:
     Returns:
         Position size as a percentage of deployable capital (e.g. 25.0 = 25 %).
     """
-    if equity < 100.0:
-        return POSITION_SIZE_PCT_TIER_MICRO
+    if equity < MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD:
+        return MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT
     if equity < 250.0:
         return POSITION_SIZE_PCT_TIER_SMALL
     if equity < 500.0:
@@ -462,7 +462,7 @@ def get_dynamic_config(equity: float) -> Dict:
         'leverage_enabled': LEVERAGE_ENABLED,
     }
 
-    # Micro-cap compounding mode: balance < $100
+    # Micro-cap compounding mode: balance < $150
     # Takes full precedence over all other tiers.
     compounding = get_micro_cap_compounding_config(equity)
     if compounding:
@@ -659,7 +659,7 @@ MICRO_CAPITAL_CONFIG = {
     'profit_reinvest_pct': PROFIT_REINVEST_PCT,
     'min_profit_to_compound': MIN_PROFIT_TO_COMPOUND,
 
-    # Micro-cap compounding mode (balance < $100)
+    # Micro-cap compounding mode (balance < $150)
     'micro_cap_compounding_balance_threshold': MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD,
     'micro_cap_compounding_max_positions': MICRO_CAP_COMPOUNDING_MAX_POSITIONS,
     'micro_cap_compounding_position_size_pct': MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT,
@@ -901,7 +901,7 @@ This configuration is optimized for:
 ✅ Multi-broker support
 ✅ Advanced AI and signal filtering
 ✅ Automatic feature enablement
-✅ Micro-cap compounding mode for fast growth under $100
+✅ Micro-cap compounding mode for fast growth under $150
 
 To activate: apply_micro_capital_config(equity=your_balance)
 """
