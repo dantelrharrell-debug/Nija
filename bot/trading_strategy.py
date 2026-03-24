@@ -3630,40 +3630,13 @@ class TradingStrategy:
                     logger.warning(f"⚠️  Auto-Cleanup Engine not available: {_ace_err}")
                     self.auto_cleanup_engine = None
 
-                # ── AUTO DUST SWEEPER (convert all dust to single target asset) ─
-                if AUTO_DUST_SWEEPER_AVAILABLE and get_auto_dust_sweeper is not None:
-                    try:
-                        _ads_dry_run = os.getenv('AUTO_DUST_SWEEPER_DRY_RUN', 'false').lower() in ('true', '1', 'yes')
-                        _ads_target  = os.getenv('AUTO_DUST_SWEEPER_TARGET_ASSET', RECYCLER_TARGET)
-                        _ads_dust_thr = float(os.getenv('AUTO_DUST_SWEEPER_THRESHOLD_USD', str(DUST_POSITION_USD)))
-                        self.auto_dust_sweeper = get_auto_dust_sweeper(
-                            dust_threshold_usd=_ads_dust_thr,
-                            target_asset=_ads_target,
-                            dry_run=_ads_dry_run,
-                        )
-                        logger.info(
-                            f"🧹 Auto Dust Sweeper initialised "
-                            f"(dust<${_ads_dust_thr:.2f}, target={_ads_target}, "
-                            f"dry_run={_ads_dry_run})"
-                        )
-                    except Exception as _ads_err:
-                        logger.warning(f"⚠️  Auto Dust Sweeper not available: {_ads_err}")
-                        self.auto_dust_sweeper = None
-                else:
-                    self.auto_dust_sweeper = None
+                # ── AUTO DUST SWEEPER — DISABLED (ignore dust, don't try to fix it) ─
+                self.auto_dust_sweeper = None
+                logger.info("🚫 Auto Dust Sweeper disabled — dust positions will be ignored")
 
-                # ── DUST SWEEPER V2 (permanent dust kill) ──────────────────────
-                try:
-                    from bot.dust_sweeper_v2 import get_dust_sweeper_v2
-                    _dsv2_dry = os.getenv('DUST_SWEEPER_DRY_RUN', 'false').lower() in ('true', '1', 'yes')
-                    self.dust_sweeper_v2 = get_dust_sweeper_v2(
-                        dust_threshold_usd=float(os.getenv('DUST_SWEEPER_THRESHOLD_USD', '1.0')),
-                        dry_run=_dsv2_dry,
-                    )
-                    logger.info("🧹 Dust Sweeper V2 initialised (permanent dust-kill loop broken)")
-                except Exception as _dsv2_err:
-                    logger.warning(f"⚠️  Dust Sweeper V2 not available: {_dsv2_err}")
-                    self.dust_sweeper_v2 = None
+                # ── DUST SWEEPER V2 — DISABLED (ignore dust, don't try to fix it) ──
+                self.dust_sweeper_v2 = None
+                logger.info("🚫 Dust Sweeper V2 disabled — dust positions will be ignored")
 
                 # ── MICRO ACCOUNT OPTIMIZER (prevent dust at entry) ─────────────
                 try:

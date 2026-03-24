@@ -192,7 +192,7 @@ MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
 #   - stop_loss        = 1.5%   (below base profit target → ≥1.67:1 R:R ratio on base)
 #   - trade_cooldown   = 300s   (5-min per-symbol cooldown between trades — tuned for faster trade flow)
 
-MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = 150.0  # Activate below $150 (matches BALANCE_THRESHOLD_MICRO)
+MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = float('inf')  # Apply to ALL balances — 1 position, 95% capital
 MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position — maximum capital concentration
 MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 95.0   # 95% of capital per trade (maximise compounding speed)
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
