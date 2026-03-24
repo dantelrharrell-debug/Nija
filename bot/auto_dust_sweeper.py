@@ -156,6 +156,12 @@ class AutoDustSweeper:
         # _should_cleanup() uses this to enforce a CLEANUP_COOLDOWN window so
         # unsellable / failed positions are never retried on every scan cycle.
         self._cleanup_cooldown: Dict[str, float] = {}
+
+        # CYCLE-LEVEL DEDUPLICATION: wall-clock timestamp of the last
+        # run_cleanup_cycle() execution.  Set to 0 so the very first call
+        # always runs.  run_cleanup_cycle() rejects re-entry within 120s.
+        self._last_cleanup_cycle_ts: float = 0
+
         logger.info(
             "🧹 AutoDustSweeper initialised | dust<$%.2f | target=%s | dry_run=%s | min_rebuy=$%.2f",
             dust_threshold_usd, target_asset, dry_run, min_rebuy_usd,
@@ -242,6 +248,38 @@ class AutoDustSweeper:
             Total portfolio value (used for logging/context only).
         """
         with self._lock:
+            return self._run(broker, positions, portfolio_value_usd)
+
+    def run_cleanup_cycle(
+        self,
+        broker: Any,
+        positions: List[Dict],
+        portfolio_value_usd: float = 0.0,
+    ) -> Optional[DustSweepResult]:
+        """Cycle-level entry-point with deduplication guard.
+
+        Prevents the sweep engine from executing more than once within the
+        same ~2-minute scan window.  Callers that previously invoked
+        ``sweep`` directly should switch to this method so the guard is
+        honoured automatically.
+
+        The timestamp check and the sweep itself are performed under
+        ``self._lock`` to guarantee thread-safety.
+
+        Returns:
+            The ``DustSweepResult`` from the sweep, or ``None`` when the
+            call is suppressed by the cooldown window.
+        """
+        now = time.time()
+        with self._lock:
+            if now - self._last_cleanup_cycle_ts < 120:
+                logger.debug(
+                    "🧹 AutoDustSweeper: skipping run_cleanup_cycle — "
+                    "last run was %.0fs ago (min interval=120s)",
+                    now - self._last_cleanup_cycle_ts,
+                )
+                return None
+            self._last_cleanup_cycle_ts = now
             return self._run(broker, positions, portfolio_value_usd)
 
     # ------------------------------------------------------------------
