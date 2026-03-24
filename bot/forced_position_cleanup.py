@@ -33,6 +33,11 @@ EXCHANGE_MIN_SELL_USD: float = 3.00
 # cap math before getting a fresh sell attempt.
 UNSELLABLE_DECAY_HOURS: float = 12.0
 
+# EXECUTION LOOP STABILISER: minimum seconds between close attempts for the
+# same symbol.  Prevents hammering an unsellable position on every 2.5-minute
+# scan cycle while still allowing a retry after the cooldown expires.
+CLEANUP_COOLDOWN: float = 300.0  # 5 minutes
+
 
 class CleanupType(Enum):
     """Types of cleanup operations"""
@@ -167,6 +172,11 @@ class ForcedPositionCleanup:
         # positions never permanently block new legitimate entries.
         self._unsellable_positions: Dict[str, float] = {}
 
+        # EXECUTION LOOP STABILISER: symbol -> last close-attempt timestamp.
+        # _should_cleanup() uses this to enforce a CLEANUP_COOLDOWN window so
+        # unsellable / failed positions are never retried on every scan cycle.
+        self._cleanup_cooldown: Dict[str, float] = {}
+
         # Post-cleanup state — force re-synced after every cleanup run so
         # callers always have an accurate view of open positions.
         self.current_positions: List[Dict] = []
@@ -241,6 +251,26 @@ class ForcedPositionCleanup:
                 "excluded from cap math until decay expires",
                 symbol, UNSELLABLE_DECAY_HOURS,
             )
+
+    def _should_cleanup(self, symbol: str) -> bool:
+        """Return True when *symbol* is eligible for a new close attempt this cycle.
+
+        Enforces CLEANUP_COOLDOWN (5 minutes) between attempts so positions that
+        were skipped or failed are not hammered on every 2.5-minute scan cycle.
+        The timestamp is stamped on the first True return so subsequent calls
+        within the cooldown window return False immediately.
+        """
+        now = time.time()
+        last = self._cleanup_cooldown.get(symbol)
+        if last is None or (now - last) > CLEANUP_COOLDOWN:
+            self._cleanup_cooldown[symbol] = now
+            return True
+        remaining = CLEANUP_COOLDOWN - (now - last)
+        logger.debug(
+            "   ⏳ %s in cleanup cooldown (%.0fs remaining) — skipping this cycle",
+            symbol, remaining,
+        )
+        return False
 
     def _is_tradable(self, symbol: str) -> bool:
         """Return True when *symbol* is NOT in the active unsellable window."""
@@ -434,10 +464,16 @@ class ForcedPositionCleanup:
             size_usd = pos.get('size_usd', 0) or pos.get('usd_value', 0)
             
             if size_usd > 0 and size_usd < self.dust_threshold_usd:
+                symbol = pos['symbol']
+                # CLEANUP_COOLDOWN guard: skip positions attempted within the last
+                # 5 minutes so the same unsellable symbol is never re-queued every
+                # scan cycle.
+                if not self._should_cleanup(symbol):
+                    continue
                 # Preserve quantity so execute_cleanup can pass it as base_size to close_position()
                 quantity = pos.get('quantity') or pos.get('base_size') or pos.get('size') or pos.get('balance')
                 dust_positions.append({
-                    'symbol': pos['symbol'],
+                    'symbol': symbol,
                     'size_usd': size_usd,
                     'quantity': quantity,
                     'pnl_pct': pos.get('pnl_pct', 0),
