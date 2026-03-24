@@ -839,6 +839,21 @@ except ImportError:
         get_dynamic_sniper_thresholds = None  # type: ignore
         logger.warning("⚠️ Dynamic Sniper Thresholds not available — static sniper gates in use")
 
+# ── Dynamic Min Entry Sizer — raise floor based on volatility + fees ──────────
+try:
+    from dynamic_min_entry_sizer import get_dynamic_min_entry_sizer
+    DYNAMIC_MIN_ENTRY_SIZER_AVAILABLE = True
+    logger.info("✅ Dynamic Min Entry Sizer loaded — volatility+fee floor active")
+except ImportError:
+    try:
+        from bot.dynamic_min_entry_sizer import get_dynamic_min_entry_sizer
+        DYNAMIC_MIN_ENTRY_SIZER_AVAILABLE = True
+        logger.info("✅ Dynamic Min Entry Sizer loaded — volatility+fee floor active")
+    except ImportError:
+        DYNAMIC_MIN_ENTRY_SIZER_AVAILABLE = False
+        get_dynamic_min_entry_sizer = None  # type: ignore
+        logger.warning("⚠️ Dynamic Min Entry Sizer not available — static floor in use")
+
 # ── Exchange Order Validator — step-size normalisation + PERMANENT_DUST_UNSELLABLE ──
 try:
     from exchange_order_validator import get_exchange_order_validator, validate_order as eov_validate_order
@@ -2556,6 +2571,22 @@ class TradingStrategy:
                 self.smart_position_consolidator = None
         else:
             self.smart_position_consolidator = None
+
+        # ── Dynamic Min Entry Sizer — volatility+fee-aware entry floor ───────
+        if DYNAMIC_MIN_ENTRY_SIZER_AVAILABLE and get_dynamic_min_entry_sizer is not None:
+            try:
+                self.dynamic_min_entry_sizer = get_dynamic_min_entry_sizer(
+                    vol_mult=float(os.getenv('DMES_VOL_MULT', '1.5')),
+                    dust_threshold_usd=float(os.getenv('DMES_DUST_THRESHOLD_USD', '5.0')),
+                    max_multiplier=float(os.getenv('DMES_MAX_MULTIPLIER', '3.0')),
+                    enabled=os.getenv('DMES_ENABLED', 'true').lower() not in ('false', '0', 'no'),
+                )
+                logger.info("✅ Dynamic Min Entry Sizer initialized — volatility+fee floor active")
+            except Exception as _e:
+                logger.warning("⚠️ Dynamic Min Entry Sizer init failed: %s", _e)
+                self.dynamic_min_entry_sizer = None
+        else:
+            self.dynamic_min_entry_sizer = None
 
         # ── Auto-Tuning AI Layer ───────────────────────────────────────────────
         if AUTO_TUNING_AI_AVAILABLE and get_auto_tuning_ai_layer is not None:
@@ -10822,15 +10853,42 @@ class TradingStrategy:
                                     account_balance, broker_name
                                 )
 
+                                # ── DYNAMIC MIN ENTRY: volatility + fee floor ──────────────────
+                                # Raise the floor further when ATR% is high (volatile market)
+                                # or fees are elevated, to prevent positions that would immediately
+                                # drop below the $5 dust threshold or be fee-eroded into dust.
+                                if DYNAMIC_MIN_ENTRY_SIZER_AVAILABLE and hasattr(self, 'dynamic_min_entry_sizer') and self.dynamic_min_entry_sizer:
+                                    try:
+                                        _dmes_atr_raw = analysis.get('atr', 0.0)
+                                        _dmes_close = float(df['close'].iloc[-1]) if df is not None and len(df) > 0 else 0.0
+                                        _dmes_atr_pct = (_dmes_atr_raw / _dmes_close) if _dmes_close > 0 and _dmes_atr_raw > 0 else 0.0
+                                        # round-trip fee = spread (both sides) + exchange taker fees (entry+exit)
+                                        _dmes_spread = float(analysis.get('spread_pct', 0.001) or 0.001)
+                                        _dmes_fee_pct = _dmes_spread * 2 + 0.012  # 2× spread + 0.012 (1.2% round-trip taker fees in decimal)
+                                        _dmes_raised = self.dynamic_min_entry_sizer.get_min_entry_usd(
+                                            base_min_usd=min_position_size_dynamic,
+                                            atr_pct=_dmes_atr_pct,
+                                            fee_pct_roundtrip=_dmes_fee_pct,
+                                        )
+                                        if _dmes_raised > min_position_size_dynamic:
+                                            logger.info(
+                                                f"   📐 {symbol}: Min entry raised by volatility+fee sizer: "
+                                                f"${min_position_size_dynamic:.2f} → ${_dmes_raised:.2f} "
+                                                f"(atr={_dmes_atr_pct*100:.2f}%, fees={_dmes_fee_pct*100:.2f}%)"
+                                            )
+                                        min_position_size_dynamic = _dmes_raised
+                                    except Exception as _dmes_err:
+                                        logger.debug("DynamicMinEntrySizer skipped for %s: %s", symbol, _dmes_err)
+
                                 # PROFITABILITY WARNING: Small positions have lower profitability
                                 # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
-                                # DYNAMIC MINIMUM: Position must meet max(10.00, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
+                                # DYNAMIC MINIMUM: Position must meet max(10.00, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min, volatility+fee floor)
                                 if position_size < min_position_size_dynamic:
                                     filter_stats['position_too_small'] += 1
                                     # FIX #3 (Jan 19, 2026): Explicit trade rejection logging
                                     logger.info(f"   ❌ Entry rejected for {symbol}")
                                     logger.info(f"      Reason: Position size ${position_size:.2f} < ${min_position_size_dynamic:.2f} minimum")
-                                    logger.info(f"      💡 Dynamic minimum = max($10.00, ${account_balance:.2f} × {DYNAMIC_POSITION_SIZE_PCT*100:.0f}%, brokerage_min[{broker_name}]) = ${min_position_size_dynamic:.2f}")
+                                    logger.info(f"      💡 Dynamic minimum = max($10.00, ${account_balance:.2f} × {DYNAMIC_POSITION_SIZE_PCT*100:.0f}%, brokerage_min[{broker_name}], vol+fee floor) = ${min_position_size_dynamic:.2f}")
                                     logger.info(f"      💡 Small positions face severe fee impact (~1.4% round-trip)")
                                     # Calculate break-even % needed: (fee_dollars / position_size) * 100
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0
