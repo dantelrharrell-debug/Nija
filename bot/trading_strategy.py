@@ -3581,24 +3581,9 @@ class TradingStrategy:
                 self.forced_cleanup = None
                 logger.info("🚫 Forced position cleanup disabled — dust positions will be ignored")
 
-                # Initialize continuous dust monitor (Option A – scheduled dust sweeps)
-                try:
-                    from continuous_dust_monitor import get_continuous_dust_monitor
-                    import os as _os
-                    _dust_interval = float(_os.getenv('DUST_SWEEP_INTERVAL_MINUTES', '30'))
-                    _dust_threshold = float(_os.getenv('DUST_THRESHOLD_USD', str(DUST_POSITION_USD)))
-                    self.continuous_dust_monitor = get_continuous_dust_monitor(
-                        dust_threshold_usd=_dust_threshold,
-                        sweep_interval_minutes=_dust_interval,
-                        dry_run=False,
-                    )
-                    logger.info(
-                        f"🌀 Continuous dust monitor initialized "
-                        f"(threshold=${_dust_threshold:.2f}, interval={_dust_interval:.0f}min)"
-                    )
-                except Exception as _cdm_err:
-                    logger.warning(f"⚠️  Failed to initialize continuous dust monitor: {_cdm_err}")
-                    self.continuous_dust_monitor = None
+                # CONTINUOUS DUST SWEEP — DISABLED at root level
+                self.continuous_dust_monitor = None
+                logger.info("🚫 Continuous dust monitor disabled — dust sweep will not run")
 
                 # ── AUTO-CLEANUP ENGINE (1-step dust liquidation + micro-position merge) ──
                 try:
@@ -6312,35 +6297,8 @@ class TradingStrategy:
                 except Exception as _ppc_err:
                     logger.debug(f"Profit Priority Cleanup summary skipped: {_ppc_err}")
 
-            # 🌀 CONTINUOUS DUST MONITOR (Option A): Time-based dust sweep
-            # Checks all accounts every DUST_SWEEP_INTERVAL_MINUTES (default 30 min)
-            # and closes any position < DUST_THRESHOLD_USD. Each action is audit-logged.
-            # FIX: Run dust sweeper ONLY on startup (cycle 0) — not every cycle.
-            if (hasattr(self, 'continuous_dust_monitor') and self.continuous_dust_monitor
-                    and hasattr(self, 'cycle_count') and self.cycle_count == 0):
-                try:
-                    # Build (account_id, broker) list for this cycle
-                    _cdm_brokers = []
-                    if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
-                        for _acct_id, _acct_broker in (
-                            self.multi_account_manager.get_all_brokers() or []
-                        ):
-                            _cdm_brokers.append((_acct_id, _acct_broker))
-                    elif active_broker:
-                        _cdm_brokers.append(("platform", active_broker))
-
-                    _cdm_summary = self.continuous_dust_monitor.maybe_sweep(
-                        brokers=_cdm_brokers if _cdm_brokers else None
-                    )
-                    if _cdm_summary is not None:
-                        logger.info(
-                            f"🌀 Dust sweep [{_cdm_summary.sweep_id}]: "
-                            f"found={_cdm_summary.dust_found} "
-                            f"closed={_cdm_summary.dust_closed} "
-                            f"recovered=${_cdm_summary.total_usd_recovered:.4f}"
-                        )
-                except Exception as _cdm_run_err:
-                    logger.warning(f"⚠️  Continuous dust monitor sweep failed: {_cdm_run_err}")
+            # 🌀 CONTINUOUS DUST MONITOR — DISABLED at root level
+            # start_continuous_dust_sweep() has been killed entirely (self.continuous_dust_monitor = None).
 
             # ── AUTO-CLEANUP ENGINE: startup-only dust liquidation ───────────────
             # Runs only on startup (cycle 0) to boot with a clean slate.
@@ -7196,41 +7154,9 @@ class TradingStrategy:
                             # 2. Small position size (anything under $1 should be exited)
                             # 3. RSI overbought/oversold (take profits or cut losses)
 
-                            # AUTO-EXIT small positions (under $1) - these are likely losers
-                            if position_value < MIN_POSITION_VALUE:
-                                logger.info(f"   🔴 SMALL POSITION AUTO-EXIT: {symbol} (${position_value:.2f} < ${MIN_POSITION_VALUE})")
-                                # HARD IGNORE: Permanently blacklist sub-$1 positions.
-                                # MIN_POSITION_VALUE is $2, so positions in the $1–$2 range are
-                                # auto-exited but NOT blacklisted.  Only truly sub-$1 amounts
-                                # (pure dust) are permanently excluded from future trading.
-                                if position_value < 1.0:
-                                    logger.warning(f"   🚫 HARD IGNORE: Blacklisting {symbol} (${position_value:.4f} < $1.00) — permanently excluded")
-                                    # Fast in-memory set (used every cycle)
-                                    self._dust_blacklist.add(symbol)
-                                    # Persistent blacklist (survives restarts)
-                                    if hasattr(self, 'dust_blacklist') and self.dust_blacklist:
-                                        self.dust_blacklist.add_to_blacklist(
-                                            symbol=symbol,
-                                            usd_value=position_value,
-                                            reason=f"sub-$1 position (${position_value:.4f}) — permanently ignored"
-                                        )
-                                    # Also sync to DustSweeperV2
-                                    if hasattr(self, 'dust_sweeper_v2') and self.dust_sweeper_v2:
-                                        self.dust_sweeper_v2.add_to_blacklist(
-                                            symbol=symbol,
-                                            usd_value=position_value,
-                                            reason=f"sub-$1 detected in position loop (${position_value:.4f})"
-                                        )
-                                    # Do NOT queue for sell — exchange will reject it anyway
-                                    continue
-                                positions_to_exit.append({
-                                    'symbol': symbol,
-                                    'quantity': quantity,
-                                    'reason': f'Small position cleanup (${position_value:.2f})',
-                                    'broker': position_broker,
-                                    'broker_label': broker_label
-                                })
-                                continue
+                            # DUST DETECTION DISABLED AT ROOT — is_dust = False
+                            # Auto-exit for small positions is permanently disabled.
+                            # Positions under the dust threshold are left untouched.
 
                             # PROFIT-BASED EXIT LOGIC (NEW!)
                             # Check if we have entry price tracked for this position
@@ -7598,8 +7524,10 @@ class TradingStrategy:
                                         # This should NEVER be reached in normal operation
                                         # Only triggers at -5.0% to catch extreme edge cases
                                         if pnl_percent <= catastrophic_stop:
-                                            # PROTECTIVE SELL DUST GATE: skip if position is dust (< exchange minimum)
-                                            if position_value < EXCHANGE_MINIMUM_ORDER_USD:
+                                            # PROTECTIVE SELL DUST GATE — DISABLED: is_dust = False
+                                            # Previously blocked sells below EXCHANGE_MINIMUM_ORDER_USD.
+                                            # Now uses hard $5 floor (handled by execution engine).
+                                            if False:
                                                 logger.info(f"🚫 SKIPPING PROTECTIVE SELL — {symbol} is dust (${position_value:.4f})")
                                                 continue
                                             logger.warning(f"   🚨 CATASTROPHIC PROTECTIVE FAILSAFE TRIGGERED: {symbol} at {pnl_percent*100:.2f}% (threshold: {catastrophic_stop*100:.1f}%)")

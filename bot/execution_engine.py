@@ -1072,6 +1072,16 @@ class ExecutionEngine:
 
             position = self.positions[symbol]
 
+            # DUST GATE: Do not attempt to sell positions worth less than $5 USD.
+            # Prevents dust from entering the execution engine entirely.
+            _position_value_usd = position['position_size'] * position['remaining_size']
+            if _position_value_usd < 5:
+                logger.info(
+                    f"🚫 DUST GATE: Skipping sell for {symbol} "
+                    f"(${_position_value_usd:.4f} < $5.00) — DO NOTHING"
+                )
+                return False
+
             # Calculate exit size
             exit_size = position['position_size'] * position['remaining_size'] * size_pct
 

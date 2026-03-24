@@ -2195,10 +2195,7 @@ class KrakenBrokerAdapter(BrokerInterface):
 
                         usd_value = balance_val * current_price if current_price > 0 else 0
 
-                        # ✅ FIX (MANDATORY): DUST EXCLUSION - If usd_value < DUST_THRESHOLD_USD, IGNORE COMPLETELY
-                        if is_dust_position and is_dust_position(usd_value):
-                            logger.info(f"   🗑️  Excluding dust position: {symbol} (${usd_value:.4f} < ${DUST_THRESHOLD_USD})")
-                            continue
+                        # DUST DETECTION DISABLED AT ROOT — all positions included regardless of size.
 
                         # ✅ FIX: If price is zero, skip position (cannot value it)
                         if current_price <= 0:
@@ -2400,13 +2397,8 @@ class KrakenBrokerAdapter(BrokerInterface):
         for pos in positions:
             usd_value = pos.get('usd_value', 0.0)
 
-            # Use is_dust_position from kraken_adapter if available
-            if is_dust_position and is_dust_position(usd_value):
-                dust_count += 1
-                symbol = pos.get('symbol', 'UNKNOWN')
-                logger.debug(f"   🗑️  Filtering dust position: {symbol} (${usd_value:.4f})")
-            else:
-                filtered.append(pos)
+            # DUST DETECTION DISABLED AT ROOT — all positions included regardless of size.
+            filtered.append(pos)
 
         if dust_count > 0:
             logger.info(f"🧹 Filtered {dust_count} dust positions (< ${DUST_THRESHOLD_USD:.2f})")
