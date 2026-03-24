@@ -22,7 +22,7 @@ logger = logging.getLogger("nija.min_notional_gate")
 class NotionalGateConfig:
     """Configuration for minimum notional gate"""
     enabled: bool = True
-    min_entry_notional_usd: float = 25.0  # $25 minimum entry size
+    min_entry_notional_usd: float = 50.0  # $50 minimum entry size (raised from $25)
     allow_stop_loss_bypass: bool = True  # Allow stop losses to bypass the gate
     
     # Broker-specific overrides (optional)
@@ -32,11 +32,11 @@ class NotionalGateConfig:
         """Initialize mutable defaults"""
         if self.broker_specific_limits is None:
             self.broker_specific_limits = {
-                'coinbase': 25.0,   # $25 minimum (profitability threshold)
-                'kraken': 10.0,     # $10 minimum (lower fees)
-                'binance': 10.0,    # $10 minimum (lower fees)
-                'okx': 10.0,        # $10 minimum (lower fees)
-                'alpaca': 1.0,      # $1 minimum (stocks, no crypto fees)
+                'coinbase': 50.0,   # $50 minimum (raised for stronger dust prevention)
+                'kraken': 25.0,     # $25 minimum (raised from $10)
+                'binance': 25.0,    # $25 minimum (raised from $10)
+                'okx': 25.0,        # $25 minimum (raised from $10)
+                'alpaca': 5.0,      # $5 minimum (raised from $1)
             }
     
     def get_min_notional_for_broker(self, broker_name: str) -> float:
