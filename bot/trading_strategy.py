@@ -1438,6 +1438,13 @@ DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = har
 DUST_POSITION_USD = 5.0   # Cleanup threshold for existing positions (< $5 = dust — SMART FIX: only count positions > $5)
 EXCHANGE_MINIMUM_ORDER_USD = 1.00  # Hard floor: exchange rejects orders below this USD value
 
+# ── MINIMUM ENTRY SIZE GATE ──────────────────────────────────────────────────
+# Any new entry whose computed order_size_usd falls below this value is
+# rejected *before* any downstream sizing logic runs.  This prevents dust
+# positions from being opened and ensures every trade covers its fees.
+# Set to the same value as MIN_POSITION_USD ($10) — raise if needed.
+EXCHANGE_MIN_ORDER_SIZE: float = 10.0  # USD — absolute minimum for any new entry order
+
 # "Tradable Positions Only" filter — minimum USD notional for a position to be
 # counted as open (affects position-cap checks, first-trade gate, etc.).
 # Positions below this size are dust: they cannot cover exchange fees and must
@@ -9782,6 +9789,21 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
+
+                                # ── MINIMUM ENTRY SIZE GATE (LAYER 0) ───────────────────
+                                # Reject this entry immediately if the computed order size
+                                # is below EXCHANGE_MIN_ORDER_SIZE.  This check runs before
+                                # any downstream sizing adjustments so the gate can never be
+                                # silently bypassed by multipliers that inflate a sub-minimum
+                                # size to just above the floor.
+                                if position_size < EXCHANGE_MIN_ORDER_SIZE:
+                                    filter_stats['position_too_small'] += 1
+                                    logger.info(
+                                        f"   🚫 MINIMUM ENTRY SIZE GATE: {symbol} rejected — "
+                                        f"order_size_usd ${position_size:.2f} < "
+                                        f"EXCHANGE_MIN_ORDER_SIZE ${EXCHANGE_MIN_ORDER_SIZE:.2f}"
+                                    )
+                                    continue
 
                                 # ═══════════════════════════════════════════════════════
                                 # GLOBAL CAPITAL BRAIN — UNIFIED DECISION HIERARCHY
