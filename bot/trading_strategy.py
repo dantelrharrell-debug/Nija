@@ -839,6 +839,22 @@ except ImportError:
         get_dynamic_sniper_thresholds = None  # type: ignore
         logger.warning("⚠️ Dynamic Sniper Thresholds not available — static sniper gates in use")
 
+# ── Exchange Order Validator — step-size normalisation + PERMANENT_DUST_UNSELLABLE ──
+try:
+    from exchange_order_validator import get_exchange_order_validator, validate_order as eov_validate_order
+    EXCHANGE_ORDER_VALIDATOR_AVAILABLE = True
+    logger.info("✅ Exchange Order Validator loaded — PERMANENT_DUST_UNSELLABLE filtering active")
+except ImportError:
+    try:
+        from bot.exchange_order_validator import get_exchange_order_validator, validate_order as eov_validate_order
+        EXCHANGE_ORDER_VALIDATOR_AVAILABLE = True
+        logger.info("✅ Exchange Order Validator loaded — PERMANENT_DUST_UNSELLABLE filtering active")
+    except ImportError:
+        EXCHANGE_ORDER_VALIDATOR_AVAILABLE = False
+        get_exchange_order_validator = None  # type: ignore
+        eov_validate_order = None  # type: ignore
+        logger.warning("⚠️ Exchange Order Validator not available")
+
 # ── AI Trade Quality Filter — ML-powered scalp quality gate ──────────────────
 try:
     from ai_trade_quality_filter import get_ai_trade_quality_filter, TradeFeatures as AITradeFeatures
@@ -6565,6 +6581,35 @@ class TradingStrategy:
                     logger.info(f"   🗑️  Filtered {blacklisted_count} blacklisted position(s) from count (permanent dust exclusion)")
                 
                 current_positions = non_blacklisted_positions
+
+            # ── PERMANENT_DUST_UNSELLABLE filter (exchange_order_validator) ──────
+            # Symbols flagged PERMANENT_DUST_UNSELLABLE are below the exchange's
+            # minimum tradable value even after step-size normalisation.  They can
+            # never be sold and must be excluded from ALL systems permanently — no
+            # retry every cycle.
+            if current_positions and EXCHANGE_ORDER_VALIDATOR_AVAILABLE and get_exchange_order_validator is not None:
+                try:
+                    _eov_inst = get_exchange_order_validator()
+                    _perm_unsellable_filtered = []
+                    _perm_count = 0
+                    for _pos in current_positions:
+                        _sym = _pos.get('symbol')
+                        if _sym and _eov_inst.is_permanently_unsellable(_sym):
+                            _perm_count += 1
+                            logger.debug(
+                                "   🚫 Excluding PERMANENT_DUST_UNSELLABLE position: %s", _sym
+                            )
+                            continue
+                        _perm_unsellable_filtered.append(_pos)
+                    if _perm_count > 0:
+                        logger.info(
+                            "   🚫 Filtered %d PERMANENT_DUST_UNSELLABLE position(s) "
+                            "from counters (below exchange minimum — excluded permanently)",
+                            _perm_count,
+                        )
+                    current_positions = _perm_unsellable_filtered
+                except Exception as _eov_filter_err:
+                    logger.debug("   ⚠️ PERMANENT_DUST_UNSELLABLE filter error: %s", _eov_filter_err)
 
             # ── "TRADABLE POSITIONS ONLY" SIZE FILTER ────────────────────────
             # Remove any remaining positions whose USD notional is below the
