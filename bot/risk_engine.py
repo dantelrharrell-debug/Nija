@@ -151,6 +151,55 @@ except ImportError:
         get_asset_exposure_correlation_gate = None  # type: ignore
         logger.warning("AssetExposureCorrelationGate not available — symbol-level correlation gate disabled")
 
+try:
+    from market_regime_engine import get_market_regime_engine, Regime
+    _MRE_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.market_regime_engine import get_market_regime_engine, Regime
+        _MRE_AVAILABLE = True
+    except ImportError:
+        _MRE_AVAILABLE = False
+        get_market_regime_engine = None  # type: ignore
+        Regime = None  # type: ignore
+        logger.warning("MarketRegimeEngine not available — regime multiplier will be neutral")
+
+try:
+    from auto_tuning_ai_layer import get_auto_tuning_ai_layer
+    _ATA_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.auto_tuning_ai_layer import get_auto_tuning_ai_layer
+        _ATA_AVAILABLE = True
+    except ImportError:
+        _ATA_AVAILABLE = False
+        get_auto_tuning_ai_layer = None  # type: ignore
+        logger.warning("AutoTuningAILayer not available — win-rate multiplier will be neutral")
+
+
+# ---------------------------------------------------------------------------
+# Dynamic sizing constants
+# ---------------------------------------------------------------------------
+
+# Market volume below which the symbol is classified as DEAD (no entries)
+_DEAD_MARKET_VOLUME_USD: float = 50_000.0
+
+# Drawdown thresholds (fractions, not percentages)
+_DD_BLOCK_PCT: float = 0.20      # ≥ 20 % drawdown from peak  → block all entries
+_DD_TIGHTEN_PCT: float = 0.05    # ≥  5 % drawdown from peak  → start scaling down
+
+# Confidence → size multiplier bounds
+_CONF_FLOOR: float = 0.40        # multiplier when confidence = 0.0
+_CONF_CEIL: float = 1.30         # multiplier when confidence = 1.0
+
+# Regime → size multiplier (BULL = TRENDING, CHOP = RANGING, CRASH = VOLATILE)
+_REGIME_SIZE_MULT: Dict[str, float] = {
+    "BULL":    1.00,   # TRENDING  — healthy market, no penalty
+    "CHOP":    0.60,   # RANGING   — reduce frequency / size
+    "CRASH":   0.25,   # VOLATILE  — defensive; severe size reduction
+    "UNKNOWN": 1.00,   # Insufficient data — neutral
+}
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -215,6 +264,280 @@ class TradeGateResult:
 
 
 # ---------------------------------------------------------------------------
+# Dynamic position sizing
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PositionSizeResult:
+    """
+    Rich output from :class:`DynamicPositionSizer`.
+
+    Attributes
+    ----------
+    final_size_usd:
+        Dollar size after all multipliers.  Zero when ``blocked`` is ``True``.
+    combined_multiplier:
+        Product of all four factors (confidence × win_rate × regime × drawdown).
+    blocked:
+        ``True`` when the trade must not proceed (DEAD market or excess drawdown).
+    block_reason:
+        Human-readable reason when ``blocked`` is ``True``.
+    """
+    final_size_usd: float
+    base_risk_usd: float
+    confidence_multiplier: float
+    win_rate_multiplier: float
+    regime_multiplier: float
+    drawdown_factor: float
+    combined_multiplier: float
+    regime: str
+    win_rate: float
+    drawdown_pct: float
+    blocked: bool = False
+    block_reason: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "final_size_usd": round(self.final_size_usd, 2),
+            "base_risk_usd": round(self.base_risk_usd, 2),
+            "multipliers": {
+                "confidence": round(self.confidence_multiplier, 4),
+                "win_rate": round(self.win_rate_multiplier, 4),
+                "regime": round(self.regime_multiplier, 4),
+                "drawdown": round(self.drawdown_factor, 4),
+                "combined": round(self.combined_multiplier, 4),
+            },
+            "context": {
+                "regime": self.regime,
+                "win_rate_pct": round(self.win_rate * 100, 1),
+                "drawdown_pct": round(self.drawdown_pct * 100, 2),
+            },
+            "blocked": self.blocked,
+            "block_reason": self.block_reason,
+        }
+
+
+class DynamicPositionSizer:
+    """
+    Implements the core adaptive sizing formula::
+
+        risk_per_trade = base_risk
+                         × confidence_multiplier   # signal quality
+                         × win_rate_multiplier     # recent performance
+                         × regime_multiplier       # market regime
+                         × drawdown_factor         # account health
+
+    Multiplier semantics
+    --------------------
+    ``confidence_multiplier``
+        Piecewise-linear mapping of the signal confidence score [0, 1] to
+        [0.40, 1.30].  Low-conviction signals are penalised; strong signals
+        are rewarded.
+
+    ``win_rate_multiplier``
+        Pulled from :mod:`bot.auto_tuning_ai_layer`'s ``position_size_multiplier``
+        which spans [0.60, 1.30].  Losing streaks shrink size automatically;
+        winning streaks expand it.
+
+    ``regime_multiplier``
+        Sourced from :mod:`bot.market_regime_engine`:
+
+        * TRENDING (BULL)  → 1.00  (healthy — no penalty)
+        * RANGING  (CHOP)  → 0.60  (tighten — reduce frequency / size)
+        * VOLATILE (CRASH) → 0.25  (defensive — severe reduction)
+        * DEAD             → 0.00  (blocked — no entries allowed)
+
+    ``drawdown_factor``
+        Scales down as the account draws from its peak:
+
+        * 0 – 5 %   → 1.00
+        * 5 – 20 %  → linear decay to 0.30
+        * ≥ 20 %    → BLOCKED (entries halted)
+    """
+
+    def __init__(
+        self,
+        dead_volume_usd: float = _DEAD_MARKET_VOLUME_USD,
+        dd_block_pct: float = _DD_BLOCK_PCT,
+        dd_tighten_pct: float = _DD_TIGHTEN_PCT,
+    ) -> None:
+        self._dead_vol = dead_volume_usd
+        self._dd_block = dd_block_pct
+        self._dd_tighten = dd_tighten_pct
+        self._rme = get_market_regime_engine() if _MRE_AVAILABLE else None
+        self._ata = get_auto_tuning_ai_layer() if _ATA_AVAILABLE else None
+        self._lock = threading.Lock()
+        logger.info(
+            "DynamicPositionSizer ready | dead_vol=$%,.0f | dd_block=%.0f%% | dd_tighten=%.0f%%",
+            dead_volume_usd, dd_block_pct * 100, dd_tighten_pct * 100,
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def calculate(
+        self,
+        base_risk_usd: float,
+        confidence: float,
+        current_balance: float,
+        peak_balance: float,
+        daily_volume_usd: float = 0.0,
+    ) -> PositionSizeResult:
+        """
+        Apply all four multipliers and return a :class:`PositionSizeResult`.
+
+        Parameters
+        ----------
+        base_risk_usd:
+            Raw dollar risk before any adjustments (e.g. 1 % of balance).
+        confidence:
+            Signal confidence in [0, 1].
+        current_balance:
+            Latest account balance in USD.
+        peak_balance:
+            All-time high balance (used for drawdown calculation).
+        daily_volume_usd:
+            24-hour market volume for the symbol.  Pass 0.0 to skip DEAD
+            market detection.
+        """
+        with self._lock:
+            # ── 1. Regime multiplier + DEAD detection ──────────────────
+            regime_str = "UNKNOWN"
+            regime_mult = 1.0
+            if self._rme is not None:
+                regime_str = self._rme.current_regime.value
+                regime_mult = _REGIME_SIZE_MULT.get(regime_str, 1.0)
+
+            if (
+                daily_volume_usd > 0
+                and daily_volume_usd < self._dead_vol
+                and regime_str in ("UNKNOWN", "CHOP")
+            ):
+                dd_pct = self._calc_dd(current_balance, peak_balance)
+                return PositionSizeResult(
+                    final_size_usd=0.0,
+                    base_risk_usd=base_risk_usd,
+                    confidence_multiplier=0.0,
+                    win_rate_multiplier=0.0,
+                    regime_multiplier=0.0,
+                    drawdown_factor=0.0,
+                    combined_multiplier=0.0,
+                    regime="DEAD",
+                    win_rate=self._get_win_rate(),
+                    drawdown_pct=dd_pct,
+                    blocked=True,
+                    block_reason=(
+                        f"DEAD market — daily volume ${daily_volume_usd:,.0f} "
+                        f"below threshold ${self._dead_vol:,.0f}"
+                    ),
+                )
+
+            # ── 2. Drawdown factor ─────────────────────────────────────
+            dd_pct = self._calc_dd(current_balance, peak_balance)
+            if dd_pct >= self._dd_block:
+                return PositionSizeResult(
+                    final_size_usd=0.0,
+                    base_risk_usd=base_risk_usd,
+                    confidence_multiplier=0.0,
+                    win_rate_multiplier=0.0,
+                    regime_multiplier=regime_mult,
+                    drawdown_factor=0.0,
+                    combined_multiplier=0.0,
+                    regime=regime_str,
+                    win_rate=self._get_win_rate(),
+                    drawdown_pct=dd_pct,
+                    blocked=True,
+                    block_reason=(
+                        f"Drawdown {dd_pct:.1%} ≥ max-block threshold {self._dd_block:.0%}"
+                    ),
+                )
+            dd_factor = self._calc_dd_factor(dd_pct)
+
+            # ── 3. Confidence multiplier ───────────────────────────────
+            conf_mult = self._calc_conf_mult(confidence)
+
+            # ── 4. Win-rate multiplier (from AutoTuningAILayer) ────────
+            wr_mult = 1.0
+            win_rate = 0.0
+            if self._ata is not None:
+                try:
+                    params = self._ata.get_tuned_params()
+                    wr_mult = params.position_size_multiplier
+                    win_rate = params.win_rate
+                except Exception:
+                    pass
+
+            # ── Formula: combine all four factors ──────────────────────
+            combined = conf_mult * wr_mult * regime_mult * dd_factor
+            final_usd = max(0.0, base_risk_usd * combined)
+
+            logger.debug(
+                "DynamicSizer | base=$%.2f conf=%.2f(×%.2f) wr=%.1f%%(×%.2f) "
+                "regime=%s(×%.2f) dd=%.1f%%(×%.2f) → final=$%.2f",
+                base_risk_usd, confidence, conf_mult,
+                win_rate * 100, wr_mult,
+                regime_str, regime_mult,
+                dd_pct * 100, dd_factor,
+                final_usd,
+            )
+
+            return PositionSizeResult(
+                final_size_usd=round(final_usd, 2),
+                base_risk_usd=base_risk_usd,
+                confidence_multiplier=round(conf_mult, 4),
+                win_rate_multiplier=round(wr_mult, 4),
+                regime_multiplier=round(regime_mult, 4),
+                drawdown_factor=round(dd_factor, 4),
+                combined_multiplier=round(combined, 4),
+                regime=regime_str,
+                win_rate=round(win_rate, 4),
+                drawdown_pct=round(dd_pct, 4),
+            )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _calc_conf_mult(confidence: float) -> float:
+        """
+        Piecewise-linear confidence → multiplier mapping:
+
+            confidence  │  multiplier
+            ────────────┼────────────
+            0.00        │  0.40
+            0.50        │  1.00
+            1.00        │  1.30
+        """
+        c = max(0.0, min(1.0, confidence))
+        if c <= 0.50:
+            return _CONF_FLOOR + (1.0 - _CONF_FLOOR) * (c / 0.50)
+        return 1.0 + (_CONF_CEIL - 1.0) * ((c - 0.50) / 0.50)
+
+    def _calc_dd_factor(self, dd_pct: float) -> float:
+        """Linear decay from 1.0 at ``dd_tighten`` to 0.30 at ``dd_block``."""
+        if dd_pct <= self._dd_tighten:
+            return 1.0
+        slope = (1.0 - 0.30) / max(self._dd_block - self._dd_tighten, 1e-9)
+        return max(0.30, 1.0 - slope * (dd_pct - self._dd_tighten))
+
+    @staticmethod
+    def _calc_dd(current: float, peak: float) -> float:
+        if peak <= 0 or current >= peak:
+            return 0.0
+        return (peak - current) / peak
+
+    def _get_win_rate(self) -> float:
+        if self._ata is None:
+            return 0.0
+        try:
+            return self._ata.get_tuned_params().win_rate
+        except Exception:
+            return 0.0
+
+
+# ---------------------------------------------------------------------------
 # Core engine
 # ---------------------------------------------------------------------------
 
@@ -272,6 +595,9 @@ class RiskEngine:
         self._peak_balance: float = 0.0
         self._total_exposure_usd: float = 0.0
 
+        # Dynamic position sizer (regime + confidence + win-rate + drawdown)
+        self._sizer = DynamicPositionSizer()
+
         logger.info(
             "RiskEngine initialised | floor=$%.2f | max_pos=%.0f%% | max_exp=%.0f%%",
             self._floor.floor_usd,
@@ -293,6 +619,7 @@ class RiskEngine:
         direction: str = "long",
         daily_volume_usd: Optional[float] = None,
         strategy: Optional[str] = None,
+        confidence: float = 1.0,
     ) -> TradeGateResult:
         """
         Evaluate all capital-protection checks for a proposed trade.
@@ -321,6 +648,10 @@ class RiskEngine:
             When provided, the asset-exposure correlation gate checks whether
             the proposed symbol is highly correlated with symbols already held
             by peer strategies.  If ``None``, the correlation gate is skipped.
+        confidence:
+            Signal confidence score in [0, 1].  Fed into the dynamic position
+            sizer so high-conviction trades are sized larger and low-conviction
+            trades are penalised.  Defaults to 1.0 (neutral — no effect).
 
         Returns
         -------
@@ -508,6 +839,41 @@ class RiskEngine:
                 except Exception as exc:
                     logger.debug("AssetExposureCorrelationGate error (non-fatal): %s", exc)
 
+            # ── 9. Dynamic position sizer ─────────────────────────────
+            # Formula: size = adjusted × conf_mult × wr_mult × regime_mult × dd_factor
+            try:
+                size_result = self._sizer.calculate(
+                    base_risk_usd=adjusted,
+                    confidence=confidence,
+                    current_balance=self._current_balance or portfolio_value,
+                    peak_balance=self._peak_balance or portfolio_value,
+                    daily_volume_usd=daily_volume_usd or 0.0,
+                )
+                if size_result.blocked:
+                    return TradeGateResult(
+                        approved=False,
+                        adjusted_size_usd=0.0,
+                        size_multiplier=0.0,
+                        reason=f"Dynamic sizer blocked: {size_result.block_reason}",
+                        risk_level=risk_level_str,
+                        checks_passed=checks_passed,
+                        checks_failed=checks_failed + [f"dynamic_sizer({size_result.block_reason})"],
+                    )
+                if size_result.final_size_usd < adjusted:
+                    adjusted = size_result.final_size_usd
+                    checks_failed.append(
+                        f"dynamic_sizer(×{size_result.combined_multiplier:.3f} "
+                        f"conf={confidence:.2f} wr={size_result.win_rate:.0%} "
+                        f"regime={size_result.regime} dd={size_result.drawdown_pct:.1%})"
+                    )
+                else:
+                    checks_passed.append(
+                        f"dynamic_sizer(regime={size_result.regime} "
+                        f"wr={size_result.win_rate:.0%})"
+                    )
+            except Exception as exc:
+                logger.debug("DynamicPositionSizer error (non-fatal): %s", exc)
+
             # ── Final decision ───────────────────────────────────────────
             adjusted = max(0.0, adjusted)
             multiplier = (adjusted / raw_size_usd) if raw_size_usd > 0 else 0.0
@@ -581,6 +947,37 @@ class RiskEngine:
         """Forward API success count to GlobalRiskController."""
         if self._grc is not None:
             self._grc.record_api_success()
+
+    def calculate_dynamic_size(
+        self,
+        base_risk_usd: float,
+        confidence: float = 1.0,
+        daily_volume_usd: float = 0.0,
+    ) -> PositionSizeResult:
+        """
+        Convenience wrapper around :class:`DynamicPositionSizer` that uses the
+        balance state already tracked by this engine.
+
+        Parameters
+        ----------
+        base_risk_usd:
+            Raw dollar risk before adjustments (e.g. 1 % of current balance).
+        confidence:
+            Signal confidence in [0, 1].
+        daily_volume_usd:
+            24-hour market volume in USD.  Pass 0.0 to skip DEAD detection.
+
+        Returns
+        -------
+        PositionSizeResult
+        """
+        return self._sizer.calculate(
+            base_risk_usd=base_risk_usd,
+            confidence=confidence,
+            current_balance=self._current_balance,
+            peak_balance=self._peak_balance,
+            daily_volume_usd=daily_volume_usd,
+        )
 
     # ------------------------------------------------------------------
     # Introspection
@@ -657,6 +1054,8 @@ def get_risk_engine(
 __all__ = [
     "CapitalFloor",
     "TradeGateResult",
+    "PositionSizeResult",
+    "DynamicPositionSizer",
     "RiskEngine",
     "get_risk_engine",
 ]
