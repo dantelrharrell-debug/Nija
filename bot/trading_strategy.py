@@ -763,6 +763,21 @@ except ImportError:
         get_auto_dust_sweeper = None  # type: ignore
         logger.warning("⚠️ Auto Dust Sweeper not available")
 
+# ── Capital Tier Hierarchy — balance-based position cap scaling ───────────────
+try:
+    from capital_tier_hierarchy import get_max_positions_for_balance as _tier_get_max_positions
+    CAPITAL_TIER_HIERARCHY_AVAILABLE = True
+    logger.info("✅ Capital Tier Hierarchy loaded — position cap scales with balance")
+except ImportError:
+    try:
+        from bot.capital_tier_hierarchy import get_max_positions_for_balance as _tier_get_max_positions
+        CAPITAL_TIER_HIERARCHY_AVAILABLE = True
+        logger.info("✅ Capital Tier Hierarchy loaded (bot.*) — position cap scales with balance")
+    except ImportError:
+        CAPITAL_TIER_HIERARCHY_AVAILABLE = False
+        _tier_get_max_positions = None  # type: ignore
+        logger.warning("⚠️ Capital Tier Hierarchy not available — using fallback position cap ladder")
+
 # ── Profit Priority Cleanup — close losers first, preserve winners ─────────────
 try:
     from profit_priority_cleanup import get_profit_priority_cleanup
@@ -1316,14 +1331,18 @@ MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each c
 # positions simultaneously.  Lower values = fewer but larger, more meaningful
 # trades.  Balance-aware sub-limits are enforced via
 # get_balance_based_max_positions() below.
-MAX_TOTAL_POSITIONS = 2   # HARD GLOBAL CAP: maximum concurrent open positions
+MAX_TOTAL_POSITIONS = 10  # HARD GLOBAL CAP: maximum concurrent open positions
+                          # Raised from 2 → 10 so tier-hierarchy scaling can work properly.
+                          # Actual runtime cap is always min(tier_cap, MAX_POSITIONS_ALLOWED)
+                          # via get_balance_based_max_positions().
 MAX_SECTOR_ALLOCATION = 0.4  # 40% of total capital — cap per sector to prevent concentration risk
 
 # Balance thresholds for the per-account position cap.
-# All balance tiers are capped at MAX_TOTAL_POSITIONS = 2 (dual-trade mode).
-# These thresholds are preserved for future reactivation if the position cap is raised.
-BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → max 1 position (reserved for future scaling)
-BALANCE_THRESHOLD_SMALL = 500.0   # $150–$500 range → max 2 positions; above $500 → MAX_TOTAL_POSITIONS
+# Per-balance sub-limits are now enforced via CapitalTierHierarchy inside
+# get_balance_based_max_positions().  These legacy constants are kept for
+# backward-compatibility but are no longer the primary scaling mechanism.
+BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → 1 position (micro compounding mode)
+BALANCE_THRESHOLD_SMALL = 500.0   # Preserved for fallback / future use
 
 # Minimum USD notional for any NEW entry order.  Orders below this value are
 # rejected at source to prevent dust accumulation and unproductive fee spend.
@@ -1333,7 +1352,11 @@ MIN_POSITION_USD = 10.0   # Minimum entry size ($10 ensures fee efficiency and m
 # current market value falls below this level is marked for cleanup:
 #   • sold immediately if the exchange permits (notional >= exchange minimum)
 #   • or added to the permanent dust blacklist so it is ignored forever
-DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = dust)
+# NOTE: This is intentionally lower than the AutoDustSweeper threshold ($5).
+#   DUST_POSITION_USD ($2)    — hard minimum; exchange may reject orders below this
+#   AutoDustSweeper ($5)      — recycles positions worth $2-$5 into BTC/ETH via
+#                               the dust-recycler trigger (total dust ≥ $5 across all symbols)
+DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = hard dust)
 EXCHANGE_MINIMUM_ORDER_USD = 1.00  # Hard floor: exchange rejects orders below this USD value
 
 # "Tradable Positions Only" filter — minimum USD notional for a position to be
@@ -1613,14 +1636,18 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.0   # Use current price as entry price (neut
 # This ensures better trading outcomes and quality over quantity
 # STRONG RECOMMENDATION: Fund account to $50+ for optimal trading outcomes
 # Support override via MAX_CONCURRENT_POSITIONS environment variable for custom configurations
-# Hard cap aligned with MAX_TOTAL_POSITIONS = 2 (global limit, dual-trade mode).
+# Hard cap aligned with MAX_TOTAL_POSITIONS = 10 (global limit, tier-scaled).
 # Per-balance sub-limits are enforced at runtime via get_balance_based_max_positions().
-HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (2)
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', str(MAX_CONCURRENT_TRADES))
+HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (10)
+# Default to MAX_TOTAL_POSITIONS so the tier hierarchy can scale freely;
+# MAX_CONCURRENT_TRADES from micro_capital_config may be lower (1) for micro accounts,
+# but we don't want it to permanently cap all balance tiers.  The env var
+# MAX_CONCURRENT_POSITIONS still lets operators override this at deploy time.
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', str(MAX_TOTAL_POSITIONS))
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
-    MAX_POSITIONS_ALLOWED = MAX_CONCURRENT_TRADES  # Default: micro_capital_config value (4)
+    MAX_POSITIONS_ALLOWED = MAX_TOTAL_POSITIONS
 # Enforce hard ceiling – never exceed MAX_TOTAL_POSITIONS regardless of env override
 if MAX_POSITIONS_ALLOWED > HARD_MAX_POSITIONS:
     MAX_POSITIONS_ALLOWED = HARD_MAX_POSITIONS
@@ -1780,14 +1807,20 @@ def get_balance_based_max_positions(balance: float) -> int:
     Return the maximum number of concurrent open positions allowed for the
     given account balance.
 
-    Per-account position cap (dual-trade mode):
-      • balance  < BALANCE_THRESHOLD_MICRO ($150)                     → 1 position
-      • BALANCE_THRESHOLD_MICRO ≤ balance < BALANCE_THRESHOLD_SMALL   → 2 positions
-      • otherwise                                                      → MAX_TOTAL_POSITIONS (= 2)
+    Uses the CapitalTierHierarchy for smooth, tier-based scaling so the
+    position cap grows proportionally with account size:
 
-    The returned value is always capped at MAX_TOTAL_POSITIONS so it is safe
-    to use as a direct replacement for the global MAX_POSITIONS_ALLOWED
-    whenever a live balance is available.
+      STARTER  ($50–99):    max 1–2 positions
+      SAVER    ($100–249):  max 2–3 positions
+      INVESTOR ($250–999):  max 3–5 positions
+      INCOME   ($1k–5k):    max 5–7 positions
+      LIVABLE  ($5k–25k):   max 7–10 positions
+      BALLER   ($25k+):     max 10–15 positions (capped at MAX_TOTAL_POSITIONS = 10)
+
+    Micro-cap accounts (balance < BALANCE_THRESHOLD_MICRO = $150) are pinned
+    to 1 position so the compounding engine can concentrate capital.
+
+    The returned value is always capped at MAX_TOTAL_POSITIONS.
 
     Args:
         balance: Current account balance in USD (≥ 0).
@@ -1803,12 +1836,23 @@ def get_balance_based_max_positions(balance: float) -> int:
         )
         balance = 0.0
 
+    # Micro-cap: pin to 1 position (maximum capital concentration for compounding)
     if balance < BALANCE_THRESHOLD_MICRO:
-        cap = 1
-    elif balance < BALANCE_THRESHOLD_SMALL:
-        cap = 2
+        return 1
+
+    # Tier-hierarchy scaling for larger balances
+    if CAPITAL_TIER_HIERARCHY_AVAILABLE and _tier_get_max_positions is not None:
+        cap = _tier_get_max_positions(balance)
     else:
-        cap = MAX_TOTAL_POSITIONS
+        # Fallback: simple ladder if capital_tier_hierarchy module unavailable
+        if balance < BALANCE_THRESHOLD_SMALL:
+            cap = 2
+        elif balance < 1000.0:
+            cap = 3
+        elif balance < 5000.0:
+            cap = 5
+        else:
+            cap = 7
 
     # Never exceed the global hard cap
     return min(cap, MAX_TOTAL_POSITIONS)
@@ -6311,13 +6355,34 @@ class TradingStrategy:
                 except Exception as _ace_run_err:
                     logger.warning(f"⚠️  Auto-cleanup run failed: {_ace_run_err}")
 
-            # ── AUTO DUST SWEEPER: convert dust → single target asset ─────────
-            # Runs on startup AND every periodic cleanup cycle to ensure all
-            # sub-threshold positions are consolidated into the configured asset.
-            _ads_run = (
+            # ── AUTO DUST SWEEPER / DUST RECYCLER: convert dust → single target asset ─
+            # Runs on startup, every periodic cleanup cycle, and ALSO whenever the
+            # dust-recycler trigger fires (total dust ≥ $5 across ALL symbols).
+            # This ensures the recycler acts as soon as enough dust accumulates —
+            # it does not wait for the next scheduled cleanup cycle.
+            _ads_sweeper = (
                 hasattr(self, 'auto_dust_sweeper') and self.auto_dust_sweeper
                 and active_broker
-                and (run_startup_cleanup or run_periodic_cleanup or run_trade_based_cleanup)
+            )
+            _ads_dust_trigger = False
+            if _ads_sweeper and not (run_startup_cleanup or run_periodic_cleanup or run_trade_based_cleanup):
+                # Proactive trigger: use cached open_positions to avoid an extra API call.
+                # Only fall back to a fresh broker fetch if the cache is empty.
+                _trigger_positions = (
+                    list(self.open_positions.values())
+                    if hasattr(self, 'open_positions') and self.open_positions
+                    else []
+                )
+                if not _trigger_positions:
+                    try:
+                        _trigger_positions = active_broker.get_positions() or []
+                    except Exception:
+                        _trigger_positions = []
+                if _trigger_positions:
+                    _ads_dust_trigger = self.auto_dust_sweeper.should_trigger_now(_trigger_positions)
+            _ads_run = _ads_sweeper and (
+                run_startup_cleanup or run_periodic_cleanup
+                or run_trade_based_cleanup or _ads_dust_trigger
             )
             if _ads_run:
                 try:
@@ -6335,7 +6400,8 @@ class TradingStrategy:
                         )
                         if _ads_result.dust_sold > 0 or _ads_result.rebuy_attempted:
                             logger.warning(
-                                f"🧹 AUTO-DUST-SWEEPER: {_ads_result.summary()}"
+                                f"♻️  DUST-RECYCLER: {_ads_result.summary()}"
+                                + (" [TRIGGER: total dust ≥ $5]" if _ads_dust_trigger else "")
                             )
                 except Exception as _ads_run_err:
                     logger.warning(f"⚠️  Auto Dust Sweeper run failed: {_ads_run_err}")
