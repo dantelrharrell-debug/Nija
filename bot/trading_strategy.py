@@ -959,6 +959,21 @@ except ImportError:
         get_minimum_notional_gate = None  # type: ignore
         logger.warning("⚠️ Minimum Notional Gate not available - notional check disabled")
 
+# Import Log Rate Limiter — throttles high-frequency log noise during rapid market scans
+try:
+    from log_rate_limiter import get_log_rate_limiter
+    LOG_RATE_LIMITER_AVAILABLE = True
+    logger.info("✅ Log Rate Limiter loaded — high-frequency log throttling active")
+except ImportError:
+    try:
+        from bot.log_rate_limiter import get_log_rate_limiter
+        LOG_RATE_LIMITER_AVAILABLE = True
+        logger.info("✅ Log Rate Limiter loaded — high-frequency log throttling active")
+    except ImportError:
+        LOG_RATE_LIMITER_AVAILABLE = False
+        get_log_rate_limiter = None  # type: ignore
+        logger.warning("⚠️ Log Rate Limiter not available - log throttling disabled")
+
 # Import Capital Scaling Engine — automatically increases deposits into winning accounts
 try:
     from capital_scaling_engine import get_capital_engine
@@ -2218,6 +2233,17 @@ class TradingStrategy:
                 self.capital_concentration_engine = None
         else:
             self.capital_concentration_engine = None
+
+        # Initialize Log Rate Limiter — throttles repetitive log lines during rapid scans
+        if LOG_RATE_LIMITER_AVAILABLE and get_log_rate_limiter is not None:
+            try:
+                self._log_rl = get_log_rate_limiter(default_window_seconds=60.0)
+                logger.info("✅ Log Rate Limiter initialized — high-frequency log throttling active")
+            except Exception as _lrl_err:
+                logger.warning("⚠️ Failed to initialize Log Rate Limiter: %s", _lrl_err)
+                self._log_rl = None
+        else:
+            self._log_rl = None
 
         # Initialize Account-Level Capital Flow — connects CCE + AIAllocator
         if ACCOUNT_FLOW_AVAILABLE and get_account_level_capital_flow is not None:
@@ -5944,14 +5970,17 @@ class TradingStrategy:
                 if _gdcb_balance > 0:
                     _gdcb_decision = _gdcb.update_equity(_gdcb_balance)
                     if not _gdcb_decision.allow_new_entries:
-                        logger.warning("=" * 80)
-                        logger.warning("🛑 GLOBAL DRAWDOWN CIRCUIT BREAKER: NEW ENTRIES HALTED")
-                        logger.warning("=" * 80)
-                        logger.warning(f"   Level: {_gdcb_decision.level.value}")
-                        logger.warning(f"   Drawdown: {_gdcb_decision.drawdown_pct:.2f}%")
-                        logger.warning(f"   Reason: {_gdcb_decision.reason}")
-                        logger.warning("   Mode: Position management only (exits/stops)")
-                        logger.warning("=" * 80)
+                        # Rate-limit halt banner: at most once every 10 minutes
+                        _rl_gdcb = getattr(self, '_log_rl', None)
+                        if _rl_gdcb is None or _rl_gdcb.allow("drawdown_halt", window_seconds=600):
+                            logger.warning("=" * 80)
+                            logger.warning("🛑 GLOBAL DRAWDOWN CIRCUIT BREAKER: NEW ENTRIES HALTED")
+                            logger.warning("=" * 80)
+                            logger.warning(f"   Level: {_gdcb_decision.level.value}")
+                            logger.warning(f"   Drawdown: {_gdcb_decision.drawdown_pct:.2f}%")
+                            logger.warning(f"   Reason: {_gdcb_decision.reason}")
+                            logger.warning("   Mode: Position management only (exits/stops)")
+                            logger.warning("=" * 80)
                         user_mode = True
                     elif _gdcb_decision.drawdown_pct >= 5.0:
                         logger.warning(
@@ -9026,6 +9055,10 @@ class TradingStrategy:
                     scan_limit = len(markets_to_scan)
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
 
+                    # Grab the log-rate-limiter for the scan loop so high-frequency per-symbol
+                    # messages can be throttled to protect performance during 732-symbol scans.
+                    _scan_log_rl = getattr(self, '_log_rl', None)
+
                     # Adaptive rate limiting: track consecutive errors (429, 403, or no data)
                     # UPDATED (Jan 10, 2026): Distinguish invalid symbols from genuine errors
                     rate_limit_counter = 0
@@ -9092,11 +9125,18 @@ class TradingStrategy:
                                 _regime_entries_allowed = _prev_result.allow_new_entries
                                 _regime_size_multiplier = _prev_result.position_size_multiplier
                                 if not _regime_entries_allowed:
-                                    logger.warning(
-                                        f"   🚫 REGIME CONTROLLER (previous cycle): "
-                                        f"{_prev_result.reason} "
-                                        f"(score={_prev_result.smoothed_score:.1f})"
+                                    # Rate-limit this warning: at most once every 5 minutes to
+                                    # avoid flooding logs during extended regime-block periods.
+                                    _rl_regime_allow = (
+                                        _scan_log_rl is None
+                                        or _scan_log_rl.allow("regime_block", window_seconds=300)
                                     )
+                                    if _rl_regime_allow:
+                                        logger.warning(
+                                            f"   🚫 REGIME CONTROLLER (previous cycle): "
+                                            f"{_prev_result.reason} "
+                                            f"(score={_prev_result.smoothed_score:.1f})"
+                                        )
 
                             # Step 2: Begin a fresh snapshot for THIS cycle's observations
                             _regime_snapshot = self.regime_controller.begin_snapshot()
@@ -10851,6 +10891,46 @@ class TradingStrategy:
                                     except Exception as _bcs_err:
                                         logger.debug("Broker Capital Shifter sizing skipped for %s: %s", symbol, _bcs_err)
 
+                                # ═══════════════════════════════════════════════════════
+                                # CAPITAL CONCENTRATION ENGINE — concentrate capital into
+                                # hot accounts (win-rate > 70%) and reduce/kill weak ones
+                                # (drawdown > 10%).  Produces fewer, larger trades by
+                                # boosting the multiplier when conditions are hot and
+                                # suppressing it when the account is stressed.
+                                #
+                                #   multiplier > 1.0 → HOT  : win-rate sustained → bigger size
+                                #   multiplier = 1.0 → NORMAL: default sizing
+                                #   multiplier < 1.0 → WEAK  : drawdown stress → smaller size
+                                #   multiplier = 0.0 → KILLED: entry blocked entirely
+                                # ═══════════════════════════════════════════════════════
+                                if hasattr(self, 'capital_concentration_engine') and self.capital_concentration_engine is not None:
+                                    try:
+                                        _cce_acct_id = self._get_primary_broker_id()
+                                        _cce_mult = self.capital_concentration_engine.get_concentration_multiplier(_cce_acct_id)
+                                        if _cce_mult <= 0.0:
+                                            logger.warning(
+                                                "   ☠️  %s: CAPITAL CONCENTRATION — account KILLED "
+                                                "(drawdown ≥ kill floor); entry blocked.",
+                                                symbol,
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        if _cce_mult != 1.0:
+                                            _cce_pre = position_size
+                                            position_size *= _cce_mult
+                                            _cce_label = "🔥 HOT" if _cce_mult > 1.0 else "📉 WEAK"
+                                            logger.info(
+                                                "   🧠 %s: Capital Concentration %s (%.2f×) "
+                                                "$%.2f → $%.2f",
+                                                symbol, _cce_label, _cce_mult,
+                                                _cce_pre, position_size,
+                                            )
+                                    except Exception as _cce_size_err:
+                                        logger.debug(
+                                            "Capital Concentration Engine sizing skipped for %s: %s",
+                                            symbol, _cce_size_err,
+                                        )
+
                                 # Calculate dynamic minimum based on account balance and
                                 # brokerage-specific minimums (Option B – prevent dust at creation)
                                 broker_name = self._get_broker_name(active_broker)
@@ -10874,24 +10954,25 @@ class TradingStrategy:
                                     continue
 
                                 # ── NOTIONAL-AWARE ENTRY GATE ───────────────────────────────────
-                                # Skip trade if position_size < min_notional * 1.2 (20% safety
-                                # buffer above the broker's exchange minimum).  Prevents future
-                                # dust creation entirely — better to skip than to open a position
+                                # Skip trade if position_size < min_notional * 1.5 (50% safety
+                                # buffer above the broker's exchange minimum).  Prevents micro
+                                # entries permanently — better to skip than to open a position
                                 # that cannot survive a normal adverse move or be sold cleanly.
+                                # Buffer raised from 1.2× to 1.5× for stronger protection.
                                 if MINIMUM_NOTIONAL_GATE_AVAILABLE and get_minimum_notional_gate:
                                     try:
                                         _notional_gate = get_minimum_notional_gate()
                                         _min_notional = _notional_gate.get_minimum_for_symbol(symbol, broker_name)
-                                        _notional_threshold = _min_notional * 1.2
+                                        _notional_threshold = _min_notional * 1.5
                                         if position_size < _notional_threshold:
                                             filter_stats['position_too_small'] += 1
-                                            logger.info(f"   ❌ NOTIONAL GATE: Entry rejected for {symbol}")
+                                            logger.info(f"   🚫 NOTIONAL GATE: Micro entry rejected for {symbol}")
                                             logger.info(
                                                 f"      Position ${position_size:.2f} < "
                                                 f"${_notional_threshold:.2f} "
-                                                f"(min_notional=${_min_notional:.2f} × 1.2 safety buffer)"
+                                                f"(min_notional=${_min_notional:.2f} × 1.5 safety buffer)"
                                             )
-                                            logger.info(f"      Prevents dust accumulation at entry source")
+                                            logger.info(f"      Micro entry prevention: raise balance or wait for larger signal")
                                             continue
                                     except Exception as _ng_err:
                                         logger.debug("Notional gate check skipped for %s: %s", symbol, _ng_err)
