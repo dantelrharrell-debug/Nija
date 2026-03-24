@@ -15,6 +15,7 @@ even when trading is paused or positions were adopted from legacy holdings.
 import logging
 import time
 import os
+import threading
 from typing import Dict, List, Tuple, Optional, Union, Any
 from datetime import datetime
 from enum import Enum
@@ -176,6 +177,12 @@ class ForcedPositionCleanup:
         # _should_cleanup() uses this to enforce a CLEANUP_COOLDOWN window so
         # unsellable / failed positions are never retried on every scan cycle.
         self._cleanup_cooldown: Dict[str, float] = {}
+
+        # CYCLE-LEVEL DEDUPLICATION: wall-clock timestamp of the last
+        # run_cleanup_cycle() execution.  Set to 0 so the very first call
+        # always runs.  run_cleanup_cycle() rejects re-entry within 120s.
+        self._last_cleanup_cycle_ts: float = 0
+        self._cycle_lock = threading.Lock()
 
         # Post-cleanup state — force re-synced after every cleanup run so
         # callers always have an accurate view of open positions.
@@ -1089,6 +1096,35 @@ class ForcedPositionCleanup:
         """
         broker_type_str = broker.broker_type.value if hasattr(broker, 'broker_type') else 'unknown'
         return f"user_{user_id}_{broker_type_str}"
+
+    def run_cleanup_cycle(
+        self,
+        broker,
+        account_id: str = "platform",
+        is_startup: bool = False,
+    ) -> Optional[Dict]:
+        """Cycle-level entry-point with deduplication guard.
+
+        Prevents the cleanup engine from executing more than once within the
+        same ~2-minute scan window.  Callers that previously invoked
+        ``cleanup_single_account`` directly should switch to this method so the
+        guard is honoured automatically.
+
+        Returns:
+            The cleanup summary dict from ``cleanup_single_account``, or
+            ``None`` when the call is suppressed by the cooldown window.
+        """
+        now = time.time()
+        with self._cycle_lock:
+            if now - self._last_cleanup_cycle_ts < 120:
+                logger.debug(
+                    "🧹 ForcedPositionCleanup: skipping run_cleanup_cycle — "
+                    "last run was %.0fs ago (min interval=120s)",
+                    now - self._last_cleanup_cycle_ts,
+                )
+                return None
+            self._last_cleanup_cycle_ts = now
+        return self.cleanup_single_account(broker, account_id, is_startup)
 
     def cleanup_single_account(self,
                                broker,
