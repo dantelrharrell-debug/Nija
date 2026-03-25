@@ -1545,20 +1545,24 @@ CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s m
 
 # Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
 # takes longer than this, the scan loop breaks early to protect cycle cadence.
-# Worst-case (no cache hits): 50 markets × 8s scan delay ≈ 400s; cap at 600s.
+# Worst-case (no cache hits): 100 markets × 8s scan delay ≈ 800s; cap at 900s.
 # With the cache-aware delay (skips sleep on cache hits) the actual runtime is
 # typically well below this ceiling, allowing more markets to be evaluated per cycle.
-MAX_CYCLE_SECONDS = 600  # Hard cap on total cycle duration (seconds; raised from 150→600)
+MAX_CYCLE_SECONDS = 900  # Hard cap on total cycle duration (seconds; raised from 600→900)
+# Separate cap for the scan portion only (measured from just before the scan loop).
+# This prevents pre-scan overhead (balance fetch, position management) from eating
+# into the scan budget and triggering 0-market cycles.
+MAX_SCAN_SECONDS = 120   # Max seconds allowed for the market scan loop itself
 
 # Market scanning rotation (prevents scanning same markets every cycle)
-# UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
-MARKET_BATCH_SIZE_MIN = 10   # Start with 10 markets per cycle on fresh start (gradual warmup)
-MARKET_BATCH_SIZE_MAX = 50  # Maximum markets to scan per cycle after warmup (raised from 30→50)
-MARKET_BATCH_WARMUP_CYCLES = 3  # Number of cycles to warm up before using max batch size
+# UPDATED (Mar 2026): Increased batch size targets for 50-200 markets per cycle
+MARKET_BATCH_SIZE_MIN = 50   # Start with 50 markets per cycle — immediate full-speed scan
+MARKET_BATCH_SIZE_MAX = 100  # Maximum markets to scan per cycle (raised from 50→100)
+MARKET_BATCH_WARMUP_CYCLES = 1  # Minimal warmup: full speed after 1 cycle
 # For micro accounts (balance < $100), scan a larger batch to compensate for tighter
 # position sizing — more opportunities evaluated per cycle increases trade frequency.
 MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD = 100.0  # USD: below this balance use boosted scan size
-MICRO_ACCOUNT_SCAN_SIZE = 50               # Markets to scan per cycle for micro accounts
+MICRO_ACCOUNT_SCAN_SIZE = 100              # Markets to scan per cycle for micro accounts (raised 50→100)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # ============================================================================
@@ -2117,6 +2121,26 @@ try:
     FIRST_TRADE_FORCE_TIMEOUT_CYCLES = int(os.getenv('FIRST_TRADE_FORCE_TIMEOUT_CYCLES', '3'))
 except ValueError:
     FIRST_TRADE_FORCE_TIMEOUT_CYCLES = 3
+
+# ── FORCED ENTRY FALLBACK ───────────────────────────────────────────────────
+# After this many consecutive zero-signal cycles (regardless of first-trade
+# state), the bot enters "B-grade" fallback mode: the sniper-filter confidence
+# threshold is lowered by FORCED_ENTRY_CONFIDENCE_DELTA so that slightly weaker
+# but still viable setups can trigger an entry.  This prevents the bot from
+# sitting idle indefinitely while valid opportunities are blocked by an
+# over-strict confidence gate.
+# Overridable via FORCED_ENTRY_FALLBACK_CYCLES env var.
+try:
+    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '5'))
+except ValueError:
+    FORCED_ENTRY_FALLBACK_CYCLES = 5
+
+# How much to reduce the sniper-filter confidence requirement in fallback mode.
+# E.g. 0.10 means a signal that would normally need 0.65 confidence only needs 0.55.
+try:
+    FORCED_ENTRY_CONFIDENCE_DELTA = float(os.getenv('FORCED_ENTRY_CONFIDENCE_DELTA', '0.10'))
+except ValueError:
+    FORCED_ENTRY_CONFIDENCE_DELTA = 0.10
 
 # ── MICRO ACCOUNT PERFORMANCE BOOSTERS (Mar 2026) ─────────────────────────
 # Four features designed to maximise growth for small accounts.  They operate
@@ -9391,12 +9415,19 @@ class TradingStrategy:
                     # Use rotation to scan different markets each cycle
                     markets_to_scan = self._get_rotated_markets(all_products)
 
-                    # FIRST TRADE GUARANTEE: bypass warmup batch-size cap on cycle 0
+                    # FIRST TRADE GUARANTEE / FORCE TRIGGER: bypass warmup batch-size cap
                     # so the bot scans a meaningful number of markets immediately.
+                    # When _first_trade_force_active (zero-signal drought), scan up to 200
+                    # markets so the "take best available" logic has maximum coverage.
                     # Rotation offset from _get_rotated_markets is respected so we
                     # do not always restart from index 0.
-                    if _first_trade_override and len(markets_to_scan) < MARKET_BATCH_SIZE_MAX:
-                        _boost = min(MARKET_BATCH_SIZE_MAX, len(all_products))
+                    _ft_boost_target = (
+                        min(200, len(all_products))
+                        if (not self._first_trade_executed and self._first_trade_force_active)
+                        else MARKET_BATCH_SIZE_MAX
+                    )
+                    if _first_trade_override and len(markets_to_scan) < _ft_boost_target:
+                        _boost = _ft_boost_target
                         _extra_needed = _boost - len(markets_to_scan)
                         _next_start = self.market_rotation_offset
                         _extra = [
@@ -9452,6 +9483,18 @@ class TradingStrategy:
                     # No need to filter again during scan - markets_to_scan already contains only supported pairs
                     scan_limit = len(markets_to_scan)
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
+
+                    # ⏱️ Record the scan-only start time so the per-market cycle cap
+                    # is measured from HERE — not from the overall cycle_start_time
+                    # which includes balance/position-management overhead that can
+                    # consume several hundred seconds before the scan even begins.
+                    scan_start_time = time.time()
+                    _pre_scan_elapsed = scan_start_time - cycle_start_time
+                    if _pre_scan_elapsed > 60:
+                        logger.info(
+                            "   ⏱️  Pre-scan overhead: %.1fs — using scan_start_time for cycle cap",
+                            _pre_scan_elapsed,
+                        )
 
                     # Grab the log-rate-limiter for the scan loop so high-frequency per-symbol
                     # messages can be throttled to protect performance during 732-symbol scans.
@@ -9550,15 +9593,18 @@ class TradingStrategy:
                                 logger.debug(f"   ⛔ SKIPPING {symbol}: Blacklisted pair (spread > profit edge)")
                                 continue
 
-                            # CYCLE TIME CAP: break the scan loop early when the total
-                            # cycle has already consumed MAX_CYCLE_SECONDS.  This prevents
-                            # a slow API batch from delaying the *next* cycle indefinitely.
-                            _elapsed = time.time() - cycle_start_time
-                            if _elapsed > MAX_CYCLE_SECONDS:
+                            # CYCLE TIME CAP: break the scan loop early when the scan
+                            # portion has already consumed MAX_SCAN_SECONDS.  We measure
+                            # from scan_start_time (set just before this loop) so that
+                            # pre-scan overhead (balance fetch, position management, etc.)
+                            # does NOT eat into the scan budget — which was the root cause
+                            # of "CYCLE CAP: scan stopped after 930s — 0/50 markets scanned".
+                            _scan_elapsed = time.time() - scan_start_time
+                            if _scan_elapsed > MAX_SCAN_SECONDS:
                                 logger.warning(
-                                    "   ⏱️  CYCLE CAP: scan stopped after %.1fs (MAX_CYCLE_SECONDS=%ds) "
+                                    "   ⏱️  SCAN CAP: scan stopped after %.1fs (MAX_SCAN_SECONDS=%ds) "
                                     "— %d/%d markets scanned",
-                                    _elapsed, MAX_CYCLE_SECONDS, i, len(markets_to_scan),
+                                    _scan_elapsed, MAX_SCAN_SECONDS, i, len(markets_to_scan),
                                 )
                                 break
 
@@ -10133,6 +10179,37 @@ class TradingStrategy:
                                                 "   📡 Micro-account sniper loosen [%s]: "
                                                 "conf nudge %.2f→%.2f (balance $%.2f)",
                                                 symbol, float(_raw_conf), _sf_confidence, account_balance
+                                            )
+
+                                        # ── FORCED ENTRY FALLBACK (B-grade mode) ─────────────
+                                        # After FORCED_ENTRY_FALLBACK_CYCLES consecutive zero-
+                                        # signal cycles the bot lowers the effective confidence
+                                        # requirement so slightly weaker ("B-grade") setups can
+                                        # fire.  This prevents sitting idle indefinitely while
+                                        # valid trades are blocked by an over-strict gate.
+                                        _fallback_active = (
+                                            self._zero_signal_streak >= FORCED_ENTRY_FALLBACK_CYCLES
+                                        )
+                                        _first_trade_force = (
+                                            not self._first_trade_executed
+                                            and self._first_trade_force_active
+                                        )
+                                        if _fallback_active or _first_trade_force:
+                                            _fb_delta = FORCED_ENTRY_CONFIDENCE_DELTA
+                                            # First-trade force gets an extra boost to ensure
+                                            # capital is deployed on the very first trade.
+                                            if _first_trade_force:
+                                                _fb_delta = min(0.25, _fb_delta * 1.5)
+                                            _sf_conf_before_fb = _sf_confidence
+                                            _sf_confidence = min(1.0, _sf_confidence + _fb_delta)
+                                            _fb_label = (
+                                                "FIRST-TRADE-FORCE" if _first_trade_force
+                                                else f"B-GRADE-FALLBACK(streak={self._zero_signal_streak})"
+                                            )
+                                            logger.debug(
+                                                "   🔓 %s [%s]: conf nudge %.2f→%.2f (+%.2f)",
+                                                _fb_label, symbol,
+                                                _sf_conf_before_fb, _sf_confidence, _fb_delta,
                                             )
 
                                         # ── WIN-RATE / FREQUENCY TUNER — confidence nudge ──
@@ -12443,6 +12520,16 @@ class TradingStrategy:
                         logger.info(
                             "   → Zero-signal streak: %d cycle(s)", self._zero_signal_streak
                         )
+                        # Announce forced entry fallback mode once it activates
+                        if self._zero_signal_streak >= FORCED_ENTRY_FALLBACK_CYCLES:
+                            logger.warning(
+                                "   🔓 FORCED ENTRY FALLBACK ACTIVE (B-grade mode) — "
+                                "confidence threshold lowered by %.2f for next cycle "
+                                "(streak=%d >= threshold=%d)",
+                                FORCED_ENTRY_CONFIDENCE_DELTA,
+                                self._zero_signal_streak,
+                                FORCED_ENTRY_FALLBACK_CYCLES,
+                            )
                         logger.info("   → Will continue monitoring markets...")
 
                         # ── FIRST TRADE FORCE TRIGGER activation ──────────────
