@@ -1230,14 +1230,14 @@ class CoinbaseBroker(BaseBroker):
         self._accounts_cache_time = None
         logger.debug("Cache cleared (balance and accounts)")
 
-    def _api_call_with_retry(self, api_func, *args, max_retries=5, base_delay=5.0, **kwargs):
+    def _api_call_with_retry(self, api_func, *args, max_retries=3, base_delay=5.0, **kwargs):
         """
         Execute an API call with exponential backoff retry logic for rate limiting and connection errors.
 
         Args:
             api_func: The API function to call
             *args: Positional arguments for the API function
-            max_retries: Maximum number of retry attempts (default: 5)
+            max_retries: Maximum number of retry attempts (default: 3 — tightened from 5)
             base_delay: Base delay in seconds for exponential backoff (default: 5.0)
             **kwargs: Keyword arguments for the API function
 
@@ -1291,17 +1291,18 @@ class CoinbaseBroker(BaseBroker):
                 if attempt >= max_retries - 1 or not is_retryable:
                     raise
 
-                # Calculate exponential backoff delay with maximum cap
+                # Calculate exponential backoff delay with maximum cap (tightened upper bounds)
+                # attempt=0 → first retry delay; attempt=1 → second retry delay (max_retries=3 → 2 retries)
                 # For connection errors, use moderate delays
                 # For 403 errors, use longer delays (more aggressive backoff)
                 if is_connection_error:
-                    delay = min(base_delay * (1.5 ** attempt), 30.0)  # 5s, 7.5s, 11.25s, 16.88s, 25.31s (capped at 30s)
+                    delay = min(base_delay * (1.5 ** attempt), 20.0)  # retry 1: 5s, retry 2: 7.5s (capped at 20s)
                     error_type = "Connection error"
                 elif is_403_error:
-                    delay = min(base_delay * (3 ** attempt), 120.0)  # 5s, 15s, 45s, 120s (capped), 120s (capped)
+                    delay = min(base_delay * (3 ** attempt), 60.0)   # retry 1: 5s, retry 2: 15s (capped at 60s)
                     error_type = "Rate limit (403)"
                 else:
-                    delay = min(base_delay * (2 ** attempt), 60.0)  # 5s, 10s, 20s, 40s, 60s (capped)
+                    delay = min(base_delay * (2 ** attempt), 30.0)   # retry 1: 5s, retry 2: 10s (capped at 30s)
                     error_type = "Rate limit (429)"
 
                 logging.warning(f"⚠️  API {error_type} (attempt {attempt + 1}/{max_retries}): {e}")
