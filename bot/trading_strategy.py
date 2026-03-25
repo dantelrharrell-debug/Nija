@@ -1400,20 +1400,30 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
                             # At 5-15 markets per cycle with 8.0s delay, scanning takes 40-120 seconds
                             # This conservative rate ensures API key never gets temporarily blocked
 
-# Broker balance fetch timeout constants (Jan 28, 2026)
-# CRITICAL FIX: Increased from 20s to 45s to accommodate Kraken API timeout (30s) plus network overhead
-# 45s chosen to allow: 30s Kraken API timeout + 15s network/serialization buffer
-# Kraken get_account_balance makes 2 API calls (Balance + TradeBalance) with 1s minimum between calls
-# Under production load, Kraken regularly takes 15-20s to respond (within 30s API timeout)
-# If timeout occurs, cached balance is used as fallback (max age: 90 seconds — tightened from 5 minutes)
-BALANCE_FETCH_TIMEOUT = 45  # Maximum time to wait for balance fetch (must be > Kraken API timeout of 30s)
-CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness — tightened)
+# Broker balance fetch timeout constants
+# Reduced from 45s → 12s to avoid long blocking on slow/hung Kraken API calls.
+# Under normal conditions Kraken responds in 1–5s; under load typically < 10s.
+# A 12s gate gives sufficient headroom while preventing a single hung call from
+# locking the entire cycle for ~45s.  Cached balance (max age: 90s) is used as
+# an immediate fallback when the live fetch times out.
+BALANCE_FETCH_TIMEOUT = 12  # Hard timeout for balance API call (was 45s; reduced for faster fallback)
+CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness)
+
+# Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
+# takes longer than this, the scan loop breaks early to protect cycle cadence.
+# At 30 markets × 8s scan delay the theoretical max is ~240s; cap at 150s so a
+# handful of slow API responses never cause multi-minute delays.
+MAX_CYCLE_SECONDS = 150  # Hard cap on total cycle duration (seconds)
 
 # Market scanning rotation (prevents scanning same markets every cycle)
 # UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
 MARKET_BATCH_SIZE_MIN = 10   # Start with 10 markets per cycle on fresh start (gradual warmup)
 MARKET_BATCH_SIZE_MAX = 30  # Maximum markets to scan per cycle after warmup
 MARKET_BATCH_WARMUP_CYCLES = 3  # Number of cycles to warm up before using max batch size
+# For micro accounts (balance < $100), scan a larger batch to compensate for tighter
+# position sizing — more opportunities evaluated per cycle increases trade frequency.
+MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD = 100.0  # USD: below this balance use boosted scan size
+MICRO_ACCOUNT_SCAN_SIZE = 50               # Markets to scan per cycle for micro accounts
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # ============================================================================
@@ -4141,16 +4151,31 @@ class TradingStrategy:
                                     'detail': 'Entry price and current price are both unavailable - cannot adopt or liquidate'
                                 })
                                 continue  # Skip - cannot safely liquidate without any price reference
+                            elif not in_recovery_mode and current_price > 0:
+                                # Fallback: use current_price as a synthetic entry price so the
+                                # position can be adopted and managed (stop-loss, P&L tracking).
+                                # P&L will read 0% initially — the bot can still exit cleanly
+                                # when a stop or profit target fires.
+                                entry_price = current_price
+                                logger.warning(
+                                    f"   [{i}/{positions_found}] ⚠️  {symbol}: Entry price unavailable — "
+                                    f"adopting with current_price=${current_price:.4f} as synthetic entry"
+                                )
+                                logger.warning(
+                                    f"   [{i}/{positions_found}] ℹ️  P&L will show 0% until a real fill "
+                                    f"price is recovered.  Set an override in "
+                                    f"config/entry_price_overrides.json if needed."
+                                )
                             else:
-                                logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE")
-                                logger.error(f"   ❌ Position adoption FAILED - entry price is MANDATORY")
+                                logger.error(f"   [{i}/{positions_found}] ❌ CAPITAL PROTECTION: {symbol} has NO ENTRY PRICE and NO current price")
+                                logger.error(f"   ❌ Position adoption FAILED - cannot determine any price reference")
                                 logger.error(f"   💡 Recommendation: Verify position history or set entry price in config/entry_price_overrides.json")
                                 failed_positions.append({
                                     'symbol': symbol,
                                     'reason': 'MISSING_ENTRY_PRICE',
-                                    'detail': 'Entry price is 0 or missing - required for P&L tracking'
+                                    'detail': 'Entry price is 0 or missing and current price is unavailable'
                                 })
-                                continue  # Skip this position - do not adopt without entry price
+                                continue  # Skip this position - do not adopt without any price reference
                     
                     # Register position in tracker (MANDATORY)
                     success = position_tracker.track_entry(
@@ -9018,6 +9043,26 @@ class TradingStrategy:
                                 f"balance=${account_balance:.2f} < ${MICRO_FREQ_BOOST_THRESHOLD:.0f})"
                             )
 
+                    # Micro-account signal sensitivity boost (balance < $100):
+                    # Scan a larger batch so more entry opportunities are evaluated each cycle.
+                    # This compensates for the already-tight position sizes on very small accounts
+                    # without loosening any risk filters on the trades that do execute.
+                    if account_balance is not None and account_balance < MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD:
+                        _micro_boost_size = min(MICRO_ACCOUNT_SCAN_SIZE, len(all_products))
+                        if len(markets_to_scan) < _micro_boost_size:
+                            _extra_needed = _micro_boost_size - len(markets_to_scan)
+                            _total_mkts = len(all_products)
+                            _next_start = self.market_rotation_offset
+                            _extra = [
+                                all_products[(_next_start + _i) % _total_mkts]
+                                for _i in range(_extra_needed)
+                            ]
+                            markets_to_scan = markets_to_scan + _extra
+                            logger.info(
+                                f"   📡 Micro-account scan boost: scanning {_micro_boost_size} markets "
+                                f"(balance=${account_balance:.2f} < ${MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD:.0f})"
+                            )
+
                     # FIX #3 (Jan 20, 2026): Kraken markets already filtered at startup
                     # No need to filter again during scan - markets_to_scan already contains only supported pairs
                     scan_limit = len(markets_to_scan)
@@ -9119,6 +9164,18 @@ class TradingStrategy:
                             if symbol in DISABLED_PAIRS:
                                 logger.debug(f"   ⛔ SKIPPING {symbol}: Blacklisted pair (spread > profit edge)")
                                 continue
+
+                            # CYCLE TIME CAP: break the scan loop early when the total
+                            # cycle has already consumed MAX_CYCLE_SECONDS.  This prevents
+                            # a slow API batch from delaying the *next* cycle indefinitely.
+                            _elapsed = time.time() - cycle_start_time
+                            if _elapsed > MAX_CYCLE_SECONDS:
+                                logger.warning(
+                                    "   ⏱️  CYCLE CAP: scan stopped after %.1fs (MAX_CYCLE_SECONDS=%ds) "
+                                    "— %d/%d markets scanned",
+                                    _elapsed, MAX_CYCLE_SECONDS, i, len(markets_to_scan),
+                                )
+                                break
 
                             # HIGH-LIQUIDITY FILTER - Only trade top 20 pairs by volume
                             # Ensures tight spreads, deep order books, and reliable price action
@@ -9594,6 +9651,21 @@ class TradingStrategy:
                                             _raw_score = analysis.get('score')
                                             _raw_conf = (_raw_score / 5.0) if _raw_score else 0.65
                                         _sf_confidence = float(_raw_conf)
+
+                                        # ── MICRO-ACCOUNT SIGNAL LOOSENING ──────────────────
+                                        # For accounts below $100 the sniper filter's default
+                                        # confidence gate (0.65) can suppress too many signals,
+                                        # leaving a small account idle for extended periods.
+                                        # Nudge the effective confidence down by 0.05 so
+                                        # slightly weaker but still valid setups are allowed.
+                                        if (account_balance is not None
+                                                and account_balance < MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD):
+                                            _sf_confidence = max(0.0, _sf_confidence - 0.05)
+                                            logger.debug(
+                                                "   📡 Micro-account sniper loosen [%s]: "
+                                                "conf nudge %.2f→%.2f (balance $%.2f)",
+                                                symbol, float(_raw_conf), _sf_confidence, account_balance
+                                            )
 
                                         # ── WIN-RATE / FREQUENCY TUNER — confidence nudge ──
                                         # Adjusts the confidence gate to maximise EV-per-hour:

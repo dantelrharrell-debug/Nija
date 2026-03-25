@@ -14,7 +14,9 @@ Each account trades independently with its own:
 """
 
 import logging
+import queue
 import sys
+import threading
 import time
 from types import MappingProxyType
 import traceback
@@ -113,6 +115,12 @@ class MultiAccountBrokerManager:
     # Solution: Cache balances per trading cycle to prevent repeated API calls
     BALANCE_CACHE_TTL = 120.0  # Cache balance for 2 minutes (one trading cycle)
     KRAKEN_BALANCE_CALL_DELAY = 1.1  # 1.1s delay between Kraken balance API calls
+    # Hard timeout for a single balance API call.  Reduced to 12s so a hung
+    # Kraken connection is detected quickly and the stale cache is used instead.
+    BALANCE_FETCH_TIMEOUT = 12.0  # seconds (was 45s)
+    # Maximum age of a stale cached balance that is still acceptable as a fallback
+    # when the live fetch times out.  5 minutes is safe for trading decisions.
+    BALANCE_STALE_FALLBACK_AGE = 300.0  # seconds
 
     def __init__(self):
         """Initialize multi-account broker manager."""
@@ -742,8 +750,60 @@ class MultiAccountBrokerManager:
 
             self._last_kraken_balance_call = time.time()
 
-        # Fetch balance from broker API
-        balance = broker.get_account_balance()
+        # Fetch balance from broker API with a hard timeout so a slow or hung
+        # Kraken connection never blocks the entire trading cycle.
+        # Non-daemon thread so the API call can complete cleanly on shutdown.
+        result_queue: queue.Queue = queue.Queue()
+
+        def _fetch():
+            try:
+                result_queue.put((True, broker.get_account_balance()))
+            except Exception as _e:
+                result_queue.put((False, _e))
+
+        fetch_thread = threading.Thread(target=_fetch, daemon=False)
+        fetch_thread.start()
+        fetch_thread.join(self.BALANCE_FETCH_TIMEOUT)
+
+        if fetch_thread.is_alive():
+            # Timed out — use stale cache if available and not too old
+            logger.warning(
+                f"Balance fetch timed out after {self.BALANCE_FETCH_TIMEOUT:.0f}s "
+                f"for {account_type} {account_id} on {broker_type.value}"
+            )
+            if cache_key in self._balance_cache:
+                _stale_bal, _stale_ts = self._balance_cache[cache_key]
+                _stale_age = current_time - _stale_ts
+                if _stale_age <= self.BALANCE_STALE_FALLBACK_AGE:
+                    logger.warning(
+                        f"Using stale cached balance ${_stale_bal:.2f} "
+                        f"(age {_stale_age:.0f}s) for {account_type} {account_id}"
+                    )
+                    return _stale_bal
+            # No usable cache — return 0 so the caller skips trading
+            logger.error(
+                f"No usable cached balance for {account_type} {account_id} on "
+                f"{broker_type.value}; returning 0"
+            )
+            return 0.0
+
+        try:
+            success, value = result_queue.get_nowait()
+        except queue.Empty:
+            success, value = False, Exception("No result in queue after thread join")
+
+        if not success:
+            logger.error(
+                f"Balance fetch raised exception for {account_type} {account_id}: {value}"
+            )
+            # Fall back to stale cache on exception too
+            if cache_key in self._balance_cache:
+                _stale_bal, _stale_ts = self._balance_cache[cache_key]
+                if current_time - _stale_ts <= self.BALANCE_STALE_FALLBACK_AGE:
+                    return _stale_bal
+            return 0.0
+
+        balance = value
 
         # Cache the result
         self._balance_cache[cache_key] = (balance, time.time())
