@@ -763,6 +763,36 @@ except ImportError:
         get_win_rate_frequency_tuner = None  # type: ignore
         logger.warning("⚠️ Win-Rate/Frequency Tuner not available")
 
+# ── Stable Profit Mode — daily range lock + overtrading guard + WR balance ────
+try:
+    from stable_profit_mode import get_stable_profit_mode
+    STABLE_PROFIT_MODE_AVAILABLE = True
+    logger.info("✅ Stable Profit Mode loaded — daily range lock + overtrading guard active")
+except ImportError:
+    try:
+        from bot.stable_profit_mode import get_stable_profit_mode
+        STABLE_PROFIT_MODE_AVAILABLE = True
+        logger.info("✅ Stable Profit Mode loaded — daily range lock + overtrading guard active")
+    except ImportError:
+        STABLE_PROFIT_MODE_AVAILABLE = False
+        get_stable_profit_mode = None  # type: ignore
+        logger.warning("⚠️ Stable Profit Mode not available")
+
+# ── Safe Profit Mode — entry gate once daily profit is locked in ──────────────
+try:
+    from safe_profit_mode import get_safe_profit_mode
+    SAFE_PROFIT_MODE_AVAILABLE = True
+    logger.info("✅ Safe Profit Mode loaded — locks entries once daily profit secured")
+except ImportError:
+    try:
+        from bot.safe_profit_mode import get_safe_profit_mode
+        SAFE_PROFIT_MODE_AVAILABLE = True
+        logger.info("✅ Safe Profit Mode loaded — locks entries once daily profit secured")
+    except ImportError:
+        SAFE_PROFIT_MODE_AVAILABLE = False
+        get_safe_profit_mode = None  # type: ignore
+        logger.warning("⚠️ Safe Profit Mode not available")
+
 # ── Aggression Mode Controller — SAFE / BALANCED / AGGRESSIVE user modes ─────
 try:
     from aggression_mode_controller import get_aggression_mode_controller
@@ -2705,6 +2735,38 @@ class TradingStrategy:
         else:
             self.win_rate_frequency_tuner = None
 
+        # ── Stable Profit Mode — daily range lock + overtrading guard ────────
+        if STABLE_PROFIT_MODE_AVAILABLE and get_stable_profit_mode is not None:
+            try:
+                self.stable_profit_mode = get_stable_profit_mode()
+                logger.info(
+                    "✅ Stable Profit Mode initialized — "
+                    "daily range $%.0f–$%.0f, max %d trades/day",
+                    self.stable_profit_mode._min_target,
+                    self.stable_profit_mode._max_target,
+                    self.stable_profit_mode._base_max_trades,
+                )
+            except Exception as _e:
+                logger.warning("⚠️ Stable Profit Mode init failed: %s", _e)
+                self.stable_profit_mode = None
+        else:
+            self.stable_profit_mode = None
+
+        # ── Safe Profit Mode — entry gate when daily profit is secured ────────
+        if SAFE_PROFIT_MODE_AVAILABLE and get_safe_profit_mode is not None:
+            try:
+                self.safe_profit_mode = get_safe_profit_mode()
+                logger.info(
+                    "✅ Safe Profit Mode initialized — "
+                    "blocks entries at %.0f%% of target or %.0f%% locked",
+                    self.safe_profit_mode.target_pct_threshold * 100,
+                    self.safe_profit_mode.lock_fraction_threshold * 100,
+                )
+            except Exception as _e:
+                logger.warning("⚠️ Safe Profit Mode init failed: %s", _e)
+                self.safe_profit_mode = None
+        else:
+            self.safe_profit_mode = None
         # ── Kraken Params Optimizer — fee-aware profit target & stop-loss tuner ──
         if KRAKEN_PARAMS_OPTIMIZER_AVAILABLE and get_kraken_params_optimizer is not None:
             try:
@@ -6245,6 +6307,53 @@ class TradingStrategy:
                     user_mode = True  # Block new entries until operator resets
             except Exception as _aks_exc:
                 logger.debug("Abnormal Market Kill Switch check skipped: %s", _aks_exc)
+
+        # ✅ LAYER 0e: STABLE PROFIT MODE — daily range lock + overtrading guard
+        # Blocks new entries when the day's profit ceiling is reached or the daily
+        # trade count cap is exceeded.  Win-rate adjusts both limits automatically.
+        if (STABLE_PROFIT_MODE_AVAILABLE
+                and hasattr(self, 'stable_profit_mode')
+                and self.stable_profit_mode is not None
+                and not user_mode):
+            try:
+                _spm_decision = self.stable_profit_mode.can_open_entry()
+                if not _spm_decision.allowed:
+                    _rl_spm = getattr(self, '_log_rl', None)
+                    _spm_log_key = f"spm_{_spm_decision.state}"
+                    if _rl_spm is None or _rl_spm.allow(_spm_log_key, window_seconds=300):
+                        logger.info("=" * 72)
+                        logger.info("🎯 STABLE PROFIT MODE: NEW ENTRIES BLOCKED")
+                        logger.info("=" * 72)
+                        logger.info("   Reason    : %s", _spm_decision.reason)
+                        logger.info("   State     : %s", _spm_decision.state.upper())
+                        logger.info(
+                            "   Daily P/L : $%.2f  |  Trades today: %d",
+                            _spm_decision.daily_profit_usd,
+                            _spm_decision.trades_today,
+                        )
+                        logger.info("   Mode: Position management only (exits/stops)")
+                        logger.info("=" * 72)
+                    user_mode = True
+            except Exception as _spm_exc:
+                logger.debug("Stable Profit Mode check skipped: %s", _spm_exc)
+
+        # ✅ LAYER 0f: SAFE PROFIT MODE — entry gate when daily profit is secured
+        # Activates when daily profit reaches 150% of the target OR 80% of today's
+        # P/L is ratchet-locked, protecting gains by halting new position entries.
+        if (SAFE_PROFIT_MODE_AVAILABLE
+                and hasattr(self, 'safe_profit_mode')
+                and self.safe_profit_mode is not None
+                and not user_mode):
+            try:
+                if self.safe_profit_mode.should_block_entry():
+                    self.safe_profit_mode.record_blocked_attempt()
+                    _rl_safpm = getattr(self, '_log_rl', None)
+                    if _rl_safpm is None or _rl_safpm.allow("safe_profit_mode", window_seconds=300):
+                        logger.info(self.safe_profit_mode.get_report())
+                    user_mode = True
+            except Exception as _safpm_exc:
+                logger.debug("Safe Profit Mode check skipped: %s", _safpm_exc)
+
 
         # CRITICAL SAFETY CHECK: Verify trading is allowed before ANY operations
         if self.safety:
@@ -11983,6 +12092,15 @@ class TradingStrategy:
                                     except Exception as _hf_rec_err:
                                         logger.debug("HF scalp record_trade skipped for %s: %s", _ps_symbol, _hf_rec_err)
 
+                                # 🎯 STABLE PROFIT MODE — register entry for daily trade count
+                                if (STABLE_PROFIT_MODE_AVAILABLE
+                                        and hasattr(self, 'stable_profit_mode')
+                                        and self.stable_profit_mode is not None):
+                                    try:
+                                        self.stable_profit_mode.record_entry()
+                                    except Exception as _spm_entry_err:
+                                        logger.debug("Stable Profit Mode record_entry skipped for %s: %s", _ps_symbol, _spm_entry_err)
+
                                 # 🔒 PROFIT LOCK SYSTEM — register new position for ratchet tracking
                                 if hasattr(self, 'profit_lock_system') and self.profit_lock_system is not None:
                                     try:
@@ -12679,6 +12797,35 @@ class TradingStrategy:
                 self.win_rate_frequency_tuner.record_trade(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _wrft_rec_err:
                 logger.debug("Win-Rate/Frequency Tuner record_trade skipped for %s: %s", symbol, _wrft_rec_err)
+
+        # 🎯 STABLE PROFIT MODE — update daily P/L tracker and overtrading guard
+        if (STABLE_PROFIT_MODE_AVAILABLE
+                and hasattr(self, 'stable_profit_mode')
+                and self.stable_profit_mode is not None):
+            try:
+                self.stable_profit_mode.record_trade(pnl_usd=profit_usd, is_win=is_win)
+            except Exception as _spm_rec_err:
+                logger.debug("Stable Profit Mode record_trade skipped for %s: %s", symbol, _spm_rec_err)
+
+        # 🔒 SAFE PROFIT MODE — update daily figures so the activation check stays current
+        if (SAFE_PROFIT_MODE_AVAILABLE
+                and hasattr(self, 'safe_profit_mode')
+                and self.safe_profit_mode is not None):
+            try:
+                # Derive the locked profit fraction from the profit lock system when available
+                _spm_locked = 0.0
+                _spm_daily  = profit_usd  # fallback: use just this trade's P/L
+                if hasattr(self, 'stable_profit_mode') and self.stable_profit_mode is not None:
+                    _spm_daily = self.stable_profit_mode.get_daily_profit()
+                _daily_target = getattr(self, '_daily_profit_target_usd', 25.0)
+                self.safe_profit_mode.update(
+                    daily_profit_usd=_spm_daily,
+                    daily_target_usd=_daily_target,
+                    locked_profit_usd=_spm_locked,
+                )
+            except Exception as _safpm_rec_err:
+                logger.debug("Safe Profit Mode update skipped for %s: %s", symbol, _safpm_rec_err)
+
 
         # 🦅 KRAKEN PARAMS OPTIMIZER — record Kraken trade outcome for adaptive learning
         # Only feeds data when the active broker is Kraken so the optimizer stays
