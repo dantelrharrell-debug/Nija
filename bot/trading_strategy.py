@@ -5696,16 +5696,29 @@ class TradingStrategy:
         return (time.time() - cached_time) < self.CANDLE_CACHE_TTL
 
 
+    def _get_broker_name(self, broker) -> str:
         """
-        Get broker name for logging from broker instance.
+        Safely resolve broker name from broker object or string.
 
         Args:
-            broker: Broker instance (may be None or lack broker_type)
+            broker: Broker instance, broker name string, or None.
 
         Returns:
-            str: Broker name (e.g., 'coinbase', 'kraken') or 'unknown'
+            str: Lower-cased broker name, or 'unknown' if it cannot be resolved.
         """
-        return broker.broker_type.value if broker and hasattr(broker, 'broker_type') else 'unknown'
+        if broker is None:
+            return "unknown"
+
+        # If already a string
+        if isinstance(broker, str):
+            return broker.lower()
+
+        # If broker object has name attribute
+        if hasattr(broker, "name"):
+            return str(broker.name).lower()
+
+        # Fallback to class name
+        return broker.__class__.__name__.lower()
 
     def _is_broker_eligible_for_entry(self, broker: Optional[object]) -> Tuple[bool, str]:
         """
