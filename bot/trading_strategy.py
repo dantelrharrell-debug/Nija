@@ -1593,14 +1593,15 @@ CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s m
 
 # Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
 # takes longer than this, the scan loop breaks early to protect cycle cadence.
-# At 30 markets × 8s scan delay the theoretical max is ~240s; cap at 150s so a
-# handful of slow API responses never cause multi-minute delays.
-MAX_CYCLE_SECONDS = 150  # Hard cap on total cycle duration (seconds)
+# Worst-case (no cache hits): 50 markets × 8s scan delay ≈ 400s; cap at 600s.
+# With the cache-aware delay (skips sleep on cache hits) the actual runtime is
+# typically well below this ceiling, allowing more markets to be evaluated per cycle.
+MAX_CYCLE_SECONDS = 600  # Hard cap on total cycle duration (seconds; raised from 150→600)
 
 # Market scanning rotation (prevents scanning same markets every cycle)
 # UPDATED (Jan 10, 2026): Adaptive batch sizing to prevent API rate limiting
 MARKET_BATCH_SIZE_MIN = 10   # Start with 10 markets per cycle on fresh start (gradual warmup)
-MARKET_BATCH_SIZE_MAX = 30  # Maximum markets to scan per cycle after warmup
+MARKET_BATCH_SIZE_MAX = 50  # Maximum markets to scan per cycle after warmup (raised from 30→50)
 MARKET_BATCH_WARMUP_CYCLES = 3  # Number of cycles to warm up before using max batch size
 # For micro accounts (balance < $100), scan a larger batch to compensate for tighter
 # position sizing — more opportunities evaluated per cycle increases trade frequency.
@@ -3153,7 +3154,7 @@ class TradingStrategy:
 
         # Candle data cache (prevents duplicate API calls for same market/timeframe)
         self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
-        self.CANDLE_CACHE_TTL = 150      # Cache candles for 2.5 minutes (one cycle)
+        self.CANDLE_CACHE_TTL = 600      # Cache candles for 10 minutes (raised from 150s→600s for aggressive caching)
 
         # Heartbeat trade state tracking (for deployment verification and health checks)
         self.heartbeat_last_trade_time = 0  # Last heartbeat trade timestamp
@@ -5632,7 +5633,31 @@ class TradingStrategy:
 
         return candles
 
-    def _get_broker_name(self, broker) -> str:
+    def _is_candle_cache_valid(self, symbol: str, timeframe: str = '5m', count: int = 100) -> bool:
+        """
+        Return True when a fresh (non-expired) cache entry exists for the
+        given symbol/timeframe/count combination.
+
+        Used by the scan loop to decide whether the per-market API delay is
+        needed before calling _get_cached_candles: if the cache is valid no
+        network request will be made, so no rate-limit sleep is required.
+
+        Args:
+            symbol:    Trading pair symbol
+            timeframe: Candle timeframe (default '5m')
+            count:     Number of candles requested (default 100)
+
+        Returns:
+            bool: True if valid cached data exists, False otherwise
+        """
+        cache_key = f"{symbol}_{timeframe}_{count}"
+        entry = self.candle_cache.get(cache_key)
+        if entry is None:
+            return False
+        cached_time, _ = entry
+        return (time.time() - cached_time) < self.CANDLE_CACHE_TTL
+
+
         """
         Get broker name for logging from broker instance.
 
@@ -9637,12 +9662,13 @@ class TradingStrategy:
                                     logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in whitelist (only trading {', '.join(WHITELISTED_ASSETS)})")
                                     continue
 
-                            # CRITICAL: Add delay BEFORE fetching candles to prevent rate limiting
-                            # This is in addition to the delay after processing (line ~1201)
-                            # Pre-delay ensures we never make requests too quickly in succession
+                            # Rate-limit guard: only sleep before a live API call; skip the delay
+                            # when candle data is already in the local cache (no network request
+                            # is made, so no risk of hitting exchange rate limits).
                             if i > 0:  # Don't delay before first market
-                                jitter = random.uniform(0, 0.3)  # Add 0-300ms jitter
-                                time.sleep(MARKET_SCAN_DELAY + jitter)
+                                if not self._is_candle_cache_valid(symbol, '5m', 100):
+                                    jitter = random.uniform(0, 0.3)  # Add 0-300ms jitter
+                                    time.sleep(MARKET_SCAN_DELAY + jitter)
 
                             # Get candles with caching to reduce duplicate API calls
                             candles = self._get_cached_candles(symbol, '5m', 100, broker=active_broker)
