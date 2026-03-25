@@ -24,12 +24,12 @@ logger = logging.getLogger("nija.minimum_notional")
 
 
 class ExchangeMinimums(Enum):
-    """Minimum notional values per exchange (USD)"""
-    COINBASE = 2.0      # Coinbase minimum ~$2
-    KRAKEN = 10.0       # Kraken minimum ~$10
-    BINANCE = 10.0      # Binance minimum ~$10
-    OKX = 10.0          # OKX minimum ~$10
-    ALPACA = 1.0        # Alpaca minimum ~$1
+    """Minimum notional values per exchange (USD) — operational floors for fee-positive trading"""
+    COINBASE = 10.0     # Coinbase operational floor — $10 (1.20% round-trip fee-positive)
+    KRAKEN = 10.0       # Kraken exchange minimum ~$10
+    BINANCE = 10.0      # Binance MIN_NOTIONAL filter ~$10 (USDT pairs)
+    OKX = 10.0          # OKX operational floor ~$10 (USDT pairs)
+    ALPACA = 1.0        # Alpaca — commission-free, no practical minimum
     
     # Default/Conservative minimum
     DEFAULT = 5.0       # Safe default: $5 minimum

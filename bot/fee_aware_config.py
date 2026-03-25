@@ -65,14 +65,14 @@ MICRO_ACCOUNT_THRESHOLD = 5.0  # Accounts below this bypass quality multipliers
 # Used for both broker minimum bumping AND balance-based position sizing strategies
 SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
 
-SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # 20% max position for small accounts (vs 10% standard)
+SMALL_ACCOUNT_MAX_POSITION_PCT = 0.40  # 40% max position for small accounts — gives early filter headroom for $50–$100 accounts
 SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0  # Max percentage point difference for broker minimum bumps (vs 5pp standard)
 STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for standard accounts
 
 # Why these values?
 # - $100 threshold: Small enough to help struggling accounts, large enough to avoid excessive risk
-# - 20% max: Allows $58.76 → $11.75 max position (meets Kraken $10 minimum)
-# - 10pp bump limit: Allows 17% positions on $58.76 balance (10% tier max + 7% bump)
+# - 40% max: $50+ balance → $20+ max position (comfortably above $10 operational floor for all brokers)
+# - 10pp bump limit: Allows broader positions on small-balance accounts
 
 # For $50-100: Trade with 75% positions — keeps growth fast, reduces blow-up risk
 SMALL_BALANCE_POSITION_PCT = 0.75  # 75% for $50–$100 accounts

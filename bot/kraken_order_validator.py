@@ -55,10 +55,11 @@ KRAKEN_TAKER_FEE = 0.0016  # 0.16% (volume tier 0-50k)
 KRAKEN_MAKER_FEE = 0.0010  # 0.10% (volume tier 0-50k)
 
 # Exchange-specific minimum order values (USD)
-# These are safety buffers above official minimums to prevent fee-burn
-COINBASE_MINIMUM_ORDER_USD = 1.00  # Coinbase typically has $1-2 minimum
-OKX_MINIMUM_ORDER_USD = 1.00       # OKX varies by pair, typically $1-5
-BINANCE_MINIMUM_ORDER_USD = 1.00   # Binance varies by pair
+# Operational floors — above exchange hard minimums to ensure fee-positive trades.
+# Aligned with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
+COINBASE_MINIMUM_ORDER_USD = 10.00  # $10 operational floor (1.20% round-trip fee-positive)
+OKX_MINIMUM_ORDER_USD = 10.00       # $10 operational floor (0.20% round-trip, USDT pairs)
+BINANCE_MINIMUM_ORDER_USD = 10.00   # $10 operational floor (matches MIN_NOTIONAL filter)
 
 
 def get_pair_minimums(pair: str) -> Dict[str, float]:

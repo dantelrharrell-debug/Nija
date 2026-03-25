@@ -132,18 +132,18 @@ class CoinbaseAdapter(BrokerAdapter):
     Coinbase-specific execution adapter.
 
     Enforces:
-    - Minimum notional: $25 for all pairs (profitability after fees)
+    - Minimum notional: $10 for all pairs (fee-positive operational floor)
     - Portfolio routing for efficient fills
     - Fee-aware exits (account for 0.6% maker + 0.6% taker fees)
     - Symbol format: ETH-USD, BTC-USDT, etc. (dash separator)
     """
 
     # ✅ REQUIREMENT #4: Coinbase minimum notional per pair
-    # UNIFIED MINIMUM: $25 to ensure profitability after 1.20% round-trip fees
-    # At $25 position with 1.20% fees = $0.30 fee cost, target 1.5% = $0.375 profit = net $0.075
-    # NOTE: $5 positions will be REJECTED as they cannot cover fees
-    MIN_NOTIONAL_DEFAULT = 25.0  # $25 minimum for all pairs (profitability threshold)
-    MIN_NOTIONAL_BTC = 25.0  # $25 minimum for BTC pairs (same as default)
+    # OPERATIONAL MINIMUM: $10 — Coinbase has no hard USD floor; $10 ensures
+    # fee-positive trades (1.20% round-trip on $10 = $0.12 fee cost).
+    # Micro-accounts ($50–$100) can trade comfortably at this level.
+    MIN_NOTIONAL_DEFAULT = 10.0  # $10 minimum for all pairs (micro-account compatible)
+    MIN_NOTIONAL_BTC = 10.0  # $10 minimum for BTC pairs (same as default)
 
     # Coinbase fee structure
     MAKER_FEE_PCT = 0.60  # 0.6% maker fee

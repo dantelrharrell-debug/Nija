@@ -34,14 +34,14 @@ from bot.minimum_notional_gate import MinimumNotionalGate, NotionalGateConfig
 # Default configuration
 config = NotionalGateConfig(
     enabled=True,
-    min_entry_notional_usd=25.0,  # $25 minimum by default
+    min_entry_notional_usd=10.0,  # $10 operational floor (fee-positive for all brokers)
     allow_stop_loss_bypass=True,  # Stop losses can bypass
     broker_specific_limits={
-        'coinbase': 25.0,   # $25 (profitability threshold)
-        'kraken': 10.0,     # $10 (lower fees)
-        'binance': 10.0,    # $10 (lower fees)
-        'okx': 10.0,        # $10 (lower fees)
-        'alpaca': 1.0,      # $1 (stocks, no crypto fees)
+        'coinbase': 10.0,   # $10 — Coinbase operational floor (1.20% round-trip fee-positive)
+        'kraken': 10.0,     # $10 — Kraken exchange minimum
+        'binance': 10.0,    # $10 — Binance MIN_NOTIONAL filter (USDT pairs)
+        'okx': 10.0,        # $10 — OKX operational floor (USDT pairs)
+        'alpaca': 1.0,      # $1  — commission-free, no practical minimum
     }
 )
 

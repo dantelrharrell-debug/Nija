@@ -678,11 +678,11 @@ class ExecutionEngine:
             # backstop remains self-contained even if other modules fail to load.
             # Keep in sync with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
             _HARD_MIN_BY_BROKER = {
-                'coinbase': 25.0,
-                'kraken':   10.0,
-                'binance':  10.0,
-                'okx':      10.0,
-                'alpaca':    1.0,
+                'coinbase': 10.0,   # Coinbase operational floor (fee-positive at $10)
+                'kraken':   10.0,   # Kraken exchange minimum
+                'binance':  10.0,   # Binance MIN_NOTIONAL filter (USDT pairs)
+                'okx':      10.0,   # OKX operational floor
+                'alpaca':    1.0,   # Alpaca — commission-free, no practical minimum
             }
             _hard_broker_key = ''
             if self.broker_client and hasattr(self.broker_client, 'broker_type'):
