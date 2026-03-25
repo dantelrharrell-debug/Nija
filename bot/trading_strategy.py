@@ -838,6 +838,54 @@ except ImportError:
         get_pnl_analytics_layer = None  # type: ignore
         logger.warning("⚠️ PnL Analytics Layer not available")
 
+# ── Pair Performance Optimizer — kills underperformers, boosts top pairs ──────
+try:
+    from pair_performance_optimizer import get_pair_performance_optimizer
+    PAIR_PERF_OPTIMIZER_AVAILABLE = True
+    logger.info(
+        "✅ Pair Performance Optimizer loaded — "
+        "underperformer kill + top-pair size boost active"
+    )
+except ImportError:
+    try:
+        from bot.pair_performance_optimizer import get_pair_performance_optimizer
+        PAIR_PERF_OPTIMIZER_AVAILABLE = True
+        logger.info(
+            "✅ Pair Performance Optimizer loaded — "
+            "underperformer kill + top-pair size boost active"
+        )
+    except ImportError:
+        PAIR_PERF_OPTIMIZER_AVAILABLE = False
+        get_pair_performance_optimizer = None  # type: ignore
+        logger.warning(
+            "⚠️ Pair Performance Optimizer not available — "
+            "underperformer kill / pair boost disabled"
+        )
+
+# ── Loss Control Tuner — auto-reduces aggression + tightens filters on drawdown
+try:
+    from loss_control_tuner import get_loss_control_tuner
+    LOSS_CONTROL_TUNER_AVAILABLE = True
+    logger.info(
+        "✅ Loss Control Tuner loaded — "
+        "drawdown-triggered filter tightening + aggression reduction active"
+    )
+except ImportError:
+    try:
+        from bot.loss_control_tuner import get_loss_control_tuner
+        LOSS_CONTROL_TUNER_AVAILABLE = True
+        logger.info(
+            "✅ Loss Control Tuner loaded — "
+            "drawdown-triggered filter tightening + aggression reduction active"
+        )
+    except ImportError:
+        LOSS_CONTROL_TUNER_AVAILABLE = False
+        get_loss_control_tuner = None  # type: ignore
+        logger.warning(
+            "⚠️ Loss Control Tuner not available — "
+            "drawdown auto-tightening disabled"
+        )
+
 # ── Auto Capital Scaler — adjusts risk tiers as balance grows ─────────────────
 try:
     from auto_capital_scaler import get_auto_capital_scaler
@@ -2854,6 +2902,31 @@ class TradingStrategy:
                 self.pnl_analytics_layer = None
         else:
             self.pnl_analytics_layer = None
+
+        # ── Pair Performance Optimizer — underperformer kill + top-pair boost
+        if PAIR_PERF_OPTIMIZER_AVAILABLE and get_pair_performance_optimizer is not None:
+            try:
+                self.pair_perf_optimizer = get_pair_performance_optimizer()
+                logger.info("✅ Pair Performance Optimizer initialized — kill+boost active")
+            except Exception as _e:
+                logger.warning("⚠️ Pair Performance Optimizer init failed: %s", _e)
+                self.pair_perf_optimizer = None
+        else:
+            self.pair_perf_optimizer = None
+
+        # ── Loss Control Tuner — auto-tighten filters + reduce aggression ────
+        if LOSS_CONTROL_TUNER_AVAILABLE and get_loss_control_tuner is not None:
+            try:
+                self.loss_control_tuner = get_loss_control_tuner()
+                logger.info(
+                    "✅ Loss Control Tuner initialized — "
+                    "drawdown thresholds: caution/warning/danger active"
+                )
+            except Exception as _e:
+                logger.warning("⚠️ Loss Control Tuner init failed: %s", _e)
+                self.loss_control_tuner = None
+        else:
+            self.loss_control_tuner = None
 
         # ── Auto Capital Scaler — adjusts risk tiers as balance grows ────────
         if AUTO_CAPITAL_SCALER_AVAILABLE and get_auto_capital_scaler is not None:
@@ -9432,6 +9505,19 @@ class TradingStrategy:
                     # messages can be throttled to protect performance during 732-symbol scans.
                     _scan_log_rl = getattr(self, '_log_rl', None)
 
+                    # ── LOSS CONTROL TUNER — refresh drawdown tier before scan ──────────
+                    # This auto-reduces aggression and tightens the confidence gate
+                    # whenever the account drawdown spikes above configurable thresholds.
+                    if (
+                        LOSS_CONTROL_TUNER_AVAILABLE
+                        and hasattr(self, 'loss_control_tuner')
+                        and self.loss_control_tuner is not None
+                    ):
+                        try:
+                            self.loss_control_tuner.update()
+                        except Exception as _lct_upd_err:
+                            logger.debug("LossControlTuner update skipped: %s", _lct_upd_err)
+
                     # Adaptive rate limiting: track consecutive errors (429, 403, or no data)
                     # UPDATED (Jan 10, 2026): Distinguish invalid symbols from genuine errors
                     rate_limit_counter = 0
@@ -9956,6 +10042,39 @@ class TradingStrategy:
                                             logger.debug("Win Rate Maximizer approve_trade skipped for %s: %s", symbol, _wmx_err)
 
                                 # ═══════════════════════════════════════════════════════
+                                # PAIR PERFORMANCE OPTIMIZER — kill underperformers
+                                # ═══════════════════════════════════════════════════════
+                                # Block entries for pairs whose rolling win-rate and profit
+                                # factor are both below the kill thresholds (after a minimum
+                                # sample of trades).  Top performers receive a size boost
+                                # applied later in the position-sizing pipeline.
+                                if (
+                                    PAIR_PERF_OPTIMIZER_AVAILABLE
+                                    and hasattr(self, 'pair_perf_optimizer')
+                                    and self.pair_perf_optimizer is not None
+                                    and analysis.get('action') in ('enter_long', 'enter_short')
+                                ):
+                                    try:
+                                        if self.pair_perf_optimizer.should_skip_pair(symbol):
+                                            logger.info(
+                                                "   ☠️  PAIR KILLED (underperformer): %s — "
+                                                "entry blocked by PairPerformanceOptimizer",
+                                                symbol,
+                                            )
+                                            analysis = {
+                                                'action': 'hold',
+                                                'reason': 'PairPerformanceOptimizer: underperformer kill',
+                                            }
+                                            filter_stats['market_filter'] = (
+                                                filter_stats.get('market_filter', 0) + 1
+                                            )
+                                    except Exception as _ppo_err:
+                                        logger.debug(
+                                            "PairPerformanceOptimizer skip check failed for %s: %s",
+                                            symbol, _ppo_err,
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
                                 # PHASE 3 — LAYER 4a: NEWS / EVENT VOLATILITY FILTER
                                 # ═══════════════════════════════════════════════════════
                                 # Block entries during news-driven volatility spikes.
@@ -10209,6 +10328,43 @@ class TradingStrategy:
                                                 logger.debug(
                                                     "TradeFrequencyController confidence nudge "
                                                     "skipped for %s: %s", symbol, _tfc_err
+                                                )
+
+                                        # ── LOSS CONTROL TUNER — drawdown confidence tighten ──
+                                        # When drawdown is in caution/warning/danger tier the tuner
+                                        # adds a positive delta to the gate so fewer signals pass
+                                        # and only the highest-conviction setups are accepted.
+                                        if (
+                                            LOSS_CONTROL_TUNER_AVAILABLE
+                                            and hasattr(self, 'loss_control_tuner')
+                                            and self.loss_control_tuner is not None
+                                        ):
+                                            try:
+                                                _lct_conf_delta = self.loss_control_tuner.get_confidence_tighten_delta()
+                                                if _lct_conf_delta > 0.0:
+                                                    _sf_confidence_pre_lct = _sf_confidence
+                                                    # Subtracting a positive delta reduces the effective
+                                                    # confidence score fed into the sniper filter gate.
+                                                    # A lower score is less likely to meet the fixed
+                                                    # minimum threshold → harder to enter → filters
+                                                    # tighten under drawdown stress.
+                                                    _sf_confidence = max(
+                                                        0.0,
+                                                        min(1.0, _sf_confidence - _lct_conf_delta),
+                                                    )
+                                                    logger.debug(
+                                                        "   🔒 LossControlTuner [%s]: conf "
+                                                        "%.3f→%.3f (tighten_delta=+%.3f tier=%s)",
+                                                        symbol,
+                                                        _sf_confidence_pre_lct,
+                                                        _sf_confidence,
+                                                        _lct_conf_delta,
+                                                        self.loss_control_tuner._tier.value,
+                                                    )
+                                            except Exception as _lct_conf_err:
+                                                logger.debug(
+                                                    "LossControlTuner confidence tighten "
+                                                    "skipped for %s: %s", symbol, _lct_conf_err,
                                                 )
 
                                         _sf_close = float(df['close'].iloc[-1]) if len(df) > 0 else 0.0
@@ -11514,6 +11670,56 @@ class TradingStrategy:
                                         logger.debug(
                                             "Capital Concentration Engine sizing skipped for %s: %s",
                                             symbol, _cce_size_err,
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
+                                # PAIR PERFORMANCE OPTIMIZER — boost top-performing pairs
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    PAIR_PERF_OPTIMIZER_AVAILABLE
+                                    and hasattr(self, 'pair_perf_optimizer')
+                                    and self.pair_perf_optimizer is not None
+                                ):
+                                    try:
+                                        _ppo_mult = self.pair_perf_optimizer.get_pair_size_multiplier(symbol)
+                                        if _ppo_mult != 1.0:
+                                            _ppo_pre = position_size
+                                            position_size *= _ppo_mult
+                                            logger.info(
+                                                "   🏆 %s: TOP PAIR BOOST (%.2f×) "
+                                                "$%.2f → $%.2f",
+                                                symbol, _ppo_mult,
+                                                _ppo_pre, position_size,
+                                            )
+                                    except Exception as _ppo_size_err:
+                                        logger.debug(
+                                            "PairPerformanceOptimizer sizing skipped for %s: %s",
+                                            symbol, _ppo_size_err,
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
+                                # LOSS CONTROL TUNER — shrink size during drawdown stress
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    LOSS_CONTROL_TUNER_AVAILABLE
+                                    and hasattr(self, 'loss_control_tuner')
+                                    and self.loss_control_tuner is not None
+                                ):
+                                    try:
+                                        _lct_mult = self.loss_control_tuner.get_size_reduction_multiplier()
+                                        if _lct_mult < 1.0:
+                                            _lct_pre = position_size
+                                            position_size *= _lct_mult
+                                            logger.info(
+                                                "   📉 %s: LOSS CONTROL size reduction "
+                                                "(%.2f×) $%.2f → $%.2f",
+                                                symbol, _lct_mult,
+                                                _lct_pre, position_size,
+                                            )
+                                    except Exception as _lct_size_err:
+                                        logger.debug(
+                                            "LossControlTuner sizing skipped for %s: %s",
+                                            symbol, _lct_size_err,
                                         )
 
                                 # Calculate dynamic minimum based on account balance and
@@ -12963,6 +13169,15 @@ class TradingStrategy:
                     self.pnl_analytics_layer.log_report()
             except Exception as _pal_rec_err:
                 logger.debug("PnL Analytics Layer record_trade skipped for %s: %s", symbol, _pal_rec_err)
+
+        # 🔄 PAIR PERFORMANCE OPTIMIZER — notify outcome for kill-recovery tracking
+        if (PAIR_PERF_OPTIMIZER_AVAILABLE
+                and hasattr(self, 'pair_perf_optimizer')
+                and self.pair_perf_optimizer is not None):
+            try:
+                self.pair_perf_optimizer.notify_trade_outcome(symbol=symbol, is_win=is_win)
+            except Exception as _ppo_rec_err:
+                logger.debug("PairPerformanceOptimizer notify skipped for %s: %s", symbol, _ppo_rec_err)
 
         # 📊 TRADE FREQUENCY CONTROLLER — register entry so frequency is tracked
         if (TRADE_FREQUENCY_CONTROLLER_AVAILABLE
