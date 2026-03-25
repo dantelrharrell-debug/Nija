@@ -71,8 +71,8 @@ STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for standard acco
 
 # Why these values?
 # - $100 threshold: Small enough to help struggling accounts, large enough to avoid excessive risk
-# - 20% max: Allows $58.76 → $11.75 max position (meets Kraken $10 minimum)
-# - 10pp bump limit: Allows 17% positions on $58.76 balance (10% tier max + 7% bump)
+# - 40% max: $50+ balance → $20+ max position (comfortably above $10 operational floor for all brokers)
+# - 10pp bump limit: Allows broader positions on small-balance accounts
 
 # For $50-100: Trade with 75% positions — keeps growth fast, reduces blow-up risk
 SMALL_BALANCE_POSITION_PCT = 0.75  # 75% for $50–$100 accounts

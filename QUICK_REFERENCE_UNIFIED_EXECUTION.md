@@ -60,11 +60,11 @@ if validated.valid:
 
 | Exchange | Minimum Order | Fees (Round-trip) |
 |----------|--------------|-------------------|
-| Coinbase | $25 USD | 1.20% |
+| Coinbase | $10 USD | 1.20% |
 | Kraken | $10 USD | 0.42% |
-| Binance | $15 USD | 0.20% |
+| Binance | $10 USD | 0.20% |
 | OKX | $10 USD | 0.20% |
-| Alpaca | Account-based | 0% (commission-free) |
+| Alpaca | $1 USD | 0% (commission-free) |
 
 ## Symbol Formats
 
