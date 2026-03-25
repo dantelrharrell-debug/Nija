@@ -9793,14 +9793,13 @@ class TradingStrategy:
                                         _sf_confidence = float(_raw_conf)
 
                                         # ── MICRO-ACCOUNT SIGNAL LOOSENING ──────────────────
-                                        # For accounts below $100 the sniper filter's default
-                                        # confidence gate (0.65) can suppress too many signals,
-                                        # leaving a small account idle for extended periods.
-                                        # Nudge the effective confidence down by 0.05 so
+                                        # For accounts below $100 the sniper filter's confidence
+                                        # gate (0.50) can still suppress some signals.
+                                        # Nudge the effective confidence UP by 0.05 so
                                         # slightly weaker but still valid setups are allowed.
                                         if (account_balance is not None
                                                 and account_balance < MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD):
-                                            _sf_confidence = max(0.0, _sf_confidence - 0.05)
+                                            _sf_confidence = min(1.0, _sf_confidence + 0.05)
                                             logger.debug(
                                                 "   📡 Micro-account sniper loosen [%s]: "
                                                 "conf nudge %.2f→%.2f (balance $%.2f)",
@@ -9820,9 +9819,12 @@ class TradingStrategy:
                                                 _wrft_params = self.win_rate_frequency_tuner.get_params()
                                                 if _wrft_params.confidence_delta != 0.0:
                                                     _sf_confidence_raw = _sf_confidence
+                                                    # Subtract delta: negative delta (LOOSEN) raises
+                                                    # effective confidence → easier to pass the gate.
+                                                    # Positive delta (TIGHTEN) lowers it → harder.
                                                     _sf_confidence = max(
                                                         0.0,
-                                                        min(1.0, _sf_confidence + _wrft_params.confidence_delta),
+                                                        min(1.0, _sf_confidence - _wrft_params.confidence_delta),
                                                     )
                                                     logger.debug(
                                                         "   📊 WinRateFreqTuner [%s]: conf "
@@ -9841,8 +9843,10 @@ class TradingStrategy:
 
                                         # ── AGGRESSION MODE — user-configurable confidence overlay ──
                                         # Applies the mode's confidence_delta (SAFE=+0.05,
-                                        # BALANCED=0.0, AGGRESSIVE=−0.06) on top of the running
-                                        # confidence score so operator intent is always reflected.
+                                        # BALANCED=0.0, AGGRESSIVE=−0.06).
+                                        # Delta is SUBTRACTED from confidence so a negative delta
+                                        # (AGGRESSIVE) RAISES effective confidence → easier to enter,
+                                        # and a positive delta (SAFE) LOWERS it → harder to enter.
                                         if (
                                             AGGRESSION_MODE_CONTROLLER_AVAILABLE
                                             and hasattr(self, 'aggression_mode_controller')
@@ -9854,7 +9858,7 @@ class TradingStrategy:
                                                     _sf_confidence_pre_amc = _sf_confidence
                                                     _sf_confidence = max(
                                                         0.0,
-                                                        min(1.0, _sf_confidence + _amc_delta),
+                                                        min(1.0, _sf_confidence - _amc_delta),
                                                     )
                                                     logger.debug(
                                                         "   %s AggressionMode [%s] conf "
@@ -9875,6 +9879,8 @@ class TradingStrategy:
                                         # ── TRADE FREQUENCY CONTROLLER — frequency-based nudge ──
                                         # When below the minimum trades/hr target the controller
                                         # emits a negative delta to make entries slightly easier.
+                                        # Delta is SUBTRACTED so a negative delta (under-target)
+                                        # RAISES effective confidence → easier to enter.
                                         if (
                                             TRADE_FREQUENCY_CONTROLLER_AVAILABLE
                                             and hasattr(self, 'trade_frequency_controller')
@@ -9886,7 +9892,7 @@ class TradingStrategy:
                                                     _sf_confidence_pre_tfc = _sf_confidence
                                                     _sf_confidence = max(
                                                         0.0,
-                                                        min(1.0, _sf_confidence + _tfc_delta),
+                                                        min(1.0, _sf_confidence - _tfc_delta),
                                                     )
                                                     logger.debug(
                                                         "   📊 TradeFreqCtrl [%s]: conf "
