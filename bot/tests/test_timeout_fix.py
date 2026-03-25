@@ -1,9 +1,9 @@
 """
-Test script for broker timeout fix (Jan 28, 2026)
+Test script for broker timeout fix
 
 Tests the timeout handling improvements:
 1. call_with_timeout race condition fix
-2. Timeout set to 45s to accommodate Kraken API timeout (30s) + network overhead (15s)
+2. Timeout reduced to 12s for faster Kraken fallback
 3. Permissive cached balance fallback
 4. Better exception logging
 """
@@ -17,14 +17,14 @@ from bot.trading_strategy import call_with_timeout, BALANCE_FETCH_TIMEOUT, CACHE
 
 
 def test_timeout_constant():
-    """Test that timeout is set to 45s to accommodate Kraken API timeout (30s) + network overhead"""
+    """Test that timeout is reduced to 12s for faster Kraken fallback"""
     print("=" * 70)
     print("TEST 1: Timeout Constant Value")
     print("=" * 70)
 
     print(f"BALANCE_FETCH_TIMEOUT = {BALANCE_FETCH_TIMEOUT}s")
-    assert BALANCE_FETCH_TIMEOUT == 45, f"Timeout should be 45s, got {BALANCE_FETCH_TIMEOUT}s"
-    print(f"✅ Timeout correctly set to 45 seconds (30s Kraken API + 15s buffer)")
+    assert BALANCE_FETCH_TIMEOUT == 12, f"Timeout should be 12s, got {BALANCE_FETCH_TIMEOUT}s"
+    print(f"✅ Timeout correctly set to 12 seconds (fast Kraken fallback)")
     print()
 
 
@@ -137,9 +137,9 @@ def test_cached_balance_max_age():
     print("TEST 6: Cached Balance Max Age")
     print("=" * 70)
 
-    print(f"CACHED_BALANCE_MAX_AGE_SECONDS = {CACHED_BALANCE_MAX_AGE_SECONDS}s ({CACHED_BALANCE_MAX_AGE_SECONDS/60:.0f} minutes)")
-    assert CACHED_BALANCE_MAX_AGE_SECONDS == 300, f"Cache age should be 300s (5 min), got {CACHED_BALANCE_MAX_AGE_SECONDS}s"
-    print("✅ Cached balance max age correctly set to 5 minutes")
+    print(f"CACHED_BALANCE_MAX_AGE_SECONDS = {CACHED_BALANCE_MAX_AGE_SECONDS}s ({CACHED_BALANCE_MAX_AGE_SECONDS/60:.1f} minutes)")
+    assert CACHED_BALANCE_MAX_AGE_SECONDS == 90, f"Cache age should be 90s, got {CACHED_BALANCE_MAX_AGE_SECONDS}s"
+    print("✅ Cached balance max age correctly set to 90s")
     print()
 
 
