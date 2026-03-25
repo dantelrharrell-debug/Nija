@@ -1548,22 +1548,29 @@ CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s m
 # Worst-case (no cache hits): 100 markets × 8s scan delay ≈ 800s; cap at 900s.
 # With the cache-aware delay (skips sleep on cache hits) the actual runtime is
 # typically well below this ceiling, allowing more markets to be evaluated per cycle.
-MAX_CYCLE_SECONDS = 900  # Hard cap on total cycle duration (seconds; raised from 600→900)
+MAX_CYCLE_SECONDS = 900  # Hard cap on total cycle duration (seconds; raised from 600s)
 # Separate cap for the scan portion only (measured from just before the scan loop).
 # This prevents pre-scan overhead (balance fetch, position management) from eating
 # into the scan budget and triggering 0-market cycles.
 MAX_SCAN_SECONDS = 120   # Max seconds allowed for the market scan loop itself
 
 # Market scanning rotation (prevents scanning same markets every cycle)
-# UPDATED (Mar 2026): Increased batch size targets for 50-200 markets per cycle
-MARKET_BATCH_SIZE_MIN = 50   # Start with 50 markets per cycle — immediate full-speed scan
+# UPDATED (Mar 2026): Increased batch size targets for 50-200 markets per cycle.
+# The warmup mechanism still exists (MARKET_BATCH_WARMUP_CYCLES=1) but now starts
+# at a much higher baseline (50) so the bot reaches full scan speed immediately.
+MARKET_BATCH_SIZE_MIN = 50   # Minimum markets to scan per cycle (raised from 10→50)
 MARKET_BATCH_SIZE_MAX = 100  # Maximum markets to scan per cycle (raised from 50→100)
-MARKET_BATCH_WARMUP_CYCLES = 1  # Minimal warmup: full speed after 1 cycle
+MARKET_BATCH_WARMUP_CYCLES = 1  # Minimal warmup: full speed after 1 cycle (lowered from 3→1)
 # For micro accounts (balance < $100), scan a larger batch to compensate for tighter
 # position sizing — more opportunities evaluated per cycle increases trade frequency.
 MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD = 100.0  # USD: below this balance use boosted scan size
 MICRO_ACCOUNT_SCAN_SIZE = 100              # Markets to scan per cycle for micro accounts (raised 50→100)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
+
+# ── FIRST TRADE BOOST ──────────────────────────────────────────────────────
+# When the first-trade force trigger is active, the scan expands to cover up
+# to FIRST_TRADE_BOOST_MAX_MARKETS to maximise the "take best available" search.
+FIRST_TRADE_BOOST_MAX_MARKETS = 200  # Max markets to scan during first-trade force mode
 
 # ============================================================================
 # POSITION CAP & SIZE CONSTANTS (CRITICAL RISK CONTROLS)
@@ -2132,15 +2139,22 @@ except ValueError:
 # Overridable via FORCED_ENTRY_FALLBACK_CYCLES env var.
 try:
     FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '5'))
-except ValueError:
+except ValueError as _e:
+    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 5", _e)
     FORCED_ENTRY_FALLBACK_CYCLES = 5
 
-# How much to reduce the sniper-filter confidence requirement in fallback mode.
-# E.g. 0.10 means a signal that would normally need 0.65 confidence only needs 0.55.
+# How much to raise the effective sniper-filter confidence in fallback mode.
+# E.g. 0.10 means the signal needs 0.10 LESS confidence to pass the gate.
 try:
     FORCED_ENTRY_CONFIDENCE_DELTA = float(os.getenv('FORCED_ENTRY_CONFIDENCE_DELTA', '0.10'))
-except ValueError:
+except ValueError as _e:
+    logger.warning("Invalid FORCED_ENTRY_CONFIDENCE_DELTA env value: %s — using default 0.10", _e)
     FORCED_ENTRY_CONFIDENCE_DELTA = 0.10
+
+# Multiplier applied to FORCED_ENTRY_CONFIDENCE_DELTA during first-trade force mode.
+# A higher multiplier ensures the very first trade executes even in difficult markets.
+FIRST_TRADE_FORCE_CONFIDENCE_MULTIPLIER = 1.5   # 1.5× delta when first-trade force is active
+FIRST_TRADE_FORCE_CONFIDENCE_CAP = 0.25         # Max confidence boost allowed in first-trade mode
 
 # ── MICRO ACCOUNT PERFORMANCE BOOSTERS (Mar 2026) ─────────────────────────
 # Four features designed to maximise growth for small accounts.  They operate
@@ -9422,7 +9436,7 @@ class TradingStrategy:
                     # Rotation offset from _get_rotated_markets is respected so we
                     # do not always restart from index 0.
                     _ft_boost_target = (
-                        min(200, len(all_products))
+                        min(FIRST_TRADE_BOOST_MAX_MARKETS, len(all_products))
                         if (not self._first_trade_executed and self._first_trade_force_active)
                         else MARKET_BATCH_SIZE_MAX
                     )
@@ -10187,25 +10201,28 @@ class TradingStrategy:
                                         # requirement so slightly weaker ("B-grade") setups can
                                         # fire.  This prevents sitting idle indefinitely while
                                         # valid trades are blocked by an over-strict gate.
-                                        _fallback_active = (
-                                            self._zero_signal_streak >= FORCED_ENTRY_FALLBACK_CYCLES
-                                        )
                                         _first_trade_force = (
                                             not self._first_trade_executed
                                             and self._first_trade_force_active
                                         )
-                                        if _fallback_active or _first_trade_force:
-                                            _fb_delta = FORCED_ENTRY_CONFIDENCE_DELTA
-                                            # First-trade force gets an extra boost to ensure
-                                            # capital is deployed on the very first trade.
+                                        _fallback_active = (
+                                            self._zero_signal_streak >= FORCED_ENTRY_FALLBACK_CYCLES
+                                        )
+                                        if _first_trade_force or _fallback_active:
                                             if _first_trade_force:
-                                                _fb_delta = min(0.25, _fb_delta * 1.5)
+                                                # First-trade force: extra boost to ensure capital
+                                                # is deployed on the very first trade.
+                                                _fb_delta = min(
+                                                    FIRST_TRADE_FORCE_CONFIDENCE_CAP,
+                                                    FORCED_ENTRY_CONFIDENCE_DELTA
+                                                    * FIRST_TRADE_FORCE_CONFIDENCE_MULTIPLIER,
+                                                )
+                                                _fb_label = "FIRST-TRADE-FORCE"
+                                            else:
+                                                _fb_delta = FORCED_ENTRY_CONFIDENCE_DELTA
+                                                _fb_label = f"B-GRADE-FALLBACK(streak={self._zero_signal_streak})"
                                             _sf_conf_before_fb = _sf_confidence
                                             _sf_confidence = min(1.0, _sf_confidence + _fb_delta)
-                                            _fb_label = (
-                                                "FIRST-TRADE-FORCE" if _first_trade_force
-                                                else f"B-GRADE-FALLBACK(streak={self._zero_signal_streak})"
-                                            )
                                             logger.debug(
                                                 "   🔓 %s [%s]: conf nudge %.2f→%.2f (+%.2f)",
                                                 _fb_label, symbol,
