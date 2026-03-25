@@ -1260,6 +1260,28 @@ except ImportError:
         KrakenOptParams = None  # type: ignore
         logger.warning("⚠️ Kraken Params Optimizer not available — static Kraken targets in use")
 
+# ── Broker Strategy Router — per-broker profiles, optimizers & move filter ───
+try:
+    from broker_strategy_router import (
+        get_broker_strategy_router,
+        BROKER_PROFILES,
+    )
+    BROKER_STRATEGY_ROUTER_AVAILABLE = True
+    logger.info("✅ Broker Strategy Router loaded — per-broker trade filtering active")
+except ImportError:
+    try:
+        from bot.broker_strategy_router import (
+            get_broker_strategy_router,
+            BROKER_PROFILES,
+        )
+        BROKER_STRATEGY_ROUTER_AVAILABLE = True
+        logger.info("✅ Broker Strategy Router loaded — per-broker trade filtering active")
+    except ImportError:
+        BROKER_STRATEGY_ROUTER_AVAILABLE = False
+        get_broker_strategy_router = None  # type: ignore
+        BROKER_PROFILES = {}  # type: ignore
+        logger.warning("⚠️ Broker Strategy Router not available — static broker targets in use")
+
 load_dotenv()
 
 # ============================================================================
@@ -2777,6 +2799,17 @@ class TradingStrategy:
                 self.kraken_params_optimizer = None
         else:
             self.kraken_params_optimizer = None
+
+        # ── Broker Strategy Router — per-broker optimizer + move filter ───────
+        if BROKER_STRATEGY_ROUTER_AVAILABLE and get_broker_strategy_router is not None:
+            try:
+                self.broker_strategy_router = get_broker_strategy_router()
+                logger.info("✅ Broker Strategy Router initialized — per-broker filtering active")
+            except Exception as _e:
+                logger.warning("⚠️ Broker Strategy Router init failed: %s", _e)
+                self.broker_strategy_router = None
+        else:
+            self.broker_strategy_router = None
 
         # ── Aggression Mode Controller — SAFE / BALANCED / AGGRESSIVE ────────
         if AGGRESSION_MODE_CONTROLLER_AVAILABLE and get_aggression_mode_controller is not None:
@@ -9636,6 +9669,18 @@ class TradingStrategy:
                                                 )
                                             except Exception as _kpo_regime_err:
                                                 logger.debug("Kraken Params Optimizer regime update skipped: %s", _kpo_regime_err)
+                                        # 🔀 BROKER STRATEGY ROUTER — broadcast regime to all broker optimizers
+                                        if (BROKER_STRATEGY_ROUTER_AVAILABLE
+                                                and hasattr(self, 'broker_strategy_router')
+                                                and self.broker_strategy_router is not None):
+                                            try:
+                                                _bsr_regime = str(self.regime_engine.current_regime)
+                                                _bsr_conf = float(getattr(self.regime_engine, 'confidence', 0.5))
+                                                self.broker_strategy_router.broadcast_regime(
+                                                    _bsr_regime, confidence=_bsr_conf
+                                                )
+                                            except Exception as _bsr_regime_err:
+                                                logger.debug("Broker Strategy Router regime broadcast skipped: %s", _bsr_regime_err)
                                 except Exception as _re_feed_err:
                                     logger.debug("Regime engine candle update failed for %s: %s", symbol, _re_feed_err)
 
@@ -9963,6 +10008,64 @@ class TradingStrategy:
                                             analysis = {'action': 'hold', 'reason': f'MTFConfirmation: {_mtf_result.summary}'}
                                     except Exception as _mtf_exc:
                                         logger.debug("MTF Confirmation check skipped for %s: %s", symbol, _mtf_exc)
+
+                                # ═══════════════════════════════════════════════════════
+                                # LAYER 4c — BROKER MOVE FILTER: per-broker min_move gate
+                                # ═══════════════════════════════════════════════════════
+                                # Skip trades whose expected price move is smaller than the
+                                # broker's minimum profitable move threshold.  Prevents:
+                                #   • Coinbase overtrading on marginal 0.8% moves (fees 1.4%)
+                                #   • Kraken undertrading by skipping profitable 0.9% scalps
+                                # The expected_move comes from the APEX analysis dict; if not
+                                # present we compute an ATR-based proxy from the recent data.
+                                if (
+                                    BROKER_STRATEGY_ROUTER_AVAILABLE
+                                    and hasattr(self, 'broker_strategy_router')
+                                    and self.broker_strategy_router is not None
+                                    and analysis.get('action') in ('enter_long', 'enter_short')
+                                ):
+                                    try:
+                                        _active_broker_name = (
+                                            self.broker.broker_type.value
+                                            if (hasattr(self, 'broker') and self.broker
+                                                and hasattr(self.broker, 'broker_type'))
+                                            else 'coinbase'
+                                        )
+                                        # Prefer explicit expected_move from analysis, fall back to ATR proxy
+                                        _exp_move = analysis.get('expected_move')
+                                        if _exp_move is None:
+                                            _atr_val = analysis.get('atr')
+                                            _last_close = analysis.get('price') or analysis.get('close')
+                                            if _atr_val and _last_close and _last_close > 0:
+                                                _exp_move = float(_atr_val) / float(_last_close)
+                                        if _exp_move is not None and _exp_move > 0:
+                                            _broker_profile = self.broker_strategy_router.get_profile(_active_broker_name)
+                                            _min_move_pct = _broker_profile.get('min_move', 0) * 100
+                                            if self.broker_strategy_router.should_skip_trade(
+                                                float(_exp_move), _active_broker_name
+                                            ):
+                                                filter_stats['min_move_filtered'] = (
+                                                    filter_stats.get('min_move_filtered', 0) + 1
+                                                )
+                                                logger.debug(
+                                                    "   📏 BROKER MOVE FILTER [%s/%s]: "
+                                                    "expected_move=%.2f%% < min_move=%.1f%% — skip",
+                                                    symbol, _active_broker_name,
+                                                    float(_exp_move) * 100, _min_move_pct,
+                                                )
+                                                analysis = {
+                                                    'action': 'hold',
+                                                    'reason': (
+                                                        f'BrokerMoveFilter/{_active_broker_name}: '
+                                                        f'move {float(_exp_move)*100:.2f}% < '
+                                                        f'{_min_move_pct:.1f}% threshold'
+                                                    ),
+                                                }
+                                    except Exception as _bmf_exc:
+                                        logger.debug(
+                                            "Broker move filter check skipped for %s: %s",
+                                            symbol, _bmf_exc,
+                                        )
 
                                 # ═══════════════════════════════════════════════════════
                                 # LAYER 5 — SNIPER FILTER: final pre-execution quality gate
