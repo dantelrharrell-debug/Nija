@@ -344,6 +344,16 @@ class PnLAnalyticsLayer:
         with self._lock:
             return self._strategies.get(strategy)
 
+    def get_all_strategy_stats(self) -> List[StrategyStats]:
+        """Return a list of all tracked strategy stats objects."""
+        with self._lock:
+            return list(self._strategies.values())
+
+    def get_all_pair_stats(self) -> List[PairStats]:
+        """Return a list of all tracked pair stats objects."""
+        with self._lock:
+            return list(self._pairs.values())
+
     # ── Full report ───────────────────────────────────────────────────────────
 
     def get_report(self) -> dict:
