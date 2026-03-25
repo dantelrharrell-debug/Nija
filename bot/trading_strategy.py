@@ -763,6 +763,66 @@ except ImportError:
         get_win_rate_frequency_tuner = None  # type: ignore
         logger.warning("⚠️ Win-Rate/Frequency Tuner not available")
 
+# ── Aggression Mode Controller — SAFE / BALANCED / AGGRESSIVE user modes ─────
+try:
+    from aggression_mode_controller import get_aggression_mode_controller
+    AGGRESSION_MODE_CONTROLLER_AVAILABLE = True
+    logger.info("✅ Aggression Mode Controller loaded — SAFE/BALANCED/AGGRESSIVE modes active")
+except ImportError:
+    try:
+        from bot.aggression_mode_controller import get_aggression_mode_controller
+        AGGRESSION_MODE_CONTROLLER_AVAILABLE = True
+        logger.info("✅ Aggression Mode Controller loaded — SAFE/BALANCED/AGGRESSIVE modes active")
+    except ImportError:
+        AGGRESSION_MODE_CONTROLLER_AVAILABLE = False
+        get_aggression_mode_controller = None  # type: ignore
+        logger.warning("⚠️ Aggression Mode Controller not available")
+
+# ── Trade Frequency Controller — ensure min trades per hour / per day ────────
+try:
+    from trade_frequency_controller import get_trade_frequency_controller
+    TRADE_FREQUENCY_CONTROLLER_AVAILABLE = True
+    logger.info("✅ Trade Frequency Controller loaded — minimum trades/hr targeting active")
+except ImportError:
+    try:
+        from bot.trade_frequency_controller import get_trade_frequency_controller
+        TRADE_FREQUENCY_CONTROLLER_AVAILABLE = True
+        logger.info("✅ Trade Frequency Controller loaded — minimum trades/hr targeting active")
+    except ImportError:
+        TRADE_FREQUENCY_CONTROLLER_AVAILABLE = False
+        get_trade_frequency_controller = None  # type: ignore
+        logger.warning("⚠️ Trade Frequency Controller not available")
+
+# ── PnL Analytics Layer — win rate, avg return, per-pair / per-strategy ──────
+try:
+    from pnl_analytics_layer import get_pnl_analytics_layer
+    PNL_ANALYTICS_LAYER_AVAILABLE = True
+    logger.info("✅ PnL Analytics Layer loaded — win rate and per-pair analytics active")
+except ImportError:
+    try:
+        from bot.pnl_analytics_layer import get_pnl_analytics_layer
+        PNL_ANALYTICS_LAYER_AVAILABLE = True
+        logger.info("✅ PnL Analytics Layer loaded — win rate and per-pair analytics active")
+    except ImportError:
+        PNL_ANALYTICS_LAYER_AVAILABLE = False
+        get_pnl_analytics_layer = None  # type: ignore
+        logger.warning("⚠️ PnL Analytics Layer not available")
+
+# ── Auto Capital Scaler — adjusts risk tiers as balance grows ─────────────────
+try:
+    from auto_capital_scaler import get_auto_capital_scaler
+    AUTO_CAPITAL_SCALER_AVAILABLE = True
+    logger.info("✅ Auto Capital Scaler loaded — risk scales automatically with balance")
+except ImportError:
+    try:
+        from bot.auto_capital_scaler import get_auto_capital_scaler
+        AUTO_CAPITAL_SCALER_AVAILABLE = True
+        logger.info("✅ Auto Capital Scaler loaded — risk scales automatically with balance")
+    except ImportError:
+        AUTO_CAPITAL_SCALER_AVAILABLE = False
+        get_auto_capital_scaler = None  # type: ignore
+        logger.warning("⚠️ Auto Capital Scaler not available")
+
 # ── Auto Dust Sweeper — convert all dust to one target asset ─────────────────
 try:
     from auto_dust_sweeper import get_auto_dust_sweeper, RECYCLER_TARGET
@@ -2622,6 +2682,61 @@ class TradingStrategy:
                 self.win_rate_frequency_tuner = None
         else:
             self.win_rate_frequency_tuner = None
+
+        # ── Aggression Mode Controller — SAFE / BALANCED / AGGRESSIVE ────────
+        if AGGRESSION_MODE_CONTROLLER_AVAILABLE and get_aggression_mode_controller is not None:
+            try:
+                self.aggression_mode_controller = get_aggression_mode_controller()
+                logger.info(
+                    "✅ Aggression Mode Controller initialized — mode=%s",
+                    self.aggression_mode_controller.mode.value,
+                )
+            except Exception as _e:
+                logger.warning("⚠️ Aggression Mode Controller init failed: %s", _e)
+                self.aggression_mode_controller = None
+        else:
+            self.aggression_mode_controller = None
+
+        # ── Trade Frequency Controller — minimum trades/hr targeting ─────────
+        if TRADE_FREQUENCY_CONTROLLER_AVAILABLE and get_trade_frequency_controller is not None:
+            try:
+                self.trade_frequency_controller = get_trade_frequency_controller()
+                logger.info(
+                    "✅ Trade Frequency Controller initialized — "
+                    "targeting %.1f/hr, %.1f/day",
+                    self.trade_frequency_controller.min_trades_per_hour,
+                    self.trade_frequency_controller.min_trades_per_day,
+                )
+            except Exception as _e:
+                logger.warning("⚠️ Trade Frequency Controller init failed: %s", _e)
+                self.trade_frequency_controller = None
+        else:
+            self.trade_frequency_controller = None
+
+        # ── PnL Analytics Layer — win rate, avg return, per-pair analytics ───
+        if PNL_ANALYTICS_LAYER_AVAILABLE and get_pnl_analytics_layer is not None:
+            try:
+                self.pnl_analytics_layer = get_pnl_analytics_layer()
+                logger.info(
+                    "✅ PnL Analytics Layer initialized — %d trades in history",
+                    self.pnl_analytics_layer.total_trades,
+                )
+            except Exception as _e:
+                logger.warning("⚠️ PnL Analytics Layer init failed: %s", _e)
+                self.pnl_analytics_layer = None
+        else:
+            self.pnl_analytics_layer = None
+
+        # ── Auto Capital Scaler — adjusts risk tiers as balance grows ────────
+        if AUTO_CAPITAL_SCALER_AVAILABLE and get_auto_capital_scaler is not None:
+            try:
+                self.auto_capital_scaler = get_auto_capital_scaler()
+                logger.info("✅ Auto Capital Scaler initialized — tier-based risk scaling active")
+            except Exception as _e:
+                logger.warning("⚠️ Auto Capital Scaler init failed: %s", _e)
+                self.auto_capital_scaler = None
+        else:
+            self.auto_capital_scaler = None
 
         # ── AI Trade Quality Filter — ML-powered scalp quality gate ──────────
         if AI_TRADE_QUALITY_FILTER_AVAILABLE and get_ai_trade_quality_filter is not None:
@@ -6028,6 +6143,31 @@ class TradingStrategy:
                         )
             except Exception as _gdcb_exc:
                 logger.debug("Global Drawdown Circuit Breaker check skipped: %s", _gdcb_exc)
+
+        # 💰 AUTO CAPITAL SCALER — update equity tier each cycle
+        # Ensures position sizing and risk parameters scale with balance growth.
+        if AUTO_CAPITAL_SCALER_AVAILABLE and hasattr(self, 'auto_capital_scaler') and self.auto_capital_scaler is not None:
+            try:
+                _acs_balance = 0.0
+                if active_broker:
+                    try:
+                        _acs_bal_result = active_broker.get_balance()
+                        if _acs_bal_result and not _acs_bal_result[1]:
+                            _acs_balance = float(_acs_bal_result[0] or 0.0)
+                    except Exception:
+                        pass
+                if _acs_balance > 0:
+                    _acs_params = self.auto_capital_scaler.update(_acs_balance)
+                    logger.debug(
+                        "💰 AutoCapitalScaler: tier=%s equity=$%.0f "
+                        "pos=%.1f%% max_concurrent=%d",
+                        _acs_params.tier_name,
+                        _acs_params.current_equity,
+                        _acs_params.base_position_pct * 100,
+                        _acs_params.max_concurrent_positions,
+                    )
+            except Exception as _acs_exc:
+                logger.debug("Auto Capital Scaler update skipped: %s", _acs_exc)
 
         # ✅ LAYER 0d: PHASE 3 — ABNORMAL MARKET KILL SWITCH
         # Automatically halts trading on flash crashes, extreme volatility,
@@ -9699,6 +9839,68 @@ class TradingStrategy:
                                                     "skipped for %s: %s", symbol, _wrft_err
                                                 )
 
+                                        # ── AGGRESSION MODE — user-configurable confidence overlay ──
+                                        # Applies the mode's confidence_delta (SAFE=+0.05,
+                                        # BALANCED=0.0, AGGRESSIVE=−0.06) on top of the running
+                                        # confidence score so operator intent is always reflected.
+                                        if (
+                                            AGGRESSION_MODE_CONTROLLER_AVAILABLE
+                                            and hasattr(self, 'aggression_mode_controller')
+                                            and self.aggression_mode_controller is not None
+                                        ):
+                                            try:
+                                                _amc_delta = self.aggression_mode_controller.profile.confidence_delta
+                                                if _amc_delta != 0.0:
+                                                    _sf_confidence_pre_amc = _sf_confidence
+                                                    _sf_confidence = max(
+                                                        0.0,
+                                                        min(1.0, _sf_confidence + _amc_delta),
+                                                    )
+                                                    logger.debug(
+                                                        "   %s AggressionMode [%s] conf "
+                                                        "%.3f→%.3f (mode=%s delta=%+.3f)",
+                                                        self.aggression_mode_controller.profile.emoji,
+                                                        symbol,
+                                                        _sf_confidence_pre_amc,
+                                                        _sf_confidence,
+                                                        self.aggression_mode_controller.mode.value,
+                                                        _amc_delta,
+                                                    )
+                                            except Exception as _amc_err:
+                                                logger.debug(
+                                                    "AggressionModeController confidence nudge "
+                                                    "skipped for %s: %s", symbol, _amc_err
+                                                )
+
+                                        # ── TRADE FREQUENCY CONTROLLER — frequency-based nudge ──
+                                        # When below the minimum trades/hr target the controller
+                                        # emits a negative delta to make entries slightly easier.
+                                        if (
+                                            TRADE_FREQUENCY_CONTROLLER_AVAILABLE
+                                            and hasattr(self, 'trade_frequency_controller')
+                                            and self.trade_frequency_controller is not None
+                                        ):
+                                            try:
+                                                _tfc_delta = self.trade_frequency_controller.get_confidence_delta()
+                                                if _tfc_delta != 0.0:
+                                                    _sf_confidence_pre_tfc = _sf_confidence
+                                                    _sf_confidence = max(
+                                                        0.0,
+                                                        min(1.0, _sf_confidence + _tfc_delta),
+                                                    )
+                                                    logger.debug(
+                                                        "   📊 TradeFreqCtrl [%s]: conf "
+                                                        "%.3f→%.3f (delta=%+.3f)",
+                                                        symbol,
+                                                        _sf_confidence_pre_tfc,
+                                                        _sf_confidence,
+                                                        _tfc_delta,
+                                                    )
+                                            except Exception as _tfc_err:
+                                                logger.debug(
+                                                    "TradeFrequencyController confidence nudge "
+                                                    "skipped for %s: %s", symbol, _tfc_err
+                                                )
 
                                         _sf_close = float(df['close'].iloc[-1]) if len(df) > 0 else 0.0
                                         _sf_spread = float(analysis.get('spread_pct', 0.001) or 0.001)
@@ -12380,6 +12582,32 @@ class TradingStrategy:
                 self.win_rate_frequency_tuner.record_trade(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _wrft_rec_err:
                 logger.debug("Win-Rate/Frequency Tuner record_trade skipped for %s: %s", symbol, _wrft_rec_err)
+
+        # 📈 PNL ANALYTICS LAYER — record outcome for win rate / per-pair tracking
+        if (PNL_ANALYTICS_LAYER_AVAILABLE
+                and hasattr(self, 'pnl_analytics_layer')
+                and self.pnl_analytics_layer is not None):
+            try:
+                self.pnl_analytics_layer.record_trade(
+                    symbol=symbol,
+                    pnl_usd=profit_usd,
+                    is_win=is_win,
+                    strategy=getattr(self, '_active_strategy_name', 'apex_v71'),
+                )
+                # Log a brief report every 50 trades
+                if self.pnl_analytics_layer.total_trades % 50 == 0:
+                    self.pnl_analytics_layer.log_report()
+            except Exception as _pal_rec_err:
+                logger.debug("PnL Analytics Layer record_trade skipped for %s: %s", symbol, _pal_rec_err)
+
+        # 📊 TRADE FREQUENCY CONTROLLER — register entry so frequency is tracked
+        if (TRADE_FREQUENCY_CONTROLLER_AVAILABLE
+                and hasattr(self, 'trade_frequency_controller')
+                and self.trade_frequency_controller is not None):
+            try:
+                self.trade_frequency_controller.record_trade()
+            except Exception as _tfc_rec_err:
+                logger.debug("Trade Frequency Controller record_trade skipped for %s: %s", symbol, _tfc_rec_err)
 
         # 🎯 DYNAMIC SNIPER THRESHOLDS — feed outcome to adapt entry gates
         if (DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE
