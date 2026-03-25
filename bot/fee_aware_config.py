@@ -65,7 +65,7 @@ MICRO_ACCOUNT_THRESHOLD = 5.0  # Accounts below this bypass quality multipliers
 # Used for both broker minimum bumping AND balance-based position sizing strategies
 SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
 
-SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # 20% max position for small accounts (vs 10% standard)
+SMALL_ACCOUNT_MAX_POSITION_PCT = 0.40  # 40% max position for small accounts — gives early filter headroom for $50–$100 accounts
 SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0  # Max percentage point difference for broker minimum bumps (vs 5pp standard)
 STANDARD_MAX_PCT_DIFF = 5.0  # Max percentage point difference for standard accounts
 

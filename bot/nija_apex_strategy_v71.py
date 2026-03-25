@@ -69,7 +69,7 @@ KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exc
 # Minimum order sizes per broker (USD).  Keeps all four check-sites in sync
 # and prevents sub-minimum orders from being scored, sized, or submitted.
 BROKER_MIN_ORDER_USD: Dict[str, float] = {
-    'coinbase': 25.0,   # Coinbase minimum — high fees make <$25 unprofitable
+    'coinbase': 10.0,   # Coinbase operational minimum — allows micro accounts ($50+) to trade
     'kraken':   10.0,   # Kraken exchange requirement
     'binance':  10.0,   # Binance minimum notional
     'okx':      10.0,   # OKX minimum notional

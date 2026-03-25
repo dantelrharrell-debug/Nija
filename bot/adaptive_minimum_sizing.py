@@ -43,7 +43,7 @@ logger = logging.getLogger("nija.adaptive_minimum_sizing")
 # Keep in sync with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py
 # ──────────────────────────────────────────────────────────────────────────────
 BROKER_MIN_ORDER_USD: Dict[str, float] = {
-    "coinbase": 25.0,   # High fees make <$25 unprofitable
+    "coinbase": 10.0,   # Coinbase operational minimum — allows micro accounts ($50+) to trade
     "kraken":   10.0,   # Kraken exchange requirement
     "binance":  10.0,   # Binance minimum notional
     "okx":      10.0,   # OKX minimum notional
