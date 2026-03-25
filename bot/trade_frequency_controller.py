@@ -11,11 +11,11 @@ filter maintain quality.
 
 Configuration via environment variables (all optional):
 
-    MIN_TRADES_PER_HOUR=1.0   # default: 0.5
-    MIN_TRADES_PER_DAY=6.0    # default: 5.0
-    FREQ_LOOSEN_STEP=0.03     # per-cycle confidence nudge downward
-    FREQ_TIGHTEN_STEP=0.02    # per-cycle confidence nudge upward
-    FREQ_MAX_DELTA=0.10       # max |confidence_delta| allowed
+    MIN_TRADES_PER_HOUR=2.0   # default: 2.0
+    MIN_TRADES_PER_DAY=12.0   # default: 12.0
+    FREQ_LOOSEN_STEP=0.03     # per-cycle confidence nudge (subtracted from gate)
+    FREQ_TIGHTEN_STEP=0.02    # per-cycle confidence nudge (added to gate)
+    FREQ_MAX_DELTA=0.15       # max |confidence_delta| allowed
 
 The controller is intentionally lightweight: it does NOT gate entries
 directly.  Instead callers read ``get_confidence_delta()`` and add it to
@@ -38,11 +38,11 @@ logger = logging.getLogger("nija.trade_frequency_controller")
 # Constants (can be overridden by env vars)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MIN_TRADES_PER_HOUR: float = 0.5
-_DEFAULT_MIN_TRADES_PER_DAY: float = 5.0
+_DEFAULT_MIN_TRADES_PER_HOUR: float = 2.0
+_DEFAULT_MIN_TRADES_PER_DAY: float = 12.0
 _DEFAULT_LOOSEN_STEP: float = 0.03
 _DEFAULT_TIGHTEN_STEP: float = 0.02
-_DEFAULT_MAX_DELTA: float = 0.10
+_DEFAULT_MAX_DELTA: float = 0.15
 
 # Rolling window sizes
 _HOUR_WINDOW_SECS: float = 3600.0

@@ -7,8 +7,8 @@ Controls entry thresholds, position sizing, and trade frequency
 based on the operator's risk preference. Set via environment variable:
 
     AGGRESSION_MODE=SAFE       # Most selective — capital preservation
-    AGGRESSION_MODE=BALANCED   # Balanced risk/reward (default)
-    AGGRESSION_MODE=AGGRESSIVE # More trades, lower thresholds — "print money"
+    AGGRESSION_MODE=BALANCED   # Balanced risk/reward
+    AGGRESSION_MODE=AGGRESSIVE # More trades, lower thresholds — "print money" (default)
 
 Each mode overlays a parameter delta on top of the base strategy
 thresholds, meaning it works alongside (not against) existing safety
@@ -180,7 +180,7 @@ class AggressionModeController:
 
     @staticmethod
     def _resolve_mode_from_env() -> AggressionMode:
-        raw = os.environ.get("AGGRESSION_MODE", "BALANCED").upper().strip()
+        raw = os.environ.get("AGGRESSION_MODE", "AGGRESSIVE").upper().strip()
         try:
             return AggressionMode(raw)
         except ValueError:

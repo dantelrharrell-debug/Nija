@@ -93,11 +93,11 @@ WIN_RATE_TIGHTEN: float = 0.45    # < 45% → TIGHTEN mode (raise gate to protec
 # Target trade frequency (trades per hour, measured over a 24-h rolling window)
 # Setting too high forces constant loosening; set it to what the market can
 # realistically deliver at your scan interval (~2.5 min = 24 trades/hr theoretical).
-MIN_TRADES_PER_HOUR: float = 1.0   # trigger LOOSEN if below 1 trade/hr
+MIN_TRADES_PER_HOUR: float = 2.0   # trigger LOOSEN if below 2 trades/hr
 
 # Maximum nudge applied to the confidence gate in either direction.
 # Keep it small — the goal is to tune, not to override the entry signal.
-MAX_CONFIDENCE_DELTA: float = 0.08   # ±8 pp absolute maximum
+MAX_CONFIDENCE_DELTA: float = 0.12   # ±12 pp absolute maximum
 LOOSEN_STEP: float = 0.03            # nudge down per LOOSEN activation
 TIGHTEN_STEP: float = 0.04           # nudge up per TIGHTEN activation
 

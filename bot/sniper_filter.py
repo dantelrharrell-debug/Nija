@@ -109,12 +109,12 @@ class SniperConfig:
     min_depth_usd: float = 0.0
 
     # ── Pillar 4: Confidence ──────────────────────────────────────────────────
-    min_confidence: float = 0.65
+    min_confidence: float = 0.50
 
     # ── Instant-block thresholds ─────────────────────────────────────────────
     # ADX below this value is treated as choppy/sideways — instant block.
     # Set to 0.0 to disable the ADX check (e.g. when ADX column is absent).
-    min_adx: float = 20.0
+    min_adx: float = 12.0
 
     # Volume below this multiple of average = thin market → instant block.
     low_volume_multiplier: float = 0.5
