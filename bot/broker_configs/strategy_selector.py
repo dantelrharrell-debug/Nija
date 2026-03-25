@@ -6,10 +6,13 @@ based on the broker being used. Each broker has unique characteristics:
 
 - Coinbase: High fees (1.4%), buy-focused, crypto only
 - Kraken: Low fees (0.36%), bidirectional, crypto + futures/options
+- Binance: Very low fees (0.28%), bidirectional, high-frequency scalp
 - Alpaca: Stock trading, different dynamics
 - Others: Conservative defaults
 
 This module provides the routing logic to apply broker-specific strategies.
+It integrates with BROKER_PROFILES from broker_strategy_router to ensure
+every selection is consistent with the fee-aware trade-filtering layer.
 """
 
 import logging
@@ -18,18 +21,30 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger("nija.strategy_selector")
 
 try:
-    # Coinbase is disabled
-    # from .coinbase_config import COINBASE_CONFIG, CoinbaseConfig
+    from .coinbase_config import COINBASE_CONFIG, CoinbaseConfig
     from .kraken_config import KRAKEN_CONFIG, KrakenConfig
+    from .binance_config import BINANCE_CONFIG, BinanceConfig
     from .default_config import DEFAULT_CONFIG, DefaultConfig
 except ImportError:
     # Fallback if not yet available
     COINBASE_CONFIG = None
     KRAKEN_CONFIG = None
+    BINANCE_CONFIG = None
     DEFAULT_CONFIG = None
     CoinbaseConfig = None
     KrakenConfig = None
+    BinanceConfig = None
     DefaultConfig = None
+
+# Pull BROKER_PROFILES so callers can inspect per-broker characteristics
+# without importing broker_strategy_router directly.
+try:
+    from bot.broker_strategy_router import BROKER_PROFILES
+except ImportError:
+    try:
+        from broker_strategy_router import BROKER_PROFILES
+    except ImportError:
+        BROKER_PROFILES = {}
 
 
 class BrokerStrategySelector:
@@ -38,16 +53,17 @@ class BrokerStrategySelector:
 
     This class acts as a router that:
     1. Identifies the broker being used
-    2. Loads the appropriate configuration
+    2. Loads the appropriate configuration (driven by BROKER_PROFILES)
     3. Provides broker-specific trading logic
     """
 
     def __init__(self):
         """Initialize strategy selector"""
         self.configs = {
-            # 'coinbase': COINBASE_CONFIG,  # Disabled
+            'coinbase': COINBASE_CONFIG,
             'kraken': KRAKEN_CONFIG,
-            'default': DEFAULT_CONFIG
+            'binance': BINANCE_CONFIG,
+            'default': DEFAULT_CONFIG,
         }
         self.current_broker = None
         self.current_config = None
@@ -57,39 +73,49 @@ class BrokerStrategySelector:
         Select trading strategy for specified broker.
 
         Args:
-            broker_type: Broker type string ('coinbase', 'kraken', etc.)
+            broker_type: Broker type string ('coinbase', 'kraken', 'binance', etc.)
 
         Returns:
             Broker configuration object
         """
         broker_type_lower = broker_type.lower() if broker_type else 'default'
 
-        # Coinbase is disabled - return None explicitly
-        if broker_type_lower == "coinbase":
-            logger.warning("Coinbase broker is disabled")
-            return None
-
         # Get config for broker
         config = self.configs.get(broker_type_lower, self.configs.get('default'))
 
         if config is None:
             logger.warning(f"No configuration available for {broker_type}, using hardcoded defaults")
-            # Return a basic dict with essential values
+            # Build conservative defaults from BROKER_PROFILES if available
+            profile = BROKER_PROFILES.get(broker_type_lower, BROKER_PROFILES.get('default', {}))
+            round_trip = profile.get('fee', 0.014)
+            min_move = profile.get('min_move', 0.015)
             return {
                 'broker_name': broker_type_lower,
-                'round_trip_cost': 0.012,
-                'profit_targets': [(0.015, "1.5%"), (0.012, "1.2%"), (0.010, "1.0%")],
-                'stop_loss': -0.010,
-                'max_hold_hours': 12.0
+                'round_trip_cost': round_trip,
+                'profit_targets': [(min_move * 1.5, f"{min_move * 150:.1f}%"),
+                                   (min_move * 2.5, f"{min_move * 250:.1f}%"),
+                                   (min_move * 4.0, f"{min_move * 400:.1f}%")],
+                'stop_loss': -(min_move * 0.8),
+                'max_hold_hours': 12.0,
+                'min_move': min_move,
+                'style': profile.get('style', 'swing'),
+                'speed': profile.get('speed', 'slow'),
             }
 
         self.current_broker = broker_type_lower
         self.current_config = config
 
+        profile = BROKER_PROFILES.get(broker_type_lower, {})
         logger.info(f"📊 Selected {config.broker_display_name} strategy")
         logger.info(f"   Fees: {config.round_trip_cost*100:.2f}% round-trip")
         logger.info(f"   Strategy: {'BIDIRECTIONAL' if config.bidirectional else 'BUY-FOCUSED'}")
         logger.info(f"   Profit targets: {', '.join([f'{t[0]*100:.1f}%' for t in config.profit_targets])}")
+        if profile:
+            logger.info(
+                f"   Profile: style={profile.get('style','?')}  "
+                f"min_move={profile.get('min_move', 0)*100:.1f}%  "
+                f"speed={profile.get('speed','?')}"
+            )
 
         return config
 
