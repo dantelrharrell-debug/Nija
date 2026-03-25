@@ -1208,6 +1208,28 @@ except ImportError:
         ShiftPolicy = None
         logger.warning("⚠️ Auto Broker Capital Shifter not available — equal broker weighting")
 
+# ── Kraken Params Optimizer — fee-aware profit target & stop-loss tuning ─────
+try:
+    from kraken_params_optimizer import (
+        get_kraken_params_optimizer,
+        KrakenOptParams,
+    )
+    KRAKEN_PARAMS_OPTIMIZER_AVAILABLE = True
+    logger.info("✅ Kraken Params Optimizer loaded — low-fee target optimisation active")
+except ImportError:
+    try:
+        from bot.kraken_params_optimizer import (
+            get_kraken_params_optimizer,
+            KrakenOptParams,
+        )
+        KRAKEN_PARAMS_OPTIMIZER_AVAILABLE = True
+        logger.info("✅ Kraken Params Optimizer loaded — low-fee target optimisation active")
+    except ImportError:
+        KRAKEN_PARAMS_OPTIMIZER_AVAILABLE = False
+        get_kraken_params_optimizer = None  # type: ignore
+        KrakenOptParams = None  # type: ignore
+        logger.warning("⚠️ Kraken Params Optimizer not available — static Kraken targets in use")
+
 load_dotenv()
 
 # ============================================================================
@@ -2682,6 +2704,17 @@ class TradingStrategy:
                 self.win_rate_frequency_tuner = None
         else:
             self.win_rate_frequency_tuner = None
+
+        # ── Kraken Params Optimizer — fee-aware profit target & stop-loss tuner ──
+        if KRAKEN_PARAMS_OPTIMIZER_AVAILABLE and get_kraken_params_optimizer is not None:
+            try:
+                self.kraken_params_optimizer = get_kraken_params_optimizer()
+                logger.info("✅ Kraken Params Optimizer initialized — Kraken low-fee tuning active")
+            except Exception as _e:
+                logger.warning("⚠️ Kraken Params Optimizer init failed: %s", _e)
+                self.kraken_params_optimizer = None
+        else:
+            self.kraken_params_optimizer = None
 
         # ── Aggression Mode Controller — SAFE / BALANCED / AGGRESSIVE ────────
         if AGGRESSION_MODE_CONTROLLER_AVAILABLE and get_aggression_mode_controller is not None:
@@ -5782,13 +5815,45 @@ class TradingStrategy:
 
         # Kraken: -1.5% primary stop (tightened from -3.0% to enforce 2:1+ R:R)
         if 'kraken' in broker_name and account_balance < 100:
-            primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -1.5%
-            description = f"Kraken small balance (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
+            # 🦅 KRAKEN PARAMS OPTIMIZER — use fee-optimised stop loss when available
+            if (KRAKEN_PARAMS_OPTIMIZER_AVAILABLE
+                    and hasattr(self, 'kraken_params_optimizer')
+                    and self.kraken_params_optimizer is not None):
+                try:
+                    _kpo_sl = self.kraken_params_optimizer.get_params().stop_loss
+                    primary_stop = _kpo_sl
+                    description = (
+                        f"Kraken small balance (${account_balance:.2f}): "
+                        f"Optimizer stop={_kpo_sl*100:.2f}%, Backstop -2.0%, Failsafe -3.0%"
+                    )
+                except Exception as _kpo_sl_err:
+                    logger.debug("Kraken Params Optimizer stop_loss skipped (small): %s", _kpo_sl_err)
+                    primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -1.5%
+                    description = f"Kraken small balance (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
+            else:
+                primary_stop = STOP_LOSS_PRIMARY_KRAKEN  # -1.5%
+                description = f"Kraken small balance (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
 
         # Kraken with larger balance: same tight stop
         elif 'kraken' in broker_name:
-            primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -1.5%
-            description = f"Kraken (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
+            # 🦅 KRAKEN PARAMS OPTIMIZER — use fee-optimised stop loss when available
+            if (KRAKEN_PARAMS_OPTIMIZER_AVAILABLE
+                    and hasattr(self, 'kraken_params_optimizer')
+                    and self.kraken_params_optimizer is not None):
+                try:
+                    _kpo_sl = self.kraken_params_optimizer.get_params().stop_loss
+                    primary_stop = _kpo_sl
+                    description = (
+                        f"Kraken (${account_balance:.2f}): "
+                        f"Optimizer stop={_kpo_sl*100:.2f}%, Backstop -2.0%, Failsafe -3.0%"
+                    )
+                except Exception as _kpo_sl_err:
+                    logger.debug("Kraken Params Optimizer stop_loss skipped (large): %s", _kpo_sl_err)
+                    primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -1.5%
+                    description = f"Kraken (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
+            else:
+                primary_stop = STOP_LOSS_PRIMARY_KRAKEN_MIN  # -1.5%
+                description = f"Kraken (${account_balance:.2f}): Primary -1.5%, Backstop -2.0%, Failsafe -3.0%"
 
         # Coinbase: -1.5% stop (tightened from -3.0% to overcome 1.4% fee drag)
         elif 'coinbase' in broker_name:
@@ -7971,8 +8036,21 @@ class TradingStrategy:
 
                                         _bkey = broker_type.value if broker_type else ''
                                         if _bkey == 'kraken':
-                                            profit_targets = PROFIT_TARGETS_KRAKEN
-                                            min_threshold = BROKER_FEE_BREAKEVEN.get('kraken', DEFAULT_FEE_BREAKEVEN)
+                                            # 🦅 KRAKEN PARAMS OPTIMIZER — use fee-optimised targets when available
+                                            if (KRAKEN_PARAMS_OPTIMIZER_AVAILABLE
+                                                    and hasattr(self, 'kraken_params_optimizer')
+                                                    and self.kraken_params_optimizer is not None):
+                                                try:
+                                                    _kpo_params = self.kraken_params_optimizer.get_params()
+                                                    profit_targets = _kpo_params.profit_targets
+                                                    min_threshold = _kpo_params.min_profit_threshold
+                                                except Exception as _kpo_err:
+                                                    logger.debug("Kraken Params Optimizer get_params skipped: %s", _kpo_err)
+                                                    profit_targets = PROFIT_TARGETS_KRAKEN
+                                                    min_threshold = BROKER_FEE_BREAKEVEN.get('kraken', DEFAULT_FEE_BREAKEVEN)
+                                            else:
+                                                profit_targets = PROFIT_TARGETS_KRAKEN
+                                                min_threshold = BROKER_FEE_BREAKEVEN.get('kraken', DEFAULT_FEE_BREAKEVEN)
                                         elif _bkey == 'coinbase':
                                             profit_targets = PROFIT_TARGETS_COINBASE
                                             min_threshold = BROKER_FEE_BREAKEVEN.get('coinbase', DEFAULT_FEE_BREAKEVEN)
@@ -9436,6 +9514,19 @@ class TradingStrategy:
                                             self.dynamic_sniper_thresholds.update_regime(_dst_regime)
                                         except Exception:
                                             pass
+                                        # 🦅 KRAKEN PARAMS OPTIMIZER — propagate regime so Kraken
+                                        # profit targets and stop losses stay regime-aware
+                                        if (KRAKEN_PARAMS_OPTIMIZER_AVAILABLE
+                                                and hasattr(self, 'kraken_params_optimizer')
+                                                and self.kraken_params_optimizer is not None):
+                                            try:
+                                                _kpo_regime = str(self.regime_engine.current_regime)
+                                                _kpo_conf = float(getattr(self.regime_engine, 'confidence', 0.5))
+                                                self.kraken_params_optimizer.update_regime(
+                                                    _kpo_regime, confidence=_kpo_conf
+                                                )
+                                            except Exception as _kpo_regime_err:
+                                                logger.debug("Kraken Params Optimizer regime update skipped: %s", _kpo_regime_err)
                                 except Exception as _re_feed_err:
                                     logger.debug("Regime engine candle update failed for %s: %s", symbol, _re_feed_err)
 
@@ -12588,6 +12679,23 @@ class TradingStrategy:
                 self.win_rate_frequency_tuner.record_trade(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _wrft_rec_err:
                 logger.debug("Win-Rate/Frequency Tuner record_trade skipped for %s: %s", symbol, _wrft_rec_err)
+
+        # 🦅 KRAKEN PARAMS OPTIMIZER — record Kraken trade outcome for adaptive learning
+        # Only feeds data when the active broker is Kraken so the optimizer stays
+        # specific to Kraken performance rather than mixing in other exchange results.
+        if (KRAKEN_PARAMS_OPTIMIZER_AVAILABLE
+                and hasattr(self, 'kraken_params_optimizer')
+                and self.kraken_params_optimizer is not None):
+            try:
+                _kpo_broker = getattr(self, 'active_broker', None) or getattr(self, 'broker', None)
+                _kpo_bname = ''
+                if _kpo_broker is not None:
+                    _bt = getattr(_kpo_broker, 'broker_type', None)
+                    _kpo_bname = (_bt.value if hasattr(_bt, 'value') else str(_bt)).lower() if _bt else ''
+                if 'kraken' in _kpo_bname:
+                    self.kraken_params_optimizer.record_trade(pnl_usd=profit_usd, is_win=is_win)
+            except Exception as _kpo_rec_err:
+                logger.debug("Kraken Params Optimizer record_trade skipped for %s: %s", symbol, _kpo_rec_err)
 
         # 📈 PNL ANALYTICS LAYER — record outcome for win rate / per-pair tracking
         if (PNL_ANALYTICS_LAYER_AVAILABLE
