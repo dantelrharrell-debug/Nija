@@ -233,6 +233,9 @@ class NIJAApexStrategyV71:
         )
         self.execution_engine = ExecutionEngine(broker_client)
 
+        # Cycle-level P&L accumulator: reset each cycle by TradingStrategy.run_cycle()
+        self._cycle_pnl = 0.0
+
         # Initialize enhanced scoring and regime detection
         # PROFIT OPTIMIZATION: Enable by default if available
         enable_enhanced = self.config.get('use_enhanced_scoring', True)  # Default to True
@@ -2430,6 +2433,9 @@ class NIJAApexStrategyV71:
                     else:
                         pnl_usd = 0.0
                     is_win = pnl_usd > 0
+
+                    # Accumulate this trade's P&L into the current cycle tracker
+                    self._cycle_pnl += pnl_usd
 
                     # Record trade in flywheel → updates compound multiplier
                     if self.portfolio_profit_flywheel is not None:

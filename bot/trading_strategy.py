@@ -6337,6 +6337,8 @@ class TradingStrategy:
         # entry is skipped early.  All downstream code uses `account_balance is not
         # None` guards so 0.0 is the safe sentinel when the broker is unavailable.
         account_balance: float = 0.0
+        # Safe default for cycle P&L percentage calculation; overwritten once balance is fetched.
+        _cycle_start_balance: float = 0.0
 
         # Remember whether the caller explicitly requested user mode so we can
         # distinguish it from user_mode being forced True by safety checks later.
@@ -6636,6 +6638,10 @@ class TradingStrategy:
 
         # ⏱️ Scan-cycle timing: record overall start time
         cycle_start_time = time.time()
+
+        # 💹 CYCLE P&L TRACKING — reset apex accumulator at cycle start
+        if hasattr(self, 'apex') and self.apex is not None:
+            self.apex._cycle_pnl = 0.0
         
         # Display user status banner (trust layer feature)
         self._display_user_status_banner(broker=active_broker)
@@ -7277,6 +7283,8 @@ class TradingStrategy:
                 else:
                     balance_data = {'trading_balance': _cached_balance}
             account_balance = balance_data.get('trading_balance', 0.0) or 0.0
+            # Capture the balance at cycle start for end-of-cycle P&L comparison
+            _cycle_start_balance = account_balance
 
             # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────
             # Two paths both result in _first_trade_override = True, which expands
@@ -12553,7 +12561,13 @@ class TradingStrategy:
 
                             _ps_success = self.apex.execute_action(_ps_analysis, _ps_symbol)
                             if _ps_success:
-                                logger.info(f"   ✅ Position opened: {_ps_symbol}")
+                                _ep = _ps_analysis.get('entry_price')
+                                _fill_entry = float(_ep) if _ep is not None else float(_ps_analysis.get('price') or 0.0)
+                                logger.info(
+                                    f"   ✅ ORDER FILLED: {_ps_symbol} | "
+                                    f"Size: ${_ps_position_size:.2f} | "
+                                    f"Entry: ${_fill_entry:.4f}"
+                                )
                                 _trades_executed_this_cycle += 1
                                 # Mark first trade as executed (first-trade guarantee flag)
                                 if not self._first_trade_executed:
@@ -12786,7 +12800,7 @@ class TradingStrategy:
                         self._zero_signal_streak += 1
                         logger.info("")
                         logger.info("   ⏳ WAITING FOR PLATFORM ENTRY")
-                        logger.info("   → No qualifying signals found in this cycle")
+                        logger.info("   → No valid setups this cycle (market conditions not favorable)")
                         logger.info(
                             "   → Zero-signal streak: %d cycle(s)", self._zero_signal_streak
                         )
@@ -12869,6 +12883,27 @@ class TradingStrategy:
 
             entry_duration = time.time() - entry_start_time
             logger.info(f"⏱️  [TIMING] Entry scan: {entry_duration:.2f}s")
+
+            # 💹 CYCLE P&L SUMMARY — show closed-trade P&L and current equity
+            try:
+                _cycle_closed_pnl = 0.0
+                if hasattr(self, 'apex') and self.apex is not None:
+                    _cycle_closed_pnl = getattr(self.apex, '_cycle_pnl', 0.0)
+
+                if _cycle_closed_pnl != 0.0:
+                    _pnl_pct = (
+                        (_cycle_closed_pnl / _cycle_start_balance * 100.0)
+                        if _cycle_start_balance > 0 else 0.0
+                    )
+                    _pnl_sign = "+" if _cycle_closed_pnl >= 0 else ""
+                    logger.info(
+                        f"💹 Cycle P&L: {_pnl_sign}${_cycle_closed_pnl:.2f} "
+                        f"({_pnl_sign}{_pnl_pct:.2f}%)"
+                    )
+                if account_balance > 0:
+                    logger.info(f"   Total Equity: ${account_balance:.2f}")
+            except Exception as _cpnl_err:
+                logger.debug("Cycle P&L summary skipped: %s", _cpnl_err)
 
             # ⏱️ Overall cycle duration + moving average
             cycle_total_duration = time.time() - cycle_start_time
