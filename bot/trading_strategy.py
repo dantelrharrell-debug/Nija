@@ -1583,12 +1583,12 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
                             # This conservative rate ensures API key never gets temporarily blocked
 
 # Broker balance fetch timeout constants
-# Reduced from 45s → 12s to avoid long blocking on slow/hung Kraken API calls.
-# Under normal conditions Kraken responds in 1–5s; under load typically < 10s.
-# A 12s gate gives sufficient headroom while preventing a single hung call from
-# locking the entire cycle for ~45s.  Cached balance (max age: 90s) is used as
-# an immediate fallback when the live fetch times out.
-BALANCE_FETCH_TIMEOUT = 12  # Hard timeout for balance API call (was 45s; reduced for faster fallback)
+# Increased from 12s → 25s to accommodate Kraken API lag under load.
+# Under normal conditions Kraken responds in 1–5s; under heavy load typically < 20s.
+# A 25s gate gives sufficient headroom while preventing a single hung call from
+# blocking the cycle for 45s.  Cached balance (max age: 90s) is used as an
+# immediate fallback when the live fetch times out.
+BALANCE_FETCH_TIMEOUT = 25  # Hard timeout for balance API call (increased from 12s for Kraken lag)
 CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness)
 
 # Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
@@ -5864,15 +5864,25 @@ class TradingStrategy:
 
             balance = balance_result[0] if balance_result[0] is not None else 0.0
             
-            # 🔒 CAPITAL PROTECTION: Validate broker data completeness before allowing entries
-            # Balance of 0.0 could indicate incomplete/missing data
+            # 🔒 CAPITAL PROTECTION: If live balance is 0.0, fall back to last known
+            # balance before hard-vetoing.  A balance of 0.0 from a fresh fetch can
+            # mean the API returned incomplete data — never convert a known balance
+            # into $0 just because one refresh returned nothing.
             if balance == 0.0:
-                veto_reason = f"{broker_name.upper()} broker data incomplete: balance is 0.0"
-                logger.warning(f"🚫 CAPITAL PROTECTION: {veto_reason}")
-                logger.info(f"🚫 TRADE VETO: {veto_reason}")
-                self.veto_count_session += 1
-                self.last_veto_reason = veto_reason
-                return False, veto_reason
+                _last_bal = getattr(broker, '_last_known_balance', None)
+                if _last_bal is not None and _last_bal > 0:
+                    logger.warning(
+                        f"   ⚠️  {broker_name.upper()} fresh balance is 0.0 — "
+                        f"using last known balance ${_last_bal:.2f} for eligibility check"
+                    )
+                    balance = _last_bal
+                else:
+                    veto_reason = f"{broker_name.upper()} broker data incomplete: balance is 0.0"
+                    logger.warning(f"🚫 CAPITAL PROTECTION: {veto_reason}")
+                    logger.info(f"🚫 TRADE VETO: {veto_reason}")
+                    self.veto_count_session += 1
+                    self.last_veto_reason = veto_reason
+                    return False, veto_reason
             
             broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
             min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
@@ -7209,11 +7219,11 @@ class TradingStrategy:
             # FIX #1: Update portfolio state from broker data
             # Get detailed balance including crypto holdings
             # PRO MODE: Also calculate total capital (free balance + position values)
-            # TIMEOUT FALLBACK: if live fetch fails, fall back to fresh-enough cached balance.
+            # TIMEOUT FALLBACK: if live fetch fails, fall back to cached balance.
             # BALANCE FRESHNESS: always use call_with_timeout so a slow/hung API call never
-            # blocks the whole trading cycle; only accept cached balance within
-            # CACHED_BALANCE_MAX_AGE_SECONDS (90 s) — staler data triggers a $0 sentinel so
-            # position-sizing uses a safe floor instead of a ghost reading.
+            # blocks the whole trading cycle; accept any cached balance — stale cache triggers
+            # grace mode (0.5× position-size multiplier) but never a $0 sentinel.
+            _balance_grace_mode = False  # True when using stale/fallback balance
             try:
                 if hasattr(active_broker, 'get_account_balance_detailed'):
                     _bal_result = call_with_timeout(
@@ -7232,7 +7242,7 @@ class TradingStrategy:
                 else:
                     balance_data = {'trading_balance': _bal_result[0]}
             except Exception as _bal_fetch_err:
-                logger.warning(f"⚠️  Balance fetch failed ({_bal_fetch_err}); checking cache freshness")
+                logger.warning(f"⚠️  Balance fetch failed ({_bal_fetch_err}); checking cache")
                 _cached_balance = None
                 if (hasattr(active_broker, '_last_known_balance')
                         and active_broker._last_known_balance is not None):
@@ -7246,17 +7256,26 @@ class TradingStrategy:
                                 f"${_cached_balance:.2f}"
                             )
                         else:
+                            # Stale but still use it — activate grace mode (0.5× sizing)
+                            _cached_balance = active_broker._last_known_balance
+                            _balance_grace_mode = True
                             logger.warning(
-                                f"   ❌ Cached balance is stale ({_cached_age:.0f}s > "
-                                f"{CACHED_BALANCE_MAX_AGE_SECONDS}s max) — using $0 sentinel"
+                                f"   ⚠️  Cached balance is stale ({_cached_age:.0f}s > "
+                                f"{CACHED_BALANCE_MAX_AGE_SECONDS}s) — using stale balance "
+                                f"in grace mode (0.5× position sizing)"
                             )
                     else:
-                        # No timestamp available; use cached value but log the risk
+                        # No timestamp available; use cached value but activate grace mode
                         _cached_balance = active_broker._last_known_balance
+                        _balance_grace_mode = True
                         logger.warning(
-                            f"   ⚠️  Using cached balance (no timestamp): ${_cached_balance:.2f}"
+                            f"   ⚠️  Using cached balance (no timestamp) in grace mode: ${_cached_balance:.2f}"
                         )
-                balance_data = {'trading_balance': _cached_balance or 0.0}
+                if _cached_balance is None:
+                    logger.error("   ❌ No cached balance available — using $0 sentinel (all retries exhausted)")
+                    balance_data = {'trading_balance': 0.0}
+                else:
+                    balance_data = {'trading_balance': _cached_balance}
             account_balance = balance_data.get('trading_balance', 0.0) or 0.0
 
             # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────
@@ -9281,29 +9300,32 @@ class TradingStrategy:
                                 cached_balance = active_broker._last_known_balance
 
                                 # Check if cached balance has a timestamp and is fresh
-                                cache_is_fresh = False
                                 if hasattr(active_broker, '_balance_last_updated') and active_broker._balance_last_updated is not None:
                                     balance_age_seconds = time.time() - active_broker._balance_last_updated
-                                    cache_is_fresh = balance_age_seconds <= CACHED_BALANCE_MAX_AGE_SECONDS
-                                    if not cache_is_fresh:
-                                        logger.warning(f"   ⚠️  Cached balance for {entry_broker_name.upper()} is stale ({balance_age_seconds:.0f}s old > {CACHED_BALANCE_MAX_AGE_SECONDS}s max)")
+                                    if balance_age_seconds <= CACHED_BALANCE_MAX_AGE_SECONDS:
+                                        logger.warning(f"   ⚠️  Using cached balance for {entry_broker_name.upper()}: ${cached_balance:.2f} (age={balance_age_seconds:.0f}s)")
+                                    else:
+                                        # Stale cache — activate grace mode (0.5× sizing) instead of blocking
+                                        _balance_grace_mode = True
+                                        logger.warning(
+                                            f"   ⚠️  Cached balance for {entry_broker_name.upper()} is stale "
+                                            f"({balance_age_seconds:.0f}s > {CACHED_BALANCE_MAX_AGE_SECONDS}s) "
+                                            f"— using stale balance in grace mode (0.5× sizing)"
+                                        )
                                 else:
-                                    # No timestamp - use cache anyway since fetch failed (better than nothing)
-                                    cache_is_fresh = True
-                                    logger.warning(f"   ⚠️  Cached balance for {entry_broker_name.upper()} has no timestamp, using anyway due to fetch failure")
-
-                                if cache_is_fresh:
-                                    logger.warning(f"   ⚠️  Using cached balance for {entry_broker_name.upper()}: ${cached_balance:.2f}")
-                                    balance_data = {'trading_balance': cached_balance, 'total_held': 0.0, 'total_funds': cached_balance}
-                                else:
-                                    # Stale cache and fresh fetch failed - use eligibility check balance
-                                    logger.error(f"   ❌ Cached balance too stale for {entry_broker_name.upper()}")
-                                    logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
-                                    balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
+                                    # No timestamp - use cache anyway, activate grace mode
+                                    _balance_grace_mode = True
+                                    logger.warning(
+                                        f"   ⚠️  Cached balance for {entry_broker_name.upper()} has no timestamp "
+                                        f"— using in grace mode (0.5× sizing)"
+                                    )
+                                balance_data = {'trading_balance': cached_balance, 'total_held': 0.0, 'total_funds': cached_balance}
                             else:
+                                # No cache at all — fall back to eligibility-check balance
                                 logger.error(f"   ❌ No cached balance available for {entry_broker_name.upper()}")
-                                # Use the balance from eligibility check as last resort
                                 logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
+                                # Always activate grace mode when falling back — source is uncertain
+                                _balance_grace_mode = True
                                 balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
 
                         account_balance = balance_data.get('trading_balance', 0.0) or 0.0
@@ -10760,6 +10782,18 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
+
+                                # ── BALANCE GRACE MODE MULTIPLIER ───────────────────────
+                                # When balance was fetched from a stale cache (API failed),
+                                # apply a 0.5× safety multiplier to avoid over-committing.
+                                if _balance_grace_mode and position_size > 0:
+                                    _original_ps = position_size
+                                    position_size *= 0.5
+                                    logger.warning(
+                                        f"   ⚠️  {symbol}: GRACE MODE — stale balance, "
+                                        f"reducing position size 0.5× "
+                                        f"(${_original_ps:.2f} → ${position_size:.2f})"
+                                    )
 
                                 # ── MINIMUM ENTRY SIZE GATE (LAYER 0) ───────────────────
                                 # Reject this entry immediately if the computed order size

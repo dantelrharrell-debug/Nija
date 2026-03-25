@@ -117,7 +117,7 @@ class MultiAccountBrokerManager:
     KRAKEN_BALANCE_CALL_DELAY = 1.1  # 1.1s delay between Kraken balance API calls
     # Hard timeout for a single balance API call.  Reduced to 12s so a hung
     # Kraken connection is detected quickly and the stale cache is used instead.
-    BALANCE_FETCH_TIMEOUT = 12.0  # seconds (was 45s)
+    BALANCE_FETCH_TIMEOUT = 25.0  # seconds (increased from 12s; Kraken APIs can lag)
     # Maximum age of a stale cached balance that is still acceptable as a fallback
     # when the live fetch times out.  5 minutes is safe for trading decisions.
     BALANCE_STALE_FALLBACK_AGE = 300.0  # seconds
@@ -766,7 +766,9 @@ class MultiAccountBrokerManager:
         fetch_thread.join(self.BALANCE_FETCH_TIMEOUT)
 
         if fetch_thread.is_alive():
-            # Timed out — use stale cache if available and not too old
+            # Timed out — use any cached balance (stale or otherwise) as fallback.
+            # The conditional only controls which warning message is emitted;
+            # the balance is returned unconditionally.  Only return 0.0 if no cache exists.
             logger.warning(
                 f"Balance fetch timed out after {self.BALANCE_FETCH_TIMEOUT:.0f}s "
                 f"for {account_type} {account_id} on {broker_type.value}"
@@ -779,10 +781,16 @@ class MultiAccountBrokerManager:
                         f"Using stale cached balance ${_stale_bal:.2f} "
                         f"(age {_stale_age:.0f}s) for {account_type} {account_id}"
                     )
-                    return _stale_bal
-            # No usable cache — return 0 so the caller skips trading
+                else:
+                    logger.warning(
+                        f"Cached balance is very old ({_stale_age:.0f}s > "
+                        f"{self.BALANCE_STALE_FALLBACK_AGE:.0f}s) for {account_type} {account_id}"
+                        f" — using stale balance as last resort (grace mode)"
+                    )
+                return _stale_bal  # Always return cached value — 0.0 only if no cache
+            # No cache at all — nothing to fall back to
             logger.error(
-                f"No usable cached balance for {account_type} {account_id} on "
+                f"No cached balance available for {account_type} {account_id} on "
                 f"{broker_type.value}; returning 0"
             )
             return 0.0
@@ -796,11 +804,23 @@ class MultiAccountBrokerManager:
             logger.error(
                 f"Balance fetch raised exception for {account_type} {account_id}: {value}"
             )
-            # Fall back to stale cache on exception too
+            # Fall back to stale cache on exception too.  Any cached value is
+            # returned unconditionally — the conditional only controls whether an
+            # extra "very old" warning is emitted.  Only return 0.0 if no cache exists.
             if cache_key in self._balance_cache:
                 _stale_bal, _stale_ts = self._balance_cache[cache_key]
-                if current_time - _stale_ts <= self.BALANCE_STALE_FALLBACK_AGE:
-                    return _stale_bal
+                _stale_age = current_time - _stale_ts
+                if _stale_age > self.BALANCE_STALE_FALLBACK_AGE:
+                    logger.warning(
+                        f"Cached balance is very old ({_stale_age:.0f}s) for "
+                        f"{account_type} {account_id} — using stale balance as last resort (grace mode)"
+                    )
+                else:
+                    logger.warning(
+                        f"Using stale cached balance ${_stale_bal:.2f} "
+                        f"(age {_stale_age:.0f}s) for {account_type} {account_id}"
+                    )
+                return _stale_bal  # Always return cached value — 0.0 only if no cache
             return 0.0
 
         balance = value
