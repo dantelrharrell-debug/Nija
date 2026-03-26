@@ -37,10 +37,19 @@ Author: NIJA Trading Systems
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
 logger = logging.getLogger("nija.net_profit_gate")
+
+
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, default))
+    except (ValueError, TypeError):
+        return default
+
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -51,9 +60,11 @@ DEFAULT_FEE_PCT: float = 0.006
 # Estimated slippage on a liquid pair (BTC/ETH/SOL).  Conservative default.
 DEFAULT_SLIPPAGE_PCT: float = 0.003
 # Minimum: profit target must be at least this many times the round-trip cost
-DEFAULT_SAFETY_MULTIPLE: float = 2.0
+# env: NET_PROFIT_SAFETY_MULTIPLE — override (e.g. 1.3 for HF Flip Mode)
+DEFAULT_SAFETY_MULTIPLE: float = _env_float("NET_PROFIT_SAFETY_MULTIPLE", 2.0)
 # Minimum absolute profit target we'll ever allow (even if multiple passes)
-MIN_PROFIT_TARGET_PCT: float = 0.005  # 0.5%
+# env: NET_PROFIT_MIN_TARGET_PCT — override as a fraction (e.g. 0.004 = 0.4%)
+MIN_PROFIT_TARGET_PCT: float = _env_float("NET_PROFIT_MIN_TARGET_PCT", 0.005)
 
 
 @dataclass

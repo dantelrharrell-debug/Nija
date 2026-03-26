@@ -1112,6 +1112,30 @@ except ImportError:
         PERF_LOG_CYCLE_INTERVAL = 20
         logger.warning("⚠️ Performance Tracker not available")
 
+# ── HF Flip Mode — MUST be imported and created FIRST so env overrides are set
+# ── before any other subsystem singleton is created.
+try:
+    from hf_flip_mode import get_hf_flip_mode as _get_hf_flip_mode
+    HF_FLIP_MODE_AVAILABLE = True
+    logger.info("✅ HF Flip Mode loaded — fast daily profit mode available (set HF_FLIP_MODE=1)")
+except ImportError:
+    try:
+        from bot.hf_flip_mode import get_hf_flip_mode as _get_hf_flip_mode
+        HF_FLIP_MODE_AVAILABLE = True
+        logger.info("✅ HF Flip Mode loaded — fast daily profit mode available (set HF_FLIP_MODE=1)")
+    except ImportError:
+        HF_FLIP_MODE_AVAILABLE = False
+        _get_hf_flip_mode = None  # type: ignore
+        logger.warning("⚠️ HF Flip Mode not available")
+
+# Instantiate immediately so env vars are set before any downstream singleton
+_hf_flip_mode_instance = None
+if HF_FLIP_MODE_AVAILABLE and _get_hf_flip_mode is not None:
+    try:
+        _hf_flip_mode_instance = _get_hf_flip_mode()
+    except Exception as _flip_init_err:
+        logger.warning("⚠️ HF Flip Mode early init failed: %s", _flip_init_err)
+
 # ── HF Micro Scalping Mode — high-frequency 30s scan, low confidence gate ─────
 try:
     from hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode
@@ -1462,6 +1486,14 @@ ACCOUNT_FLOW_AVAILABLE            = False  # ❌ Multi-account capital routing
 SECTOR_TAXONOMY_AVAILABLE         = False  # ❌ Sector allocation engine
 VOLATILITY_CAPITAL_ROUTER_AVAILABLE = False  # ❌ Volatility-weighted capital router
 KELLY_SIZING_ENABLED              = False  # ❌ Kelly sizing (too aggressive for small accounts)
+
+# ── HF FLIP MODE: re-enable selected layers for fast daily profit operation ──
+if _hf_flip_mode_instance is not None and _hf_flip_mode_instance.enabled:
+    if _hf_flip_mode_instance.trade_cluster_enabled:
+        TRADE_CLUSTER_AVAILABLE = True   # ✅ re-enabled by HF Flip Mode (trend stacking)
+    if _hf_flip_mode_instance.cross_broker_arb_enabled:
+        CROSS_BROKER_ARB_AVAILABLE = True  # ✅ re-enabled by HF Flip Mode (spread capture)
+
 _disabled_layers = [
     name for name, enabled in [
         ("AI-Evolution",   AI_STRATEGY_EVOLUTION_AVAILABLE),
@@ -2523,6 +2555,14 @@ class TradingStrategy:
         """Initialize production strategy with multi-broker support."""
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
 
+        # ── HF Flip Mode — attach the pre-created singleton for later patching ──
+        self._hf_flip_mode = None
+        if HF_FLIP_MODE_AVAILABLE and _get_hf_flip_mode is not None:
+            try:
+                self._hf_flip_mode = _get_hf_flip_mode()
+            except Exception:
+                pass
+
         # Last Evaluated Trade Tracking (for UI panel)
         self.last_evaluated_trade = {
             'timestamp': None,
@@ -2736,6 +2776,9 @@ class TradingStrategy:
             try:
                 self.net_profit_gate = get_net_profit_gate()
                 logger.info("✅ Net Profit Gate initialized")
+                # HF Flip Mode: lower safety multiple to 1.3× for tight HF scalps
+                if hasattr(self, '_hf_flip_mode') and self._hf_flip_mode is not None:
+                    self._hf_flip_mode.apply_to_net_profit_gate(self.net_profit_gate)
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize Net Profit Gate: {e}")
                 self.net_profit_gate = None
@@ -2879,6 +2922,9 @@ class TradingStrategy:
             try:
                 self.sniper_filter = get_sniper_filter()
                 logger.info("✅ Sniper Filter initialized — final pre-execution gate active")
+                # HF Flip Mode: relax min_confidence and min_adx thresholds
+                if hasattr(self, '_hf_flip_mode') and self._hf_flip_mode is not None:
+                    self._hf_flip_mode.apply_to_sniper_filter(self.sniper_filter)
             except Exception as _e:
                 logger.warning("⚠️ Sniper Filter init failed: %s", _e)
                 self.sniper_filter = None
@@ -3151,6 +3197,9 @@ class TradingStrategy:
             try:
                 self.ai_trade_quality_filter = get_ai_trade_quality_filter()
                 logger.info("✅ AI Trade Quality Filter initialized — ML scalp filtering active")
+                # HF Flip Mode: lower win-probability threshold to 0.33
+                if hasattr(self, '_hf_flip_mode') and self._hf_flip_mode is not None:
+                    self._hf_flip_mode.apply_to_ai_filter(self.ai_trade_quality_filter)
             except Exception as _e:
                 logger.warning("⚠️ AI Trade Quality Filter init failed: %s", _e)
                 self.ai_trade_quality_filter = None
