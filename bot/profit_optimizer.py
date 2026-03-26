@@ -188,13 +188,27 @@ class AccelerationTier:
     label: str                  # Human-readable name
 
 
-# Tier ladder — from smallest to largest balance
+# Tier ladder — from smallest to largest balance.
+#
+# $74 → $1 000 growth path (targeting $25/day net profit):
+#
+#   micro      $0–$100   — starting point (~$74); reinvest 60% of wins; full
+#                          size multiplier (1.00×) so every dollar of position
+#                          is used.  Higher reinvest rate vs. the old "seed"
+#                          tier (was 0.50) to compound faster from a small base.
+#   seed       $100–$250 — reinvest 65%, size ×1.10 — first doubling range.
+#   sprout     $250–$500 — $25/day net becomes achievable around ~$300;
+#                          reinvest 70%, size ×1.20.
+#   grow       $500–$750 — capital now generates $50+/day; reinvest 72%, ×1.35.
+#   build      $750–$1K  — final sprint to the $1 000 milestone; reinvest 75%, ×1.50.
+#   scale      $1K–$2.5K — milestone reached; sustain and extend gains.
+#   compound   $2.5K+    — full compounding mode.
 _DEFAULT_TIERS: Tuple[AccelerationTier, ...] = (
-    AccelerationTier(min_balance=0,      reinvest_rate=0.50, size_multiplier=1.00, label="seed"),
-    AccelerationTier(min_balance=100,    reinvest_rate=0.60, size_multiplier=1.10, label="sprout"),
-    AccelerationTier(min_balance=250,    reinvest_rate=0.65, size_multiplier=1.20, label="grow"),
-    AccelerationTier(min_balance=500,    reinvest_rate=0.70, size_multiplier=1.35, label="build"),
-    AccelerationTier(min_balance=750,    reinvest_rate=0.75, size_multiplier=1.50, label="accelerate"),
+    AccelerationTier(min_balance=0,      reinvest_rate=0.60, size_multiplier=1.00, label="micro"),
+    AccelerationTier(min_balance=100,    reinvest_rate=0.65, size_multiplier=1.10, label="seed"),
+    AccelerationTier(min_balance=250,    reinvest_rate=0.70, size_multiplier=1.20, label="sprout"),
+    AccelerationTier(min_balance=500,    reinvest_rate=0.72, size_multiplier=1.35, label="grow"),
+    AccelerationTier(min_balance=750,    reinvest_rate=0.75, size_multiplier=1.50, label="build"),
     AccelerationTier(min_balance=1_000,  reinvest_rate=0.80, size_multiplier=1.75, label="scale"),
     AccelerationTier(min_balance=2_500,  reinvest_rate=0.85, size_multiplier=2.00, label="compound"),
 )
@@ -207,7 +221,7 @@ class AccelerationState:
     total_wins: int   = 0
     total_pnl: float  = 0.0
     peak_balance: float = 0.0
-    current_tier: str = "seed"
+    current_tier: str = "micro"
 
 
 class ProfitAccelerationModel:
@@ -222,7 +236,8 @@ class ProfitAccelerationModel:
     Once ``target_balance`` is reached the model holds at the highest tier and
     simply tracks performance.
 
-    Example path: $74 → seed tier → $100 → sprout → … → $1 000 → scale tier.
+    Example path: $74 → micro tier → $100 → seed → $250 → sprout → $500 → grow → $750 → build → $1 000 → scale.
+    At ~$300 balance the $25/day net profit target becomes achievable with 15+ trades at 65%+ win rate.
     """
 
     def __init__(

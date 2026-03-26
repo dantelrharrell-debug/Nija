@@ -105,6 +105,18 @@ MONITOR_INTERVAL = 45       # Seconds between open-position monitoring cycles
 DAILY_MAX_LOSS = 6.0  # Maximum 6% daily loss
 MAX_DRAWDOWN = 12.0  # Maximum 12% drawdown before stopping
 
+# ============================================================================
+# DAILY PROFIT TARGET & GROWTH MILESTONE
+# ============================================================================
+# Target net profit per trading day once position sizing is working at scale.
+# At ~$300 balance (95% position, 2.5% target, 60% win rate, ~15 trades/day)
+# the bot can realistically generate $25 net daily.  This constant is used by
+# the pattern_win_tracker and the reporting layer.
+DAILY_PROFIT_TARGET_USD = 25.0       # $25/day net profit goal
+BALANCE_MILESTONE_TARGET_USD = 1000.0  # Primary growth target: $74 → $1K
+OPTIMAL_WIN_RATE_TARGET = 0.65       # Target win rate for sustainable edge
+MIN_DAILY_TRADES = 10                # Minimum qualifying trades to reach daily goal
+
 # Position sizer configuration
 POSITION_SIZER = "HYBRID"
 
@@ -197,7 +209,7 @@ MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position — maximum c
 MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 95.0   # 95% of capital per trade (maximise compounding speed)
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R)
-MICRO_CAP_TRADE_COOLDOWN = 300                   # 5-min per-symbol re-entry gate (was 600 s / 10 min — tuned for faster trade flow)
+MICRO_CAP_TRADE_COOLDOWN = 180                   # 3-min per-symbol re-entry gate (reduced from 300 s for higher daily trade frequency)
 
 # Tiered profit targets for micro-cap compounding mode
 MICRO_CAP_TP1_PCT = 2.5   # Target 1: 2.5% — partial exit + activate trailing stop (was 3.0%)
@@ -217,7 +229,10 @@ MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 2.5  # 2.5% base profit target (w
 # Backward-compatible alias used as the static fallback when no spread data is available
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R vs base target)
-MICRO_CAP_TRADE_COOLDOWN = 300                   # 5-min per-symbol re-entry cooldown (was 600 s / 10 min — tuned for faster trade flow)
+# NOTE: MICRO_CAP_TRADE_COOLDOWN is also declared above (line ~212) for the primary block.
+# Both declarations are kept in sync intentionally so callers importing from either
+# section get the same value without requiring a forward reference.
+MICRO_CAP_TRADE_COOLDOWN = 180                   # 3-min per-symbol re-entry cooldown (reduced from 300 s for higher daily trade frequency)
 
 # Win-streak bonus applied on top of (base + spread) while on a hot streak.
 # The bonus is reset to 0 whenever a trade ends in a loss so the bot does not
