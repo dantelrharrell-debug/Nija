@@ -60,6 +60,7 @@ drift.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -67,6 +68,13 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 logger = logging.getLogger("nija.sniper_filter")
+
+
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, default))
+    except (ValueError, TypeError):
+        return default
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -109,12 +117,18 @@ class SniperConfig:
     min_depth_usd: float = 0.0
 
     # ── Pillar 4: Confidence ──────────────────────────────────────────────────
-    min_confidence: float = 0.50
+    # env: SNIPER_MIN_CONFIDENCE — override default 0.50 (e.g. 0.35 for flip mode)
+    min_confidence: float = field(
+        default_factory=lambda: _env_float("SNIPER_MIN_CONFIDENCE", 0.50)
+    )
 
     # ── Instant-block thresholds ─────────────────────────────────────────────
     # ADX below this value is treated as choppy/sideways — instant block.
     # Set to 0.0 to disable the ADX check (e.g. when ADX column is absent).
-    min_adx: float = 12.0
+    # env: SNIPER_MIN_ADX — override default 12.0 (e.g. 8.0 for flip mode)
+    min_adx: float = field(
+        default_factory=lambda: _env_float("SNIPER_MIN_ADX", 12.0)
+    )
 
     # Volume below this multiple of average = thin market → instant block.
     low_volume_multiplier: float = 0.5
