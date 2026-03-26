@@ -1039,6 +1039,21 @@ except ImportError:
         get_profit_compounding_engine = None  # type: ignore
         logger.warning("⚠️ Profit Compounding Engine not available — static position sizing in use")
 
+# ── Profit Optimizer — confidence sizing + trade ranking + acceleration ────────
+try:
+    from profit_optimizer import get_profit_optimizer
+    PROFIT_OPTIMIZER_AVAILABLE = True
+    logger.info("✅ Profit Optimizer loaded — confidence sizing, trade ranking, acceleration active")
+except ImportError:
+    try:
+        from bot.profit_optimizer import get_profit_optimizer
+        PROFIT_OPTIMIZER_AVAILABLE = True
+        logger.info("✅ Profit Optimizer loaded — confidence sizing, trade ranking, acceleration active")
+    except ImportError:
+        PROFIT_OPTIMIZER_AVAILABLE = False
+        get_profit_optimizer = None  # type: ignore
+        logger.warning("⚠️ Profit Optimizer not available — default position sizing in use")
+
 # ── Performance Tracker — fees + slippage aware closed-trade stats ────────────
 try:
     from performance_tracker import get_performance_tracker as _get_perf_tracker_ts, PERF_LOG_CYCLE_INTERVAL
@@ -3008,6 +3023,22 @@ class TradingStrategy:
                 self.profit_compounding_engine = None
         else:
             self.profit_compounding_engine = None
+
+        # ── Profit Optimizer — confidence sizing + trade ranking + acceleration ─
+        if PROFIT_OPTIMIZER_AVAILABLE and get_profit_optimizer is not None:
+            try:
+                _po_target = float(os.environ.get("PROFIT_TARGET_BALANCE", "1000"))
+                self.profit_optimizer = get_profit_optimizer(target_balance=_po_target)
+                logger.info(
+                    "✅ Profit Optimizer initialized — "
+                    "target=$%.0f (confidence sizing + trade ranking + acceleration)",
+                    _po_target,
+                )
+            except Exception as _po_err:
+                logger.warning("⚠️ Profit Optimizer init failed: %s", _po_err)
+                self.profit_optimizer = None
+        else:
+            self.profit_optimizer = None
 
         if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
             try:
@@ -10594,7 +10625,45 @@ class TradingStrategy:
                                         )
 
                                 # ═══════════════════════════════════════════════════════
-                                # AI TRADE QUALITY FILTER — ML scalp quality gate
+                                # TRADE RANKING ENGINE — top-percentile setup gate
+                                # Maintains a rolling window of recent signal scores and
+                                # only allows entry when the current setup ranks in the
+                                # configured top percentile (default: top 60 %).
+                                # Skipped setups do NOT count as losses — capital is
+                                # simply preserved for a better opportunity.
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    PROFIT_OPTIMIZER_AVAILABLE
+                                    and hasattr(self, 'profit_optimizer')
+                                    and self.profit_optimizer is not None
+                                    and analysis.get('action') in ('enter_long', 'enter_short')
+                                ):
+                                    try:
+                                        _po_score = float(analysis.get('score', analysis.get('confidence', 3.0)) or 3.0)
+                                        _po_passes = self.profit_optimizer.ranker.should_enter(
+                                            score=_po_score, symbol=symbol
+                                        )
+                                        if not _po_passes:
+                                            _po_pct = self.profit_optimizer.ranker.get_percentile(_po_score)
+                                            logger.info(
+                                                "   📊 TRADE RANKER SKIPPED %s: score=%.2f "
+                                                "not in top %d%% (percentile=%.0f%%)",
+                                                symbol, _po_score,
+                                                int((1 - self.profit_optimizer.ranker.config.pass_percentile) * 100),
+                                                _po_pct * 100,
+                                            )
+                                            analysis = {
+                                                'action': 'hold',
+                                                'reason': f'TradeRanker: score {_po_score:.2f} below threshold',
+                                            }
+                                            filter_stats['trade_ranker'] = (
+                                                filter_stats.get('trade_ranker', 0) + 1
+                                            )
+                                    except Exception as _tr_exc:
+                                        logger.debug(
+                                            "Trade Ranking Engine skipped for %s: %s",
+                                            symbol, _tr_exc,
+                                        )
                                 # Predicts win probability from RSI, ADX, regime, entry
                                 # score, and signal features.  Rejects low-quality scalps
                                 # before capital is committed.  Falls back to heuristics
@@ -11506,7 +11575,56 @@ class TradingStrategy:
                                         )
 
                                 # ═══════════════════════════════════════════════════════
-                                # CROSS-BROKER ARBITRAGE MONITOR — best venue selection
+                                # PROFIT OPTIMIZER — confidence sizing + acceleration
+                                # Layer A: scale position by signal confidence (0.5×–2.0×)
+                                # Layer B: apply tier-based acceleration multiplier that
+                                #          grows as the account compounds toward target.
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    PROFIT_OPTIMIZER_AVAILABLE
+                                    and hasattr(self, 'profit_optimizer')
+                                    and self.profit_optimizer is not None
+                                ):
+                                    try:
+                                        _po = self.profit_optimizer
+                                        _po_conf = float(
+                                            analysis.get('confidence', _sf_confidence
+                                                         if SNIPER_FILTER_AVAILABLE
+                                                         else 0.6) or 0.6
+                                        )
+
+                                        # Layer A: confidence-based size scaling
+                                        _po_conf_mult = _po.sizer.get_multiplier(_po_conf)
+                                        if _po_conf_mult != 1.0:
+                                            _po_pre_conf = position_size
+                                            position_size *= _po_conf_mult
+                                            logger.info(
+                                                "   🎯 %s: ConfidenceSizer ×%.2f "
+                                                "$%.2f→$%.2f (conf=%.3f)",
+                                                symbol, _po_conf_mult,
+                                                _po_pre_conf, position_size, _po_conf,
+                                            )
+
+                                        # Layer B: profit acceleration multiplier
+                                        _po_bal = account_balance if account_balance and account_balance > 0 else 74.0
+                                        _po_accel = _po.accelerator.get_multiplier(_po_bal)
+                                        if _po_accel > 1.0:
+                                            _po_pre_accel = position_size
+                                            position_size *= _po_accel
+                                            _po_tier = _po.accelerator.get_tier(_po_bal).label
+                                            logger.info(
+                                                "   🚀 %s: ProfitAccel ×%.2f "
+                                                "$%.2f→$%.2f (tier=%s balance=$%.0f→$%.0f)",
+                                                symbol, _po_accel,
+                                                _po_pre_accel, position_size,
+                                                _po_tier, _po_bal,
+                                                _po.accelerator.target_balance,
+                                            )
+                                    except Exception as _po_size_err:
+                                        logger.debug(
+                                            "Profit Optimizer sizing skipped for %s: %s",
+                                            symbol, _po_size_err,
+                                        )
                                 # ═══════════════════════════════════════════════════════
                                 if CROSS_BROKER_ARB_AVAILABLE and hasattr(self, 'arb_monitor') and self.arb_monitor is not None:
                                     try:
@@ -13437,6 +13555,19 @@ class TradingStrategy:
                 )
             except Exception as _pce_rec_err:
                 logger.debug("Profit Compounding Engine record_trade skipped for %s: %s", symbol, _pce_rec_err)
+
+        # 🚀 PROFIT OPTIMIZER — feed outcome to accelerator for tier tracking
+        if (PROFIT_OPTIMIZER_AVAILABLE
+                and hasattr(self, 'profit_optimizer')
+                and self.profit_optimizer is not None):
+            try:
+                _po_bal = getattr(self, '_last_known_balance', None) or 74.0
+                self.profit_optimizer.accelerator.record_trade(
+                    pnl_usd=profit_usd,
+                    current_balance=float(_po_bal),
+                )
+            except Exception as _po_rec_err:
+                logger.debug("Profit Optimizer record_trade skipped for %s: %s", symbol, _po_rec_err)
 
         if not self.advanced_manager:
             return

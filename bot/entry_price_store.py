@@ -98,6 +98,9 @@ class EntryPriceRecord:
     source: str
     """Where the price came from: 'execution', 'api', or 'override'."""
 
+    quantity: float = 0.0
+    """Size of the position in base-asset units (e.g. BTC, HBAR)."""
+
     def to_dict(self) -> Dict:
         return asdict(self)
 
@@ -107,6 +110,7 @@ class EntryPriceRecord:
             price=float(d["price"]),
             timestamp=int(d["timestamp"]),
             source=str(d.get("source", "unknown")),
+            quantity=float(d.get("quantity", 0.0)),
         )
 
 
@@ -139,25 +143,31 @@ class EntryPriceStore:
     # Public API
     # ------------------------------------------------------------------
 
-    def save(self, symbol: str, price: float, source: str = "execution") -> None:
+    def save(self, symbol: str, price: float, source: str = "execution",
+             quantity: float = 0.0) -> None:
         """
         Persist an entry price record for *symbol*.
 
         Args:
-            symbol: Trading symbol (e.g. ``'BTC-USD'``).
-            price:  Entry price in USD.
-            source: Origin of the price – ``'execution'``, ``'api'``, or
-                    ``'override'``.
+            symbol:   Trading symbol (e.g. ``'BTC-USD'``).
+            price:    Entry price in USD.
+            source:   Origin of the price – ``'execution'``, ``'api'``, or
+                      ``'override'``.
+            quantity: Position size in base-asset units (e.g. 41.54 HBAR).
         """
         record = EntryPriceRecord(
             price=float(price),
             timestamp=int(time.time()),
             source=source,
+            quantity=float(quantity),
         )
         with self._lock:
             self._records[symbol] = record
             self._persist()
-        logger.debug(f"[EntryPriceStore] saved {symbol}: ${price:.4f} (source={source})")
+        logger.debug(
+            f"[EntryPriceStore] saved {symbol}: ${price:.4f} "
+            f"qty={quantity} (source={source})"
+        )
 
     def get(self, symbol: str) -> Optional[EntryPriceRecord]:
         """
@@ -276,10 +286,13 @@ class EntryPriceStore:
 
                     api_price = broker.get_real_entry_price(symbol)
                     if api_price and api_price > 0:
-                        self.save(symbol, api_price, source="api")
+                        # Preserve quantity from the existing record when upgrading
+                        preserved_qty = existing.quantity if existing else 0.0
+                        self.save(symbol, api_price, source="api",
+                                  quantity=preserved_qty)
                         logger.info(
                             f"[EntryPriceStore] repair: {symbol} → "
-                            f"${api_price:.4f} (source=api)"
+                            f"${api_price:.4f} qty={preserved_qty} (source=api)"
                         )
                         repaired += 1
                 except Exception as sym_err:
@@ -321,6 +334,7 @@ class EntryPriceStore:
                             price=float(val),
                             timestamp=int(time.time()),
                             source="override",
+                            quantity=0.0,
                         )
                 logger.info(
                     f"[EntryPriceStore] loaded {len(self._records)} record(s)"
