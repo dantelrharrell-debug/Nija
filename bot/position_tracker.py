@@ -46,6 +46,9 @@ class PositionTracker:
         # Load existing positions
         self._load_positions()
 
+        # Entry Price Store — rich metadata persistence (price/timestamp/source/quantity)
+        self._eps = get_entry_price_store() if ENTRY_PRICE_STORE_AVAILABLE and get_entry_price_store else None
+
         logger.info(f"PositionTracker initialized: {len(self.positions)} tracked positions")
 
     def _load_positions(self):

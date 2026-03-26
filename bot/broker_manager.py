@@ -89,6 +89,18 @@ except ImportError:
         UserBrokerState = None
         create_balance_snapshot_from_broker_response = None
 
+# Import Entry Price Store — rich metadata Layer 2 fallback + self-healing repair job
+try:
+    from bot.entry_price_store import get_entry_price_store
+    ENTRY_PRICE_STORE_AVAILABLE = True
+except ImportError:
+    try:
+        from entry_price_store import get_entry_price_store
+        ENTRY_PRICE_STORE_AVAILABLE = True
+    except ImportError:
+        ENTRY_PRICE_STORE_AVAILABLE = False
+        get_entry_price_store = None  # type: ignore
+
 # Import KrakenNonce for per-user nonce generation (DEPRECATED - kept for backward compatibility)
 # NOTE: This is being phased out in favor of GlobalKrakenNonceManager
 try:
@@ -1184,7 +1196,26 @@ class CoinbaseBroker(BaseBroker):
             logger.error("❌ Position tracker is MANDATORY for capital protection - cannot proceed")
             raise RuntimeError(f"MANDATORY position_tracker initialization failed: {e}")
 
-        # Balance tracking for fail-closed behavior (Jan 19, 2026)
+        # Entry Price Store — self-healing sync repair job (every 5 min)
+        # Re-fetches real entry prices from broker fills API for any record that
+        # wasn't captured at execution time, overwriting stale/override values.
+        if ENTRY_PRICE_STORE_AVAILABLE and get_entry_price_store is not None:
+            try:
+                _eps = get_entry_price_store()
+                _self_ref = self  # capture broker reference for the lambda
+                _eps.start_sync_repair_job(
+                    broker_getter=lambda: _self_ref,
+                    interval_secs=300,
+                    symbols_getter=lambda: (
+                        list(_self_ref.position_tracker.positions.keys())
+                        if _self_ref.position_tracker else []
+                    ),
+                )
+                logger.info("✅ EntryPriceStore sync repair job started (interval=300s)")
+            except Exception as _eps_init_err:
+                logger.warning(f"⚠️ EntryPriceStore repair job failed to start: {_eps_init_err}")
+
+
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
