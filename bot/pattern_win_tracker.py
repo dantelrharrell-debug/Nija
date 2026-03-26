@@ -527,6 +527,10 @@ __all__ = [
     "SYMBOL_KILL_WIN_RATE",
     "SYMBOL_FULL_EXPOSURE_WIN_RATE",
 ]
+
+
+class PatternWinTracker:
+    """
     Thread-safe pattern win-rate tracker, auto-disable engine, and daily
     profit target guard.
     """
