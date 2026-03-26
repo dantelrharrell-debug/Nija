@@ -234,6 +234,18 @@ except ImportError:
         validate_trade_size = None
         auto_resize_trade = None
 
+# Import Connection Stability Manager for watchdog, auto-reconnect, and HTTP pool optimisation
+try:
+    from bot.connection_stability_manager import get_connection_stability_manager
+    CONNECTION_STABILITY_AVAILABLE = True
+except ImportError:
+    try:
+        from connection_stability_manager import get_connection_stability_manager
+        CONNECTION_STABILITY_AVAILABLE = True
+    except ImportError:
+        CONNECTION_STABILITY_AVAILABLE = False
+        get_connection_stability_manager = None  # type: ignore
+
 # ── Exchange Order Validator — step-size normalisation + PERMANENT_DUST_UNSELLABLE ──
 try:
     from bot.exchange_order_validator import (
@@ -1232,6 +1244,16 @@ class CoinbaseBroker(BaseBroker):
         # Allows emergency sells even when account is too small for new entries
         self.exit_only_mode = False
 
+        # CONNECTION STABILITY: Initialize per-broker watchdog and HTTP pool manager
+        if CONNECTION_STABILITY_AVAILABLE:
+            _cm_key = f"coinbase_{account_type.value}"
+            if user_id:
+                _cm_key = f"{_cm_key}_{user_id}"
+            self._connection_stability_manager = get_connection_stability_manager(_cm_key)
+            logger.info("✅ ConnectionStabilityManager attached to CoinbaseBroker")
+        else:
+            self._connection_stability_manager = None
+
         # CRITICAL FIX (Jan 11, 2026): Install logging filter to suppress invalid ProductID errors
         # The Coinbase SDK logs "ProductID is invalid" as ERROR before raising exceptions
         # These errors are expected (delisted coins) and already handled by our exception logic
@@ -1491,6 +1513,15 @@ class CoinbaseBroker(BaseBroker):
                         logging.error("=" * 70)
                         self.connected = False
                         return False
+
+                    # CONNECTION STABILITY: Register broker and start watchdog
+                    if self._connection_stability_manager is not None:
+                        self._connection_stability_manager.register_broker(
+                            broker=self,
+                            reconnect_fn=self.connect,
+                        )
+                        self._connection_stability_manager.mark_connected()
+                        self._connection_stability_manager.start_watchdog()
 
                     return True
 
