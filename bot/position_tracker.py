@@ -18,11 +18,10 @@ logger = logging.getLogger("nija")
 # Entry price store — optional; imported lazily so PositionTracker can still
 # function if the module is unavailable for any reason.
 try:
-    from entry_price_store import get_entry_price_store as _get_eps
-    _ENTRY_PRICE_STORE_AVAILABLE = True
-except ImportError:
-    _ENTRY_PRICE_STORE_AVAILABLE = False
-    _get_eps = None
+    from bot.entry_price_store import get_entry_price_store
+    ENTRY_PRICE_STORE_AVAILABLE = True
+except Exception:
+    ENTRY_PRICE_STORE_AVAILABLE = False
 
 
 class PositionTracker:
@@ -47,7 +46,7 @@ class PositionTracker:
         self._load_positions()
 
         # Entry Price Store — rich metadata persistence (price/timestamp/source/quantity)
-        self._eps = get_entry_price_store() if ENTRY_PRICE_STORE_AVAILABLE and get_entry_price_store else None
+        self._eps = get_entry_price_store() if ENTRY_PRICE_STORE_AVAILABLE else None
 
         logger.info(f"PositionTracker initialized: {len(self.positions)} tracked positions")
 
@@ -145,9 +144,10 @@ class PositionTracker:
                 # broker-API failures.  Use the final effective entry price
                 # (avg_price for adds, entry_price for new positions).
                 _effective_price = self.positions[symbol]['entry_price']
-                if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                if ENTRY_PRICE_STORE_AVAILABLE:
                     try:
-                        _get_eps().save(symbol, _effective_price)
+                        entry_price_store = get_entry_price_store()
+                        entry_price_store.save(symbol, _effective_price)
                     except Exception as _eps_err:
                         logger.debug(f"[PositionTracker] entry_price_store save failed for {symbol}: {_eps_err}")
                 return True
@@ -198,9 +198,10 @@ class PositionTracker:
 
                 self._save_positions()
                 # Remove from entry price store when position is fully closed
-                if _full_exit and _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                if _full_exit and ENTRY_PRICE_STORE_AVAILABLE:
                     try:
-                        _get_eps().clear(symbol)
+                        entry_price_store = get_entry_price_store()
+                        entry_price_store.clear(symbol)
                     except Exception as _eps_err:
                         logger.debug(f"[PositionTracker] entry_price_store clear failed for {symbol}: {_eps_err}")
                 return True
