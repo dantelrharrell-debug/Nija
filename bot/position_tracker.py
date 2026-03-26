@@ -15,6 +15,15 @@ from threading import Lock
 
 logger = logging.getLogger("nija")
 
+# Entry price store — optional; imported lazily so PositionTracker can still
+# function if the module is unavailable for any reason.
+try:
+    from entry_price_store import get_entry_price_store as _get_eps
+    _ENTRY_PRICE_STORE_AVAILABLE = True
+except ImportError:
+    _ENTRY_PRICE_STORE_AVAILABLE = False
+    _get_eps = None
+
 
 class PositionTracker:
     """
@@ -129,6 +138,15 @@ class PositionTracker:
                     logger.info(f"Tracking new position {symbol}: entry=${entry_price:.2f}, qty={quantity:.8f}, source={position_source}")
 
                 self._save_positions()
+                # Persist entry price to the dedicated store so it survives
+                # broker-API failures.  Use the final effective entry price
+                # (avg_price for adds, entry_price for new positions).
+                _effective_price = self.positions[symbol]['entry_price']
+                if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                    try:
+                        _get_eps().save(symbol, _effective_price)
+                    except Exception as _eps_err:
+                        logger.debug(f"[PositionTracker] entry_price_store save failed for {symbol}: {_eps_err}")
                 return True
         except Exception as e:
             logger.error(f"Error tracking entry for {symbol}: {e}")
@@ -155,7 +173,9 @@ class PositionTracker:
                     # Full exit - remove position
                     del self.positions[symbol]
                     logger.info(f"Removed position {symbol} (full exit)")
+                    _full_exit = True
                 else:
+                    _full_exit = False
                     # Partial exit - reduce quantity
                     position = self.positions[symbol]
                     remaining_qty = position['quantity'] - exit_quantity
@@ -164,6 +184,7 @@ class PositionTracker:
                         # Exit consumed entire position
                         del self.positions[symbol]
                         logger.info(f"Removed position {symbol} (partial exit cleared position)")
+                        _full_exit = True
                     else:
                         # Update remaining quantity and proportional size
                         # Preserve proportional cost basis
@@ -173,6 +194,12 @@ class PositionTracker:
                         logger.info(f"Reduced position {symbol}: remaining_qty={remaining_qty:.8f}, remaining_size=${remaining_size:.2f}")
 
                 self._save_positions()
+                # Remove from entry price store when position is fully closed
+                if _full_exit and _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                    try:
+                        _get_eps().clear(symbol)
+                    except Exception as _eps_err:
+                        logger.debug(f"[PositionTracker] entry_price_store clear failed for {symbol}: {_eps_err}")
                 return True
         except Exception as e:
             logger.error(f"Error tracking exit for {symbol}: {e}")

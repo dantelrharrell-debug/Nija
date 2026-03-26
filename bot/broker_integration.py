@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import logging
 import threading
+import time
 import traceback
 
 # Import Kraken order validator for minimum order validation
@@ -173,6 +174,18 @@ except ImportError:
             pass
 
 logger = logging.getLogger("nija.broker")
+
+# ── Optional: entry price store (local truth for entry prices) ─────────────
+try:
+    from bot.entry_price_store import get_entry_price_store as _get_eps
+    _ENTRY_PRICE_STORE_AVAILABLE = True
+except ImportError:
+    try:
+        from entry_price_store import get_entry_price_store as _get_eps
+        _ENTRY_PRICE_STORE_AVAILABLE = True
+    except ImportError:
+        _ENTRY_PRICE_STORE_AVAILABLE = False
+        _get_eps = None
 
 # ✅ REQUIREMENT 2: KRAKEN MINIMUM ORDER COST
 # FIX #3: Kraken hard minimum enforcement with safety buffer
@@ -934,6 +947,17 @@ class KrakenBrokerAdapter(BrokerInterface):
         # has been initialised.  Created lazily in _kraken_api_call_with_fallback.
         self._secondary_api = None
 
+        # ── In-memory cache for entry prices fetched from Kraken order history
+        # Once a price is successfully fetched it is never re-fetched until the
+        # position changes (permanent cache).
+        self._entry_price_cache: dict = {}   # { symbol -> float }
+        self._entry_price_cache_lock = threading.Lock()
+
+        # ── Balance cache: avoids hammering the Kraken API every few seconds
+        self._balance_cache: dict = {}           # last successful response dict
+        self._balance_cache_time: float = 0.0    # unix timestamp of last fetch
+        self._balance_cache_ttl: float = 45.0    # seconds before re-fetching
+
     def _kraken_api_call(self, method: str, params: dict = None):
         """
         Make a Kraken API call with:
@@ -1176,6 +1200,10 @@ class KrakenBrokerAdapter(BrokerInterface):
     def get_account_balance(self, verbose: bool = True) -> Dict[str, float]:
         """Get Kraken account balance with proper error handling.
 
+        Results are cached for up to ``_balance_cache_ttl`` seconds (default 45 s)
+        to reduce Kraken API load.  Pass ``verbose=True`` (the default) to log
+        balance details; the cache hit path suppresses redundant log lines.
+
         Args:
             verbose: If True, log balance info. If False, suppress verbose logging.
 
@@ -1192,6 +1220,18 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'error_message': 'API not connected'
                 }
 
+            # ── Balance cache: serve from cache if fresh enough ───────────────
+            now = time.time()
+            if (
+                self._balance_cache
+                and not self._balance_cache.get('error', True)
+                and (now - self._balance_cache_time) < self._balance_cache_ttl
+            ):
+                cache_age = now - self._balance_cache_time
+                logger.debug(f"[BalanceCache] Returning cached Kraken balance (age {cache_age:.0f}s)")
+                return self._balance_cache
+
+            # ── Live fetch ────────────────────────────────────────────────────
             # Use helper method for serialized API call
             balance = self._kraken_api_call('Balance')
 
@@ -1217,12 +1257,16 @@ class KrakenBrokerAdapter(BrokerInterface):
                 if verbose:
                     logger.info(f"Kraken balance: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
 
-                return {
+                response = {
                     'total_balance': total,
                     'available_balance': total,
                     'currency': 'USD',
                     'error': False
                 }
+                # Update cache
+                self._balance_cache = response
+                self._balance_cache_time = now
+                return response
 
             # Unexpected response format
             return {
@@ -2257,54 +2301,96 @@ class KrakenBrokerAdapter(BrokerInterface):
 
     def get_real_entry_price(self, symbol: str) -> Optional[float]:
         """
-        ✅ FIX 1: Try to get real entry price from Kraken order history.
+        Try to get real entry price for *symbol* with three layers of resilience:
 
-        This method attempts to fetch the actual entry price from the broker's
-        order history. If not available, returns None (caller should use fallback).
+        1. **In-memory cache** — return immediately if already fetched this session.
+        2. **Local entry price store** — check the JSON-backed store that is written
+           whenever a trade executes; this eliminates 90 % of broker API calls after
+           a restart.
+        3. **Kraken order history** — query ``ClosedOrders`` with up to 3 retries
+           (backoff: 1.5 s, 3 s, 4.5 s) before giving up.
+
+        Successful API results are cached permanently in memory and written back to
+        the local store so they are available immediately on the next call.
 
         Args:
-            symbol: Trading symbol
+            symbol: Trading symbol (e.g. ``'HBAR-USD'``).
 
         Returns:
-            Real entry price if available, None otherwise
+            Entry price as a float, or ``None`` if unavailable.
         """
-        try:
-            if not self.api:
+        # ── Layer 1: in-memory permanent cache ────────────────────────────────
+        with self._entry_price_cache_lock:
+            cached = self._entry_price_cache.get(symbol)
+        if cached is not None:
+            return cached
+
+        # ── Layer 2: local entry price store (JSON) ───────────────────────────
+        if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+            try:
+                local_price = _get_eps().get(symbol)
+                if local_price and local_price > 0:
+                    logger.debug(f"[EntryPrice] {symbol}: Using local store price ${local_price:.6g}")
+                    with self._entry_price_cache_lock:
+                        self._entry_price_cache[symbol] = local_price
+                    return local_price
+            except Exception as _eps_err:
+                logger.debug(f"[EntryPrice] {symbol}: local store lookup failed: {_eps_err}")
+
+        # ── Layer 3: Kraken order history (3× retry with backoff) ─────────────
+        if not self.api:
+            return None
+
+        # Convert symbol to Kraken pair format
+        kraken_symbol = symbol.replace('-', '').upper()
+        if kraken_symbol.startswith('BTC'):
+            kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+
+        last_exc = None
+        for attempt in range(3):
+            try:
+                result = self._kraken_api_call('ClosedOrders', {'trades': True})
+
+                if result and 'result' in result and 'closed' in result['result']:
+                    closed_orders = result['result']['closed']
+
+                    # Find most recent buy order for this symbol
+                    for _oid, order_data in sorted(
+                        closed_orders.items(),
+                        key=lambda x: x[1].get('opentm', 0),
+                        reverse=True,
+                    ):
+                        if order_data.get('descr', {}).get('pair') == kraken_symbol:
+                            if order_data.get('descr', {}).get('type') == 'buy':
+                                avg_price = float(order_data.get('price', 0))
+                                if avg_price > 0:
+                                    logger.debug(f"[EntryPrice] {symbol}: Fetched ${avg_price:.6g} from Kraken history")
+                                    # Persist to in-memory cache and local store
+                                    with self._entry_price_cache_lock:
+                                        self._entry_price_cache[symbol] = avg_price
+                                    if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                                        try:
+                                            _get_eps().save(symbol, avg_price)
+                                        except Exception:
+                                            pass
+                                    return avg_price
+
+                # Successful API call but no matching order found — stop retrying
+                logger.debug(f"[EntryPrice] {symbol}: No matching buy order in Kraken history")
                 return None
 
-            # Convert symbol format to Kraken format
-            kraken_symbol = symbol.replace('-', '').upper()
-            if kraken_symbol.startswith('BTC'):
-                kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 2:
+                    delay = 1.5 * (attempt + 1)
+                    logger.warning(
+                        f"[EntryPrice] {symbol}: Kraken ClosedOrders attempt {attempt + 1}/3 failed "
+                        f"({exc}); retrying in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
 
-            # Query closed orders (last 50)
-            # Use helper method for serialized API call
-            result = self._kraken_api_call('ClosedOrders', {'trades': True})
-
-            if result and 'result' in result and 'closed' in result['result']:
-                closed_orders = result['result']['closed']
-
-                # Find most recent buy order for this symbol
-                for order_id, order_data in sorted(
-                    closed_orders.items(),
-                    key=lambda x: x[1].get('opentm', 0),
-                    reverse=True  # Most recent first
-                ):
-                    if order_data.get('descr', {}).get('pair') == kraken_symbol:
-                        if order_data.get('descr', {}).get('type') == 'buy':
-                            # Found a buy order - extract average price
-                            avg_price = float(order_data.get('price', 0))
-                            if avg_price > 0:
-                                logger.debug(f"Found real entry price for {symbol}: ${avg_price:.2f}")
-                                return avg_price
-
-            # No entry price found in recent orders
-            logger.debug(f"No real entry price found for {symbol} in Kraken order history")
-            return None
-
-        except Exception as e:
-            logger.debug(f"Error fetching real entry price for {symbol}: {e}")
-            return None
+        logger.debug(f"[EntryPrice] {symbol}: All 3 Kraken attempts failed ({last_exc})")
+        return None
 
     def refresh_positions_from_exchange(self) -> List[Dict]:
         """
