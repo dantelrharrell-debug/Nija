@@ -70,7 +70,7 @@ class UserConfig:
             broker_type=data['broker_type'],
             enabled=data.get('enabled', True),
             description=data.get('description', ''),
-            copy_from_platform=data.get('copy_from_platform', True),
+            copy_from_platform=data.get('copy_from_platform', data.get('copy_from_master', True)),
             disabled_symbols=data.get('disabled_symbols', []),
             independent_trading=data.get('independent_trading', False),
             active_trading=data.get('active_trading', True)
