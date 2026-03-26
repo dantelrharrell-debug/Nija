@@ -86,19 +86,24 @@ WINDOW_SIZE: int = 30
 MIN_TRADES_BEFORE_TUNING: int = 10
 
 # Win-rate thresholds
+# Tuned for the $25/day target at micro balances ($74 → $1K growth path):
+#   • TIGHTEN raised 0.45 → 0.48 so the gate tightens before win rate erodes
+#     too far, protecting compounding gains earlier.
+#   • QUALITY kept at 0.65 — the optimal target win rate for sustainable edge.
 WIN_RATE_QUALITY: float = 0.65    # ≥ 65% → QUALITY mode (stay tight)
 WIN_RATE_LOOSEN_OK: float = 0.55  # ≥ 55% win rate is healthy enough to accept more trades
-WIN_RATE_TIGHTEN: float = 0.45    # < 45% → TIGHTEN mode (raise gate to protect capital)
+WIN_RATE_TIGHTEN: float = 0.48    # < 48% → TIGHTEN mode (raised from 0.45 to protect capital sooner)
 
-# Target trade frequency (trades per hour, measured over a 24-h rolling window)
-# Setting too high forces constant loosening; set it to what the market can
-# realistically deliver at your scan interval (~2.5 min = 24 trades/hr theoretical).
-MIN_TRADES_PER_HOUR: float = 2.0   # trigger LOOSEN if below 2 trades/hr
+# Target trade frequency (trades per hour, measured over a 24-h rolling window).
+# Tuned for micro accounts: targeting ~15 quality trades/day = 0.625 trades/hr on
+# a 24-h window.  Set to 0.7 so LOOSEN activates when frequency drops below that,
+# keeping daily trade count close to the minimum needed to hit $25/day.
+MIN_TRADES_PER_HOUR: float = 0.7   # trigger LOOSEN if below ~17 trades/24 h
 
 # Maximum nudge applied to the confidence gate in either direction.
 # Keep it small — the goal is to tune, not to override the entry signal.
 MAX_CONFIDENCE_DELTA: float = 0.12   # ±12 pp absolute maximum
-LOOSEN_STEP: float = 0.03            # nudge down per LOOSEN activation
+LOOSEN_STEP: float = 0.02            # nudge down per LOOSEN activation (finer, was 0.03)
 TIGHTEN_STEP: float = 0.04           # nudge up per TIGHTEN activation
 
 # Frequency measurement window (seconds)
