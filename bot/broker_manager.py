@@ -198,6 +198,18 @@ except ImportError:
 # Configure logger for broker operations (must be before imports that use it)
 logger = logging.getLogger('nija.broker')
 
+# ── Optional: entry price store (local truth for entry prices) ─────────────
+try:
+    from bot.entry_price_store import get_entry_price_store as _get_eps
+    _ENTRY_PRICE_STORE_AVAILABLE = True
+except ImportError:
+    try:
+        from entry_price_store import get_entry_price_store as _get_eps
+        _ENTRY_PRICE_STORE_AVAILABLE = True
+    except ImportError:
+        _ENTRY_PRICE_STORE_AVAILABLE = False
+        _get_eps = None
+
 # Import Execution Layer Hardening (Feb 16, 2026) - CRITICAL ENFORCEMENT
 # This module enforces ALL hardening requirements at the execution layer:
 # 1. Position cap enforcement
@@ -1209,6 +1221,12 @@ class CoinbaseBroker(BaseBroker):
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
+
+        # In-memory permanent cache for entry prices fetched from Coinbase fills.
+        # Once fetched successfully the price is not re-fetched until the position
+        # changes, eliminating redundant API calls.
+        self._entry_price_cache: dict = {}
+        self._entry_price_cache_lock = threading.Lock()
 
         # FIX 2: EXIT-ONLY mode when balance is below minimum (Jan 20, 2026)
         # Allows emergency sells even when account is too small for new entries
@@ -4405,15 +4423,14 @@ class CoinbaseBroker(BaseBroker):
 
     def get_real_entry_price(self, symbol: str) -> Optional[float]:
         """
-        ✅ FIX: Get real entry price from Coinbase order history.
+        Get real entry price for *symbol* with three layers of resilience:
 
-        Fetches the most recent buy order fill for the given symbol to determine
-        the actual entry price. This is used to recover entry prices for positions
-        that weren't properly tracked during initial entry.
+        1. **In-memory cache** — return immediately if already fetched this session.
+        2. **Local entry price store** — check the JSON-backed store populated when
+           trades execute; avoids redundant API calls after restarts.
+        3. **Coinbase fills API** — up to 3 retries (backoff: 1.5 s, 3 s, 4.5 s).
 
-        NOTE: For positions with multiple partial fills or round-trip trades,
-        this returns the most recent BUY fill price. For more accurate tracking
-        of complex positions, use position_tracker from the start.
+        Successful results are cached permanently in memory and in the local store.
 
         Args:
             symbol: Trading symbol (e.g., 'BNB-USD')
@@ -4421,87 +4438,100 @@ class CoinbaseBroker(BaseBroker):
         Returns:
             Real entry price if found, None otherwise
         """
-        # ── LAYER 2: Entry Price Store (fast, no API call) ────────────────────
-        # Check the local store first — if we have an execution-time or API-
-        # confirmed price, return it immediately without hitting the network.
-        if ENTRY_PRICE_STORE_AVAILABLE and get_entry_price_store is not None:
-            try:
-                _eps_record = get_entry_price_store().get(symbol)
-                if _eps_record and _eps_record.price > 0:
-                    logger.debug(
-                        f"[Layer2] EntryPriceStore hit for {symbol}: "
-                        f"${_eps_record.price:.4f} (source={_eps_record.source}, "
-                        f"qty={_eps_record.quantity})"
-                    )
-                    return _eps_record.price
-            except Exception as _eps_err:
-                logger.debug(f"EntryPriceStore lookup failed for {symbol}: {_eps_err}")
+        # ── Layer 1: in-memory permanent cache ────────────────────────────────
+        with self._entry_price_cache_lock:
+            cached = self._entry_price_cache.get(symbol)
+        if cached is not None:
+            return cached
 
+        # ── Layer 2: local entry price store (JSON) ───────────────────────────
+        if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+            try:
+                local_price = _get_eps().get(symbol)
+                if local_price and local_price > 0:
+                    logger.debug(f"[EntryPrice] {symbol}: Using local store price ${local_price:.6g}")
+                    with self._entry_price_cache_lock:
+                        self._entry_price_cache[symbol] = local_price
+                    return local_price
+            except Exception as _eps_err:
+                logger.debug(f"[EntryPrice] {symbol}: local store lookup failed: {_eps_err}")
+
+        # ── Layer 3: Coinbase fills API (3× retry with backoff) ───────────────
         if not self.client:
-            logger.debug(f"Cannot get entry price for {symbol}: client not connected")
+            logger.debug(f"[EntryPrice] {symbol}: Coinbase client not connected")
             return None
 
-        try:
-            # Fetch recent fills for the symbol using Coinbase Advanced Trade API
-            # get_fills returns all recent fills, can filter by product_ids
-            logger.debug(f"Fetching order fills for {symbol} to recover entry price...")
+        last_exc = None
+        for attempt in range(3):
+            try:
+                def _fetch_fills():
+                    fills_resp = self.client.get_fills(
+                        product_ids=[symbol],
+                        limit=100,
+                    )
+                    return fills_resp
 
-            # Use rate limiter to prevent 429 errors
-            def _fetch_fills():
-                fills_resp = self.client.get_fills(
-                    product_ids=[symbol],  # product_ids expects a list
-                    limit=100  # Get last 100 fills to find recent buys
-                )
-                return fills_resp
+                if self._rate_limiter:
+                    fills_resp = self._rate_limiter.call('get_fills', _fetch_fills)
+                else:
+                    fills_resp = _fetch_fills()
 
-            if self._rate_limiter:
-                fills_resp = self._rate_limiter.call('get_fills', _fetch_fills)
-            else:
-                fills_resp = _fetch_fills()
+                # Parse fills response
+                fills = []
+                if hasattr(fills_resp, 'fills'):
+                    fills = fills_resp.fills
+                elif isinstance(fills_resp, dict) and 'fills' in fills_resp:
+                    fills = fills_resp['fills']
 
-            # Parse fills response
-            fills = []
-            if hasattr(fills_resp, 'fills'):
-                fills = fills_resp.fills
-            elif isinstance(fills_resp, dict) and 'fills' in fills_resp:
-                fills = fills_resp['fills']
+                if not fills:
+                    logger.debug(f"[EntryPrice] {symbol}: No fills found in Coinbase history")
+                    return None
 
-            if not fills:
-                logger.debug(f"No fills found for {symbol}")
+                # Find the most recent BUY fill
+                for fill in fills:
+                    if isinstance(fill, dict):
+                        side = fill.get('side', '').upper()
+                        price = fill.get('price')
+                        size = fill.get('size')
+                    else:
+                        side = getattr(fill, 'side', '').upper()
+                        price = getattr(fill, 'price', None)
+                        size = getattr(fill, 'size', None)
+
+                    if side == 'BUY' and price:
+                        try:
+                            entry_price = float(price)
+                            fill_size = float(size) if size else 0
+                            logger.info(f"[EntryPrice] {symbol}: Fetched ${entry_price:.6g} from Coinbase fills (size: {fill_size})")
+                            # Persist to in-memory cache and local store
+                            with self._entry_price_cache_lock:
+                                self._entry_price_cache[symbol] = entry_price
+                            if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                                try:
+                                    _get_eps().save(symbol, entry_price)
+                                except Exception:
+                                    pass
+                            return entry_price
+                        except (ValueError, TypeError) as parse_err:
+                            logger.warning(f"[EntryPrice] {symbol}: Invalid price data {price}: {parse_err}")
+                            continue
+
+                # Successful call, no BUY fill — stop retrying
+                logger.debug(f"[EntryPrice] {symbol}: No BUY fills found in Coinbase history")
                 return None
 
-            # Find the most recent BUY fill for this symbol
-            # NOTE: Coinbase API returns fills in reverse chronological order (newest first)
-            # We look for the first BUY fill, which represents the most recent entry
-            for fill in fills:
-                # Extract fill data (handle both object and dict formats)
-                if isinstance(fill, dict):
-                    side = fill.get('side', '').upper()
-                    price = fill.get('price')
-                    size = fill.get('size')
-                else:
-                    side = getattr(fill, 'side', '').upper()
-                    price = getattr(fill, 'price', None)
-                    size = getattr(fill, 'size', None)
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 2:
+                    delay = 1.5 * (attempt + 1)
+                    logger.warning(
+                        f"[EntryPrice] {symbol}: Coinbase fills attempt {attempt + 1}/3 failed "
+                        f"({exc}); retrying in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
 
-                # We want BUY fills (entry) not SELL fills (exit)
-                if side == 'BUY' and price:
-                    try:
-                        entry_price = float(price)
-                        fill_size = float(size) if size else 0
-                        logger.info(f"✅ Found real entry price for {symbol}: ${entry_price:.2f} (size: {fill_size})")
-                        return entry_price
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Invalid price data for {symbol}: {price} - {e}")
-                        continue  # Try next fill
-
-            # No buy fills found
-            logger.debug(f"No BUY fills found for {symbol} in recent history")
-            return None
-
-        except Exception as e:
-            logger.warning(f"Failed to fetch entry price for {symbol}: {e}")
-            return None
+        logger.warning(f"[EntryPrice] {symbol}: All 3 Coinbase attempts failed ({last_exc})")
+        return None
 
     def get_bulk_entry_prices(self, symbols: List[str]) -> Dict[str, float]:
         """
@@ -5920,6 +5950,12 @@ class KrakenBroker(BaseBroker):
             logger.error(f"❌ CAPITAL PROTECTION: Position tracker initialization FAILED: {e}")
             logger.error("❌ Position tracker is MANDATORY for capital protection - cannot proceed")
             raise RuntimeError(f"MANDATORY position_tracker initialization failed: {e}")
+
+        # In-memory permanent cache for entry prices fetched from Kraken trade history.
+        # Once fetched successfully the price is not re-fetched until the position
+        # changes, eliminating redundant API calls.
+        self._entry_price_cache: dict = {}
+        self._entry_price_cache_lock = threading.Lock()
 
     def _initialize_kraken_market_data(self):
         """
@@ -8184,11 +8220,14 @@ class KrakenBroker(BaseBroker):
 
     def get_real_entry_price(self, symbol: str) -> Optional[float]:
         """
-        Get real entry price from Kraken trade history.
+        Get real entry price for *symbol* with three layers of resilience:
 
-        Fetches the most recent buy trades for the given symbol and returns
-        the volume-weighted average entry price. This is used to recover
-        entry prices for positions that weren't tracked at entry time.
+        1. **In-memory cache** — return immediately if already fetched this session.
+        2. **Local entry price store** — check the JSON-backed store populated when
+           trades execute; avoids redundant API calls after restarts.
+        3. **Kraken TradesHistory API** — up to 3 retries (backoff: 1.5 s, 3 s, 4.5 s).
+
+        Successful results are cached permanently in memory and in the local store.
 
         Args:
             symbol: Standard format symbol (e.g., 'BTC-USD', 'ETH-USD')
@@ -8196,98 +8235,121 @@ class KrakenBroker(BaseBroker):
         Returns:
             Volume-weighted average entry price if found, None otherwise
         """
+        # ── Layer 1: in-memory permanent cache ────────────────────────────────
+        with self._entry_price_cache_lock:
+            cached = self._entry_price_cache.get(symbol)
+        if cached is not None:
+            return cached
+
+        # ── Layer 2: local entry price store (JSON) ───────────────────────────
+        if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+            try:
+                local_price = _get_eps().get(symbol)
+                if local_price and local_price > 0:
+                    logger.debug(f"[EntryPrice] {symbol}: Using local store price ${local_price:.6g}")
+                    with self._entry_price_cache_lock:
+                        self._entry_price_cache[symbol] = local_price
+                    return local_price
+            except Exception as _eps_err:
+                logger.debug(f"[EntryPrice] {symbol}: local store lookup failed: {_eps_err}")
+
+        # ── Layer 3: Kraken TradesHistory API (3× retry with backoff) ─────────
         if not self.api:
-            logger.debug(f"Cannot get entry price for {symbol}: Kraken API not connected")
+            logger.debug(f"[EntryPrice] {symbol}: Kraken API not connected")
             return None
 
-        try:
-            # Convert standard symbol to Kraken pair format for filtering
-            kraken_pair = None
-            if convert_to_kraken is not None:
-                kraken_pair = convert_to_kraken(symbol)
-            else:
-                logger.debug(f"Symbol mapper unavailable for {symbol}; will match by currency code in trade history")
+        # Convert standard symbol to Kraken pair format for filtering
+        kraken_pair = None
+        if convert_to_kraken is not None:
+            kraken_pair = convert_to_kraken(symbol)
 
-            logger.debug(f"Fetching Kraken trade history for {symbol} (pair: {kraken_pair}) to recover entry price...")
+        symbol_currency = symbol.replace('-USD', '').replace('-USDT', '')
+        match_pairs: set = set()
+        if kraken_pair:
+            match_pairs.add(kraken_pair.upper())
+        match_pairs.add(f"X{symbol_currency}ZUSD")
+        match_pairs.add(f"{symbol_currency}USD")
+        match_pairs.add(f"X{symbol_currency}ZUSDT")
+        match_pairs.add(f"{symbol_currency}USDT")
+        match_pairs.add(f"{symbol_currency}/USD")
+        match_pairs.add(f"{symbol_currency}/USDT")
 
-            # Fetch recent closed trade history from Kraken
-            # TradesHistory returns up to 50 most recent trades (oldest first by default)
-            history_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
-            response = self._kraken_private_call('TradesHistory', category=history_category)
+        last_exc = None
+        for attempt in range(3):
+            try:
+                history_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+                response = self._kraken_private_call('TradesHistory', category=history_category)
 
-            if not response or 'result' not in response:
-                logger.debug(f"No trade history response for {symbol}")
-                return None
+                if not response or 'result' not in response:
+                    logger.debug(f"[EntryPrice] {symbol}: No trade history response")
+                    return None
 
-            if response.get('error'):
-                error_msgs = ', '.join(response['error'])
-                logger.warning(f"Kraken TradesHistory error for {symbol}: {error_msgs}")
-                return None
+                if response.get('error'):
+                    error_msgs = ', '.join(response['error'])
+                    logger.warning(f"[EntryPrice] {symbol}: Kraken TradesHistory error: {error_msgs}")
+                    return None
 
-            trades = response['result'].get('trades', {})
-            if not trades:
-                logger.debug(f"No trade history found for {symbol}")
-                return None
+                trades = response['result'].get('trades', {})
+                if not trades:
+                    logger.debug(f"[EntryPrice] {symbol}: No trade history found")
+                    return None
 
-            # Build a set of Kraken pair representations to match against
-            # Kraken may return the pair in multiple formats (e.g., XXBTZUSD or XBTUSD)
-            symbol_currency = symbol.replace('-USD', '').replace('-USDT', '')
-            match_pairs = set()
-            if kraken_pair:
-                match_pairs.add(kraken_pair.upper())
-            # Add common Kraken variants so we don't miss trades
-            match_pairs.add(f"X{symbol_currency}ZUSD")
-            match_pairs.add(f"{symbol_currency}USD")
-            match_pairs.add(f"X{symbol_currency}ZUSDT")
-            match_pairs.add(f"{symbol_currency}USDT")
-            # Also try the wsname format (e.g., BTC/USD)
-            match_pairs.add(f"{symbol_currency}/USD")
-            match_pairs.add(f"{symbol_currency}/USDT")
+                # Collect all BUY trades for this symbol
+                buy_trades = []
+                for _tid, trade in trades.items():
+                    trade_pair = trade.get('pair', '').upper()
+                    if trade.get('type', '').lower() != 'buy':
+                        continue
+                    pair_matches = (
+                        trade_pair in match_pairs
+                        or symbol_currency.upper() in trade_pair
+                    )
+                    if not pair_matches:
+                        continue
+                    try:
+                        price = float(trade.get('price', 0))
+                        vol = float(trade.get('vol', 0))
+                        trade_time = float(trade.get('time', 0))
+                        if price > 0 and vol > 0:
+                            buy_trades.append((trade_time, price, vol))
+                    except (ValueError, TypeError):
+                        continue
 
-            # Collect all BUY trades for this symbol (most recent first matters for ordering)
-            buy_trades = []
-            for trade_id, trade in trades.items():
-                trade_pair = trade.get('pair', '').upper()
-                trade_type = trade.get('type', '').lower()
+                if not buy_trades:
+                    logger.debug(f"[EntryPrice] {symbol}: No BUY trades found in Kraken history")
+                    return None
 
-                if trade_type != 'buy':
-                    continue
+                # VWAP of all found BUY trades (most recent first)
+                buy_trades.sort(key=lambda t: t[0], reverse=True)
+                total_vol = sum(vol for _, _, vol in buy_trades)
+                vwap = sum(price * vol for _, price, vol in buy_trades) / total_vol
 
-                # Check if this trade is for our symbol
-                pair_matches = (
-                    trade_pair in match_pairs
-                    or symbol_currency.upper() in trade_pair
+                logger.info(
+                    f"[EntryPrice] {symbol}: Fetched ${vwap:.4f} from Kraken history "
+                    f"(VWAP of {len(buy_trades)} buy trade(s))"
                 )
-                if not pair_matches:
-                    continue
+                # Persist to in-memory cache and local store
+                with self._entry_price_cache_lock:
+                    self._entry_price_cache[symbol] = vwap
+                if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                    try:
+                        _get_eps().save(symbol, vwap)
+                    except Exception:
+                        pass
+                return vwap
 
-                try:
-                    price = float(trade.get('price', 0))
-                    vol = float(trade.get('vol', 0))
-                    trade_time = float(trade.get('time', 0))
-                    if price > 0 and vol > 0:
-                        buy_trades.append((trade_time, price, vol))
-                except (ValueError, TypeError):
-                    continue
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 2:
+                    delay = 1.5 * (attempt + 1)
+                    logger.warning(
+                        f"[EntryPrice] {symbol}: Kraken TradesHistory attempt {attempt + 1}/3 failed "
+                        f"({exc}); retrying in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
 
-            if not buy_trades:
-                logger.debug(f"No BUY trades found for {symbol} in Kraken trade history")
-                return None
-
-            # Sort by time descending (most recent first) and compute VWAP of all found buys
-            buy_trades.sort(key=lambda t: t[0], reverse=True)
-            total_vol = sum(vol for _, _, vol in buy_trades)
-            vwap = sum(price * vol for _, price, vol in buy_trades) / total_vol
-
-            logger.info(
-                f"✅ Kraken historical entry price for {symbol}: ${vwap:.4f} "
-                f"(VWAP of {len(buy_trades)} buy trade(s))"
-            )
-            return vwap
-
-        except Exception as e:
-            logger.warning(f"Failed to fetch Kraken entry price for {symbol}: {e}")
-            return None
+        logger.warning(f"[EntryPrice] {symbol}: All 3 Kraken attempts failed ({last_exc})")
+        return None
 
     def get_bulk_entry_prices(self, symbols: List[str]) -> Dict[str, float]:
         """

@@ -15,24 +15,14 @@ from threading import Lock
 
 logger = logging.getLogger("nija")
 
-# ── Entry Price Store integration (Layer 2 persistence) ───────────────────────
+# Entry price store — optional; imported lazily so PositionTracker can still
+# function if the module is unavailable for any reason.
 try:
-    from bot.entry_price_store import get_entry_price_store
-    ENTRY_PRICE_STORE_AVAILABLE = True
+    from entry_price_store import get_entry_price_store as _get_eps
+    _ENTRY_PRICE_STORE_AVAILABLE = True
 except ImportError:
-    try:
-        from entry_price_store import get_entry_price_store
-        ENTRY_PRICE_STORE_AVAILABLE = True
-    except ImportError:
-        ENTRY_PRICE_STORE_AVAILABLE = False
-        get_entry_price_store = None  # type: ignore
-
-# Source labels written to the entry price store
-_EPS_SOURCE_MAP = {
-    "nija_strategy":    "execution",
-    "broker_existing":  "api",
-}
-_EPS_SOURCE_DEFAULT = "override"
+    _ENTRY_PRICE_STORE_AVAILABLE = False
+    _get_eps = None
 
 
 class PositionTracker:
@@ -151,20 +141,15 @@ class PositionTracker:
                     logger.info(f"Tracking new position {symbol}: entry=${entry_price:.2f}, qty={quantity:.8f}, source={position_source}")
 
                 self._save_positions()
-
-                # ── Entry Price Store: persist rich metadata ──────────────────
-                if self._eps is not None:
+                # Persist entry price to the dedicated store so it survives
+                # broker-API failures.  Use the final effective entry price
+                # (avg_price for adds, entry_price for new positions).
+                _effective_price = self.positions[symbol]['entry_price']
+                if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
                     try:
-                        _eps_source = _EPS_SOURCE_MAP.get(position_source, _EPS_SOURCE_DEFAULT)
-                        # Use the averaged entry price so the store always reflects
-                        # the true cost basis even after position adds.
-                        _stored_price = self.positions[symbol]['entry_price']
-                        _stored_qty   = self.positions[symbol]['quantity']
-                        self._eps.save(symbol, _stored_price,
-                                       source=_eps_source, quantity=_stored_qty)
+                        _get_eps().save(symbol, _effective_price)
                     except Exception as _eps_err:
-                        logger.debug(f"EntryPriceStore save skipped for {symbol}: {_eps_err}")
-
+                        logger.debug(f"[PositionTracker] entry_price_store save failed for {symbol}: {_eps_err}")
                 return True
         except Exception as e:
             logger.error(f"Error tracking entry for {symbol}: {e}")
@@ -191,7 +176,9 @@ class PositionTracker:
                     # Full exit - remove position
                     del self.positions[symbol]
                     logger.info(f"Removed position {symbol} (full exit)")
+                    _full_exit = True
                 else:
+                    _full_exit = False
                     # Partial exit - reduce quantity
                     position = self.positions[symbol]
                     remaining_qty = position['quantity'] - exit_quantity
@@ -200,6 +187,7 @@ class PositionTracker:
                         # Exit consumed entire position
                         del self.positions[symbol]
                         logger.info(f"Removed position {symbol} (partial exit cleared position)")
+                        _full_exit = True
                     else:
                         # Update remaining quantity and proportional size
                         # Preserve proportional cost basis
@@ -209,24 +197,12 @@ class PositionTracker:
                         logger.info(f"Reduced position {symbol}: remaining_qty={remaining_qty:.8f}, remaining_size=${remaining_size:.2f}")
 
                 self._save_positions()
-
-                # ── Entry Price Store: sync on exit ───────────────────────────
-                if self._eps is not None:
+                # Remove from entry price store when position is fully closed
+                if _full_exit and _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
                     try:
-                        if symbol not in self.positions:
-                            # Full exit (or partial that consumed all) — drop record
-                            self._eps.clear(symbol)
-                        else:
-                            # True partial exit — update quantity in store
-                            existing_rec = self._eps.get(symbol)
-                            if existing_rec:
-                                new_qty = self.positions[symbol]['quantity']
-                                self._eps.save(symbol, existing_rec.price,
-                                               source=existing_rec.source,
-                                               quantity=new_qty)
+                        _get_eps().clear(symbol)
                     except Exception as _eps_err:
-                        logger.debug(f"EntryPriceStore exit sync skipped for {symbol}: {_eps_err}")
-
+                        logger.debug(f"[PositionTracker] entry_price_store clear failed for {symbol}: {_eps_err}")
                 return True
         except Exception as e:
             logger.error(f"Error tracking exit for {symbol}: {e}")
