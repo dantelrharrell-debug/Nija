@@ -1054,6 +1054,48 @@ except ImportError:
         get_profit_optimizer = None  # type: ignore
         logger.warning("⚠️ Profit Optimizer not available — default position sizing in use")
 
+# ── Portfolio Profit Engine — total portfolio P&L tracking ───────────────────
+try:
+    from portfolio_profit_engine import get_portfolio_profit_engine
+    PORTFOLIO_PROFIT_ENGINE_AVAILABLE = True
+    logger.info("✅ Portfolio Profit Engine loaded — total portfolio P&L tracking active")
+except ImportError:
+    try:
+        from bot.portfolio_profit_engine import get_portfolio_profit_engine
+        PORTFOLIO_PROFIT_ENGINE_AVAILABLE = True
+        logger.info("✅ Portfolio Profit Engine loaded — total portfolio P&L tracking active")
+    except ImportError:
+        PORTFOLIO_PROFIT_ENGINE_AVAILABLE = False
+        get_portfolio_profit_engine = None  # type: ignore
+
+# ── Auto-Reinvest Engine — split profits into reinvest vs withdraw buckets ────
+try:
+    from auto_reinvest_engine import get_auto_reinvest_engine
+    AUTO_REINVEST_ENGINE_AVAILABLE = True
+    logger.info("✅ Auto-Reinvest Engine loaded — profit reinvestment routing active")
+except ImportError:
+    try:
+        from bot.auto_reinvest_engine import get_auto_reinvest_engine
+        AUTO_REINVEST_ENGINE_AVAILABLE = True
+        logger.info("✅ Auto-Reinvest Engine loaded — profit reinvestment routing active")
+    except ImportError:
+        AUTO_REINVEST_ENGINE_AVAILABLE = False
+        get_auto_reinvest_engine = None  # type: ignore
+
+# ── Smart Drawdown Recovery — detect drawdowns and activate structured recovery ─
+try:
+    from smart_drawdown_recovery import get_smart_drawdown_recovery
+    SMART_DRAWDOWN_RECOVERY_AVAILABLE = True
+    logger.info("✅ Smart Drawdown Recovery loaded — structured drawdown recovery active")
+except ImportError:
+    try:
+        from bot.smart_drawdown_recovery import get_smart_drawdown_recovery
+        SMART_DRAWDOWN_RECOVERY_AVAILABLE = True
+        logger.info("✅ Smart Drawdown Recovery loaded — structured drawdown recovery active")
+    except ImportError:
+        SMART_DRAWDOWN_RECOVERY_AVAILABLE = False
+        get_smart_drawdown_recovery = None  # type: ignore
+
 # ── Performance Tracker — fees + slippage aware closed-trade stats ────────────
 try:
     from performance_tracker import get_performance_tracker as _get_perf_tracker_ts, PERF_LOG_CYCLE_INTERVAL
@@ -13624,38 +13666,17 @@ class TradingStrategy:
                 logger.warning(f"Failed to record trade in market adapter: {e}")
 
         # Record with Portfolio Profit Engine for total portfolio profit tracking
-        try:
-            from bot.portfolio_profit_engine import get_portfolio_profit_engine
-            _ppe = get_portfolio_profit_engine()
-            _ppe.record_trade(symbol=symbol, pnl_usd=profit_usd, is_win=is_win)
-        except ImportError:
+        if PORTFOLIO_PROFIT_ENGINE_AVAILABLE and get_portfolio_profit_engine is not None:
             try:
-                from portfolio_profit_engine import get_portfolio_profit_engine
                 _ppe = get_portfolio_profit_engine()
                 _ppe.record_trade(symbol=symbol, pnl_usd=profit_usd, is_win=is_win)
-            except ImportError:
-                logger.debug("Portfolio Profit Engine not available — skipping portfolio profit recording")
-        except Exception as e:
-            logger.warning(f"Failed to record trade in Portfolio Profit Engine: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to record trade in Portfolio Profit Engine: {e}")
 
         # Auto-Reinvest Engine — split profit into reinvest vs withdraw buckets
-        try:
-            from bot.auto_reinvest_engine import get_auto_reinvest_engine as _get_are
-            _are_decision = _get_are().process_profit(
-                symbol=symbol,
-                gross_profit=profit_usd,
-                fees=0.0,
-                is_win=is_win,
-            )
-            if not _are_decision.skipped:
-                logger.info(
-                    "💰 AutoReinvest [%s] reinvest=$%.4f withdraw=$%.4f",
-                    symbol, _are_decision.reinvest_usd, _are_decision.withdraw_usd,
-                )
-        except ImportError:
+        if AUTO_REINVEST_ENGINE_AVAILABLE and get_auto_reinvest_engine is not None:
             try:
-                from auto_reinvest_engine import get_auto_reinvest_engine as _get_are
-                _are_decision = _get_are().process_profit(
+                _are_decision = get_auto_reinvest_engine().process_profit(
                     symbol=symbol,
                     gross_profit=profit_usd,
                     fees=0.0,
@@ -13666,10 +13687,8 @@ class TradingStrategy:
                         "💰 AutoReinvest [%s] reinvest=$%.4f withdraw=$%.4f",
                         symbol, _are_decision.reinvest_usd, _are_decision.withdraw_usd,
                     )
-            except ImportError:
-                logger.debug("AutoReinvestEngine not available — skipping reinvest split")
-        except Exception as _are_err:
-            logger.debug("AutoReinvestEngine record skipped: %s", _are_err)
+            except Exception as _are_err:
+                logger.debug("AutoReinvestEngine record skipped: %s", _are_err)
 
         # Record with Self-Learning Strategy Allocator
         try:
@@ -13688,27 +13707,16 @@ class TradingStrategy:
             logger.warning(f"Failed to record trade in Self-Learning Allocator: {e}")
 
         # Record with Smart Drawdown Recovery engine
-        try:
-            from bot.smart_drawdown_recovery import get_smart_drawdown_recovery
-            _sdr = get_smart_drawdown_recovery()
-            _sdr_status = _sdr.get_status()
-            _sdr.update(
-                current_capital=_sdr_status["current_capital"] + profit_usd,
-                is_win=is_win,
-            )
-        except ImportError:
+        if SMART_DRAWDOWN_RECOVERY_AVAILABLE and get_smart_drawdown_recovery is not None:
             try:
-                from smart_drawdown_recovery import get_smart_drawdown_recovery
                 _sdr = get_smart_drawdown_recovery()
                 _sdr_status = _sdr.get_status()
                 _sdr.update(
                     current_capital=_sdr_status["current_capital"] + profit_usd,
                     is_win=is_win,
                 )
-            except ImportError:
-                logger.debug("Smart Drawdown Recovery not available")
-        except Exception as e:
-            logger.warning(f"Failed to update Smart Drawdown Recovery: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to update Smart Drawdown Recovery: {e}")
 
         # Record with Global Risk Governor for cascade-loss circuit breaker
         if GLOBAL_RISK_GOVERNOR_AVAILABLE and get_global_risk_governor:

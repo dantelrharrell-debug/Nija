@@ -1,9 +1,11 @@
 # NIJA - Autonomous Algorithmic Trading Platform
 
-📋 **Version 7.5.0** — March 2026 Multi-Layer Protection Release
+📋 **Version 7.6.0** — March 2026 Trading & Compounding Reliability Release
 
 > **CRITICAL SAFETY GUARANTEE**  
 > **Tier-based capital protection is enforced in all environments and cannot be bypassed.**
+
+> **✅ v7.6.0 (March 26, 2026):** Code audit and reliability pass — syntax error in `pattern_win_tracker.py` fixed; `portfolio_profit_engine`, `auto_reinvest_engine`, and `smart_drawdown_recovery` promoted to module-level imports for faster post-trade recording; README updated with clear trading enablement guide; `.env.example` trading setup steps clarified. Profit compounding and trading flow verified end-to-end.
 
 > **✅ v7.5.0 (March 17, 2026):** Three new priority gate modules + three integration modules landed. **VolatilityGuard** (Priority-1, blowup prevention), **TradeThrottler** (Priority-2, consistency), and **StrategyVoter** (Priority-3, accuracy) are wired into **MasterStrategyRouter**, **ExecutionPipeline**, and **SignalBroadcaster** respectively. Both previously broken files (`portfolio_kill_switch.py`, `trade_duplication_guard.py`) fully repaired. 110 tests pass (60 existing + 50 new).
 
@@ -15,7 +17,71 @@
 
 ---
 
-## 🛡️ PRIORITY GATE SYSTEM (v7.5.0 — March 17, 2026)
+## 🚀 QUICK START — Enable Live Trading
+
+> **NIJA defaults to DISABLED mode (safe state) until credentials and the live-trading flag are set.**
+
+### 3-Step Setup
+
+```bash
+# Step 1: Copy the example env file
+cp .env.example .env
+
+# Step 2: Fill in your exchange API credentials
+#   Primary broker (Kraken):
+#   KRAKEN_PLATFORM_API_KEY=your_key
+#   KRAKEN_PLATFORM_API_SECRET=your_secret
+#
+#   Alternative broker (Coinbase Advanced Trade):
+#   COINBASE_API_KEY=your_key
+#   COINBASE_API_SECRET=your_secret
+
+# Step 3: Set the live-trading authorization flags (already set to true in .env.example)
+#   LIVE_CAPITAL_VERIFIED=true
+#   LIVE_TRADING=1
+
+# Step 4: Start the bot
+bash start.sh
+```
+
+### Trading Mode Reference
+
+| Mode | Condition | New Entries | Position Management |
+|------|-----------|-------------|---------------------|
+| `LIVE` | Credentials set + `LIVE_CAPITAL_VERIFIED=true` | ✅ | ✅ |
+| `MONITOR` | Credentials set, `LIVE_CAPITAL_VERIFIED=false` | ❌ | ✅ |
+| `DRY_RUN` | `DRY_RUN_MODE=true` | ✅ simulated | ✅ |
+| `DISABLED` | No credentials | ❌ | ❌ |
+
+### Profit Compounding
+
+Profit compounding is **always active** once trading is enabled. The bot:
+1. Records every closed trade via `profit_compounding_engine.record_trade()`
+2. Grows position sizes proportionally as profits accumulate (`compound_multiplier = current_capital / base_capital`)
+3. Caps the multiplier at `2×` by default (configurable via `COMPOUNDING_STRATEGY` env var)
+4. Automatically reinvests profits via the `auto_reinvest_engine` after each trade
+
+Override defaults via environment variables:
+
+```bash
+BASE_CAPITAL=500            # Your starting capital in USD (default: 100)
+COMPOUNDING_STRATEGY=aggressive  # Options: conservative | moderate | aggressive
+DAILY_PROFIT_TARGET_USD=50  # Slow-down mode threshold (default: 25)
+```
+
+### Troubleshooting: Trading Is Blocked
+
+If the bot logs `🛑 TRADING NOT ALLOWED`, check:
+
+1. **Credentials missing** — Set `KRAKEN_PLATFORM_API_KEY` and `KRAKEN_PLATFORM_API_SECRET` in `.env`
+2. **Live flag not set** — Add `LIVE_CAPITAL_VERIFIED=true` to `.env`
+3. **Emergency stop active** — Delete the `EMERGENCY_STOP` file if it exists
+4. **Kill switch tripped** — Check logs for `Kill switch active`, then restart
+5. **Max drawdown hit** — Review `RISK_PROFILE` setting; default is `STARTER` (20% max drawdown)
+
+---
+
+
 
 Every trade passes through **three priority gates** before reaching execution.
 The gates are enforced globally: no trade can bypass them.
