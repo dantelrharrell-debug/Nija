@@ -1345,6 +1345,67 @@ except ImportError:
         BROKER_PROFILES = {}  # type: ignore
         logger.warning("⚠️ Broker Strategy Router not available — static broker targets in use")
 
+# ── Capital Efficiency Mode — account-size-aware thresholds (Steps 1-5) ──────
+try:
+    from capital_efficiency_mode import get_capital_efficiency_mode
+    CAPITAL_EFFICIENCY_MODE_AVAILABLE = True
+    logger.info("✅ Capital Efficiency Mode loaded — account-size-aware thresholds active")
+except ImportError:
+    try:
+        from bot.capital_efficiency_mode import get_capital_efficiency_mode
+        CAPITAL_EFFICIENCY_MODE_AVAILABLE = True
+        logger.info("✅ Capital Efficiency Mode loaded — account-size-aware thresholds active")
+    except ImportError:
+        CAPITAL_EFFICIENCY_MODE_AVAILABLE = False
+        get_capital_efficiency_mode = None  # type: ignore
+        logger.warning("⚠️ Capital Efficiency Mode not available")
+
+# ── Kill Bad Symbols Memory — reduce exposure on losing coins ─────────────────
+try:
+    from kill_bad_symbols import get_kill_bad_symbols
+    KILL_BAD_SYMBOLS_AVAILABLE = True
+    logger.info("✅ Kill Bad Symbols Memory loaded — losing coin exposure reduction active")
+except ImportError:
+    try:
+        from bot.kill_bad_symbols import get_kill_bad_symbols
+        KILL_BAD_SYMBOLS_AVAILABLE = True
+        logger.info("✅ Kill Bad Symbols Memory loaded — losing coin exposure reduction active")
+    except ImportError:
+        KILL_BAD_SYMBOLS_AVAILABLE = False
+        get_kill_bad_symbols = None  # type: ignore
+        logger.warning("⚠️ Kill Bad Symbols Memory not available")
+
+# ── Session Awareness — time-of-day entry confidence / size adjustment ────────
+try:
+    from session_awareness import get_session_awareness
+    SESSION_AWARENESS_AVAILABLE = True
+    logger.info("✅ Session Awareness loaded — time-based entry adjustments active")
+except ImportError:
+    try:
+        from bot.session_awareness import get_session_awareness
+        SESSION_AWARENESS_AVAILABLE = True
+        logger.info("✅ Session Awareness loaded — time-based entry adjustments active")
+    except ImportError:
+        SESSION_AWARENESS_AVAILABLE = False
+        get_session_awareness = None  # type: ignore
+        logger.warning("⚠️ Session Awareness not available")
+
+# ── Pattern Win Tracker — per-pattern analytics, auto-disable, daily target ───
+try:
+    from pattern_win_tracker import get_pattern_win_tracker, Pattern as EntryPattern
+    PATTERN_WIN_TRACKER_AVAILABLE = True
+    logger.info("✅ Pattern Win Tracker loaded — pattern analytics + daily profit target active")
+except ImportError:
+    try:
+        from bot.pattern_win_tracker import get_pattern_win_tracker, Pattern as EntryPattern
+        PATTERN_WIN_TRACKER_AVAILABLE = True
+        logger.info("✅ Pattern Win Tracker loaded — pattern analytics + daily profit target active")
+    except ImportError:
+        PATTERN_WIN_TRACKER_AVAILABLE = False
+        get_pattern_win_tracker = None  # type: ignore
+        EntryPattern = None  # type: ignore
+        logger.warning("⚠️ Pattern Win Tracker not available")
+
 load_dotenv()
 
 # ============================================================================
@@ -2992,6 +3053,56 @@ class TradingStrategy:
                 self.auto_capital_scaler = None
         else:
             self.auto_capital_scaler = None
+
+        # ── Capital Efficiency Mode — account-size-aware thresholds ──────────
+        if CAPITAL_EFFICIENCY_MODE_AVAILABLE and get_capital_efficiency_mode is not None:
+            try:
+                self.capital_efficiency_mode = get_capital_efficiency_mode()
+                logger.info("✅ Capital Efficiency Mode initialized")
+            except Exception as _e:
+                logger.warning("⚠️ Capital Efficiency Mode init failed: %s", _e)
+                self.capital_efficiency_mode = None
+        else:
+            self.capital_efficiency_mode = None
+
+        # ── Kill Bad Symbols Memory — bad-coin exposure reducer ───────────────
+        if KILL_BAD_SYMBOLS_AVAILABLE and get_kill_bad_symbols is not None:
+            try:
+                self.kill_bad_symbols = get_kill_bad_symbols()
+                logger.info("✅ Kill Bad Symbols Memory initialized")
+            except Exception as _e:
+                logger.warning("⚠️ Kill Bad Symbols Memory init failed: %s", _e)
+                self.kill_bad_symbols = None
+        else:
+            self.kill_bad_symbols = None
+
+        # ── Session Awareness — time-of-day entry adjustments ────────────────
+        if SESSION_AWARENESS_AVAILABLE and get_session_awareness is not None:
+            try:
+                self.session_awareness = get_session_awareness()
+                logger.info("✅ Session Awareness initialized")
+            except Exception as _e:
+                logger.warning("⚠️ Session Awareness init failed: %s", _e)
+                self.session_awareness = None
+        else:
+            self.session_awareness = None
+
+        # ── Pattern Win Tracker — per-pattern analytics + daily target ────────
+        if PATTERN_WIN_TRACKER_AVAILABLE and get_pattern_win_tracker is not None:
+            try:
+                _pwt_target = float(os.environ.get("DAILY_PROFIT_TARGET_USD", "25.0"))
+                self.pattern_win_tracker = get_pattern_win_tracker(
+                    daily_target_usd=_pwt_target
+                )
+                logger.info(
+                    "✅ Pattern Win Tracker initialized — daily_target=$%.2f",
+                    _pwt_target,
+                )
+            except Exception as _e:
+                logger.warning("⚠️ Pattern Win Tracker init failed: %s", _e)
+                self.pattern_win_tracker = None
+        else:
+            self.pattern_win_tracker = None
 
         # ── AI Trade Quality Filter — ML-powered scalp quality gate ──────────
         if AI_TRADE_QUALITY_FILTER_AVAILABLE and get_ai_trade_quality_filter is not None:
@@ -9709,6 +9820,69 @@ class TradingStrategy:
                     # the top-ranked setups are executed (see post-scan block).
                     pending_signals = []
 
+                    # ── Capital Efficiency Mode — resolve per-cycle config ─────────
+                    # Updates the balance tier and idle state before scanning symbols.
+                    _cem_config = None
+                    if (
+                        CAPITAL_EFFICIENCY_MODE_AVAILABLE
+                        and hasattr(self, 'capital_efficiency_mode')
+                        and self.capital_efficiency_mode is not None
+                    ):
+                        try:
+                            _cem_obj = self.capital_efficiency_mode
+                            _cem_obj.update(account_balance)
+                            _cem_config = _cem_obj.get_config()
+                            logger.debug(
+                                "CEM: mode=%s min_score=%.1f pass_pct=%.0f%% "
+                                "max_pos=%d idle=%d",
+                                _cem_config.mode, _cem_config.min_score,
+                                _cem_config.pass_percentile * 100,
+                                _cem_config.max_positions,
+                                _cem_obj.idle_cycles,
+                            )
+                        except Exception as _cem_init_err:
+                            logger.debug("CEM update skipped: %s", _cem_init_err)
+
+                    # Apply CEM max_positions cap to effective_max_positions
+                    if _cem_config is not None:
+                        effective_max_positions = min(
+                            effective_max_positions, _cem_config.max_positions
+                        )
+
+                    # ── Session Awareness — resolve current trading session ────────
+                    _session_config = None
+                    if (
+                        SESSION_AWARENESS_AVAILABLE
+                        and hasattr(self, 'session_awareness')
+                        and self.session_awareness is not None
+                    ):
+                        try:
+                            _session_config = self.session_awareness.get_session()
+                        except Exception as _sa_init_err:
+                            logger.debug("SessionAwareness get_session skipped: %s", _sa_init_err)
+
+                    # ── Pattern Win Tracker — daily slow-down check ───────────────
+                    _pwt_slow_down = False
+                    if (
+                        PATTERN_WIN_TRACKER_AVAILABLE
+                        and hasattr(self, 'pattern_win_tracker')
+                        and self.pattern_win_tracker is not None
+                    ):
+                        try:
+                            _pwt_slow_down = self.pattern_win_tracker.should_slow_down()
+                            if _pwt_slow_down:
+                                logger.info(
+                                    "PatternWinTracker: DAILY TARGET HIT "
+                                    "($%.2f) — slow-down mode active",
+                                    self.pattern_win_tracker.get_daily_profit(),
+                                )
+                        except Exception as _pwt_sd_err:
+                            logger.debug("PatternWinTracker slow-down check skipped: %s", _pwt_sd_err)
+
+                    # Live signal counter — used by ranking engine sparse bypass
+                    # (Step 2: if total signals this cycle < 5, bypass percentile)
+                    _scan_live_signals: int = 0
+
                     # ═══════════════════════════════════════════════════════
                     # MARKET REGIME CONTROLLER — pre-scan meta decision
                     # "Should the bot be trading this cycle at all?"
@@ -10133,6 +10307,34 @@ class TradingStrategy:
                             _wmx_reason: str = ""
 
                             # ═══════════════════════════════════════════════════════
+                            # KILL BAD SYMBOLS — skip known-losing coins early
+                            # Avoids wasting expensive API / analysis calls on symbols
+                            # that have a poor recent track record.
+                            # ═══════════════════════════════════════════════════════
+                            if (
+                                KILL_BAD_SYMBOLS_AVAILABLE
+                                and hasattr(self, 'kill_bad_symbols')
+                                and self.kill_bad_symbols is not None
+                            ):
+                                try:
+                                    if self.kill_bad_symbols.should_skip(symbol):
+                                        _kbs_wr = self.kill_bad_symbols.get_win_rate(symbol)
+                                        logger.info(
+                                            "   KillBadSymbols: skipping %s "
+                                            "(win_rate=%.0f%% — exposure=0%%)",
+                                            symbol, _kbs_wr * 100,
+                                        )
+                                        filter_stats['market_filter'] = (
+                                            filter_stats.get('market_filter', 0) + 1
+                                        )
+                                        continue
+                                except Exception as _kbs_skip_err:
+                                    logger.debug(
+                                        "KillBadSymbols skip check error for %s: %s",
+                                        symbol, _kbs_skip_err,
+                                    )
+
+                            # ═══════════════════════════════════════════════════════
                             # MASTER STRATEGY ROUTER — ONE signal, not per-user signals
                             # Platform: generates signal via APEX and publishes it.
                             # User accounts: read the master signal only (no independent
@@ -10233,6 +10435,86 @@ class TradingStrategy:
                                             "PairPerformanceOptimizer skip check failed for %s: %s",
                                             symbol, _ppo_err,
                                         )
+
+                                # ═══════════════════════════════════════════════════════
+                                # PATTERN WIN TRACKER — gate on disabled patterns +
+                                # CEM score threshold check
+                                # ═══════════════════════════════════════════════════════
+                                if analysis.get('action') in ('enter_long', 'enter_short'):
+                                    # --- Pattern gate ---
+                                    if (
+                                        PATTERN_WIN_TRACKER_AVAILABLE
+                                        and hasattr(self, 'pattern_win_tracker')
+                                        and self.pattern_win_tracker is not None
+                                        and EntryPattern is not None
+                                    ):
+                                        try:
+                                            _pwt_reason  = analysis.get('reason', '')
+                                            _pwt_pattern = EntryPattern.from_reason(_pwt_reason)
+                                            if not self.pattern_win_tracker.is_pattern_enabled(_pwt_pattern):
+                                                logger.info(
+                                                    "   PatternWinTracker: BLOCKED %s — "
+                                                    "pattern %s auto-disabled (low win rate)",
+                                                    symbol, _pwt_pattern,
+                                                )
+                                                analysis = {
+                                                    'action': 'hold',
+                                                    'reason': f'PatternWinTracker: {_pwt_pattern} disabled',
+                                                }
+                                                filter_stats['market_filter'] = (
+                                                    filter_stats.get('market_filter', 0) + 1
+                                                )
+                                        except Exception as _pwt_gate_err:
+                                            logger.debug(
+                                                "PatternWinTracker gate skipped for %s: %s",
+                                                symbol, _pwt_gate_err,
+                                            )
+
+                                    # --- CEM minimum score check ---
+                                    if (
+                                        _cem_config is not None
+                                        and analysis.get('action') in ('enter_long', 'enter_short')
+                                    ):
+                                        try:
+                                            _cem_score = float(
+                                                analysis.get('score', 3.0) or 3.0
+                                            )
+                                            _cem_min   = _cem_config.min_score
+                                            # Mid-tier boost (Step 5): score >= 2.5 AND
+                                            # optimizer_bonus >= 1.0 -> treat as passing
+                                            _cem_bonus = float(
+                                                analysis.get('confidence', 0.0) or 0.0
+                                            )
+                                            _cem_mid_boost = (
+                                                hasattr(self.capital_efficiency_mode, 'is_mid_tier_boost')
+                                                and self.capital_efficiency_mode.is_mid_tier_boost(
+                                                    _cem_score, _cem_bonus
+                                                )
+                                            )
+                                            if _cem_score < _cem_min and not _cem_mid_boost:
+                                                logger.debug(
+                                                    "   CEM: %s score %.2f < min %.1f (mode=%s) — hold",
+                                                    symbol, _cem_score, _cem_min, _cem_config.mode,
+                                                )
+                                                analysis = {
+                                                    'action': 'hold',
+                                                    'reason': (
+                                                        f'CEM:{_cem_config.mode} score {_cem_score:.2f}'
+                                                        f' < min {_cem_min:.1f}'
+                                                    ),
+                                                }
+                                                filter_stats['market_filter'] = (
+                                                    filter_stats.get('market_filter', 0) + 1
+                                                )
+                                        except Exception as _cem_score_err:
+                                            logger.debug(
+                                                "CEM score check skipped for %s: %s",
+                                                symbol, _cem_score_err,
+                                            )
+
+                                    # Count live signals for sparse-window bypass (Step 2)
+                                    if analysis.get('action') in ('enter_long', 'enter_short'):
+                                        _scan_live_signals += 1
 
                                 # ═══════════════════════════════════════════════════════
                                 # PHASE 3 — LAYER 4a: NEWS / EVENT VOLATILITY FILTER
@@ -10420,6 +10702,37 @@ class TradingStrategy:
                                                 "   🔓 %s [%s]: conf nudge %.2f→%.2f (+%.2f)",
                                                 _fb_label, symbol,
                                                 _sf_conf_before_fb, _sf_confidence, _fb_delta,
+                                            )
+
+                                        # ── SESSION AWARENESS — time-of-day confidence nudge ──
+                                        # High-volume sessions (US_OPEN, LONDON_OPEN) loosen the
+                                        # gate; low-volume sessions (DEAD_ZONE, NIGHT) tighten it.
+                                        if _session_config is not None:
+                                            _sa_delta = _session_config.confidence_delta
+                                            if _sa_delta != 0.0:
+                                                _sf_conf_before_sa = _sf_confidence
+                                                _sf_confidence = max(
+                                                    0.0, min(1.0, _sf_confidence + _sa_delta)
+                                                )
+                                                logger.debug(
+                                                    "   Session [%s][%s]: conf %.2f->%.2f (%+.2f)",
+                                                    _session_config.name, symbol,
+                                                    _sf_conf_before_sa, _sf_confidence, _sa_delta,
+                                                )
+
+                                        # ── CAPITAL EFFICIENCY MODE — confidence boost ─────────
+                                        # AGGRESSIVE_SMALL mode adds +0.05 to help small accounts
+                                        # get enough valid signals without lowering base standards.
+                                        if _cem_config is not None and _cem_config.confidence_delta != 0.0:
+                                            _sf_conf_before_cem = _sf_confidence
+                                            _sf_confidence = max(
+                                                0.0, min(1.0, _sf_confidence + _cem_config.confidence_delta)
+                                            )
+                                            logger.debug(
+                                                "   CEM [%s][%s]: conf %.2f->%.2f (%+.2f)",
+                                                _cem_config.mode, symbol,
+                                                _sf_conf_before_cem, _sf_confidence,
+                                                _cem_config.confidence_delta,
                                             )
 
                                         # ── WIN-RATE / FREQUENCY TUNER — confidence nudge ──
@@ -10640,16 +10953,85 @@ class TradingStrategy:
                                 ):
                                     try:
                                         _po_score = float(analysis.get('score', analysis.get('confidence', 3.0)) or 3.0)
-                                        _po_passes = self.profit_optimizer.ranker.should_enter(
-                                            score=_po_score, symbol=symbol
+
+                                        # Step 2 FIX: sparse-window bypass
+                                        # When fewer than 5 live signals have been seen in
+                                        # this scan cycle, the pool is too thin to rank.
+                                        # Allow all above-threshold signals through.
+                                        _po_sparse_bypass = _scan_live_signals < 5
+
+                                        # Step 5: mid-tier boost bypass
+                                        # score >= 2.5 AND optimizer_bonus >= 1.0 -> skip ranker
+                                        _po_conf_val = float(
+                                            analysis.get('confidence', 0.0) or 0.0
                                         )
+                                        _po_mid_boost = (
+                                            CAPITAL_EFFICIENCY_MODE_AVAILABLE
+                                            and hasattr(self, 'capital_efficiency_mode')
+                                            and self.capital_efficiency_mode is not None
+                                            and self.capital_efficiency_mode.is_mid_tier_boost(
+                                                _po_score, _po_conf_val
+                                            )
+                                        )
+
+                                        if _po_sparse_bypass:
+                                            # Step 2: sparse scan — push score into window but allow through
+                                            self.profit_optimizer.ranker.should_enter(
+                                                score=_po_score, symbol=symbol
+                                            )
+                                            logger.debug(
+                                                "   TradeRanker SPARSE BYPASS %s: "
+                                                "only %d live signals this cycle",
+                                                symbol, _scan_live_signals,
+                                            )
+                                            _po_passes = True
+                                        elif _po_mid_boost:
+                                            # Step 5: mid-tier boost — allow through, still record score
+                                            self.profit_optimizer.ranker.should_enter(
+                                                score=_po_score, symbol=symbol
+                                            )
+                                            logger.debug(
+                                                "   TradeRanker MID-TIER BOOST %s: "
+                                                "score=%.2f conf=%.2f",
+                                                symbol, _po_score, _po_conf_val,
+                                            )
+                                            _po_passes = True
+                                        else:
+                                            # Normal path: apply CEM pass_percentile if available
+                                            if _cem_config is not None:
+                                                # Temporarily override ranker pass_percentile
+                                                _orig_pct = self.profit_optimizer.ranker.config.pass_percentile
+                                                self.profit_optimizer.ranker.config = (
+                                                    self.profit_optimizer.ranker.config.__class__(
+                                                        window_size=self.profit_optimizer.ranker.config.window_size,
+                                                        pass_percentile=_cem_config.pass_percentile,
+                                                        min_window_fill=self.profit_optimizer.ranker.config.min_window_fill,
+                                                    )
+                                                )
+                                                _po_passes = self.profit_optimizer.ranker.should_enter(
+                                                    score=_po_score, symbol=symbol
+                                                )
+                                                # Restore original pass_percentile
+                                                self.profit_optimizer.ranker.config = (
+                                                    self.profit_optimizer.ranker.config.__class__(
+                                                        window_size=self.profit_optimizer.ranker.config.window_size,
+                                                        pass_percentile=_orig_pct,
+                                                        min_window_fill=self.profit_optimizer.ranker.config.min_window_fill,
+                                                    )
+                                                )
+                                            else:
+                                                _po_passes = self.profit_optimizer.ranker.should_enter(
+                                                    score=_po_score, symbol=symbol
+                                                )
+
                                         if not _po_passes:
                                             _po_pct = self.profit_optimizer.ranker.get_percentile(_po_score)
+                                            _eff_pct = _cem_config.pass_percentile if _cem_config else self.profit_optimizer.ranker.config.pass_percentile
                                             logger.info(
-                                                "   📊 TRADE RANKER SKIPPED %s: score=%.2f "
+                                                "   TRADE RANKER SKIPPED %s: score=%.2f "
                                                 "not in top %d%% (percentile=%.0f%%)",
                                                 symbol, _po_score,
-                                                int((1 - self.profit_optimizer.ranker.config.pass_percentile) * 100),
+                                                int((1 - _eff_pct) * 100),
                                                 _po_pct * 100,
                                             )
                                             analysis = {
@@ -11722,6 +12104,91 @@ class TradingStrategy:
                                         )
 
                                 # ═══════════════════════════════════════════════════════
+                                # SESSION AWARENESS — time-of-day size multiplier
+                                # US_OPEN / LONDON_OPEN boost size; DEAD_ZONE / NIGHT reduce.
+                                # ═══════════════════════════════════════════════════════
+                                if _session_config is not None and _session_config.size_multiplier != 1.0:
+                                    try:
+                                        _sa_size_pre = position_size
+                                        position_size *= _session_config.size_multiplier
+                                        logger.debug(
+                                            "   Session [%s] %s: size %.2fx "
+                                            "$%.2f -> $%.2f",
+                                            _session_config.name, symbol,
+                                            _session_config.size_multiplier,
+                                            _sa_size_pre, position_size,
+                                        )
+                                    except Exception as _sa_size_err:
+                                        logger.debug("SessionAwareness size mult skipped for %s: %s", symbol, _sa_size_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # KILL BAD SYMBOLS — apply exposure multiplier to size
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    KILL_BAD_SYMBOLS_AVAILABLE
+                                    and hasattr(self, 'kill_bad_symbols')
+                                    and self.kill_bad_symbols is not None
+                                ):
+                                    try:
+                                        _kbs_mult = self.kill_bad_symbols.get_exposure_multiplier(symbol)
+                                        if _kbs_mult < 1.0:
+                                            _kbs_pre = position_size
+                                            position_size *= _kbs_mult
+                                            _kbs_wr = self.kill_bad_symbols.get_win_rate(symbol)
+                                            logger.info(
+                                                "   KillBadSymbols [%s]: exposure %.0f%% "
+                                                "(win_rate=%.0f%%) -- $%.2f -> $%.2f",
+                                                symbol, _kbs_mult * 100, _kbs_wr * 100,
+                                                _kbs_pre, position_size,
+                                            )
+                                    except Exception as _kbs_size_err:
+                                        logger.debug("KillBadSymbols size mult skipped for %s: %s", symbol, _kbs_size_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # PATTERN WIN TRACKER — daily slow-down size reduction
+                                # Once daily profit target is hit, halve the position size
+                                # to protect accrued gains.
+                                # ═══════════════════════════════════════════════════════
+                                if _pwt_slow_down:
+                                    try:
+                                        _pwt_mult = self.pattern_win_tracker.slow_down_size_multiplier
+                                        _pwt_size_pre = position_size
+                                        position_size *= _pwt_mult
+                                        logger.info(
+                                            "   PatternWinTracker SLOW-DOWN [%s]: "
+                                            "size %.0f%% -- $%.2f -> $%.2f",
+                                            symbol, _pwt_mult * 100,
+                                            _pwt_size_pre, position_size,
+                                        )
+                                    except Exception as _pwt_size_err:
+                                        logger.debug("PatternWinTracker slow-down size skipped for %s: %s", symbol, _pwt_size_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # STEP 4: MINIMUM TRADE SIZE ENFORCEMENT ($10 hard floor)
+                                # Positions below $10 lose money to fees and are dust trades.
+                                # Skip them regardless of mode or multipliers applied above.
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    CAPITAL_EFFICIENCY_MODE_AVAILABLE
+                                    and hasattr(self, 'capital_efficiency_mode')
+                                    and self.capital_efficiency_mode is not None
+                                ):
+                                    try:
+                                        if not self.capital_efficiency_mode.is_valid_trade_size(position_size):
+                                            logger.info(
+                                                "   CEM MIN-SIZE: skipping %s -- "
+                                                "size $%.2f < $%.2f hard floor",
+                                                symbol, position_size,
+                                                self.capital_efficiency_mode.is_valid_trade_size.__doc__ and 10.0 or 10.0,
+                                            )
+                                            filter_stats['market_filter'] = (
+                                                filter_stats.get('market_filter', 0) + 1
+                                            )
+                                            continue
+                                    except Exception as _cem_min_err:
+                                        logger.debug("CEM min-size check skipped for %s: %s", symbol, _cem_min_err)
+
+                                # ═══════════════════════════════════════════════════════
                                 # MARKET READINESS GATE - Re-check with entry score for CAUTIOUS mode
                                 # ═══════════════════════════════════════════════════════
                                 if self.market_readiness_gate is not None:
@@ -12679,6 +13146,10 @@ class TradingStrategy:
 
                             _ps_success = self.apex.execute_action(_ps_analysis, _ps_symbol)
                             if _ps_success:
+                                # Store entry reason for PatternWinTracker lookup on close
+                                if not hasattr(self, '_last_entry_reason'):
+                                    self._last_entry_reason = {}
+                                self._last_entry_reason[_ps_symbol] = _ps_analysis.get('reason', '')
                                 _ep = _ps_analysis.get('entry_price')
                                 _fill_entry = float(_ep) if _ep is not None else float(_ps_analysis.get('price') or 0.0)
                                 logger.info(
@@ -12916,6 +13387,16 @@ class TradingStrategy:
                     # EXPLICIT: Log waiting status when no signals found
                     if filter_stats['signals_found'] == 0:
                         self._zero_signal_streak += 1
+                        # CEM: record idle cycle
+                        if (
+                            CAPITAL_EFFICIENCY_MODE_AVAILABLE
+                            and hasattr(self, 'capital_efficiency_mode')
+                            and self.capital_efficiency_mode is not None
+                        ):
+                            try:
+                                self.capital_efficiency_mode.record_no_trade()
+                            except Exception:
+                                pass
                         logger.info("")
                         logger.info("   ⏳ WAITING FOR PLATFORM ENTRY")
                         logger.info("   → No valid setups this cycle (market conditions not favorable)")
@@ -12978,6 +13459,16 @@ class TradingStrategy:
                                 self._zero_signal_streak,
                             )
                         self._zero_signal_streak = 0
+                        # CEM: reset idle counter when trades found
+                        if (
+                            CAPITAL_EFFICIENCY_MODE_AVAILABLE
+                            and hasattr(self, 'capital_efficiency_mode')
+                            and self.capital_efficiency_mode is not None
+                        ):
+                            try:
+                                self.capital_efficiency_mode.record_trade()
+                            except Exception:
+                                pass
 
                 except Exception as e:
                     logger.error(f"Error during market scan: {e}", exc_info=True)
@@ -13604,6 +14095,36 @@ class TradingStrategy:
 
         except Exception as e:
             logger.warning(f"Failed to record trade in advanced manager: {e}")
+
+        # ── Kill Bad Symbols Memory — update per-symbol win/loss history ──────
+        if (
+            KILL_BAD_SYMBOLS_AVAILABLE
+            and hasattr(self, 'kill_bad_symbols')
+            and self.kill_bad_symbols is not None
+        ):
+            try:
+                self.kill_bad_symbols.record_trade(symbol=symbol, is_win=is_win)
+            except Exception as _kbs_rec_err:
+                logger.debug("KillBadSymbols record_trade skipped for %s: %s", symbol, _kbs_rec_err)
+
+        # ── Pattern Win Tracker — update per-pattern stats + daily P/L ────────
+        if (
+            PATTERN_WIN_TRACKER_AVAILABLE
+            and hasattr(self, 'pattern_win_tracker')
+            and self.pattern_win_tracker is not None
+            and EntryPattern is not None
+        ):
+            try:
+                # Infer pattern from the last analysis reason stored on the instance
+                _last_reason = getattr(self, '_last_entry_reason', {}).get(symbol, '')
+                _pwt_pattern = EntryPattern.from_reason(_last_reason)
+                self.pattern_win_tracker.record_trade(
+                    pattern=_pwt_pattern,
+                    is_win=is_win,
+                    pnl_usd=profit_usd,
+                )
+            except Exception as _pwt_rec_err:
+                logger.debug("PatternWinTracker record_trade skipped for %s: %s", symbol, _pwt_rec_err)
 
     def process_end_of_day(self):
         """
