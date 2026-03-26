@@ -376,7 +376,7 @@ def get_entry_price_store(data_file: str = _DEFAULT_DATA_FILE) -> EntryPriceStor
             if _store_instance is None:
                 _store_instance = EntryPriceStore(data_file=data_file)
     return _store_instance
-Entry Price Store — local truth storage for position entry prices.
+"""Entry Price Store - local truth storage for position entry prices.
 
 Saves entry prices to a JSON file the moment a trade executes so that
 the bot never has to rely solely on the broker API to recover them.
