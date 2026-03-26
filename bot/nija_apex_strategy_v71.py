@@ -115,6 +115,20 @@ except ImportError:
     ENHANCED_SCORING_AVAILABLE = False
     logger.warning("Enhanced scoring and regime detection modules not available - using basic scoring")
 
+# Import entry optimizer (RSI divergence, Bollinger Band zone, volume pattern)
+try:
+    from entry_optimizer import get_entry_optimizer, EntryOptimizer
+    ENTRY_OPTIMIZER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.entry_optimizer import get_entry_optimizer, EntryOptimizer
+        ENTRY_OPTIMIZER_AVAILABLE = True
+    except ImportError:
+        ENTRY_OPTIMIZER_AVAILABLE = False
+        get_entry_optimizer = None  # type: ignore
+        EntryOptimizer = None  # type: ignore
+        logger.warning("Entry optimizer not available – running without RSI divergence / BB zone optimizations")
+
 # Import AI Intelligence Hub (AI Market Regime Detection + Portfolio Risk Engine +
 # Capital Allocation AI).  All three components are optional – the strategy degrades
 # gracefully when any of them is unavailable.
@@ -254,6 +268,13 @@ class NIJAApexStrategyV71:
                 logger.warning("⚠️  Enhanced scoring modules not available - using legacy scoring")
             else:
                 logger.info("ℹ️  Enhanced scoring disabled by configuration")
+
+        # Entry optimizer: RSI divergence, Bollinger Band zone, volume pattern
+        if ENTRY_OPTIMIZER_AVAILABLE and get_entry_optimizer is not None:
+            self.entry_optimizer = get_entry_optimizer()
+            logger.info("✅ Entry optimizer enabled (RSI divergence + BB zone + volume pattern)")
+        else:
+            self.entry_optimizer = None
 
         # Strategy parameters - OPTIMIZED FOR HIGH WIN RATE
         # OPTIMIZATION (Jan 29, 2026): Rebalance filters for quality trades
@@ -1065,12 +1086,28 @@ class NIJAApexStrategyV71:
         score = sum(conditions.values())
         signal = score >= 3  # RESTORED: 3/5 required for quality trades (was emergency-relaxed to 2/5)
 
-        reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
+        # Apply entry optimizer bonus (RSI divergence, BB zone, volume pattern)
+        # The bonus is additive and raises the effective score for high-quality setups,
+        # which benefits position sizing and signal ranking without blocking any trade
+        # that already met the base conditions.
+        opt_delta = 0.0
+        opt_reason = ""
+        if self.entry_optimizer is not None and signal:
+            try:
+                opt_result = self.entry_optimizer.analyze_entry(df, indicators, "long")
+                opt_delta = opt_result.score_delta
+                opt_reason = opt_result.reason
+            except Exception as exc:
+                logger.debug(f"  EntryOptimizer (long) error: {exc}")
+        optimized_score = score + opt_delta
+
+        base_reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
+        reason = f"{base_reason} | opt: {opt_reason} (+{opt_delta:.1f})" if opt_delta > 0 else base_reason
 
         if score > 0:
             logger.debug(f"  Long entry check: {reason}")
 
-        return signal, score, reason
+        return signal, optimized_score, reason
 
     def check_short_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
@@ -1166,12 +1203,25 @@ class NIJAApexStrategyV71:
         score = sum(conditions.values())
         signal = score >= 3  # RESTORED: 3/5 required for quality trades (was emergency-relaxed to 2/5)
 
-        reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
+        # Apply entry optimizer bonus (RSI divergence, BB zone, volume pattern)
+        opt_delta = 0.0
+        opt_reason = ""
+        if self.entry_optimizer is not None and signal:
+            try:
+                opt_result = self.entry_optimizer.analyze_entry(df, indicators, "short")
+                opt_delta = opt_result.score_delta
+                opt_reason = opt_result.reason
+            except Exception as exc:
+                logger.debug(f"  EntryOptimizer (short) error: {exc}")
+        optimized_score = score + opt_delta
+
+        base_reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
+        reason = f"{base_reason} | opt: {opt_reason} (+{opt_delta:.1f})" if opt_delta > 0 else base_reason
 
         if score > 0:
             logger.debug(f"  Short entry check: {reason}")
 
-        return signal, score, reason
+        return signal, optimized_score, reason
 
     def check_smart_filters(self, df: pd.DataFrame, current_time: datetime, symbol: str = None) -> Tuple[bool, str]:
         """
