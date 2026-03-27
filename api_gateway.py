@@ -33,7 +33,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 import jwt
 import os
@@ -59,18 +59,18 @@ try:
 except ImportError as e:
     logger.warning(f"Import warning: {e}. Some features may not be available.")
     # Define fallback stubs
-    def get_api_key_manager():
+    def get_api_key_manager() -> Any:  # type: ignore[misc]
         return None
-    def get_user_manager():
+    def get_user_manager() -> Any:  # type: ignore[misc]
         return None
-    def get_permission_validator():
+    def get_permission_validator() -> Any:  # type: ignore[misc]
         return None
-    def get_user_control_backend():
+    def get_user_control_backend() -> Any:  # type: ignore[misc]
         return None
     # Fallback for position source utils
-    def get_source_label(source):
+    def get_source_label(source: Any) -> str:  # type: ignore[misc]
         return "Unknown Source"
-    def is_nija_managed(pos):
+    def is_nija_managed(pos: Any) -> bool:  # type: ignore[misc]
         return pos.get('position_source') == 'nija_strategy'
 
 # Import broker manager for balance queries
@@ -81,7 +81,7 @@ except ImportError:
         from broker_manager import get_broker_manager
     except ImportError:
         logger.warning("broker_manager not available. Balance endpoint will use mock data.")
-        def get_broker_manager(*args, **kwargs):
+        def get_broker_manager(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
             return None
 
 # Initialize FastAPI app
@@ -123,6 +123,7 @@ if not JWT_SECRET_KEY:
     logger.critical("🔒 Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'")
     # Exit immediately if no JWT secret is configured
     sys.exit(1)
+JWT_SECRET_KEY_STR: str = JWT_SECRET_KEY  # narrowed after sys.exit guard above
 
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
@@ -227,13 +228,13 @@ def create_access_token(user_id: str) -> str:
         'exp': datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
         'iat': datetime.utcnow()
     }
-    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, JWT_SECRET_KEY_STR, algorithm=JWT_ALGORITHM)
 
 
 def decode_access_token(token: str) -> Optional[Dict]:
     """Decode and validate JWT token."""
     try:
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, JWT_SECRET_KEY_STR, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
         logger.warning("JWT token has expired")

@@ -20,16 +20,17 @@ import threading
 
 # Import circuit breaker for API reliability
 try:
-    from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState
+    from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState  # type: ignore[assignment]
     CIRCUIT_BREAKER_AVAILABLE = True
 except ImportError:
     try:
-        from broker_circuit_breaker import get_circuit_breaker, BrokerHealthState
+        from broker_circuit_breaker import get_circuit_breaker, BrokerHealthState  # type: ignore[assignment]
         CIRCUIT_BREAKER_AVAILABLE = True
     except ImportError:
         CIRCUIT_BREAKER_AVAILABLE = False
         BrokerHealthState = None
-        get_circuit_breaker = None
+        def get_circuit_breaker(*args, **kwargs):  # type: ignore[misc]
+            return None
 
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
@@ -218,37 +219,39 @@ except ImportError:
 # 4. Dust prevention
 # These checks CANNOT be bypassed by strategy, signal engine, or broker adapters
 try:
-    from bot.execution_layer_hardening import get_execution_layer_hardening
+    from bot.execution_layer_hardening import get_execution_layer_hardening  # type: ignore[assignment]
     EXECUTION_HARDENING_AVAILABLE = True
     logger.info("✅ Execution Layer Hardening loaded - ENFORCING POSITION CAPS AND MINIMUMS")
 except ImportError:
     try:
-        from execution_layer_hardening import get_execution_layer_hardening
+        from execution_layer_hardening import get_execution_layer_hardening  # type: ignore[assignment]
         EXECUTION_HARDENING_AVAILABLE = True
         logger.info("✅ Execution Layer Hardening loaded - ENFORCING POSITION CAPS AND MINIMUMS")
     except ImportError:
         EXECUTION_HARDENING_AVAILABLE = False
         logger.warning("⚠️ Execution Layer Hardening not available - POSITION CONTROLS DISABLED")
-        get_execution_layer_hardening = None
+        def get_execution_layer_hardening(*args, **kwargs):  # type: ignore[misc]
+            return None
         get_tier_config = None
         validate_trade_size = None
         auto_resize_trade = None
 
 # Import Connection Stability Manager for watchdog, auto-reconnect, and HTTP pool optimisation
 try:
-    from bot.connection_stability_manager import get_connection_stability_manager
+    from bot.connection_stability_manager import get_connection_stability_manager  # type: ignore[assignment]
     CONNECTION_STABILITY_AVAILABLE = True
 except ImportError:
     try:
-        from connection_stability_manager import get_connection_stability_manager
+        from connection_stability_manager import get_connection_stability_manager  # type: ignore[assignment]
         CONNECTION_STABILITY_AVAILABLE = True
     except ImportError:
         CONNECTION_STABILITY_AVAILABLE = False
-        get_connection_stability_manager = None  # type: ignore
+        def get_connection_stability_manager(*args, **kwargs):  # type: ignore[misc]
+            return None
 
 # ── Exchange Order Validator — step-size normalisation + PERMANENT_DUST_UNSELLABLE ──
 try:
-    from bot.exchange_order_validator import (
+    from bot.exchange_order_validator import (  # type: ignore[assignment]
         get_exchange_order_validator,
         validate_order as _eov_validate_order,
     )
@@ -256,7 +259,7 @@ try:
     logger.info("✅ Exchange Order Validator loaded — step-size normalisation + PERMANENT_DUST_UNSELLABLE active")
 except ImportError:
     try:
-        from exchange_order_validator import (
+        from exchange_order_validator import (  # type: ignore[assignment]
             get_exchange_order_validator,
             validate_order as _eov_validate_order,
         )
@@ -301,16 +304,10 @@ except ImportError:
 
 # Import custom exceptions for safety checks
 try:
-    from bot.exceptions import (
-        ExecutionError, BrokerMismatchError, InvalidTxidError,
-        InvalidFillPriceError, OrderRejectedError
-    )
+    from bot.exceptions import ExecutionError, BrokerMismatchError, InvalidTxidError, InvalidFillPriceError, OrderRejectedError  # type: ignore[assignment]
 except ImportError:
     try:
-        from exceptions import (
-            ExecutionError, BrokerMismatchError, InvalidTxidError,
-            InvalidFillPriceError, OrderRejectedError
-        )
+        from exceptions import ExecutionError, BrokerMismatchError, InvalidTxidError, InvalidFillPriceError, OrderRejectedError  # type: ignore[assignment]
     except ImportError:
         # Fallback: Define locally if import fails
         class ExecutionError(Exception):
@@ -706,7 +703,7 @@ class BaseBroker(ABC):
         """
         pass
     
-    def _call_with_circuit_breaker(self, func: callable, *args, **kwargs):
+    def _call_with_circuit_breaker(self, func, *args, **kwargs):
         """
         Execute broker API call with circuit breaker protection.
         
@@ -780,15 +777,19 @@ class BaseBroker(ABC):
         """
         cancelled = 0
         try:
-            if hasattr(self, 'get_open_orders'):
-                orders = self.get_open_orders()
-                for order in (orders or []):
+            _get_orders = getattr(self, 'get_open_orders', None)
+            if callable(_get_orders):
+                orders = _get_orders()
+                _cancel = getattr(self, 'cancel_order', None)
+                if not isinstance(orders, list):
+                    orders = []
+                for order in orders:
                     order_id = (
                         order.get('order_id') or order.get('id') or order.get('txid')
                     )
-                    if order_id and hasattr(self, 'cancel_order'):
+                    if order_id and callable(_cancel):
                         try:
-                            if self.cancel_order(order_id):
+                            if _cancel(order_id):
                                 cancelled += 1
                         except Exception:
                             pass
@@ -1152,7 +1153,7 @@ class CoinbaseBroker(BaseBroker):
     def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         """Initialize Coinbase broker"""
         super().__init__(BrokerType.COINBASE, account_type=account_type, user_id=user_id)
-        self.client = None
+        self.client: Any = None
         self.portfolio_uuid = None
         self._product_cache = {}  # Cache for product metadata (tick sizes, increments)
         self._invalid_symbols_cache = set()  # In-memory fast-lookup; backed by DelistedAssetRegistry
@@ -1215,7 +1216,7 @@ class CoinbaseBroker(BaseBroker):
             try:
                 _eps = get_entry_price_store()
                 _self_ref = self  # capture broker reference for the lambda
-                _eps.start_sync_repair_job(
+                _eps.start_sync_repair_job(  # type: ignore[union-attr]
                     broker_getter=lambda: _self_ref,
                     interval_secs=300,
                     symbols_getter=lambda: (
@@ -1381,7 +1382,7 @@ class CoinbaseBroker(BaseBroker):
                 time.sleep(delay)
 
     def _log_trade_to_journal(self, symbol: str, side: str, price: float,
-                               size_usd: float, quantity: float, pnl_data: dict = None):
+                               size_usd: float, quantity: float, pnl_data: Optional[dict] = None):
         """
         Log trade to trade_journal.jsonl with P&L tracking.
 
@@ -1640,7 +1641,7 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logging.error(f"❌ Portfolio detection error: {e}")
 
-    def _is_account_tradeable(self, account_type: str, platform: str) -> bool:
+    def _is_account_tradeable(self, account_type: Optional[str], platform: Optional[str]) -> bool:
         """
         IMPROVEMENT #3: Expanded account type matching patterns.
         Checks multiple patterns to identify tradeable accounts.
@@ -2545,11 +2546,17 @@ class CoinbaseBroker(BaseBroker):
                 api_key = os.getenv("COINBASE_API_KEY")
                 api_secret = os.getenv("COINBASE_API_SECRET")
 
+                if not api_secret:
+                    raise ValueError("COINBASE_API_SECRET environment variable not set")
+
                 # Normalize PEM
                 if '\\n' in api_secret:
                     api_secret = api_secret.replace('\\n', '\n')
 
+                from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
                 private_key = serialization.load_pem_private_key(api_secret.encode('utf-8'), password=None)
+                if not isinstance(private_key, EllipticCurvePrivateKey):
+                    raise ValueError("Expected EC private key for Coinbase JWT")
 
                 # Make v2 API call
                 uri = "GET api.coinbase.com/v2/accounts"
@@ -2629,7 +2636,7 @@ class CoinbaseBroker(BaseBroker):
                         usdc_balance += available
                         if available > 0:
                             logging.info(f"   ✅ Advanced Trade USDC: ${available:.2f} (name={account_name}, type={account_type}) [TRADABLE]")
-                    elif available > 0:
+                    elif available > 0 and currency:
                         crypto_holdings[currency] = crypto_holdings.get(currency, 0) + available
             except Exception as v3_error:
                 logging.error(f"⚠️  v3 API check failed!")
@@ -2645,7 +2652,7 @@ class CoinbaseBroker(BaseBroker):
 
             # IGNORE ALLOW_CONSUMER_USD flag - it's misleading
             # Consumer wallets are simply NOT accessible for API trading
-            if self.allow_consumer_usd and (consumer_usd > 0 or consumer_usdc > 0):
+            if getattr(self, 'allow_consumer_usd', False) and (consumer_usd > 0 or consumer_usdc > 0):
                 logging.warning("⚠️  ALLOW_CONSUMER_USD is enabled, but API cannot trade from Consumer wallets!")
                 logging.warning("   This flag has no effect. Transfer funds to Advanced Trade instead.")
 
@@ -3429,7 +3436,8 @@ class CoinbaseBroker(BaseBroker):
                         ]
                         if meta.get('base_increment_exponent') is not None:
                             try:
-                                exp_val = float(meta.get('base_increment_exponent'))
+                                exp_raw = meta.get('base_increment_exponent')
+                                exp_val = float(exp_raw)  # type: ignore[arg-type]
                                 inc_candidates.append(10 ** exp_val)
                             except Exception as exp_err:
                                 logger.warning(f"⚠️ Could not parse base_increment_exponent for {symbol}: {exp_err}")
@@ -5996,7 +6004,7 @@ class KrakenBroker(BaseBroker):
         Called after successful connection to ensure API is available.
         """
         try:
-            from bot.kraken_market_data import get_kraken_market_data
+            from bot.kraken_market_data import get_kraken_market_data  # type: ignore[import]
             market_data = get_kraken_market_data()
             if market_data.fetch_and_cache(self.kraken_api):
                 pair_count = len(market_data.get_all_pairs())
@@ -8079,7 +8087,7 @@ class KrakenBroker(BaseBroker):
                         # ENHANCED COPY TRADING: Also trigger direct on_platform_trade hook
                         # This provides a simplified interface for copy trading implementations
                         try:
-                            from bot.kraken_copy_trading import on_platform_trade
+                            from bot.kraken_copy_trading import on_platform_trade  # type: ignore[import]
 
                             # Build trade object for hook
                             trade_obj = {
