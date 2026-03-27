@@ -15,7 +15,7 @@ DO NOT store API keys in plain text or commit them to version control.
 import logging
 import json
 import os
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from datetime import datetime
 from cryptography.fernet import Fernet
 import base64
@@ -42,7 +42,7 @@ class APIKeyManager:
             logger.warning(f"Encryption key: {encryption_key.decode()}")
 
         self.cipher = Fernet(encryption_key)
-        self.user_keys: Dict[str, Dict[str, str]] = {}
+        self.user_keys: Dict[str, Dict[str, Any]] = {}
         logger.info("API key manager initialized with encryption")
 
     def store_user_api_key(
@@ -70,7 +70,7 @@ class APIKeyManager:
         encrypted_key = self.cipher.encrypt(api_key.encode()).decode()
         encrypted_secret = self.cipher.encrypt(api_secret.encode()).decode()
 
-        broker_creds = {
+        broker_creds: Dict[str, Any] = {
             'api_key': encrypted_key,
             'api_secret': encrypted_secret,
             'created_at': datetime.now().isoformat(),
@@ -91,7 +91,7 @@ class APIKeyManager:
         self,
         user_id: str,
         broker: str
-    ) -> Optional[Dict[str, str]]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Retrieve and decrypt user API credentials.
 
@@ -117,7 +117,7 @@ class APIKeyManager:
             decrypted_key = self.cipher.decrypt(broker_creds['api_key'].encode()).decode()
             decrypted_secret = self.cipher.decrypt(broker_creds['api_secret'].encode()).decode()
 
-            result = {
+            result: Dict[str, Any] = {
                 'api_key': decrypted_key,
                 'api_secret': decrypted_secret,
                 'broker': broker

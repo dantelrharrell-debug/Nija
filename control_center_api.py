@@ -143,7 +143,7 @@ _state = ControlCenterState()
 _state_lock = threading.Lock()
 
 
-def create_control_center_api(app: Flask = None) -> Flask:
+def create_control_center_api(app: Optional[Flask] = None) -> Flask:
     """Create or configure Flask app with Control Center API"""
     
     if app is None:
@@ -174,38 +174,36 @@ def create_control_center_api(app: Flask = None) -> Flask:
             }
             
             if DATABASE_AVAILABLE:
-                session = get_db_session()
-                
-                # Get user counts
-                users = session.query(User).all()
-                overview['platform']['total_users'] = len(users)
-                overview['platform']['active_users'] = sum(1 for u in users if u.is_active)
-                
-                # Get positions
-                positions = session.query(Position).filter(Position.is_open == True).all()
-                overview['platform']['total_positions'] = len(positions)
-                overview['platform']['unrealized_pnl'] = sum(p.unrealized_pnl or 0 for p in positions)
-                
-                # Calculate total capital
-                for user in users:
-                    if PNL_TRACKER_AVAILABLE:
-                        try:
-                            tracker = get_user_pnl_tracker(user.user_id)
-                            overview['platform']['total_capital'] += tracker.get_total_balance()
-                            overview['platform']['daily_pnl'] += tracker.get_daily_pnl()
-                        except Exception:
-                            pass
-                
+                with get_db_session() as session:
+                    # Get user counts
+                    users = session.query(User).all()
+                    overview['platform']['total_users'] = len(users)
+                    overview['platform']['active_users'] = sum(1 for u in users if u.is_active)
+
+                    # Get positions
+                    positions = session.query(Position).filter(Position.is_open == True).all()
+                    overview['platform']['total_positions'] = len(positions)
+                    overview['platform']['unrealized_pnl'] = sum(p.unrealized_pnl or 0 for p in positions)
+
+                    # Calculate total capital
+                    for user in users:
+                        if PNL_TRACKER_AVAILABLE:
+                            try:
+                                tracker = get_user_pnl_tracker()
+                                stats = tracker.get_stats(str(user.user_id))
+                                overview['platform']['total_capital'] += stats.get('total_pnl', 0.0)
+                                overview['platform']['daily_pnl'] += stats.get('daily_pnl', 0.0)
+                            except Exception:
+                                pass
+
                 # Check health
                 overview['platform']['database_healthy'] = check_database_health()
-                
-                session.close()
             
             # Check trading status
             if CONTROLS_AVAILABLE:
                 try:
                     controls = get_hard_controls()
-                    overview['platform']['trading_enabled'] = controls.is_trading_enabled()
+                    overview['platform']['trading_enabled'] = controls.is_live_capital_verified()
                 except Exception:
                     pass
             
@@ -232,62 +230,63 @@ def create_control_center_api(app: Flask = None) -> Flask:
             if not DATABASE_AVAILABLE:
                 return jsonify({'success': True, 'data': summaries})
             
-            session = get_db_session()
-            users = session.query(User).all()
-            
-            for user in users:
-                summary = {
-                    'user_id': user.user_id,
-                    'email': user.email or 'N/A',
-                    'tier': user.subscription_tier or 'basic',
-                    'is_active': user.is_active,
-                    'balance': 0.0,
-                    'broker_balances': {},
-                    'positions': 0,
-                    'unrealized_pnl': 0.0,
-                    'daily_pnl': 0.0,
-                    'can_trade': False,
-                    'status': 'unknown',
-                    'risk_level': 'unknown'
-                }
+            with get_db_session() as session:
+                users = session.query(User).all()
+
+                for user in users:
+                    summary = {
+                        'user_id': user.user_id,
+                        'email': user.email or 'N/A',
+                        'tier': user.subscription_tier or 'basic',
+                        'is_active': user.is_active,
+                        'balance': 0.0,
+                        'broker_balances': {},
+                        'positions': 0,
+                        'unrealized_pnl': 0.0,
+                        'daily_pnl': 0.0,
+                        'can_trade': False,
+                        'status': 'unknown',
+                        'risk_level': 'unknown'
+                    }
+
+                    # Get positions
+                    positions = session.query(Position).filter(
+                        Position.user_id == user.user_id,
+                        Position.is_open == True
+                    ).all()
+                    summary['positions'] = len(positions)
+                    summary['unrealized_pnl'] = sum(p.unrealized_pnl or 0 for p in positions)
+
+                    # Get broker balances
+                    credentials = session.query(BrokerCredential).filter(
+                        BrokerCredential.user_id == user.user_id
+                    ).all()
+                    summary['configured_brokers'] = [c.broker_name for c in credentials]
+
+                    # Get PnL tracker data
+                    if PNL_TRACKER_AVAILABLE:
+                        try:
+                            tracker = get_user_pnl_tracker()
+                            stats = tracker.get_stats(str(user.user_id))
+                            summary['balance'] = stats.get('total_pnl', 0.0)
+                            summary['daily_pnl'] = stats.get('daily_pnl', 0.0)
+                            summary['broker_balances'] = {}
+                        except Exception:
+                            pass
+
+                    # Get risk status
+                    if RISK_MANAGER_AVAILABLE:
+                        try:
+                            risk_mgr = get_user_risk_manager()
+                            can_trade_result, _ = risk_mgr.can_trade(str(user.user_id), 0.0)
+                            summary['can_trade'] = can_trade_result
+                            state = risk_mgr.get_state(str(user.user_id))
+                            summary['status'] = 'circuit_breaker' if state.circuit_breaker_triggered else 'active'
+                            summary['risk_level'] = 'high' if state.circuit_breaker_triggered else 'normal'
+                        except Exception:
+                            pass
                 
-                # Get positions
-                positions = session.query(Position).filter(
-                    Position.user_id == user.user_id,
-                    Position.is_open == True
-                ).all()
-                summary['positions'] = len(positions)
-                summary['unrealized_pnl'] = sum(p.unrealized_pnl or 0 for p in positions)
-                
-                # Get broker balances
-                credentials = session.query(BrokerCredential).filter(
-                    BrokerCredential.user_id == user.user_id
-                ).all()
-                summary['configured_brokers'] = [c.broker_name for c in credentials]
-                
-                # Get PnL tracker data
-                if PNL_TRACKER_AVAILABLE:
-                    try:
-                        tracker = get_user_pnl_tracker(user.user_id)
-                        summary['balance'] = tracker.get_total_balance()
-                        summary['daily_pnl'] = tracker.get_daily_pnl()
-                        summary['broker_balances'] = tracker.get_broker_balances()
-                    except Exception:
-                        pass
-                
-                # Get risk status
-                if RISK_MANAGER_AVAILABLE:
-                    try:
-                        risk_mgr = get_user_risk_manager(user.user_id)
-                        summary['can_trade'] = risk_mgr.can_trade()
-                        summary['status'] = risk_mgr.get_status()
-                        summary['risk_level'] = risk_mgr.get_risk_level()
-                    except Exception:
-                        pass
-                
-                summaries.append(summary)
-            
-            session.close()
+                    summaries.append(summary)
             
             return jsonify({'success': True, 'data': summaries})
             
@@ -370,27 +369,24 @@ def create_control_center_api(app: Flask = None) -> Flask:
             if not DATABASE_AVAILABLE:
                 return jsonify({'success': True, 'data': positions})
             
-            session = get_db_session()
-            
-            # Get all open positions
-            db_positions = session.query(Position).filter(Position.is_open == True).all()
-            
-            for pos in db_positions:
-                positions.append({
-                    'id': pos.id,
-                    'user_id': pos.user_id,
-                    'symbol': pos.symbol,
-                    'side': pos.side,
-                    'size': float(pos.size) if pos.size else 0,
-                    'entry_price': float(pos.entry_price) if pos.entry_price else 0,
-                    'current_price': float(pos.current_price) if pos.current_price else 0,
-                    'unrealized_pnl': float(pos.unrealized_pnl) if pos.unrealized_pnl else 0,
-                    'broker': pos.broker,
-                    'opened_at': pos.opened_at.isoformat() if pos.opened_at else None
-                })
-            
-            session.close()
-            
+            with get_db_session() as session:
+                # Get all open positions
+                db_positions = session.query(Position).filter(Position.is_open == True).all()
+
+                for pos in db_positions:
+                    positions.append({
+                        'id': pos.id,
+                        'user_id': pos.user_id,
+                        'symbol': pos.symbol,
+                        'side': pos.side,
+                        'size': float(pos.size or 0),  # type: ignore[arg-type]
+                        'entry_price': float(pos.entry_price or 0),  # type: ignore[arg-type]
+                        'current_price': float(pos.current_price or 0),  # type: ignore[arg-type]
+                        'unrealized_pnl': float(pos.unrealized_pnl or 0),  # type: ignore[arg-type]
+                        'broker': pos.broker,
+                        'opened_at': pos.opened_at.isoformat() if pos.opened_at is not None else None  # type: ignore[union-attr]
+                    })
+
             return jsonify({'success': True, 'data': positions})
             
         except Exception as e:
@@ -407,28 +403,25 @@ def create_control_center_api(app: Flask = None) -> Flask:
             if not DATABASE_AVAILABLE:
                 return jsonify({'success': True, 'data': trades})
             
-            session = get_db_session()
-            
-            # Get recent trades
-            db_trades = session.query(Trade).order_by(
-                Trade.executed_at.desc()
-            ).limit(limit).all()
-            
-            for trade in db_trades:
-                trades.append({
-                    'id': trade.id,
-                    'user_id': trade.user_id,
-                    'symbol': trade.symbol,
-                    'side': trade.side,
-                    'size': float(trade.size) if trade.size else 0,
-                    'price': float(trade.price) if trade.price else 0,
-                    'pnl': float(trade.pnl) if trade.pnl else 0,
-                    'broker': trade.broker,
-                    'executed_at': trade.executed_at.isoformat() if trade.executed_at else None
-                })
-            
-            session.close()
-            
+            with get_db_session() as session:
+                # Get recent trades
+                db_trades = session.query(Trade).order_by(
+                    Trade.executed_at.desc()
+                ).limit(limit).all()
+
+                for trade in db_trades:
+                    trades.append({
+                        'id': trade.id,
+                        'user_id': trade.user_id,
+                        'symbol': trade.symbol,
+                        'side': trade.side,
+                        'size': float(trade.size or 0),  # type: ignore[arg-type]
+                        'price': float(trade.price) if trade.price else 0,
+                        'pnl': float(trade.pnl or 0),  # type: ignore[arg-type]
+                        'broker': trade.broker,
+                        'executed_at': trade.executed_at.isoformat() if trade.executed_at else None
+                    })
+
             return jsonify({'success': True, 'data': trades})
             
         except Exception as e:
@@ -446,9 +439,24 @@ def create_control_center_api(app: Flask = None) -> Flask:
                     cc_metrics = get_command_center_metrics()
                     snapshot = cc_metrics.get_snapshot()
                     metrics = {
-                        'equity': snapshot.equity_curve.__dict__,
-                        'risk': snapshot.risk_heat.__dict__,
-                        'quality': snapshot.trade_quality.__dict__
+                        'equity': {
+                            'equity': snapshot.equity,
+                            'equity_peak': snapshot.equity_peak,
+                            'equity_change_24h': snapshot.equity_change_24h,
+                            'equity_change_pct_24h': snapshot.equity_change_pct_24h,
+                        },
+                        'risk': {
+                            'risk_heat': snapshot.risk_heat,
+                            'risk_level': snapshot.risk_level,
+                            'max_drawdown_pct': snapshot.max_drawdown_pct,
+                            'current_drawdown_pct': snapshot.current_drawdown_pct,
+                        },
+                        'quality': {
+                            'trade_quality_score': snapshot.trade_quality_score,
+                            'trade_quality_grade': snapshot.trade_quality_grade,
+                            'win_rate': snapshot.win_rate,
+                            'profit_factor': snapshot.profit_factor,
+                        }
                     }
                 except Exception as e:
                     logger.error(f"Error getting command center metrics: {e}")
@@ -470,8 +478,8 @@ def create_control_center_api(app: Flask = None) -> Flask:
                 }), 500
             
             controls = get_hard_controls()
-            controls.disable_trading()
-            
+            controls.trigger_global_kill_switch('Emergency stop activated via control center')
+
             # Add alert
             with _state_lock:
                 _state.add_alert('error', 'Emergency stop activated', 'control_center')
@@ -496,8 +504,8 @@ def create_control_center_api(app: Flask = None) -> Flask:
                 }), 500
             
             controls = get_hard_controls()
-            controls.disable_trading()
-            
+            controls.trigger_global_kill_switch('Trading paused via control center')
+
             with _state_lock:
                 _state.add_alert('warning', 'Trading paused', 'control_center')
             
@@ -521,8 +529,8 @@ def create_control_center_api(app: Flask = None) -> Flask:
                 }), 500
             
             controls = get_hard_controls()
-            controls.enable_trading()
-            
+            controls.reset_global_kill_switch()
+
             with _state_lock:
                 _state.add_alert('info', 'Trading resumed', 'control_center')
             

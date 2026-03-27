@@ -26,6 +26,14 @@ import os
 import hashlib
 import secrets
 
+
+def hash_password(password: str) -> str:
+    """Hash a password using SHA-256 with a random salt."""
+    salt = secrets.token_hex(16)
+    pw_hash = hashlib.sha256((salt + password).encode()).hexdigest()
+    return f"{salt}:{pw_hash}"
+
+
 # Import core modules
 from core.multi_asset_router import (
     MultiAssetRouter, AssetClass, MarketRegime, AssetAllocation, MarketConditions

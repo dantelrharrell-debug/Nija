@@ -1,0 +1,11 @@
+{
+  "pythonVersion": "3.12",
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": [
+    "./bot",
+    "."
+  ],
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none"
+}

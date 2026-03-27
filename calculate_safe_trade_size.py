@@ -18,7 +18,7 @@ Usage:
 
 import sys
 import argparse
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
 # Import NIJA modules
 sys.path.insert(0, './bot')
@@ -47,7 +47,7 @@ from fee_aware_config import (
 )
 
 
-def calculate_fees(trade_size: float, use_limit_order: bool = True) -> Dict[str, float]:
+def calculate_fees(trade_size: float, use_limit_order: bool = True) -> Dict[str, Any]:
     """
     Calculate all fees for a trade.
 
