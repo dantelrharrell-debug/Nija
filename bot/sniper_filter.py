@@ -97,7 +97,7 @@ class SniperConfig:
     # ── Pillar 2: Momentum ───────────────────────────────────────────────────
     # Volume spike: current bar volume must exceed this multiple of the rolling
     # average to count as a momentum confirmation.
-    volume_spike_multiplier: float = 1.5
+    volume_spike_multiplier: float = 1.2  # TUNED: Lowered from 1.5 to allow entries on moderate volume expansion
 
     # Rolling window (bars) for average-volume calculation
     volume_lookback: int = 20
@@ -107,7 +107,7 @@ class SniperConfig:
 
     # Strong-close: candle body (|close-open|) must be at least this fraction
     # of the candle range (high-low) to count as a "strong close"
-    strong_body_pct: float = 0.55
+    strong_body_pct: float = 0.45  # TUNED: Lowered from 0.55 to accept moderate-conviction closes
 
     # ── Pillar 3: Liquidity ───────────────────────────────────────────────────
     # Maximum allowed spread as a fraction of mid-price (0.003 = 0.30 %)
@@ -119,19 +119,19 @@ class SniperConfig:
     # ── Pillar 4: Confidence ──────────────────────────────────────────────────
     # env: SNIPER_MIN_CONFIDENCE — override default 0.50 (e.g. 0.35 for flip mode)
     min_confidence: float = field(
-        default_factory=lambda: _env_float("SNIPER_MIN_CONFIDENCE", 0.50)
+        default_factory=lambda: _env_float("SNIPER_MIN_CONFIDENCE", 0.45)
     )
 
     # ── Instant-block thresholds ─────────────────────────────────────────────
     # ADX below this value is treated as choppy/sideways — instant block.
     # Set to 0.0 to disable the ADX check (e.g. when ADX column is absent).
-    # env: SNIPER_MIN_ADX — override default 12.0 (e.g. 8.0 for flip mode)
+    # env: SNIPER_MIN_ADX — override default 10.0 (e.g. 8.0 for flip mode)
     min_adx: float = field(
-        default_factory=lambda: _env_float("SNIPER_MIN_ADX", 12.0)
+        default_factory=lambda: _env_float("SNIPER_MIN_ADX", 10.0)
     )
 
     # Volume below this multiple of average = thin market → instant block.
-    low_volume_multiplier: float = 0.5
+    low_volume_multiplier: float = 0.4  # TUNED: Lowered from 0.5 to 0.4 — blocks severely thin markets while allowing moderate dips
 
     # Minimum bars required in the DataFrame for any check to run
     min_bars: int = 25

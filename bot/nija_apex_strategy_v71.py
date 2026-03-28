@@ -281,10 +281,10 @@ class NIJAApexStrategyV71:
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
         # New strategy: Moderate filters to capture trending markets with real volume
         # Target: 60-65% win rate with 5-10 quality trades per day
-        self.min_adx = self.config.get('min_adx', 15)  # RESTORED: Require meaningful trend strength (was emergency-relaxed to 10, then 6)
+        self.min_adx = self.config.get('min_adx', 12)  # TUNED: Lowered from 15 to 12 to catch more trending setups without allowing pure chop
         self.volume_threshold = self.config.get('volume_threshold', 0.10)  # OPTIMIZED: 10% of 5-candle avg (was 0.05, too loose)
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
-        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 3)  # RESTORED: Require 3/5 indicators for solid confirmation (was emergency-relaxed to 2)
+        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # TUNED: Lowered from 3 to 2 to allow entries on partial trend confirmation
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
 
@@ -430,7 +430,7 @@ class NIJAApexStrategyV71:
         if self.use_enhanced_scoring:
             logger.info("✅ Enhanced entry scoring: ENABLED (0-100 weighted scoring)")
             logger.info("✅ Regime detection: ENABLED (trending/ranging/volatile)")
-            min_score = self.config.get('min_score_threshold', 70)  # RESTORED: Require good quality setups (70/100)
+            min_score = self.config.get('min_score_threshold', 60)  # TUNED: Lowered from 70 to 60 for more frequent entries
             logger.info(f"✅ Minimum entry score: {min_score}/100 (quality threshold targeting 65-70%+ win rate)")
         if self.enable_stepped_exits:
             logger.info("✅ Stepped profit-taking: ENABLED (aggressive partial exits)")
@@ -1024,9 +1024,9 @@ class NIJAApexStrategyV71:
 
         conditions = {}
 
-        # 1. Pullback to EMA21 or VWAP (RESTORED: 1.0% tolerance - tightened from 2.0% emergency relaxation)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
-        near_vwap = abs(current_price - vwap) / vwap < 0.01
+        # 1. Pullback to EMA21 or VWAP (TUNED: 1.5% tolerance — more entries than 1.0%, less than emergency 2.0%)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.015
+        near_vwap = abs(current_price - vwap) / vwap < 0.015
         conditions['pullback'] = near_ema21 or near_vwap
 
         # 2. RSI bullish pullback (ADAPTIVE MAX ALPHA UPGRADE)
@@ -1141,9 +1141,9 @@ class NIJAApexStrategyV71:
 
         conditions = {}
 
-        # 1. Pullback to EMA21 or VWAP (RESTORED: 1.0% tolerance - tightened from 2.0% emergency relaxation)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
-        near_vwap = abs(current_price - vwap) / vwap < 0.01
+        # 1. Pullback to EMA21 or VWAP (TUNED: 1.5% tolerance — more entries than 1.0%, less than emergency 2.0%)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.015
+        near_vwap = abs(current_price - vwap) / vwap < 0.015
         conditions['pullback'] = near_ema21 or near_vwap
 
         # 2. RSI bearish pullback (ADAPTIVE MAX ALPHA UPGRADE)
