@@ -191,6 +191,58 @@ except ImportError:
         SMART_REINVEST_AVAILABLE = False
         logger.warning("Smart Reinvest Cycles not available – running without condition-gated reinvestment")
 
+# ── Industry Principle #2: Adaptive multi-regime strategy bridge ───────────
+# Maps detected regime → complete parameter set (RSI, confidence, sizing, SL/TP)
+try:
+    from bot.regime_strategy_bridge import get_regime_strategy_bridge, RegimeTradingParams, StrategyType
+    REGIME_BRIDGE_AVAILABLE = True
+    logger.info("✅ Regime Strategy Bridge loaded — adaptive multi-regime strategy active")
+except ImportError:
+    try:
+        from regime_strategy_bridge import get_regime_strategy_bridge, RegimeTradingParams, StrategyType
+        REGIME_BRIDGE_AVAILABLE = True
+        logger.info("✅ Regime Strategy Bridge loaded — adaptive multi-regime strategy active")
+    except ImportError:
+        get_regime_strategy_bridge = None  # type: ignore
+        RegimeTradingParams = None  # type: ignore
+        StrategyType = None  # type: ignore
+        REGIME_BRIDGE_AVAILABLE = False
+        logger.warning("⚠️ Regime Strategy Bridge not available — using static RSI ranges")
+
+# ── Industry Principle #3: Risk-per-trade position sizer (ATR-based) ──────
+# Sizes positions based on stop-loss distance, not raw balance percentage
+try:
+    from bot.risk_per_trade_sizer import get_risk_per_trade_sizer, RiskSizingResult
+    RISK_PER_TRADE_SIZER_AVAILABLE = True
+    logger.info("✅ Risk-Per-Trade Sizer loaded — ATR-based position sizing active")
+except ImportError:
+    try:
+        from risk_per_trade_sizer import get_risk_per_trade_sizer, RiskSizingResult
+        RISK_PER_TRADE_SIZER_AVAILABLE = True
+        logger.info("✅ Risk-Per-Trade Sizer loaded — ATR-based position sizing active")
+    except ImportError:
+        get_risk_per_trade_sizer = None  # type: ignore
+        RiskSizingResult = None  # type: ignore
+        RISK_PER_TRADE_SIZER_AVAILABLE = False
+        logger.warning("⚠️ Risk-Per-Trade Sizer not available — using balance-percentage sizing")
+
+# ── Industry Principle #5: Scalp mode optimizer (high-frequency micro-trades) ─
+# Activates tight-stop, quick-TP scalping when regime is CONSOLIDATION/RANGING
+try:
+    from bot.scalp_mode_optimizer import get_scalp_mode_optimizer, ScalpConfig
+    SCALP_MODE_OPTIMIZER_AVAILABLE = True
+    logger.info("✅ Scalp Mode Optimizer loaded — high-frequency micro-scalp mode active")
+except ImportError:
+    try:
+        from scalp_mode_optimizer import get_scalp_mode_optimizer, ScalpConfig
+        SCALP_MODE_OPTIMIZER_AVAILABLE = True
+        logger.info("✅ Scalp Mode Optimizer loaded — high-frequency micro-scalp mode active")
+    except ImportError:
+        get_scalp_mode_optimizer = None  # type: ignore
+        ScalpConfig = None  # type: ignore
+        SCALP_MODE_OPTIMIZER_AVAILABLE = False
+        logger.warning("⚠️ Scalp Mode Optimizer not available — standard entry logic in use")
+
 
 class NIJAApexStrategyV71:
     """
@@ -201,12 +253,13 @@ class NIJAApexStrategyV71:
     2. Entry Logic (pullback to EMA21/VWAP, RSI, candlestick patterns, MACD tick, volume)
     3. Enhanced Entry Scoring (0-100 weighted multi-factor scoring)
     4. Market Regime Detection (trending/ranging/volatile)
-    5. Adaptive Strategy Switching (regime-based parameters)
-    6. Dynamic Risk Management (ADX-based position sizing 2-10%, ATR stop loss)
-    7. Exit Logic (opposite signal, trailing stop, trend break)
+    5. Adaptive Strategy Switching (regime-based parameters via RegimeStrategyBridge)
+    6. Dynamic Risk Management (ATR-based risk-per-trade sizing, stop loss)
+    7. Exit Logic (opposite signal, trailing stop, trend break, time-based)
     8. Smart Filters (news, volume, candle timing)
     9. Optional: AI Momentum Scoring (skeleton)
     10. Profit Optimization Stack (harvest layer + flywheel compounding + capital recycling)
+    11. Scalp Mode (high-frequency micro-trades in CONSOLIDATION/RANGING regimes)
     """
 
     def __init__(self, broker_client=None, config: Optional[Dict] = None):
@@ -410,6 +463,43 @@ class NIJAApexStrategyV71:
 
         # Track current regime for logging
         self.current_regime = None
+
+        # ── Industry Principle #2: Regime Strategy Bridge ────────────────────
+        # Provides complete parameter sets per detected regime (RSI, confidence,
+        # position multiplier, SL/TP) so the strategy adapts dynamically.
+        if REGIME_BRIDGE_AVAILABLE and get_regime_strategy_bridge is not None:
+            try:
+                self.regime_bridge = get_regime_strategy_bridge()
+                logger.info("✅ Regime Strategy Bridge: ENABLED (adaptive multi-regime)")
+            except Exception as _rb_err:
+                logger.warning("⚠️  Regime Strategy Bridge init failed: %s", _rb_err)
+                self.regime_bridge = None
+        else:
+            self.regime_bridge = None
+
+        # ── Industry Principle #3: Risk-Per-Trade Sizer ──────────────────────
+        # Sizes every position by stop-loss distance, not raw balance percentage.
+        if RISK_PER_TRADE_SIZER_AVAILABLE and get_risk_per_trade_sizer is not None:
+            try:
+                self.risk_per_trade_sizer = get_risk_per_trade_sizer()
+                logger.info("✅ Risk-Per-Trade Sizer: ENABLED (ATR-based sizing)")
+            except Exception as _rpts_err:
+                logger.warning("⚠️  Risk-Per-Trade Sizer init failed: %s", _rpts_err)
+                self.risk_per_trade_sizer = None
+        else:
+            self.risk_per_trade_sizer = None
+
+        # ── Industry Principle #5: Scalp Mode Optimizer ──────────────────────
+        # Activates tight-stop, quick-TP micro-scalping when regime permits.
+        if SCALP_MODE_OPTIMIZER_AVAILABLE and get_scalp_mode_optimizer is not None:
+            try:
+                self.scalp_optimizer = get_scalp_mode_optimizer()
+                logger.info("✅ Scalp Mode Optimizer: ENABLED (micro-scalp in CONSOLIDATION/RANGING)")
+            except Exception as _smo_err:
+                logger.warning("⚠️  Scalp Mode Optimizer init failed: %s", _smo_err)
+                self.scalp_optimizer = None
+        else:
+            self.scalp_optimizer = None
         
         # Kraken-specific tuning parameters (Jan 30, 2026)
         # These can be adjusted via environment variables for safe tuning
@@ -1030,9 +1120,24 @@ class NIJAApexStrategyV71:
         conditions['pullback'] = near_ema21 or near_vwap
 
         # 2. RSI bullish pullback (ADAPTIVE MAX ALPHA UPGRADE)
-        # Get adaptive RSI ranges based on current market regime
-        if self.use_enhanced_scoring and self.regime_detector and self.current_regime:
-            adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
+        # Get adaptive RSI ranges based on current market regime.
+        # Priority: RegimeStrategyBridge > legacy regime detector > static fallback.
+        adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
+        _broker_name_long = self._get_broker_name()
+        if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                and self.current_regime is not None):
+            _rb_params = self.regime_bridge.get_params(self.current_regime)
+            long_rsi_min = _rb_params.rsi_long_min
+            long_rsi_max = _rb_params.rsi_long_max
+            # In CONSOLIDATION regime switch to scalp-optimized RSI bounds
+            if (SCALP_MODE_OPTIMIZER_AVAILABLE and self.scalp_optimizer is not None
+                    and self.scalp_optimizer.should_use_scalp_mode(self.current_regime)):
+                _scalp_cfg = self.scalp_optimizer.get_scalp_config(
+                    _broker_name_long, getattr(self, '_last_account_balance', 100.0)
+                )
+                long_rsi_min = _scalp_cfg.rsi_long_min
+                long_rsi_max = _scalp_cfg.rsi_long_max
+        elif self.use_enhanced_scoring and self.regime_detector and self.current_regime:
             rsi_ranges = self.regime_detector.get_adaptive_rsi_ranges(self.current_regime, adx)
             long_rsi_min = rsi_ranges['long_min']
             long_rsi_max = rsi_ranges['long_max']
@@ -1147,9 +1252,24 @@ class NIJAApexStrategyV71:
         conditions['pullback'] = near_ema21 or near_vwap
 
         # 2. RSI bearish pullback (ADAPTIVE MAX ALPHA UPGRADE)
-        # Get adaptive RSI ranges based on current market regime
-        if self.use_enhanced_scoring and self.regime_detector and self.current_regime:
-            adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
+        # Get adaptive RSI ranges based on current market regime.
+        # Priority: RegimeStrategyBridge > legacy regime detector > static fallback.
+        adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
+        _broker_name_short = self._get_broker_name()
+        if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                and self.current_regime is not None):
+            _rb_params_short = self.regime_bridge.get_params(self.current_regime)
+            short_rsi_min = _rb_params_short.rsi_short_min
+            short_rsi_max = _rb_params_short.rsi_short_max
+            # In CONSOLIDATION regime switch to scalp-optimized RSI bounds
+            if (SCALP_MODE_OPTIMIZER_AVAILABLE and self.scalp_optimizer is not None
+                    and self.scalp_optimizer.should_use_scalp_mode(self.current_regime)):
+                _scalp_cfg_s = self.scalp_optimizer.get_scalp_config(
+                    _broker_name_short, getattr(self, '_last_account_balance', 100.0)
+                )
+                short_rsi_min = _scalp_cfg_s.rsi_short_min
+                short_rsi_max = _scalp_cfg_s.rsi_short_max
+        elif self.use_enhanced_scoring and self.regime_detector and self.current_regime:
             rsi_ranges = self.regime_detector.get_adaptive_rsi_ranges(self.current_regime, adx)
             short_rsi_min = rsi_ranges['short_min']
             short_rsi_max = rsi_ranges['short_max']
@@ -1782,14 +1902,35 @@ class NIJAApexStrategyV71:
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
 
+                    # ── Industry Principle #3: Risk-Per-Trade override (LONG) ──
+                    # When ATR is available, re-size to risk exactly 1-2% of account
+                    # based on stop-loss distance rather than a raw balance percentage.
+                    if (RISK_PER_TRADE_SIZER_AVAILABLE and self.risk_per_trade_sizer is not None):
+                        try:
+                            _atr_val_l = float(indicators.get('atr', pd.Series([0])).iloc[-1])
+                            _entry_price_l = float(df['close'].iloc[-1])
+                            _risk_pct_l = None
+                            if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                                    and self.current_regime is not None):
+                                _rb_p_l = self.regime_bridge.get_params(self.current_regime)
+                                _risk_pct_l = _rb_p_l.risk_per_trade_pct / 100.0
+                            _rpt_l = self.risk_per_trade_sizer.calculate(
+                                account_balance=account_balance,
+                                entry_price=_entry_price_l,
+                                atr_value=_atr_val_l if _atr_val_l > 0 else None,
+                                risk_pct_override=_risk_pct_l,
+                                side='long',
+                            )
+                            if _rpt_l.position_size_usd > 0:
+                                position_size = scalar(_rpt_l.position_size_usd)
+                        except Exception as _rpt_l_err:
+                            logger.debug("Risk-per-trade sizer error (long): %s", _rpt_l_err)
+
                     # Adjust position size based on regime and score
                     if self.use_enhanced_scoring and self.current_regime:
                         position_size = self.adjust_position_size_for_regime(
                             position_size, self.current_regime, score
                         )
-
-                    # ── Portfolio Profit Flywheel ──────────────────────────
-                    # As cumulative net profit grows the flywheel returns a
                     # multiplier (1.0–3.0) that gradually increases position
                     # sizes, compounding capital growth automatically.
                     if self.portfolio_profit_flywheel is not None:
@@ -2049,6 +2190,30 @@ class NIJAApexStrategyV71:
                     )
                     # Normalize position_size (defensive programming - ensures scalar even if tuple unpacking changes)
                     position_size = scalar(position_size)
+
+                    # ── Industry Principle #3: Risk-Per-Trade override (SHORT) ─
+                    # When ATR is available, re-size to risk exactly 1-2% of account
+                    # based on stop-loss distance rather than a raw balance percentage.
+                    if (RISK_PER_TRADE_SIZER_AVAILABLE and self.risk_per_trade_sizer is not None):
+                        try:
+                            _atr_val_s = float(indicators.get('atr', pd.Series([0])).iloc[-1])
+                            _entry_price_s = float(df['close'].iloc[-1])
+                            _risk_pct_s = None
+                            if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                                    and self.current_regime is not None):
+                                _rb_p_s = self.regime_bridge.get_params(self.current_regime)
+                                _risk_pct_s = _rb_p_s.risk_per_trade_pct / 100.0
+                            _rpt_s = self.risk_per_trade_sizer.calculate(
+                                account_balance=account_balance,
+                                entry_price=_entry_price_s,
+                                atr_value=_atr_val_s if _atr_val_s > 0 else None,
+                                risk_pct_override=_risk_pct_s,
+                                side='short',
+                            )
+                            if _rpt_s.position_size_usd > 0:
+                                position_size = scalar(_rpt_s.position_size_usd)
+                        except Exception as _rpt_s_err:
+                            logger.debug("Risk-per-trade sizer error (short): %s", _rpt_s_err)
 
                     # Adjust position size based on regime and score
                     if self.use_enhanced_scoring and self.current_regime:
