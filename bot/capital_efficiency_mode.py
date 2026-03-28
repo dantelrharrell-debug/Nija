@@ -5,7 +5,7 @@ Adjusts trading aggressiveness based on account size, idle state, and
 optimizer feedback so every dollar works at the right intensity level.
 
 Mode tiers (by account balance):
-  AGGRESSIVE_SMALL  (<$500)   -- min_score 2.0, top-75% ranking, max 4 positions
+  AGGRESSIVE_SMALL  (<$500)   -- min_score 1.5, top-80% ranking, max 4 positions
   BALANCED          (<$2000)  -- min_score 3.0, top-50% ranking, max 5 positions
   STANDARD          ($2000+)  -- min_score 3.0, top-40% ranking, max 7 positions
 
@@ -75,8 +75,8 @@ class CapitalModeConfig:
 # Default mode configs
 _AGGRESSIVE_SMALL = CapitalModeConfig(
     mode="AGGRESSIVE_SMALL",
-    min_score=2.0,            # was 2.5 — lowered so more setups qualify on small accounts
-    pass_percentile=0.25,     # top 75% pass (was 0.30 / top 70%)
+    min_score=1.5,            # lowered 2.0→1.5 so more setups qualify on small accounts
+    pass_percentile=0.20,     # top 80% pass (lowered 0.25→0.20 for small-cap mode)
     max_positions=4,
     min_size_usd=MIN_TRADE_SIZE_USD,
     confidence_delta=+0.05,   # loosen gate for small accounts
@@ -190,7 +190,7 @@ class CapitalEfficiencyMode:
         # --- Idle boost: lower the gate temporarily ---
         loosened = CapitalModeConfig(
             mode=f"{base.mode}+IDLE_BOOST",
-            min_score=max(1.5, base.min_score - IDLE_SCORE_DELTA),
+            min_score=max(1.0, base.min_score - IDLE_SCORE_DELTA),
             pass_percentile=max(0.10, base.pass_percentile - IDLE_PERCENTILE_DELTA),
             max_positions=base.max_positions,
             min_size_usd=base.min_size_usd,
