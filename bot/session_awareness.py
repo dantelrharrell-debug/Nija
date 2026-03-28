@@ -14,8 +14,8 @@ Session table (all times UTC):
                          confidence +0.05 | size x1.10
     LONDON_PEAK  10-12   London peak liquidity window
                          confidence +0.03 | size x1.05
-    LUNCH_LAG    12-14   London--US crossover lull
-                         confidence -0.05 | size x0.85
+    LUNCH_LAG    12-14   London--US crossover lull (⚠️ 13:00 UTC is notably slow)
+                         confidence -0.08 | size x0.80
     US_OPEN      14-16   US market open -- highest volatility window
                          confidence +0.08 | size x1.15
     US_PEAK      16-19   US peak session
@@ -74,7 +74,7 @@ _SESSIONS = (
     SessionConfig("ASIA_ACTIVE",  5,  8, -0.03, 0.90, "Asia markets active"),
     SessionConfig("LONDON_OPEN",  8, 10, +0.05, 1.10, "London open -- elevated volatility"),
     SessionConfig("LONDON_PEAK", 10, 12, +0.03, 1.05, "London peak liquidity"),
-    SessionConfig("LUNCH_LAG",   12, 14, -0.05, 0.85, "London-US crossover lull"),
+    SessionConfig("LUNCH_LAG",   12, 14, -0.08, 0.80, "London-US crossover lull -- 13:00 UTC notably slow"),
     SessionConfig("US_OPEN",     14, 16, +0.08, 1.15, "US market open -- peak volatility"),
     SessionConfig("US_PEAK",     16, 19, +0.05, 1.10, "US peak session"),
     SessionConfig("US_CLOSE",    19, 22, -0.02, 0.95, "US session wind-down"),
@@ -130,6 +130,16 @@ class SessionAwareness:
                             session.size_multiplier,
                             session.description,
                         )
+                        if session.name == "LUNCH_LAG":
+                            logger.warning(
+                                "⚠️  LUNCH_LAG session active (%02d:00 UTC): "
+                                "London-US crossover — markets are typically slow "
+                                "around 13:00 UTC.  Confidence reduced by %.2f, "
+                                "position size scaled to %.2fx.",
+                                hour_utc,
+                                abs(session.confidence_delta),
+                                session.size_multiplier,
+                            )
                 return session
 
         return _NEUTRAL

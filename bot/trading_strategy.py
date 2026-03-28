@@ -2100,15 +2100,14 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.0   # Use current price as entry price (neut
 # Hard cap aligned with MAX_TOTAL_POSITIONS = 10 (global limit, tier-scaled).
 # Per-balance sub-limits are enforced at runtime via get_balance_based_max_positions().
 HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (10)
-# Default to MAX_TOTAL_POSITIONS so the tier hierarchy can scale freely;
-# MAX_CONCURRENT_TRADES from micro_capital_config may be lower (1) for micro accounts,
-# but we don't want it to permanently cap all balance tiers.  The env var
-# MAX_CONCURRENT_POSITIONS still lets operators override this at deploy time.
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', str(MAX_TOTAL_POSITIONS))
+# AGGRESSIVE MODE: Default reduced from MAX_TOTAL_POSITIONS (10) → 5 so new quality
+# trades can be opened even when several older positions remain open.  Operators can
+# raise this limit via the MAX_CONCURRENT_POSITIONS environment variable (max 10).
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '5')
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
-    MAX_POSITIONS_ALLOWED = MAX_TOTAL_POSITIONS
+    MAX_POSITIONS_ALLOWED = 5
 # Enforce hard ceiling – never exceed MAX_TOTAL_POSITIONS regardless of env override
 if MAX_POSITIONS_ALLOWED > HARD_MAX_POSITIONS:
     MAX_POSITIONS_ALLOWED = HARD_MAX_POSITIONS

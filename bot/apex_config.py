@@ -1030,7 +1030,13 @@ GRID_CONFIG = {
     'order_spacing_pct': 0.001,        # 0.1% between each grid level
     # Market-order fallback: cancel limit orders unfilled after this timeout
     'market_fallback_enabled': True,
-    'market_fallback_timeout_seconds': 300,  # 5 minutes (300 s) before switching to market orders
+    'market_fallback_timeout_seconds': 60,   # 60 s (reduced from 300 s) for faster fills
+    # Fast-market override: if price moves > fast_market_move_pct within
+    # fast_market_window_seconds the grid switches to market orders immediately
+    'fast_market_fallback_enabled': True,
+    'fast_market_move_pct': 0.005,           # 0.005 decimal = 0.5% price move triggers fast-market mode
+    'fast_market_window_seconds': 30,        # evaluation window for fast-market detection
+    'fast_market_order_timeout_seconds': 15, # switch to market order after 15 s in fast market
     # Capital reserved for grid orders (% of free balance)
     'capital_allocation_pct': 0.30,    # 30% of capital used for grid orders
     'min_order_usd': 10.0,             # Minimum individual grid order size
