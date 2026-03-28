@@ -1763,12 +1763,12 @@ PRE_SCAN_POSITION_BUDGET_SECONDS = 90  # Max seconds for the position-analysis l
 # The warmup mechanism still exists (MARKET_BATCH_WARMUP_CYCLES=1) but now starts
 # at a much higher baseline (50) so the bot reaches full scan speed immediately.
 MARKET_BATCH_SIZE_MIN = 50   # Minimum markets to scan per cycle (raised from 10→50)
-MARKET_BATCH_SIZE_MAX = 100  # Maximum markets to scan per cycle (raised from 50→100)
+MARKET_BATCH_SIZE_MAX = 150  # Maximum markets to scan per cycle (raised 100→150 for small-cap coverage)
 MARKET_BATCH_WARMUP_CYCLES = 1  # Minimal warmup: full speed after 1 cycle (lowered from 3→1)
 # For micro accounts (balance < $100), scan a larger batch to compensate for tighter
 # position sizing — more opportunities evaluated per cycle increases trade frequency.
 MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD = 100.0  # USD: below this balance use boosted scan size
-MICRO_ACCOUNT_SCAN_SIZE = 100              # Markets to scan per cycle for micro accounts (raised 50→100)
+MICRO_ACCOUNT_SCAN_SIZE = 150              # Markets to scan per cycle for micro accounts (raised 100→150)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # ── FIRST TRADE BOOST ──────────────────────────────────────────────────────
@@ -2148,6 +2148,11 @@ except ValueError:
     FORCED_CLEANUP_INTERVAL = 6  # Default fallback (15 minutes)
 logger.debug(f"🧹 Forced cleanup interval: every {FORCED_CLEANUP_INTERVAL} cycles (~{FORCED_CLEANUP_INTERVAL * 2.5:.0f} minutes)")
 
+# Stale open-order age thresholds and check intervals for per-broker order cleanup.
+# Orders older than the age threshold are cancelled so capital is freed for new entries.
+STALE_ORDER_MAX_AGE_MINUTES   = 5  # Cancel open orders older than 5 minutes
+STALE_ORDER_CHECK_INTERVAL_MIN = 6  # Minimum minutes between consecutive cleanup runs
+
 # Optional: Cleanup after N trades executed (alternative/additional trigger)
 # If set, cleanup runs after N trades OR every FORCED_CLEANUP_INTERVAL cycles (whichever comes first)
 _cleanup_trades_env = os.getenv('FORCED_CLEANUP_AFTER_N_TRADES', '')
@@ -2342,10 +2347,10 @@ except ValueError:
 # over-strict confidence gate.
 # Overridable via FORCED_ENTRY_FALLBACK_CYCLES env var.
 try:
-    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '5'))
+    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '3'))
 except ValueError as _e:
-    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 5", _e)
-    FORCED_ENTRY_FALLBACK_CYCLES = 5
+    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 3", _e)
+    FORCED_ENTRY_FALLBACK_CYCLES = 3
 
 # How much to raise the effective sniper-filter confidence in fallback mode.
 # E.g. 0.10 means the signal needs 0.10 LESS confidence to pass the gate.
@@ -3419,6 +3424,9 @@ class TradingStrategy:
         # Kraken order cleanup manager (initialized after Kraken connection)
         self.kraken_cleanup = None
 
+        # Coinbase order cleanup manager (initialized after Coinbase connection)
+        self.coinbase_cleanup = None
+
         # Market rotation state (prevents scanning same markets every cycle)
         self.market_rotation_offset = 0  # Tracks which batch of markets to scan next
         self.all_markets_cache = []      # Cache of all available markets
@@ -3609,9 +3617,14 @@ class TradingStrategy:
                     # This frees up capital tied in unfilled limit orders
                     try:
                         from bot.kraken_order_cleanup import create_kraken_cleanup
-                        self.kraken_cleanup = create_kraken_cleanup(kraken, max_order_age_minutes=5)
+                        self.kraken_cleanup = create_kraken_cleanup(
+                            kraken, max_order_age_minutes=STALE_ORDER_MAX_AGE_MINUTES
+                        )
                         if self.kraken_cleanup:
-                            logger.info("   ✅ Kraken order cleanup initialized (max age: 5 minutes)")
+                            logger.info(
+                                f"   ✅ Kraken order cleanup initialized "
+                                f"(max age: {STALE_ORDER_MAX_AGE_MINUTES} minutes)"
+                            )
                         else:
                             logger.warning("   ⚠️  Kraken order cleanup not available")
                             self.kraken_cleanup = None
@@ -3662,6 +3675,28 @@ class TradingStrategy:
                     connected_brokers.append("Coinbase")
                     logger.info("   ✅ Coinbase MASTER connected")
                     logger.info("   ✅ Coinbase registered as PLATFORM broker in multi-account manager")
+
+                    # COINBASE ORDER CLEANUP: Initialize automatic stale order cleanup
+                    # This frees up capital tied in unfilled orders on Coinbase
+                    try:
+                        from bot.coinbase_order_cleanup import create_coinbase_cleanup
+                        self.coinbase_cleanup = create_coinbase_cleanup(
+                            coinbase, max_order_age_minutes=STALE_ORDER_MAX_AGE_MINUTES
+                        )
+                        if self.coinbase_cleanup:
+                            logger.info(
+                                f"   ✅ Coinbase order cleanup initialized "
+                                f"(max age: {STALE_ORDER_MAX_AGE_MINUTES} minutes)"
+                            )
+                        else:
+                            logger.warning("   ⚠️  Coinbase order cleanup not available")
+                            self.coinbase_cleanup = None
+                    except ImportError as import_err:
+                        logger.warning(f"   ⚠️  Coinbase order cleanup module not available: {import_err}")
+                        self.coinbase_cleanup = None
+                    except Exception as cleanup_err:
+                        logger.error(f"   ❌ Coinbase order cleanup setup error: {cleanup_err}")
+                        self.coinbase_cleanup = None
                 else:
                     logger.warning("   ⚠️  Coinbase MASTER connection failed")
             except Exception as e:
@@ -7725,9 +7760,9 @@ class TradingStrategy:
             # This runs every cycle if Kraken cleanup is available and broker is Kraken
             if self.kraken_cleanup and hasattr(active_broker, 'broker_type') and active_broker.broker_type == BrokerType.KRAKEN:
                 try:
-                    # Only run cleanup if enough time has passed (default: 5 minutes)
+                    # Only run cleanup if enough time has passed
                     # Use slightly longer interval than order age to give orders time to fill
-                    if self.kraken_cleanup.should_run_cleanup(min_interval_minutes=6):
+                    if self.kraken_cleanup.should_run_cleanup(min_interval_minutes=STALE_ORDER_CHECK_INTERVAL_MIN):
                         logger.info("")
                         cancelled_count, capital_freed = self.kraken_cleanup.cleanup_stale_orders(dry_run=False)
                         if cancelled_count > 0:
@@ -7748,6 +7783,29 @@ class TradingStrategy:
                                 logger.debug(f"   Could not refresh balance: {balance_err}")
                 except Exception as cleanup_err:
                     logger.warning(f"⚠️ Kraken order cleanup error: {cleanup_err}")
+
+            # COINBASE ORDER CLEANUP: Cancel stale open orders to free capital
+            # Analogous to Kraken cleanup — prevents unfilled orders from blocking available cash
+            if self.coinbase_cleanup and hasattr(active_broker, 'broker_type') and active_broker.broker_type == BrokerType.COINBASE:
+                try:
+                    if self.coinbase_cleanup.should_run_cleanup(min_interval_minutes=STALE_ORDER_CHECK_INTERVAL_MIN):
+                        logger.info("")
+                        cancelled_count, capital_freed = self.coinbase_cleanup.cleanup_stale_orders(dry_run=False)
+                        if cancelled_count > 0:
+                            logger.info(f"   🧹 Coinbase cleanup: Freed ${capital_freed:.2f} by cancelling {cancelled_count} stale order(s)")
+                            try:
+                                old_balance = account_balance
+                                new_balance = active_broker.get_account_balance()
+                                if new_balance is None:
+                                    logger.warning("   ⚠️ Coinbase balance refresh returned None — keeping previous balance")
+                                    new_balance = old_balance
+                                account_balance = float(new_balance or 0.0)
+                                if account_balance > old_balance:
+                                    logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
+                            except Exception as balance_err:
+                                logger.debug(f"   Could not refresh Coinbase balance: {balance_err}")
+                except Exception as cleanup_err:
+                    logger.warning(f"⚠️ Coinbase order cleanup error: {cleanup_err}")
 
             # Small delay after balance check to avoid rapid-fire API calls
             time.sleep(0.5)
