@@ -813,14 +813,15 @@ class NIJAApexStrategyV71:
         atr = scalar(indicators.get('atr', pd.Series([0])).iloc[-1])
         
         # Configurable thresholds (can be overridden via config in future)
-        general_rsi_min = 30
-        general_rsi_max = 70
+        # AGGRESSIVE MODE: widened from 30/70 → 25/75 to allow entries in a broader RSI band
+        general_rsi_min = 25
+        general_rsi_max = 75
         general_min_atr_pct = 0.5  # 0.5% minimum volatility
         general_max_spread_pct = 0.15  # 0.15% maximum spread
         
         # 1. RSI Range Check
         # NOTE: We use the same RSI range for both long and short to avoid extreme conditions
-        # This prevents trading when RSI is in extreme overbought (>70) or oversold (<30) zones
+        # This prevents trading when RSI is in extreme overbought (>75) or oversold (<25) zones
         # Rationale: Extreme RSI often leads to reversals, making entries risky regardless of direction
         if side == 'long':
             # For longs, avoid extreme RSI conditions (both overbought and oversold)
@@ -1037,18 +1038,18 @@ class NIJAApexStrategyV71:
             long_rsi_max = rsi_ranges['long_max']
         else:
             # Fallback to balanced static ranges (when regime detection unavailable)
-            # PROFIT-TUNED: Widened from 30-55 to 25-65 to capture more trade setups:
+            # AGGRESSIVE: Widened from 25-65 to 25-67 to capture more trade setups:
             # RSI 25-35: Deep oversold pullback entries (mean reversion)
             # RSI 35-50: Standard pullback entries (momentum continuation)
-            # RSI 50-65: Momentum continuation entries (trend following)
+            # RSI 50-67: Momentum continuation entries (trend following, slightly overbought)
             long_rsi_min = 25
-            long_rsi_max = 65
+            long_rsi_max = 67
 
         # Apply adaptive RSI condition: balanced entry strategy (fallback)
         # When regime detection is unavailable, use balanced ranges for all market conditions
         # - RSI 25-40: Deep pullback entries (mean reversion)
         # - RSI 40-55: Shallow pullback entries (momentum continuation)
-        # - RSI 55-65: Early momentum entries (trend following)
+        # - RSI 55-67: Early momentum entries (trend following)
         conditions['rsi_pullback'] = long_rsi_min <= rsi <= long_rsi_max and rsi > rsi_prev
 
         # 3. Bullish candlestick patterns
@@ -1154,16 +1155,16 @@ class NIJAApexStrategyV71:
             short_rsi_max = rsi_ranges['short_max']
         else:
             # Fallback to balanced static ranges (when regime detection unavailable)
-            # PROFIT-TUNED: Widened from 45-70 to 35-75 to capture more short setups:
-            # RSI 35-45: Early overbought-reversal shorts
+            # AGGRESSIVE: Widened from 35-75 to 33-75 to capture more short setups:
+            # RSI 33-45: Early overbought-reversal shorts (slightly oversold reversal zone)
             # RSI 45-60: Momentum continuation shorts
             # RSI 60-75: Extended overbought shorts (mean reversion)
-            short_rsi_min = 35
+            short_rsi_min = 33
             short_rsi_max = 75
 
         # Apply adaptive RSI condition: balanced short entry strategy (fallback)
         # When regime detection is unavailable, use balanced ranges for all market conditions
-        # - RSI 35-45: Early reversal short entries (trend following)
+        # - RSI 33-45: Early reversal short entries (trend following)
         # - RSI 45-60: Bounce short entries (momentum continuation)
         # - RSI 60-75: Extended overbought shorts (mean reversion)
         conditions['rsi_pullback'] = short_rsi_min <= rsi <= short_rsi_max and rsi < rsi_prev
@@ -1540,8 +1541,14 @@ class NIJAApexStrategyV71:
         indicators['plus_di'] = plus_di
         indicators['minus_di'] = minus_di
 
-        # Calculate Bollinger Bands for volatility-based adaptive profit targets
-        bb_upper, bb_middle, bb_lower, bb_bandwidth = calculate_bollinger_bands(df, period=20, std_dev=2)
+        # Calculate Bollinger Bands for volatility-based adaptive profit targets.
+        # AGGRESSIVE: std_dev reduced from 2.0 (conventional 95%-capture) → 1.4 so the
+        # bands are narrower.  This causes price to touch (or breach) the bands more
+        # frequently, allowing the entry optimizer to award BB-proximity bonuses on a
+        # larger share of candles and thereby generate more entry signals.  The deviation
+        # from the standard 2σ definition is intentional and has been tuned for this
+        # high-frequency crypto strategy.
+        bb_upper, bb_middle, bb_lower, bb_bandwidth = calculate_bollinger_bands(df, period=20, std_dev=1.4)
         indicators['bb_upper'] = bb_upper
         indicators['bb_middle'] = bb_middle
         indicators['bb_lower'] = bb_lower
