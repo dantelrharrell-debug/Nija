@@ -24,13 +24,24 @@ UNIVERSAL_INDICATORS = {
     },
     "rsi": {
         "period": 14,
-        "description": "Momentum Trigger - Use RSI CROSS detection"
+        "description": "Momentum Trigger - Use RSI CROSS detection",
+        # Widened thresholds for more frequent mean-reversion entries
+        "oversold": 35,    # Loosened from 30 → more frequent long signals
+        "overbought": 65,  # Loosened from 70 → more frequent short signals
     },
     "ema": {
         "periods": [9, 21, 50],
         "description": "Precision Entry Timing",
         "alignment_long": "EMA 9 > EMA 21 > EMA 50",
-        "alignment_short": "EMA 9 < EMA 21 < EMA 50"
+        "alignment_short": "EMA 9 < EMA 21 < EMA 50",
+        # Faster EMA pair for trend-following — captures shorter trends
+        "trend_fast": 10,
+        "trend_slow": 30,
+    },
+    "bollinger_bands": {
+        "period": 20,
+        "std_dev": 1.5,    # Reduced from 2.0 → tighter bands trigger more mean-reversion signals
+        "description": "Mean Reversion Bands"
     },
     "volume_filter": "Current candle ≥ last 2 candles combined",
     "timeframes": {
@@ -339,17 +350,17 @@ PROFIT_LOCK = {
 SIGNAL_SCORING = {
     "buy_criteria": [
         "+1 point: Price above VWAP",
-        "+1 point: RSI oversold cross (30-50 range)",
+        "+1 point: RSI oversold cross (35-50 range)",  # Widened from 30 → 35
         "+1 point: Volume > 1.2x average",
         "+1 point: MACD bullish crossover",
-        "+1 point: EMA alignment (9 > 21)"
+        "+1 point: EMA alignment (10 > 30 or 9 > 21)"  # Faster trend EMA pair
     ],
     "sell_criteria": [
         "+1 point: Price below VWAP",
-        "+1 point: RSI overbought cross (50-70 range)",
+        "+1 point: RSI overbought cross (50-65 range)",  # Widened from 70 → 65
         "+1 point: Volume > 1.2x average",
         "+1 point: MACD bearish crossunder",
-        "+1 point: EMA alignment (9 < 21)"
+        "+1 point: EMA alignment (10 < 30 or 9 < 21)"  # Faster trend EMA pair
     ]
 }
 
@@ -357,7 +368,18 @@ SIGNAL_SCORING = {
 # 🎯 TRADING PAIRS
 # ═══════════════════════════════════════════════════════════════════
 
-TRADING_PAIRS = ["BTC-USD", "ETH-USD", "SOL-USD"]
+TRADING_PAIRS = [
+    # Core liquid pairs — primary mean-reversion and trend-following targets
+    "BTC-USD",
+    "ETH-USD",
+    "SOL-USD",
+    # Additional pairs for broader multi-pair monitoring (increases signal frequency)
+    "MATIC-USD",
+    "ADA-USD",
+    "AVAX-USD",
+    "LINK-USD",
+    "DOT-USD",
+]
 
 # ═══════════════════════════════════════════════════════════════════
 # ⏱️ BOT EXECUTION
