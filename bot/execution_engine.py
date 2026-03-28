@@ -1562,20 +1562,25 @@ class ExecutionEngine:
         # Earlier exits than Coinbase — fee structure makes them profitable sooner.
         # The 0.5% gate covers all current low-fee brokers (max 0.36%) with room
         # for future low-fee brokers up to 0.50%.  Coinbase (1.4%) stays above.
+        #
+        # PROFIT-OPTIMIZED (Mar 2026): Increased early exit sizes for faster capital
+        # recycling and compounding.  Research shows 20-25% early exits (vs the
+        # previous 10-15%) capture more profit sooner, freeing capital to re-enter
+        # new setups and compound gains faster without sacrificing R/R on the runner.
         if broker_round_trip_fee <= 0.005:  # <= 0.5% fees (Kraken 0.36%, Binance 0.28%, OKX 0.30%)
             exit_levels = [
-                (0.010, 0.10, 'tp_exit_1.0pct'),   # Exit 10% at 1.0% gross → ~0.64% NET (Kraken)
-                (0.015, 0.15, 'tp_exit_1.5pct'),   # Exit 15% at 1.5% gross → ~1.14% NET
-                (0.025, 0.25, 'tp_exit_2.5pct'),   # Exit 25% at 2.5% gross → ~2.14% NET
-                (0.040, 0.50, 'tp_exit_4.0pct'),   # Exit 50% at 4.0% gross → ~3.64% NET
+                (0.010, 0.20, 'tp_exit_1.0pct'),   # Exit 20% at 1.0% gross → ~0.64% NET (up from 10%)
+                (0.015, 0.25, 'tp_exit_1.5pct'),   # Exit 25% at 1.5% gross → ~1.14% NET (up from 15%)
+                (0.025, 0.30, 'tp_exit_2.5pct'),   # Exit 30% at 2.5% gross → ~2.14% NET (up from 25%)
+                (0.040, 0.35, 'tp_exit_4.0pct'),   # Exit 35% at 4.0% gross → ~3.64% NET (runner reduced, more captured early)
             ]
         # High-fee brokers (Coinbase 1.4%)
         else:
             exit_levels = [
-                (0.020, 0.10, 'tp_exit_2.0pct'),   # Exit 10% at 2.0% gross → ~0.6% NET
-                (0.025, 0.15, 'tp_exit_2.5pct'),   # Exit 15% at 2.5% gross → ~1.1% NET
-                (0.035, 0.25, 'tp_exit_3.5pct'),   # Exit 25% at 3.5% gross → ~2.1% NET
-                (0.050, 0.50, 'tp_exit_5.0pct'),   # Exit 50% at 5.0% gross → ~3.6% NET
+                (0.020, 0.20, 'tp_exit_2.0pct'),   # Exit 20% at 2.0% gross → ~0.6% NET (up from 10%)
+                (0.025, 0.25, 'tp_exit_2.5pct'),   # Exit 25% at 2.5% gross → ~1.1% NET (up from 15%)
+                (0.035, 0.30, 'tp_exit_3.5pct'),   # Exit 30% at 3.5% gross → ~2.1% NET (up from 25%)
+                (0.050, 0.35, 'tp_exit_5.0pct'),   # Exit 35% at 5.0% gross → ~3.6% NET (runner reduced, more captured early)
             ]
 
         for gross_threshold, exit_pct, exit_flag in exit_levels:
