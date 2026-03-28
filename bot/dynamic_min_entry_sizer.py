@@ -67,10 +67,10 @@ REFERENCE_FEE_PCT: float = 0.012
 # A position that drops by ATR% before the SL fires will be worth
 # position_size × (1 − atr_pct).  We apply a conservatism multiplier so that
 # even partial adverse moves (not a full ATR) raise the floor meaningfully.
-DEFAULT_VOL_MULT: float = 1.5
+DEFAULT_VOL_MULT: float = 1.2
 
-# Dust threshold in USD.  Aligns with auto_dust_sweeper.DEFAULT_DUST_THRESHOLD_USD.
-DEFAULT_DUST_THRESHOLD_USD: float = 5.0
+# Dust threshold in USD.  Lowered to 2.0 to allow micro-account trading.
+DEFAULT_DUST_THRESHOLD_USD: float = 2.0
 
 # Cap: the dynamic minimum cannot exceed this multiple of base_min_usd.
 # Prevents the sizer from blocking all entries in extreme vol environments.

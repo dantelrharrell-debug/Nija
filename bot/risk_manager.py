@@ -104,7 +104,9 @@ HARD_DAILY_LOSS_PCT = 3.0        # 3% daily loss → daily kill switch fires
 HARD_WEEKLY_HALF_PCT = 8.0       # 8% weekly loss → cut risk in half
 HARD_WEEKLY_STOP_PCT = 10.0      # 10% weekly loss → weekly kill switch fires
 HARD_MAX_LEVERAGE = 3.0          # 3x leverage cap — no 10x / 20x
-SAFETY_CLAMP_PCT = 0.25          # Hard ceiling: position_size ≤ 25% of account_balance
+SAFETY_CLAMP_PCT = 0.50          # Hard ceiling: position_size ≤ 50% of account_balance
+                                  # Raised from 25% → 50% to allow micro accounts to deploy
+                                  # meaningful capital per trade (env: SAFETY_CLAMP_PCT to override)
 
 # Safety guard: absolute maximum daily loss across all accounts
 MAX_DAILY_LOSS = 0.05            # 5% of portfolio — hard ceiling, triggers full trading halt
@@ -1000,7 +1002,7 @@ class AdaptiveRiskManager:
         # Calculate position size based on sizing_base (total capital in PRO MODE, free balance otherwise)
         position_size = sizing_base * final_pct
 
-        # SAFETY CLAMP: position_size must not exceed 25% of account_balance
+        # SAFETY CLAMP: position_size must not exceed 50% of account_balance
         safety_cap = account_balance * SAFETY_CLAMP_PCT
         if position_size > safety_cap:
             logger.info(
