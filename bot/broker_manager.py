@@ -5979,6 +5979,11 @@ class KrakenBroker(BaseBroker):
         self._kraken_rate_mode = None  # KrakenRateMode enum
         self._kraken_rate_profile = None  # Rate profile dict
 
+        # Instance-level product list cache (avoids repeated get_tradable_asset_pairs() calls)
+        self._kraken_products_cache: list = []
+        self._kraken_products_cache_time: float = 0.0
+        self._kraken_products_cache_ttl: float = 4 * 3600  # 4-hour TTL
+
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
@@ -7399,9 +7404,30 @@ class KrakenBroker(BaseBroker):
 
             # Fetch current price using Kraken Ticker API
             # Ticker is a public endpoint (no authentication needed)
-            # Suppress pykrakenapi's print() statements
-            with suppress_pykrakenapi_prints():
-                ticker_result = self.api.query_public('Ticker', {'pair': kraken_symbol})
+            # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
+            # Wrap in a 10-second thread timeout to prevent the position-analysis loop
+            # from hanging for hours when the Kraken connection is broken.
+            _ticker_result_holder = [None]
+            _ticker_err_holder    = [None]
+            def _fetch_ticker():
+                try:
+                    with suppress_pykrakenapi_prints():
+                        _ticker_result_holder[0] = self.api.query_public(
+                            'Ticker', {'pair': kraken_symbol}
+                        )
+                except Exception as _te:
+                    _ticker_err_holder[0] = _te
+            _ticker_thread = threading.Thread(target=_fetch_ticker, daemon=True)
+            _ticker_thread.start()
+            _ticker_thread.join(10)  # 10-second hard cap per price fetch
+            if _ticker_thread.is_alive():
+                logger.debug(
+                    f"⏱️  Ticker fetch for {symbol} timed out (10s) — returning None"
+                )
+                return None
+            if _ticker_err_holder[0] is not None:
+                raise _ticker_err_holder[0]
+            ticker_result = _ticker_result_holder[0]
 
             if ticker_result and 'result' in ticker_result:
                 ticker_data = ticker_result['result'].get(kraken_symbol, {})
@@ -8568,13 +8594,34 @@ class KrakenBroker(BaseBroker):
             kraken_interval = interval_map.get(timeframe.lower(), 5)
 
             # Fetch OHLC data using pykrakenapi
-            # Suppress pykrakenapi's print() statements
-            with suppress_pykrakenapi_prints():
-                ohlc, last = self.kraken_api.get_ohlc_data(
-                kraken_symbol,
-                interval=kraken_interval,
-                ascending=True
-            )
+            # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
+            # Wrap in a 15-second thread timeout so a broken connection never hangs the
+            # position-analysis loop for hours (root cause of 13,000s+ pre-scan times).
+            _ohlc_result_holder = [None]
+            _ohlc_err_holder    = [None]
+            _kraken_symbol_cap  = kraken_symbol
+            _kraken_interval_cap = kraken_interval
+            def _fetch_ohlc():
+                try:
+                    with suppress_pykrakenapi_prints():
+                        _ohlc_result_holder[0] = self.kraken_api.get_ohlc_data(
+                            _kraken_symbol_cap,
+                            interval=_kraken_interval_cap,
+                            ascending=True,
+                        )
+                except Exception as _oe:
+                    _ohlc_err_holder[0] = _oe
+            _ohlc_thread = threading.Thread(target=_fetch_ohlc, daemon=True)
+            _ohlc_thread.start()
+            _ohlc_thread.join(15)  # 15-second hard cap per candle fetch
+            if _ohlc_thread.is_alive():
+                logging.warning(
+                    f"⏱️  get_ohlc_data for {symbol} timed out (15s) — returning []"
+                )
+                return []
+            if _ohlc_err_holder[0] is not None:
+                raise _ohlc_err_holder[0]
+            ohlc, last = _ohlc_result_holder[0]
 
             # Convert to standard format (vectorised – avoids iterrows overhead)
             tail = ohlc.tail(count)
@@ -8617,6 +8664,22 @@ class KrakenBroker(BaseBroker):
         Returns:
             List of trading pairs in standard format (e.g., ['BTC-USD', 'ETH-USD', 'BTC-PERP', ...])
         """
+        # ── Instance-level product cache (4-hour TTL) ─────────────────────────
+        # Avoids repeated get_tradable_asset_pairs() + _initialize_kraken_market_data()
+        # calls within a session, which are the dominant source of pre-scan overhead.
+        _now = time.time()
+        if (
+            hasattr(self, '_kraken_products_cache')
+            and self._kraken_products_cache
+            and (_now - self._kraken_products_cache_time) < self._kraken_products_cache_ttl
+        ):
+            _cache_age_min = int((_now - self._kraken_products_cache_time) / 60)
+            logging.debug(
+                f"[KrakenProducts] Returning cached product list "
+                f"({len(self._kraken_products_cache)} pairs, age {_cache_age_min}m)"
+            )
+            return list(self._kraken_products_cache)
+
         try:
             if not self.kraken_api:
                 logging.warning("⚠️  Kraken not connected, cannot fetch products")
@@ -8636,10 +8699,31 @@ class KrakenBroker(BaseBroker):
             # This prevents "volume minimum not met" rejections by fetching actual pair minimums
             self._initialize_kraken_market_data()
 
-            # Get all tradable asset pairs (returns pandas DataFrame)
-            # Suppress pykrakenapi's print() statements
-            with suppress_pykrakenapi_prints():
-                asset_pairs = self.kraken_api.get_tradable_asset_pairs()
+            # Fetch tradable asset pairs with retry + exponential backoff
+            asset_pairs = None
+            _max_fetch_attempts = 3
+            _fetch_delay = 2.0
+            for _attempt in range(1, _max_fetch_attempts + 1):
+                try:
+                    with suppress_pykrakenapi_prints():
+                        asset_pairs = self.kraken_api.get_tradable_asset_pairs()
+                    break  # success — exit retry loop
+                except Exception as _fetch_err:
+                    if _attempt < _max_fetch_attempts:
+                        logging.warning(
+                            f"⚠️  Kraken get_tradable_asset_pairs attempt {_attempt}/{_max_fetch_attempts} "
+                            f"failed: {_fetch_err} — retrying in {_fetch_delay:.0f}s"
+                        )
+                        time.sleep(_fetch_delay)
+                        _fetch_delay = min(_fetch_delay * 2.0, 30.0)
+                    else:
+                        logging.warning(
+                            f"⚠️  Kraken get_tradable_asset_pairs failed after {_max_fetch_attempts} "
+                            f"attempts: {_fetch_err}"
+                        )
+
+            if asset_pairs is None:
+                raise RuntimeError("get_tradable_asset_pairs returned no data after retries")
 
             # Extract pairs that trade against USD or USDT
             symbols = []
@@ -8673,15 +8757,43 @@ class KrakenBroker(BaseBroker):
                         symbols.append(symbol)
 
             logging.info(f"📊 Kraken: Found {spot_count} spot pairs + {futures_count} futures pairs = {len(symbols)} total tradable USD/USDT pairs")
+
+            # Populate instance cache so subsequent calls within the TTL are instant
+            if symbols:
+                self._kraken_products_cache = list(symbols)
+                self._kraken_products_cache_time = time.time()
+
             return symbols
 
         except Exception as e:
             logging.warning(f"⚠️  Error fetching Kraken products: {e}")
-            # Return a fallback list of popular crypto pairs
+            # Return a comprehensive fallback list covering the most-liquid Kraken USD pairs.
+            # Intentionally larger (100 pairs) to give the bot meaningful coverage
+            # even when the API is temporarily unavailable.
             fallback_pairs = [
+                # Majors
                 'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'DOGE-USD',
-                'MATIC-USD', 'DOT-USD', 'LINK-USD', 'UNI-USD', 'AVAX-USD', 'ATOM-USD',
-                'LTC-USD', 'ALGO-USD', 'XLM-USD'
+                'DOT-USD', 'LINK-USD', 'AVAX-USD', 'ATOM-USD', 'LTC-USD', 'ALGO-USD',
+                'XLM-USD', 'UNI-USD', 'MATIC-USD',
+                # Mid-caps
+                'FIL-USD', 'AAVE-USD', 'COMP-USD', 'MKR-USD', 'SNX-USD', 'YFI-USD',
+                'SUSHI-USD', 'CRV-USD', '1INCH-USD', 'BAL-USD', 'REN-USD', 'KNC-USD',
+                'ZRX-USD', 'ENJ-USD', 'MANA-USD', 'SAND-USD', 'GRT-USD', 'LRC-USD',
+                'BAND-USD', 'BAT-USD', 'OGN-USD', 'OMG-USD', 'OCEAN-USD', 'ANKR-USD',
+                # Alt layer-1 / layer-2
+                'NEAR-USD', 'FLOW-USD', 'ICP-USD', 'VET-USD', 'EOS-USD', 'TRX-USD',
+                'XTZ-USD', 'THETA-USD', 'EGLD-USD', 'HBAR-USD', 'ONE-USD', 'KLAY-USD',
+                'CELO-USD', 'ZIL-USD', 'ICX-USD', 'ONT-USD', 'IOST-USD', 'QTUM-USD',
+                'NEO-USD', 'WAVES-USD', 'ZEC-USD', 'DASH-USD', 'XMR-USD', 'ETC-USD',
+                'BCH-USD',
+                # DeFi / newer
+                'APE-USD', 'APT-USD', 'ARB-USD', 'OP-USD', 'SUI-USD', 'INJ-USD',
+                'FTM-USD', 'ROSE-USD', 'RNDR-USD', 'IMX-USD', 'CHZ-USD', 'AXS-USD',
+                'GMT-USD', 'STX-USD', 'CFG-USD', 'KSM-USD', 'SCRT-USD', 'KAVA-USD',
+                'GLMR-USD', 'CTSI-USD', 'ALICE-USD',
+                # USDT variants of top pairs
+                'BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'XRP-USDT', 'ADA-USDT',
+                'AVAX-USDT', 'DOGE-USDT', 'DOT-USDT', 'MATIC-USDT', 'LINK-USDT',
             ]
             logging.info(f"📊 Kraken: Using fallback list of {len(fallback_pairs)} crypto pairs")
             return fallback_pairs

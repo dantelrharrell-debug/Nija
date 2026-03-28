@@ -5,7 +5,7 @@ Adjusts trading aggressiveness based on account size, idle state, and
 optimizer feedback so every dollar works at the right intensity level.
 
 Mode tiers (by account balance):
-  AGGRESSIVE_SMALL  (<$500)   -- min_score 2.5, top-70% ranking, max 4 positions
+  AGGRESSIVE_SMALL  (<$500)   -- min_score 2.0, top-75% ranking, max 4 positions
   BALANCED          (<$2000)  -- min_score 3.0, top-50% ranking, max 5 positions
   STANDARD          ($2000+)  -- min_score 3.0, top-40% ranking, max 7 positions
 
@@ -45,8 +45,8 @@ logger = logging.getLogger("nija.capital_efficiency_mode")
 # Thresholds (all overridable via subclass or direct attribute assignment)
 # ---------------------------------------------------------------------------
 
-IDLE_CYCLES_THRESHOLD: int   = 5     # cycles without a trade -> loosen
-IDLE_SCORE_DELTA: float      = 0.5   # subtract from min_score when idle
+IDLE_CYCLES_THRESHOLD: int   = 3     # cycles without a trade -> loosen (was 5)
+IDLE_SCORE_DELTA: float      = 0.7   # subtract from min_score when idle (was 0.5)
 IDLE_PERCENTILE_DELTA: float = 0.20  # subtract from pass_percentile when idle
 IDLE_CONFIDENCE_DELTA: float = 0.08  # add to confidence_delta when idle
 
@@ -75,8 +75,8 @@ class CapitalModeConfig:
 # Default mode configs
 _AGGRESSIVE_SMALL = CapitalModeConfig(
     mode="AGGRESSIVE_SMALL",
-    min_score=2.5,
-    pass_percentile=0.30,     # top 70% pass
+    min_score=2.0,            # was 2.5 — lowered so more setups qualify on small accounts
+    pass_percentile=0.25,     # top 75% pass (was 0.30 / top 70%)
     max_positions=4,
     min_size_usd=MIN_TRADE_SIZE_USD,
     confidence_delta=+0.05,   # loosen gate for small accounts
