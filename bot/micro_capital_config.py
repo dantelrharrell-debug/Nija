@@ -5,7 +5,7 @@ NIJA Micro Capital Mode Configuration
 Configuration for micro capital accounts ($15-$500) with:
 - Optimized for small capital fast-frequency trading (Pro-Level)
 - Dynamic position scaling based on equity
-- Kraken as PRIMARY broker (Coinbase disabled Jan 30, 2026)
+- Kraken as PRIMARY broker, Coinbase as SECONDARY broker
 - Advanced signal filtering and AI trade validation
 - Automatic feature enablement as capital grows
 
@@ -19,7 +19,7 @@ Optimized for:
 Author: NIJA Trading Systems
 Version: 2.1
 Date: January 30, 2026
-Updated: Kraken as exclusive primary broker (Coinbase disabled)
+Updated: Kraken as primary broker, Coinbase as secondary broker
 """
 
 import os
@@ -37,9 +37,9 @@ MICRO_CAPITAL_MODE = True
 # Trading mode configuration
 MODE = "PLATFORM_ONLY"  # Only platform account trades (no copy trading initially)
 
-# Broker configuration (UPDATED Jan 30, 2026: Coinbase disabled)
-PRIMARY_BROKER = "KRAKEN"  # Changed from COINBASE to KRAKEN
-SECONDARY_BROKER = None    # No secondary broker (Coinbase disabled)
+# Broker configuration
+PRIMARY_BROKER = "KRAKEN"
+SECONDARY_BROKER = "COINBASE"  # Both Kraken and Coinbase enabled
 
 # Live trading settings
 LIVE_TRADING = True
@@ -172,11 +172,11 @@ FORCE_CASH_BUFFER = 10.0  # Keep 10% of capital unallocated (was 15% — deploy 
 # EXCHANGE PRIORITY
 # ============================================================================
 
-EXCHANGE_PRIORITY = ["KRAKEN"]  # Only Kraken (Coinbase disabled Jan 30, 2026)
+EXCHANGE_PRIORITY = ["KRAKEN", "COINBASE"]  # Kraken primary, Coinbase secondary
 
 # Minimum balances per exchange
-MIN_BALANCE_KRAKEN = 10.0  # Lowered to match previous Coinbase minimum
-# MIN_BALANCE_COINBASE = 10.0  # Coinbase disabled
+MIN_BALANCE_KRAKEN = 10.0
+MIN_BALANCE_COINBASE = 10.0
 
 # ============================================================================
 # MICRO-CAP COMPOUNDING MODE (balance < $150)
@@ -647,7 +647,7 @@ MICRO_CAPITAL_CONFIG = {
     # Exchange settings
     'exchange_priority': EXCHANGE_PRIORITY,
     'min_balance_kraken': MIN_BALANCE_KRAKEN,
-    # 'min_balance_coinbase': MIN_BALANCE_COINBASE,  # Coinbase disabled
+    'min_balance_coinbase': MIN_BALANCE_COINBASE,
     
     # Logging
     'log_signal_rejections': LOG_SIGNAL_REJECTIONS,
@@ -755,7 +755,7 @@ def get_environment_variables(equity: Optional[float] = None) -> Dict[str, str]:
         
         'EXCHANGE_PRIORITY': ','.join(EXCHANGE_PRIORITY),
         'MIN_BALANCE_KRAKEN': str(MIN_BALANCE_KRAKEN),
-        # 'MIN_BALANCE_COINBASE': str(MIN_BALANCE_COINBASE),  # Coinbase disabled
+        'MIN_BALANCE_COINBASE': str(MIN_BALANCE_COINBASE),
         
         'LOG_SIGNAL_REJECTIONS': str(LOG_SIGNAL_REJECTIONS).lower(),
         'LOG_ENTRY_BLOCK_REASONS': str(LOG_ENTRY_BLOCK_REASONS).lower(),
@@ -848,7 +848,7 @@ def get_config_summary(equity: Optional[float] = None) -> str:
    • Mode: {MODE}
    • Micro Capital Mode: {MICRO_CAPITAL_MODE}
    • Primary Broker: {PRIMARY_BROKER}
-   • Secondary Broker: {SECONDARY_BROKER if SECONDARY_BROKER else 'None (Coinbase disabled)'}
+   • Secondary Broker: {SECONDARY_BROKER if SECONDARY_BROKER else 'None'}
    • Live Trading: {LIVE_TRADING}
    • PRO Mode: {PRO_MODE}
 

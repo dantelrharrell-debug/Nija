@@ -95,10 +95,9 @@ $PY --version 2>&1
 # Ensure Python version output is flushed
 sleep 0.05
 
-# Test Coinbase module (OPTIONAL - Coinbase is disabled, Jan 30, 2026)
-# Keeping this check for now in case user needs to re-enable Coinbase
-$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available (currently disabled)')" 2>&1 || {
-    echo "⚠️  Coinbase REST client not available (this is OK - Coinbase is disabled)"
+# Test Coinbase module (OPTIONAL - secondary broker)
+$PY -c "from coinbase.rest import RESTClient; print('✅ Coinbase REST client available')" 2>&1 || {
+    echo "⚠️  Coinbase REST client not available (this is OK - Coinbase is the secondary broker)"
 }
 
 # Ensure output is flushed
@@ -127,11 +126,11 @@ if [ -n "${KRAKEN_PLATFORM_API_KEY}" ] && [ -n "${KRAKEN_PLATFORM_API_SECRET}" ]
         exit_config_error
     }
 else
-    # CRITICAL: Kraken credentials are REQUIRED since Coinbase is disabled
+    # CRITICAL: Kraken credentials are REQUIRED as primary broker
     echo ""
     echo "❌ CRITICAL: Kraken Platform credentials are REQUIRED"
     echo ""
-    echo "Kraken is the primary broker (Coinbase is disabled)."
+    echo "Kraken is the primary broker."
     echo "You MUST configure Kraken credentials to use this bot."
     echo ""
     echo "🔧 SOLUTION:"
@@ -228,13 +227,12 @@ else
     echo "      ❌ Not configured (REQUIRED)"
 fi
 
-# Coinbase (DISABLED)
-echo "   📊 COINBASE (Master) - DISABLED:"
+# Coinbase - Platform (SECONDARY BROKER)
+echo "   📊 COINBASE (Platform) - SECONDARY BROKER:"
 if [ -n "${COINBASE_API_KEY}" ] && [ -n "${COINBASE_API_SECRET}" ]; then
-    echo "      ⚠️  Configured but DISABLED (Key: ${#COINBASE_API_KEY} chars, Secret: ${#COINBASE_API_SECRET} chars)"
-    echo "      ℹ️  Coinbase connection is disabled in trading_strategy.py"
+    echo "      ✅ Configured (Key: ${#COINBASE_API_KEY} chars, Secret: ${#COINBASE_API_SECRET} chars)"
 else
-    echo "      ❌ Not configured (Coinbase is disabled)"
+    echo "      ⚠️  Not configured (optional secondary broker)"
 fi
 
 # Kraken - User #1 (Daivon)
@@ -416,13 +414,12 @@ if is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}" && ! is_truthy "${DRY_RUN_MODE_VAL}"
     fi
 fi
 
-# Coinbase credentials are now OPTIONAL (Coinbase disabled Jan 30, 2026)
-# The bot will run with Kraken only
+# Kraken credentials are REQUIRED (primary broker); Coinbase credentials are OPTIONAL (secondary broker)
 if [ -z "${KRAKEN_PLATFORM_API_KEY}" ] || [ -z "${KRAKEN_PLATFORM_API_SECRET}" ]; then
     echo ""
     echo "⚠️  MISSING KRAKEN CREDENTIALS — LIVE MODE REQUIRES API KEY + SECRET"
     echo ""
-    echo "Kraken is the primary broker (Coinbase is disabled)."
+    echo "Kraken is the primary broker. Coinbase can be connected as a secondary broker."
     echo "Set these environment variables, then re-run:"
     echo "   export KRAKEN_PLATFORM_API_KEY='<your-api-key>'"
     echo "   export KRAKEN_PLATFORM_API_SECRET='<your-api-secret>'"
