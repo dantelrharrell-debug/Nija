@@ -13074,6 +13074,12 @@ class TradingStrategy:
                                             filter_stats['market_filter'] = (
                                                 filter_stats.get('market_filter', 0) + 1
                                             )
+                                            logger.info(
+                                                f"❌ Trade rejected: {symbol}\n"
+                                                f"   - Score: {entry_score} (PASS)\n"
+                                                f"   - Size: ${position_size:.2f}\n"
+                                                f"   - Reason: Net profit < fees — {_npg_reason}"
+                                            )
                                             continue
                                     except Exception as _npg_err:
                                         logger.debug(
