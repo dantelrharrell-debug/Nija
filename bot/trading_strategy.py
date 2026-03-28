@@ -1738,7 +1738,7 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
 # A 25s gate gives sufficient headroom while preventing a single hung call from
 # blocking the cycle for 45s.  Cached balance (max age: 90s) is used as an
 # immediate fallback when the live fetch times out.
-BALANCE_FETCH_TIMEOUT = 25  # Hard timeout for balance API call (increased from 12s for Kraken lag)
+BALANCE_FETCH_TIMEOUT = 30  # Hard timeout for balance API call (raised 25→30s for Kraken lag)
 CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness)
 
 # Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
@@ -1751,6 +1751,12 @@ MAX_CYCLE_SECONDS = 900  # Hard cap on total cycle duration (seconds; raised fro
 # This prevents pre-scan overhead (balance fetch, position management) from eating
 # into the scan budget and triggering 0-market cycles.
 MAX_SCAN_SECONDS = 120   # Max seconds allowed for the market scan loop itself
+# Hard cap on position-analysis time (the pre-scan phase).
+# pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected; even with the 15s
+# per-call thread timeout each position costs up to 15s.  With this guard, the
+# position loop will skip any remaining positions once the budget is exhausted
+# so the bot always reaches the market scan within a predictable window.
+PRE_SCAN_POSITION_BUDGET_SECONDS = 90  # Max seconds for the position-analysis loop
 
 # Market scanning rotation (prevents scanning same markets every cycle)
 # UPDATED (Mar 2026): Increased batch size targets for 50-200 markets per cycle.
@@ -7779,6 +7785,9 @@ class TradingStrategy:
 
             # ⏱️ Sub-step 2: Position update
             positions_start_time = time.time()
+            # Record when position analysis begins so the per-position budget guard
+            # can detect and skip remaining positions if the loop runs too long.
+            _pos_analysis_start_time = positions_start_time
 
             # CRITICAL FIX: Wrap position management in try-except to ensure it ALWAYS runs
             # Previous bug: Any exception in position fetching would skip ALL exit logic
@@ -7946,6 +7955,23 @@ class TradingStrategy:
                 # Position analysis loop (runs for both DRAIN and NORMAL modes)
                 if new_state in (PositionManagementState.DRAIN, PositionManagementState.NORMAL):
                     for idx, position in enumerate(current_positions):
+                        # ── PRE-SCAN POSITION BUDGET GUARD ────────────────────────────────
+                        # pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected; each
+                        # position can cost up to 15s (get_current_price) + 15s (get_candles).
+                        # If the budget is exhausted, skip remaining positions so the bot
+                        # always reaches the market scan within ~PRE_SCAN_POSITION_BUDGET_SECONDS.
+                        _pos_elapsed = time.time() - _pos_analysis_start_time
+                        if _pos_elapsed > PRE_SCAN_POSITION_BUDGET_SECONDS:
+                            _remaining = len(current_positions) - idx
+                            logger.warning(
+                                "⏱️  Position-analysis budget exhausted (%.1fs > %ds) — "
+                                "skipping remaining %d position(s) to protect cycle cadence",
+                                _pos_elapsed,
+                                PRE_SCAN_POSITION_BUDGET_SECONDS,
+                                _remaining,
+                            )
+                            break
+                        # ──────────────────────────────────────────────────────────────────
                         try:
                             symbol = position.get('symbol')
                             if not symbol:

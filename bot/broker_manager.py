@@ -7404,9 +7404,30 @@ class KrakenBroker(BaseBroker):
 
             # Fetch current price using Kraken Ticker API
             # Ticker is a public endpoint (no authentication needed)
-            # Suppress pykrakenapi's print() statements
-            with suppress_pykrakenapi_prints():
-                ticker_result = self.api.query_public('Ticker', {'pair': kraken_symbol})
+            # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
+            # Wrap in a 10-second thread timeout to prevent the position-analysis loop
+            # from hanging for hours when the Kraken connection is broken.
+            _ticker_result_holder = [None]
+            _ticker_err_holder    = [None]
+            def _fetch_ticker():
+                try:
+                    with suppress_pykrakenapi_prints():
+                        _ticker_result_holder[0] = self.api.query_public(
+                            'Ticker', {'pair': kraken_symbol}
+                        )
+                except Exception as _te:
+                    _ticker_err_holder[0] = _te
+            _ticker_thread = threading.Thread(target=_fetch_ticker, daemon=True)
+            _ticker_thread.start()
+            _ticker_thread.join(10)  # 10-second hard cap per price fetch
+            if _ticker_thread.is_alive():
+                logger.debug(
+                    f"⏱️  Ticker fetch for {symbol} timed out (10s) — returning None"
+                )
+                return None
+            if _ticker_err_holder[0] is not None:
+                raise _ticker_err_holder[0]
+            ticker_result = _ticker_result_holder[0]
 
             if ticker_result and 'result' in ticker_result:
                 ticker_data = ticker_result['result'].get(kraken_symbol, {})
@@ -8573,13 +8594,34 @@ class KrakenBroker(BaseBroker):
             kraken_interval = interval_map.get(timeframe.lower(), 5)
 
             # Fetch OHLC data using pykrakenapi
-            # Suppress pykrakenapi's print() statements
-            with suppress_pykrakenapi_prints():
-                ohlc, last = self.kraken_api.get_ohlc_data(
-                kraken_symbol,
-                interval=kraken_interval,
-                ascending=True
-            )
+            # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
+            # Wrap in a 15-second thread timeout so a broken connection never hangs the
+            # position-analysis loop for hours (root cause of 13,000s+ pre-scan times).
+            _ohlc_result_holder = [None]
+            _ohlc_err_holder    = [None]
+            _kraken_symbol_cap  = kraken_symbol
+            _kraken_interval_cap = kraken_interval
+            def _fetch_ohlc():
+                try:
+                    with suppress_pykrakenapi_prints():
+                        _ohlc_result_holder[0] = self.kraken_api.get_ohlc_data(
+                            _kraken_symbol_cap,
+                            interval=_kraken_interval_cap,
+                            ascending=True,
+                        )
+                except Exception as _oe:
+                    _ohlc_err_holder[0] = _oe
+            _ohlc_thread = threading.Thread(target=_fetch_ohlc, daemon=True)
+            _ohlc_thread.start()
+            _ohlc_thread.join(15)  # 15-second hard cap per candle fetch
+            if _ohlc_thread.is_alive():
+                logging.warning(
+                    f"⏱️  get_ohlc_data for {symbol} timed out (15s) — returning []"
+                )
+                return []
+            if _ohlc_err_holder[0] is not None:
+                raise _ohlc_err_holder[0]
+            ohlc, last = _ohlc_result_holder[0]
 
             # Convert to standard format (vectorised – avoids iterrows overhead)
             tail = ohlc.tail(count)
@@ -8622,12 +8664,10 @@ class KrakenBroker(BaseBroker):
         Returns:
             List of trading pairs in standard format (e.g., ['BTC-USD', 'ETH-USD', 'BTC-PERP', ...])
         """
-        import time as _time
-
         # ── Instance-level product cache (4-hour TTL) ─────────────────────────
         # Avoids repeated get_tradable_asset_pairs() + _initialize_kraken_market_data()
         # calls within a session, which are the dominant source of pre-scan overhead.
-        _now = _time.time()
+        _now = time.time()
         if (
             hasattr(self, '_kraken_products_cache')
             and self._kraken_products_cache
@@ -8674,7 +8714,7 @@ class KrakenBroker(BaseBroker):
                             f"⚠️  Kraken get_tradable_asset_pairs attempt {_attempt}/{_max_fetch_attempts} "
                             f"failed: {_fetch_err} — retrying in {_fetch_delay:.0f}s"
                         )
-                        _time.sleep(_fetch_delay)
+                        time.sleep(_fetch_delay)
                         _fetch_delay = min(_fetch_delay * 2.0, 30.0)
                     else:
                         logging.warning(
@@ -8721,7 +8761,7 @@ class KrakenBroker(BaseBroker):
             # Populate instance cache so subsequent calls within the TTL are instant
             if symbols:
                 self._kraken_products_cache = list(symbols)
-                self._kraken_products_cache_time = _time.time()
+                self._kraken_products_cache_time = time.time()
 
             return symbols
 

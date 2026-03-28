@@ -116,7 +116,7 @@ class RetryHandler:
                                 )
                                 logger.info(f"🔄 Retrying in {delay}s...")
                                 time.sleep(delay)
-                                delay = min(delay * self.backoff_factor, 30)  # Cap at 30s
+                                delay = min(delay * self.backoff_factor, 15)  # Cap at 15s (was 30s)
                                 continue
 
                         # Non-retryable or max attempts reached
@@ -280,4 +280,8 @@ class RetryHandler:
 
 
 # Global retry handler instance
-retry_handler = RetryHandler(max_attempts=5, base_delay=2.0, timeout=10, backoff_factor=2.5)
+# Tuned for Kraken RemoteDisconnected recovery:
+#   base_delay 2.0→1.0s  — first retry fires faster
+#   backoff_factor 2.5→2.0 — gentler ramp (1s→2s→4s→8s→16s)
+#   timeout 10→15s         — gives slow Kraken endpoints more headroom
+retry_handler = RetryHandler(max_attempts=5, base_delay=1.0, timeout=15, backoff_factor=2.0)
