@@ -35,16 +35,25 @@ INDICATORS = {
     'ema_fast': 9,
     'ema_medium': 21,
     'ema_slow': 50,
+    # Faster trend-following EMA pair (reduced from 20/50 for quicker response)
+    'trend_ema_fast': 10,
+    'trend_ema_slow': 30,
     'rsi_period': 14,
-    'rsi_bullish_min': 40,  # RSI bullish zone minimum
-    'rsi_bullish_max': 70,  # RSI bullish zone maximum
-    'rsi_bearish_min': 30,  # RSI bearish zone minimum
-    'rsi_bearish_max': 60,  # RSI bearish zone maximum
+    'rsi_bullish_min': 35,  # RSI bullish zone minimum (loosened from 40 for earlier entries)
+    'rsi_bullish_max': 65,  # RSI bullish zone maximum (loosened from 70 for mean reversion)
+    # Note: bearish_min/max define the RSI range acceptable for SHORT entries (avoids extremes).
+    # Both zones intentionally share the 35-65 band so neither longs nor shorts enter during
+    # deeply oversold (<35) or deeply overbought (>65) conditions, reducing reversal risk.
+    'rsi_bearish_min': 35,  # RSI bearish zone minimum (was 30; avoid deeply oversold shorts)
+    'rsi_bearish_max': 65,  # RSI bearish zone maximum (loosened from 60)
     'macd_fast': 12,
     'macd_slow': 26,
     'macd_signal': 9,
     'adx_period': 14,
     'atr_period': 14,
+    # Bollinger Bands: tighter std_dev for more frequent mean-reversion signals
+    'bb_period': 20,
+    'bb_std_dev': 1.5,      # Reduced from 2.0 for wider signal band
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -946,6 +955,13 @@ BROKER_CONFIG = {
     'order_type': 'market',  # 'market' or 'limit'
     'limit_order_offset_pct': 0.0005,  # 0.05% offset for limit orders
     'order_timeout_seconds': 30,  # Cancel order if not filled in 30s
+    # Market-order fallback: if a limit order is unfilled after this many seconds, switch to market
+    'limit_fallback_to_market': True,
+    'limit_fallback_timeout_seconds': 120,  # 2 minutes before market fallback
+    # Connection fallback: allow trading on last-known prices during brief disconnects
+    'allow_last_known_price_trading': True,
+    'last_known_price_max_age_seconds': 120,  # Prices older than 2 min are rejected
+    'last_known_price_position_size_pct': 0.5,  # Halve position size when using stale prices
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -953,11 +969,16 @@ BROKER_CONFIG = {
 # ═══════════════════════════════════════════════════════════════════
 
 TRADING_PAIRS = {
-    # Coinbase pairs
+    # Coinbase pairs — expanded for broader multi-pair mean-reversion coverage
     'coinbase': [
         'BTC-USD',
         'ETH-USD',
         'SOL-USD',
+        'MATIC-USD',
+        'ADA-USD',
+        'AVAX-USD',
+        'LINK-USD',
+        'DOT-USD',
     ],
 
     # Binance pairs (for future use)
@@ -992,6 +1013,27 @@ EXECUTION_CONFIG = {
     # Position Limits
     'max_positions': 8,  # 8 positions maximum (consistent with MAX_POSITIONS_ALLOWED)
     'max_positions_per_symbol': 1,  # One position per symbol
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# GRID / LIMIT ORDER CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════
+#
+# Widened grid range (from 0.5-1% to 1-1.5%) and more levels (10 → 15-20)
+# so that open limit orders fill even during fast market moves.
+
+GRID_CONFIG = {
+    'enabled': True,
+    # Price range on each side of mid-price for grid orders
+    'grid_range_pct': 0.015,           # 1.5% (up from 1.0%) for wider order placement
+    'grid_levels': 18,                 # 18 levels (up from 10) for denser coverage
+    'order_spacing_pct': 0.001,        # 0.1% between each grid level
+    # Market-order fallback: cancel limit orders unfilled after this timeout
+    'market_fallback_enabled': True,
+    'market_fallback_timeout_seconds': 300,  # 5 minutes (300 s) before switching to market orders
+    # Capital reserved for grid orders (% of free balance)
+    'capital_allocation_pct': 0.30,    # 30% of capital used for grid orders
+    'min_order_usd': 10.0,             # Minimum individual grid order size
 }
 
 # ═══════════════════════════════════════════════════════════════════
