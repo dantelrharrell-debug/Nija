@@ -67,6 +67,26 @@ MAX_ENTRIES_PER_CYCLE = 3
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
 MIN_SCORE_HARD_FLOOR = 25.0
 
+# After this many consecutive zero-signal cycles, the fallback entry logic fires:
+# the top-N candidates are forced through even if their quality is below the
+# normal threshold, so the account is never idle for too long.
+ZERO_SIGNAL_STREAK_THRESHOLD = 5
+
+# Points added to a candidate's composite_score when the fallback entry is active.
+# 20 points on a 0–100 scale corresponds to the +0.20 confidence boost described
+# in the NIJA Profit Mode specification.
+FALLBACK_SCORE_BOOST: float = 20.0
+
+# Attempt to import TOP_N from sniper_filter at module load time.
+# Fallback to 2 when the module is unavailable.
+try:
+    from sniper_filter import TOP_N as _SNIPER_TOP_N_DEFAULT
+except ImportError:
+    try:
+        from bot.sniper_filter import TOP_N as _SNIPER_TOP_N_DEFAULT
+    except ImportError:
+        _SNIPER_TOP_N_DEFAULT = 2
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -107,6 +127,10 @@ class NijaCoreLoop:
 
         # Lazy AI engine reference
         self._ai_engine = None
+
+        # Consecutive cycles where Phase 3 produced zero entries (used by
+        # the fallback entry mechanism — see ZERO_SIGNAL_STREAK_THRESHOLD).
+        self._zero_signal_streak: int = 0
 
         logger.info(
             "✅ NijaCoreLoop initialized (max_positions=%d, max_entries_per_cycle=%d)",
@@ -188,10 +212,24 @@ class NijaCoreLoop:
                     balance=balance,
                     symbols=symbols,
                     available_slots=available_slots,
+                    zero_signal_streak=self._zero_signal_streak,
                 )
                 result.entries_taken = entries
                 result.entries_blocked = blocked
                 result.symbols_scored = scored
+
+                # Update the zero-signal streak counter for the next cycle
+                if entries > 0:
+                    self._zero_signal_streak = 0
+                else:
+                    self._zero_signal_streak += 1
+                    if self._zero_signal_streak >= ZERO_SIGNAL_STREAK_THRESHOLD:
+                        logger.warning(
+                            "⚡ Core loop: zero-signal streak=%d (threshold=%d) — "
+                            "fallback entry will activate next cycle if streak persists",
+                            self._zero_signal_streak,
+                            ZERO_SIGNAL_STREAK_THRESHOLD,
+                        )
             else:
                 logger.info(
                     "🔒 Core loop: position cap reached (%d/%d) — skipping entries",
@@ -318,9 +356,15 @@ class NijaCoreLoop:
         balance: float,
         symbols: List[str],
         available_slots: int,
+        zero_signal_streak: int = 0,
     ) -> Tuple[int, int, int]:
         """
         Score all candidate symbols, rank them, execute top-N.
+
+        When ``zero_signal_streak`` has reached ``ZERO_SIGNAL_STREAK_THRESHOLD``,
+        a forced entry (fallback) activates: the top-N candidates receive a
+        +0.20 confidence boost and have the low-quality bypass flag set so
+        they can cross the entry threshold even in low-signal conditions.
 
         Returns (entries_taken, entries_blocked, symbols_scored).
         """
@@ -429,6 +473,23 @@ class NijaCoreLoop:
             else candidates[:available_slots]
         )
 
+        # ── Fallback entry: activate after too many zero-signal cycles ─────────
+        # When the zero-signal streak has reached the threshold, boost the top-N
+        # candidates and mark them so downstream gates treat them as forced entries.
+        fallback_active = zero_signal_streak >= ZERO_SIGNAL_STREAK_THRESHOLD
+        if fallback_active:
+            logger.warning(
+                "⚡ FALLBACK ENTRY ACTIVE (zero_streak=%d >= threshold=%d) — "
+                "boosting top-%d candidates by +%.0f pts",
+                zero_signal_streak, ZERO_SIGNAL_STREAK_THRESHOLD,
+                _SNIPER_TOP_N_DEFAULT, FALLBACK_SCORE_BOOST,
+            )
+            selected = selected[:_SNIPER_TOP_N_DEFAULT]
+            for sig in selected:
+                sig.composite_score += FALLBACK_SCORE_BOOST
+                sig.metadata["bypass_low_quality"] = True
+                sig.metadata["fallback_streak"] = zero_signal_streak
+
         # ── Execute selected entries ──────────────────────────────────────
         entries = 0
         for sig in selected:
@@ -442,6 +503,24 @@ class NijaCoreLoop:
                 # Re-run full apex.analyze_market (handles SL/TP/sizing etc.)
                 analysis = self.apex.analyze_market(df, sig.symbol, balance)
                 action = analysis.get("action", "hold")
+
+                # When fallback is active, force the action to enter if the
+                # signal side is known — the streak means we need a trade.
+                if fallback_active and action not in ("enter_long", "enter_short"):
+                    if sig.side in ("long", "buy", "enter_long"):
+                        action = "enter_long"
+                    elif sig.side in ("short", "sell", "enter_short"):
+                        action = "enter_short"
+                    else:
+                        # Unknown side — log and skip rather than guess direction
+                        logger.warning(
+                            "⚡ Fallback entry: unknown side '%s' for %s — skipping",
+                            sig.side, sig.symbol,
+                        )
+                        blocked += 1
+                        continue
+                    analysis["action"] = action
+                    analysis["reason"] = analysis.get("reason", "") + " [fallback_entry]"
 
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
@@ -461,9 +540,10 @@ class NijaCoreLoop:
                 if success:
                     entries += 1
                     logger.info(
-                        "   ✅ Core loop entry: %s %s score=%.1f mult=×%.2f",
+                        "   ✅ Core loop entry: %s %s score=%.1f mult=×%.2f%s",
                         sig.symbol, sig.side.upper(),
                         sig.composite_score, sig.position_multiplier,
+                        " [FALLBACK]" if fallback_active else "",
                     )
                 else:
                     blocked += 1

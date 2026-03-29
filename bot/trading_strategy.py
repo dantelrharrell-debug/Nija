@@ -1799,12 +1799,14 @@ PRE_SCAN_POSITION_BUDGET_SECONDS = 90  # Max seconds for the position-analysis l
 # The warmup mechanism still exists (MARKET_BATCH_WARMUP_CYCLES=1) but now starts
 # at a much higher baseline (50) so the bot reaches full scan speed immediately.
 MARKET_BATCH_SIZE_MIN = 50   # Minimum markets to scan per cycle (raised from 10→50)
-MARKET_BATCH_SIZE_MAX = 150  # Maximum markets to scan per cycle (raised 100→150 for small-cap coverage)
+MARKET_BATCH_SIZE_MAX = 50   # Maximum markets to scan per cycle (reduced 150→50 for faster rotations)
+                             # Both MIN and MAX set to 50 to enforce a fixed batch size and
+                             # keep cycle times at 8–10 min for micro-cap accounts.
 MARKET_BATCH_WARMUP_CYCLES = 1  # Minimal warmup: full speed after 1 cycle (lowered from 3→1)
-# For micro accounts (balance < $100), scan a larger batch to compensate for tighter
-# position sizing — more opportunities evaluated per cycle increases trade frequency.
+# For micro accounts (balance < $100), scan a targeted batch to keep rotation fast
+# and market conditions fresh — smaller scans enable 8–10 min cycles.
 MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD = 100.0  # USD: below this balance use boosted scan size
-MICRO_ACCOUNT_SCAN_SIZE = 150              # Markets to scan per cycle for micro accounts (raised 100→150)
+MICRO_ACCOUNT_SCAN_SIZE = 50               # Markets to scan per cycle for micro accounts (reduced 150→50)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # ── FIRST TRADE BOOST ──────────────────────────────────────────────────────
