@@ -303,6 +303,41 @@ except ImportError:
         DRAWDOWN_RISK_CONTROLLER_AVAILABLE = False
         logger.warning("⚠️ Drawdown Risk Controller not available — basic drawdown logic only")
 
+# ── Nija AI Engine — unified rank-first entry coordinator ────────────────────
+# Aggregates EnhancedEntryScorer + EntryOptimizer + AIEntryGate into one call,
+# ranks all candidate symbols, and returns top-N with adaptive thresholds.
+try:
+    from bot.nija_ai_engine import get_nija_ai_engine, NijaAIEngine, AIEngineSignal
+    NIJA_AI_ENGINE_AVAILABLE = True
+    logger.info("✅ Nija AI Engine loaded — rank-first adaptive entry coordinator active")
+except ImportError:
+    try:
+        from nija_ai_engine import get_nija_ai_engine, NijaAIEngine, AIEngineSignal
+        NIJA_AI_ENGINE_AVAILABLE = True
+        logger.info("✅ Nija AI Engine loaded — rank-first adaptive entry coordinator active")
+    except ImportError:
+        get_nija_ai_engine = None  # type: ignore
+        NijaAIEngine = None  # type: ignore
+        AIEngineSignal = None  # type: ignore
+        NIJA_AI_ENGINE_AVAILABLE = False
+        logger.warning("⚠️ Nija AI Engine not available — falling back to sequential gate logic")
+
+# ── Nija Core Loop — rebuilt single-pass scan / rank / enter loop ─────────────
+try:
+    from bot.nija_core_loop import get_nija_core_loop, NijaCoreLoop
+    NIJA_CORE_LOOP_AVAILABLE = True
+    logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
+except ImportError:
+    try:
+        from nija_core_loop import get_nija_core_loop, NijaCoreLoop
+        NIJA_CORE_LOOP_AVAILABLE = True
+        logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
+    except ImportError:
+        get_nija_core_loop = None  # type: ignore
+        NijaCoreLoop = None  # type: ignore
+        NIJA_CORE_LOOP_AVAILABLE = False
+        logger.warning("⚠️ Nija Core Loop not available — using legacy run_cycle dispatch")
+
 
 class NIJAApexStrategyV71:
     """
@@ -391,6 +426,13 @@ class NIJAApexStrategyV71:
             logger.info("✅ Entry optimizer enabled (RSI divergence + BB zone + volume pattern)")
         else:
             self.entry_optimizer = None
+
+        # Nija AI Engine: unified rank-first adaptive entry coordinator
+        if NIJA_AI_ENGINE_AVAILABLE and get_nija_ai_engine is not None:
+            self.nija_ai_engine = get_nija_ai_engine()
+            logger.info("✅ Nija AI Engine enabled — rank-first adaptive scoring active")
+        else:
+            self.nija_ai_engine = None
 
         # Strategy parameters - OPTIMIZED FOR HIGH WIN RATE
         # OPTIMIZATION (Jan 29, 2026): Rebalance filters for quality trades
@@ -1566,73 +1608,127 @@ class NIJAApexStrategyV71:
     def check_entry_with_enhanced_scoring(self, df: pd.DataFrame, indicators: Dict,
                                          side: str, account_balance: float) -> Tuple[bool, float, str, Dict]:
         """
-        Check entry conditions using enhanced scoring system
+        Check entry conditions using the unified Nija AI Engine.
 
-        This method combines:
-        - Legacy 5-point entry logic (for backward compatibility)
-        - Enhanced 0-100 weighted scoring system
-        - Market regime detection and adaptive thresholds
+        Route:
+            1. NijaAIEngine.evaluate_symbol()  (rank-first, adaptive threshold)
+               → composite score 0-100 + position multiplier
+            2. Legacy 5-point check (always run for backward-compat metadata)
+            3. Regime detection (kept for position sizing / SL/TP downstream)
 
-        Args:
-            df: Price DataFrame
-            indicators: Dictionary of calculated indicators
-            side: 'long' or 'short'
-            account_balance: Current account balance
+        Decision rule (priority order):
+            a. If NijaAIEngine available → use composite score + adaptive threshold
+            b. If only EnhancedEntryScorer available → legacy enhanced path
+            c. Fallback → legacy 5-point check only
 
         Returns:
-            Tuple of (should_enter, score, reason, metadata)
+            (should_enter, score, reason, metadata)
         """
-        # Get legacy score first (0-5 points)
-        if side == 'long':
+        # ── Always run legacy check (needed for metadata + fallback) ──────
+        if side == "long":
             legacy_signal, legacy_score, legacy_reason = self.check_long_entry(df, indicators)
         else:
             legacy_signal, legacy_score, legacy_reason = self.check_short_entry(df, indicators)
 
-        # If enhanced scoring not available, use legacy only
+        # ── Regime detection ───────────────────────────────────────────────
+        regime = self.current_regime
+        regime_metrics: Dict = {}
+        regime_params: Dict = {}
+        if self.use_enhanced_scoring and self.regime_detector is not None:
+            try:
+                regime, regime_metrics = self.regime_detector.detect_regime(df, indicators)
+                self.current_regime = regime
+                regime_params = self.regime_detector.get_regime_parameters(regime)
+            except Exception as _rd_err:
+                logger.debug("Regime detection error: %s", _rd_err)
+
+        # ── Fallback: no enhanced scoring available ────────────────────────
         if not self.use_enhanced_scoring:
-            return legacy_signal, legacy_score, legacy_reason, {'legacy_score': legacy_score}
+            return legacy_signal, float(legacy_score), legacy_reason, {"legacy_score": legacy_score}
 
-        # Calculate enhanced score (0-100)
-        enhanced_score, score_breakdown = self.entry_scorer.calculate_entry_score(df, indicators, side)
+        # ── Path A: Nija AI Engine (primary) ──────────────────────────────
+        if self.nija_ai_engine is not None:
+            broker_name = self._get_broker_name() if hasattr(self, "_get_broker_name") else "coinbase"
+            entry_type = self._get_entry_type_for_regime(regime) if hasattr(self, "_get_entry_type_for_regime") else "swing"
 
-        # Detect market regime
-        regime, regime_metrics = self.regime_detector.detect_regime(df, indicators)
-        self.current_regime = regime
+            try:
+                ai_signal = self.nija_ai_engine.evaluate_symbol(
+                    df=df,
+                    indicators=indicators,
+                    side=side,
+                    regime=regime,
+                    broker=broker_name,
+                    entry_type=entry_type,
+                    symbol=getattr(self, "_current_symbol", "UNKNOWN"),
+                )
 
-        # Get regime-specific parameters
-        regime_params = self.regime_detector.get_regime_parameters(regime)
+                if ai_signal is not None:
+                    composite = ai_signal.composite_score
+                    should_enter = composite >= ai_signal.threshold_used
+                    regime_str = regime.value if hasattr(regime, "value") else str(regime)
+                    reason = (
+                        f"{side.upper()} | AI composite={composite:.1f}/100 "
+                        f"({ai_signal.metadata.get('score_breakdown', {}).get('quality', '?')}) | "
+                        f"mult=×{ai_signal.position_multiplier:.2f} | "
+                        f"Regime:{regime_str} | Legacy:{legacy_score}/5 | "
+                        f"gate={'✅' if ai_signal.metadata.get('gate_passed', True) else '⚠️'}"
+                    )
+                    metadata = {
+                        "legacy_score": legacy_score,
+                        "enhanced_score": composite,
+                        "composite_score": composite,
+                        "position_multiplier": ai_signal.position_multiplier,
+                        "entry_type": ai_signal.entry_type,
+                        "score_breakdown": ai_signal.metadata.get("score_breakdown", {}),
+                        "regime": regime_str,
+                        "regime_confidence": regime_metrics.get("confidence", 0.5),
+                        "regime_params": regime_params,
+                        "should_enter_legacy": legacy_signal,
+                        "should_enter_enhanced": should_enter,
+                        "combined_decision": should_enter,
+                        "ai_engine_used": True,
+                    }
+                    if should_enter:
+                        logger.info("  ✅ %s", reason)
+                    else:
+                        logger.debug("  ❌ %s", reason)
+                    return should_enter, composite, reason, metadata
 
-        # Adjust score threshold based on regime
+            except Exception as _ae_err:
+                logger.debug("NijaAIEngine.evaluate_symbol error: %s", _ae_err)
+
+        # ── Path B: EnhancedEntryScorer only (fallback) ───────────────────
+        try:
+            enhanced_score, score_breakdown = self.entry_scorer.calculate_entry_score(df, indicators, side)
+        except Exception as _es_err:
+            logger.debug("EnhancedEntryScorer error: %s", _es_err)
+            enhanced_score, score_breakdown = 50.0, {"quality": "Fair"}
+
         should_enter_enhanced = self.entry_scorer.should_enter_trade(enhanced_score)
-
-        # Combined decision: Both legacy and enhanced must agree
         should_enter = legacy_signal and should_enter_enhanced
 
-        # Build comprehensive reason
-        reason = f"{side.upper()} | Regime:{regime.value} | Legacy:{legacy_score}/5 | Enhanced:{enhanced_score:.1f}/100 | {score_breakdown['quality']}"
-
-        # Metadata for logging and analysis
+        regime_str = regime.value if hasattr(regime, "value") else str(regime or "")
+        reason = (
+            f"{side.upper()} | Regime:{regime_str} | Legacy:{legacy_score}/5 | "
+            f"Enhanced:{enhanced_score:.1f}/100 | {score_breakdown.get('quality', '?')}"
+        )
         metadata = {
-            'legacy_score': legacy_score,
-            'enhanced_score': enhanced_score,
-            'score_breakdown': score_breakdown,
-            'regime': regime.value,
-            'regime_confidence': regime_metrics['confidence'],
-            'regime_params': regime_params,
-            'should_enter_legacy': legacy_signal,
-            'should_enter_enhanced': should_enter_enhanced,
-            'combined_decision': should_enter
+            "legacy_score": legacy_score,
+            "enhanced_score": enhanced_score,
+            "score_breakdown": score_breakdown,
+            "regime": regime_str,
+            "regime_confidence": regime_metrics.get("confidence", 0.5),
+            "regime_params": regime_params,
+            "should_enter_legacy": legacy_signal,
+            "should_enter_enhanced": should_enter_enhanced,
+            "combined_decision": should_enter,
+            "ai_engine_used": False,
         }
 
         if should_enter:
-            logger.info(f"  ✅ {reason}")
-            logger.info(f"     Trend:{score_breakdown['trend_strength']:.1f} "
-                       f"Momentum:{score_breakdown['momentum']:.1f} "
-                       f"Price:{score_breakdown['price_action']:.1f} "
-                       f"Volume:{score_breakdown['volume']:.1f} "
-                       f"Structure:{score_breakdown['market_structure']:.1f}")
+            logger.info("  ✅ %s", reason)
         else:
-            logger.debug(f"  ❌ {reason}")
+            logger.debug("  ❌ %s", reason)
 
         return should_enter, enhanced_score, reason, metadata
 
@@ -1801,6 +1897,7 @@ class NIJAApexStrategyV71:
             'ema_21': calculate_ema(df, 21),
             'ema_50': calculate_ema(df, 50),
             'rsi': calculate_rsi(df, 14),
+            'rsi_9': calculate_rsi(df, 9),   # short-term momentum pulse for dual-RSI scoring
         }
 
         macd_line, signal_line, histogram = calculate_macd(df)
