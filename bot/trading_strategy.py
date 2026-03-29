@@ -720,18 +720,24 @@ except ImportError:
 
 # ── Sniper Filter — final pre-execution quality gate ─────────────────────────
 try:
-    from sniper_filter import get_sniper_filter
+    from sniper_filter import get_sniper_filter, SNIPER_BORDERLINE_POSITION_MULTIPLIER
     SNIPER_FILTER_AVAILABLE = True
-    logger.info("✅ Sniper Filter loaded — final pre-execution quality gate active")
+    logger.info("✅ Sniper Filter loaded — Tiered Pass System + weighted risk scaling active")
 except ImportError:
     try:
-        from bot.sniper_filter import get_sniper_filter
+        from bot.sniper_filter import get_sniper_filter, SNIPER_BORDERLINE_POSITION_MULTIPLIER  # type: ignore
         SNIPER_FILTER_AVAILABLE = True
-        logger.info("✅ Sniper Filter loaded — final pre-execution quality gate active")
+        logger.info("✅ Sniper Filter loaded — Tiered Pass System + weighted risk scaling active")
     except ImportError:
         SNIPER_FILTER_AVAILABLE = False
         get_sniper_filter = None  # type: ignore
+        SNIPER_BORDERLINE_POSITION_MULTIPLIER: float = 0.5  # fallback if module absent
         logger.warning("⚠️ Sniper Filter not available — entry quality gate disabled")
+
+# Scalp regime adjustments applied inside the scan loop when regime is
+# CONSOLIDATION or RANGING.  Centralised here for easy tuning.
+SCALP_REGIME_CONFIDENCE_BOOST: float = 0.30  # added to _sf_confidence in scalp regimes
+SCALP_REGIME_COOLDOWN_MULTIPLIER: float = 0.50  # re-entry cooldown × this factor
 
 # ── Auto-Tuning AI Layer — win/loss streak threshold self-adjuster ────────────
 try:
@@ -1182,11 +1188,11 @@ except ImportError:
     except ImportError:
         MICRO_CAP_COMPOUNDING_AVAILABLE = False
         MICRO_CAP_TRADE_COOLDOWN = 300  # Default: 5 minutes (matches config constant)
-        MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1
+        MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 3  # Default: 3 positions for frequency + compounding
         MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 95.0   # 95% — aggressive micro-compounding mode (balance < $150)
         MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5
         MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5
-        MAX_CONCURRENT_TRADES = 1  # Default: single-position micro mode
+        MAX_CONCURRENT_TRADES = 3  # Default: 3-position mode for frequency + compounding
         logger.warning("⚠️ Micro-Cap Compounding Config not available - micro-cap mode disabled")
         get_micro_cap_compounding_config = None  # type: ignore
 
@@ -11053,6 +11059,29 @@ class TradingStrategy:
                                         _sf_bid = _sf_close * (1.0 - _sf_spread / 2.0)
                                         _sf_ask = _sf_close * (1.0 + _sf_spread / 2.0)
 
+                                        # ── SCALP MODE CONFIDENCE BOOST (CONSOLIDATION/RANGING) ──
+                                        # In CONSOLIDATION or RANGING regimes, raise the effective
+                                        # confidence so the tier gate moves up a tier (e.g. SCALP →
+                                        # STANDARD), unlocking quieter but valid setups.
+                                        try:
+                                            _scalp_mode_regime_str = ""
+                                            if _regime_result and hasattr(_regime_result, 'regime'):
+                                                _scalp_mode_regime_str = str(_regime_result.regime).lower()
+                                            elif analysis.get('regime'):
+                                                _scalp_mode_regime_str = str(analysis['regime']).lower()
+                                            if any(r in _scalp_mode_regime_str for r in ("consolidation", "ranging")):
+                                                _sf_conf_pre_scalp = _sf_confidence
+                                                _sf_confidence = min(1.0, _sf_confidence + SCALP_REGIME_CONFIDENCE_BOOST)
+                                                logger.debug(
+                                                    "   ⚡ SCALP REGIME [%s][%s]: conf "
+                                                    "%.2f→%.2f (+%.2f min_score relaxed)",
+                                                    _scalp_mode_regime_str, symbol,
+                                                    _sf_conf_pre_scalp, _sf_confidence,
+                                                    SCALP_REGIME_CONFIDENCE_BOOST,
+                                                )
+                                        except Exception:
+                                            pass
+
                                         # Use dynamic sniper thresholds when available
                                         _dyn_sniper = (
                                             getattr(self, 'dynamic_sniper_thresholds', None)
@@ -11104,6 +11133,17 @@ class TradingStrategy:
                                             }
                                             filter_stats['sniper_filter'] = (
                                                 filter_stats.get('sniper_filter', 0) + 1
+                                            )
+                                        elif getattr(_sf_result, 'reduced_size', False):
+                                            # Tier passed but weighted score < threshold: scale risk down
+                                            _sf_pre_size = position_size
+                                            position_size = position_size * SNIPER_BORDERLINE_POSITION_MULTIPLIER
+                                            logger.info(
+                                                "   🎯⚡ SNIPER FILTER reduced-size %s: "
+                                                "$%.2f → $%.2f (x%.2f) | %s",
+                                                symbol, _sf_pre_size, position_size,
+                                                SNIPER_BORDERLINE_POSITION_MULTIPLIER,
+                                                _sf_result.reason,
                                             )
                                     except Exception as _sf_exc:
                                         logger.debug(
@@ -11559,15 +11599,41 @@ class TradingStrategy:
                                 #   → risk engine → trade execution
                                 # ═══════════════════════════════════════════════════════
                                 if _micro_cap_config:
-                                    # 1. Re-entry cooldown: enforce MICRO_CAP_TRADE_COOLDOWN
+                                    # ── SCALP MODE AGGRESSIVENESS (CONSOLIDATION / RANGING) ──
+                                    # In consolidation/ranging regimes, most consistent scalp
+                                    # profits occur. Halve the re-entry cooldown and reduce the
+                                    # effective min-score gate to increase trade frequency.
+                                    _effective_cooldown = MICRO_CAP_TRADE_COOLDOWN
+                                    _scalp_regime_str = ""
+                                    try:
+                                        if _regime_result and hasattr(_regime_result, 'regime'):
+                                            _scalp_regime_str = str(_regime_result.regime).lower()
+                                        elif analysis.get('regime'):
+                                            _scalp_regime_str = str(analysis['regime']).lower()
+                                    except Exception:
+                                        pass
+                                    _in_scalp_regime = any(
+                                        r in _scalp_regime_str
+                                        for r in ("consolidation", "ranging")
+                                    )
+                                    if _in_scalp_regime:
+                                        _effective_cooldown = MICRO_CAP_TRADE_COOLDOWN * SCALP_REGIME_COOLDOWN_MULTIPLIER
+                                        logger.debug(
+                                            "   ⚡ SCALP REGIME [%s][%s]: cooldown %.0f → %.0fs (x%.2f)",
+                                            _scalp_regime_str, symbol,
+                                            MICRO_CAP_TRADE_COOLDOWN, _effective_cooldown,
+                                            SCALP_REGIME_COOLDOWN_MULTIPLIER,
+                                        )
+
+                                    # 1. Re-entry cooldown: enforce effective cooldown
                                     _last_trade_ts = self._micro_cap_last_trade_times.get(symbol, 0.0)
                                     if _last_trade_ts > 0:
                                         _elapsed_since_trade = time.time() - _last_trade_ts
-                                        if _elapsed_since_trade < MICRO_CAP_TRADE_COOLDOWN:
-                                            _remaining = MICRO_CAP_TRADE_COOLDOWN - _elapsed_since_trade
+                                        if _elapsed_since_trade < _effective_cooldown:
+                                            _remaining = _effective_cooldown - _elapsed_since_trade
                                             logger.info(
                                                 f"   ⏳ {symbol}: Micro-cap re-entry cooldown active "
-                                                f"({_remaining:.0f}s remaining, cooldown={MICRO_CAP_TRADE_COOLDOWN}s)"
+                                                f"({_remaining:.0f}s remaining, cooldown={int(_effective_cooldown)}s)"
                                             )
                                             filter_stats['market_filter'] += 1
                                             continue

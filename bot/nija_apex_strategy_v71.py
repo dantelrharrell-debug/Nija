@@ -84,6 +84,14 @@ _DEFAULT_MIN_ORDER_USD = 10.0  # Conservative fallback for any unlisted broker
 MIN_CONFIDENCE = 0.60  # Profit-tuned: lower bar catches more trades while preserving edge (was 0.75)
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
+# Volume gate for entry confirmation in check_long/short_entry.
+# Widened from 0.6x to 0.4x to unlock quieter markets (where most scalps occur).
+ENTRY_VOLUME_MIN_MULTIPLIER: float = 0.4
+
+# Borderline ATR multiplier: ATR between (BORDERLINE_ATR_FLOOR × min_atr) and min_atr
+# is treated as borderline volatility — allowed with reduced position size.
+BORDERLINE_ATR_FLOOR: float = 0.5  # 50 % of minimum → borderline zone
+
 # Import adaptive minimum sizing engine (Mar 2026)
 try:
     from adaptive_minimum_sizing import get_adaptive_minimum_sizer, AdaptiveMinimumSizer
@@ -430,8 +438,8 @@ class NIJAApexStrategyV71:
         if self.use_enhanced_scoring:
             logger.info("✅ Enhanced entry scoring: ENABLED (0-100 weighted scoring)")
             logger.info("✅ Regime detection: ENABLED (trending/ranging/volatile)")
-            min_score = self.config.get('min_score_threshold', 60)  # TUNED: Lowered from 70 to 60 for more frequent entries
-            logger.info(f"✅ Minimum entry score: {min_score}/100 (quality threshold targeting 65-70%+ win rate)")
+            min_score = self.config.get('min_score_threshold', 40)  # TUNED: Relaxed from 60 to 40 for higher signal frequency (range 40-75)
+            logger.info(f"✅ Minimum entry score: {min_score}/100 (relaxed threshold — more signals, 40-75 range)")
         if self.enable_stepped_exits:
             logger.info("✅ Stepped profit-taking: ENABLED (aggressive partial exits)")
             logger.info(f"   Exit levels: {len(self.stepped_exit_levels)} profit targets (2.5%, 3.0%, 4.0%, 6.5%)")
@@ -839,13 +847,24 @@ class NIJAApexStrategyV71:
                 failures.append(f'RSI {rsi:.1f} outside safe range {rsi_min}-{rsi_max} (avoiding extremes)')
         
         # 2. Volatility (ATR) Check
-        # Ensure sufficient volatility for profitable trading
+        # Ensure sufficient volatility for profitable trading.
+        # Borderline volatility (0.25%–0.5%) is allowed with a reduced position size
+        # instead of hard-blocking: trade smaller rather than reject.
         atr_pct = (atr / current_price) * 100 if current_price > 0 else 0
         min_atr_pct = general_min_atr_pct
+        borderline_min_atr_pct = min_atr_pct * BORDERLINE_ATR_FLOOR  # floor for borderline zone
         atr_valid = atr_pct >= min_atr_pct
-        checks['volatility'] = {'atr_pct': atr_pct, 'min_required': min_atr_pct, 'valid': atr_valid}
-        if not atr_valid:
-            failures.append(f'Volatility too low: ATR {atr_pct:.2f}% < {min_atr_pct}% minimum')
+        borderline_volatility = (not atr_valid) and (atr_pct >= borderline_min_atr_pct)
+        allow_with_reduced_size = borderline_volatility
+        checks['volatility'] = {
+            'atr_pct': atr_pct,
+            'min_required': min_atr_pct,
+            'valid': atr_valid,
+            'borderline': borderline_volatility,
+            'allow_with_reduced_size': allow_with_reduced_size,
+        }
+        if not atr_valid and not borderline_volatility:
+            failures.append(f'Volatility too low: ATR {atr_pct:.2f}% < {borderline_min_atr_pct:.2f}% (even borderline minimum)')
         
         # 3. Spread Check (if bid/ask prices provided)
         if bid_price is not None and ask_price is not None and bid_price > 0 and ask_price > 0:
@@ -894,18 +913,24 @@ class NIJAApexStrategyV71:
         
         # Determine eligibility
         eligible = len(failures) == 0
-        
+        # Collect borderline_volatility flag from the volatility check
+        _borderline_vol = checks.get('volatility', {}).get('borderline', False)
+        allow_with_reduced_size = _borderline_vol and eligible
+
         if eligible:
             reason = f"✅ Trade eligible: RSI={rsi:.1f}, ATR={atr_pct:.2f}%"
             if 'spread' in checks and 'spread_pct' in checks['spread']:
                 reason += f", Spread={checks['spread']['spread_pct']:.3f}%"
+            if _borderline_vol:
+                reason += " (borderline volatility — reduced size recommended)"
         else:
             reason = f"❌ Trade not eligible: {'; '.join(failures)}"
-        
+
         return {
             'eligible': eligible,
             'reason': reason,
-            'checks': checks
+            'checks': checks,
+            'allow_with_reduced_size': allow_with_reduced_size,
         }
 
     def check_market_filter(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, str, str]:
@@ -1079,9 +1104,9 @@ class NIJAApexStrategyV71:
         # 4. MACD histogram ticking up
         conditions['macd_tick_up'] = macd_hist > macd_hist_prev
 
-        # 5. Volume confirmation (>= 60% of last 2 candles avg)
+        # 5. Volume confirmation (>= ENTRY_VOLUME_MIN_MULTIPLIER of last 2 candles avg)
         avg_volume_2 = df['volume'].iloc[-3:-1].mean()
-        conditions['volume'] = current['volume'] >= avg_volume_2 * 0.6
+        conditions['volume'] = current['volume'] >= avg_volume_2 * ENTRY_VOLUME_MIN_MULTIPLIER
 
         # Calculate score
         score = sum(conditions.values())
@@ -1196,9 +1221,9 @@ class NIJAApexStrategyV71:
         # 4. MACD histogram ticking down
         conditions['macd_tick_down'] = macd_hist < macd_hist_prev
 
-        # 5. Volume confirmation
+        # 5. Volume confirmation (>= ENTRY_VOLUME_MIN_MULTIPLIER of last 2 candles avg)
         avg_volume_2 = df['volume'].iloc[-3:-1].mean()
-        conditions['volume'] = current['volume'] >= avg_volume_2 * 0.6
+        conditions['volume'] = current['volume'] >= avg_volume_2 * ENTRY_VOLUME_MIN_MULTIPLIER
 
         # Calculate score
         score = sum(conditions.values())
