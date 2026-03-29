@@ -374,12 +374,18 @@ if __name__ == "__main__":
         r = sizer.calculate(balance, entry, atr_value=atr, side=side,
                             take_profit_price=entry * 1.025 if side == "long"
                             else entry * 0.975)
-        print(
-            f"\n{label}\n"
-            f"  Position: ${r.position_size_usd:,.2f} | "
-            f"Stop: ${r.stop_loss_price:.4f} ({r.stop_loss_pct*100:.2f}%) | "
-            f"Dollar risk: ${r.dollar_risk:.2f} | "
-            f"R:R = 1:{r.risk_reward_ratio:.2f}" if r.risk_reward_ratio else
-            f"  Position: ${r.position_size_usd:,.2f} | Stop: ${r.stop_loss_price:.4f}"
-        )
+        if r.risk_reward_ratio:
+            print(
+                f"\n{label}\n"
+                f"  Position: ${r.position_size_usd:,.2f} | "
+                f"Stop: ${r.stop_loss_price:.4f} ({r.stop_loss_pct*100:.2f}%) | "
+                f"Dollar risk: ${r.dollar_risk:.2f} | "
+                f"R:R = 1:{r.risk_reward_ratio:.2f}"
+            )
+        else:
+            print(
+                f"\n{label}\n"
+                f"  Position: ${r.position_size_usd:,.2f} | "
+                f"Stop: ${r.stop_loss_price:.4f} ({r.stop_loss_pct*100:.2f}%)"
+            )
     print("\n" + "=" * 90)

@@ -391,7 +391,6 @@ if __name__ == "__main__":
               f"Trailing: {cfg.trailing_stop_pct*100:.2f}%")
         print(f"  TP ladder:")
         for gross, frac in cfg.tp_levels:
-            net = gross - (cfg.stop_loss_pct / 2)  # rough NET
             print(f"    {gross*100:.1f}% gross | exit {frac*100:.0f}%")
         print(f"  Concurrent: {cfg.max_concurrent_scalps} | "
               f"Target: {cfg.target_trades_per_hour:.0f}/hr")

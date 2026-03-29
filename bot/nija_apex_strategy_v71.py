@@ -243,23 +243,78 @@ except ImportError:
         SCALP_MODE_OPTIMIZER_AVAILABLE = False
         logger.warning("⚠️ Scalp Mode Optimizer not available — standard entry logic in use")
 
+# ── 5-Gate AI Entry Confirmation ─────────────────────────────────────────────
+# All 5 gates must pass: AI score / volume / volatility / spread / regime
+try:
+    from bot.ai_entry_gate import get_ai_entry_gate, GateResult
+    AI_ENTRY_GATE_AVAILABLE = True
+    logger.info("✅ AI Entry Gate loaded — 5-gate entry confirmation active")
+except ImportError:
+    try:
+        from ai_entry_gate import get_ai_entry_gate, GateResult
+        AI_ENTRY_GATE_AVAILABLE = True
+        logger.info("✅ AI Entry Gate loaded — 5-gate entry confirmation active")
+    except ImportError:
+        get_ai_entry_gate = None  # type: ignore
+        GateResult = None  # type: ignore
+        AI_ENTRY_GATE_AVAILABLE = False
+        logger.warning("⚠️ AI Entry Gate not available — single-pass entry logic in use")
+
+# ── Centralized Execution & Exit Configuration ───────────────────────────────
+# Hard SL 1–1.2%, trailing activate 1.8%, buffer 0.6%, 4 strategy profiles
+try:
+    from bot.execution_exit_config import get_execution_exit_config, ExitParams, StratProfile
+    EXECUTION_EXIT_CONFIG_AVAILABLE = True
+    logger.info("✅ Execution Exit Config loaded — regime-aware SL/TP/trailing active")
+except ImportError:
+    try:
+        from execution_exit_config import get_execution_exit_config, ExitParams, StratProfile
+        EXECUTION_EXIT_CONFIG_AVAILABLE = True
+        logger.info("✅ Execution Exit Config loaded — regime-aware SL/TP/trailing active")
+    except ImportError:
+        get_execution_exit_config = None  # type: ignore
+        ExitParams = None  # type: ignore
+        StratProfile = None  # type: ignore
+        EXECUTION_EXIT_CONFIG_AVAILABLE = False
+        logger.warning("⚠️ Execution Exit Config not available — using legacy SL/TP logic")
+
+# ── Drawdown Risk Controller ──────────────────────────────────────────────────
+# Max drawdown halt + daily loss limit + ATR dynamic sizing + market conditions
+try:
+    from bot.drawdown_risk_controller import get_drawdown_risk_controller, RiskEnvelopeResult
+    DRAWDOWN_RISK_CONTROLLER_AVAILABLE = True
+    logger.info("✅ Drawdown Risk Controller loaded — 4-layer risk envelope active")
+except ImportError:
+    try:
+        from drawdown_risk_controller import get_drawdown_risk_controller, RiskEnvelopeResult
+        DRAWDOWN_RISK_CONTROLLER_AVAILABLE = True
+        logger.info("✅ Drawdown Risk Controller loaded — 4-layer risk envelope active")
+    except ImportError:
+        get_drawdown_risk_controller = None  # type: ignore
+        RiskEnvelopeResult = None  # type: ignore
+        DRAWDOWN_RISK_CONTROLLER_AVAILABLE = False
+        logger.warning("⚠️ Drawdown Risk Controller not available — basic drawdown logic only")
+
 
 class NIJAApexStrategyV71:
     """
     NIJA Apex Strategy v7.1 - Unified Algorithmic Trading System
 
     Features:
-    1. Market Filter (uptrend/downtrend using VWAP, EMA9/21/50, MACD, ADX>20, Volume)
-    2. Entry Logic (pullback to EMA21/VWAP, RSI, candlestick patterns, MACD tick, volume)
-    3. Enhanced Entry Scoring (0-100 weighted multi-factor scoring)
-    4. Market Regime Detection (trending/ranging/volatile)
-    5. Adaptive Strategy Switching (regime-based parameters via RegimeStrategyBridge)
-    6. Dynamic Risk Management (ATR-based risk-per-trade sizing, stop loss)
-    7. Exit Logic (opposite signal, trailing stop, trend break, time-based)
-    8. Smart Filters (news, volume, candle timing)
-    9. Optional: AI Momentum Scoring (skeleton)
+    1.  Market Filter (uptrend/downtrend using VWAP, EMA9/21/50, MACD, ADX>20, Volume)
+    2.  Entry Logic (pullback to EMA21/VWAP, RSI, candlestick patterns, MACD tick, volume)
+    3.  Enhanced Entry Scoring (0-100 weighted multi-factor scoring)
+    4.  Market Regime Detection (trending/ranging/volatile)
+    5.  Adaptive Strategy Switching (regime-based parameters via RegimeStrategyBridge)
+    6.  Dynamic Risk Management (ATR-based risk-per-trade sizing, stop loss)
+    7.  Exit Logic (opposite signal, trailing stop, trend break, time-based)
+    8.  Smart Filters (news, volume, candle timing)
+    9.  Optional: AI Momentum Scoring (skeleton)
     10. Profit Optimization Stack (harvest layer + flywheel compounding + capital recycling)
     11. Scalp Mode (high-frequency micro-trades in CONSOLIDATION/RANGING regimes)
+    12. 5-Gate AI Entry Confirmation (Score / Volume / Volatility / Spread / Regime)
+    13. Centralized SL/TP/Trailing Config (4 profiles: SCALP/SWING/BREAKOUT/MEAN_REVERSION)
+    14. 4-Layer Drawdown Risk Controller (CB + daily loss + ATR sizing + market conditions)
     """
 
     def __init__(self, broker_client=None, config: Optional[Dict] = None):
@@ -500,6 +555,52 @@ class NIJAApexStrategyV71:
                 self.scalp_optimizer = None
         else:
             self.scalp_optimizer = None
+
+        # ── 5-Gate AI Entry Confirmation ─────────────────────────────────────
+        # Gates: AI Score / Volume Liquidity / Volatility Range / Spread / Regime
+        if AI_ENTRY_GATE_AVAILABLE and get_ai_entry_gate is not None:
+            try:
+                self.ai_entry_gate = get_ai_entry_gate()
+                logger.info("✅ AI Entry Gate: ENABLED (5-gate entry confirmation)")
+            except Exception as _aeg_err:
+                logger.warning("⚠️  AI Entry Gate init failed: %s", _aeg_err)
+                self.ai_entry_gate = None
+        else:
+            self.ai_entry_gate = None
+
+        # ── Centralized Execution & Exit Config ───────────────────────────────
+        # Hard SL 1–1.2%, trailing @ 1.8%, 4 profiles: SCALP/SWING/BREAKOUT/MEAN_REV
+        if EXECUTION_EXIT_CONFIG_AVAILABLE and get_execution_exit_config is not None:
+            try:
+                self.exit_config = get_execution_exit_config()
+                logger.info("✅ Execution Exit Config: ENABLED (regime-aware SL/TP/trailing)")
+            except Exception as _exc_err:
+                logger.warning("⚠️  Execution Exit Config init failed: %s", _exc_err)
+                self.exit_config = None
+        else:
+            self.exit_config = None
+
+        # ── 4-Layer Drawdown Risk Controller ─────────────────────────────────
+        # CB + daily loss limit + ATR-dynamic sizing + market condition pre-filter
+        if DRAWDOWN_RISK_CONTROLLER_AVAILABLE and get_drawdown_risk_controller is not None:
+            try:
+                self.drawdown_risk_ctrl = get_drawdown_risk_controller()
+                logger.info("✅ Drawdown Risk Controller: ENABLED (4-layer risk envelope)")
+            except Exception as _drc_err:
+                logger.warning("⚠️  Drawdown Risk Controller init failed: %s", _drc_err)
+                self.drawdown_risk_ctrl = None
+        else:
+            self.drawdown_risk_ctrl = None
+
+        # Per-call state: risk envelope multiplier from drawdown controller
+        # Updated at start of each analyze_market call and used in position sizing
+        self._risk_envelope_multiplier: float = 1.0
+
+        # Per-call state: active exit params resolved per analyze_market call
+        self._active_exit_params = None   # ExitParams | None
+
+        # Per-symbol cooldown tracking (re-entry cooldown from exit config)
+        self._symbol_last_trade_time: dict = {}   # symbol → float (unix timestamp)
         
         # Kraken-specific tuning parameters (Jan 30, 2026)
         # These can be adjusted via environment variables for safe tuning
@@ -1123,7 +1224,7 @@ class NIJAApexStrategyV71:
         # Get adaptive RSI ranges based on current market regime.
         # Priority: RegimeStrategyBridge > legacy regime detector > static fallback.
         adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
-        _broker_name_long = self._get_broker_name()
+        _broker_name = self._get_broker_name()
         if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
                 and self.current_regime is not None):
             _rb_params = self.regime_bridge.get_params(self.current_regime)
@@ -1133,7 +1234,7 @@ class NIJAApexStrategyV71:
             if (SCALP_MODE_OPTIMIZER_AVAILABLE and self.scalp_optimizer is not None
                     and self.scalp_optimizer.should_use_scalp_mode(self.current_regime)):
                 _scalp_cfg = self.scalp_optimizer.get_scalp_config(
-                    _broker_name_long, getattr(self, '_last_account_balance', 100.0)
+                    _broker_name, getattr(self, '_last_account_balance', 100.0)
                 )
                 long_rsi_min = _scalp_cfg.rsi_long_min
                 long_rsi_max = _scalp_cfg.rsi_long_max
@@ -1255,7 +1356,7 @@ class NIJAApexStrategyV71:
         # Get adaptive RSI ranges based on current market regime.
         # Priority: RegimeStrategyBridge > legacy regime detector > static fallback.
         adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
-        _broker_name_short = self._get_broker_name()
+        _broker_name = self._get_broker_name()
         if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
                 and self.current_regime is not None):
             _rb_params_short = self.regime_bridge.get_params(self.current_regime)
@@ -1265,7 +1366,7 @@ class NIJAApexStrategyV71:
             if (SCALP_MODE_OPTIMIZER_AVAILABLE and self.scalp_optimizer is not None
                     and self.scalp_optimizer.should_use_scalp_mode(self.current_regime)):
                 _scalp_cfg_s = self.scalp_optimizer.get_scalp_config(
-                    _broker_name_short, getattr(self, '_last_account_balance', 100.0)
+                    _broker_name, getattr(self, '_last_account_balance', 100.0)
                 )
                 short_rsi_min = _scalp_cfg_s.rsi_short_min
                 short_rsi_max = _scalp_cfg_s.rsi_short_max
@@ -1510,6 +1611,33 @@ class NIJAApexStrategyV71:
 
         return should_enter, enhanced_score, reason, metadata
 
+    # ── Helper: map regime to entry_type string ───────────────────────────────
+    def _get_entry_type_for_regime(self, regime: object) -> str:
+        """
+        Return the strategy profile string for a regime.
+
+        Used by AI Entry Gate and Execution Exit Config to select
+        the correct parameters (SCALP / SWING / BREAKOUT / MEAN_REVERSION).
+        """
+        regime_str = ""
+        if hasattr(regime, "value"):
+            regime_str = str(regime.value).lower()
+        elif regime is not None:
+            regime_str = str(regime).lower()
+
+        _MAP = {
+            "strong_trend": "breakout",
+            "weak_trend":   "swing",
+            "ranging":      "mean_reversion",
+            "consolidation": "scalp",
+            "expansion":    "breakout",
+            "mean_reversion": "mean_reversion",
+            "volatility_explosion": "swing",
+            "trending":     "swing",
+            "volatile":     "swing",
+        }
+        return _MAP.get(regime_str, "swing")
+
     def adjust_position_size_for_regime(self, base_position_size: float,
                                        regime: 'MarketRegime', score: float) -> float:
         """
@@ -1724,6 +1852,54 @@ class NIJAApexStrategyV71:
                     'reason': market_reason
                 }
 
+            # ── 4-Layer Drawdown Risk Controller (pre-entry authority) ────────
+            # Runs BEFORE any position or signal checks to avoid wasted computation.
+            # Layers: Global CB halt / Daily loss limit / ATR dynamic sizing / Market conditions
+            self._last_account_balance = account_balance
+            if self.drawdown_risk_ctrl is not None:
+                try:
+                    _risk_result = self.drawdown_risk_ctrl.pre_entry_check(
+                        account_balance=account_balance,
+                        df=df,
+                        indicators=indicators,
+                        daily_pnl_usd=getattr(self, '_daily_pnl_usd', 0.0),
+                        regime=self.current_regime,
+                    )
+                    self._risk_envelope_multiplier = _risk_result.position_multiplier
+                    if not _risk_result.can_trade:
+                        logger.debug(
+                            "   🛡️  %s: Risk envelope blocked — %s",
+                            symbol, _risk_result.reason,
+                        )
+                        return {'action': 'hold', 'reason': _risk_result.reason}
+                except Exception as _drc_check_err:
+                    logger.debug("DrawdownRiskController check error: %s", _drc_check_err)
+                    self._risk_envelope_multiplier = 1.0
+            else:
+                self._risk_envelope_multiplier = 1.0
+
+            # ── Per-symbol re-entry cooldown (from ExecutionExitConfig) ───────
+            if self.exit_config is not None:
+                import time as _time_mod
+                _now = _time_mod.time()
+                _last_trade_ts = self._symbol_last_trade_time.get(symbol, 0.0)
+                if _last_trade_ts > 0:
+                    _elapsed = _now - _last_trade_ts
+                    _cooldown_s = self.exit_config.get_cooldown_seconds(
+                        trades_per_hour=getattr(self, '_recent_trades_per_hour', 2.0)
+                    )
+                    if _elapsed < _cooldown_s:
+                        logger.debug(
+                            "   ⏳ %s: Cooldown active (%.0fs remaining, window=%ds)",
+                            symbol, _cooldown_s - _elapsed, _cooldown_s,
+                        )
+                        return {
+                            'action': 'hold',
+                            'reason': (
+                                f"Re-entry cooldown: {_cooldown_s - _elapsed:.0f}s remaining"
+                            ),
+                        }
+
             # Check if we have an existing position
             position = self.execution_engine.get_position(symbol)
             current_price = df['close'].iloc[-1]
@@ -1882,6 +2058,44 @@ class NIJAApexStrategyV71:
                     metadata = {}
 
                 if long_signal:
+                    # ── 5-Gate AI Entry Confirmation (LONG) ───────────────────
+                    # All 5 gates must pass: Score / Volume / Volatility / Spread / Regime
+                    _entry_type_l = self._get_entry_type_for_regime(self.current_regime)
+                    if self.ai_entry_gate is not None:
+                        try:
+                            _gate_result_l = self.ai_entry_gate.check(
+                                df=df,
+                                indicators=indicators,
+                                side='long',
+                                enhanced_score=float(score),
+                                regime=self.current_regime,
+                                broker=broker_name,
+                                entry_type=_entry_type_l,
+                            )
+                            if not _gate_result_l.passed:
+                                logger.debug(
+                                    "   🚦 %s: AI gate blocked LONG — %s",
+                                    symbol, _gate_result_l.reason,
+                                )
+                                return {'action': 'hold', 'reason': _gate_result_l.reason}
+                        except Exception as _gate_l_err:
+                            logger.debug("AI Entry Gate error (long): %s", _gate_l_err)
+
+                    # Resolve exit params for this entry (used for SL/TP/trailing)
+                    if self.exit_config is not None:
+                        try:
+                            self._active_exit_params = self.exit_config.get_exit_params(
+                                regime=self.current_regime,
+                                entry_type=_entry_type_l,
+                                broker=broker_name,
+                                trades_per_hour=getattr(self, '_recent_trades_per_hour', 2.0),
+                            )
+                        except Exception as _exc_l_err:
+                            logger.debug("Exit config error (long): %s", _exc_l_err)
+                            self._active_exit_params = None
+                    else:
+                        self._active_exit_params = None
+
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
@@ -1925,6 +2139,18 @@ class NIJAApexStrategyV71:
                                 position_size = scalar(_rpt_l.position_size_usd)
                         except Exception as _rpt_l_err:
                             logger.debug("Risk-per-trade sizer error (long): %s", _rpt_l_err)
+
+                    # ── Drawdown Risk Controller: ATR dynamic sizing (LONG) ───
+                    # Apply the risk envelope multiplier (0.0–1.0) from the pre-filter.
+                    # This ensures high-volatility periods automatically trade smaller.
+                    _env_mult = getattr(self, '_risk_envelope_multiplier', 1.0)
+                    if _env_mult < 1.0 and _env_mult > 0.0:
+                        _pre_env = position_size
+                        position_size = scalar(position_size * _env_mult)
+                        logger.debug(
+                            "   🛡️  Risk envelope LONG: $%.2f × %.2f = $%.2f",
+                            _pre_env, _env_mult, position_size,
+                        )
 
                     # Adjust position size based on regime and score
                     if self.use_enhanced_scoring and self.current_regime:
@@ -2046,6 +2272,23 @@ class NIJAApexStrategyV71:
                             current_price, 'long', swing_low, atr
                         )
 
+                        # ── Execution Exit Config: hard SL cap (LONG) ────────────
+                        # Apply the regime-aware hard stop-loss % as a FLOOR on stop
+                        # (i.e. stop can't be FURTHER than hard_sl_pct below entry)
+                        if self._active_exit_params is not None:
+                            try:
+                                _hard_sl = self._active_exit_params.stop.hard_sl_pct
+                                _sl_floor = current_price * (1.0 - _hard_sl)
+                                if stop_loss < _sl_floor:
+                                    logger.debug(
+                                        "   ⚙️  SL tightened by exit config: %.4f → %.4f "
+                                        "(%.2f%% hard cap)",
+                                        stop_loss, _sl_floor, _hard_sl * 100,
+                                    )
+                                    stop_loss = _sl_floor
+                            except Exception as _sl_cap_err:
+                                logger.debug("Exit config SL cap error (long): %s", _sl_cap_err)
+
                         # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
                         # Get broker-specific round-trip fee and use it for dynamic profit targets
                         # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
@@ -2065,6 +2308,20 @@ class NIJAApexStrategyV71:
                             atr=atr,
                             volatility_bandwidth=volatility_bandwidth
                         )
+
+                        # ── Execution Exit Config: TP level override (LONG) ───────
+                        # When the exit config provides a profile-based TP ladder,
+                        # convert pct targets to prices and override the legacy levels.
+                        if self._active_exit_params is not None:
+                            try:
+                                _tp_cfg = self._active_exit_params.tp
+                                if _tp_cfg.levels:
+                                    tp_levels = [
+                                        current_price * (1.0 + lv.target_pct)
+                                        for lv in _tp_cfg.levels
+                                    ]
+                            except Exception as _tp_ov_err:
+                                logger.debug("Exit config TP override error (long): %s", _tp_ov_err)
 
                         # Adjust TP levels based on regime if enhanced scoring is enabled
                         if self.use_enhanced_scoring and self.current_regime:
@@ -2171,6 +2428,43 @@ class NIJAApexStrategyV71:
                     metadata = {}
 
                 if short_signal:
+                    # ── 5-Gate AI Entry Confirmation (SHORT) ──────────────────
+                    _entry_type_s = self._get_entry_type_for_regime(self.current_regime)
+                    if self.ai_entry_gate is not None:
+                        try:
+                            _gate_result_s = self.ai_entry_gate.check(
+                                df=df,
+                                indicators=indicators,
+                                side='short',
+                                enhanced_score=float(score),
+                                regime=self.current_regime,
+                                broker=broker_name,
+                                entry_type=_entry_type_s,
+                            )
+                            if not _gate_result_s.passed:
+                                logger.debug(
+                                    "   🚦 %s: AI gate blocked SHORT — %s",
+                                    symbol, _gate_result_s.reason,
+                                )
+                                return {'action': 'hold', 'reason': _gate_result_s.reason}
+                        except Exception as _gate_s_err:
+                            logger.debug("AI Entry Gate error (short): %s", _gate_s_err)
+
+                    # Resolve exit params for this short entry
+                    if self.exit_config is not None:
+                        try:
+                            self._active_exit_params = self.exit_config.get_exit_params(
+                                regime=self.current_regime,
+                                entry_type=_entry_type_s,
+                                broker=broker_name,
+                                trades_per_hour=getattr(self, '_recent_trades_per_hour', 2.0),
+                            )
+                        except Exception as _exc_s_err:
+                            logger.debug("Exit config error (short): %s", _exc_s_err)
+                            self._active_exit_params = None
+                    else:
+                        self._active_exit_params = None
+
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
@@ -2214,6 +2508,16 @@ class NIJAApexStrategyV71:
                                 position_size = scalar(_rpt_s.position_size_usd)
                         except Exception as _rpt_s_err:
                             logger.debug("Risk-per-trade sizer error (short): %s", _rpt_s_err)
+
+                    # ── Drawdown Risk Controller: ATR dynamic sizing (SHORT) ──
+                    _env_mult_s = getattr(self, '_risk_envelope_multiplier', 1.0)
+                    if _env_mult_s < 1.0 and _env_mult_s > 0.0:
+                        _pre_env_s = position_size
+                        position_size = scalar(position_size * _env_mult_s)
+                        logger.debug(
+                            "   🛡️  Risk envelope SHORT: $%.2f × %.2f = $%.2f",
+                            _pre_env_s, _env_mult_s, position_size,
+                        )
 
                     # Adjust position size based on regime and score
                     if self.use_enhanced_scoring and self.current_regime:
@@ -2335,6 +2639,21 @@ class NIJAApexStrategyV71:
                             current_price, 'short', swing_high, atr
                         )
 
+                        # ── Execution Exit Config: hard SL cap (SHORT) ───────────
+                        if self._active_exit_params is not None:
+                            try:
+                                _hard_sl_s = self._active_exit_params.stop.hard_sl_pct
+                                _sl_ceil_s = current_price * (1.0 + _hard_sl_s)
+                                if stop_loss > _sl_ceil_s:
+                                    logger.debug(
+                                        "   ⚙️  SL tightened by exit config (short): %.4f → %.4f "
+                                        "(%.2f%% hard cap)",
+                                        stop_loss, _sl_ceil_s, _hard_sl_s * 100,
+                                    )
+                                    stop_loss = _sl_ceil_s
+                            except Exception as _sl_cap_s_err:
+                                logger.debug("Exit config SL cap error (short): %s", _sl_cap_s_err)
+
                         # ✅ ADAPTIVE PROFIT TARGETS (INSTITUTIONAL UPGRADE - Jan 29, 2026)
                         # Get broker-specific round-trip fee and use it for dynamic profit targets
                         # Enhanced with ATR and volatility-based adaptive targeting for institutional performance
@@ -2354,6 +2673,18 @@ class NIJAApexStrategyV71:
                             atr=atr,
                             volatility_bandwidth=volatility_bandwidth
                         )
+
+                        # ── Execution Exit Config: TP level override (SHORT) ──────
+                        if self._active_exit_params is not None:
+                            try:
+                                _tp_cfg_s = self._active_exit_params.tp
+                                if _tp_cfg_s.levels:
+                                    tp_levels = [
+                                        current_price * (1.0 - lv.target_pct)
+                                        for lv in _tp_cfg_s.levels
+                                    ]
+                            except Exception as _tp_ov_s_err:
+                                logger.debug("Exit config TP override error (short): %s", _tp_ov_s_err)
 
                         # Adjust TP levels based on regime if enhanced scoring is enabled
                         if self.use_enhanced_scoring and self.current_regime:
