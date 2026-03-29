@@ -25,7 +25,7 @@ Layer 1 — Global drawdown circuit breaker (existing module)
 Layer 2 — Daily loss limit
     If today's realised P&L (cumulative) falls below ``-daily_loss_limit_pct``
     of account balance, trading halts until the next calendar day.
-    Default: -3.0 % of account.
+    Default: -5.0 % of account (override via ``MAX_DAILY_LOSS_PCT`` env var).
     Prevents the "revenge trading spiral" that destroys small accounts.
 
 Layer 3 — ATR-based dynamic position sizing
@@ -47,6 +47,7 @@ Layer 4 — Market condition pre-filter (5 of 5 must score ≥ threshold)
     4. Regime not VOLATILITY_EXPLOSION
     5. Price > 0        (basic sanity)
     Score < 3 → return hold immediately (saves ~60ms of signal computation).
+    **Skipped** when ``df`` has fewer than 5 rows (portfolio-level gate path).
 
 Usage
 -----
@@ -151,7 +152,7 @@ class DrawdownRiskController:
         self._daily_loss_limit = (
             daily_loss_limit_pct / 100.0
             if daily_loss_limit_pct is not None
-            else _ef("MAX_DAILY_LOSS_PCT", 3.0) / 100.0
+            else _ef("MAX_DAILY_LOSS_PCT", 5.0) / 100.0
         )
         self._min_cond_score = min_condition_score
         self._peak_balance: float = 0.0
@@ -282,7 +283,16 @@ class DrawdownRiskController:
         vol_mult = self._atr_to_multiplier(atr_pct)
 
         # ── Layer 4: Market condition pre-filter ─────────────────────
-        score = self._market_condition_score(df, indicators, regime)
+        # Skip when called without per-symbol data (portfolio-level gate).
+        # Per-symbol calls in apex.analyze_market always supply a full df.
+        # An empty df would always score below the threshold and incorrectly
+        # block entries at the portfolio level before any symbols are scanned.
+        _has_symbol_data = len(df) >= 5
+        score = (
+            self._market_condition_score(df, indicators, regime)
+            if _has_symbol_data
+            else self._min_cond_score   # assume OK; per-symbol check handles it
+        )
         if score < self._min_cond_score:
             reason = (
                 f"Market conditions too weak: {score}/{self._min_cond_score} "

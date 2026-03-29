@@ -227,9 +227,15 @@ class NijaCoreLoop:
 
     def _phase1_safety(self, broker: Any, balance: float) -> Tuple[bool, str]:
         """
-        Lightweight safety check:
-        - If the apex strategy has a drawdown controller, query it
-        - Otherwise allow trading
+        Portfolio-level safety gate — checks only Layers 1 (global drawdown
+        circuit breaker) and 2 (daily loss limit).
+
+        Layer 4 (market-condition per-symbol check) is intentionally skipped
+        here: it requires real symbol data and is enforced per-symbol inside
+        ``apex.analyze_market``.  Passing an empty DataFrame to the controller
+        would always return a score of 2/5 (below the threshold of 3) and
+        incorrectly block all entries at the portfolio level before any
+        symbols have been scanned.
 
         Returns (can_enter, reason_string).
         """
@@ -239,12 +245,13 @@ class NijaCoreLoop:
             if drc is None:
                 return True, "no drawdown controller"
 
-            # We call with minimal args; the full check is also done per-symbol
-            # in apex.analyze_market — this is a fast portfolio-level gate
+            # Pass an empty DataFrame so the controller's Layer 4 market-
+            # condition check is bypassed (len(df) < 5 → skip Layer 4).
+            # Only Layers 1 + 2 run at this portfolio-wide gate.
             current_regime = getattr(apex, "current_regime", None)
             result = drc.pre_entry_check(
                 account_balance=balance,
-                df=pd.DataFrame(),      # empty — controller has its own fast path
+                df=pd.DataFrame(),      # empty → Layer 4 skipped (portfolio gate)
                 indicators={},
                 daily_pnl_usd=getattr(apex, "_daily_pnl_usd", 0.0),
                 regime=current_regime,
