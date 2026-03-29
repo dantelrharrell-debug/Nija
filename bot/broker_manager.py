@@ -390,6 +390,18 @@ LOG_SEPARATOR = "=" * 70
 _FIRST_TRADE_EXECUTED = False
 _FIRST_TRADE_LOCK = threading.Lock()
 
+# ── Market scanning / cycle timing constants (NIJA Profit Mode) ──────────────
+# Reduce the number of markets scanned per cycle from 150 → 50 so each
+# rotation completes in 8–10 min instead of 30–38 min, keeping prices fresh
+# and capturing fast volatility on micro-cap accounts.
+MARKETS_PER_SCAN: int = 50
+
+# Rate-limit intervals for MICRO_CAP accounts ($20–$100).
+# These mirror the values in kraken_rate_profiles.py KrakenRateMode.MICRO_CAP
+# and are exposed here so broker-level logic can reference them directly.
+ENTRY_INTERVAL_MICRO_CAP: int = 30    # seconds between entry orders
+MONITOR_INTERVAL_MICRO_CAP: int = 60  # seconds between balance/position checks
+
 
 # ============================================================================
 # BROKER-AWARE SYMBOL NORMALIZATION (FIX #1 - Jan 19, 2026)

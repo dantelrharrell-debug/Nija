@@ -47,6 +47,57 @@ logger = logging.getLogger("nija.scoring")
 # (ensures the total score never collapses to 0 due to a single missing indicator)
 _PARTIAL_CREDIT = 0.3
 
+# Minimum score threshold — signals below this are rejected by legacy callers.
+# Lowered from 40 → 25 so weak setups pass the entry gate when signal streaks are high.
+MIN_SCORE_THRESHOLD = 25
+
+# Baseline confidence boost applied when the bot has been idle for a zero-signal streak.
+CONFIDENCE_BOOST = 0.20
+
+# adjusted_score() tuning constants
+# SCORE_DAMPENING_FACTOR: reduce the raw component's weight (0.75 = 75%) so the
+# adjusted score grows more quickly from its floor instead of tracking the raw
+# value too closely.
+_ADJ_DAMPENING = 0.75
+
+# BASE_ADJUSTMENT: added to the dampened raw score as a minimum floor lift so
+# that even a raw score of 0 emerges above the entry threshold.
+_ADJ_BASE = 15.0
+
+# Per-streak-cycle bonus: each additional zero-signal cycle adds 5 pts to
+# the bonus so prolonged idle periods escalate the adjustment more aggressively.
+_ADJ_STREAK_STEP = 0.05
+
+
+def adjusted_score(raw_score: float, zero_streak: int) -> float:
+    """
+    Dynamically inflate the entry score when no signals have fired recently.
+
+    When the bot has gone ``zero_streak`` consecutive cycles without a trade,
+    a small bonus is added so that marginal setups can cross the entry threshold
+    and prevent the account from sitting completely idle.
+
+    Adjustment formula::
+
+        dampened = raw_score * _ADJ_DAMPENING   (0.75)
+        streak_bonus = _ADJ_STREAK_STEP * zero_streak  (0.05 per cycle)
+        adjusted = max(dampened + _ADJ_BASE + streak_bonus, raw_score)
+
+    The ``max(…, raw_score)`` guard ensures the score is never *lowered*
+    by the adjustment.
+
+    Parameters
+    ----------
+    raw_score   : Raw composite score (0–100) from EnhancedEntryScorer.
+    zero_streak : Number of consecutive cycles with zero entries.
+
+    Returns
+    -------
+    Adjusted score (always >= raw_score).
+    """
+    streak_bonus = _ADJ_STREAK_STEP * zero_streak
+    return max(raw_score * _ADJ_DAMPENING + _ADJ_BASE + streak_bonus, raw_score)
+
 
 class EnhancedEntryScorer:
     """
@@ -75,7 +126,7 @@ class EnhancedEntryScorer:
         self.config = config or {}
 
         # Legacy threshold attrs (kept for backward-compat callers)
-        self.min_score_threshold = self.config.get("min_score_threshold", 30)
+        self.min_score_threshold = self.config.get("min_score_threshold", MIN_SCORE_THRESHOLD)
         self.excellent_score_threshold = self.config.get("excellent_score_threshold", 75)
 
         # Build active weights from config overrides

@@ -137,7 +137,7 @@ class SniperConfig:
         default_factory=lambda: _env_float("SNIPER_MEDIUM_THRESHOLD", 0.50)
     )
     weak_threshold: float = field(
-        default_factory=lambda: _env_float("SNIPER_WEAK_THRESHOLD", 0.35)
+        default_factory=lambda: _env_float("SNIPER_WEAK_THRESHOLD", 0.25)
     )
 
 
@@ -152,6 +152,14 @@ SNIPER_SCORE_THRESHOLD: int = 5       # score >= 5 → full size; score < 5 → 
 # When the tier gate passes but weighted score < SNIPER_SCORE_THRESHOLD,
 # the caller should multiply position size by this factor.
 SNIPER_BORDERLINE_POSITION_MULTIPLIER: float = 0.5
+
+# SCALP mode — micro-cap friendly settings
+# Accept thin markets when spreads are within limits; do not hard-block on volume.
+ALLOW_LOW_LIQUIDITY: bool = True
+
+# Maximum top-N candidates per cycle for SCALP / micro-cap mode.
+# Taking 2 per cycle gives fast, small wins that compound on a $74–$102 account.
+TOP_N: int = 2
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -194,6 +202,12 @@ class SniperFilter:
             self._cfg.low_volume_multiplier,
             self._cfg.max_spread_pct,
         )
+        if ALLOW_LOW_LIQUIDITY:
+            logger.warning(
+                "⚠️  SniperFilter: ALLOW_LOW_LIQUIDITY=True — SCALP tier will accept "
+                "thin markets (volume check bypassed). Slippage risk is elevated on "
+                "micro-cap or illiquid pairs."
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -318,6 +332,7 @@ class SniperFilter:
         #
         # SCALP: weaker signal in scalp/consolidation mode → spread + volatility.
         #   Volume can be thin; we trade smaller rather than reject entirely.
+        #   When ALLOW_LOW_LIQUIDITY is True (default), volume_pass is not required.
         #
         # REJECTED: confidence below the floor → no trade.
 
@@ -339,11 +354,17 @@ class SniperFilter:
             )
         elif confidence >= cfg.weak_threshold:
             tier = "SCALP"
-            tier_pass = spread_ok and volatility_pass
+            # When ALLOW_LOW_LIQUIDITY is enabled, thin markets are accepted as long
+            # as the spread is within tolerance — volume is not a hard requirement.
+            if ALLOW_LOW_LIQUIDITY:
+                tier_pass = spread_ok
+            else:
+                tier_pass = spread_ok and volatility_pass
             tier_reason = (
                 f"SCALP tier (conf={confidence:.2f} >= {cfg.weak_threshold:.2f}): "
                 f"spread={'✓' if spread_ok else '✗'} "
                 f"volatility={'✓' if volatility_pass else '✗'}"
+                + (" [low-liq allowed]" if ALLOW_LOW_LIQUIDITY else "")
             )
         else:
             tier = "REJECTED"
