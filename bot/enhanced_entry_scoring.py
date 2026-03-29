@@ -1,25 +1,34 @@
 """
-NIJA Enhanced Entry Scoring System
-===================================
+NIJA Enhanced Entry Scoring System  (v2 — optimized)
+=====================================================
 
 Multi-factor weighted scoring system for trade entry decisions.
-Considers:
-- Trend strength (ADX, EMA alignment)
-- Momentum (RSI, MACD)
-- Price action (candlestick patterns, support/resistance)
-- Volume confirmation
-- Market structure (swing highs/lows)
+
+v2 improvements over the original:
+- **Six dimensions** instead of five: adds a dedicated volatility (ATR) axis
+- **Dual RSI** — RSI_9 (short-term momentum pulse) + RSI_14 (trend confirmation)
+  are scored separately and combined; both must align for full points
+- **20-period volume baseline** instead of 2–5 bar comparison — much more
+  robust against single-candle spikes that were distorting the old score
+- **ADX slope bonus** — a rising ADX rewards strengthening trends
+- **No hard pass/fail gate** — the scorer always returns a continuous 0-100
+  value.  Threshold enforcement is the caller's responsibility (NijaAIEngine
+  uses an adaptive threshold so the bot never stalls with zero candidates)
+- **Regime-adaptive weights** (optional) — when a ``regime`` key is present
+  in ``config``, trend/momentum weights increase for trending regimes and
+  mean-reversion/structure weights increase for ranging regimes
 
 Score Range: 0-100
-- 0-40: No trade (weak setup)
-- 40-60: Marginal (proceed with caution, reduced size)
-- 60-80: Good (standard position size)
-- 80-100: Excellent (increased position size)
+- 80-100 Elite   (×1.5 position size)
+- 60-79  Good    (×1.0 position size)
+- 45-59  Fair    (×0.75 position size)
+- 30-44  Floor   (×0.5 position size — taken only as best-available top-N)
+- 0-29   Reject  (never executed)
 """
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 import logging
 
 try:
@@ -34,421 +43,458 @@ except ImportError:
 
 logger = logging.getLogger("nija.scoring")
 
+# Fraction of max_pts awarded when data is insufficient for a dimension
+# (ensures the total score never collapses to 0 due to a single missing indicator)
+_PARTIAL_CREDIT = 0.3
+
 
 class EnhancedEntryScorer:
     """
-    Enhanced entry scoring system with weighted factors
+    Optimized six-dimension weighted scoring system.
+
+    Dimensions and default weights (sum = 100):
+        trend_strength  25 — ADX strength + EMA stack alignment + ADX slope
+        dual_rsi        22 — RSI_9 momentum pulse + RSI_14 trend confirm (both must align)
+        macd_momentum   13 — MACD histogram direction + magnitude
+        volume          18 — current vs 20-period average volume
+        volatility      10 — ATR% in ideal range (not too low / not too high)
+        price_action    12 — candlestick patterns + pullback to EMA/VWAP
     """
 
-    def __init__(self, config: Dict = None):
-        """
-        Initialize entry scorer
+    # Default dimension weights (sum = 100)
+    DEFAULT_WEIGHTS: Dict[str, int] = {
+        "trend_strength": 25,
+        "dual_rsi":       22,
+        "macd_momentum":  13,
+        "volume":         18,
+        "volatility":     10,
+        "price_action":   12,
+    }
 
-        Args:
-            config: Optional configuration dictionary
-        """
+    def __init__(self, config: Optional[Dict] = None) -> None:
         self.config = config or {}
 
-        # Score thresholds (out of 100)
-        # OPTIMIZED (Jan 29, 2026): Balance signal generation with trade quality
-        # Previous emergency setting (50/100) was too low, leading to marginal trades
-        # New strategy: 60/100 minimum for good setups, 75/100 for excellent setups
-        # Target: 60-65% win rate with quality entries
-        self.min_score_threshold = self.config.get('min_score_threshold', 40)  # TUNED: Relaxed from 60 to 40 — increases signals 20-40% (range 40-75)
-        self.excellent_score_threshold = self.config.get('excellent_score_threshold', 75)  # TUNED: Raised from 70 to 75 — top-tier threshold
+        # Legacy threshold attrs (kept for backward-compat callers)
+        self.min_score_threshold = self.config.get("min_score_threshold", 30)
+        self.excellent_score_threshold = self.config.get("excellent_score_threshold", 75)
 
-        # Weights for different factors (must sum to 100)
-        self.weights = {
-            'trend_strength': 25,      # ADX, EMA alignment
-            'momentum': 20,             # RSI, MACD direction
-            'price_action': 20,         # Candlestick patterns
-            'volume': 15,               # Volume confirmation
-            'market_structure': 20,     # Support/resistance, swing points
-        }
+        # Build active weights from config overrides
+        self.weights = dict(self.DEFAULT_WEIGHTS)
+        for key in self.weights:
+            cfg_key = f"weight_{key}"
+            if cfg_key in self.config:
+                self.weights[key] = int(self.config[cfg_key])
 
-        logger.info("EnhancedEntryScorer initialized")
+        logger.info("EnhancedEntryScorer v2 initialized (6-dim dual-RSI + ATR)")
 
-    def calculate_entry_score(self, df: pd.DataFrame, indicators: Dict, side: str) -> Tuple[float, Dict]:
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def calculate_entry_score(
+        self,
+        df: pd.DataFrame,
+        indicators: Dict,
+        side: str,
+    ) -> Tuple[float, Dict]:
         """
-        Calculate comprehensive entry score (0-100)
+        Calculate comprehensive six-dimension entry score (0-100).
 
         Args:
-            df: Price DataFrame with OHLCV data
-            indicators: Dictionary of calculated indicators
-            side: 'long' or 'short'
+            df:          OHLCV DataFrame (recent candles, most recent last)
+            indicators:  Dict from ``calculate_indicators``
+            side:        ``'long'`` or ``'short'``
 
         Returns:
-            Tuple of (total_score, score_breakdown)
+            ``(total_score, breakdown_dict)``
         """
-        scores = {}
+        w = self.weights
 
-        # 1. Trend Strength Score (0-25 points)
-        scores['trend_strength'] = self._score_trend_strength(df, indicators, side)
-
-        # 2. Momentum Score (0-20 points)
-        scores['momentum'] = self._score_momentum(df, indicators, side)
-
-        # 3. Price Action Score (0-20 points)
-        scores['price_action'] = self._score_price_action(df, indicators, side)
-
-        # 4. Volume Score (0-15 points)
-        scores['volume'] = self._score_volume(df, indicators)
-
-        # 5. Market Structure Score (0-20 points)
-        scores['market_structure'] = self._score_market_structure(df, indicators, side)
-
-        # Calculate total weighted score
-        total_score = sum(scores.values())
-
-        # Prepare breakdown with percentages
-        breakdown = {
-            **scores,
-            'total': total_score,
-            'quality': self._classify_score(total_score)
+        scores = {
+            "trend_strength": self._score_trend_strength(df, indicators, side, w["trend_strength"]),
+            "dual_rsi":       self._score_dual_rsi(df, indicators, side, w["dual_rsi"]),
+            "macd_momentum":  self._score_macd(df, indicators, side, w["macd_momentum"]),
+            "volume":         self._score_volume(df, w["volume"]),
+            "volatility":     self._score_volatility(df, indicators, w["volatility"]),
+            "price_action":   self._score_price_action(df, indicators, side, w["price_action"]),
         }
 
-        logger.debug(f"{side.upper()} entry score: {total_score:.1f}/100 ({breakdown['quality']}) - " +
-                    f"Trend:{scores['trend_strength']:.1f} Momentum:{scores['momentum']:.1f} " +
-                    f"Price:{scores['price_action']:.1f} Volume:{scores['volume']:.1f} " +
-                    f"Structure:{scores['market_structure']:.1f}")
+        total = float(np.clip(sum(scores.values()), 0.0, 100.0))
 
-        return total_score, breakdown
+        breakdown = {
+            **scores,
+            "total": total,
+            "quality": self._classify_score(total),
+        }
 
-    def _score_trend_strength(self, df: pd.DataFrame, indicators: Dict, side: str) -> float:
+        logger.debug(
+            "%s score: %.1f/100 (%s) — "
+            "trend=%.1f rsi=%.1f macd=%.1f vol=%.1f atr=%.1f pa=%.1f",
+            side.upper(), total, breakdown["quality"],
+            scores["trend_strength"], scores["dual_rsi"], scores["macd_momentum"],
+            scores["volume"], scores["volatility"], scores["price_action"],
+        )
+        return total, breakdown
+
+    def should_enter_trade(self, score: float) -> bool:
         """
-        Score trend strength (0-25 points)
+        Soft gate — kept for backward compatibility.
 
-        Factors:
-        - ADX strength (0-10 points)
-        - EMA alignment (0-10 points)
-        - VWAP alignment (0-5 points)
+        The NijaAIEngine uses its own adaptive threshold; this method uses the
+        legacy ``min_score_threshold`` (default 30) so callers that bypass the
+        AI engine still get reasonable filtering.
+        """
+        return score >= self.min_score_threshold
+
+    # ------------------------------------------------------------------
+    # Dimension scorers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _score_trend_strength(
+        df: pd.DataFrame, indicators: Dict, side: str, max_pts: int
+    ) -> float:
+        """
+        Trend strength (0-max_pts).
+
+        Sub-components:
+        - ADX level   (0–10 pts)
+        - EMA stack   (0–10 pts): price vs EMA9/21/50 alignment
+        - ADX slope   (0–3 pts):  ADX increasing over last 3 bars = bonus
+        - VWAP side   (0–2 pts):  price on correct side of VWAP
         """
         score = 0.0
+        price = float(df["close"].iloc[-1])
 
-        # Get indicator values
-        adx = scalar(indicators.get('adx', pd.Series([0])).iloc[-1])
-        current_price = df['close'].iloc[-1]
-
-        # ADX strength (0-10 points)
+        # ADX level
+        adx_series = indicators.get("adx", pd.Series([0.0]))
+        adx = float(scalar(adx_series.iloc[-1]))
         if adx >= 40:
             score += 10.0
         elif adx >= 30:
             score += 8.0
-        elif adx >= 25:
-            score += 6.0
         elif adx >= 20:
-            score += 4.0
+            score += 5.0
+        elif adx >= 15:
+            score += 3.0
         else:
+            score += 1.0
+
+        # EMA stack alignment
+        ema9  = float(indicators.get("ema_9",  pd.Series([price])).iloc[-1])
+        ema21 = float(indicators.get("ema_21", pd.Series([price])).iloc[-1])
+        ema50 = float(indicators.get("ema_50", pd.Series([price])).iloc[-1])
+
+        if side == "long":
+            if price > ema9 > ema21 > ema50:
+                score += 10.0
+            elif price > ema9 > ema21:
+                score += 7.0
+            elif price > ema21:
+                score += 4.0
+            elif price > ema50:
+                score += 2.0
+        else:
+            if price < ema9 < ema21 < ema50:
+                score += 10.0
+            elif price < ema9 < ema21:
+                score += 7.0
+            elif price < ema21:
+                score += 4.0
+            elif price < ema50:
+                score += 2.0
+
+        # ADX slope bonus (rising trend momentum)
+        if len(adx_series) >= 4:
+            adx_prev = float(scalar(adx_series.iloc[-4]))
+            if adx > adx_prev:
+                score += 3.0
+
+        # VWAP side
+        vwap = float(indicators.get("vwap", pd.Series([price])).iloc[-1])
+        if (side == "long" and price > vwap) or (side == "short" and price < vwap):
             score += 2.0
 
-        # EMA alignment (0-10 points)
-        ema9 = indicators.get('ema_9', pd.Series([current_price])).iloc[-1]
-        ema21 = indicators.get('ema_21', pd.Series([current_price])).iloc[-1]
-        ema50 = indicators.get('ema_50', pd.Series([current_price])).iloc[-1]
+        return min(score, float(max_pts))
 
-        if side == 'long':
-            # Perfect bullish alignment: price > EMA9 > EMA21 > EMA50
-            if current_price > ema9 > ema21 > ema50:
-                score += 10.0
-            elif current_price > ema9 > ema21:
-                score += 7.0
-            elif current_price > ema9:
-                score += 4.0
-        else:  # short
-            # Perfect bearish alignment: price < EMA9 < EMA21 < EMA50
-            if current_price < ema9 < ema21 < ema50:
-                score += 10.0
-            elif current_price < ema9 < ema21:
-                score += 7.0
-            elif current_price < ema9:
-                score += 4.0
-
-        # VWAP alignment (0-5 points)
-        vwap = indicators.get('vwap', pd.Series([current_price])).iloc[-1]
-
-        if side == 'long':
-            if current_price > vwap:
-                # Distance from VWAP indicates strength
-                distance_pct = (current_price - vwap) / vwap
-                if distance_pct > 0.02:  # More than 2% above
-                    score += 5.0
-                elif distance_pct > 0.01:  # More than 1% above
-                    score += 3.0
-                else:
-                    score += 2.0
-        else:  # short
-            if current_price < vwap:
-                distance_pct = (vwap - current_price) / vwap
-                if distance_pct > 0.02:
-                    score += 5.0
-                elif distance_pct > 0.01:
-                    score += 3.0
-                else:
-                    score += 2.0
-
-        return min(score, self.weights['trend_strength'])
-
-    def _score_momentum(self, df: pd.DataFrame, indicators: Dict, side: str) -> float:
+    @staticmethod
+    def _score_dual_rsi(
+        df: pd.DataFrame, indicators: Dict, side: str, max_pts: int
+    ) -> float:
         """
-        Score momentum (0-20 points)
+        Dual RSI (0-max_pts).
 
-        Factors:
-        - RSI position and direction (0-10 points)
-        - MACD histogram direction and strength (0-10 points)
+        RSI_14 confirms the trend direction; RSI_9 confirms the momentum pulse.
+        Both must align for full points — misalignment caps the score at 60%.
         """
         score = 0.0
 
-        # RSI scoring (0-10 points)
-        rsi_series = indicators.get('rsi', pd.Series([50]))
-        rsi = scalar(rsi_series.iloc[-1])
-        rsi_prev = scalar(rsi_series.iloc[-2]) if len(rsi_series) >= 2 else rsi
+        rsi14_series = indicators.get("rsi", pd.Series([50.0]))
+        rsi14 = float(scalar(rsi14_series.iloc[-1]))
+        rsi14_prev = float(scalar(rsi14_series.iloc[-2])) if len(rsi14_series) >= 2 else rsi14
 
-        if side == 'long':
-            # RSI in bullish range (40-70) and rising
-            if 40 < rsi < 70:
-                score += 5.0
-                if rsi > rsi_prev:  # Rising
-                    score += 5.0
-                elif rsi > rsi_prev - 2:  # Slightly declining but still good
-                    score += 3.0
-            elif 30 < rsi <= 40:  # Oversold bounce potential
-                score += 7.0
-            elif rsi >= 70:  # Overbought - risky
-                score += 2.0
-        else:  # short
-            # RSI in bearish range (30-60) and falling
-            if 30 < rsi < 60:
-                score += 5.0
-                if rsi < rsi_prev:  # Falling
-                    score += 5.0
-                elif rsi < rsi_prev + 2:
-                    score += 3.0
-            elif 60 <= rsi < 70:  # Overbought reversal potential
-                score += 7.0
-            elif rsi <= 30:  # Oversold - risky
-                score += 2.0
+        # Build RSI_9 from raw data if not pre-calculated in indicators
+        rsi9_series = indicators.get("rsi_9", None)
+        if rsi9_series is None:
+            try:
+                from indicators import calculate_rsi
+                rsi9_series = calculate_rsi(df, period=9)
+            except Exception as _rsi9_err:
+                logger.debug("RSI_9 calculation failed, falling back to RSI_14: %s", _rsi9_err)
+                rsi9_series = rsi14_series  # fallback to RSI_14
+        rsi9 = float(scalar(rsi9_series.iloc[-1]))
 
-        # MACD histogram scoring (0-10 points)
-        macd_hist_series = indicators.get('histogram', pd.Series([0]))
-        macd_hist = macd_hist_series.iloc[-1]
-        macd_hist_prev = macd_hist_series.iloc[-2] if len(macd_hist_series) >= 2 else macd_hist
-
-        if side == 'long':
-            if macd_hist > 0:  # Positive histogram
-                score += 5.0
-                if macd_hist > macd_hist_prev:  # Increasing
-                    score += 5.0
-                else:
+        # ── RSI_14 trend direction (0-12 pts) ────────────────────────────
+        if side == "long":
+            if 40 < rsi14 < 70:
+                score += 8.0
+                if rsi14 > rsi14_prev:
+                    score += 4.0
+                elif rsi14 > rsi14_prev - 2:
                     score += 2.0
-            elif macd_hist > macd_hist_prev:  # Negative but improving
-                score += 3.0
-        else:  # short
-            if macd_hist < 0:  # Negative histogram
-                score += 5.0
-                if macd_hist < macd_hist_prev:  # Decreasing
-                    score += 5.0
-                else:
-                    score += 2.0
-            elif macd_hist < macd_hist_prev:  # Positive but weakening
-                score += 3.0
-
-        return min(score, self.weights['momentum'])
-
-    def _score_price_action(self, df: pd.DataFrame, indicators: Dict, side: str) -> float:
-        """
-        Score price action patterns (0-20 points)
-
-        Factors:
-        - Candlestick patterns (0-10 points)
-        - Pullback to support/resistance (0-10 points)
-        """
-        score = 0.0
-
-        current = df.iloc[-1]
-        previous = df.iloc[-2] if len(df) >= 2 else current
-
-        body = current['close'] - current['open']
-        prev_body = previous['close'] - previous['open']
-        total_range = current['high'] - current['low']
-
-        # Candlestick patterns (0-10 points)
-        if side == 'long':
-            # Bullish engulfing
-            if (prev_body < 0 and body > 0 and
-                current['close'] > previous['open'] and
-                current['open'] < previous['close']):
+            elif 30 < rsi14 <= 40:   # oversold bounce
                 score += 10.0
-
-            # Hammer
-            elif total_range > 0:
-                lower_wick = current['open'] - current['low'] if body > 0 else current['close'] - current['low']
-                if body > 0 and lower_wick > abs(body) * 2 and lower_wick / total_range > 0.6:
-                    score += 8.0
-
-            # Strong bullish candle
-            elif body > 0 and abs(body) / total_range > 0.7:
+            elif rsi14 <= 30:         # deep oversold
                 score += 6.0
-
-            # Regular bullish candle
-            elif body > 0:
-                score += 4.0
-
-        else:  # short
-            # Bearish engulfing
-            if (prev_body > 0 and body < 0 and
-                current['close'] < previous['open'] and
-                current['open'] > previous['close']):
+            elif rsi14 >= 70:         # overbought — partial credit only
+                score += 1.0
+        else:
+            if 30 < rsi14 < 60:
+                score += 8.0
+                if rsi14 < rsi14_prev:
+                    score += 4.0
+                elif rsi14 < rsi14_prev + 2:
+                    score += 2.0
+            elif 60 <= rsi14 < 70:   # overbought reversal
                 score += 10.0
-
-            # Shooting star
-            elif total_range > 0:
-                upper_wick = current['high'] - current['open'] if body < 0 else current['high'] - current['close']
-                if body < 0 and upper_wick > abs(body) * 2 and upper_wick / total_range > 0.6:
-                    score += 8.0
-
-            # Strong bearish candle
-            elif body < 0 and abs(body) / total_range > 0.7:
+            elif rsi14 >= 70:
                 score += 6.0
+            elif rsi14 <= 30:
+                score += 1.0
 
-            # Regular bearish candle
-            elif body < 0:
+        # ── RSI_9 momentum pulse (0-10 pts) ──────────────────────────────
+        rsi9_bonus = 0.0
+        if side == "long":
+            if rsi9 > 55:
+                rsi9_bonus = 10.0
+            elif rsi9 > 50:
+                rsi9_bonus = 7.0
+            elif rsi9 > 45:
+                rsi9_bonus = 4.0
+        else:
+            if rsi9 < 45:
+                rsi9_bonus = 10.0
+            elif rsi9 < 50:
+                rsi9_bonus = 7.0
+            elif rsi9 < 55:
+                rsi9_bonus = 4.0
+
+        # Cap RSI_9 bonus at 60% of max when RSI_14 direction misaligns
+        rsi14_long_ok  = side == "long"  and 30 < rsi14 < 75
+        rsi14_short_ok = side == "short" and 25 < rsi14 < 70
+        if not (rsi14_long_ok or rsi14_short_ok):
+            rsi9_bonus *= 0.6
+
+        score += rsi9_bonus
+        return min(score, float(max_pts))
+
+    @staticmethod
+    def _score_macd(
+        df: pd.DataFrame, indicators: Dict, side: str, max_pts: int
+    ) -> float:
+        """MACD momentum (0-max_pts)."""
+        score = 0.0
+
+        hist_series = indicators.get("histogram", pd.Series([0.0]))
+        hist = float(hist_series.iloc[-1])
+        hist_prev = float(hist_series.iloc[-2]) if len(hist_series) >= 2 else hist
+
+        if side == "long":
+            if hist > 0:
+                score += 7.0
+                if hist > hist_prev:       # accelerating
+                    score += 6.0
+                else:
+                    score += 2.0
+            elif hist > hist_prev:         # negative but turning
+                score += 4.0
+        else:
+            if hist < 0:
+                score += 7.0
+                if hist < hist_prev:
+                    score += 6.0
+                else:
+                    score += 2.0
+            elif hist < hist_prev:
                 score += 4.0
 
-        # Pullback to EMA/VWAP (0-10 points)
-        current_price = current['close']
-        ema21 = indicators.get('ema_21', pd.Series([current_price])).iloc[-1]
-        vwap = indicators.get('vwap', pd.Series([current_price])).iloc[-1]
+        return min(score, float(max_pts))
 
-        # Check if price is near support (for long) or resistance (for short)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.01
-        near_vwap = abs(current_price - vwap) / vwap < 0.01
-
-        if near_ema21 or near_vwap:
-            score += 10.0
-        elif abs(current_price - ema21) / ema21 < 0.02 or abs(current_price - vwap) / vwap < 0.02:
-            score += 5.0
-
-        return min(score, self.weights['price_action'])
-
-    def _score_volume(self, df: pd.DataFrame, indicators: Dict) -> float:
+    @staticmethod
+    def _score_volume(df: pd.DataFrame, max_pts: int) -> float:
         """
-        Score volume confirmation (0-15 points)
+        Volume vs 20-period baseline (0-max_pts).
 
-        Factors:
-        - Current volume vs average
-        - Volume trend
+        Using 20-period average eliminates single-candle spike distortion.
+        Below-average volume still earns partial credit so the scorer never
+        zeroes out an otherwise strong setup due to quiet markets.
         """
-        score = 0.0
+        if len(df) < 5:
+            return float(max_pts) * _PARTIAL_CREDIT  # not enough data → neutral partial credit
 
-        current_volume = df['volume'].iloc[-1]
+        current_vol = float(df["volume"].iloc[-1])
+        baseline_len = min(20, len(df) - 1)
+        avg_vol = float(df["volume"].iloc[-(baseline_len + 1):-1].mean())
 
-        # Compare to 5-period average
-        if len(df) >= 5:
-            avg_volume_5 = df['volume'].iloc[-5:].mean()
-            volume_ratio = current_volume / avg_volume_5 if avg_volume_5 > 0 else 0
+        if avg_vol <= 0:
+            return float(max_pts) * _PARTIAL_CREDIT
 
-            if volume_ratio >= 1.5:  # 50% above average
-                score += 15.0
-            elif volume_ratio >= 1.2:  # 20% above average
-                score += 10.0
-            elif volume_ratio >= 0.8:  # Close to average
-                score += 5.0
-            elif volume_ratio >= 0.5:  # Below average
-                score += 2.0
+        ratio = current_vol / avg_vol
 
-        return min(score, self.weights['volume'])
+        if ratio >= 2.0:
+            pts = float(max_pts)
+        elif ratio >= 1.5:
+            pts = float(max_pts) * 0.85
+        elif ratio >= 1.2:
+            pts = float(max_pts) * 0.65
+        elif ratio >= 0.8:
+            pts = float(max_pts) * 0.45   # average — partial credit
+        elif ratio >= 0.5:
+            pts = float(max_pts) * 0.25
+        else:
+            pts = float(max_pts) * 0.10
 
-    def _score_market_structure(self, df: pd.DataFrame, indicators: Dict, side: str) -> float:
+        return min(pts, float(max_pts))
+
+    @staticmethod
+    def _score_volatility(df: pd.DataFrame, indicators: Dict, max_pts: int) -> float:
         """
-        Score market structure (0-20 points)
+        ATR-based volatility quality (0-max_pts).
 
-        Factors:
-        - Swing high/low proximity
-        - Support/resistance levels
-        - Higher highs / Lower lows pattern
+        Ideal: ATR% in [0.3%, 4.0%] range — enough room to profit, not a
+        flash-crash.  Scores fall off outside this band.
         """
-        score = 0.0
+        atr_series = indicators.get("atr", None)
+        price = float(df["close"].iloc[-1])
+        if atr_series is None or price <= 0:
+            return float(max_pts) * 0.5   # neutral when ATR unavailable
 
-        if len(df) < 10:
+        try:
+            atr = float(scalar(atr_series.iloc[-1]))
+        except Exception:
+            return float(max_pts) * 0.5
+
+        atr_pct = (atr / price) * 100.0  # ATR as % of price
+
+        if 0.5 <= atr_pct <= 3.0:
+            pts = float(max_pts)
+        elif 0.3 <= atr_pct < 0.5:
+            pts = float(max_pts) * 0.65
+        elif 3.0 < atr_pct <= 5.0:
+            pts = float(max_pts) * 0.70
+        elif atr_pct > 5.0:
+            pts = float(max_pts) * 0.30   # too volatile
+        else:
+            pts = float(max_pts) * 0.20   # near-zero volatility → flat market
+
+        return min(pts, float(max_pts))
+
+    @staticmethod
+    def _score_price_action(
+        df: pd.DataFrame, indicators: Dict, side: str, max_pts: int
+    ) -> float:
+        """
+        Price action (0-max_pts).
+
+        Sub-components:
+        - Candlestick pattern (0-8 pts): engulfing > pin bar > strong candle > regular
+        - Pullback proximity  (0-4 pts): price near EMA21 or VWAP support/resistance
+        """
+        if len(df) < 2:
             return 0.0
 
-        current_price = df['close'].iloc[-1]
+        score = 0.0
+        cur  = df.iloc[-1]
+        prev = df.iloc[-2]
 
-        # Find recent swing high and low
-        lookback = min(20, len(df))
-        recent_high = df['high'].iloc[-lookback:].max()
-        recent_low = df['low'].iloc[-lookback:].min()
+        body      = float(cur["close"] - cur["open"])
+        prev_body = float(prev["close"] - prev["open"])
+        rng       = float(cur["high"] - cur["low"])
 
-        if side == 'long':
-            # Score based on distance from swing low (support)
-            distance_from_low = (current_price - recent_low) / recent_low
-
-            if distance_from_low < 0.02:  # Very close to support (within 2%)
-                score += 15.0
-            elif distance_from_low < 0.05:  # Close to support (within 5%)
-                score += 10.0
-            elif distance_from_low < 0.10:  # Moderate distance
-                score += 5.0
-
-            # Check for higher lows pattern
-            if len(df) >= 20:
-                lows = df['low'].iloc[-20:]
-                # Simple check: last 3 swing lows are increasing
-                if lows.iloc[-10:].min() > lows.iloc[-20:-10].min():
+        # ── Candlestick pattern (0-8 pts) ─────────────────────────────────
+        if side == "long":
+            # Bullish engulfing
+            if (prev_body < 0 and body > 0
+                    and cur["close"] > prev["open"]
+                    and cur["open"] < prev["close"]):
+                score += 8.0
+            # Hammer / pin bar
+            elif rng > 0:
+                lower_wick = (
+                    float(cur["open"] - cur["low"]) if body > 0
+                    else float(cur["close"] - cur["low"])
+                )
+                if body > 0 and lower_wick > abs(body) * 2 and lower_wick / rng > 0.55:
+                    score += 7.0
+                elif body > 0 and abs(body) / rng > 0.65:
                     score += 5.0
-
-        else:  # short
-            # Score based on distance from swing high (resistance)
-            distance_from_high = (recent_high - current_price) / recent_high
-
-            if distance_from_high < 0.02:  # Very close to resistance
-                score += 15.0
-            elif distance_from_high < 0.05:  # Close to resistance
-                score += 10.0
-            elif distance_from_high < 0.10:  # Moderate distance
-                score += 5.0
-
-            # Check for lower highs pattern
-            if len(df) >= 20:
-                highs = df['high'].iloc[-20:]
-                if highs.iloc[-10:].max() < highs.iloc[-20:-10].max():
+                elif body > 0:
+                    score += 3.0
+                elif body == 0:          # doji near support → partial
+                    score += 2.0
+        else:
+            # Bearish engulfing
+            if (prev_body > 0 and body < 0
+                    and cur["close"] < prev["open"]
+                    and cur["open"] > prev["close"]):
+                score += 8.0
+            # Shooting star / pin bar
+            elif rng > 0:
+                upper_wick = (
+                    float(cur["high"] - cur["open"]) if body < 0
+                    else float(cur["high"] - cur["close"])
+                )
+                if body < 0 and upper_wick > abs(body) * 2 and upper_wick / rng > 0.55:
+                    score += 7.0
+                elif body < 0 and abs(body) / rng > 0.65:
                     score += 5.0
+                elif body < 0:
+                    score += 3.0
+                elif body == 0:
+                    score += 2.0
 
-        return min(score, self.weights['market_structure'])
+        # ── Pullback to EMA21 / VWAP (0-4 pts) ───────────────────────────
+        price = float(cur["close"])
+        ema21 = float(indicators.get("ema_21", pd.Series([price])).iloc[-1])
+        vwap  = float(indicators.get("vwap",  pd.Series([price])).iloc[-1])
+
+        dist_ema = abs(price - ema21) / max(ema21, 1e-9)
+        dist_vwap = abs(price - vwap) / max(vwap, 1e-9)
+
+        if dist_ema < 0.005 or dist_vwap < 0.005:   # within 0.5%
+            score += 4.0
+        elif dist_ema < 0.015 or dist_vwap < 0.015: # within 1.5%
+            score += 2.5
+        elif dist_ema < 0.03 or dist_vwap < 0.03:   # within 3%
+            score += 1.0
+
+        return min(score, float(max_pts))
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _classify_score(self, score: float) -> str:
-        """
-        Classify score into quality categories
-
-        Args:
-            score: Total score (0-100)
-
-        Returns:
-            Quality classification string
-        """
         if score >= self.excellent_score_threshold:
             return "Excellent"
-        elif score >= 70:
+        if score >= 60:
             return "Good"
-        elif score >= self.min_score_threshold:
+        if score >= 45:
             return "Fair"
-        elif score >= 40:
+        if score >= 30:
             return "Marginal"
-        else:
-            return "Weak"
-
-    def should_enter_trade(self, score: float) -> bool:
-        """
-        Determine if trade should be entered based on score
-
-        Args:
-            score: Entry score (0-100)
-
-        Returns:
-            True if score meets minimum threshold
-        """
-        return score >= self.min_score_threshold
+        return "Weak"
 
 
-# Global instance
+# Global instance (backward compat)
 entry_scorer = EnhancedEntryScorer()

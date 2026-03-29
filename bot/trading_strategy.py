@@ -754,6 +754,36 @@ except ImportError:
         get_auto_tuning_ai_layer = None  # type: ignore
         logger.warning("⚠️ Auto-Tuning AI Layer not available — static thresholds in use")
 
+# ── Nija AI Engine — rank-first adaptive entry coordinator ───────────────────
+try:
+    from nija_ai_engine import get_nija_ai_engine, NijaAIEngine
+    NIJA_AI_ENGINE_AVAILABLE = True
+    logger.info("✅ Nija AI Engine loaded")
+except ImportError:
+    try:
+        from bot.nija_ai_engine import get_nija_ai_engine, NijaAIEngine
+        NIJA_AI_ENGINE_AVAILABLE = True
+        logger.info("✅ Nija AI Engine loaded")
+    except ImportError:
+        NIJA_AI_ENGINE_AVAILABLE = False
+        get_nija_ai_engine = None  # type: ignore
+        NijaAIEngine = None  # type: ignore
+
+# ── Nija Core Loop — rebuilt single-pass scan / rank / enter loop ────────────
+try:
+    from nija_core_loop import get_nija_core_loop, NijaCoreLoop
+    NIJA_CORE_LOOP_AVAILABLE = True
+    logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
+except ImportError:
+    try:
+        from bot.nija_core_loop import get_nija_core_loop, NijaCoreLoop
+        NIJA_CORE_LOOP_AVAILABLE = True
+        logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
+    except ImportError:
+        NIJA_CORE_LOOP_AVAILABLE = False
+        get_nija_core_loop = None  # type: ignore
+        NijaCoreLoop = None  # type: ignore
+
 # ── Win-Rate / Frequency Tuner — optimise EV by balancing quality vs volume ──
 try:
     from win_rate_frequency_tuner import get_win_rate_frequency_tuner
@@ -4418,6 +4448,20 @@ class TradingStrategy:
                         logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
 
                 logger.info("✅ TradingStrategy initialized (APEX v7.1 + Multi-Broker + 8-Position Cap)")
+
+                # ── Nija Core Loop — attach to TradingStrategy ────────────────
+                if NIJA_CORE_LOOP_AVAILABLE and get_nija_core_loop is not None and self.apex is not None:
+                    try:
+                        self.nija_core_loop = get_nija_core_loop(
+                            apex_strategy=self.apex,
+                            max_positions=MAX_POSITIONS_ALLOWED,
+                        )
+                        logger.info("✅ Nija Core Loop attached to TradingStrategy")
+                    except Exception as _ncl_init_err:
+                        logger.warning("⚠️ Nija Core Loop init skipped: %s", _ncl_init_err)
+                        self.nija_core_loop = None
+                else:
+                    self.nija_core_loop = None
             else:
                 logger.warning("Strategy initialized in monitor mode (no active brokers)")
                 self.enforcer = None
@@ -10544,6 +10588,9 @@ class TradingStrategy:
                                     continue
                             else:
                                 # PLATFORM ACCOUNT — generate signal via APEX and publish via master router
+                                # Set symbol hint so check_entry_with_enhanced_scoring can log it
+                                if self.apex is not None:
+                                    self.apex._current_symbol = symbol
                                 analysis = self.apex.analyze_market(df, symbol, broker_balance)
 
                                 # ═══════════════════════════════════════════════════════
