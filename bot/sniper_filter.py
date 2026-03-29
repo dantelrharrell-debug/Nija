@@ -5,56 +5,44 @@ NIJA Sniper Filter
 Final pre-execution gate that raises the bar to "sniper quality" before any
 trade reaches the order book.
 
-With only one trade at a time your edge **is** everything.  This filter
-enforces four hard pillars simultaneously.  Every pillar must pass; if any
-one fails the trade is vetoed.
+Gate decisions use a **Tiered Pass System** keyed on the AI confidence score.
+A high-conviction signal needs less supporting evidence; a weaker signal must
+clear more corroborating conditions.  No single missing condition hard-blocks
+the trade — instead, risk is scaled down via the ``reduced_size`` flag when
+alignment is only partial.
 
-Pillar 1 — Trend Confirmation (MTF)
-    5-minute and 15-minute price action must both be aligned with the signal
-    direction.  Market structure must show Higher Highs + Higher Lows (long)
-    or Lower Highs + Lower Lows (short) on the base timeframe.
-
-Pillar 2 — Momentum Trigger
-    Either a confirmed breakout above/below the rolling high/low OR a strong
-    candle close (body ≥ ``strong_body_pct`` × candle range).  Volume must be
-    ≥ ``volume_spike_multiplier`` × 20-period rolling average.
-
-Pillar 3 — Liquidity Check
-    Bid-ask spread must be ≤ ``max_spread_pct``.  Optionally a minimum USD
-    depth can be enforced when order-book data is available.
-
-Pillar 4 — Confidence Threshold
-    Trade signal confidence (0–1) must be ≥ ``min_confidence`` (default 0.65).
-
-Instant block conditions (checked first):
-    • ADX < ``min_adx`` → chop / sideways market
-    • Volume < ``low_volume_multiplier`` × average → thin market
-    • Price is range-bound (small ATR relative to range) without a breakout
-
-Usage
+Tiers
 -----
-::
+ELITE   (conf >= strong_threshold, default 0.70)
+    High-conviction setup.  Only ``spread_ok AND regime_match`` required.
+    Volume and volatility weakness are tolerated — trade proceeds at full or
+    reduced size depending on the weighted score.
 
-    from bot.sniper_filter import get_sniper_filter
+STANDARD (conf >= medium_threshold, default 0.50)
+    Normal setup.  ``volume_ok AND volatility_ok AND spread_ok`` required.
+    Regime alignment boosts the weighted score but is not a hard gate.
 
-    sf = get_sniper_filter()
-    result = sf.check(
-        symbol="BTC-USD",
-        df=df,                  # OHLCV + indicators DataFrame
-        signal_side="long",
-        confidence=0.72,
-        bid=price * 0.9995,
-        ask=price * 1.0005,
-    )
-    if not result.passed:
-        logger.info("🎯 SNIPER FILTER blocked %s: %s", symbol, result.reason)
-        return  # skip trade
+SCALP   (conf >= weak_threshold, default 0.35)
+    Scalp / consolidation mode.  Only ``spread_ok AND volatility_ok`` needed.
+    Thin volume is acceptable — position is sized down instead of rejected.
 
-Singleton
----------
-``get_sniper_filter()`` returns the same instance for the lifetime of the
-process, which keeps state-less computation cheap and avoids configuration
-drift.
+REJECTED (conf < weak_threshold)
+    Below minimum acceptable confidence — trade vetoed.
+
+Position sizing
+---------------
+After the tier gate passes, the weighted score (0–7) determines size:
+  score >= SNIPER_SCORE_THRESHOLD (5) → full position
+  score <  SNIPER_SCORE_THRESHOLD     → ``reduced_size=True``
+    (caller multiplies size by SNIPER_BORDERLINE_POSITION_MULTIPLIER = 0.5)
+
+Weighted score components
+-------------------------
+  ai_score_pass  (confidence >= min_confidence) : +2
+  volume_pass    (vol_ratio >= low_volume_multiplier) : +1
+  volatility_pass (ADX >= min_adx) : +1
+  spread_ok      (bid-ask spread <= max_spread_pct) : +1
+  regime_match   (MTF EMA trend aligned) : +2
 """
 
 from __future__ import annotations
@@ -122,20 +110,48 @@ class SniperConfig:
         default_factory=lambda: _env_float("SNIPER_MIN_CONFIDENCE", 0.45)
     )
 
-    # ── Instant-block thresholds ─────────────────────────────────────────────
-    # ADX below this value is treated as choppy/sideways — instant block.
-    # Set to 0.0 to disable the ADX check (e.g. when ADX column is absent).
-    # env: SNIPER_MIN_ADX — override default 10.0 (e.g. 8.0 for flip mode)
+    # ── Soft-condition thresholds ─────────────────────────────────────────────
+    # ADX below this value = weak trend — scored as volatility_pass=False.
+    # Set to 0.0 to disable (e.g. when ADX column is absent).
+    # env: SNIPER_MIN_ADX
     min_adx: float = field(
         default_factory=lambda: _env_float("SNIPER_MIN_ADX", 10.0)
     )
 
-    # Volume below this multiple of average = thin market → instant block.
-    low_volume_multiplier: float = 0.4  # TUNED: Lowered from 0.5 to 0.4 — blocks severely thin markets while allowing moderate dips
+    # Volume below this multiple of average = thin market — scored as volume_pass=False.
+    low_volume_multiplier: float = 0.4  # TUNED: allows quieter markets that were previously hard-blocked
 
     # Minimum bars required in the DataFrame for any check to run
     min_bars: int = 25
 
+    # ── Tiered pass thresholds (keyed on AI confidence 0–1) ──────────────────
+    # ELITE  : conf >= strong_threshold → only spread_ok AND regime_match needed
+    # STANDARD: conf >= medium_threshold → volume_ok AND volatility_ok AND spread_ok needed
+    # SCALP  : conf >= weak_threshold   → spread_ok AND volatility_ok only needed
+    # REJECTED: conf <  weak_threshold  → always blocked
+    # Override via environment variables for live tuning without code changes.
+    strong_threshold: float = field(
+        default_factory=lambda: _env_float("SNIPER_STRONG_THRESHOLD", 0.70)
+    )
+    medium_threshold: float = field(
+        default_factory=lambda: _env_float("SNIPER_MEDIUM_THRESHOLD", 0.50)
+    )
+    weak_threshold: float = field(
+        default_factory=lambda: _env_float("SNIPER_WEAK_THRESHOLD", 0.35)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Weighted scoring constants
+# ---------------------------------------------------------------------------
+
+# Weighted scoring decision threshold.
+# Tier gate passes first; this score then decides whether position is full or reduced.
+SNIPER_SCORE_THRESHOLD: int = 5       # score >= 5 → full size; score < 5 → reduced size
+
+# When the tier gate passes but weighted score < SNIPER_SCORE_THRESHOLD,
+# the caller should multiply position size by this factor.
+SNIPER_BORDERLINE_POSITION_MULTIPLIER: float = 0.5
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -148,6 +164,9 @@ class SniperResult:
     passed: bool
     reason: str
     details: Dict = field(default_factory=dict)
+    # True when the tier gate passed but the weighted score < SNIPER_SCORE_THRESHOLD.
+    # The caller should multiply position size by SNIPER_BORDERLINE_POSITION_MULTIPLIER.
+    reduced_size: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -165,11 +184,14 @@ class SniperFilter:
     def __init__(self, config: Optional[SniperConfig] = None) -> None:
         self._cfg = config or SniperConfig()
         logger.info(
-            "🎯 SniperFilter initialized "
-            "(min_confidence=%.2f, min_adx=%.1f, vol_spike=%.1fx, max_spread=%.3f)",
-            self._cfg.min_confidence,
+            "🎯 SniperFilter initialized — Tiered Pass System "
+            "(strong=%.2f elite, medium=%.2f standard, weak=%.2f scalp | "
+            "min_adx=%.1f, vol_floor=%.2fx, max_spread=%.3f)",
+            self._cfg.strong_threshold,
+            self._cfg.medium_threshold,
+            self._cfg.weak_threshold,
             self._cfg.min_adx,
-            self._cfg.volume_spike_multiplier,
+            self._cfg.low_volume_multiplier,
             self._cfg.max_spread_pct,
         )
 
@@ -188,30 +210,25 @@ class SniperFilter:
         depth_usd: float = 0.0,
     ) -> SniperResult:
         """
-        Evaluate all four sniper pillars for a candidate trade.
+        Evaluate trade quality using the Tiered Pass System.
 
-        Parameters
-        ----------
-        symbol:
-            Trading pair being evaluated (for logging).
-        df:
-            OHLCV DataFrame with at minimum columns ``open``, ``high``,
-            ``low``, ``close``, ``volume``.  Optional: ``adx``, ``rsi``.
-            The index should be a DatetimeIndex (needed for MTF resampling).
-        signal_side:
-            ``"long"`` or ``"short"``.
-        confidence:
-            Signal confidence (0–1 scale) from the strategy scorer.
-        bid:
-            Current best bid.  Pass 0.0 to skip the spread check.
-        ask:
-            Current best ask.  Pass 0.0 to skip the spread check.
-        depth_usd:
-            Best-5-level USD depth.  Pass 0.0 to skip depth check.
+        The AI confidence score determines which tier applies; each tier
+        has its own required conditions.  A high-conviction signal can pass
+        with fewer supporting conditions, allowing more participation without
+        lowering the floor for weak signals.
 
-        Returns
-        -------
-        SniperResult
+        Tier gate (primary decision)
+        ----------------------------
+        ELITE   (conf >= strong_threshold): spread_ok AND regime_match
+        STANDARD (conf >= medium_threshold): volume_ok AND volatility_ok AND spread_ok
+        SCALP   (conf >= weak_threshold):   spread_ok AND volatility_ok
+        REJECTED (conf < weak_threshold):   always blocked
+
+        Position sizing (secondary — uses weighted score 0–7)
+        -------------------------------------------------------
+        weighted_score >= SNIPER_SCORE_THRESHOLD (5): full size
+        weighted_score == SNIPER_BORDERLINE_THRESHOLD (4): reduced_size=True
+        weighted_score < 4 but tier passed: reduced_size=True (conservative)
         """
         cfg = self._cfg
         details: Dict = {
@@ -220,7 +237,7 @@ class SniperFilter:
             "confidence": confidence,
         }
 
-        # ── 0. Minimum data guard ─────────────────────────────────────────────
+        # ── 0. Minimum data guard (hard block — can't score without data) ──────
         if not isinstance(df, pd.DataFrame) or len(df) < cfg.min_bars:
             reason = f"Insufficient data: {len(df) if isinstance(df, pd.DataFrame) else 0} bars < {cfg.min_bars} required"
             details["block_reason"] = "insufficient_data"
@@ -235,85 +252,136 @@ class SniperFilter:
 
         is_long = signal_side.lower() in ("long", "buy", "enter_long")
 
-        # ── INSTANT BLOCK: Chop / sideways ────────────────────────────────────
-        if cfg.min_adx > 0 and "adx" in df.columns:
-            adx_val = float(df["adx"].iloc[-1])
-            details["adx"] = adx_val
-            if adx_val < cfg.min_adx:
-                reason = (
-                    f"Choppy market: ADX {adx_val:.1f} < min {cfg.min_adx:.1f} "
-                    f"(sideways / no trend)"
-                )
-                details["block_reason"] = "chop_adx"
-                logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
-                return SniperResult(passed=False, reason=reason, details=details)
+        # ── Weighted scoring (7 points total, threshold = 5) ──────────────────
+        # Trades with score >= 5 are approved.
+        # Score == 4 is borderline: approved with reduced_size = True.
+        score = 0
 
-        # ── INSTANT BLOCK: Low volume ─────────────────────────────────────────
+        # ── ai_score_pass (+2): confidence vs threshold ───────────────────────
+        details["min_confidence"] = cfg.min_confidence
+        ai_score_pass = confidence >= cfg.min_confidence
+        if ai_score_pass:
+            score += 2
+        details["ai_score_pass"] = ai_score_pass
+
+        # ── volume_pass (+1): current volume vs rolling average ───────────────
         volume_now = float(df["volume"].iloc[-1])
         avg_volume = _rolling_mean(df["volume"], cfg.volume_lookback)
         details["volume_now"] = volume_now
         details["avg_volume"] = avg_volume
-        if avg_volume > 0:
-            vol_ratio = volume_now / avg_volume
-            details["volume_ratio"] = vol_ratio
-            if vol_ratio < cfg.low_volume_multiplier:
-                reason = (
-                    f"Low volume: ratio {vol_ratio:.2f}x < {cfg.low_volume_multiplier:.2f}x "
-                    f"(thin market)"
-                )
-                details["block_reason"] = "low_volume"
-                logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
-                return SniperResult(passed=False, reason=reason, details=details)
-        else:
-            vol_ratio = 0.0
+        vol_ratio = (volume_now / avg_volume) if avg_volume > 0 else 0.0
+        details["volume_ratio"] = vol_ratio
+        volume_pass = vol_ratio >= cfg.low_volume_multiplier
+        if volume_pass:
+            score += 1
+        details["volume_pass"] = volume_pass
 
-        # ── PILLAR 4: Confidence threshold ────────────────────────────────────
-        details["min_confidence"] = cfg.min_confidence
-        if confidence < cfg.min_confidence:
-            reason = (
-                f"Confidence {confidence:.2f} below minimum {cfg.min_confidence:.2f}"
-            )
-            details["block_reason"] = "low_confidence"
-            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
-            return SniperResult(passed=False, reason=reason, details=details)
+        # ── volatility_pass (+1): ADX trend strength proxy ────────────────────
+        volatility_pass = True  # default: pass if ADX column absent
+        if cfg.min_adx > 0 and "adx" in df.columns:
+            adx_val = float(df["adx"].iloc[-1])
+            details["adx"] = adx_val
+            volatility_pass = adx_val >= cfg.min_adx
+        if volatility_pass:
+            score += 1
+        details["volatility_pass"] = volatility_pass
 
-        # ── PILLAR 1: Trend confirmation (MTF) ────────────────────────────────
-        mtf_pass, mtf_reason, mtf_details = self._check_mtf_trend(df, is_long)
-        details["mtf"] = mtf_details
-        if not mtf_pass:
-            reason = f"MTF trend not aligned: {mtf_reason}"
-            details["block_reason"] = "mtf_trend"
-            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
-            return SniperResult(passed=False, reason=reason, details=details)
-
-        # ── PILLAR 2: Momentum trigger ────────────────────────────────────────
-        mom_pass, mom_reason, mom_details = self._check_momentum(df, is_long, vol_ratio)
-        details["momentum"] = mom_details
-        if not mom_pass:
-            reason = f"Weak momentum: {mom_reason}"
-            details["block_reason"] = "weak_momentum"
-            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
-            return SniperResult(passed=False, reason=reason, details=details)
-
-        # ── PILLAR 3: Liquidity check ─────────────────────────────────────────
+        # ── spread_ok (+1): bid-ask liquidity check ───────────────────────────
         liq_pass, liq_reason, liq_details = self._check_liquidity(bid, ask, depth_usd)
         details["liquidity"] = liq_details
-        if not liq_pass:
-            reason = f"Poor liquidity: {liq_reason}"
-            details["block_reason"] = "poor_liquidity"
-            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
-            return SniperResult(passed=False, reason=reason, details=details)
+        spread_ok = liq_pass
+        if spread_ok:
+            score += 1
+        details["spread_ok"] = spread_ok
 
-        # ── All pillars passed ────────────────────────────────────────────────
+        # ── regime_match (+2): MTF trend alignment ────────────────────────────
+        mtf_pass, mtf_reason, mtf_details = self._check_mtf_trend(df, is_long)
+        details["mtf"] = mtf_details
+        regime_match = mtf_pass
+        if regime_match:
+            score += 2
+        details["regime_match"] = regime_match
+
+        details["weighted_score"] = score
+
+        # ── Momentum check (informational — logged but not scored separately) ──
+        mom_pass, mom_reason, mom_details = self._check_momentum(df, is_long, vol_ratio)
+        details["momentum"] = mom_details
+
+        # ── Tiered Pass System — primary gate decision ────────────────────────
+        #
+        # ELITE: high-conviction signal → only spread + regime needed.
+        #   Volume and volatility are desirable but not blocking.
+        #
+        # STANDARD: normal signal → volume + volatility + spread all needed.
+        #   Regime alignment is a bonus for position sizing, not a gate.
+        #
+        # SCALP: weaker signal in scalp/consolidation mode → spread + volatility.
+        #   Volume can be thin; we trade smaller rather than reject entirely.
+        #
+        # REJECTED: confidence below the floor → no trade.
+
+        if confidence >= cfg.strong_threshold:
+            tier = "ELITE"
+            tier_pass = spread_ok and regime_match
+            tier_reason = (
+                f"ELITE tier (conf={confidence:.2f} >= {cfg.strong_threshold:.2f}): "
+                f"spread={'✓' if spread_ok else '✗'} regime={'✓' if regime_match else '✗'}"
+            )
+        elif confidence >= cfg.medium_threshold:
+            tier = "STANDARD"
+            tier_pass = volume_pass and volatility_pass and spread_ok
+            tier_reason = (
+                f"STANDARD tier (conf={confidence:.2f} >= {cfg.medium_threshold:.2f}): "
+                f"volume={'✓' if volume_pass else '✗'} "
+                f"volatility={'✓' if volatility_pass else '✗'} "
+                f"spread={'✓' if spread_ok else '✗'}"
+            )
+        elif confidence >= cfg.weak_threshold:
+            tier = "SCALP"
+            tier_pass = spread_ok and volatility_pass
+            tier_reason = (
+                f"SCALP tier (conf={confidence:.2f} >= {cfg.weak_threshold:.2f}): "
+                f"spread={'✓' if spread_ok else '✗'} "
+                f"volatility={'✓' if volatility_pass else '✗'}"
+            )
+        else:
+            tier = "REJECTED"
+            tier_pass = False
+            tier_reason = (
+                f"REJECTED: confidence {confidence:.2f} < "
+                f"weak_threshold {cfg.weak_threshold:.2f}"
+            )
+
+        details["tier"] = tier
+        details["tier_pass"] = tier_pass
+        details["tier_reason"] = tier_reason
+
+        if not tier_pass:
+            details["block_reason"] = f"tier_{tier.lower()}_failed"
+            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, tier_reason)
+            return SniperResult(passed=False, reason=tier_reason, details=details)
+
+        # ── Position sizing via weighted score ────────────────────────────────
+        # Tier gate passed.  Use the weighted score to decide whether the
+        # position should be full-size or reduced.
+        reduce = score < SNIPER_SCORE_THRESHOLD  # score < 5 → borderline size
+        size_note = (
+            "full size"
+            if not reduce
+            else f"reduced size x{SNIPER_BORDERLINE_POSITION_MULTIPLIER}"
+        )
+
         logger.info(
             "   🎯✅ SNIPER FILTER approved %s "
-            "(conf=%.2f, vol=%.1fx, MTF=aligned, momentum=%s)",
-            symbol, confidence, vol_ratio, mom_details.get("trigger", "?"),
+            "(tier=%s, score=%d/7, conf=%.2f, vol=%.1fx, %s)",
+            symbol, tier, score, confidence, vol_ratio, size_note,
         )
         return SniperResult(
             passed=True,
-            reason="All sniper pillars passed",
+            reason=f"{tier_reason} | weighted={score}/7 | {size_note}",
             details=details,
+            reduced_size=reduce,
         )
 
     # ------------------------------------------------------------------

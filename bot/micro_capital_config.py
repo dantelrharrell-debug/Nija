@@ -58,21 +58,21 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # ============================================================================
 
 # Pro-Level Optimization (Jan 30, 2026):
-# - MAX_POSITIONS = 1: Single concurrent trade — maximum capital concentration
-# - MIN_POSITIONS = 1: Single concurrent trade — maximum capital concentration
+# - MAX_POSITIONS = 3: Up to 3 concurrent trades — frequency + compounding
+# - MIN_POSITIONS = 1: At least 1 concurrent trade
 # - MAX_POSITION_PCT = 25%: Larger individual positions for small capital efficiency
 # - RISK_PER_TRADE = 0.9%: Balanced risk control per trade
 #
-# Configuration (Mar 2026 — reset to single-trade mode):
-#   All balance ranges → max_positions = 1 (one trade at a time)
-#   This focuses capital on the highest-conviction trade while the compounding
-#   engine grows position sizes over time.
+# Configuration (Mar 2026 — increased to 3-position mode for higher frequency):
+#   Balance ranges → max_positions = 3 (REQUIRED for frequency + compounding)
+#   Multiple concurrent positions allow the bot to capture more opportunities
+#   while the compounding engine grows position sizes over time.
 #
 # NOTE: MAX_POSITION_PCT = 25% means each trade uses 25% of capital.
 # the risk_manager.py enforces max_total_exposure = 60% as a safeguard.
 
-MIN_POSITIONS = 1  # Minimum concurrent positions for micro accounts (lower bound of 1–1 range)
-MAX_POSITIONS = 1  # Maximum concurrent positions for micro accounts (upper bound of 1–1 range)
+MIN_POSITIONS = 1  # Minimum concurrent positions for micro accounts
+MAX_POSITIONS = 3  # Maximum concurrent positions for micro accounts (increased from 1 for frequency + compounding)
 
 # Position sizing as percentage of capital
 MAX_POSITION_PCT = 25.0  # Maximum 25% of capital per position (OPTIMIZED for small capital fast-frequency)
@@ -93,7 +93,7 @@ ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol
 # market_structure_filter.py for the scoring logic).
 # ============================================================================
 
-MAX_CONCURRENT_TRADES = 1   # Maximum simultaneous open trades
+MAX_CONCURRENT_TRADES = 3   # Maximum simultaneous open trades (increased from 1 for frequency + compounding)
 CAPITAL_PER_TRADE = 40.0    # Percentage of total capital allocated per trade (%) — $50–$100 × 40% = $20–$40 per trade
 ENTRY_SCAN_INTERVAL = 15    # Seconds between entry-opportunity scans (was 20 – faster for micro growth)
 MONITOR_INTERVAL = 45       # Seconds between open-position monitoring cycles
@@ -205,7 +205,7 @@ MIN_BALANCE_COINBASE = 10.0
 #   - trade_cooldown   = 300s   (5-min per-symbol cooldown between trades — tuned for faster trade flow)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = float('inf')  # Apply to ALL balances — 1 position, 95% capital
-MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 1          # Single position — maximum capital concentration
+MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 3          # 3 concurrent positions — REQUIRED for frequency + compounding
 MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 95.0   # 95% of capital per trade (maximise compounding speed)
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R)
@@ -426,7 +426,7 @@ except ImportError as _import_err:
     POS_UNLOCK_TIER_4              = 150.0
     POS_UNLOCK_TIER_5              = 300.0
     POS_UNLOCK_TIER_6              = 600.0
-    BASE_MAX_POSITIONS             = 1
+    BASE_MAX_POSITIONS             = 3  # Minimum 3 concurrent positions for frequency + compounding
 
 
 def get_position_size_pct(equity: float) -> float:
