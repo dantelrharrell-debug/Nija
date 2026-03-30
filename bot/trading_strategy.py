@@ -1774,7 +1774,7 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
 # A 25s gate gives sufficient headroom while preventing a single hung call from
 # blocking the cycle for 45s.  Cached balance (max age: 90s) is used as an
 # immediate fallback when the live fetch times out.
-BALANCE_FETCH_TIMEOUT = 30  # Hard timeout for balance API call (raised 25→30s for Kraken lag)
+BALANCE_FETCH_TIMEOUT = 15  # Hard timeout for balance API call (reduced to 15s for faster fallback to cache)
 CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness)
 
 # Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
@@ -2313,7 +2313,7 @@ def get_balance_based_max_positions(balance: float) -> int:
     Uses the CapitalTierHierarchy for smooth, tier-based scaling so the
     position cap grows proportionally with account size:
 
-      STARTER  ($50–99):    max 1–2 positions
+      STARTER  ($50–99):    max 2–5 positions (18% per position → 90% max exposure)
       SAVER    ($100–249):  max 2–3 positions
       INVESTOR ($250–999):  max 3–5 positions
       INCOME   ($1k–5k):    max 5–7 positions
@@ -2350,7 +2350,7 @@ def get_balance_based_max_positions(balance: float) -> int:
     else:
         # Fallback: simple ladder if capital_tier_hierarchy module unavailable
         if balance < BALANCE_THRESHOLD_SMALL:
-            cap = 2
+            cap = 5  # STARTER/SAVER range: up to 5 positions at 18% each
         elif balance < 1000.0:
             cap = 3
         elif balance < 5000.0:

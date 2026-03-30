@@ -96,7 +96,7 @@ ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol
 MAX_CONCURRENT_TRADES = 5   # Maximum simultaneous open trades (increased from 3 for higher frequency)
 CAPITAL_PER_TRADE = 18.0    # Percentage of total capital allocated per trade (%) — 5 × 18% = 90% max exposure, keeps 10% buffer
 ENTRY_SCAN_INTERVAL = 10    # Seconds between entry-opportunity scans (was 15 – faster for micro growth)
-MONITOR_INTERVAL = 15       # Seconds between open-position monitoring cycles (was 45)
+MONITOR_INTERVAL = 10       # Seconds between open-position monitoring cycles (was 15)
 
 # ============================================================================
 # RISK MANAGEMENT
