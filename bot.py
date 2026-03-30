@@ -634,7 +634,10 @@ def _run_bot_startup_and_trading():
         exchange_status = []
 
         # Check Coinbase
-        if os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET"):
+        coinbase_configured = bool(
+            os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET")
+        )
+        if coinbase_configured:
             exchanges_configured += 1
             exchange_status.append("✅ Coinbase")
             logger.info("✅ Coinbase credentials detected")
@@ -884,6 +887,10 @@ def _run_bot_startup_and_trading():
             if kraken_platform_configured and 'KRAKEN' not in connected_platform_brokers:
                 failed_platform_brokers.append('KRAKEN')
 
+            # Check if Coinbase was expected but didn't connect
+            if coinbase_configured and 'COINBASE' not in connected_platform_brokers:
+                failed_platform_brokers.append('COINBASE')
+
             # Track if Kraken credentials were not configured at all
             kraken_not_configured = not kraken_platform_configured
 
@@ -930,6 +937,14 @@ def _run_bot_startup_and_trading():
                                     logger.error("      → Fix: Wait 1-2 minutes and restart the bot")
                                 else:
                                     logger.error("      → Verify credentials at https://www.kraken.com/u/security/api")
+                        elif exchange == 'COINBASE':
+                            logger.warning("      Coinbase credentials are set but connection failed.")
+                            logger.warning("      Common causes:")
+                            logger.warning("        • Invalid API key or secret format")
+                            logger.warning("        • API key lacks required permissions")
+                            logger.warning("        • Account balance check failed (see logs above)")
+                            logger.warning("      → Run: python test_v2_balance.py for a detailed diagnosis")
+                            logger.warning("      → See README.md → '🔐 Coinbase API Setup' for help")
 
                 logger.info("")
                 logger.info(f"📈 Trading will occur on {len(connected_platform_brokers)} exchange(s)")
