@@ -114,6 +114,18 @@ except ImportError:
     except ImportError:
         get_cross_account_allocator = None
 
+# Import broker failure manager — auto-removes failed brokers, rebalances capital, retries intelligently
+try:
+    from bot.broker_failure_manager import get_broker_failure_manager
+    BROKER_FAILURE_MANAGER_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_failure_manager import get_broker_failure_manager
+        BROKER_FAILURE_MANAGER_AVAILABLE = True
+    except ImportError:
+        get_broker_failure_manager = None
+        BROKER_FAILURE_MANAGER_AVAILABLE = False
+
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -235,6 +247,16 @@ class IndependentBrokerTrader:
             except Exception as _ca_err:
                 logger.warning("   ⚠️  CrossAccountCapitalAllocator unavailable: %s", _ca_err)
 
+        # BROKER FAILURE MANAGER — auto-remove failed brokers, instant capital rebalancing,
+        # intelligent retry backoff (15 s → 30 s → 60 s)
+        self.broker_failure_manager = None
+        if BROKER_FAILURE_MANAGER_AVAILABLE and get_broker_failure_manager is not None:
+            try:
+                self.broker_failure_manager = get_broker_failure_manager()
+                logger.info("   ✅ Broker failure manager enabled — auto-remove + instant rebalance active")
+            except Exception as _bfm_err:
+                logger.warning("   ⚠️  BrokerFailureManager unavailable: %s", _bfm_err)
+
         logger.info("=" * 70)
         logger.info("🔒 INDEPENDENT BROKER TRADER INITIALIZED")
         if multi_account_manager:
@@ -251,6 +273,8 @@ class IndependentBrokerTrader:
             logger.info("   🧭 Master strategy router active")
         if self.capital_allocator:
             logger.info("   💰 Cross-account capital allocator active")
+        if self.broker_failure_manager:
+            logger.info("   🛡️  Broker failure manager active (auto-remove + rebalance)")
         logger.info("=" * 70)
 
     def _get_platform_broker_source(self):
@@ -1121,6 +1145,17 @@ class IndependentBrokerTrader:
         if not funded and not funded_users:
             logger.error("❌ No funded brokers detected (platform or user). Cannot start trading.")
             return False
+
+        # Register all platform brokers with the failure manager so capital weights are tracked
+        if self.broker_failure_manager:
+            broker_source_for_reg = self._get_platform_broker_source()
+            if broker_source_for_reg:
+                equal_alloc = 1.0 / max(len(broker_source_for_reg), 1)
+                for _bt, _br in broker_source_for_reg.items():
+                    self.broker_failure_manager.register_broker(
+                        _bt.value, initial_allocation=equal_alloc
+                    )
+            self.broker_failure_manager.log_active_dead_banner()
 
         total_threads = 0
 
