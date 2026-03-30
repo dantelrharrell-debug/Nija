@@ -118,32 +118,32 @@ def test_min_interval_calculation():
     entry_interval = calculate_min_interval(KrakenAPICategory.ENTRY, KrakenRateMode.SMALL_CAP)
     monitoring_interval = calculate_min_interval(KrakenAPICategory.MONITORING, KrakenRateMode.SMALL_CAP)
 
-    if entry_interval == 10.0:
+    if entry_interval == 5.0:
         print(f"✅ SMALL_CAP entry interval: {entry_interval}s")
     else:
-        print(f"❌ SMALL_CAP entry interval: Expected 10.0s, got {entry_interval}s")
+        print(f"❌ SMALL_CAP entry interval: Expected 5.0s, got {entry_interval}s")
         return False
 
-    if monitoring_interval == 30.0:
+    if monitoring_interval == 10.0:
         print(f"✅ SMALL_CAP monitoring interval: {monitoring_interval}s")
     else:
-        print(f"❌ SMALL_CAP monitoring interval: Expected 30.0s, got {monitoring_interval}s")
+        print(f"❌ SMALL_CAP monitoring interval: Expected 10.0s, got {monitoring_interval}s")
         return False
 
     # Test LOW_CAPITAL backward-compat alias (should resolve to SMALL_CAP intervals)
     entry_interval = calculate_min_interval(KrakenAPICategory.ENTRY, KrakenRateMode.LOW_CAPITAL)
     monitoring_interval = calculate_min_interval(KrakenAPICategory.MONITORING, KrakenRateMode.LOW_CAPITAL)
 
-    if entry_interval == 10.0:
+    if entry_interval == 5.0:
         print(f"✅ LOW_CAPITAL (alias→SMALL_CAP) entry interval: {entry_interval}s")
     else:
-        print(f"❌ LOW_CAPITAL entry interval: Expected 10.0s, got {entry_interval}s")
+        print(f"❌ LOW_CAPITAL entry interval: Expected 5.0s, got {entry_interval}s")
         return False
 
-    if monitoring_interval == 30.0:
+    if monitoring_interval == 10.0:
         print(f"✅ LOW_CAPITAL (alias→SMALL_CAP) monitoring interval: {monitoring_interval}s")
     else:
-        print(f"❌ LOW_CAPITAL monitoring interval: Expected 30.0s, got {monitoring_interval}s")
+        print(f"❌ LOW_CAPITAL monitoring interval: Expected 10.0s, got {monitoring_interval}s")
         return False
 
     # Test STANDARD mode

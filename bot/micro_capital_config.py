@@ -72,7 +72,7 @@ MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 # the risk_manager.py enforces max_total_exposure = 60% as a safeguard.
 
 MIN_POSITIONS = 1  # Minimum concurrent positions for micro accounts
-MAX_POSITIONS = 3  # Maximum concurrent positions for micro accounts (increased from 1 for frequency + compounding)
+MAX_POSITIONS = 5  # Maximum concurrent positions for micro accounts (increased from 3 for higher frequency)
 
 # Position sizing as percentage of capital
 MAX_POSITION_PCT = 25.0  # Maximum 25% of capital per position (OPTIMIZED for small capital fast-frequency)
@@ -93,10 +93,10 @@ ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol
 # market_structure_filter.py for the scoring logic).
 # ============================================================================
 
-MAX_CONCURRENT_TRADES = 3   # Maximum simultaneous open trades (increased from 1 for frequency + compounding)
-CAPITAL_PER_TRADE = 40.0    # Percentage of total capital allocated per trade (%) — $50–$100 × 40% = $20–$40 per trade
-ENTRY_SCAN_INTERVAL = 15    # Seconds between entry-opportunity scans (was 20 – faster for micro growth)
-MONITOR_INTERVAL = 45       # Seconds between open-position monitoring cycles
+MAX_CONCURRENT_TRADES = 5   # Maximum simultaneous open trades (increased from 3 for higher frequency)
+CAPITAL_PER_TRADE = 18.0    # Percentage of total capital allocated per trade (%) — 5 × 18% = 90% max exposure, keeps 10% buffer
+ENTRY_SCAN_INTERVAL = 10    # Seconds between entry-opportunity scans (was 15 – faster for micro growth)
+MONITOR_INTERVAL = 15       # Seconds between open-position monitoring cycles (was 45)
 
 # ============================================================================
 # RISK MANAGEMENT
@@ -129,16 +129,16 @@ EQUITY_WEIGHT = 0.30
 # SIGNAL FILTERING
 # ============================================================================
 
-MIN_SIGNAL_SCORE = 0.68  # Minimum signal quality score on 0-1 scale (was 0.75). NOTE: this is overridden
+MIN_SIGNAL_SCORE = 0.60  # Minimum signal quality score on 0-1 scale (was 0.68 — slightly lowered to increase trade frequency)
                          # by the 0-100 scale MIN_SIGNAL_SCORE in the ADVANCED OPTIMIZATION block below.
-MIN_AI_CONFIDENCE = 0.65  # Minimum AI confidence level (65% — was 70%, more signals while maintaining quality gate)
+MIN_AI_CONFIDENCE = 0.60  # Minimum AI confidence level (60% — was 65%, more signals while maintaining meaningful quality gate)
 MIN_RISK_REWARD = 1.8  # Minimum risk/reward ratio
 
 # ============================================================================
 # TRADING PAIRS
 # ============================================================================
 
-TRADE_ONLY = ["BTC", "ETH", "SOL", "XRP", "ADA"]  # Major liquid cryptocurrencies (expanded for more opportunities)
+TRADE_ONLY = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "LINK", "DOT", "MATIC"]  # Top liquid cryptocurrencies (expanded for more opportunities)
 
 # ============================================================================
 # ADVANCED FEATURES
@@ -166,7 +166,7 @@ MAX_CONSECUTIVE_LOSSES = 3  # Maximum consecutive losses before pause
 # CAPITAL ALLOCATION
 # ============================================================================
 
-FORCE_CASH_BUFFER = 10.0  # Keep 10% of capital unallocated (was 15% — deploy more capital for faster growth)
+FORCE_CASH_BUFFER = 5.0  # Keep 5% of capital unallocated (reduced from 10% — deploy more capital for faster growth)
 
 # ============================================================================
 # EXCHANGE PRIORITY
@@ -205,7 +205,7 @@ MIN_BALANCE_COINBASE = 10.0
 #   - trade_cooldown   = 300s   (5-min per-symbol cooldown between trades — tuned for faster trade flow)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = float('inf')  # Apply to ALL balances — 1 position, 95% capital
-MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 3          # 3 concurrent positions — REQUIRED for frequency + compounding
+MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 5          # 5 concurrent positions — REQUIRED for frequency + compounding
 MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 95.0   # 95% of capital per trade (maximise compounding speed)
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R)

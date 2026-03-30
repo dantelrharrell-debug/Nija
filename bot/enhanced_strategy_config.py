@@ -234,9 +234,9 @@ RISK_CONFIG = {
     'min_position_size_usd': 2.0,           # Minimum $2 position
 
     # Portfolio risk limits
-    'max_total_exposure_pct': 50.0,         # Max 50% of capital in positions
-    'max_concurrent_positions': 5,          # Max 5 positions at once
-    'min_reserve_pct': 10.0,                # Keep 10% cash reserve
+    'max_total_exposure_pct': 65.0,         # Max 65% of capital in positions (was 50%)
+    'max_concurrent_positions': 8,          # Max 8 positions at once (was 5)
+    'min_reserve_pct': 5.0,                 # Keep 5% cash reserve (was 10%)
 
     # Stop loss settings
     'use_atr_stop_loss': True,              # Use ATR-based dynamic stops
