@@ -1769,12 +1769,12 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
                             # This conservative rate ensures API key never gets temporarily blocked
 
 # Broker balance fetch timeout constants
-# Increased from 12s → 25s to accommodate Kraken API lag under load.
-# Under normal conditions Kraken responds in 1–5s; under heavy load typically < 20s.
-# A 25s gate gives sufficient headroom while preventing a single hung call from
-# blocking the cycle for 45s.  Cached balance (max age: 90s) is used as an
-# immediate fallback when the live fetch times out.
-BALANCE_FETCH_TIMEOUT = 30  # Hard timeout for balance API call (raised 25→30s for Kraken lag)
+# Reduced from 30s → 15s: Kraken normally responds in 1–5s; under heavy load < 15s.
+# Failing faster lets the bot fall back to cached balance sooner, preventing a
+# 30s per-cycle hang from killing trade frequency.
+# Strategy-level _last_known_balance provides a session-persistent last-resort
+# fallback so timeouts never force a $0 sentinel that caps positions to 1.
+BALANCE_FETCH_TIMEOUT = 15
 CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness)
 
 # Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
@@ -3523,6 +3523,13 @@ class TradingStrategy:
         self._zero_signal_streak: int = 0
         # Alert after this many consecutive zero-signal cycles
         self._zero_signal_alert_threshold: int = 10
+
+        # Strategy-level balance cache — persists across cycles and broker reconnects.
+        # Updated whenever a confirmed live balance > 0 is returned by the broker.
+        # Used as a last-resort fallback when the broker's own _last_known_balance
+        # cache is exhausted AND live fetches fail, preventing the $0 sentinel from
+        # bottlenecking the position-cap calculation and killing all trading.
+        self._last_known_balance: Optional[float] = None
 
         # Initialize advanced trading features placeholder
         # NOTE: Advanced modules will be initialized AFTER first live balance fetch
@@ -7604,11 +7611,34 @@ class TradingStrategy:
                             f"   ⚠️  Using cached balance (no timestamp) in grace mode: ${_cached_balance:.2f}"
                         )
                 if _cached_balance is None:
-                    logger.error("   ❌ No cached balance available — using $0 sentinel (all retries exhausted)")
-                    balance_data = {'trading_balance': 0.0}
+                    # BALANCE SYNC FIX: use strategy-level long-lived cache before falling
+                    # back to the $0 sentinel.  The strategy-level cache (_last_known_balance)
+                    # is updated every cycle when a positive balance is confirmed and survives
+                    # broker reconnects, whereas broker._last_known_balance can be None after
+                    # a fresh reconnect.  This prevents cap=1 from killing all trading.
+                    if self._last_known_balance is not None and self._last_known_balance > 0:
+                        logger.warning(
+                            "   ⚠️  Broker cache empty — using strategy-level cached balance as last resort: "
+                            "$%.2f (live fetch failed, activating grace mode)",
+                            self._last_known_balance,
+                        )
+                        balance_data = {'trading_balance': self._last_known_balance}
+                        _balance_grace_mode = True
+                    else:
+                        logger.error("   ❌ No cached balance available — using $0 sentinel (all retries exhausted)")
+                        balance_data = {'trading_balance': 0.0}
                 else:
                     balance_data = {'trading_balance': _cached_balance}
             account_balance = balance_data.get('trading_balance', 0.0) or 0.0
+            # Update strategy-level balance cache whenever we have a confirmed positive balance
+            if account_balance > 0:
+                if self._last_known_balance != account_balance:
+                    logger.debug(
+                        "   💾 Strategy balance cache updated: $%.2f → $%.2f",
+                        self._last_known_balance or 0.0,
+                        account_balance,
+                    )
+                self._last_known_balance = account_balance
             # Capture the balance at cycle start for end-of-cycle P&L comparison
             _cycle_start_balance = account_balance
 
@@ -7828,9 +7858,13 @@ class TradingStrategy:
                                 if new_balance is None:
                                     logger.warning("   ⚠️ Kraken balance refresh returned None — keeping previous balance")
                                     new_balance = old_balance
-                                account_balance = float(new_balance or 0.0)
-                                if account_balance > old_balance:
-                                    logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
+                                _refreshed = float(new_balance or 0.0)
+                                if _refreshed > 0:
+                                    account_balance = _refreshed
+                                    if account_balance > old_balance:
+                                        logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
+                                else:
+                                    logger.warning("   ⚠️ Kraken balance refresh returned $0 — keeping previous balance $%.2f", old_balance)
                             except Exception as balance_err:
                                 logger.debug(f"   Could not refresh balance: {balance_err}")
                 except Exception as cleanup_err:
@@ -7851,9 +7885,13 @@ class TradingStrategy:
                                 if new_balance is None:
                                     logger.warning("   ⚠️ Coinbase balance refresh returned None — keeping previous balance")
                                     new_balance = old_balance
-                                account_balance = float(new_balance or 0.0)
-                                if account_balance > old_balance:
-                                    logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
+                                _refreshed = float(new_balance or 0.0)
+                                if _refreshed > 0:
+                                    account_balance = _refreshed
+                                    if account_balance > old_balance:
+                                        logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
+                                else:
+                                    logger.warning("   ⚠️ Coinbase balance refresh returned $0 — keeping previous balance $%.2f", old_balance)
                             except Exception as balance_err:
                                 logger.debug(f"   Could not refresh Coinbase balance: {balance_err}")
                 except Exception as cleanup_err:
@@ -7882,8 +7920,17 @@ class TradingStrategy:
             # The result is also capped at MAX_POSITIONS_ALLOWED so the user's
             # environment variable can only *lower* the cap, never raise it above
             # the global hard limit.
+            # BALANCE SYNC FIX: if account_balance is still 0 (all fallbacks exhausted),
+            # use the strategy-level cache so the position cap is not wrongly pinned to 1.
+            _effective_balance_for_cap = account_balance
+            if _effective_balance_for_cap <= 0 and self._last_known_balance is not None and self._last_known_balance > 0:
+                _effective_balance_for_cap = self._last_known_balance
+                logger.warning(
+                    "⚠️  account_balance=$0 for position cap — using strategy cached balance $%.2f to avoid cap=1",
+                    _effective_balance_for_cap,
+                )
             effective_max_positions = min(
-                get_balance_based_max_positions(account_balance),
+                get_balance_based_max_positions(_effective_balance_for_cap),
                 MAX_POSITIONS_ALLOWED,
             )
             logger.info(
