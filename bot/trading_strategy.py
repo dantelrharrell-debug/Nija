@@ -581,6 +581,21 @@ except ImportError:
         get_arb_monitor = None
         ArbSignalStrength = None
 
+# Import Arb & Best-Execution Router — real-time multi-broker arbitrage + best-execution selection
+try:
+    from arb_best_execution_router import get_arb_best_execution_router
+    ARB_BEST_EXEC_AVAILABLE = True
+    logger.info("✅ Arb & Best-Execution Router loaded - multi-broker arbitrage routing active")
+except ImportError:
+    try:
+        from bot.arb_best_execution_router import get_arb_best_execution_router
+        ARB_BEST_EXEC_AVAILABLE = True
+        logger.info("✅ Arb & Best-Execution Router loaded - multi-broker arbitrage routing active")
+    except ImportError:
+        ARB_BEST_EXEC_AVAILABLE = False
+        logger.warning("⚠️ Arb & Best-Execution Router not available - single-venue mode")
+        get_arb_best_execution_router = None
+
 # Import Volatility-Weighted Capital Router — inverse-volatility capital sizing
 try:
     from volatility_weighted_capital_router import get_volatility_router
@@ -1522,6 +1537,7 @@ ACCOUNT_FLOW_AVAILABLE            = False  # ❌ Multi-account capital routing
 SECTOR_TAXONOMY_AVAILABLE         = False  # ❌ Sector allocation engine
 VOLATILITY_CAPITAL_ROUTER_AVAILABLE = False  # ❌ Volatility-weighted capital router
 KELLY_SIZING_ENABLED              = False  # ❌ Kelly sizing (too aggressive for small accounts)
+# ARB_BEST_EXEC_AVAILABLE is set by the import block above; do not override here.
 
 # ── HF FLIP MODE: re-enable selected layers for fast daily profit operation ──
 if _hf_flip_mode_instance is not None and _hf_flip_mode_instance.enabled:
@@ -1539,6 +1555,7 @@ _disabled_layers = [
         ("SectorAlloc",    SECTOR_TAXONOMY_AVAILABLE),
         ("VolRouter",      VOLATILITY_CAPITAL_ROUTER_AVAILABLE),
         ("KellySizing",    KELLY_SIZING_ENABLED),
+        ("ArbBestExec",    ARB_BEST_EXEC_AVAILABLE),
     ] if not enabled
 ]
 if _disabled_layers:
@@ -2883,6 +2900,17 @@ class TradingStrategy:
                 self.arb_monitor = None
         else:
             self.arb_monitor = None
+
+        # Initialize Arb & Best-Execution Router — real-time best-execution + arbitrage routing
+        if ARB_BEST_EXEC_AVAILABLE and get_arb_best_execution_router is not None:
+            try:
+                self.arb_best_exec_router = get_arb_best_execution_router()
+                logger.info("✅ Arb & Best-Execution Router initialized - multi-broker arbitrage active")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Arb & Best-Execution Router: {e}")
+                self.arb_best_exec_router = None
+        else:
+            self.arb_best_exec_router = None
 
         # Initialize Volatility-Weighted Capital Router
         if VOLATILITY_CAPITAL_ROUTER_AVAILABLE and get_volatility_router is not None:
@@ -10433,6 +10461,20 @@ class TradingStrategy:
                                         except Exception:
                                             pass
 
+                                    # Feed Arb & Best-Execution Router with primary broker price
+                                    if ARB_BEST_EXEC_AVAILABLE and hasattr(self, 'arb_best_exec_router') and self.arb_best_exec_router is not None:
+                                        try:
+                                            _arb_broker_name = (
+                                                active_broker.broker_type.value
+                                                if hasattr(active_broker, 'broker_type')
+                                                else "primary"
+                                            )
+                                            self.arb_best_exec_router.update_price(
+                                                _arb_broker_name, symbol, bid_price, ask_price
+                                            )
+                                        except Exception:
+                                            pass
+
                                     # Calculate ATR percentage if available
                                     atr_pct = None
                                     if 'atr' in df.columns and len(df) > 0:
@@ -12365,6 +12407,38 @@ class TradingStrategy:
                                             )
                                     except Exception as _arb_err:
                                         logger.debug("Cross-Broker Arb Monitor skipped for %s: %s", symbol, _arb_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # ARB & BEST-EXECUTION ROUTER — pick optimal venue + detect arb
+                                # ═══════════════════════════════════════════════════════
+                                if ARB_BEST_EXEC_AVAILABLE and hasattr(self, 'arb_best_exec_router') and self.arb_best_exec_router is not None:
+                                    try:
+                                        _abe_side = signal.get('direction', 'buy').lower()
+                                        _abe_rec = self.arb_best_exec_router.get_execution_recommendation(
+                                            symbol=symbol,
+                                            side=_abe_side,
+                                            size_usd=position_size,
+                                        )
+                                        if _abe_rec.recommended_broker:
+                                            # Store recommendation so trade executor can use it
+                                            signal['preferred_broker'] = _abe_rec.recommended_broker
+                                            logger.info(
+                                                "   🎯 BestExec: route %s %s → %s (%s)",
+                                                _abe_side.upper(), symbol,
+                                                _abe_rec.recommended_broker,
+                                                _abe_rec.reasoning,
+                                            )
+                                        if _abe_rec.arb_opportunity:
+                                            _arb = _abe_rec.arb_opportunity
+                                            logger.info(
+                                                "   ⚡ ARB SIGNAL %s: buy@%s ask=%.4f sell@%s bid=%.4f net=+%.3f%%",
+                                                symbol,
+                                                _arb.buy_broker, _arb.buy_ask,
+                                                _arb.sell_broker, _arb.sell_bid,
+                                                _arb.net_profit_pct,
+                                            )
+                                    except Exception as _abe_err:
+                                        logger.debug("ArbBestExecRouter skipped for %s: %s", symbol, _abe_err)
 
                                 # ═══════════════════════════════════════════════════════
                                 # RISK BUDGET ENGINE — risk-first position size override

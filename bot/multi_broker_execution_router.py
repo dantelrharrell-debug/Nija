@@ -132,6 +132,17 @@ except ImportError:
         FilterVerdict = None  # type: ignore
         logger.warning("ExecutionQualityFilter not available — AI execution quality filtering disabled")
 
+try:
+    from bot.arb_best_execution_router import get_arb_best_execution_router
+    _ABE_AVAILABLE = True
+except ImportError:
+    try:
+        from arb_best_execution_router import get_arb_best_execution_router
+        _ABE_AVAILABLE = True
+    except ImportError:
+        _ABE_AVAILABLE = False
+        get_arb_best_execution_router = None  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Asset-class detection helpers
@@ -404,6 +415,11 @@ class MultiBrokerExecutionRouter:
             request.size_usd, ac.value,
         )
 
+        # Expose symbol + side as instance attributes so _select_broker can use
+        # the ArbBestExecutionRouter for real-time best-execution selection.
+        self._pending_request_symbol = request.symbol
+        self._pending_request_side = request.side
+
         # 2. Select broker
         broker = self._select_broker(ac, request.preferred_broker)
         if broker is None:
@@ -620,6 +636,26 @@ class MultiBrokerExecutionRouter:
                             best_name, asset_class.value, scorer.get_score(best_name),
                         )
                         return b
+
+        # Best-execution override via ArbBestExecutionRouter — uses live bid/ask
+        # prices + fees + latency to pick the genuinely cheapest venue.
+        if _ABE_AVAILABLE and get_arb_best_execution_router is not None:
+            try:
+                _abe = get_arb_best_execution_router()
+                _abe_side = getattr(self, "_pending_request_side", None) or "buy"
+                _abe_symbol = getattr(self, "_pending_request_symbol", None) or ""
+                if _abe_symbol:
+                    _abe_best = _abe.get_best_broker(_abe_symbol, _abe_side)
+                    if _abe_best is not None:
+                        for b in candidates:
+                            if b.name == _abe_best:
+                                logger.debug(
+                                    "BestExec routing: selected '%s' for %s %s",
+                                    _abe_best, _abe_side.upper(), _abe_symbol,
+                                )
+                                return b
+            except Exception as _abe_err:
+                logger.debug("ArbBestExecutionRouter skipped: %s", _abe_err)
 
         # Fallback: sort by priority (ascending = highest priority first)
         candidates.sort(key=lambda b: b.priority)
