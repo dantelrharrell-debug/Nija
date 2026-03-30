@@ -265,6 +265,9 @@ class IndependentBrokerTrader:
             try:
                 self.broker_failure_manager = get_broker_failure_manager()
                 logger.info("   ✅ Broker failure manager enabled — auto-remove + instant rebalance active")
+            except Exception as _bfm_err:
+                logger.warning("   ⚠️  BrokerFailureManager unavailable: %s", _bfm_err)
+
         # BROKER FAILURE MANAGER — backoff, auto-disable, allocation shift
         self.failure_manager = None
         if _BROKER_FAILURE_MANAGER_AVAILABLE and get_broker_failure_manager is not None:
@@ -878,8 +881,6 @@ class IndependentBrokerTrader:
                     if newly_dead:
                         self.broker_failure_manager.log_active_dead_banner()
 
-                # Wait before retry
-                stop_flag.wait(60)
                 # Backoff wait before retry (15 → 30 → 60 s)
                 stop_flag.wait(backoff)
 
