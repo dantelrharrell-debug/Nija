@@ -636,14 +636,15 @@ class IndependentBrokerTrader:
         while not stop_flag.is_set():
             cycle_count += 1
 
-            # ── Failure manager: skip dead brokers immediately ──────────────
+            # ── Failure manager: skip dead brokers with backoff, then retry ──
             if self.failure_manager and self.failure_manager.is_dead(broker_name):
-                logger.error(
-                    f"🔴 {broker_name} is DEAD (auto-disabled after repeated failures). "
-                    f"Thread exiting — restart bot after fixing the issue or call "
-                    f"failure_manager.revive_broker('{broker_name}') to re-enable."
+                delay = self.failure_manager.get_retry_delay(broker_name)
+                logger.warning(
+                    f"🔴 {broker_name} is DEAD — retrying in {delay:.0f}s "
+                    f"(call failure_manager.revive_broker('{broker_name}') to re-enable)"
                 )
-                break
+                stop_flag.wait(delay)
+                continue
 
             try:
                 logger.info(f"🔄 {broker_name} - Cycle #{cycle_count}")
@@ -839,8 +840,16 @@ class IndependentBrokerTrader:
                         if newly_dead:
                             self.broker_failure_manager.log_active_dead_banner()
 
-                    # Continue to next cycle - don't let one broker's failure stop everything
-                    logger.info(f"   ⚠️  {broker_name} will retry next cycle")
+                    # ❌ Backoff wait — use get_retry_delay() for intelligent backoff
+                    if self.failure_manager:
+                        delay = self.failure_manager.get_retry_delay(broker_name)
+                    else:
+                        delay = 30
+                    logger.warning(
+                        f"⚠️ Broker loop error ({broker_name}): {trading_err} | retry in {delay:.0f}s"
+                    )
+                    stop_flag.wait(delay)
+                    continue  # skip normal 150s cycle wait on failure
 
                 # Wait 150 seconds (2.5 minutes) between cycles
                 # Use stop_flag.wait() so we can be interrupted for shutdown
