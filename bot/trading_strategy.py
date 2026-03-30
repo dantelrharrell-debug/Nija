@@ -1769,11 +1769,11 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
                             # This conservative rate ensures API key never gets temporarily blocked
 
 # Broker balance fetch timeout constants
-# Increased from 12s → 25s to accommodate Kraken API lag under load.
-# Under normal conditions Kraken responds in 1–5s; under heavy load typically < 20s.
-# A 25s gate gives sufficient headroom while preventing a single hung call from
-# blocking the cycle for 45s.  Cached balance (max age: 90s) is used as an
-# immediate fallback when the live fetch times out.
+# Reduced from 30s → 15s to fail fast and use the cached balance immediately,
+# preventing a single hung API call from blocking the trading cycle.
+# Under normal conditions Kraken responds in 1–5s; 15s provides ample headroom.
+# Cached balance (max age: 90s) is used as an immediate fallback when the live
+# fetch times out.
 BALANCE_FETCH_TIMEOUT = 15  # Hard timeout for balance API call (reduced to 15s for faster fallback to cache)
 CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness)
 
