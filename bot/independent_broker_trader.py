@@ -602,6 +602,72 @@ class IndependentBrokerTrader:
         logger.info("   " + "=" * 70)
         logger.info("")
 
+    def _execute_trading_cycle(
+        self,
+        broker_type,
+        broker,
+        broker_name: str,
+        cycle_count: int,
+        balance: float,
+    ) -> None:
+        """
+        Execute a single platform trading cycle for the given broker.
+
+        Runs position adoption then the full strategy scan (run_cycle).
+        Called inside the try block of run_broker_trading_loop so that any
+        exception is caught and handled by the unified error-handling pattern.
+
+        Args:
+            broker_type: BrokerType enum (passed through to trading_strategy)
+            broker: BaseBroker instance
+            broker_name: Human-readable broker name for logging
+            cycle_count: Current cycle number (for logging)
+            balance: Account balance fetched before this cycle (USD)
+        """
+        logger.info(f"   {'═' * 55}")
+        logger.info(f"   🎯 {broker_name.upper()} PLATFORM TRADING CYCLE #{cycle_count}")
+        logger.info(f"   {'═' * 55}")
+        logger.info(f"   💰 Current balance: ${balance:.2f}")
+        logger.info(f"   📊 Mode: PLATFORM (full strategy execution)")
+        logger.info(f"   🔍 Will scan markets for opportunities")
+        logger.info(f"   ⚡ Will execute trades if signals trigger")
+        logger.info(f"   🔄 Will manage existing positions")
+        logger.info(f"   {'═' * 55}")
+
+        # ── Position adoption (every cycle — position tracker prevents duplicates) ──
+        if hasattr(self.trading_strategy, 'adopt_existing_positions'):
+            account_id = f"PLATFORM_{broker_name.upper()}"
+            adoption_status = self.trading_strategy.adopt_existing_positions(
+                broker=broker,
+                broker_name=broker_name.upper(),
+                account_id=account_id,
+            )
+            if adoption_status['success']:
+                logger.info(
+                    f"   ✅ {broker_name.upper()}: {adoption_status['positions_adopted']} position(s) adopted"
+                )
+            else:
+                err = adoption_status.get('error', 'unknown')
+                self.update_broker_health(broker_name, 'failed', f'Adoption failed: {err}')
+                raise RuntimeError(f"position adoption failed: {err}")
+        else:
+            platform_positions = broker.get_positions()
+            if platform_positions:
+                logger.info(f"   🔁 Found {len(platform_positions)} position(s)")
+            else:
+                logger.info(f"   📊 No open positions")
+
+        # ── Execute trading cycle for THIS broker only (thread-safe) ──
+        self.trading_strategy.run_cycle(broker=broker)
+
+        # ── Mark broker healthy with both failure managers ──
+        if self.broker_failure_manager:
+            self.broker_failure_manager.record_success(broker_name)
+        self.update_broker_health(broker_name, 'healthy', is_trading=True)
+
+        logger.info(f"   ✅ {broker_name.upper()} cycle completed successfully")
+        logger.info("")
+
     def run_broker_trading_loop(self, broker_type, broker, stop_flag: threading.Event):
         """
         Run independent trading loop for a single broker.
@@ -633,23 +699,28 @@ class IndependentBrokerTrader:
         # Display Capital Scaling Protocol banner (once at startup)
         self._display_capital_scaling_banner()
 
-        while not stop_flag.is_set():
-            cycle_count += 1
+        try:  # ── FATAL CRASH GUARD — thread NEVER silently dies ─────────────────
 
-            # ── Failure manager: skip dead brokers with backoff, then retry ──
-            if self.failure_manager and self.failure_manager.is_dead(broker_name):
-                delay = self.failure_manager.get_retry_delay(broker_name)
-                logger.warning(
-                    f"🔴 {broker_name} is DEAD — retrying in {delay:.0f}s "
-                    f"(call failure_manager.revive_broker('{broker_name}') to re-enable)"
-                )
-                stop_flag.wait(delay)
-                continue
+            while not stop_flag.is_set():
+                cycle_count += 1
 
-            try:
-                logger.info(f"🔄 {broker_name} - Cycle #{cycle_count}")
+                # ─────────────────────────────────────────────────────────────
+                # 🔴 DEAD BROKER CHECK (failure_manager — retry with backoff)
+                # ─────────────────────────────────────────────────────────────
+                if self.failure_manager and self.failure_manager.is_dead(broker_name):
+                    error_count = self.failure_manager.get_consecutive_errors(broker_name)
+                    delay = self.failure_manager.get_retry_delay(broker_name)
+                    logger.warning(
+                        f"🔴 {broker_name} marked DEAD "
+                        f"(errors={error_count}) → retrying in {delay:.0f}s "
+                        f"(call failure_manager.revive_broker('{broker_name}') to re-enable)"
+                    )
+                    stop_flag.wait(delay)
+                    continue
 
-                # BROKER FAILURE MANAGER: skip dead brokers with intelligent backoff
+                # ─────────────────────────────────────────────────────────────
+                # 🔴 DEAD BROKER CHECK (broker_failure_manager — reconnect)
+                # ─────────────────────────────────────────────────────────────
                 if self.broker_failure_manager and self.broker_failure_manager.is_dead(broker_name):
                     retry_delay = self.broker_failure_manager.get_retry_delay(broker_name)
                     logger.warning(
@@ -658,7 +729,6 @@ class IndependentBrokerTrader:
                     )
                     self.update_broker_health(broker_name, 'failed', 'Marked dead by BrokerFailureManager')
                     stop_flag.wait(retry_delay)
-                    # Attempt reconnect
                     try:
                         logger.info(f"🔄 {broker_name}: attempting reconnect…")
                         reconnected = broker.connect() if hasattr(broker, 'connect') else False
@@ -671,7 +741,9 @@ class IndependentBrokerTrader:
                         logger.warning(f"⚠️  {broker_name}: reconnect raised: {_reconnect_err}")
                     continue
 
-                # Guard: ensure the platform broker is still in CONNECTED state before trading
+                # ─────────────────────────────────────────────────────────────
+                # ⛔ CONNECTION GUARD
+                # ─────────────────────────────────────────────────────────────
                 if self.multi_account_manager and not self.multi_account_manager.is_platform_connected(broker_type):
                     logger.warning(f"⛔ {broker_name}: Trading paused — platform not connected")
                     self.update_broker_health(broker_name, 'degraded', 'Platform not connected')
@@ -683,16 +755,11 @@ class IndependentBrokerTrader:
                     stop_flag.wait(backoff)
                     continue
 
-                # Check if broker is still funded
+                # ─────────────────────────────────────────────────────────────
+                # 💰 BALANCE CHECK
+                # ─────────────────────────────────────────────────────────────
                 try:
                     balance = broker.get_account_balance()
-                    if balance < MINIMUM_FUNDED_BALANCE:
-                        logger.warning(f"⚠️  {broker_name} balance too low: ${balance:.2f}")
-                        self.update_broker_health(broker_name, 'degraded',
-                                                 f'Underfunded: ${balance:.2f}')
-                        # Wait before rechecking (not counted as a hard error)
-                        stop_flag.wait(60)
-                        continue
                 except Exception as balance_err:
                     logger.error(f"❌ {broker_name} balance check failed: {balance_err}")
                     if self.broker_failure_manager:
@@ -709,98 +776,37 @@ class IndependentBrokerTrader:
                     stop_flag.wait(backoff)
                     continue
 
-                # Run trading cycle for this broker
+                if balance < MINIMUM_FUNDED_BALANCE:
+                    logger.warning(
+                        f"⚠️  {broker_name} balance too low: ${balance:.2f} "
+                        f"(min: ${MINIMUM_FUNDED_BALANCE:.2f}) — waiting 60s before recheck"
+                    )
+                    self.update_broker_health(broker_name, 'degraded', f'Underfunded: ${balance:.2f}')
+                    stop_flag.wait(60)
+                    continue
+
+                # ─────────────────────────────────────────────────────────────
+                # 🔄 EXECUTE TRADING CYCLE
+                # ─────────────────────────────────────────────────────────────
                 try:
-                    # CRITICAL FIX (Jan 11, 2026): Pass broker to run_cycle() instead of setting shared state
-                    # Previously, we set self.trading_strategy.broker = broker which caused race conditions
-                    # when multiple threads tried to set this shared variable simultaneously.
-                    # Now we pass the broker as a parameter, making each thread truly independent.
+                    start_time = time.time()
+                    self._execute_trading_cycle(broker_type, broker, broker_name, cycle_count, balance)
+                    elapsed = time.time() - start_time
+                    logger.info(f"✅ {broker_name.upper()} cycle completed in {elapsed:.2f}s")
 
-                    # ENHANCED LOGGING (Jan 18, 2026): Show exactly what's about to happen
-                    logger.info(f"   ═══════════════════════════════════════════════════════════")
-                    logger.info(f"   🎯 {broker_name.upper()} PLATFORM TRADING CYCLE #{cycle_count}")
-                    logger.info(f"   ═══════════════════════════════════════════════════════════")
-                    logger.info(f"   💰 Current balance: ${balance:.2f}")
-                    
-                    # 🔄 UNIFIED STRATEGY PER ACCOUNT - POSITION ADOPTION (EVERY CYCLE)
-                    # Platform account independently adopts and manages its positions with exit logic
-                    # 🔒 GUARDRAIL: This runs every cycle to ensure all positions are managed
-                    # Position tracker prevents duplicates, so re-adoption is safe
-                    try:
-                        if hasattr(self.trading_strategy, 'adopt_existing_positions'):
-                            # Determine account_id for tracking
-                            account_id = f"PLATFORM_{broker_name.upper()}"
-                            
-                            # Call the adopt function - returns detailed status dict
-                            adoption_status = self.trading_strategy.adopt_existing_positions(
-                                broker=broker,
-                                broker_name=broker_name.upper(),
-                                account_id=account_id
-                            )
-                            
-                            # 🔒 GUARDRAIL: Verify adoption completed
-                            if adoption_status['success']:
-                                logger.info(f"   ✅ {broker_name.upper()}: {adoption_status['positions_adopted']} position(s) adopted")
-                            else:
-                                logger.error(f"   ❌ {broker_name.upper()}: Adoption failed - {adoption_status.get('error', 'unknown')}")
-                                logger.error(f"   🛑 CRITICAL: HALTING {broker_name.upper()} TRADING")
-                                logger.error(f"   ⚠️  Manual intervention required - positions may be unmanaged")
-                                # Update broker health to failed status
-                                self.update_broker_health(broker_name, 'failed', 
-                                    f'Adoption failed: {adoption_status.get("error", "unknown")}')
-                                # CRITICAL: Skip trading cycle - do NOT continue in MASTER mode
-                                logger.info(f"   ═══════════════════════════════════════════════════════════")
-                                logger.info("")
-                                continue  # Skip to next iteration without executing run_cycle()
-                        else:
-                            # Fallback for backward compatibility
-                            logger.warning(f"   ⚠️  adopt_existing_positions() not available - using legacy method")
-                            platform_positions = broker.get_positions()
-                            if platform_positions:
-                                logger.info(f"   🔁 Found {len(platform_positions)} position(s)")
-                            else:
-                                logger.info(f"   📊 No open positions")
-                    except Exception as pos_err:
-                        logger.error(f"   ❌ Position adoption failed: {pos_err}")
-                        logger.error(f"   🛑 CRITICAL: HALTING {broker_name.upper()} TRADING")
-                        logger.error(f"   ⚠️  Exception during adoption - manual intervention required")
-                        logger.error(traceback.format_exc())
-                        # Update broker health to failed status
-                        self.update_broker_health(broker_name, 'failed', 
-                            f'Adoption exception: {str(pos_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
-                        # CRITICAL: Skip trading cycle - do NOT continue in MASTER mode
-                        logger.info(f"   ═══════════════════════════════════════════════════════════")
-                        logger.info("")
-                        continue  # Skip to next iteration without executing run_cycle()
-                    
-                    logger.info(f"   📊 Mode: PLATFORM (full strategy execution)")
-                    logger.info(f"   🔍 Will scan markets for opportunities")
-                    logger.info(f"   ⚡ Will execute trades if signals trigger")
-                    logger.info(f"   🔄 Will manage existing positions")
-                    logger.info(f"   ═══════════════════════════════════════════════════════════")
-
-                    # Execute trading cycle for THIS broker only (thread-safe)
-                    self.trading_strategy.run_cycle(broker=broker)
-
-                    # Mark as healthy — reset failure counter
-                    if self.broker_failure_manager:
-                        self.broker_failure_manager.record_success(broker_name)
-                    # Mark as healthy and reset failure counter
-                    self.update_broker_health(broker_name, 'healthy', is_trading=True)
+                    # ✅ SUCCESS → reset failure counter
                     if self.failure_manager:
                         self.failure_manager.record_success(broker_name)
-                    logger.info(f"   ✅ {broker_name.upper()} cycle completed successfully")
-                    logger.info("")
 
-                except Exception as trading_err:
-                    logger.error(f"❌ {broker_name} trading cycle failed: {trading_err}")
-                    logger.error(f"   Error type: {type(trading_err).__name__}")
-                    logger.error(f"   ISOLATION: This failure is contained to {broker_name} only")
+                    # Cycle interval: 90s for faster micro-cap growth (reduced from 150s —
+                    # shorter gap catches rapid price movements and compounds capital quicker)
+                    logger.info(f"   {broker_name}: Next cycle in 90s...")
+                    stop_flag.wait(90)
 
-                    # Record failure with isolation manager
+                except Exception as e:
+                    # ❌ FAILURE → track error count + intelligent backoff
                     if self.isolation_manager and FailureType:
-                        # Determine failure type
-                        error_str = str(trading_err).lower()
+                        error_str = str(e).lower()
                         if 'api' in error_str:
                             failure_type = FailureType.API_ERROR
                         elif 'auth' in error_str or 'credential' in error_str:
@@ -815,90 +821,49 @@ class IndependentBrokerTrader:
                             failure_type = FailureType.NETWORK_ERROR
                         else:
                             failure_type = FailureType.UNKNOWN_ERROR
-                        
                         self.isolation_manager.record_failure(
-                            'platform', 'platform', broker_name,
-                            trading_err,
-                            failure_type
+                            'platform', 'platform', broker_name, e, failure_type
                         )
 
-                    # Record with failure manager (triggers backoff + auto-disable)
-                    if self.failure_manager:
-                        self.failure_manager.record_error(
-                            broker_name, str(trading_err)[:80]
-                        )
-
-                    # Update health status
-                    self.update_broker_health(broker_name, 'degraded',
-                                             f'Trading error: {str(trading_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
-
-                    # Record failure with broker failure manager — triggers auto-remove + capital rebalance
                     if self.broker_failure_manager:
                         newly_dead = self.broker_failure_manager.record_error(
-                            broker_name, reason=f"trading_error: {str(trading_err)[:80]}"
+                            broker_name, reason=f"trading_error: {str(e)[:80]}"
                         )
                         if newly_dead:
                             self.broker_failure_manager.log_active_dead_banner()
 
-                    # ❌ Backoff wait — use get_retry_delay() for intelligent backoff
                     if self.failure_manager:
-                        delay = self.failure_manager.get_retry_delay(broker_name)
-                    else:
-                        delay = 30
-                    logger.warning(
-                        f"⚠️ Broker loop error ({broker_name}): {trading_err} | retry in {delay:.0f}s"
+                        self.failure_manager.record_error(broker_name, str(e)[:80])
+
+                    self.update_broker_health(broker_name, 'degraded',
+                                             f'Trading error: {str(e)[:MAX_ERROR_MESSAGE_LENGTH]}')
+
+                    error_count = (
+                        self.failure_manager.get_consecutive_errors(broker_name)
+                        if self.failure_manager else 1
+                    )
+                    delay = (
+                        self.failure_manager.get_retry_delay(broker_name)
+                        if self.failure_manager else 30
+                    )
+                    logger.error(
+                        f"❌ Broker error ({broker_name}) "
+                        f"[#{error_count}] → {e} | retry in {delay:.0f}s",
+                        exc_info=True,
                     )
                     stop_flag.wait(delay)
-                    continue  # skip normal 150s cycle wait on failure
 
-                # Wait 150 seconds (2.5 minutes) between cycles
-                # Use stop_flag.wait() so we can be interrupted for shutdown
-                logger.info(f"   {broker_name}: Waiting 2.5 minutes until next cycle...")
-                stop_flag.wait(150)
-
-            except Exception as outer_err:
-                # Catch-all for any unexpected errors - ultimate isolation boundary
-                logger.error(f"❌ {broker_name} CRITICAL ERROR in trading loop: {outer_err}")
-                logger.error(f"   ISOLATION GUARANTEE: This will NOT affect other brokers")
-                logger.error(traceback.format_exc())
-                
-                # Record critical failure with isolation manager
-                if self.isolation_manager and FailureType:
-                    self.isolation_manager.record_failure(
-                        'platform', 'platform', broker_name,
-                        outer_err,
-                        FailureType.UNKNOWN_ERROR
-                    )
-
-                # Record with failure manager (triggers backoff + auto-disable)
-                if self.failure_manager:
-                    self.failure_manager.record_error(
-                        broker_name, f'Critical: {str(outer_err)[:60]}'
-                    )
-                    backoff = self.failure_manager.get_retry_delay(broker_name)
-                else:
-                    backoff = 60
-                
-                self.update_broker_health(broker_name, 'failed',
-                                         f'Critical error: {str(outer_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
-
-                # Record critical failure with broker failure manager
-                if self.broker_failure_manager:
-                    newly_dead = self.broker_failure_manager.record_error(
-                        broker_name, reason=f"critical_error: {str(outer_err)[:80]}"
-                    )
-                    if newly_dead:
-                        self.broker_failure_manager.log_active_dead_banner()
-
-                # Backoff wait before retry (15 → 30 → 60 s)
-                stop_flag.wait(backoff)
-
-        # Cleanup: Remove from active threads when loop exits
-        with self.active_threads_lock:
-            self.active_trading_threads.discard(broker_name)
-
-        logger.info(f"🛑 {broker_name} trading loop stopped (total cycles: {cycle_count})")
-        logger.info(f"   Thread removed from active trading threads")
+        except Exception as fatal_err:
+            logger.critical(
+                f"💥 FATAL: {broker_name} trader loop crashed unexpectedly: {fatal_err}",
+                exc_info=True,
+            )
+        finally:
+            # Cleanup: Remove from active threads when loop exits
+            with self.active_threads_lock:
+                self.active_trading_threads.discard(broker_name)
+            logger.info(f"🛑 {broker_name} trading loop stopped (total cycles: {cycle_count})")
+            logger.info(f"   Thread removed from active trading threads")
 
     def run_user_broker_trading_loop(self, user_id: str, broker_type, broker, stop_flag: threading.Event):
         """
