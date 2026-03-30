@@ -6773,13 +6773,13 @@ class KrakenBroker(BaseBroker):
                         # Use total_funds for rate profile selection to match actual capital capacity
                         if get_kraken_rate_profile is not None and KrakenRateMode is not None:
                             # Auto-select rate mode based on account balance.
-                            # MICRO_CAP = $20-$100 (30s entry / 60s monitoring)
-                            # SMALL_CAP  = $100-$500
+                            # MICRO_CAP = $20-$50  (30s entry / 60s monitoring — single position)
+                            # SMALL_CAP  = $50-$500  (5s entry / 10s monitoring — multi-position)
                             # STANDARD   = $500-$1000
                             # AGGRESSIVE = $1000+
                             self._kraken_rate_profile = get_kraken_rate_profile(account_balance=total_funds)
                             self._kraken_rate_mode = (
-                                KrakenRateMode.MICRO_CAP if total_funds < 100.0
+                                KrakenRateMode.MICRO_CAP if total_funds < 50.0
                                 else KrakenRateMode.SMALL_CAP if total_funds < 500.0
                                 else KrakenRateMode.STANDARD if total_funds < 1000.0
                                 else KrakenRateMode.AGGRESSIVE

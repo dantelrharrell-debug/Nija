@@ -380,7 +380,7 @@ def get_kraken_rate_profile(
     """
     # Auto-select mode based on account balance if provided
     if account_balance is not None:
-        if account_balance < 100.0:
+        if account_balance < 50.0:
             mode = KrakenRateMode.MICRO_CAP
             logger.info(f"Auto-selected MICRO_CAP mode for ${account_balance:.2f} balance")
         elif account_balance < 500.0:
