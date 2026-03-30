@@ -114,6 +114,18 @@ except ImportError:
     except ImportError:
         get_cross_account_allocator = None
 
+# Import broker failure manager — backoff, auto-disable, allocation shift
+try:
+    from bot.broker_failure_manager import get_broker_failure_manager
+    _BROKER_FAILURE_MANAGER_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_failure_manager import get_broker_failure_manager
+        _BROKER_FAILURE_MANAGER_AVAILABLE = True
+    except ImportError:
+        get_broker_failure_manager = None  # type: ignore
+        _BROKER_FAILURE_MANAGER_AVAILABLE = False
+
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -234,6 +246,15 @@ class IndependentBrokerTrader:
                 self.capital_allocator = get_cross_account_allocator()
             except Exception as _ca_err:
                 logger.warning("   ⚠️  CrossAccountCapitalAllocator unavailable: %s", _ca_err)
+
+        # BROKER FAILURE MANAGER — backoff, auto-disable, allocation shift
+        self.failure_manager = None
+        if _BROKER_FAILURE_MANAGER_AVAILABLE and get_broker_failure_manager is not None:
+            try:
+                self.failure_manager = get_broker_failure_manager()
+                logger.info("   🛡️  Broker failure manager active (backoff + auto-disable)")
+            except Exception as _bfm_err:
+                logger.warning("   ⚠️  BrokerFailureManager unavailable: %s", _bfm_err)
 
         logger.info("=" * 70)
         logger.info("🔒 INDEPENDENT BROKER TRADER INITIALIZED")
@@ -592,6 +613,15 @@ class IndependentBrokerTrader:
         while not stop_flag.is_set():
             cycle_count += 1
 
+            # ── Failure manager: skip dead brokers immediately ──────────────
+            if self.failure_manager and self.failure_manager.is_dead(broker_name):
+                logger.error(
+                    f"🔴 {broker_name} is DEAD (auto-disabled after repeated failures). "
+                    f"Thread exiting — restart bot after fixing the issue or call "
+                    f"failure_manager.revive_broker('{broker_name}') to re-enable."
+                )
+                break
+
             try:
                 logger.info(f"🔄 {broker_name} - Cycle #{cycle_count}")
 
@@ -599,7 +629,12 @@ class IndependentBrokerTrader:
                 if self.multi_account_manager and not self.multi_account_manager.is_platform_connected(broker_type):
                     logger.warning(f"⛔ {broker_name}: Trading paused — platform not connected")
                     self.update_broker_health(broker_name, 'degraded', 'Platform not connected')
-                    stop_flag.wait(30)
+                    if self.failure_manager:
+                        self.failure_manager.record_error(broker_name, 'Platform not connected')
+                        backoff = self.failure_manager.get_retry_delay(broker_name)
+                    else:
+                        backoff = 30
+                    stop_flag.wait(backoff)
                     continue
 
                 # Check if broker is still funded
@@ -609,15 +644,19 @@ class IndependentBrokerTrader:
                         logger.warning(f"⚠️  {broker_name} balance too low: ${balance:.2f}")
                         self.update_broker_health(broker_name, 'degraded',
                                                  f'Underfunded: ${balance:.2f}')
-                        # Wait before rechecking
+                        # Wait before rechecking (not counted as a hard error)
                         stop_flag.wait(60)
                         continue
                 except Exception as balance_err:
                     logger.error(f"❌ {broker_name} balance check failed: {balance_err}")
                     self.update_broker_health(broker_name, 'degraded',
                                              f'Balance check failed: {str(balance_err)[:50]}')
-                    # Wait before retry
-                    stop_flag.wait(30)
+                    if self.failure_manager:
+                        self.failure_manager.record_error(broker_name, str(balance_err)[:80])
+                        backoff = self.failure_manager.get_retry_delay(broker_name)
+                    else:
+                        backoff = 30
+                    stop_flag.wait(backoff)
                     continue
 
                 # Run trading cycle for this broker
@@ -693,8 +732,10 @@ class IndependentBrokerTrader:
                     # Execute trading cycle for THIS broker only (thread-safe)
                     self.trading_strategy.run_cycle(broker=broker)
 
-                    # Mark as healthy
+                    # Mark as healthy and reset failure counter
                     self.update_broker_health(broker_name, 'healthy', is_trading=True)
+                    if self.failure_manager:
+                        self.failure_manager.record_success(broker_name)
                     logger.info(f"   ✅ {broker_name.upper()} cycle completed successfully")
                     logger.info("")
 
@@ -728,6 +769,12 @@ class IndependentBrokerTrader:
                             failure_type
                         )
 
+                    # Record with failure manager (triggers backoff + auto-disable)
+                    if self.failure_manager:
+                        self.failure_manager.record_error(
+                            broker_name, str(trading_err)[:80]
+                        )
+
                     # Update health status
                     self.update_broker_health(broker_name, 'degraded',
                                              f'Trading error: {str(trading_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
@@ -753,12 +800,21 @@ class IndependentBrokerTrader:
                         outer_err,
                         FailureType.UNKNOWN_ERROR
                     )
+
+                # Record with failure manager (triggers backoff + auto-disable)
+                if self.failure_manager:
+                    self.failure_manager.record_error(
+                        broker_name, f'Critical: {str(outer_err)[:60]}'
+                    )
+                    backoff = self.failure_manager.get_retry_delay(broker_name)
+                else:
+                    backoff = 60
                 
                 self.update_broker_health(broker_name, 'failed',
                                          f'Critical error: {str(outer_err)[:MAX_ERROR_MESSAGE_LENGTH]}')
 
-                # Wait before retry
-                stop_flag.wait(60)
+                # Backoff wait before retry (15 → 30 → 60 s)
+                stop_flag.wait(backoff)
 
         # Cleanup: Remove from active threads when loop exits
         with self.active_threads_lock:
@@ -1734,6 +1790,18 @@ class IndependentBrokerTrader:
                     )
                 }
 
+        # Enrich with failure-manager data (active/dead classification)
+        if self.failure_manager:
+            active_brokers, dead_brokers = self.failure_manager.get_active_dead_lists()
+            summary['active_brokers'] = active_brokers
+            summary['dead_brokers'] = dead_brokers
+            for broker_name, details in summary['broker_details'].items():
+                details['is_dead'] = self.failure_manager.is_dead(broker_name)
+                details['consecutive_errors'] = self.failure_manager.get_consecutive_errors(broker_name)
+        else:
+            summary['active_brokers'] = []
+            summary['dead_brokers'] = []
+
         return summary
 
     def log_status_summary(self):
@@ -1761,6 +1829,10 @@ class IndependentBrokerTrader:
                 logger.info(f"   ⚠️  Recent Errors: {details['error_count']}")
 
         logger.info("=" * 70)
+
+        # ── ACTIVE vs DEAD broker banner ────────────────────────────────
+        if self.failure_manager:
+            self.failure_manager.log_active_dead_banner()
 
         # Log active positions for all funded brokers (master and users)
         self._log_all_active_positions()
