@@ -113,7 +113,7 @@ class MultiAccountBrokerManager:
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
     # Problem: Sequential balance calls cause 1-1.2s delay per user
     # Solution: Cache balances per trading cycle to prevent repeated API calls
-    BALANCE_CACHE_TTL = 120.0  # Cache balance for 2 minutes (one trading cycle)
+    BALANCE_CACHE_TTL = 30.0   # Cache balance for 30 seconds (was 120s — more responsive for high-frequency trading without excessive API load)
     KRAKEN_BALANCE_CALL_DELAY = 1.1  # 1.1s delay between Kraken balance API calls
     # Hard timeout for a single balance API call.  Reduced to 12s so a hung
     # Kraken connection is detected quickly and the stale cache is used instead.

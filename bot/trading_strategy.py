@@ -1832,7 +1832,7 @@ MAX_SECTOR_ALLOCATION = 0.4  # 40% of total capital — cap per sector to preven
 # Per-balance sub-limits are now enforced via CapitalTierHierarchy inside
 # get_balance_based_max_positions().  These legacy constants are kept for
 # backward-compatibility but are no longer the primary scaling mechanism.
-BALANCE_THRESHOLD_MICRO = 150.0   # Below this balance → 1 position (micro compounding mode)
+BALANCE_THRESHOLD_MICRO = 50.0    # Below this balance → 1 position (micro compounding mode; lowered from $150 so that $50–$150 accounts scale to 3–5 positions via CapitalTierHierarchy)
 BALANCE_THRESHOLD_SMALL = 500.0   # Preserved for fallback / future use
 
 # Minimum USD notional for any NEW entry order.  Orders below this value are
@@ -2320,8 +2320,9 @@ def get_balance_based_max_positions(balance: float) -> int:
       LIVABLE  ($5k–25k):   max 7–10 positions
       BALLER   ($25k+):     max 10–15 positions (capped at MAX_TOTAL_POSITIONS = 10)
 
-    Micro-cap accounts (balance < BALANCE_THRESHOLD_MICRO = $150) are pinned
+    Micro-cap accounts (balance < BALANCE_THRESHOLD_MICRO = $50) are pinned
     to 1 position so the compounding engine can concentrate capital.
+    Accounts above $50 scale to 2–5+ positions via CapitalTierHierarchy.
 
     The returned value is always capped at MAX_TOTAL_POSITIONS.
 
@@ -7875,10 +7876,9 @@ class TradingStrategy:
                     logger.warning("⚠️ CapitalAllocator.rebalance failed: %s", _ca_reb_err)
             # ────────────────────────────────────────────────────────────────
 
-            # ── PER-ACCOUNT POSITION CAP (CONSOLIDATION MODE) ─────────────────
+            # ── PER-ACCOUNT POSITION CAP (TIER-SCALED MODE) ───────────────────
             # Derive the effective position cap from the live account balance.
-            # This enforces the single-trade-focus rule:
-            #   all balance tiers → max 1 position  (MAX_TOTAL_POSITIONS = 1)
+            # Tier scaling: <$50 → 1 pos; $50–$99 → 1–2; $100–$249 → 2–3; $250+ → 3–5+.
             # The result is also capped at MAX_POSITIONS_ALLOWED so the user's
             # environment variable can only *lower* the cap, never raise it above
             # the global hard limit.

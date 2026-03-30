@@ -27,6 +27,7 @@ TOP_10_HIGH_LIQUIDITY_SYMBOLS = {
     "BTC-USD",   # Bitcoin            – #1 by volume on Coinbase
     "ETH-USD",   # Ethereum           – #2 by volume
     "SOL-USD",   # Solana             – high-growth L1
+    "XRP-USD",   # XRP                – high-volume, fast transactions
     "DOGE-USD",  # Dogecoin           – high retail volume
     "ADA-USD",   # Cardano            – blue-chip altcoin
     "AVAX-USD",  # Avalanche          – high-liquidity L1
@@ -34,6 +35,9 @@ TOP_10_HIGH_LIQUIDITY_SYMBOLS = {
     "DOT-USD",   # Polkadot           – interoperability leader
     "MATIC-USD", # Polygon            – Ethereum L2 leader
     "LTC-USD",   # Litecoin           – long-established, liquid
+    "BCH-USD",   # Bitcoin Cash       – high-liquidity Bitcoin fork
+    "UNI-USD",   # Uniswap            – leading DeFi protocol
+    "ATOM-USD",  # Cosmos             – interchain hub
 }
 
 # Backward-compatible alias (kept for any external references)

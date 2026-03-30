@@ -168,8 +168,8 @@ KRAKEN_RATE_PROFILES = {
 
     # SMALL_CAP MODE: Conservative for $100-$500 small accounts
     # - Slightly larger position sizing than MICRO_CAP
-    # - Multi-position support (up to 2 concurrent positions)
-    # - 10-second entry interval to reduce overtrading
+    # - Multi-position support (up to 5 concurrent positions)
+    # - 5-second entry interval for higher-frequency trading
     # - Designed for growth-oriented small accounts
     KrakenRateMode.SMALL_CAP: {
         'name': 'Small-Cap Rate Profile',
@@ -178,10 +178,10 @@ KRAKEN_RATE_PROFILES = {
         'max_account_balance': 500.0,
 
         # Entry operations (AddOrder buy): 0 points
-        # Slowed to 10s to reduce churn
+        # Reduced to 5s to allow higher-frequency trading
         'entry': {
-            'min_interval_seconds': 10.0,  # 10 seconds between entry orders
-            'max_per_minute': 6,           # Up to 6 entries/minute
+            'min_interval_seconds': 5.0,   # 5 seconds between entry orders (was 10s)
+            'max_per_minute': 12,          # Up to 12 entries/minute (was 6)
             'api_cost_points': 0,          # Free on Kraken
         },
 
@@ -194,44 +194,44 @@ KRAKEN_RATE_PROFILES = {
 
         # Monitoring operations (Balance, TradeBalance): 1 point each
         'monitoring': {
-            'min_interval_seconds': 30.0,  # 30 seconds between balance checks
-            'max_per_minute': 2,            # Max 2 balance checks/minute
+            'min_interval_seconds': 10.0,  # 10 seconds between balance checks (was 30s)
+            'max_per_minute': 6,            # Max 6 balance checks/minute (was 2)
             'api_cost_points': 1,           # 1 point per check
         },
 
         # Query operations (QueryOrders, OpenOrders): 1-2 points
         'query': {
-            'min_interval_seconds': 15.0,  # 15 seconds between queries
-            'max_per_minute': 4,            # Max 4 queries/minute
+            'min_interval_seconds': 10.0,  # 10 seconds between queries (was 15s)
+            'max_per_minute': 6,            # Max 6 queries/minute (was 4)
             'api_cost_points': 1,           # 1-2 points per query
         },
 
         # Overall API budget management
         'budget': {
             'total_points_per_minute': 15,  # Kraken Tier 0 limit
-            'reserve_points': 5,             # Keep 5 points reserve (33%)
-            'monitoring_budget_pct': 0.20,   # 20% of budget for monitoring
-            'query_budget_pct': 0.80,        # 80% of budget for queries
+            'reserve_points': 3,             # Keep 3 points reserve (was 5)
+            'monitoring_budget_pct': 0.40,   # 40% of budget for monitoring (was 20%)
+            'query_budget_pct': 0.60,        # 60% of budget for queries (was 80%)
         },
 
         # Small-cap optimizations
         'optimizations': {
-            'cache_balance': True,          # Cache balance for 60s
-            'cache_ttl_seconds': 60,        # 60 second cache
+            'cache_balance': True,          # Cache balance for 15s
+            'cache_ttl_seconds': 15,        # 15 second cache (was 60s — faster balance updates)
             'skip_pre_trade_balance': False, # Check balance before trades
             'batch_queries': True,           # Batch multiple queries when possible
         },
 
         # Small-cap specific constraints
         'small_cap_rules': {
-            'max_concurrent_positions': 2,   # Up to 2 positions at a time
-            'position_size_pct': 0.20,       # 20% of balance per position
+            'max_concurrent_positions': 5,   # Up to 5 positions at a time (was 2)
+            'position_size_pct': 0.15,       # 15% of balance per position (was 20%)
             'profit_target_pct': 3.0,        # 3% profit target
             'stop_loss_pct': 1.5,            # 1.5% stop loss (2:1 risk/reward)
             'allow_dca': False,              # No adding to positions
             'stale_order_timeout_seconds': 120,  # Cancel orders after 2 minutes
-            'high_confidence_only': True,    # Only take high-confidence signals
-            'min_quality_score': 0.70,       # Minimum 70% quality score for entry
+            'high_confidence_only': False,   # Accept medium-confidence signals (was True)
+            'min_quality_score': 0.55,       # Minimum 55% quality score for entry (was 0.70)
         },
     },
 
