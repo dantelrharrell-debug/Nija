@@ -3,9 +3,10 @@ NIJA Apex Strategy v7.1 - Configuration
 
 All configuration parameters for the Apex trading strategy.
 
-Note: ADX threshold is set to 15 across multiple sections for consistency.
-This value represents the minimum ADX for trend detection, optimized for
-crypto markets. If you need to adjust, change all three instances:
+Note: ADX threshold is set to 8 across multiple sections for consistency.
+This value represents the minimum ADX for trend detection, loosened from 10
+to allow more setups in current Kraken market conditions. If you need to
+adjust, change all three instances:
 - MARKET_FILTER['adx_threshold']
 - MARKET_FILTERING['min_adx']
 - SMART_FILTERS['chop_detection']['adx_threshold'] (set 1 lower to avoid edge cases)
@@ -20,9 +21,9 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 10,  # ADX must be > 10 for trending market - OPTIMIZED for quality (was 15→6, now 10)
+    'adx_threshold': 8,  # ADX must be > 8 for trending market - LOOSENED (was 10) to allow more setups
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.10,  # Volume must be > 10% of recent average - OPTIMIZED (was 0.3→0.05, now 0.10)
+    'volume_threshold': 0.05,  # Volume must be > 5% of recent average - LOOSENED (was 0.10) for lower-volume markets
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
@@ -62,7 +63,7 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 10,  # Minimum ADX for trend strength (< 10 = choppy) - OPTIMIZED (was 15→6, now 10)
+    'min_adx': 8,  # Minimum ADX for trend strength (< 8 = choppy) - LOOSENED (was 10) to allow more setups
     'strong_adx': 30,  # ADX above this is strong trend
 
     # Volume Requirements
@@ -81,7 +82,7 @@ MARKET_FILTERING = {
 
 ENTRY_CONFIG = {
     # Signal Scoring (6 possible confirmations)
-    'min_signal_score': 4,  # Minimum confirmations required (out of 6) - OPTIMIZED for quality (was 3)
+    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED (was 4) to allow more entries
     'a_plus_signal_score': 6,  # Perfect setup score
 
     # Required Conditions
@@ -115,7 +116,7 @@ ENTRY_TRIGGERS = {
             'MACD histogram uptick (growing)',
             'Volume confirmation (>50% avg)',
         ],
-        'required_conditions': 4,  # Minimum 4 out of 5 conditions
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
         'entry_on_close': True,  # Only enter on candle close
     },
     'short': {
@@ -127,10 +128,10 @@ ENTRY_TRIGGERS = {
             'MACD histogram downtick (shrinking)',
             'Volume confirmation (>50% avg)',
         ],
-        'required_conditions': 4,  # Minimum 4 out of 5 conditions
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
         'entry_on_close': True,  # Only enter on candle close
     },
-    'pullback_threshold': 0.005,  # 0.5% distance to EMA21/VWAP for pullback
+    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback - LOOSENED (was 0.005/0.5%)
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -265,7 +266,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
-        'adx_threshold': 14,  # ADX < 14 indicates chop - slightly below min_adx to avoid edge cases
+        'adx_threshold': 7,  # ADX < 7 indicates chop - slightly below min_adx (8) to avoid edge cases
     },
 }
 
