@@ -3,9 +3,10 @@ NIJA Apex Strategy v7.1 - Configuration
 
 All configuration parameters for the Apex trading strategy.
 
-Note: ADX threshold is set to 10 across multiple sections for consistency.
-This value represents the minimum ADX for trend detection, optimized for
-crypto markets. If you need to adjust, change all three instances:
+Note: ADX threshold is set to 7 across multiple sections for consistency.
+This value represents the minimum ADX for trend detection, tuned for
+crypto markets. Below 10 allows real market movement to be captured.
+If you need to adjust, change all three instances:
 - MARKET_FILTER['adx_threshold']
 - MARKET_FILTERING['min_adx']
 - SMART_FILTERS['chop_detection']['adx_threshold'] (set 1 lower to avoid edge cases)
@@ -20,9 +21,9 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 10,  # ADX must be > 10 for trending market
+    'adx_threshold': 7,   # ADX must be > 7 — below 10 allows real market movement
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.10,  # Volume must be > 10% of recent average
+    'volume_threshold': 0.05,  # Volume must be > 5% of recent average (was 10%)
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
@@ -62,7 +63,7 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 10,  # Minimum ADX for trend strength (< 10 = choppy)
+    'min_adx': 7,   # Minimum ADX for trend strength — below 10 captures real movement
     'strong_adx': 30,  # ADX above this is strong trend
 
     # Volume Requirements
@@ -265,7 +266,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
-        'adx_threshold': 9,  # ADX < 9 indicates chop - set 1 lower than min_adx (10) to avoid edge cases
+        'adx_threshold': 6,  # ADX < 6 indicates chop — set 1 lower than min_adx (7)
     },
 }
 

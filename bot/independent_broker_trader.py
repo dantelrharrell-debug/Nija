@@ -137,6 +137,15 @@ except ImportError:
         get_broker_failure_manager = None  # type: ignore
         _BROKER_FAILURE_MANAGER_AVAILABLE = False
 
+# Import global Kraken nonce jump helper for nonce-error recovery
+try:
+    from bot.global_kraken_nonce import jump_global_kraken_nonce_forward
+except ImportError:
+    try:
+        from global_kraken_nonce import jump_global_kraken_nonce_forward
+    except ImportError:
+        jump_global_kraken_nonce_forward = None  # type: ignore
+
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -699,171 +708,200 @@ class IndependentBrokerTrader:
         # Display Capital Scaling Protocol banner (once at startup)
         self._display_capital_scaling_banner()
 
-        try:  # ── FATAL CRASH GUARD — thread NEVER silently dies ─────────────────
+        # ── OUTER RESTART GUARD ──────────────────────────────────────────────────
+        # Re-enters the inner trading loop after any unexpected fatal crash.
+        # Dead-broker checks inside use `continue` (never `break`) so the loop
+        # keeps retrying. A fatal exception triggers a 5 s back-off then restart.
+        while not stop_flag.is_set():
+            try:
+                while not stop_flag.is_set():
+                    cycle_count += 1
 
-            while not stop_flag.is_set():
-                cycle_count += 1
+                    # ─────────────────────────────────────────────────────────────
+                    # 🔴 DEAD BROKER CHECK (failure_manager — retry with backoff)
+                    # ─────────────────────────────────────────────────────────────
+                    if self.failure_manager and self.failure_manager.is_dead(broker_name):
+                        error_count = self.failure_manager.get_consecutive_errors(broker_name)
+                        delay = self.failure_manager.get_retry_delay(broker_name)
+                        logger.warning(
+                            f"🔴 {broker_name} marked DEAD "
+                            f"(errors={error_count}) → retrying in {delay:.0f}s "
+                            f"(call failure_manager.revive_broker('{broker_name}') to re-enable)"
+                        )
+                        stop_flag.wait(delay)
+                        continue
 
-                # ─────────────────────────────────────────────────────────────
-                # 🔴 DEAD BROKER CHECK (failure_manager — retry with backoff)
-                # ─────────────────────────────────────────────────────────────
-                if self.failure_manager and self.failure_manager.is_dead(broker_name):
-                    error_count = self.failure_manager.get_consecutive_errors(broker_name)
-                    delay = self.failure_manager.get_retry_delay(broker_name)
-                    logger.warning(
-                        f"🔴 {broker_name} marked DEAD "
-                        f"(errors={error_count}) → retrying in {delay:.0f}s "
-                        f"(call failure_manager.revive_broker('{broker_name}') to re-enable)"
-                    )
-                    stop_flag.wait(delay)
-                    continue
+                    # ─────────────────────────────────────────────────────────────
+                    # 🔴 DEAD BROKER CHECK (broker_failure_manager — reconnect)
+                    # ─────────────────────────────────────────────────────────────
+                    if self.broker_failure_manager and self.broker_failure_manager.is_dead(broker_name):
+                        retry_delay = self.broker_failure_manager.get_retry_delay(broker_name)
+                        logger.warning(
+                            f"🔴 {broker_name}: broker is DEAD — waiting {retry_delay:.0f}s "
+                            f"before reconnect attempt (intelligent backoff)"
+                        )
+                        self.update_broker_health(broker_name, 'failed', 'Marked dead by BrokerFailureManager')
+                        stop_flag.wait(retry_delay)
+                        try:
+                            logger.info(f"🔄 {broker_name}: attempting reconnect…")
+                            reconnected = broker.connect() if hasattr(broker, 'connect') else False
+                            if reconnected:
+                                self.broker_failure_manager.revive_broker(broker_name)
+                                logger.info(f"✅ {broker_name}: reconnected — re-entering trading loop")
+                            else:
+                                logger.warning(f"⚠️  {broker_name}: reconnect failed — will retry next cycle")
+                        except Exception as _reconnect_err:
+                            logger.warning(f"⚠️  {broker_name}: reconnect raised: {_reconnect_err}")
+                        continue
 
-                # ─────────────────────────────────────────────────────────────
-                # 🔴 DEAD BROKER CHECK (broker_failure_manager — reconnect)
-                # ─────────────────────────────────────────────────────────────
-                if self.broker_failure_manager and self.broker_failure_manager.is_dead(broker_name):
-                    retry_delay = self.broker_failure_manager.get_retry_delay(broker_name)
-                    logger.warning(
-                        f"🔴 {broker_name}: broker is DEAD — waiting {retry_delay:.0f}s "
-                        f"before reconnect attempt (intelligent backoff)"
-                    )
-                    self.update_broker_health(broker_name, 'failed', 'Marked dead by BrokerFailureManager')
-                    stop_flag.wait(retry_delay)
+                    # ─────────────────────────────────────────────────────────────
+                    # ⛔ CONNECTION GUARD
+                    # ─────────────────────────────────────────────────────────────
+                    if self.multi_account_manager and not self.multi_account_manager.is_platform_connected(broker_type):
+                        logger.warning(f"⛔ {broker_name}: Trading paused — platform not connected")
+                        self.update_broker_health(broker_name, 'degraded', 'Platform not connected')
+                        if self.failure_manager:
+                            self.failure_manager.record_error(broker_name, 'Platform not connected')
+                            backoff = self.failure_manager.get_retry_delay(broker_name)
+                        else:
+                            backoff = 30
+                        stop_flag.wait(backoff)
+                        continue
+
+                    # ─────────────────────────────────────────────────────────────
+                    # 💰 BALANCE CHECK
+                    # Uses _get_broker_balance so Coinbase zero-balance is retried
+                    # ─────────────────────────────────────────────────────────────
                     try:
-                        logger.info(f"🔄 {broker_name}: attempting reconnect…")
-                        reconnected = broker.connect() if hasattr(broker, 'connect') else False
-                        if reconnected:
-                            self.broker_failure_manager.revive_broker(broker_name)
-                            logger.info(f"✅ {broker_name}: reconnected — re-entering trading loop")
+                        balance = self._get_broker_balance(broker, broker_type, broker_name)
+                    except Exception as balance_err:
+                        logger.error(f"❌ {broker_name} balance check failed: {balance_err}")
+                        if self.broker_failure_manager:
+                            self.broker_failure_manager.record_error(
+                                broker_name, reason=f"balance_check_failed: {str(balance_err)[:80]}"
+                            )
+                        self.update_broker_health(broker_name, 'degraded',
+                                                 f'Balance check failed: {str(balance_err)[:50]}')
+                        if self.failure_manager:
+                            self.failure_manager.record_error(broker_name, str(balance_err)[:80])
+                            backoff = self.failure_manager.get_retry_delay(broker_name)
                         else:
-                            logger.warning(f"⚠️  {broker_name}: reconnect failed — will retry next cycle")
-                    except Exception as _reconnect_err:
-                        logger.warning(f"⚠️  {broker_name}: reconnect raised: {_reconnect_err}")
-                    continue
+                            backoff = 30
+                        stop_flag.wait(backoff)
+                        continue
 
-                # ─────────────────────────────────────────────────────────────
-                # ⛔ CONNECTION GUARD
-                # ─────────────────────────────────────────────────────────────
-                if self.multi_account_manager and not self.multi_account_manager.is_platform_connected(broker_type):
-                    logger.warning(f"⛔ {broker_name}: Trading paused — platform not connected")
-                    self.update_broker_health(broker_name, 'degraded', 'Platform not connected')
-                    if self.failure_manager:
-                        self.failure_manager.record_error(broker_name, 'Platform not connected')
-                        backoff = self.failure_manager.get_retry_delay(broker_name)
-                    else:
-                        backoff = 30
-                    stop_flag.wait(backoff)
-                    continue
-
-                # ─────────────────────────────────────────────────────────────
-                # 💰 BALANCE CHECK
-                # ─────────────────────────────────────────────────────────────
-                try:
-                    balance = broker.get_account_balance()
-                except Exception as balance_err:
-                    logger.error(f"❌ {broker_name} balance check failed: {balance_err}")
-                    if self.broker_failure_manager:
-                        self.broker_failure_manager.record_error(
-                            broker_name, reason=f"balance_check_failed: {str(balance_err)[:80]}"
+                    if balance < MINIMUM_FUNDED_BALANCE:
+                        logger.warning(
+                            f"⚠️  {broker_name} balance too low: ${balance:.2f} "
+                            f"(min: ${MINIMUM_FUNDED_BALANCE:.2f}) — waiting 60s before recheck"
                         )
-                    self.update_broker_health(broker_name, 'degraded',
-                                             f'Balance check failed: {str(balance_err)[:50]}')
-                    if self.failure_manager:
-                        self.failure_manager.record_error(broker_name, str(balance_err)[:80])
-                        backoff = self.failure_manager.get_retry_delay(broker_name)
-                    else:
-                        backoff = 30
-                    stop_flag.wait(backoff)
-                    continue
+                        self.update_broker_health(broker_name, 'degraded', f'Underfunded: ${balance:.2f}')
+                        stop_flag.wait(60)
+                        continue
 
-                if balance < MINIMUM_FUNDED_BALANCE:
-                    logger.warning(
-                        f"⚠️  {broker_name} balance too low: ${balance:.2f} "
-                        f"(min: ${MINIMUM_FUNDED_BALANCE:.2f}) — waiting 60s before recheck"
-                    )
-                    self.update_broker_health(broker_name, 'degraded', f'Underfunded: ${balance:.2f}')
-                    stop_flag.wait(60)
-                    continue
+                    # ─────────────────────────────────────────────────────────────
+                    # 🔄 EXECUTE TRADING CYCLE
+                    # ─────────────────────────────────────────────────────────────
+                    try:
+                        start_time = time.time()
+                        self._execute_trading_cycle(broker_type, broker, broker_name, cycle_count, balance)
+                        elapsed = time.time() - start_time
+                        logger.info(f"✅ {broker_name.upper()} cycle completed in {elapsed:.2f}s")
 
-                # ─────────────────────────────────────────────────────────────
-                # 🔄 EXECUTE TRADING CYCLE
-                # ─────────────────────────────────────────────────────────────
-                try:
-                    start_time = time.time()
-                    self._execute_trading_cycle(broker_type, broker, broker_name, cycle_count, balance)
-                    elapsed = time.time() - start_time
-                    logger.info(f"✅ {broker_name.upper()} cycle completed in {elapsed:.2f}s")
+                        # ✅ SUCCESS → reset failure counter
+                        if self.failure_manager:
+                            self.failure_manager.record_success(broker_name)
 
-                    # ✅ SUCCESS → reset failure counter
-                    if self.failure_manager:
-                        self.failure_manager.record_success(broker_name)
+                        # Cycle interval: 90s for faster micro-cap growth (reduced from 150s —
+                        # shorter gap catches rapid price movements and compounds capital quicker)
+                        logger.info(f"   {broker_name}: Next cycle in 90s...")
+                        stop_flag.wait(90)
 
-                    # Cycle interval: 90s for faster micro-cap growth (reduced from 150s —
-                    # shorter gap catches rapid price movements and compounds capital quicker)
-                    logger.info(f"   {broker_name}: Next cycle in 90s...")
-                    stop_flag.wait(90)
+                    except Exception as e:
+                        # ─────────────────────────────────────────────────────
+                        # 🔑 NONCE ERROR RECOVERY (Kraken "Invalid nonce")
+                        # Jump the global nonce forward so the next request is
+                        # accepted, then retry quickly without counting this as
+                        # a normal failure.
+                        # ─────────────────────────────────────────────────────
+                        _err_lower = str(e).lower()
+                        if "nonce" in _err_lower and broker_name == "kraken" and jump_global_kraken_nonce_forward is not None:
+                            logger.warning(
+                                "⚠️  %s: Kraken nonce error detected — jumping nonce forward 60 s "
+                                "and retrying in 5 s (not counted as failure)",
+                                broker_name,
+                            )
+                            try:
+                                jump_global_kraken_nonce_forward(60_000)  # 60 000 ms = 60 s
+                            except Exception as _nonce_jump_err:
+                                logger.debug("Nonce jump failed (non-critical): %s", _nonce_jump_err)
+                            stop_flag.wait(5)
+                            continue
 
-                except Exception as e:
-                    # ❌ FAILURE → track error count + intelligent backoff
-                    if self.isolation_manager and FailureType:
-                        error_str = str(e).lower()
-                        if 'api' in error_str:
-                            failure_type = FailureType.API_ERROR
-                        elif 'auth' in error_str or 'credential' in error_str:
-                            failure_type = FailureType.AUTHENTICATION_ERROR
-                        elif 'rate' in error_str or 'limit' in error_str:
-                            failure_type = FailureType.RATE_LIMIT_ERROR
-                        elif 'execution' in error_str or 'order' in error_str:
-                            failure_type = FailureType.EXECUTION_ERROR
-                        elif 'position' in error_str:
-                            failure_type = FailureType.POSITION_ERROR
-                        elif 'network' in error_str or 'timeout' in error_str:
-                            failure_type = FailureType.NETWORK_ERROR
-                        else:
-                            failure_type = FailureType.UNKNOWN_ERROR
-                        self.isolation_manager.record_failure(
-                            'platform', 'platform', broker_name, e, failure_type
+                        # ❌ FAILURE → track error count + intelligent backoff
+                        if self.isolation_manager and FailureType:
+                            error_str = str(e).lower()
+                            if 'api' in error_str:
+                                failure_type = FailureType.API_ERROR
+                            elif 'auth' in error_str or 'credential' in error_str:
+                                failure_type = FailureType.AUTHENTICATION_ERROR
+                            elif 'rate' in error_str or 'limit' in error_str:
+                                failure_type = FailureType.RATE_LIMIT_ERROR
+                            elif 'execution' in error_str or 'order' in error_str:
+                                failure_type = FailureType.EXECUTION_ERROR
+                            elif 'position' in error_str:
+                                failure_type = FailureType.POSITION_ERROR
+                            elif 'network' in error_str or 'timeout' in error_str:
+                                failure_type = FailureType.NETWORK_ERROR
+                            else:
+                                failure_type = FailureType.UNKNOWN_ERROR
+                            self.isolation_manager.record_failure(
+                                'platform', 'platform', broker_name, e, failure_type
+                            )
+
+                        if self.broker_failure_manager:
+                            newly_dead = self.broker_failure_manager.record_error(
+                                broker_name, reason=f"trading_error: {str(e)[:80]}"
+                            )
+                            if newly_dead:
+                                self.broker_failure_manager.log_active_dead_banner()
+
+                        if self.failure_manager:
+                            self.failure_manager.record_error(broker_name, str(e)[:80])
+
+                        self.update_broker_health(broker_name, 'degraded',
+                                                 f'Trading error: {str(e)[:MAX_ERROR_MESSAGE_LENGTH]}')
+
+                        error_count = (
+                            self.failure_manager.get_consecutive_errors(broker_name)
+                            if self.failure_manager else 1
                         )
-
-                    if self.broker_failure_manager:
-                        newly_dead = self.broker_failure_manager.record_error(
-                            broker_name, reason=f"trading_error: {str(e)[:80]}"
+                        delay = (
+                            self.failure_manager.get_retry_delay(broker_name)
+                            if self.failure_manager else 30
                         )
-                        if newly_dead:
-                            self.broker_failure_manager.log_active_dead_banner()
+                        logger.error(
+                            f"❌ Broker error ({broker_name}) "
+                            f"[#{error_count}] → {e} | retry in {delay:.0f}s",
+                            exc_info=True,
+                        )
+                        stop_flag.wait(delay)
 
-                    if self.failure_manager:
-                        self.failure_manager.record_error(broker_name, str(e)[:80])
-
-                    self.update_broker_health(broker_name, 'degraded',
-                                             f'Trading error: {str(e)[:MAX_ERROR_MESSAGE_LENGTH]}')
-
-                    error_count = (
-                        self.failure_manager.get_consecutive_errors(broker_name)
-                        if self.failure_manager else 1
-                    )
-                    delay = (
-                        self.failure_manager.get_retry_delay(broker_name)
-                        if self.failure_manager else 30
-                    )
-                    logger.error(
-                        f"❌ Broker error ({broker_name}) "
-                        f"[#{error_count}] → {e} | retry in {delay:.0f}s",
-                        exc_info=True,
-                    )
-                    stop_flag.wait(delay)
-
-        except Exception as fatal_err:
-            logger.critical(
-                f"💥 FATAL: {broker_name} trader loop crashed unexpectedly: {fatal_err}",
-                exc_info=True,
-            )
-        finally:
-            # Cleanup: Remove from active threads when loop exits
-            with self.active_threads_lock:
-                self.active_trading_threads.discard(broker_name)
-            logger.info(f"🛑 {broker_name} trading loop stopped (total cycles: {cycle_count})")
-            logger.info(f"   Thread removed from active trading threads")
+            except Exception as fatal_err:
+                if stop_flag.is_set():
+                    break
+                logger.critical(
+                    "💥 FATAL: %s trader loop crashed unexpectedly (restarting in 5s): %s",
+                    broker_name,
+                    fatal_err,
+                    exc_info=True,
+                )
+                stop_flag.wait(5)  # brief back-off before restarting inner loop
+        # Cleanup: runs when stop_flag is set and outer loop exits normally
+        with self.active_threads_lock:
+            self.active_trading_threads.discard(broker_name)
+        logger.info(f"🛑 {broker_name} trading loop stopped (total cycles: {cycle_count})")
+        logger.info(f"   Thread removed from active trading threads")
 
     def run_user_broker_trading_loop(self, user_id: str, broker_type, broker, stop_flag: threading.Event):
         """
