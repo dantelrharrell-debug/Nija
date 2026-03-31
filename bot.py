@@ -969,6 +969,14 @@ def _run_bot_startup_and_trading():
             # Check if we should use independent multi-broker trading mode
             use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
 
+            # If independent trading is requested but the trader wasn't initialised
+            # (e.g. no platform broker available), fall back to the single-broker
+            # run_cycle() loop so trading still happens.
+            if use_independent_trading and not strategy.independent_trader:
+                logger.warning("⚠️  MULTI_BROKER_INDEPENDENT=true but independent_trader is not available")
+                logger.warning("   Falling back to single-broker run_cycle() loop")
+                use_independent_trading = False
+
             if use_independent_trading and strategy.independent_trader:
                 logger.info("=" * 70)
                 logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING MODE")
