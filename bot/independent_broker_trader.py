@@ -137,6 +137,15 @@ except ImportError:
         get_broker_failure_manager = None  # type: ignore
         _BROKER_FAILURE_MANAGER_AVAILABLE = False
 
+# Import global Kraken nonce jump helper for nonce-error recovery
+try:
+    from bot.global_kraken_nonce import jump_global_kraken_nonce_forward
+except ImportError:
+    try:
+        from global_kraken_nonce import jump_global_kraken_nonce_forward
+    except ImportError:
+        jump_global_kraken_nonce_forward = None  # type: ignore
+
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -761,9 +770,10 @@ class IndependentBrokerTrader:
 
                     # ─────────────────────────────────────────────────────────────
                     # 💰 BALANCE CHECK
+                    # Uses _get_broker_balance so Coinbase zero-balance is retried
                     # ─────────────────────────────────────────────────────────────
                     try:
-                        balance = broker.get_account_balance()
+                        balance = self._get_broker_balance(broker, broker_type, broker_name)
                     except Exception as balance_err:
                         logger.error(f"❌ {broker_name} balance check failed: {balance_err}")
                         if self.broker_failure_manager:
@@ -808,6 +818,26 @@ class IndependentBrokerTrader:
                         stop_flag.wait(90)
 
                     except Exception as e:
+                        # ─────────────────────────────────────────────────────
+                        # 🔑 NONCE ERROR RECOVERY (Kraken "Invalid nonce")
+                        # Jump the global nonce forward so the next request is
+                        # accepted, then retry quickly without counting this as
+                        # a normal failure.
+                        # ─────────────────────────────────────────────────────
+                        _err_lower = str(e).lower()
+                        if "nonce" in _err_lower and broker_name == "kraken" and jump_global_kraken_nonce_forward is not None:
+                            logger.warning(
+                                "⚠️  %s: Kraken nonce error detected — jumping nonce forward 60 s "
+                                "and retrying in 5 s (not counted as failure)",
+                                broker_name,
+                            )
+                            try:
+                                jump_global_kraken_nonce_forward(60_000)  # 60 000 ms = 60 s
+                            except Exception as _nonce_jump_err:
+                                logger.debug("Nonce jump failed (non-critical): %s", _nonce_jump_err)
+                            stop_flag.wait(5)
+                            continue
+
                         # ❌ FAILURE → track error count + intelligent backoff
                         if self.isolation_manager and FailureType:
                             error_str = str(e).lower()
