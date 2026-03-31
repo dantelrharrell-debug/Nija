@@ -16,11 +16,17 @@ Gate 3 — Volatility Range            1 pt   (market conditions)
 Gate 4 — Spread / Slippage           1 pt   (cost safety)
 Gate 5 — Regime Confirmation         2 pts  (market context)
 
-Pass threshold: 5 / 9 (≈ 55 %).  This means:
+Pass threshold: 3.5 / 9 (≈ 39 %, temporarily loosened).  This means:
+  - Gate 1 alone                   → 3 pts → PASS (int(3.5)=3 floor, 3≥3 passes)
   - Gate 1 + Gate 2                → 5 pts → PASS
   - Gate 1 + Gate 5                → 5 pts → PASS
   - Gate 1 + Gate 3 + Gate 4 + Gate 5 → 7 pts → PASS
   - Gate 2 + Gate 3 + Gate 4 + Gate 5 → 6 pts → PASS (even without perfect AI score)
+
+  AI + Volume alone can now trigger a trade even if volume is weak.
+  Still respects the hard-block: VOLATILITY_EXPLOSION regime.
+  Threshold auto-restores to 5.0 once account balance reaches $100 via
+  check_balance_and_adjust_threshold() in trade_frequency_controller.
 
 Drought relaxation
 ------------------
@@ -179,7 +185,11 @@ _GATE_WEIGHTS: Dict[str, int] = {
     "gate5_regime":     2,   # market context
 }
 _GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 9
-_GATE_PASS_THRESHOLD: int = 5  # ≈55% — Gate1+Gate2 alone is enough
+
+# Mutable base threshold — lowered temporarily to 3.5 to generate more trades.
+# Restored to 5.0 automatically by check_balance_and_adjust_threshold() once
+# the account balance reaches $100 (TARGET_BALANCE in trade_frequency_controller).
+BASE_ENTRY_SCORE_THRESHOLD: float = 3.5  # was 5.0; temporarily loosened for more trades
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +219,8 @@ class AIEntryGate:
         }
         logger.info(
             "🚦 AIEntryGate initialized — "
-            "score-based OR logic: %d gates, pass at %d/%d pts",
-            len(_GATE_WEIGHTS), _GATE_PASS_THRESHOLD, _GATE_MAX_SCORE,
+            "score-based OR logic: %d gates, pass at %.1f/%d pts",
+            len(_GATE_WEIGHTS), BASE_ENTRY_SCORE_THRESHOLD, _GATE_MAX_SCORE,
         )
 
     # ------------------------------------------------------------------
@@ -302,7 +312,7 @@ class AIEntryGate:
         capped_reduction = min(gate_score_reduction, 0.50)
         effective_threshold = max(
             2,
-            int(_GATE_PASS_THRESHOLD * (1.0 - capped_reduction)),
+            int(BASE_ENTRY_SCORE_THRESHOLD * (1.0 - capped_reduction)),
         )
         passed = total_score >= effective_threshold
 

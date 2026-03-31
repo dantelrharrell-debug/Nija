@@ -59,6 +59,10 @@ _STRUCT_WINDOW: int           = int(_ef("MOMENTUM_STRUCT_WINDOW", 10))
 _BREAKOUT_WINDOW: int         = int(_ef("BREAKOUT_WINDOW", 20))
 _BREAKOUT_VOL_SURGE: float    = _ef("BREAKOUT_VOL_SURGE", 1.4)
 
+# Balance-based threshold tightening — mirrors trade_frequency_controller constants.
+TARGET_BALANCE: float = 100.0       # tighten AI entry threshold once balance hits this
+TIGHTENED_ENTRY_SCORE: float = 5.0  # restored threshold when TARGET_BALANCE is reached
+
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -277,3 +281,35 @@ def check_breakout_short(
     except Exception as exc:
         logger.warning("breakout_short error: %s", exc)
         return False, 0.0, f"breakout_short error: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Balance-based threshold tightening
+# ---------------------------------------------------------------------------
+
+def check_balance_and_adjust_threshold(current_balance: float) -> None:
+    """
+    Tighten the AI entry threshold once the account balance reaches TARGET_BALANCE.
+
+    Call this at the end of each trade or scan loop.
+    When ``current_balance`` is at or above ``TARGET_BALANCE`` the
+    ``BASE_ENTRY_SCORE_THRESHOLD`` in ``ai_entry_gate`` is restored to
+    ``TIGHTENED_ENTRY_SCORE``, reversing the temporary loosening.
+    The threshold is only updated (and the log emitted) on the first call
+    that crosses the target, preventing repeated writes and log spam.
+    """
+    if current_balance >= TARGET_BALANCE:
+        try:
+            try:
+                import bot.ai_entry_gate as _ai_gate
+            except ImportError:
+                import ai_entry_gate as _ai_gate  # type: ignore[no-redef]
+            if _ai_gate.BASE_ENTRY_SCORE_THRESHOLD != TIGHTENED_ENTRY_SCORE:
+                _ai_gate.BASE_ENTRY_SCORE_THRESHOLD = TIGHTENED_ENTRY_SCORE
+                logger.info(
+                    "💰 Balance $%.2f reached target $%.1f — "
+                    "tightening AI entry threshold to %.1f",
+                    current_balance, TARGET_BALANCE, TIGHTENED_ENTRY_SCORE,
+                )
+        except Exception as exc:
+            logger.warning("check_balance_and_adjust_threshold error: %s", exc)
