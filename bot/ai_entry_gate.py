@@ -16,11 +16,15 @@ Gate 3 — Volatility Range            1 pt   (market conditions)
 Gate 4 — Spread / Slippage           1 pt   (cost safety)
 Gate 5 — Regime Confirmation         2 pts  (market context)
 
-Pass threshold: 5 / 9 (≈ 55 %).  This means:
+Pass threshold: 3.5 / 9 (≈ 39 %, temporarily loosened for more trades).  This means:
+  - Gate 1 alone                   → 3 pts → PASS  (AI score sufficient)
   - Gate 1 + Gate 2                → 5 pts → PASS
-  - Gate 1 + Gate 5                → 5 pts → PASS
-  - Gate 1 + Gate 3 + Gate 4 + Gate 5 → 7 pts → PASS
+  - Gate 2 + Gate 3 + Gate 4      → 4 pts → PASS  (volume + conditions)
   - Gate 2 + Gate 3 + Gate 4 + Gate 5 → 6 pts → PASS (even without perfect AI score)
+
+Once the account balance reaches the target (default $100), callers should invoke
+``set_gate_pass_threshold(5.0)`` (or use ``TradeFrequencyController.check_balance_and_adjust_threshold``)
+to restore the stricter 5-point pass requirement.
 
 Drought relaxation
 ------------------
@@ -179,7 +183,12 @@ _GATE_WEIGHTS: Dict[str, int] = {
     "gate5_regime":     2,   # market context
 }
 _GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 9
-_GATE_PASS_THRESHOLD: int = 5  # ≈55% — Gate1+Gate2 alone is enough
+
+# Temporarily loosened from 5.0 → 3.5 to allow more trades.
+# AI score gate alone (3 pts) is now sufficient to pass.
+# Restored to 5.0 once the account balance reaches TARGET_BALANCE ($100)
+# via ``set_gate_pass_threshold`` / ``TradeFrequencyController.check_balance_and_adjust_threshold``.
+BASE_ENTRY_SCORE_THRESHOLD: float = 3.5  # out of 9 — temporarily loosened for more trades
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +218,8 @@ class AIEntryGate:
         }
         logger.info(
             "🚦 AIEntryGate initialized — "
-            "score-based OR logic: %d gates, pass at %d/%d pts",
-            len(_GATE_WEIGHTS), _GATE_PASS_THRESHOLD, _GATE_MAX_SCORE,
+            "score-based OR logic: %d gates, pass at %.1f/%d pts",
+            len(_GATE_WEIGHTS), BASE_ENTRY_SCORE_THRESHOLD, _GATE_MAX_SCORE,
         )
 
     # ------------------------------------------------------------------
@@ -302,7 +311,7 @@ class AIEntryGate:
         capped_reduction = min(gate_score_reduction, 0.50)
         effective_threshold = max(
             2,
-            int(_GATE_PASS_THRESHOLD * (1.0 - capped_reduction)),
+            int(BASE_ENTRY_SCORE_THRESHOLD * (1.0 - capped_reduction)),
         )
         passed = total_score >= effective_threshold
 
@@ -533,6 +542,28 @@ def get_ai_entry_gate() -> AIEntryGate:
             if _gate_instance is None:
                 _gate_instance = AIEntryGate()
     return _gate_instance
+
+
+def set_gate_pass_threshold(value: float) -> None:
+    """
+    Dynamically update ``BASE_ENTRY_SCORE_THRESHOLD`` at runtime.
+
+    Use this to restore the stricter threshold once the account balance
+    reaches the target (e.g. tighten back to 5.0 after reaching $100).
+    Thread-safe: writes are atomic on CPython due to the GIL, but callers
+    should treat this as an eventually-consistent hint rather than a hard
+    synchronisation barrier.
+
+    Args:
+        value: New pass threshold (out of 9 gate points).  Clamped to [2, 9].
+    """
+    global BASE_ENTRY_SCORE_THRESHOLD
+    clamped = max(2.0, min(float(value), float(_GATE_MAX_SCORE)))
+    BASE_ENTRY_SCORE_THRESHOLD = clamped
+    logger.info(
+        "🚦 AIEntryGate pass threshold updated → %.1f/%d pts",
+        BASE_ENTRY_SCORE_THRESHOLD, _GATE_MAX_SCORE,
+    )
 
 
 # ---------------------------------------------------------------------------

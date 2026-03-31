@@ -72,6 +72,10 @@ _DEFAULT_DROUGHT_GATE_PCT: float = 0.10        # lower AI-gate threshold by 10 %
 _HOUR_WINDOW_SECS: float = 3600.0
 _DAY_WINDOW_SECS: float = 86400.0
 
+# Balance-based threshold tightening
+TARGET_BALANCE: float = 100.0        # USD — restore strict thresholds once reached
+TIGHTENED_ENTRY_SCORE: float = 5.0  # gate-pass threshold to restore at target balance
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -380,6 +384,40 @@ class TradeFrequencyController:
             "drought_active": d.active,
             "drought_secs_since_trade": round(d.secs_since_last_trade, 1),
         }
+
+    def check_balance_and_adjust_threshold(self, current_balance: float) -> None:
+        """
+        Tighten the AI entry gate threshold once the account balance reaches
+        ``TARGET_BALANCE``.
+
+        While the bot is building up equity the gate-pass threshold is kept at a
+        lower value (3.5 / 9) to allow more trades.  Once the balance hits the
+        target this method restores the stricter threshold (5.0 / 9) so that
+        quality filtering kicks back in.
+
+        Call this at the end of every trade or at the start of every scan loop,
+        passing the current cash balance.
+
+        Args:
+            current_balance: Current account balance in USD.
+        """
+        if current_balance >= TARGET_BALANCE:
+            try:
+                try:
+                    from bot.ai_entry_gate import set_gate_pass_threshold
+                except ImportError:
+                    from ai_entry_gate import set_gate_pass_threshold
+                set_gate_pass_threshold(TIGHTENED_ENTRY_SCORE)
+                logger.info(
+                    "💰 Balance $%.2f ≥ $%.0f target — "
+                    "entry gate tightened to %.1f/9 pts",
+                    current_balance, TARGET_BALANCE, TIGHTENED_ENTRY_SCORE,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "check_balance_and_adjust_threshold: "
+                    "could not update ai_entry_gate threshold: %s", exc,
+                )
 
     def update_targets(self, min_per_hour: float, min_per_day: float) -> None:
         """
