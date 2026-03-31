@@ -3,7 +3,7 @@ NIJA Apex Strategy v7.1 - Configuration
 
 All configuration parameters for the Apex trading strategy.
 
-Note: ADX threshold is set to 8 across multiple sections for consistency.
+Note: ADX threshold is set to 10 across multiple sections for consistency.
 This value represents the minimum ADX for trend detection, optimized for
 crypto markets. If you need to adjust, change all three instances:
 - MARKET_FILTER['adx_threshold']
@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 8,  # ADX must be > 8 for trending market - LOOSENED (was 10) to allow choppier markets
+    'adx_threshold': 10,  # ADX must be > 10 for trending market
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.05,  # Volume must be > 5% of recent average - LOOSENED (was 0.10) to allow lower volume
+    'volume_threshold': 0.10,  # Volume must be > 10% of recent average
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
@@ -62,7 +62,7 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 8,  # Minimum ADX for trend strength (< 8 = choppy) - LOOSENED (was 10) to allow choppier markets
+    'min_adx': 10,  # Minimum ADX for trend strength (< 10 = choppy)
     'strong_adx': 30,  # ADX above this is strong trend
 
     # Volume Requirements
@@ -140,7 +140,7 @@ ENTRY_TRIGGERS = {
 POSITION_SIZING = {
     'trend_quality': {
         'weak': {
-            'adx_range': (8, 15),
+            'adx_range': (10, 15),
             'position_size': 0.02,  # 2% of account (conservative, minimal risk)
         },
         'moderate': {
@@ -265,7 +265,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
-        'adx_threshold': 7,  # ADX < 7 indicates chop - set 1 lower than min_adx (8) to avoid edge cases
+        'adx_threshold': 9,  # ADX < 9 indicates chop - set 1 lower than min_adx (10) to avoid edge cases
     },
 }
 
