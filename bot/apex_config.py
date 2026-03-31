@@ -3,7 +3,7 @@ NIJA Apex Strategy v7.1 - Configuration
 
 All configuration parameters for the Apex trading strategy.
 
-Note: ADX threshold is set to 15 across multiple sections for consistency.
+Note: ADX threshold is set to 10 across multiple sections for consistency.
 This value represents the minimum ADX for trend detection, optimized for
 crypto markets. If you need to adjust, change all three instances:
 - MARKET_FILTER['adx_threshold']
@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 10,  # ADX must be > 10 for trending market - OPTIMIZED for quality (was 15→6, now 10)
+    'adx_threshold': 10,  # ADX must be > 10 for trending market
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.10,  # Volume must be > 10% of recent average - OPTIMIZED (was 0.3→0.05, now 0.10)
+    'volume_threshold': 0.10,  # Volume must be > 10% of recent average
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
@@ -62,7 +62,7 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 10,  # Minimum ADX for trend strength (< 10 = choppy) - OPTIMIZED (was 15→6, now 10)
+    'min_adx': 10,  # Minimum ADX for trend strength (< 10 = choppy)
     'strong_adx': 30,  # ADX above this is strong trend
 
     # Volume Requirements
@@ -81,7 +81,7 @@ MARKET_FILTERING = {
 
 ENTRY_CONFIG = {
     # Signal Scoring (6 possible confirmations)
-    'min_signal_score': 4,  # Minimum confirmations required (out of 6) - OPTIMIZED for quality (was 3)
+    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED (was 4) for more entries
     'a_plus_signal_score': 6,  # Perfect setup score
 
     # Required Conditions
@@ -109,28 +109,28 @@ ENTRY_TRIGGERS = {
     'long': {
         'description': 'Long entry conditions',
         'conditions': [
-            'Price pulls to EMA21 or VWAP (within 0.5%)',
+            'Price pulls to EMA21 or VWAP (within 1.0%)',
             'RSI in bullish zone (40-70)',
             'Bullish reversal candle',
             'MACD histogram uptick (growing)',
             'Volume confirmation (>50% avg)',
         ],
-        'required_conditions': 4,  # Minimum 4 out of 5 conditions
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions
         'entry_on_close': True,  # Only enter on candle close
     },
     'short': {
         'description': 'Short entry conditions (mirror of long)',
         'conditions': [
-            'Price pulls to EMA21 or VWAP (within 0.5%)',
+            'Price pulls to EMA21 or VWAP (within 1.0%)',
             'RSI in bearish zone (30-60)',
             'Bearish reversal candle',
             'MACD histogram downtick (shrinking)',
             'Volume confirmation (>50% avg)',
         ],
-        'required_conditions': 4,  # Minimum 4 out of 5 conditions
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions
         'entry_on_close': True,  # Only enter on candle close
     },
-    'pullback_threshold': 0.005,  # 0.5% distance to EMA21/VWAP for pullback
+    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback - LOOSENED (was 0.5%) for wider entry zone
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -265,7 +265,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
-        'adx_threshold': 14,  # ADX < 14 indicates chop - slightly below min_adx to avoid edge cases
+        'adx_threshold': 9,  # ADX < 9 indicates chop - set 1 lower than min_adx (10) to avoid edge cases
     },
 }
 
