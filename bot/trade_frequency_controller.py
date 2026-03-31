@@ -9,17 +9,34 @@ controller emits a negative ``confidence_delta`` (makes entries easier).
 When it is comfortably above target it backs off and lets the sniper
 filter maintain quality.
 
+Drought safeguard
+-----------------
+If **no trade has occurred in the last 2 hours** the controller enters
+"drought mode" and returns a ``DroughtRelaxation`` that callers use to
+automatically soften every filter layer by 10–20 %:
+
+  * ADX requirement reduced by 3 points (e.g. 7 → 4)
+  * Volume threshold halved (e.g. 5 % → 2.5 %)
+  * Entry-score requirement reduced by 0.5 point
+  * AI-gate score threshold reduced by 10 %
+  * confidence_delta pinned to max loosening (-0.15)
+
 Configuration via environment variables (all optional):
 
-    MIN_TRADES_PER_HOUR=2.0   # default: 2.0
-    MIN_TRADES_PER_DAY=12.0   # default: 12.0
-    FREQ_LOOSEN_STEP=0.03     # per-cycle confidence nudge (subtracted from gate)
-    FREQ_TIGHTEN_STEP=0.02    # per-cycle confidence nudge (added to gate)
-    FREQ_MAX_DELTA=0.15       # max |confidence_delta| allowed
+    MIN_TRADES_PER_HOUR=2.0       # default: 2.0
+    MIN_TRADES_PER_DAY=12.0       # default: 12.0
+    FREQ_LOOSEN_STEP=0.03         # per-cycle confidence nudge (subtracted)
+    FREQ_TIGHTEN_STEP=0.02        # per-cycle confidence nudge (added)
+    FREQ_MAX_DELTA=0.15           # max |confidence_delta| allowed
+    DROUGHT_WINDOW_HOURS=2.0      # hours without a trade → drought mode
+    DROUGHT_ADX_REDUCTION=3.0     # ADX points removed in drought
+    DROUGHT_VOLUME_MULTIPLIER=0.5 # volume threshold multiplied in drought
+    DROUGHT_SCORE_REDUCTION=0.5   # entry-score points removed in drought
+    DROUGHT_GATE_PCT=0.10         # AI-gate score threshold reduced by this %
 
 The controller is intentionally lightweight: it does NOT gate entries
-directly.  Instead callers read ``get_confidence_delta()`` and add it to
-their confidence score before the sniper filter.
+directly.  Instead callers read ``get_confidence_delta()`` and
+``get_drought_relaxation()`` and apply them before each filter check.
 """
 
 from __future__ import annotations
@@ -44,6 +61,13 @@ _DEFAULT_LOOSEN_STEP: float = 0.03
 _DEFAULT_TIGHTEN_STEP: float = 0.02
 _DEFAULT_MAX_DELTA: float = 0.15
 
+# Drought safeguard defaults
+_DEFAULT_DROUGHT_WINDOW_SECS: float = 7200.0   # 2 hours
+_DEFAULT_DROUGHT_ADX_REDUCTION: float = 3.0    # subtract 3 ADX points
+_DEFAULT_DROUGHT_VOL_MULTIPLIER: float = 0.5   # halve volume threshold
+_DEFAULT_DROUGHT_SCORE_REDUCTION: float = 0.5  # shave 0.5 from entry score
+_DEFAULT_DROUGHT_GATE_PCT: float = 0.10        # lower AI-gate threshold by 10 %
+
 # Rolling window sizes
 _HOUR_WINDOW_SECS: float = 3600.0
 _DAY_WINDOW_SECS: float = 86400.0
@@ -64,6 +88,28 @@ class FrequencyStatus:
     below_hourly_target: bool
     below_daily_target: bool
     mode: str                     # "ON_TARGET" | "BELOW_HOURLY" | "BELOW_DAILY" | "WELL_ABOVE"
+
+
+@dataclass
+class DroughtRelaxation:
+    """
+    Filter relaxation applied when no trade has occurred for ``drought_window`` seconds.
+
+    Callers should apply each field to the relevant threshold:
+      * adx_reduction       — subtract from min_adx before the ADX gate
+      * volume_multiplier   — multiply the volume_threshold (0.5 = halve it)
+      * score_reduction     — subtract from the required entry score
+      * gate_pct_reduction  — multiply AI-gate score thresholds by (1 - gate_pct_reduction)
+      * confidence_delta    — add to signal confidence (negative = easier to enter)
+    """
+    active: bool
+    secs_since_last_trade: float  # 0.0 if a trade was recorded today
+    adx_reduction: float          # points to subtract from min_adx
+    volume_multiplier: float      # fraction to multiply volume_threshold by
+    score_reduction: float        # points to subtract from min entry score
+    gate_pct_reduction: float     # fractional reduction of AI-gate thresholds
+    confidence_delta: float       # additional confidence loosening
+    reason: str
 
 
 # ---------------------------------------------------------------------------
@@ -104,20 +150,46 @@ class TradeFrequencyController:
         self._tighten_step = _env("FREQ_TIGHTEN_STEP", _DEFAULT_TIGHTEN_STEP, tighten_step)
         self._max_delta = _env("FREQ_MAX_DELTA", _DEFAULT_MAX_DELTA, max_delta)
 
+        # Drought safeguard parameters
+        self._drought_window = _env("DROUGHT_WINDOW_HOURS", 2.0, None) * 3600.0
+        self._drought_adx_reduction = _env(
+            "DROUGHT_ADX_REDUCTION", _DEFAULT_DROUGHT_ADX_REDUCTION, None
+        )
+        self._drought_vol_multiplier = _env(
+            "DROUGHT_VOLUME_MULTIPLIER", _DEFAULT_DROUGHT_VOL_MULTIPLIER, None
+        )
+        self._drought_score_reduction = _env(
+            "DROUGHT_SCORE_REDUCTION", _DEFAULT_DROUGHT_SCORE_REDUCTION, None
+        )
+        self._drought_gate_pct = _env(
+            "DROUGHT_GATE_PCT", _DEFAULT_DROUGHT_GATE_PCT, None
+        )
+
         # Rolling timestamp windows
         self._lock = threading.Lock()
         self._trade_timestamps: Deque[float] = deque()
         self._confidence_delta: float = 0.0
         self._last_update_ts: float = 0.0
+        # _init_ts anchors the drought clock: drought triggers only after the bot
+        # has been running for drought_window seconds WITHOUT a recorded trade.
+        self._init_ts: float = time.time()
+        # Timestamp of most-recent recorded trade (0.0 = none yet)
+        self._last_trade_ts: float = 0.0
 
         logger.info(
             "📊 TradeFrequencyController started — "
-            "target: %.1f/hr, %.1f/day | step loosen=%.3f tighten=%.3f cap=±%.3f",
+            "target: %.1f/hr, %.1f/day | step loosen=%.3f tighten=%.3f cap=±%.3f | "
+            "drought window=%.0fh relax ADX-%.1f vol×%.2f score-%.1f gate-%.0f%%",
             self._min_per_hour,
             self._min_per_day,
             self._loosen_step,
             self._tighten_step,
             self._max_delta,
+            self._drought_window / 3600.0,
+            self._drought_adx_reduction,
+            self._drought_vol_multiplier,
+            self._drought_score_reduction,
+            self._drought_gate_pct * 100,
         )
 
     # ── Internal helpers ─────────────────────────────────────────────────────
@@ -171,6 +243,7 @@ class TradeFrequencyController:
         now = time.time()
         with self._lock:
             self._trade_timestamps.append(now)
+            self._last_trade_ts = now
             self._purge_old_timestamps(now)
             self._update_delta(now)
 
@@ -191,6 +264,73 @@ class TradeFrequencyController:
                 self._purge_old_timestamps(now)
                 self._update_delta(now)
             return self._confidence_delta
+
+    def get_drought_relaxation(self) -> DroughtRelaxation:
+        """
+        Return filter relaxation parameters for the 2-hour drought safeguard.
+
+        When no trade has been recorded for ``drought_window`` seconds this
+        returns an *active* ``DroughtRelaxation`` with non-zero relaxation
+        values.  Callers should apply those values to every threshold they
+        own before evaluating a new entry:
+
+            relax = controller.get_drought_relaxation()
+            if relax.active:
+                effective_adx = max(0, min_adx - relax.adx_reduction)
+                effective_vol = volume_threshold * relax.volume_multiplier
+                effective_score = max(1.0, min_score - relax.score_reduction)
+
+        When no drought is detected all numeric fields are 0 / 1.0 (no-op).
+        """
+        now = time.time()
+        with self._lock:
+            if self._last_trade_ts > 0:
+                # A trade has been recorded — measure from the last trade
+                secs_since = now - self._last_trade_ts
+            else:
+                # No trade yet — measure from bot startup; drought only triggers
+                # after the bot has been running for a full drought_window period.
+                secs_since = now - self._init_ts
+            in_drought = secs_since >= self._drought_window
+
+        if not in_drought:
+            return DroughtRelaxation(
+                active=False,
+                secs_since_last_trade=secs_since,
+                adx_reduction=0.0,
+                volume_multiplier=1.0,
+                score_reduction=0.0,
+                gate_pct_reduction=0.0,
+                confidence_delta=0.0,
+                reason="no drought — filters unchanged",
+            )
+
+        hours = secs_since / 3600.0
+        logger.info(
+            "⏳ DROUGHT SAFEGUARD active — %.1fh since last trade; "
+            "relaxing filters: ADX-%.1f vol×%.2f score-%.1f gate-%.0f%%",
+            hours,
+            self._drought_adx_reduction,
+            self._drought_vol_multiplier,
+            self._drought_score_reduction,
+            self._drought_gate_pct * 100,
+        )
+        return DroughtRelaxation(
+            active=True,
+            secs_since_last_trade=secs_since,
+            adx_reduction=self._drought_adx_reduction,
+            volume_multiplier=self._drought_vol_multiplier,
+            score_reduction=self._drought_score_reduction,
+            gate_pct_reduction=self._drought_gate_pct,
+            confidence_delta=-self._max_delta,   # pin to maximum loosening
+            reason=(
+                f"drought {hours:.1f}h > {self._drought_window/3600:.0f}h limit — "
+                f"ADX-{self._drought_adx_reduction:.0f} "
+                f"vol×{self._drought_vol_multiplier:.2f} "
+                f"score-{self._drought_score_reduction:.1f} "
+                f"gate-{self._drought_gate_pct*100:.0f}%"
+            ),
+        )
 
     def get_status(self) -> FrequencyStatus:
         """Return a full status snapshot (for logging / analytics)."""
@@ -229,6 +369,7 @@ class TradeFrequencyController:
     def get_report(self) -> dict:
         """Return a JSON-serialisable summary for logging / API endpoints."""
         s = self.get_status()
+        d = self.get_drought_relaxation()
         return {
             "confidence_delta": round(s.confidence_delta, 4),
             "trades_last_hour": s.trades_last_hour,
@@ -236,6 +377,8 @@ class TradeFrequencyController:
             "target_per_hour": s.target_per_hour,
             "target_per_day": s.target_per_day,
             "mode": s.mode,
+            "drought_active": d.active,
+            "drought_secs_since_trade": round(d.secs_since_last_trade, 1),
         }
 
     def update_targets(self, min_per_hour: float, min_per_day: float) -> None:
