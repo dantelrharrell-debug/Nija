@@ -82,7 +82,7 @@ MARKET_FILTERING = {
 
 ENTRY_CONFIG = {
     # Signal Scoring (6 possible confirmations)
-    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED (was 4) to allow more entries
+    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED for frequency (was 4)
     'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED (was 4) for more entries
     'a_plus_signal_score': 6,  # Perfect setup score
 
@@ -117,6 +117,7 @@ ENTRY_TRIGGERS = {
             'MACD histogram uptick (growing)',
             'Volume confirmation (>50% avg)',
         ],
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions (was 4)
         'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
         'required_conditions': 3,  # Minimum 3 out of 5 conditions
         'entry_on_close': True,  # Only enter on candle close
@@ -130,6 +131,10 @@ ENTRY_TRIGGERS = {
             'MACD histogram downtick (shrinking)',
             'Volume confirmation (>50% avg)',
         ],
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions (was 4)
+        'entry_on_close': True,  # Only enter on candle close
+    },
+    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback (was 0.5%)
         'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
         'entry_on_close': True,  # Only enter on candle close
     },
