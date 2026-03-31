@@ -81,7 +81,7 @@ MARKET_FILTERING = {
 
 ENTRY_CONFIG = {
     # Signal Scoring (6 possible confirmations)
-    'min_signal_score': 4,  # Minimum confirmations required (out of 6) - OPTIMIZED for quality (was 3)
+    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED for frequency (was 4)
     'a_plus_signal_score': 6,  # Perfect setup score
 
     # Required Conditions
@@ -115,7 +115,7 @@ ENTRY_TRIGGERS = {
             'MACD histogram uptick (growing)',
             'Volume confirmation (>50% avg)',
         ],
-        'required_conditions': 4,  # Minimum 4 out of 5 conditions
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions (was 4)
         'entry_on_close': True,  # Only enter on candle close
     },
     'short': {
@@ -127,10 +127,10 @@ ENTRY_TRIGGERS = {
             'MACD histogram downtick (shrinking)',
             'Volume confirmation (>50% avg)',
         ],
-        'required_conditions': 4,  # Minimum 4 out of 5 conditions
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions (was 4)
         'entry_on_close': True,  # Only enter on candle close
     },
-    'pullback_threshold': 0.005,  # 0.5% distance to EMA21/VWAP for pullback
+    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback (was 0.5%)
 }
 
 # ═══════════════════════════════════════════════════════════════════
