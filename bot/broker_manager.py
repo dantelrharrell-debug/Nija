@@ -6476,6 +6476,13 @@ class KrakenBroker(BaseBroker):
             time.sleep(KRAKEN_STARTUP_DELAY_SECONDS)
             logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
 
+            # PRE-CONNECTION NONCE JUMP: Jump nonce forward before the very first API call.
+            # This clears any "burned" nonce window left by a previous session.
+            # Kraken tracks used nonces for ~60 seconds; a restart may replay an already-
+            # used nonce unless we advance past it proactively.
+            logger.info(f"   ⚡ Jumping nonce forward before connection attempt ({cred_label}) to clear any burned nonce window...")
+            self._immediate_nonce_jump()
+
             # Test connection by fetching account balance with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
             # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
