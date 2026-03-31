@@ -969,93 +969,109 @@ def _run_bot_startup_and_trading():
             # Check if we should use independent multi-broker trading mode
             use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
 
+            # Track whether independent trading successfully entered a persistent loop
+            independent_trading_active = False
+
             if use_independent_trading and strategy.independent_trader:
                 logger.info("=" * 70)
-                logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING MODE")
+                logger.info("🚀 ATTEMPTING INDEPENDENT MULTI-BROKER TRADING MODE")
                 logger.info("=" * 70)
                 logger.info("Each broker will trade independently in isolated threads.")
                 logger.info("Failures in one broker will NOT affect other brokers.")
                 logger.info("=" * 70)
 
-                # Start independent trading for all funded brokers
-                if strategy.start_independent_multi_broker_trading():
-                    logger.info("✅ Independent multi-broker trading started successfully")
+                try:
+                    # Start independent trading for all funded brokers
+                    if strategy.start_independent_multi_broker_trading():
+                        logger.info("✅ Independent multi-broker trading started successfully")
+                        independent_trading_active = True
 
-                    # Main loop just monitors status and keeps process alive
-                    cycle_count = 0
-                    while True:
-                        try:
-                            cycle_count += 1
-                            
-                            # Update health heartbeat
-                            health_manager.heartbeat()
+                        # Main loop just monitors status and keeps process alive
+                        cycle_count = 0
+                        while True:
+                            try:
+                                cycle_count += 1
 
-                            # Log status every 10 cycles (25 minutes)
-                            if cycle_count % 10 == 0:
-                                logger.info(f"🔄 Status check #{cycle_count // 10}")
-                                strategy.log_multi_broker_status()
+                                # Update health heartbeat
+                                health_manager.heartbeat()
 
-                            # Sleep for 2.5 minutes
-                            time.sleep(150)
+                                # Log status every 10 cycles (25 minutes)
+                                if cycle_count % 10 == 0:
+                                    logger.info(f"🔄 Status check #{cycle_count // 10}")
+                                    strategy.log_multi_broker_status()
 
-                        except KeyboardInterrupt:
-                            _log_lifecycle_banner(
-                                "⚠️  TRADING LOOP INTERRUPTED - Multi-Broker Mode",
-                                [
-                                    "KeyboardInterrupt received in independent multi-broker loop",
-                                    "Stopping all independent trading threads...",
-                                    f"Completed {cycle_count} monitoring cycles",
-                                    *_get_thread_status()
-                                ]
-                            )
-                            logger.info("Stopping all independent trading...")
-                            strategy.stop_independent_trading()
-                            logger.info("✅ Independent trading stopped")
-                            break
-                        except Exception as e:
-                            logger.error(f"❌ Error in monitoring loop: {e}", exc_info=True)
-                            logger.warning(f"Recovering from error, continuing monitoring...")
-                            time.sleep(10)
-                else:
-                    logger.error("❌ Failed to start independent multi-broker trading")
-                    logger.info("Falling back to single-broker mode...")
-                    use_independent_trading = False
+                                # Sleep for 2.5 minutes
+                                time.sleep(150)
 
-            if not use_independent_trading:
-                # Single broker mode (original behavior)
-                _hf_cycle_secs = _hf_bot.get_cycle_interval() if _hf_bot is not None else 150
-                _hf_label = (
-                    f"HF scalping ({_hf_cycle_secs}s)" if (_hf_bot is not None and _hf_bot.enabled)
-                    else "2.5 minute"
-                )
-                logger.info(f"🚀 Starting single-broker trading loop ({_hf_label} cadence)...")
-                cycle_count = 0
+                            except KeyboardInterrupt:
+                                _log_lifecycle_banner(
+                                    "⚠️  TRADING LOOP INTERRUPTED - Multi-Broker Mode",
+                                    [
+                                        "KeyboardInterrupt received in independent multi-broker loop",
+                                        "Stopping all independent trading threads...",
+                                        f"Completed {cycle_count} monitoring cycles",
+                                        *_get_thread_status()
+                                    ]
+                                )
+                                logger.info("Stopping all independent trading...")
+                                strategy.stop_independent_trading()
+                                logger.info("✅ Independent trading stopped")
+                                break
+                            except Exception as e:
+                                logger.error(f"❌ Error in monitoring loop: {e}", exc_info=True)
+                                logger.warning(f"Recovering from error, continuing monitoring...")
+                                time.sleep(10)
+                    else:
+                        logger.error("❌ Failed to start independent multi-broker trading")
+                        logger.info("Falling back to single-broker run_cycle() loop...")
+                except Exception as e:
+                    logger.error(f"❌ Independent trading raised an exception: {e}", exc_info=True)
+                    logger.info("Falling back to single-broker run_cycle() loop...")
+            else:
+                logger.info("ℹ️  Independent trading not enabled or trader unavailable — using single-broker mode")
 
-                while True:
-                    try:
-                        cycle_count += 1
-                        
-                        # Update health heartbeat
-                        health_manager.heartbeat()
-                        
-                        logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
-                        strategy.run_cycle()
-                        time.sleep(_hf_cycle_secs)  # dynamic: 30 s (HF scalp) or 150 s (normal)
-                    except KeyboardInterrupt:
-                        _log_lifecycle_banner(
-                            "⚠️  TRADING LOOP INTERRUPTED - Single-Broker Mode",
-                            [
-                                "KeyboardInterrupt received in single-broker trading loop",
-                                f"Completed {cycle_count} trading cycles",
-                                "Exiting trading loop...",
-                                *_get_thread_status()
-                            ]
-                        )
-                        break
-                    except Exception as e:
-                        logger.error(f"❌ Error in trading cycle: {e}", exc_info=True)
-                        logger.warning(f"Recovering from error, continuing trading...")
-                        time.sleep(10)
+            # Single-broker fallback: always run run_cycle() loop.
+            # This executes when:
+            #   • use_independent_trading is False
+            #   • strategy.independent_trader is None/falsy
+            #   • start_independent_multi_broker_trading() returned False
+            #   • Independent trading raised an exception
+            #   • The independent monitoring loop exited (e.g. KeyboardInterrupt)
+            _hf_cycle_secs = _hf_bot.get_cycle_interval() if _hf_bot is not None else 150
+            _hf_label = (
+                f"HF scalping ({_hf_cycle_secs}s)" if (_hf_bot is not None and _hf_bot.enabled)
+                else "2.5 minute"
+            )
+            logger.info("=" * 70)
+            logger.info(f"🔁 STARTING SINGLE-BROKER run_cycle() LOOP ({_hf_label} cadence)")
+            logger.info("=" * 70)
+            cycle_count = 0
+
+            while True:
+                try:
+                    cycle_count += 1
+
+                    # Update health heartbeat
+                    health_manager.heartbeat()
+
+                    logger.info(f"🔁 Trading cycle #{cycle_count}")
+                    strategy.run_cycle()
+                    time.sleep(_hf_cycle_secs)  # dynamic: 30 s (HF scalp) or 150 s (normal)
+                except KeyboardInterrupt:
+                    _log_lifecycle_banner(
+                        "⚠️  TRADING LOOP INTERRUPTED - Single-Broker Mode",
+                        [
+                            "KeyboardInterrupt received in single-broker trading loop",
+                            f"Completed {cycle_count} trading cycles",
+                            "Exiting trading loop...",
+                            *_get_thread_status()
+                        ]
+                    )
+                    break
+                except Exception as e:
+                    logger.error(f"❌ Error in trading cycle: {e}", exc_info=True)
+                    logger.warning(f"Recovering from error, continuing trading...")
+                    time.sleep(10)
 
             # CRITICAL: Keep-alive loop to prevent process exit
             logger.info("🔒 Trading loops completed - entering keep-alive mode")
