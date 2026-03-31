@@ -430,6 +430,86 @@ def _log_memory_usage():
         logger.debug(f"Error logging memory usage: {e}")
 
 
+def _start_trader_thread(independent_trader, broker_type, broker):
+    """
+    Wrap a single broker's trading loop in a self-healing daemon thread.
+
+    The inner runner calls ``run_broker_trading_loop`` in a loop so that if
+    the function ever returns unexpectedly (fatal crash escaping the inner
+    guard), the thread automatically restarts after a 5-second back-off.
+    The stop_flag is the single clean-shutdown mechanism.
+
+    Returns:
+        tuple: (threading.Thread, threading.Event) – thread and its stop flag.
+    """
+    broker_name = broker_type.value
+    stop_flag = threading.Event()
+
+    def _runner():
+        logger.info("🚀 [Orchestrator] Trader thread started for %s", broker_name.upper())
+        while not stop_flag.is_set():
+            try:
+                independent_trader.run_broker_trading_loop(broker_type, broker, stop_flag)
+            except Exception as _loop_err:
+                if stop_flag.is_set():
+                    break
+                logger.error(
+                    "💥 [Orchestrator] Trader crashed for %s: %s — restarting in 5s",
+                    broker_name.upper(),
+                    _loop_err,
+                    exc_info=True,
+                )
+                stop_flag.wait(5)
+        logger.info("🛑 [Orchestrator] Trader thread stopped for %s", broker_name.upper())
+
+    t = threading.Thread(target=_runner, daemon=True, name=f"Trader-{broker_name}")
+    t.start()
+    return t, stop_flag
+
+
+def _start_single_broker_thread(strategy, cycle_secs):
+    """
+    Wrap ``strategy.run_cycle()`` in a self-healing daemon thread.
+
+    Used as a fallback when ``independent_trader`` is unavailable or when no
+    funded platform brokers are detected.  Any exception from ``run_cycle``
+    is caught, logged, and retried after 10 seconds so the thread never dies
+    silently.
+
+    Returns:
+        tuple: (threading.Thread, threading.Event) – thread and its stop flag.
+    """
+    stop_flag = threading.Event()
+
+    def _runner():
+        logger.info(
+            "🚀 [Orchestrator] Single-broker trading thread started (%ds cadence)",
+            cycle_secs,
+        )
+        cycle = 0
+        while not stop_flag.is_set():
+            try:
+                cycle += 1
+                logger.info("🔁 [Orchestrator] Single-broker cycle #%d", cycle)
+                strategy.run_cycle()
+                stop_flag.wait(cycle_secs)
+            except Exception as _cycle_err:
+                if stop_flag.is_set():
+                    break
+                logger.error(
+                    "❌ [Orchestrator] Single-broker cycle #%d error: %s — retrying in 10s",
+                    cycle,
+                    _cycle_err,
+                    exc_info=True,
+                )
+                stop_flag.wait(10)
+        logger.info("🛑 [Orchestrator] Single-broker trading thread stopped")
+
+    t = threading.Thread(target=_runner, daemon=True, name="Trader-SingleBroker")
+    t.start()
+    return t, stop_flag
+
+
 def _run_bot_startup_and_trading_with_retry():
     """
     Wrapper function that implements startup retry logic.
@@ -966,102 +1046,270 @@ def _run_bot_startup_and_trading():
             logger.info("🚀 NIJA SYSTEM FULLY OPERATIONAL — TRADING ENABLED")
             logger.info("=" * 70)
 
-            # Check if we should use independent multi-broker trading mode
-            use_independent_trading = os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
+            # ═══════════════════════════════════════════════════════════════════════
+            # BULLETPROOF TRADING ORCHESTRATOR
+            # ═══════════════════════════════════════════════════════════════════════
+            # Architecture:
+            #   1. Detect funded platform + user brokers.
+            #   2. Start a self-healing daemon thread per broker via
+            #      _start_trader_thread / _start_single_broker_thread.
+            #   3. Supervisor loop checks thread health every 10 s and restarts
+            #      any thread that dies unexpectedly.
+            #   4. NEVER exits silently — process stays alive until SIGTERM/SIGINT.
+            #
+            # Bug fixed: previously, when strategy.independent_trader was None
+            # (init failure) but MULTI_BROKER_INDEPENDENT=true (the default),
+            # NEITHER the independent loop NOR the single-broker fallback would
+            # run — sending the bot directly to the keep-alive loop with zero
+            # trading activity.
+            # ═══════════════════════════════════════════════════════════════════════
 
-            if use_independent_trading and strategy.independent_trader:
+            use_independent_trading = (
+                os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
+                and strategy.independent_trader is not None
+            )
+
+            # _active_threads: broker_key → {thread, stop_flag, broker_type, broker, mode, ...}
+            _active_threads: dict = {}
+
+            if use_independent_trading:
                 logger.info("=" * 70)
                 logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING MODE")
                 logger.info("=" * 70)
-                logger.info("Each broker will trade independently in isolated threads.")
-                logger.info("Failures in one broker will NOT affect other brokers.")
+                logger.info("   Each broker trades in its own self-healing daemon thread.")
+                logger.info("   The supervisor restarts any thread that dies unexpectedly.")
                 logger.info("=" * 70)
 
-                # Start independent trading for all funded brokers
-                if strategy.start_independent_multi_broker_trading():
-                    logger.info("✅ Independent multi-broker trading started successfully")
+                # Detect funded platform brokers
+                _funded = strategy.independent_trader.detect_funded_brokers()
+                _broker_source = strategy.independent_trader._get_platform_broker_source()
 
-                    # Main loop just monitors status and keeps process alive
-                    cycle_count = 0
-                    while True:
-                        try:
-                            cycle_count += 1
-                            
-                            # Update health heartbeat
-                            health_manager.heartbeat()
-
-                            # Log status every 10 cycles (25 minutes)
-                            if cycle_count % 10 == 0:
-                                logger.info(f"🔄 Status check #{cycle_count // 10}")
-                                strategy.log_multi_broker_status()
-
-                            # Sleep for 2.5 minutes
-                            time.sleep(150)
-
-                        except KeyboardInterrupt:
-                            _log_lifecycle_banner(
-                                "⚠️  TRADING LOOP INTERRUPTED - Multi-Broker Mode",
-                                [
-                                    "KeyboardInterrupt received in independent multi-broker loop",
-                                    "Stopping all independent trading threads...",
-                                    f"Completed {cycle_count} monitoring cycles",
-                                    *_get_thread_status()
-                                ]
+                # Register all platform brokers with the failure manager
+                try:
+                    if strategy.independent_trader.broker_failure_manager and _broker_source:
+                        _equal_alloc = 1.0 / max(len(_broker_source), 1)
+                        for _bt, _br in _broker_source.items():
+                            strategy.independent_trader.broker_failure_manager.register_broker(
+                                _bt.value, initial_allocation=_equal_alloc
                             )
-                            logger.info("Stopping all independent trading...")
-                            strategy.stop_independent_trading()
-                            logger.info("✅ Independent trading stopped")
-                            break
-                        except Exception as e:
-                            logger.error(f"❌ Error in monitoring loop: {e}", exc_info=True)
-                            logger.warning(f"Recovering from error, continuing monitoring...")
-                            time.sleep(10)
-                else:
-                    logger.error("❌ Failed to start independent multi-broker trading")
-                    logger.info("Falling back to single-broker mode...")
+                        strategy.independent_trader.broker_failure_manager.log_active_dead_banner()
+                except Exception as _reg_err:
+                    logger.debug("Failure manager registration skipped: %s", _reg_err)
+
+                # Start a self-healing thread for each funded, connected platform broker
+                _platform_stagger = 0
+                for _broker_type, _broker in _broker_source.items():
+                    _bname = _broker_type.value
+                    if _bname not in _funded:
+                        logger.info("   ⏭️  %s — not funded, skipping", _bname.upper())
+                        continue
+                    if not _broker.connected:
+                        logger.warning("   ⚠️  %s — not connected, skipping", _bname.upper())
+                        continue
+                    # Stagger starts to prevent simultaneous API bursts
+                    if _platform_stagger > 0:
+                        logger.info(
+                            "   ⏳ Staggering: 10s before starting %s…", _bname.upper()
+                        )
+                        time.sleep(10)
+                    _t, _sf = _start_trader_thread(
+                        strategy.independent_trader, _broker_type, _broker
+                    )
+                    _active_threads[_bname] = {
+                        "thread": _t,
+                        "stop_flag": _sf,
+                        "broker_type": _broker_type,
+                        "broker": _broker,
+                        "mode": "platform",
+                    }
+                    logger.info(
+                        "   ✅ Self-healing trader thread started for %s", _bname.upper()
+                    )
+                    _platform_stagger += 1
+
+                # Start user broker threads (individually wrapped for self-healing)
+                try:
+                    _funded_users = strategy.independent_trader.detect_funded_user_brokers()
+                except Exception as _fu_err:
+                    logger.warning("Could not detect funded user brokers: %s", _fu_err)
+                    _funded_users = {}
+
+                if _funded_users and strategy.multi_account_manager:
+                    logger.info("=" * 70)
+                    logger.info("👤 STARTING USER BROKER THREADS")
+                    logger.info("=" * 70)
+                    for _uid, _user_brokers in strategy.multi_account_manager.user_brokers.items():
+                        if _uid not in _funded_users:
+                            continue
+                        for _ubt, _ubr in _user_brokers.items():
+                            _ubname = f"{_uid}_{_ubt.value}"
+                            # Respect per-user independent_trading flag
+                            _ucfg = strategy.multi_account_manager.user_configs.get(_uid)
+                            if not (_ucfg and _ucfg.independent_trading):
+                                logger.info(
+                                    "   ⏭️  %s — independent_trading not enabled", _ubname
+                                )
+                                continue
+                            if _ubt.value not in _funded_users.get(_uid, {}):
+                                continue
+                            if not _ubr.connected:
+                                logger.warning(
+                                    "   ⚠️  %s — not connected, skipping", _ubname
+                                )
+                                continue
+                            _user_sf = threading.Event()
+                            _user_t = threading.Thread(
+                                target=strategy.independent_trader.run_user_broker_trading_loop,
+                                args=(_uid, _ubt, _ubr, _user_sf),
+                                name=f"Trader-{_ubname}",
+                                daemon=True,
+                            )
+                            _user_t.start()
+                            _active_threads[_ubname] = {
+                                "thread": _user_t,
+                                "stop_flag": _user_sf,
+                                "broker_type": _ubt,
+                                "broker": _ubr,
+                                "mode": "user",
+                                "user_id": _uid,
+                            }
+                            logger.info("   ✅ User trader thread started: %s", _ubname)
+
+                if not _active_threads:
+                    logger.warning(
+                        "⚠️  No funded/connected brokers — falling back to single-broker mode"
+                    )
                     use_independent_trading = False
 
+                # Start connection monitor for brokers that couldn't connect at boot
+                try:
+                    strategy.independent_trader.start_connection_monitor()
+                except Exception as _cm_err:
+                    logger.debug("Connection monitor start skipped: %s", _cm_err)
+
             if not use_independent_trading:
-                # Single broker mode (original behavior)
+                # Single-broker fallback: run strategy.run_cycle() in a self-healing thread
                 _hf_cycle_secs = _hf_bot.get_cycle_interval() if _hf_bot is not None else 150
                 _hf_label = (
-                    f"HF scalping ({_hf_cycle_secs}s)" if (_hf_bot is not None and _hf_bot.enabled)
+                    f"HF scalping ({_hf_cycle_secs}s)"
+                    if (_hf_bot is not None and _hf_bot.enabled)
                     else "2.5 minute"
                 )
-                logger.info(f"🚀 Starting single-broker trading loop ({_hf_label} cadence)...")
-                cycle_count = 0
+                logger.info(
+                    "🚀 Starting single-broker trading thread (%s cadence)…", _hf_label
+                )
+                _t, _sf = _start_single_broker_thread(strategy, _hf_cycle_secs)
+                _active_threads["__single_broker__"] = {
+                    "thread": _t,
+                    "stop_flag": _sf,
+                    "broker_type": None,
+                    "broker": None,
+                    "mode": "single",
+                }
+                logger.info("   ✅ Self-healing single-broker thread started")
 
-                while True:
-                    try:
-                        cycle_count += 1
-                        
-                        # Update health heartbeat
-                        health_manager.heartbeat()
-                        
-                        logger.info(f"🔁 Main trading loop iteration #{cycle_count}")
-                        strategy.run_cycle()
-                        time.sleep(_hf_cycle_secs)  # dynamic: 30 s (HF scalp) or 150 s (normal)
-                    except KeyboardInterrupt:
-                        _log_lifecycle_banner(
-                            "⚠️  TRADING LOOP INTERRUPTED - Single-Broker Mode",
-                            [
-                                "KeyboardInterrupt received in single-broker trading loop",
-                                f"Completed {cycle_count} trading cycles",
-                                "Exiting trading loop...",
-                                *_get_thread_status()
-                            ]
-                        )
-                        break
-                    except Exception as e:
-                        logger.error(f"❌ Error in trading cycle: {e}", exc_info=True)
-                        logger.warning(f"Recovering from error, continuing trading...")
-                        time.sleep(10)
+            # ═══════════════════════════════════════════════════════════════════════
+            # SUPERVISOR LOOP — monitors every 10 s, restarts dead threads
+            # ═══════════════════════════════════════════════════════════════════════
+            _log_lifecycle_banner(
+                "🔒 ORCHESTRATOR ACTIVE",
+                [
+                    f"{len(_active_threads)} trader thread(s) running",
+                    "Supervisor checks thread health every 10s",
+                    "Dead threads are restarted automatically",
+                    "Process will never exit silently",
+                    *_get_thread_status(),
+                ],
+            )
 
-            # CRITICAL: Keep-alive loop to prevent process exit
-            logger.info("🔒 Trading loops completed - entering keep-alive mode")
+            _orch_cycle = 0
             while True:
-                time.sleep(300)
-                logger.debug("🧵 Startup thread keep-alive")
+                try:
+                    _orch_cycle += 1
+                    health_manager.heartbeat()
+
+                    # ── Restart any trader thread that died unexpectedly ──────────
+                    for _bname, _entry in list(_active_threads.items()):
+                        _t = _entry["thread"]
+                        _sf = _entry["stop_flag"]
+                        if not _t.is_alive() and not _sf.is_set():
+                            logger.critical(
+                                "💥 [Orchestrator] Trader thread '%s' DIED — restarting…",
+                                _bname.upper(),
+                            )
+                            if _entry["mode"] == "platform":
+                                _new_t, _new_sf = _start_trader_thread(
+                                    strategy.independent_trader,
+                                    _entry["broker_type"],
+                                    _entry["broker"],
+                                )
+                            elif _entry["mode"] == "user":
+                                _new_sf = threading.Event()
+                                _new_t = threading.Thread(
+                                    target=strategy.independent_trader.run_user_broker_trading_loop,
+                                    args=(
+                                        _entry["user_id"],
+                                        _entry["broker_type"],
+                                        _entry["broker"],
+                                        _new_sf,
+                                    ),
+                                    name=f"Trader-{_bname}",
+                                    daemon=True,
+                                )
+                                _new_t.start()
+                            else:
+                                _hf_secs = (
+                                    _hf_bot.get_cycle_interval()
+                                    if _hf_bot is not None
+                                    else 150
+                                )
+                                _new_t, _new_sf = _start_single_broker_thread(
+                                    strategy, _hf_secs
+                                )
+                            _entry["thread"] = _new_t
+                            _entry["stop_flag"] = _new_sf
+                            logger.info(
+                                "   ✅ [Orchestrator] Restarted trader for '%s'",
+                                _bname.upper(),
+                            )
+
+                    # ── Periodic status log every ~3 minutes (18 × 10 s) ─────────
+                    if _orch_cycle % 18 == 0:
+                        _alive = sum(
+                            1 for _e in _active_threads.values() if _e["thread"].is_alive()
+                        )
+                        logger.info(
+                            "💓 [Orchestrator] %d/%d threads alive (supervisor cycle %d)",
+                            _alive,
+                            len(_active_threads),
+                            _orch_cycle,
+                        )
+                        if use_independent_trading and strategy.independent_trader:
+                            strategy.log_multi_broker_status()
+
+                    time.sleep(10)
+
+                except KeyboardInterrupt:
+                    _log_lifecycle_banner(
+                        "⚠️  ORCHESTRATOR INTERRUPTED",
+                        [
+                            "KeyboardInterrupt — stopping all trader threads…",
+                            f"Active threads: {len(_active_threads)}",
+                            *_get_thread_status(),
+                        ],
+                    )
+                    for _entry in _active_threads.values():
+                        _entry["stop_flag"].set()
+                    for _entry in _active_threads.values():
+                        _entry["thread"].join(timeout=5)
+                    break
+                except Exception as _orch_err:
+                    logger.error(
+                        "❌ [Orchestrator] Supervisor loop error: %s — continuing",
+                        _orch_err,
+                        exc_info=True,
+                    )
+                    time.sleep(10)
                 
         except RuntimeError as e:
             if "Broker connection failed" in str(e):

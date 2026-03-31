@@ -338,6 +338,52 @@ except ImportError:
         NIJA_CORE_LOOP_AVAILABLE = False
         logger.warning("⚠️ Nija Core Loop not available — using legacy run_cycle dispatch")
 
+# ── Trade Frequency Controller — minimum trade safeguard ─────────────────────
+# Tracks trade cadence and relaxes filters when no trade in drought_window hours.
+try:
+    from bot.trade_frequency_controller import (
+        get_trade_frequency_controller, DroughtRelaxation,
+    )
+    TRADE_FREQ_CTRL_AVAILABLE = True
+    logger.info("✅ Trade Frequency Controller loaded — drought safeguard active")
+except ImportError:
+    try:
+        from trade_frequency_controller import (
+            get_trade_frequency_controller, DroughtRelaxation,
+        )
+        TRADE_FREQ_CTRL_AVAILABLE = True
+        logger.info("✅ Trade Frequency Controller loaded — drought safeguard active")
+    except ImportError:
+        get_trade_frequency_controller = None  # type: ignore
+        DroughtRelaxation = None  # type: ignore
+        TRADE_FREQ_CTRL_AVAILABLE = False
+        logger.warning("⚠️ Trade Frequency Controller not available — no drought safeguard")
+
+# ── Momentum Entry Filter — simple 2-3 condition OR-logic entries ─────────────
+# Fires when institutional check misses: RSI momentum + volume/breakout confirm.
+try:
+    from bot.momentum_entry_filter import (
+        check_momentum_long, check_momentum_short,
+        check_breakout_long, check_breakout_short,
+    )
+    MOMENTUM_ENTRY_AVAILABLE = True
+    logger.info("✅ Momentum Entry Filter loaded — fast RSI+breakout entries active")
+except ImportError:
+    try:
+        from momentum_entry_filter import (
+            check_momentum_long, check_momentum_short,
+            check_breakout_long, check_breakout_short,
+        )
+        MOMENTUM_ENTRY_AVAILABLE = True
+        logger.info("✅ Momentum Entry Filter loaded — fast RSI+breakout entries active")
+    except ImportError:
+        check_momentum_long = None   # type: ignore
+        check_momentum_short = None  # type: ignore
+        check_breakout_long = None   # type: ignore
+        check_breakout_short = None  # type: ignore
+        MOMENTUM_ENTRY_AVAILABLE = False
+        logger.warning("⚠️ Momentum Entry Filter not available — institutional entry only")
+
 
 class NIJAApexStrategyV71:
     """
@@ -434,13 +480,24 @@ class NIJAApexStrategyV71:
         else:
             self.nija_ai_engine = None
 
+        # Trade Frequency Controller — minimum trade safeguard + drought detection
+        if TRADE_FREQ_CTRL_AVAILABLE and get_trade_frequency_controller is not None:
+            try:
+                self._freq_ctrl = get_trade_frequency_controller()
+                logger.info("✅ Trade Frequency Controller enabled — drought safeguard active")
+            except Exception as _freq_err:
+                logger.warning("Trade Frequency Controller init error: %s", _freq_err)
+                self._freq_ctrl = None
+        else:
+            self._freq_ctrl = None
+
         # Strategy parameters - OPTIMIZED FOR HIGH WIN RATE
         # OPTIMIZATION (Jan 29, 2026): Rebalance filters for quality trades
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
         # New strategy: Moderate filters to capture trending markets with real volume
         # Target: 60-65% win rate with 5-10 quality trades per day
-        self.min_adx = self.config.get('min_adx', 12)  # TUNED: Lowered from 15 to 12 to catch more trending setups without allowing pure chop
-        self.volume_threshold = self.config.get('volume_threshold', 0.10)  # OPTIMIZED: 10% of 5-candle avg (was 0.05, too loose)
+        self.min_adx = self.config.get('min_adx', 7)  # TUNED: 7 allows real market movement (was 12)
+        self.volume_threshold = self.config.get('volume_threshold', 0.05)  # TUNED: 5% — crypto moves without huge volume spikes (was 0.10)
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
         self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # TUNED: Lowered from 3 to 2 to allow entries on partial trend confirmation
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
@@ -678,7 +735,7 @@ class NIJAApexStrategyV71:
             logger.info(f"   Exit levels: {len(self.stepped_exit_levels)} profit targets (2.5%, 3.0%, 4.0%, 6.5%)")
         logger.info(f"✅ Position sizing: {self.config.get('min_position_pct', 0.02)*100:.0f}%-{self.config.get('max_position_pct', 0.10)*100:.0f}% (capital efficient)")
         logger.info(f"✅ Confidence threshold: {MIN_CONFIDENCE*100:.0f}% (balanced quality)")
-        logger.info(f"✅ Minimum ADX: {self.min_adx} (moderate trend strength)")
+        logger.info(f"✅ Minimum ADX: {self.min_adx} (soft score contribution; drought relaxation active when idle 2h+)")
         if self.use_ai_hub:
             logger.info("✅ AI Intelligence Hub: ENABLED")
             logger.info("   ├─ AI Market Regime Detection (7-class classifier)")
@@ -1202,21 +1259,37 @@ class NIJAApexStrategyV71:
         current_volume = df['volume'].iloc[-1]
         volume_ratio = current_volume / avg_volume_5 if avg_volume_5 > 0 else 0
 
-        # ADX filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
-        if self.min_adx > 0 and float(adx) < self.min_adx:
-            return False, 'none', f'ADX too low ({adx:.1f} < {self.min_adx})'
+        # ADX filter — contributes to trend score rather than hard-blocking.
+        # A low-ADX market still gets a full score evaluation; the adx_strong
+        # condition in uptrend/downtrend scoring already penalises choppy markets.
+        # Hard block retained only when min_adx is explicitly forced above zero AND
+        # drought relaxation is not active (drought mode disables even this gate).
+        _drought = (
+            self._freq_ctrl.get_drought_relaxation()
+            if self._freq_ctrl is not None
+            else None
+        )
+        _drought_active = _drought is not None and _drought.active
 
-        # Volume filter - relaxed for ULTRA AGGRESSIVE mode (15-day goal)
-        if self.volume_threshold > 0 and volume_ratio < self.volume_threshold:
-            return False, 'none', f'Volume too low ({volume_ratio*100:.1f}% of 5-candle avg)'
+        # Apply drought relaxation to effective thresholds
+        _eff_adx = max(0.0, self.min_adx - (_drought.adx_reduction if _drought and _drought.active else 0.0))
+        _eff_vol = self.volume_threshold * (_drought.volume_multiplier if _drought and _drought.active else 1.0)
+
+        if _drought_active:
+            logger.info(
+                "⏳ Drought relaxation active — ADX threshold %.1f→%.1f, "
+                "volume threshold %.1f%%→%.1f%%",
+                self.min_adx, _eff_adx,
+                self.volume_threshold * 100, _eff_vol * 100,
+            )
 
         # Check for uptrend
         uptrend_conditions = {
             'vwap': current_price > vwap,
             'ema_sequence': ema9 > ema21 > ema50,
             'macd_positive': macd_hist > 0,
-            'adx_strong': adx > self.min_adx,
-            'volume_ok': volume_ratio >= self.volume_threshold
+            'adx_strong': adx > _eff_adx,
+            'volume_ok': volume_ratio >= _eff_vol
         }
 
         # Check for downtrend
@@ -1224,8 +1297,8 @@ class NIJAApexStrategyV71:
             'vwap': current_price < vwap,
             'ema_sequence': ema9 < ema21 < ema50,
             'macd_negative': macd_hist < 0,
-            'adx_strong': adx > self.min_adx,
-            'volume_ok': volume_ratio >= self.volume_threshold
+            'adx_strong': adx > _eff_adx,
+            'volume_ok': volume_ratio >= _eff_vol
         }
 
         # QUALITY FIX: Check trend conditions - configurable threshold via min_trend_confirmation
@@ -2179,10 +2252,43 @@ class NIJAApexStrategyV71:
                     long_signal, score, reason = self.check_long_entry(df, indicators)
                     metadata = {}
 
+                # ── Momentum / Breakout fallback (score-based OR logic) ────────
+                # When the institutional check misses, try the simpler momentum
+                # and breakout patterns.  These require only 2-3 confirmations so
+                # they produce repeatable daily trades even in quiet markets.
+                _momentum_entry_type = None
+                if not long_signal and MOMENTUM_ENTRY_AVAILABLE:
+                    try:
+                        _mom_sig, _mom_score, _mom_reason = check_momentum_long(df, indicators)
+                        if _mom_sig:
+                            long_signal, score, reason = _mom_sig, _mom_score, _mom_reason
+                            metadata = {'entry_source': 'momentum'}
+                            _momentum_entry_type = 'momentum'
+                            logger.info("   ⚡ %s: MOMENTUM long entry — %s", symbol, _mom_reason)
+                    except Exception as _me:
+                        logger.debug("momentum_long error: %s", _me)
+
+                if not long_signal and MOMENTUM_ENTRY_AVAILABLE:
+                    try:
+                        _bo_sig, _bo_score, _bo_reason = check_breakout_long(df, indicators)
+                        if _bo_sig:
+                            long_signal, score, reason = _bo_sig, _bo_score, _bo_reason
+                            metadata = {'entry_source': 'breakout'}
+                            _momentum_entry_type = 'breakout'
+                            logger.info("   🚀 %s: BREAKOUT long entry — %s", symbol, _bo_reason)
+                    except Exception as _be:
+                        logger.debug("breakout_long error: %s", _be)
+
                 if long_signal:
-                    # ── 5-Gate AI Entry Confirmation (LONG) ───────────────────
-                    # All 5 gates must pass: Score / Volume / Volatility / Spread / Regime
-                    _entry_type_l = self._get_entry_type_for_regime(self.current_regime)
+                    # ── Score-based AI Entry Gate (LONG) ──────────────────────
+                    # Gates contribute weighted points; trade passes when total ≥ threshold.
+                    # Drought safeguard lowers gate thresholds by gate_score_reduction %.
+                    _entry_type_l = _momentum_entry_type or self._get_entry_type_for_regime(self.current_regime)
+                    _drought_l = (
+                        self._freq_ctrl.get_drought_relaxation()
+                        if self._freq_ctrl is not None else None
+                    )
+                    _gate_reduction_l = _drought_l.gate_pct_reduction if (_drought_l and _drought_l.active) else 0.0
                     if self.ai_entry_gate is not None:
                         try:
                             _gate_result_l = self.ai_entry_gate.check(
@@ -2193,6 +2299,7 @@ class NIJAApexStrategyV71:
                                 regime=self.current_regime,
                                 broker=broker_name,
                                 entry_type=_entry_type_l,
+                                gate_score_reduction=_gate_reduction_l,
                             )
                             if not _gate_result_l.passed:
                                 logger.debug(
@@ -2521,6 +2628,13 @@ class NIJAApexStrategyV71:
                     if metadata:
                         result['metadata'] = metadata
 
+                    # Record trade for frequency controller (drought safeguard)
+                    if self._freq_ctrl is not None:
+                        try:
+                            self._freq_ctrl.record_trade()
+                        except Exception:
+                            pass
+
                     return result
 
             elif trend == 'downtrend':
@@ -2549,9 +2663,38 @@ class NIJAApexStrategyV71:
                     short_signal, score, reason = self.check_short_entry(df, indicators)
                     metadata = {}
 
+                # ── Momentum / Breakout fallback (score-based OR logic) ────────
+                _momentum_entry_type_s = None
+                if not short_signal and MOMENTUM_ENTRY_AVAILABLE:
+                    try:
+                        _mom_sig_s, _mom_score_s, _mom_reason_s = check_momentum_short(df, indicators)
+                        if _mom_sig_s:
+                            short_signal, score, reason = _mom_sig_s, _mom_score_s, _mom_reason_s
+                            metadata = {'entry_source': 'momentum'}
+                            _momentum_entry_type_s = 'momentum'
+                            logger.info("   ⚡ %s: MOMENTUM short entry — %s", symbol, _mom_reason_s)
+                    except Exception as _me_s:
+                        logger.debug("momentum_short error: %s", _me_s)
+
+                if not short_signal and MOMENTUM_ENTRY_AVAILABLE:
+                    try:
+                        _bo_sig_s, _bo_score_s, _bo_reason_s = check_breakout_short(df, indicators)
+                        if _bo_sig_s:
+                            short_signal, score, reason = _bo_sig_s, _bo_score_s, _bo_reason_s
+                            metadata = {'entry_source': 'breakout'}
+                            _momentum_entry_type_s = 'breakout'
+                            logger.info("   🚀 %s: BREAKOUT short entry — %s", symbol, _bo_reason_s)
+                    except Exception as _be_s:
+                        logger.debug("breakout_short error: %s", _be_s)
+
                 if short_signal:
-                    # ── 5-Gate AI Entry Confirmation (SHORT) ──────────────────
-                    _entry_type_s = self._get_entry_type_for_regime(self.current_regime)
+                    # ── Score-based AI Entry Gate (SHORT) ─────────────────────
+                    _entry_type_s = _momentum_entry_type_s or self._get_entry_type_for_regime(self.current_regime)
+                    _drought_s = (
+                        self._freq_ctrl.get_drought_relaxation()
+                        if self._freq_ctrl is not None else None
+                    )
+                    _gate_reduction_s = _drought_s.gate_pct_reduction if (_drought_s and _drought_s.active) else 0.0
                     if self.ai_entry_gate is not None:
                         try:
                             _gate_result_s = self.ai_entry_gate.check(
@@ -2562,6 +2705,7 @@ class NIJAApexStrategyV71:
                                 regime=self.current_regime,
                                 broker=broker_name,
                                 entry_type=_entry_type_s,
+                                gate_score_reduction=_gate_reduction_s,
                             )
                             if not _gate_result_s.passed:
                                 logger.debug(
@@ -2882,6 +3026,13 @@ class NIJAApexStrategyV71:
                     # Add metadata if available
                     if metadata:
                         result['metadata'] = metadata
+
+                    # Record trade for frequency controller (drought safeguard)
+                    if self._freq_ctrl is not None:
+                        try:
+                            self._freq_ctrl.record_trade()
+                        except Exception:
+                            pass
 
                     return result
 
