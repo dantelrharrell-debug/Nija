@@ -2,42 +2,31 @@
 NIJA AI Entry Gate
 ===================
 
-All-or-nothing 5-gate entry confirmation filter.
+Score-based entry confirmation filter.
 
-Every gate must PASS before a trade is submitted to the execution engine.
-Even one failure blocks the entry cleanly with a human-readable reason.
+Each gate contributes weighted points.  An entry is permitted when the
+total gate score meets the minimum threshold — no single gate can veto a
+trade on its own (except VOLATILITY_EXPLOSION, which always hard-blocks).
 
-Industry principle #1 — "AI signals + execution filter layers = more real
-trades" — is implemented here: the gate ensures that every order that
-reaches the broker is backed by a strong, multi-dimensional signal, not
-just a single indicator flip.
+Gate weights (total = 9 points)
+---------------------------------
+Gate 1 — AI Predictive Score         3 pts  (signal quality)
+Gate 2 — Volume / Liquidity          2 pts  (execution safety)
+Gate 3 — Volatility Range            1 pt   (market conditions)
+Gate 4 — Spread / Slippage           1 pt   (cost safety)
+Gate 5 — Regime Confirmation         2 pts  (market context)
 
-Gates
------
-Gate 1 — AI Predictive Score
-    enhanced_score (0-100) must exceed a regime-adjusted threshold.
-    Threshold is tighter in uncertain regimes (RANGING/VOLATILE) and
-    looser in high-confidence regimes (STRONG_TREND, SCALP mode).
+Pass threshold: 5 / 9 (≈ 55 %).  This means:
+  - Gate 1 + Gate 2                → 5 pts → PASS
+  - Gate 1 + Gate 5                → 5 pts → PASS
+  - Gate 1 + Gate 3 + Gate 4 + Gate 5 → 7 pts → PASS
+  - Gate 2 + Gate 3 + Gate 4 + Gate 5 → 6 pts → PASS (even without perfect AI score)
 
-Gate 2 — Volume / Liquidity
-    Current bar volume must be >= min_liquidity_multiplier × 20-bar
-    average.  Blocks entries in dead, illiquid markets where execution
-    quality is poor.
-
-Gate 3 — Volatility Range
-    ATR% must fall within [min_atr_pct, max_atr_pct].
-    Too low → no room to profit before fees.
-    Too high → flash-crash / spread-blowout territory.
-    Range adjusts per regime (SCALP needs tight vol, BREAKOUT needs more).
-
-Gate 4 — Spread / Slippage
-    bid-ask spread + estimated slippage must be < broker-specific ceiling.
-    Prevents entering when execution cost would consume the profit target.
-
-Gate 5 — Regime Confirmation
-    The detected market regime must be compatible with the requested entry
-    type.  E.g. a long entry in VOLATILITY_EXPLOSION is blocked; a scalp
-    entry in CONSOLIDATION is allowed.
+Drought relaxation
+------------------
+When the TradeFrequencyController signals a 2-hour trade drought, callers
+may pass ``gate_score_reduction`` (0–1 fraction) to lower the per-gate
+score thresholds by that percentage, making it easier to pass each gate.
 
 Usage
 -----
@@ -54,14 +43,15 @@ Usage
         enhanced_score=72.5,
         regime=self.current_regime,
         broker='coinbase',
-        entry_type='swing',   # 'scalp' | 'swing' | 'breakout' | 'mean_reversion'
+        entry_type='swing',
+        gate_score_reduction=0.10,   # 10% drought relaxation (optional)
     )
 
     if not result.passed:
         return {'action': 'hold', 'reason': result.reason}
 
 Author: NIJA Trading Systems
-Version: 1.0
+Version: 2.0 — score-based OR logic
 Date: March 2026
 """
 
@@ -100,7 +90,7 @@ class GateResult:
     """
     Aggregated result from all 5 gates.
 
-    ``passed`` is True only when every gate passes.
+    ``passed`` is True when the weighted gate score meets the pass threshold.
     ``gates`` is an ordered dict so callers can inspect each decision.
     """
     passed: bool
@@ -109,6 +99,8 @@ class GateResult:
     gates: Dict[str, GateCheck] = field(default_factory=dict)
     entry_type: str = "swing"
     regime_name: str = "unknown"
+    gate_score: int = 0       # points earned across all gates
+    gate_max: int = 9         # maximum possible points
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +169,18 @@ _REGIME_ALLOWED_ENTRIES: Dict[str, set] = {
 }
 _REGIME_ALLOWED_DEFAULT = {"swing", "scalp", "mean_reversion", "breakout"}
 
+# ── Score-based OR logic ─────────────────────────────────────────────────────
+# Gate weights — must sum to _GATE_MAX_SCORE
+_GATE_WEIGHTS: Dict[str, int] = {
+    "gate1_score":      3,   # AI signal quality (most important)
+    "gate2_volume":     2,   # liquidity / execution safety
+    "gate3_volatility": 1,   # market conditions
+    "gate4_spread":     1,   # cost safety
+    "gate5_regime":     2,   # market context
+}
+_GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 9
+_GATE_PASS_THRESHOLD: int = 5  # ≈55% — Gate1+Gate2 alone is enough
+
 
 # ---------------------------------------------------------------------------
 # Gate class
@@ -184,7 +188,10 @@ _REGIME_ALLOWED_DEFAULT = {"swing", "scalp", "mean_reversion", "breakout"}
 
 class AIEntryGate:
     """
-    5-gate AI entry confirmation filter.
+    Score-based 5-gate entry confirmation filter.
+
+    All 5 gates are evaluated regardless of individual pass/fail.  A trade
+    is permitted when the total weighted score meets _GATE_PASS_THRESHOLD.
 
     Thread-safe; stateless per-call (no shared mutable state between calls).
     """
@@ -202,7 +209,8 @@ class AIEntryGate:
         }
         logger.info(
             "🚦 AIEntryGate initialized — "
-            "5 gates: Score | Volume | Volatility | Spread | Regime"
+            "score-based OR logic: %d gates, pass at %d/%d pts",
+            len(_GATE_WEIGHTS), _GATE_PASS_THRESHOLD, _GATE_MAX_SCORE,
         )
 
     # ------------------------------------------------------------------
@@ -218,9 +226,10 @@ class AIEntryGate:
         regime: Any = None,
         broker: str = "coinbase",
         entry_type: str = "swing",
+        gate_score_reduction: float = 0.0,
     ) -> GateResult:
         """
-        Run all 5 gates in sequence.  Returns on first failure.
+        Run all 5 gates and return a score-based pass/fail decision.
 
         Args:
             df: OHLCV DataFrame (recent candles).
@@ -230,9 +239,11 @@ class AIEntryGate:
             regime: Current market regime (enum or string).
             broker: Exchange name (used for spread ceiling).
             entry_type: Strategy type active for this entry.
+            gate_score_reduction: Fractional threshold reduction from
+                drought safeguard (0.0 = no relaxation, 0.10 = 10% easier).
 
         Returns:
-            GateResult with pass/fail and per-gate detail.
+            GateResult with pass/fail, total gate score, and per-gate detail.
         """
         regime_key = self._regime_key(regime)
         broker_key = self._broker_key(broker)
@@ -241,51 +252,87 @@ class AIEntryGate:
         with self._lock:
             self._total_checked += 1
 
-        # ── Gate 1: AI Score ──────────────────────────────────────────
-        g1 = self._gate_score(enhanced_score, regime_key)
-        gates["gate1_score"] = g1
-        if not g1.passed:
-            return self._fail("gate1_score", g1.detail, gates, regime_key, entry_type)
+        # ── Hard block: VOLATILITY_EXPLOSION ─────────────────────────
+        # Capital preservation always wins — no scoring bypass.
+        if regime_key == "volatility_explosion":
+            reason = "❌ VOLATILITY_EXPLOSION: all new entries hard-blocked (capital protection)"
+            logger.debug("AIEntryGate: %s", reason)
+            return GateResult(
+                passed=False,
+                reason=reason,
+                first_failure="volatility_explosion",
+                gates=gates,
+                entry_type=entry_type,
+                regime_name=regime_key,
+                gate_score=0,
+                gate_max=_GATE_MAX_SCORE,
+            )
 
-        # ── Gate 2: Volume / Liquidity ────────────────────────────────
+        # ── Evaluate all 5 gates, collect scores ─────────────────────
+        g1 = self._gate_score(enhanced_score, regime_key, gate_score_reduction)
+        gates["gate1_score"] = g1
+
         g2 = self._gate_volume(df, entry_type)
         gates["gate2_volume"] = g2
-        if not g2.passed:
-            return self._fail("gate2_volume", g2.detail, gates, regime_key, entry_type)
 
-        # ── Gate 3: Volatility Range ──────────────────────────────────
         g3 = self._gate_volatility(df, indicators, regime_key, entry_type)
         gates["gate3_volatility"] = g3
-        if not g3.passed:
-            return self._fail("gate3_volatility", g3.detail, gates, regime_key, entry_type)
 
-        # ── Gate 4: Spread / Slippage ─────────────────────────────────
         g4 = self._gate_spread(df, broker_key)
         gates["gate4_spread"] = g4
-        if not g4.passed:
-            return self._fail("gate4_spread", g4.detail, gates, regime_key, entry_type)
 
-        # ── Gate 5: Regime Confirmation ───────────────────────────────
         g5 = self._gate_regime(regime_key, entry_type, side)
         gates["gate5_regime"] = g5
-        if not g5.passed:
-            return self._fail("gate5_regime", g5.detail, gates, regime_key, entry_type)
 
-        # All gates passed
-        with self._lock:
-            self._total_passed += 1
+        # ── Tally weighted score ──────────────────────────────────────
+        total_score = 0
+        failed_gates = []
+        for key, check in gates.items():
+            w = _GATE_WEIGHTS.get(key, 0)
+            if check.passed:
+                total_score += w
+            else:
+                failed_gates.append(key)
+                with self._lock:
+                    self._gate_failures[key] = self._gate_failures.get(key, 0) + 1
 
-        reason = (
-            f"✅ All 5 gates passed | {side.upper()} {entry_type} | "
-            f"score={enhanced_score:.1f} regime={regime_key.upper()}"
+        # Drought relaxation lowers the effective threshold.
+        # Cap reduction at 50% and enforce a minimum of 2 points so that
+        # at least two gate conditions must still be satisfied.
+        capped_reduction = min(gate_score_reduction, 0.50)
+        effective_threshold = max(
+            2,
+            int(_GATE_PASS_THRESHOLD * (1.0 - capped_reduction)),
         )
-        logger.debug(reason)
+        passed = total_score >= effective_threshold
+
+        if passed:
+            with self._lock:
+                self._total_passed += 1
+            reason = (
+                f"✅ Gate score {total_score}/{_GATE_MAX_SCORE} "
+                f"≥ {effective_threshold} threshold | "
+                f"{side.upper()} {entry_type} | regime={regime_key.upper()}"
+            )
+            first_failure = ""
+        else:
+            first_failure = failed_gates[0] if failed_gates else ""
+            reason = (
+                f"❌ Gate score {total_score}/{_GATE_MAX_SCORE} "
+                f"< {effective_threshold} threshold | "
+                f"failed: {', '.join(failed_gates)}"
+            )
+
+        logger.debug("AIEntryGate: %s", reason)
         return GateResult(
-            passed=True,
+            passed=passed,
             reason=reason,
+            first_failure=first_failure,
             gates=gates,
             entry_type=entry_type,
             regime_name=regime_key,
+            gate_score=total_score,
+            gate_max=_GATE_MAX_SCORE,
         )
 
     def get_stats(self) -> Dict[str, Any]:
@@ -306,9 +353,15 @@ class AIEntryGate:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _gate_score(enhanced_score: float, regime_key: str) -> GateCheck:
+    def _gate_score(
+        enhanced_score: float,
+        regime_key: str,
+        gate_score_reduction: float = 0.0,
+    ) -> GateCheck:
         """Gate 1: AI predictive score vs regime-adjusted threshold."""
         threshold = _SCORE_THRESHOLDS.get(regime_key, _DEFAULT_SCORE_THRESHOLD)
+        # Apply drought relaxation — lower threshold by the given fraction
+        threshold = threshold * (1.0 - gate_score_reduction)
         passed = enhanced_score >= threshold
         return GateCheck(
             passed=passed,
@@ -431,25 +484,13 @@ class AIEntryGate:
     def _gate_regime(regime_key: str, entry_type: str, side: str) -> GateCheck:
         """Gate 5: Regime must permit the requested entry type."""
         allowed = _REGIME_ALLOWED_ENTRIES.get(regime_key, _REGIME_ALLOWED_DEFAULT)
-
-        # VOLATILITY_EXPLOSION always blocks
-        if regime_key == "volatility_explosion":
-            return GateCheck(
-                passed=False,
-                name="Regime",
-                detail=(
-                    f"VOLATILITY_EXPLOSION: all new entries blocked "
-                    f"(protect capital during crisis)"
-                ),
-            )
-
         passed = entry_type in allowed
         return GateCheck(
             passed=passed,
             name="Regime",
             detail=(
                 f"regime={regime_key.upper()} "
-                f"{'permits' if passed else 'BLOCKS'} "
+                f"{'permits' if passed else 'discourages'} "
                 f"{entry_type} {side} entry "
                 f"(allowed types: {sorted(allowed)})"
             ),
@@ -458,28 +499,6 @@ class AIEntryGate:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _fail(
-        self,
-        gate_key: str,
-        detail: str,
-        gates: Dict[str, GateCheck],
-        regime_key: str,
-        entry_type: str,
-    ) -> GateResult:
-        with self._lock:
-            self._gate_failures[gate_key] = self._gate_failures.get(gate_key, 0) + 1
-        gate_name = gates[gate_key].name
-        reason = f"❌ Gate [{gate_name}] FAILED: {detail}"
-        logger.debug("AIEntryGate: %s", reason)
-        return GateResult(
-            passed=False,
-            reason=reason,
-            first_failure=gate_key,
-            gates=gates,
-            entry_type=entry_type,
-            regime_name=regime_key,
-        )
 
     @staticmethod
     def _regime_key(regime: Any) -> str:
