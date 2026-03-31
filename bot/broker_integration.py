@@ -104,13 +104,19 @@ except ImportError:
 
 # Import global Kraken nonce manager (FINAL FIX)
 try:
-    from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
+    from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
 except ImportError:
     try:
-        from global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock
+        from global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
     except ImportError:
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
+        jump_global_kraken_nonce_forward = None
+
+# Nonce jump amount used when recovering from "EAPI:Invalid nonce" errors.
+# Jumping 120 seconds (120 000 ms) ahead clears Kraken's ~60-second nonce window
+# and ensures the next request uses a fresh, accepted nonce.
+_KRAKEN_NONCE_RECOVERY_JUMP_MS = 120_000
 
 # Import Broker Circuit Breaker for Kraken API reliability
 try:
@@ -1129,64 +1135,91 @@ class KrakenBrokerAdapter(BrokerInterface):
 
             self.kraken_api = KrakenAPI(self.api)
 
-            # Test connection - use helper method for serialized API call
-            balance = self._kraken_api_call('Balance')
+            # PRE-CONNECTION NONCE JUMP: Jump nonce forward before the first API call.
+            # This clears any "burned" nonce window left by a previous session, which is
+            # the primary cause of "EAPI:Invalid nonce" errors on restart.
+            if jump_global_kraken_nonce_forward is not None:
+                try:
+                    jump_global_kraken_nonce_forward(_KRAKEN_NONCE_RECOVERY_JUMP_MS)
+                    logger.info("   ⚡ Pre-connection nonce jump applied (clears burned nonce window from previous sessions)")
+                except Exception as _nonce_jump_err:
+                    logger.debug(f"   Pre-connection nonce jump skipped: {_nonce_jump_err}")
 
-            if balance and 'error' in balance and balance['error']:
-                error_msgs = ', '.join(balance['error'])
+            # Test connection with retry logic for nonce errors
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                balance = self._kraken_api_call('Balance')
 
-                # Check if it's a permission error
-                is_permission_error = any(keyword in error_msgs.lower() for keyword in [
-                    'permission denied', 'egeneral:permission',
-                    'eapi:invalid permission', 'insufficient permission'
-                ])
+                if balance and 'error' in balance and balance['error']:
+                    error_msgs = ', '.join(balance['error'])
 
-                if is_permission_error:
-                    logger.error(f"❌ Kraken connection test failed: {error_msgs}")
+                    # Check if it's a nonce error - retry with a nonce jump
+                    is_nonce_error = any(kw in error_msgs.lower() for kw in [
+                        'invalid nonce', 'eapi:invalid nonce', 'nonce window'
+                    ])
+                    if is_nonce_error and attempt < max_attempts:
+                        logger.warning(f"   ⚠️ Kraken nonce error on attempt {attempt}/{max_attempts}: {error_msgs}")
+                        logger.info(f"   🔄 Jumping nonce forward 120 s and retrying...")
+                        if jump_global_kraken_nonce_forward is not None:
+                            try:
+                                jump_global_kraken_nonce_forward(_KRAKEN_NONCE_RECOVERY_JUMP_MS)
+                            except Exception as _je:
+                                logger.debug(f"   Nonce jump failed (non-critical): {_je}")
+                        time.sleep(3)
+                        continue
 
-                    # Thread-safe check and update of global flag
-                    with KrakenBrokerAdapter._permission_errors_lock:
-                        # Only log detailed permission error instructions ONCE GLOBALLY
-                        # After the first Kraken permission error, subsequent errors
-                        # get a brief reference message instead of full instructions
-                        # This prevents log spam when multiple adapters have permission errors
-                        if not KrakenBrokerAdapter._permission_error_details_logged:
-                            KrakenBrokerAdapter._permission_error_details_logged = True
-                            should_log_details = True
+                    # Check if it's a permission error
+                    is_permission_error = any(keyword in error_msgs.lower() for keyword in [
+                        'permission denied', 'egeneral:permission',
+                        'eapi:invalid permission', 'insufficient permission'
+                    ])
+
+                    if is_permission_error:
+                        logger.error(f"❌ Kraken connection test failed: {error_msgs}")
+
+                        # Thread-safe check and update of global flag
+                        with KrakenBrokerAdapter._permission_errors_lock:
+                            # Only log detailed permission error instructions ONCE GLOBALLY
+                            # After the first Kraken permission error, subsequent errors
+                            # get a brief reference message instead of full instructions
+                            # This prevents log spam when multiple adapters have permission errors
+                            if not KrakenBrokerAdapter._permission_error_details_logged:
+                                KrakenBrokerAdapter._permission_error_details_logged = True
+                                should_log_details = True
+                            else:
+                                should_log_details = False
+
+                        if should_log_details:
+                            logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                            logger.error("   Your Kraken API key does not have the required permissions.")
+                            logger.warning("")
+                            logger.warning("   To fix this issue:")
+                            logger.warning("   1. Go to https://www.kraken.com/u/security/api")
+                            logger.warning("   2. Find your API key and edit its permissions")
+                            logger.warning("   3. Enable these permissions:")
+                            logger.warning("      ✅ Query Funds (required to check balance)")
+                            logger.warning("      ✅ Query Open Orders & Trades (required for position tracking)")
+                            logger.warning("      ✅ Query Closed Orders & Trades (required for trade history)")
+                            logger.warning("      ✅ Create & Modify Orders (required to place trades)")
+                            logger.warning("      ✅ Cancel/Close Orders (required for stop losses)")
+                            logger.warning("   4. Save changes and restart the bot")
+                            logger.warning("")
+                            logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
+                            logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                         else:
-                            should_log_details = False
-
-                    if should_log_details:
-                        logger.error("   ⚠️  API KEY PERMISSION ERROR")
-                        logger.error("   Your Kraken API key does not have the required permissions.")
-                        logger.warning("")
-                        logger.warning("   To fix this issue:")
-                        logger.warning("   1. Go to https://www.kraken.com/u/security/api")
-                        logger.warning("   2. Find your API key and edit its permissions")
-                        logger.warning("   3. Enable these permissions:")
-                        logger.warning("      ✅ Query Funds (required to check balance)")
-                        logger.warning("      ✅ Query Open Orders & Trades (required for position tracking)")
-                        logger.warning("      ✅ Query Closed Orders & Trades (required for trade history)")
-                        logger.warning("      ✅ Create & Modify Orders (required to place trades)")
-                        logger.warning("      ✅ Cancel/Close Orders (required for stop losses)")
-                        logger.warning("   4. Save changes and restart the bot")
-                        logger.warning("")
-                        logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
-                        logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                            logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                            logger.error("   Your Kraken API key does not have the required permissions.")
+                            logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' permissions at:")
+                            logger.error("   https://www.kraken.com/u/security/api")
+                            logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
                     else:
-                        logger.error("   ⚠️  API KEY PERMISSION ERROR")
-                        logger.error("   Your Kraken API key does not have the required permissions.")
-                        logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' permissions at:")
-                        logger.error("   https://www.kraken.com/u/security/api")
-                        logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
-                else:
-                    logger.error(f"Kraken connection test failed: {error_msgs}")
+                        logger.error(f"Kraken connection test failed: {error_msgs}")
 
-                return False
+                    return False
 
-            if balance and 'result' in balance:
-                logger.info("✅ Kraken connected")
-                return True
+                if balance and 'result' in balance:
+                    logger.info("✅ Kraken connected")
+                    return True
 
             return False
 
