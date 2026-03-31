@@ -73,6 +73,8 @@ _HOUR_WINDOW_SECS: float = 3600.0
 _DAY_WINDOW_SECS: float = 86400.0
 
 # Balance-based threshold tightening
+TARGET_BALANCE: float = 100.0       # tighten AI entry threshold once balance hits this
+TIGHTENED_ENTRY_SCORE: float = 5.0  # restored threshold when TARGET_BALANCE is reached
 TARGET_BALANCE: float = 100.0        # USD — restore strict thresholds once reached
 TIGHTENED_ENTRY_SCORE: float = 5.0  # gate-pass threshold to restore at target balance
 
@@ -442,6 +444,33 @@ class TradeFrequencyController:
         """Current minimum trades-per-day target."""
         with self._lock:
             return self._min_per_day
+
+    def check_balance_and_adjust_threshold(self, current_balance: float) -> None:
+        """
+        Tighten the AI entry threshold once the account balance reaches TARGET_BALANCE.
+
+        Call this at the end of every trade or at every scan loop.
+        When ``current_balance`` is at or above ``TARGET_BALANCE`` the
+        ``BASE_ENTRY_SCORE_THRESHOLD`` in ``ai_entry_gate`` is restored to
+        ``TIGHTENED_ENTRY_SCORE``, reversing the temporary loosening.
+        The threshold is only updated (and the log emitted) on the first call
+        that crosses the target, preventing repeated writes and log spam.
+        """
+        if current_balance >= TARGET_BALANCE:
+            try:
+                try:
+                    import bot.ai_entry_gate as _ai_gate
+                except ImportError:
+                    import ai_entry_gate as _ai_gate  # type: ignore[no-redef]
+                if _ai_gate.BASE_ENTRY_SCORE_THRESHOLD != TIGHTENED_ENTRY_SCORE:
+                    _ai_gate.BASE_ENTRY_SCORE_THRESHOLD = TIGHTENED_ENTRY_SCORE
+                    logger.info(
+                        "💰 Balance $%.2f reached target $%.1f — "
+                        "tightening AI entry threshold to %.1f",
+                        current_balance, TARGET_BALANCE, TIGHTENED_ENTRY_SCORE,
+                    )
+            except Exception as exc:
+                logger.warning("check_balance_and_adjust_threshold error: %s", exc)
 
 
 # ---------------------------------------------------------------------------
