@@ -277,3 +277,47 @@ def check_breakout_short(
     except Exception as exc:
         logger.warning("breakout_short error: %s", exc)
         return False, 0.0, f"breakout_short error: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Balance-based threshold tightening
+# ---------------------------------------------------------------------------
+
+# --- START PATCH ---
+TARGET_BALANCE: float = 100.0        # USD — tighten filters once this balance is reached
+TIGHTENED_ENTRY_SCORE: float = 5.0  # gate-pass score to restore at TARGET_BALANCE
+
+
+def check_balance_and_adjust_threshold(current_balance: float) -> None:
+    """
+    Restore the stricter AI entry gate pass-threshold once the account balance
+    reaches ``TARGET_BALANCE``.
+
+    While building equity the threshold is kept loose (3.5 / 9) to generate
+    more trades.  Once the bot hits the target balance this function resets it
+    to the normal 5.0 / 9 level so quality filtering is re-enabled.
+
+    Call ``check_balance_and_adjust_threshold(current_balance)`` at the end
+    of each trade or at the start of each scan loop.
+
+    Args:
+        current_balance: Current account balance in USD.
+    """
+    if current_balance >= TARGET_BALANCE:
+        try:
+            try:
+                from bot.ai_entry_gate import set_gate_pass_threshold
+            except ImportError:
+                from ai_entry_gate import set_gate_pass_threshold
+            set_gate_pass_threshold(TIGHTENED_ENTRY_SCORE)
+            logger.info(
+                "💰 Balance $%.2f ≥ $%.0f target — "
+                "entry gate tightened to %.1f/9 pts via momentum_entry_filter",
+                current_balance, TARGET_BALANCE, TIGHTENED_ENTRY_SCORE,
+            )
+        except Exception as exc:
+            logger.warning(
+                "check_balance_and_adjust_threshold: "
+                "could not update ai_entry_gate threshold: %s", exc,
+            )
+# --- END PATCH ---
