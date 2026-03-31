@@ -3,10 +3,10 @@ NIJA Apex Strategy v7.1 - Configuration
 
 All configuration parameters for the Apex trading strategy.
 
-Note: ADX threshold is set to 8 across multiple sections for consistency.
-This value represents the minimum ADX for trend detection, loosened from 10
-to allow more setups in current Kraken market conditions. If you need to
-adjust, change all three instances:
+Note: ADX threshold is set to 7 across multiple sections for consistency.
+This value represents the minimum ADX for trend detection, tuned for
+crypto markets. Below 10 allows real market movement to be captured.
+If you need to adjust, change all three instances:
 - MARKET_FILTER['adx_threshold']
 - MARKET_FILTERING['min_adx']
 - SMART_FILTERS['chop_detection']['adx_threshold'] (set 1 lower to avoid edge cases)
@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 8,  # ADX must be > 8 for trending market - LOOSENED (was 10) to allow more setups
+    'adx_threshold': 7,   # ADX must be > 7 — below 10 allows real market movement
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.05,  # Volume must be > 5% of recent average - LOOSENED (was 0.10) for lower-volume markets
+    'volume_threshold': 0.05,  # Volume must be > 5% of recent average (was 10%)
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
@@ -63,7 +63,7 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 8,  # Minimum ADX for trend strength (< 8 = choppy) - LOOSENED (was 10) to allow more setups
+    'min_adx': 7,   # Minimum ADX for trend strength — below 10 captures real movement
     'strong_adx': 30,  # ADX above this is strong trend
 
     # Volume Requirements
@@ -83,6 +83,7 @@ MARKET_FILTERING = {
 ENTRY_CONFIG = {
     # Signal Scoring (6 possible confirmations)
     'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED (was 4) to allow more entries
+    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED (was 4) for more entries
     'a_plus_signal_score': 6,  # Perfect setup score
 
     # Required Conditions
@@ -110,19 +111,20 @@ ENTRY_TRIGGERS = {
     'long': {
         'description': 'Long entry conditions',
         'conditions': [
-            'Price pulls to EMA21 or VWAP (within 0.5%)',
+            'Price pulls to EMA21 or VWAP (within 1.0%)',
             'RSI in bullish zone (40-70)',
             'Bullish reversal candle',
             'MACD histogram uptick (growing)',
             'Volume confirmation (>50% avg)',
         ],
         'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions
         'entry_on_close': True,  # Only enter on candle close
     },
     'short': {
         'description': 'Short entry conditions (mirror of long)',
         'conditions': [
-            'Price pulls to EMA21 or VWAP (within 0.5%)',
+            'Price pulls to EMA21 or VWAP (within 1.0%)',
             'RSI in bearish zone (30-60)',
             'Bearish reversal candle',
             'MACD histogram downtick (shrinking)',
@@ -132,6 +134,10 @@ ENTRY_TRIGGERS = {
         'entry_on_close': True,  # Only enter on candle close
     },
     'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback - LOOSENED (was 0.005/0.5%)
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions
+        'entry_on_close': True,  # Only enter on candle close
+    },
+    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback - LOOSENED (was 0.5%) for wider entry zone
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -267,6 +273,7 @@ SMART_FILTERS = {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
         'adx_threshold': 7,  # ADX < 7 indicates chop - slightly below min_adx (8) to avoid edge cases
+        'adx_threshold': 6,  # ADX < 6 indicates chop — set 1 lower than min_adx (7)
     },
 }
 
