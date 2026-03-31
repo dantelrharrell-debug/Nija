@@ -118,6 +118,7 @@ ENTRY_TRIGGERS = {
             'Volume confirmation (>50% avg)',
         ],
         'required_conditions': 3,  # Minimum 3 out of 5 conditions (was 4)
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
         'required_conditions': 3,  # Minimum 3 out of 5 conditions
         'entry_on_close': True,  # Only enter on candle close
     },
@@ -134,6 +135,10 @@ ENTRY_TRIGGERS = {
         'entry_on_close': True,  # Only enter on candle close
     },
     'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback (was 0.5%)
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
+        'entry_on_close': True,  # Only enter on candle close
+    },
+    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback - LOOSENED (was 0.005/0.5%)
         'required_conditions': 3,  # Minimum 3 out of 5 conditions
         'entry_on_close': True,  # Only enter on candle close
     },
@@ -272,6 +277,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
+        'adx_threshold': 7,  # ADX < 7 indicates chop - slightly below min_adx (8) to avoid edge cases
         'adx_threshold': 6,  # ADX < 6 indicates chop — set 1 lower than min_adx (7)
     },
 }
