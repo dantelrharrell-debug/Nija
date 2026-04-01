@@ -59,7 +59,7 @@ class EntryQualityScorer:
     def __init__(self):
         """Initialize the entry quality scorer"""
         self.audit_log = []
-        self.min_passing_score = 60  # Minimum score for quality entry
+        self.min_passing_score = 40  # Lowered from 60 — allow more trade setups through
         
     def score_entry(
         self,

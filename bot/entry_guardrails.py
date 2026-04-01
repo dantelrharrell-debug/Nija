@@ -566,16 +566,16 @@ class SignalConfidenceFilter:
 
     def __init__(
         self,
-        min_confidence: float = 0.65,
-        min_quality: float = 55.0,
+        min_confidence: float = 0.45,
+        min_quality: float = 35.0,
     ):
         """
         Args:
             min_confidence: Minimum signal confidence on a 0–1 scale
-                (default 0.65 = 65 %).  Signals below this are considered
+                (default 0.45 = 45 %).  Signals below this are considered
                 too uncertain to trade.
             min_quality: Minimum signal quality score on a 0–100 scale
-                (default 55.0).  Scores below this indicate weak setups.
+                (default 35.0).  Scores below this indicate weak setups.
         """
         self.min_confidence = min_confidence
         self.min_quality = min_quality
