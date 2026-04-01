@@ -77,16 +77,20 @@ BROKER_MIN_ORDER_USD: Dict[str, float] = {
 }
 _DEFAULT_MIN_ORDER_USD = 10.0  # Conservative fallback for any unlisted broker
 
-# Trade quality thresholds (Jan 29, 2026 - OPTIMIZED FOR WIN RATE)
-# OPTIMIZATION: Balance between signal generation and trade quality
-# Previous emergency relaxations went too far (0.50 confidence = low quality trades)
-# New strategy: Moderate confidence for better win rate while maintaining signal flow
-MIN_CONFIDENCE = 0.60  # Profit-tuned: lower bar catches more trades while preserving edge (was 0.75)
+# Trade quality thresholds — loosened to fix 0-trade issue (entry filters too strict)
+# NOTE: Kraken is the active broker; kraken_min_confidence was blocking all trades at 0.70
+# (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
+MIN_CONFIDENCE = 0.50  # Lowered from 0.60 to allow 2+/5 legacy signals through
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Volume gate for entry confirmation in check_long/short_entry.
 # Widened from 0.6x to 0.4x to unlock quieter markets (where most scalps occur).
 ENTRY_VOLUME_MIN_MULTIPLIER: float = 0.4
+
+# Minimum number of the 5 legacy entry conditions that must be met to generate
+# a signal.  Lowered from 3 → 2 to allow entries when only partial confirmation
+# is available (e.g. price pullback + MACD tick without candlestick pattern).
+LEGACY_SIGNAL_THRESHOLD: int = 2
 
 # Borderline ATR multiplier: ATR between (BORDERLINE_ATR_FLOOR × min_atr) and min_atr
 # is treated as borderline volatility — allowed with reduced position size.
@@ -711,11 +715,13 @@ class NIJAApexStrategyV71:
         
         # Kraken-specific tuning parameters (Jan 30, 2026)
         # These can be adjusted via environment variables for safe tuning
-        # Default values are conservative to prevent over-aggressive trading
-        self.kraken_min_rsi = float(os.getenv('KRAKEN_MIN_RSI', '35'))  # More conservative than general (30)
-        self.kraken_max_rsi = float(os.getenv('KRAKEN_MAX_RSI', '65'))  # More conservative than general (70)
-        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.70'))  # Aligned with global MIN_CONFIDENCE (was 0.65)
-        self.kraken_min_atr_pct = float(os.getenv('KRAKEN_MIN_ATR_PCT', '0.6'))  # Higher than general (0.5%)
+        # Kraken-specific safety thresholds — loosened to fix 0-trade issue.
+        # Previous values (RSI 35-65, confidence 0.70, ATR 0.6%) were blocking
+        # all signals since legacy_score=3 → confidence=0.60 < 0.70.
+        self.kraken_min_rsi = float(os.getenv('KRAKEN_MIN_RSI', '28'))
+        self.kraken_max_rsi = float(os.getenv('KRAKEN_MAX_RSI', '72'))
+        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.50'))
+        self.kraken_min_atr_pct = float(os.getenv('KRAKEN_MIN_ATR_PCT', '0.4'))
         
         # Track first trade for sanity check logging
         self.first_trade_attempted = False
@@ -1431,7 +1437,7 @@ class NIJAApexStrategyV71:
 
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # RESTORED: 3/5 required for quality trades (was emergency-relaxed to 2/5)
+        signal = score >= LEGACY_SIGNAL_THRESHOLD
 
         # Apply entry optimizer bonus (RSI divergence, BB zone, volume pattern)
         # The bonus is additive and raises the effective score for high-quality setups,
@@ -1563,7 +1569,7 @@ class NIJAApexStrategyV71:
 
         # Calculate score
         score = sum(conditions.values())
-        signal = score >= 3  # RESTORED: 3/5 required for quality trades (was emergency-relaxed to 2/5)
+        signal = score >= LEGACY_SIGNAL_THRESHOLD
 
         # Apply entry optimizer bonus (RSI divergence, BB zone, volume pattern)
         opt_delta = 0.0

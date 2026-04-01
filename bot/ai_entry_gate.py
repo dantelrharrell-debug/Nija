@@ -120,18 +120,18 @@ class GateResult:
 # ── Gate 1: AI Score thresholds per regime ──────────────────────────────────
 # Tighter in choppy / crisis regimes, looser when trend gives a clear edge.
 _SCORE_THRESHOLDS: Dict[str, float] = {
-    "strong_trend":         52.0,   # trend gives edge → relax slightly
-    "weak_trend":           55.0,   # default
-    "ranging":              62.0,   # direction hard to call → require better setup
-    "consolidation":        45.0,   # scalp mode → need high frequency
-    "expansion":            55.0,   # breakout → normal bar
-    "mean_reversion":       60.0,   # counter-trend → extra conviction
-    "volatility_explosion": 78.0,   # crisis → near-perfect setups only
+    "strong_trend":         38.0,   # trend gives edge → relax
+    "weak_trend":           40.0,   # default
+    "ranging":              45.0,   # direction hard to call → require better setup
+    "consolidation":        35.0,   # scalp mode → need high frequency
+    "expansion":            40.0,   # breakout → normal bar
+    "mean_reversion":       45.0,   # counter-trend → extra conviction
+    "volatility_explosion": 65.0,   # crisis → near-perfect setups only
     # Legacy 3-regime fallbacks
-    "trending":             52.0,
-    "volatile":             70.0,
+    "trending":             38.0,
+    "volatile":             55.0,
 }
-_DEFAULT_SCORE_THRESHOLD = 55.0
+_DEFAULT_SCORE_THRESHOLD = 40.0
 
 # ── Gate 2: Volume multiplier ────────────────────────────────────────────────
 # Current volume must be >= this × 20-bar average.
@@ -190,15 +190,12 @@ _GATE_WEIGHTS: Dict[str, int] = {
 }
 _GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 9
 
-# Mutable base threshold — lowered temporarily to 3.5 to generate more trades.
-# Restored to 5.0 automatically by check_balance_and_adjust_threshold() once
-# the account balance reaches $100 (TARGET_BALANCE in trade_frequency_controller).
-BASE_ENTRY_SCORE_THRESHOLD: float = 3.5  # was 5.0; temporarily loosened for more trades
-# Temporarily loosened from 5.0 → 3.5 to allow more trades.
-# AI score gate alone (3 pts) is now sufficient to pass.
+# Mutable base threshold — lowered to 2.5 to generate more trades in current
+# market conditions.  Any gate combination scoring ≥ 2.5 pts passes (e.g. Gate 3+4
+# alone = 1+1 = 2 pts → FAIL; Gate 2+3 = 2+1 = 3 pts → PASS; Gate 1 alone = 3 pts → PASS).
 # Restored to 5.0 once the account balance reaches TARGET_BALANCE ($100)
 # via ``set_gate_pass_threshold`` / ``TradeFrequencyController.check_balance_and_adjust_threshold``.
-BASE_ENTRY_SCORE_THRESHOLD: float = 3.5  # out of 9 — temporarily loosened for more trades
+BASE_ENTRY_SCORE_THRESHOLD: float = 2.5  # out of 9 — loosened for more trades
 
 
 # ---------------------------------------------------------------------------
