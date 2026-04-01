@@ -127,24 +127,24 @@ class HFScalpConfig:
 
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.50)
+        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.30)
     )
-    # env: HF_SCALP_MIN_CONFIDENCE  (0.50 vs normal 0.75)
+    # env: HF_SCALP_MIN_CONFIDENCE  (0.30 — relaxed from 0.50 to match user accounts)
 
     kraken_min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.55)
+        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.30)
     )
-    # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE
+    # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE  (0.30 — relaxed from 0.55)
 
     min_adx: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 8)
+        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 5)
     )
-    # env: HF_SCALP_MIN_ADX  (8 vs normal 15)
+    # env: HF_SCALP_MIN_ADX  (5 — relaxed from 8 to match user accounts)
 
     volume_threshold: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.05)
+        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.02)
     )
-    # env: HF_SCALP_VOLUME_THRESHOLD  (0.05 = 5 % of 5-candle avg, vs normal 0.10)
+    # env: HF_SCALP_VOLUME_THRESHOLD  (0.02 = 2 % of 5-candle avg — relaxed from 5%)
 
     volume_min_threshold: float = field(
         default_factory=lambda: _env_float("HF_SCALP_VOLUME_MIN_THRESHOLD", 0.001)
