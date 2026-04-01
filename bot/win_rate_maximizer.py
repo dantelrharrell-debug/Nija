@@ -79,6 +79,7 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections import deque
 from dataclasses import dataclass, field
@@ -100,7 +101,15 @@ DEFAULT_MAX_CONSECUTIVE_LOSSES: int = 4      # cool-down after N straight losses
 DEFAULT_MAX_DRAWDOWN_PCT: float = 0.10       # 10 % from session peak
 
 # Layer 2 – Signal Quality
-DEFAULT_SIGNAL_THRESHOLD: float = 70.0       # minimum score (0–100)
+# Lowered from 70 → 58 so the bot can trade in typical (non-trending) market
+# conditions.  A score of 70 required near-perfect ADX + EMA alignment +
+# above-average volume simultaneously, which blocked all trades in ranging
+# or low-volume markets.  58 still rejects genuinely poor signals (no trend,
+# no volume, wrong momentum) while allowing realistic setups through.
+# Override at runtime with the WMX_SIGNAL_THRESHOLD env variable.
+DEFAULT_SIGNAL_THRESHOLD: float = float(
+    os.getenv("WMX_SIGNAL_THRESHOLD", "58")
+)
 
 # Layer 3 – Profit Consistency
 DEFAULT_WIN_RATE_WINDOW: int = 30            # rolling window (trades)
