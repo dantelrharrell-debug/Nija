@@ -103,11 +103,13 @@ MOMENTUM_WEIGHT: float = 0.25
 VOLATILITY_PENALTY_WEIGHT: float = 0.10
 
 # Score → Regime mapping (lower bound inclusive)
+# RELAXED (Apr 2026): Lowered NEUTRAL threshold from 35 → 20 so ranging markets
+# (score 20-35) allow entries at reduced 75% position size instead of blocking.
 REGIME_THRESHOLDS: Dict[str, float] = {
     "FAVORABLE":   60.0,
-    "NEUTRAL":     35.0,
-    "UNFAVORABLE": 15.0,
-    # anything below 15 → CRISIS
+    "NEUTRAL":     20.0,   # was 35.0 — now allows entries in low-score markets
+    "UNFAVORABLE": 10.0,   # was 15.0
+    # anything below 10 → CRISIS
 }
 
 # Rolling window of market snapshots used to smooth regime transitions
