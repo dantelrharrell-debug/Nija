@@ -271,29 +271,29 @@ Throttled (aggressive): 25% monthly
 
 ## 🔄 8. Trading Frequency
 
-### NIJA Target: **3 - 12 trades/day**
+### NIJA Target: **10 - 15 trades/day**
 
-**Optimal:** 7 trades/day
+**Optimal:** 12 trades/day
 
 **Why This Range?**
 
-- ✅ **Sufficient opportunities**: 3+ ensures daily profit potential
-- ✅ **Quality over quantity**: 12 max prevents overtrading
-- ✅ **Fee efficiency**: Fewer trades = lower cumulative fees
-- ✅ **Sustainable pace**: Avoids market noise, focuses on high-conviction setups
+- ✅ **Consistent opportunity**: 10+ ensures meaningful daily profit potential
+- ✅ **Quality over quantity**: 15 max prevents overtrading and fee drag
+- ✅ **Fee efficiency**: Hard upper cap at 15/day keeps cumulative fees in check
+- ✅ **Max-profit focus**: Only the top 35% of setups execute (TradeRankingEngine)
 
 **Monthly Targets:**
 ```
-Minimum: 60 trades (3/day × 20 days)
-Target: 140 trades (7/day × 20 days)
-Maximum: 240 trades (12/day × 20 days)
+Minimum: 200 trades (10/day × 20 days)
+Target:  240 trades (12/day × 20 days)
+Maximum: 300 trades (15/day × 20 days)
 ```
 
 **Implementation:**
-- **Adaptive frequency** based on market conditions
-- High volatility: More trades (8-12/day)
-- Low volatility: Fewer trades (3-5/day)
-- Quality scoring: Only 3/5+ signal setups
+- **Adaptive frequency** via TradeFrequencyController (min=10, max=15 per day)
+- Quality gate: TradeRankingEngine `pass_percentile=0.65` — top 35% only
+- Score floor: `MIN_SCORE_ABSOLUTE=35` — weak signals rejected before ranking
+- Loosen filters when below 10/day; tighten when above 15/day
 
 ---
 
