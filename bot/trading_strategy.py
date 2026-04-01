@@ -6934,15 +6934,52 @@ class TradingStrategy:
         # 🏦 TIERED RISK ENGINE — conservative vs aggressive capital pool gate
         if not user_mode and hasattr(self, 'tiered_risk_engine') and self.tiered_risk_engine is not None:
             try:
-                # Use synced position count (from adoption or previous cycle) so the
-                # tiered risk engine sees the real position count, not a stale internal dict.
-                # Explicit is-not-None check is required so a legitimate 0 isn't overridden.
-                if hasattr(self, 'open_positions_count') and self.open_positions_count is not None:
-                    _open_positions = self.open_positions_count
-                elif hasattr(self, 'current_positions') and self.current_positions is not None:
-                    _open_positions = len(self.current_positions)
-                else:
-                    _open_positions = len(getattr(self, 'open_positions', {}))
+                # Compute accurate tradable position count for the tiered risk engine.
+                # Start from self.current_positions (already dust/size filtered from the
+                # previous cycle) and additionally strip out any positions that are in the
+                # active unsellable-retry window, the ACE blacklist, or the dust blacklist.
+                # This prevents unsellable dust (e.g. USDG-USD) from inflating the count
+                # and falsely triggering the "At max positions" gate every cycle.
+                _tre_broker_name = (
+                    active_broker.name
+                    if active_broker and hasattr(active_broker, 'name')
+                    else ''
+                )
+                _tre_positions = list(
+                    getattr(self, 'current_positions', None) or []
+                )
+                # Strip positions in the active unsellable-retry window
+                if _tre_positions and hasattr(self, 'unsellable_positions') and self.unsellable_positions:
+                    _now_ts_tre = time.time()
+                    _ret_to_tre = getattr(self, 'unsellable_retry_timeout', 24 * 3600)
+                    _tre_positions = [
+                        p for p in _tre_positions
+                        if p.get('symbol') not in self.unsellable_positions
+                        or (_now_ts_tre - self.unsellable_positions.get(p.get('symbol', ''), 0)) >= _ret_to_tre
+                    ]
+                # Strip positions in the AutoCleanupEngine blacklist
+                if _tre_positions and hasattr(self, 'auto_cleanup_engine') and self.auto_cleanup_engine:
+                    try:
+                        _ace_bl_tre = set(self.auto_cleanup_engine.symbol_blacklist)
+                        if _ace_bl_tre:
+                            _tre_positions = [
+                                p for p in _tre_positions
+                                if p.get('symbol') not in _ace_bl_tre
+                            ]
+                    except Exception:
+                        pass
+                # Strip permanently blacklisted dust positions
+                if _tre_positions and hasattr(self, 'dust_blacklist') and self.dust_blacklist:
+                    try:
+                        _tre_positions = [
+                            p for p in _tre_positions
+                            if not self.dust_blacklist.is_blacklisted(p.get('symbol', ''))
+                        ]
+                    except Exception:
+                        pass
+                # Re-apply the tradable-size floor for any positions that slipped through
+                _tre_positions = filter_tradable_positions(_tre_positions, _tre_broker_name)
+                _open_positions = len(_tre_positions)
                 _market_vol = 50.0  # neutral default volatility (0-100 scale)
                 # Use the actual account balance to compute a realistic representative
                 # trade size for the gate check.  The old formula (BASE_CAPITAL * 0.05)
@@ -7112,6 +7149,18 @@ class TradingStrategy:
                 if result['excess'] > 0:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
                     logger.info(f"   Sold {result['sold']} positions")
+                # Sync enforcer's unsellable marks into the strategy's filter dict so
+                # the per-cycle position-count filtering (and TRE gate above) can exclude
+                # positions that the enforcer confirmed are below the exchange minimum.
+                if hasattr(self.enforcer, '_unsellable_positions') and self.enforcer._unsellable_positions:
+                    if not hasattr(self, 'unsellable_positions'):
+                        self.unsellable_positions = {}
+                    for _sym, _ts in self.enforcer._unsellable_positions.items():
+                        if _sym not in self.unsellable_positions:
+                            self.unsellable_positions[_sym] = _ts
+                            logger.info(
+                                "   🔄 Synced enforcer unsellable mark → strategy filter: %s", _sym
+                            )
             
             # 🧹 FORCED CLEANUP: Run aggressive dust cleanup and retroactive cap enforcement
             # This runs periodically to clean up:
