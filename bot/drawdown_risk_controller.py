@@ -41,8 +41,8 @@ Layer 3 — ATR-based dynamic position sizing
 Layer 4 — Market condition pre-filter (5 of 5 must score ≥ threshold)
     A lightweight score (0–5) checks five basic market-health conditions
     before any expensive signal computation runs:
-    1. ADX > 8          (some directional momentum)
-    2. Volume > 0.4×avg (some liquidity)
+    1. ADX > 5          (some directional momentum; was > 8, relaxed Apr 2026)
+    2. Volume > 0.2×avg (some liquidity; was 0.4×, relaxed Apr 2026)
     3. ATR > 0.25%      (enough movement to profit after fees)
     4. Regime not VOLATILITY_EXPLOSION
     5. Price > 0        (basic sanity)
@@ -418,19 +418,21 @@ class DrawdownRiskController:
         """
         score = 0
 
-        # 1. ADX > 8 (some directional activity)
+        # 1. ADX > 5 (some directional activity)
+        # THRESHOLD REDUCTION (Apr 2026): Relaxed from > 8 to > 5 to match user-account activity.
         try:
             adx = float(indicators.get("adx", pd.Series([0])).iloc[-1])
-            if adx > 8.0:
+            if adx > 5.0:
                 score += 1
         except Exception:
             score += 1  # skip on error
 
-        # 2. Volume > 40% of 20-bar average
+        # 2. Volume > 20% of 20-bar average
+        # THRESHOLD REDUCTION (Apr 2026): Relaxed from >= 0.40 to >= 0.20 to allow quieter markets.
         try:
             avg_vol = df["volume"].iloc[-21:-1].mean() if len(df) >= 21 else df["volume"].mean()
             cur_vol = float(df["volume"].iloc[-1])
-            if avg_vol > 0 and (cur_vol / avg_vol) >= 0.40:
+            if avg_vol > 0 and (cur_vol / avg_vol) >= 0.20:
                 score += 1
         except Exception:
             score += 1
