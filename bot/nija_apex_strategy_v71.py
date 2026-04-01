@@ -502,8 +502,8 @@ class NIJAApexStrategyV71:
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
         # New strategy: Moderate filters to capture trending markets with real volume
         # Target: 60-65% win rate with 5-10 quality trades per day
-        self.min_adx = self.config.get('min_adx', 7)  # TUNED: 7 allows real market movement (was 12)
-        self.volume_threshold = self.config.get('volume_threshold', 0.05)  # TUNED: 5% — crypto moves without huge volume spikes (was 0.10)
+        self.min_adx = self.config.get('min_adx', 5)  # TUNED: 5 — further relaxed from 7 to allow Platform to enter trades
+        self.volume_threshold = self.config.get('volume_threshold', 0.02)  # TUNED: 2% — further relaxed from 5% to match user account behaviour
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
         self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # TUNED: Lowered from 3 to 2 to allow entries on partial trend confirmation
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
@@ -722,7 +722,7 @@ class NIJAApexStrategyV71:
         # all signals since legacy_score=3 → confidence=0.60 < 0.70.
         self.kraken_min_rsi = float(os.getenv('KRAKEN_MIN_RSI', '28'))
         self.kraken_max_rsi = float(os.getenv('KRAKEN_MAX_RSI', '72'))
-        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.50'))
+        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.30'))
         self.kraken_min_atr_pct = float(os.getenv('KRAKEN_MIN_ATR_PCT', '0.4'))
         
         # Track first trade for sanity check logging
