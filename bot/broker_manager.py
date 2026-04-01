@@ -6013,6 +6013,18 @@ class KrakenBroker(BaseBroker):
         self._entry_price_cache: dict = {}
         self._entry_price_cache_lock = threading.Lock()
 
+        # CONNECTION STABILITY: Initialize per-broker watchdog and HTTP pool manager
+        # Mirrors the CoinbaseBroker pattern so Kraken connections benefit from the
+        # same keep-alive / connection-reuse infrastructure.
+        if CONNECTION_STABILITY_AVAILABLE:
+            _cm_key = f"kraken_{account_type.value}"
+            if user_id:
+                _cm_key = f"{_cm_key}_{user_id}"
+            self._connection_stability_manager = get_connection_stability_manager(_cm_key)
+            logger.info("✅ ConnectionStabilityManager attached to KrakenBroker")
+        else:
+            self._connection_stability_manager = None
+
     def _initialize_kraken_market_data(self):
         """
         Initialize Kraken market data for dynamic minimum volumes.
@@ -6344,21 +6356,28 @@ class KrakenBroker(BaseBroker):
                 logger.warning(f"⚠️  Could not configure HTTP timeout: {e}")
 
             # Configure HTTP keep-alive / connection reuse to prevent RemoteDisconnected errors.
-            # Kraken's API server may close idle connections; mounting a custom HTTPAdapter with
-            # pool_connections and pool_keepalive ensures the session reuses TCP connections and
-            # reconnects transparently instead of raising RemoteDisconnected.
+            # Use ConnectionStabilityManager.apply_connection_pool() when available for richer
+            # pool configuration (pool_connections=4, pool_maxsize=10, transport-level retries).
+            # Falls back to a basic HTTPAdapter if the manager is not initialised.
+            # pool_connections=4, pool_maxsize=10 chosen to match ConnectionPoolConfig defaults
+            # in connection_stability_manager.py — enough headroom for concurrent balance checks
+            # and order submissions without exhausting TCP resources.
             try:
-                import requests
-                from requests.adapters import HTTPAdapter
+                if self._connection_stability_manager is not None:
+                    self._connection_stability_manager.apply_connection_pool(self.api.session)
+                    logger.debug(f"✅ HTTP connection pool applied via ConnectionStabilityManager for {cred_label}")
+                else:
+                    import requests
+                    from requests.adapters import HTTPAdapter
 
-                _kraken_adapter = HTTPAdapter(
-                    pool_connections=2,
-                    pool_maxsize=4,
-                    max_retries=0,  # Retry logic is handled by our own retry loop
-                )
-                self.api.session.mount("https://", _kraken_adapter)
-                self.api.session.mount("http://", _kraken_adapter)
-                logger.debug(f"✅ HTTP keep-alive adapter configured for {cred_label} (prevents RemoteDisconnected)")
+                    _kraken_adapter = HTTPAdapter(
+                        pool_connections=4,   # Aligned with ConnectionPoolConfig defaults
+                        pool_maxsize=10,      # Aligned with ConnectionPoolConfig defaults
+                        max_retries=0,  # Retry logic is handled by our own retry loop
+                    )
+                    self.api.session.mount("https://", _kraken_adapter)
+                    self.api.session.mount("http://", _kraken_adapter)
+                    logger.debug(f"✅ HTTP keep-alive adapter configured for {cred_label} (prevents RemoteDisconnected)")
             except Exception as e:
                 logger.debug(f"⚠️  Could not configure keep-alive adapter: {e}")
 
@@ -6846,6 +6865,15 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"   ⏳ Post-connection cooldown: {post_connection_delay:.1f}s (prevents nonce errors)...")
                         time.sleep(post_connection_delay)
                         logger.debug(f"   ✅ Cooldown complete - ready for balance checks")
+
+                        # CONNECTION STABILITY: Register broker and start watchdog
+                        if self._connection_stability_manager is not None:
+                            self._connection_stability_manager.register_broker(
+                                broker=self,
+                                reconnect_fn=self.connect,
+                            )
+                            self._connection_stability_manager.mark_connected()
+                            self._connection_stability_manager.start_watchdog()
 
                         return True
                     else:
