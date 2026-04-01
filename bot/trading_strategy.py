@@ -1801,13 +1801,13 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
                             # This conservative rate ensures API key never gets temporarily blocked
 
 # Broker balance fetch timeout constants
-# Increased from 15s → 30s because Kraken API can be slow under load and was
+# Increased from 15s → 30s → 60s because Kraken API can be slow under load and was
 # timing out before a valid response arrived, causing the bot to fall back to
-# monitor mode. 30s matches KrakenBroker.API_TIMEOUT_SECONDS and gives the
-# API enough headroom to respond during peak congestion periods.
+# monitor mode. 60s gives the API enough headroom to respond during peak congestion
+# periods (connection timeouts were observed at 30s threshold).
 # Cached balance (max age: 90s) is still used as an immediate fallback when the
 # live fetch times out.
-BALANCE_FETCH_TIMEOUT = 30  # Hard timeout for balance API call (increased to 30s to match Kraken API timeout)
+BALANCE_FETCH_TIMEOUT = 60  # Hard timeout for balance API call (increased to 60s to prevent Kraken connection timeouts)
 CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness)
 
 # Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
@@ -2547,11 +2547,11 @@ if HEARTBEAT_TRADE_ENABLED:
 else:
     logger.debug("Heartbeat trade disabled (set HEARTBEAT_TRADE=true to enable)")
 
-def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=30):
+def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=60):
     """
     Execute a function with a timeout. Returns (result, error).
     If timeout occurs, returns (None, TimeoutError).
-    Default timeout is 30 seconds to accommodate production API latency.
+    Default timeout is 60 seconds to accommodate Kraken API latency under load.
 
     CRITICAL FIX (Jan 27, 2026): Fixed race condition where queue.get_nowait()
     could raise queue.Empty even after successful completion.

@@ -94,7 +94,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 # Minimum signal confidence to include in scan output
-MIN_CONFIDENCE: float = 0.55
+MIN_CONFIDENCE: float = 0.30
 
 # Rolling window length for baseline statistics (bars / ticks)
 BASELINE_WINDOW: int = 120
