@@ -117,26 +117,29 @@ class MarketReadinessGate:
     """
     
     # Thresholds for AGGRESSIVE mode (all must be true)
-    AGGRESSIVE_ATR_MIN = 0.006        # 0.6%
-    AGGRESSIVE_ADX_MIN = 25.0
-    AGGRESSIVE_VOLUME_PERCENTILE_MIN = 60.0
+    # RELAXED (Apr 2026): Lowered to allow entries in more market conditions
+    AGGRESSIVE_ATR_MIN = 0.004        # 0.4% (was 0.6%) — more coins qualify
+    AGGRESSIVE_ADX_MIN = 18.0         # 18 (was 25) — includes moderate trends
+    AGGRESSIVE_VOLUME_PERCENTILE_MIN = 40.0  # 40% (was 60%) — normal volume qualifies
     AGGRESSIVE_SPREAD_MAX = 0.0015    # 0.15%
     AGGRESSIVE_WIN_RATE_MIN = 0.45    # 45%
     
     # Thresholds for CAUTIOUS mode (some conditions met)
-    CAUTIOUS_ATR_MIN = 0.004          # 0.4%
-    CAUTIOUS_ATR_MAX = 0.006          # 0.6%
-    CAUTIOUS_ADX_MIN = 18.0
-    CAUTIOUS_ADX_MAX = 25.0
-    CAUTIOUS_VOLUME_PERCENTILE_MIN = 40.0
+    # RELAXED (Apr 2026): Expanded ATR range, lowered ADX/volume requirements
+    CAUTIOUS_ATR_MIN = 0.001          # 0.1% (was 0.4%) — very low ATR still qualifies
+    CAUTIOUS_ATR_MAX = 0.05           # 5.0% (was 0.6%) — high volatility still qualifies
+    CAUTIOUS_ADX_MIN = 5.0            # 5.0 (was 18) — any measurable trend qualifies
+    CAUTIOUS_ADX_MAX = 100.0          # remove upper ADX limit (was 25)
+    CAUTIOUS_VOLUME_PERCENTILE_MIN = 10.0   # 10% (was 40%) — sparse volume still qualifies
     
     # Position sizing for CAUTIOUS mode
     CAUTIOUS_SIZE_MIN = 0.15          # 15%
     CAUTIOUS_SIZE_MAX = 0.25          # 25%
-    CAUTIOUS_MIN_SCORE = 70           # Matches enhanced entry scorer min (was 85, lowered for micro-cap consistency)
+    CAUTIOUS_MIN_SCORE = 45           # 45 (was 70) — accept moderate-quality setups
     
     # IDLE mode triggers
-    IDLE_ATR_MAX = 0.004              # 0.4%
+    # RELAXED (Apr 2026): Only hard-block when ATR is essentially zero (flat market)
+    IDLE_ATR_MAX = 0.0005             # 0.05% (was 0.4%) — only block genuinely flat markets
     IDLE_NON_MEANINGFUL_WIN_THRESHOLD = 3
     IDLE_CIRCUIT_BREAKER_COOLDOWN_HOURS = 2.0
     
@@ -425,17 +428,19 @@ class MarketReadinessGate:
             
             return MarketMode.CAUTIOUS, conditions, details
         
-        # Default to IDLE if no mode matches
+        # Default to CAUTIOUS instead of IDLE so entries are allowed in normal markets.
+        # The previous IDLE default was blocking all trades in typical ranging conditions.
         details = {
-            'mode': MarketMode.IDLE.value,
-            'reasons': ['Conditions insufficient for AGGRESSIVE or CAUTIOUS'],
-            'message': 'Market not paying traders right now',
-            'allow_entries': False,
+            'mode': MarketMode.CAUTIOUS.value,
+            'reasons': ['Default cautious — conditions below aggressive thresholds'],
+            'message': 'Market conditions normal - trading cautiously',
+            'allow_entries': True,
             'allow_exits': True,
-            'position_size_multiplier': 0.0
+            'position_size_multiplier': 0.20,
+            'min_entry_score': self.CAUTIOUS_MIN_SCORE
         }
-        logger.info(f"🛑 IDLE MODE (default): Insufficient conditions")
-        return MarketMode.IDLE, conditions, details
+        logger.debug(f"⚠️ CAUTIOUS MODE (default): Normal market conditions — trade cautiously")
+        return MarketMode.CAUTIOUS, conditions, details
     
     def get_position_size_adjustment(self, base_size: float, mode: MarketMode) -> float:
         """

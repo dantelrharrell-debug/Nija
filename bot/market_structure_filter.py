@@ -44,11 +44,11 @@ import pandas as pd
 logger = logging.getLogger("nija")
 
 # ── tunable thresholds ────────────────────────────────────────────────────────
-VOLUME_EXPANSION_MULTIPLIER: float = 1.2   # TUNED: Lowered from 1.5 to allow entries with moderate volume expansion
+VOLUME_EXPANSION_MULTIPLIER: float = 1.0   # RELAXED (Apr 2026): 1.0 = average volume qualifies (was 1.2)
 VOLUME_LOOKBACK_PERIODS: int = 20          # rolling window for average volume
 BREAKOUT_LOOKBACK_PERIODS: int = 20        # rolling window for breakout high detection
-RSI_OVERSOLD_THRESHOLD: float = 40.0       # RSI below this value → +20 pts (oversold/bounce zone)
-MIN_SCORE_TO_ENTER: int = 50               # TUNED: Lowered from 60 to 50 — passes trend+RSI (30+20=50) or breakout+volume (30+20=50); still blocks volume+RSI only (20+20=40)
+RSI_OVERSOLD_THRESHOLD: float = 55.0       # RELAXED (Apr 2026): 55 catches more momentum setups (was 40.0)
+MIN_SCORE_TO_ENTER: int = 30               # RELAXED (Apr 2026): 30 = trend alone passes (was 50)
 
 # Score weights (must be consistent with the docstring table above)
 SCORE_TREND: int = 30      # bullish trend (HH + HL)
