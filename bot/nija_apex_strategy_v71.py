@@ -80,7 +80,9 @@ _DEFAULT_MIN_ORDER_USD = 10.0  # Conservative fallback for any unlisted broker
 # Trade quality thresholds — loosened to fix 0-trade issue (entry filters too strict)
 # NOTE: Kraken is the active broker; kraken_min_confidence was blocking all trades at 0.70
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
-MIN_CONFIDENCE = 0.50  # Lowered from 0.60 to allow 2+/5 legacy signals through
+# THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
+# Platform was stuck waiting while users traded on lower-confidence signals.
+MIN_CONFIDENCE = 0.30  # Lowered from 0.50 to allow weaker-confidence signals through
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Volume gate for entry confirmation in check_long/short_entry.

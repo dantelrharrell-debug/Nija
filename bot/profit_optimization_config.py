@@ -40,10 +40,11 @@ ENHANCED_SCORING_CONFIG = {
     'use_enhanced_scoring': True,
 
     # Minimum score to enter trade (out of 100)
-    # PROFITABILITY FIX (Jan 26, 2026): Increased thresholds to only take high-quality trades
-    # 75 = very good setup, 85+ = excellent (filters out marginal 60-70 trades that caused losses)
-    'min_score_threshold': 75,  # Stricter threshold to improve win rate
-    'excellent_score_threshold': 85,  # Increase position size on excellent setups
+    # THRESHOLD REDUCTION (Apr 2026): Lowered to match user-account activity levels.
+    # 50 = moderate setup, allows platform to trade more actively (was 75 which blocked all but
+    # top-tier signals; user accounts were already trading on lower-quality setups).
+    'min_score_threshold': 50,  # Relaxed from 75 to generate more entry signals
+    'excellent_score_threshold': 70,  # Relaxed from 85 to match lower baseline
 
     # Score weights (must sum to 100)
     'scoring_weights': {
@@ -70,22 +71,23 @@ REGIME_DETECTION_CONFIG = {
     'volatile_atr_threshold': 0.03, # 3% ATR/price = volatile
 
     # Regime-specific parameters
-    # PROFITABILITY FIX (Jan 26, 2026): Increased all min_entry_score thresholds by 15 points
+    # THRESHOLD REDUCTION (Apr 2026): Lowered all min_entry_score thresholds to match
+    # user-account activity levels (was 75/80/85 from Jan 26 profitability fix — too strict).
     'regime_params': {
         'trending': {
-            'min_entry_score': 75,               # Stricter threshold (was 60)
+            'min_entry_score': 50,               # Relaxed from 75 to allow more signals
             'position_size_multiplier': 1.2,     # Increase size by 20%
             'trailing_stop_distance': 1.5,       # Wider trailing stop
             'take_profit_multiplier': 1.5,       # Higher profit targets
         },
         'ranging': {
-            'min_entry_score': 80,               # Very selective (was 65)
+            'min_entry_score': 55,               # Relaxed from 80 — more selective in chop
             'position_size_multiplier': 0.8,     # Reduce size by 20%
             'trailing_stop_distance': 1.0,       # Tighter trailing stop
             'take_profit_multiplier': 0.8,       # Take profits faster
         },
         'volatile': {
-            'min_entry_score': 85,               # Extremely selective (was 70)
+            'min_entry_score': 60,               # Relaxed from 85 — still selective in volatile markets
             'position_size_multiplier': 0.7,     # Reduce size by 30%
             'trailing_stop_distance': 2.0,       # Much wider stops
             'take_profit_multiplier': 1.0,       # Normal profit targets
