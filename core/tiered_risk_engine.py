@@ -69,7 +69,7 @@ class TieredRiskEngine:
             max_position_size_pct=15.0,
             max_daily_loss_pct=10.0,
             max_drawdown_pct=20.0,
-            max_concurrent_positions=1,
+            max_concurrent_positions=3,
             volatility_threshold=80.0,
             min_trade_size_usd=10.0,
             max_trade_size_usd=25.0
@@ -79,7 +79,7 @@ class TieredRiskEngine:
             max_position_size_pct=10.0,
             max_daily_loss_pct=8.0,
             max_drawdown_pct=15.0,
-            max_concurrent_positions=1,
+            max_concurrent_positions=3,
             volatility_threshold=75.0,
             min_trade_size_usd=10.0,
             max_trade_size_usd=40.0
