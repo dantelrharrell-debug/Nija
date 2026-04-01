@@ -63,7 +63,7 @@ _W_OPTIMIZER = 0.25   # EntryOptimizer RSI-div / BB-zone bonus
 _W_GATE      = 0.20   # 5-Gate AI gate penalty deduction
 
 # Hard absolute floor — never execute below this regardless of ranking
-MIN_SCORE_ABSOLUTE = 22.0
+MIN_SCORE_ABSOLUTE = 35.0
 
 # Default number of top signals to select per cycle
 TOP_N_DEFAULT = 3

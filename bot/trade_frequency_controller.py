@@ -23,8 +23,9 @@ automatically soften every filter layer by 10–20 %:
 
 Configuration via environment variables (all optional):
 
-    MIN_TRADES_PER_HOUR=2.0       # default: 2.0
-    MIN_TRADES_PER_DAY=12.0       # default: 12.0
+    MIN_TRADES_PER_HOUR=0.5        # default: 0.5 (~12/day pace)
+    MIN_TRADES_PER_DAY=10.0       # default: 10.0 (lower bound of 10-15 target)
+    MAX_TRADES_PER_DAY=15.0       # default: 15.0 (upper bound — tighten above this)
     FREQ_LOOSEN_STEP=0.03         # per-cycle confidence nudge (subtracted)
     FREQ_TIGHTEN_STEP=0.02        # per-cycle confidence nudge (added)
     FREQ_MAX_DELTA=0.15           # max |confidence_delta| allowed
@@ -55,8 +56,9 @@ logger = logging.getLogger("nija.trade_frequency_controller")
 # Constants (can be overridden by env vars)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MIN_TRADES_PER_HOUR: float = 2.0
-_DEFAULT_MIN_TRADES_PER_DAY: float = 12.0
+_DEFAULT_MIN_TRADES_PER_HOUR: float = 0.5
+_DEFAULT_MIN_TRADES_PER_DAY: float = 10.0   # Lower bound of the 10-15 trades/day target band
+_DEFAULT_MAX_TRADES_PER_DAY: float = 15.0   # Upper bound — tighten confidence gate above this level
 _DEFAULT_LOOSEN_STEP: float = 0.03
 _DEFAULT_TIGHTEN_STEP: float = 0.02
 _DEFAULT_MAX_DELTA: float = 0.15
@@ -152,6 +154,7 @@ class TradeFrequencyController:
 
         self._min_per_hour = _env("MIN_TRADES_PER_HOUR", _DEFAULT_MIN_TRADES_PER_HOUR, min_trades_per_hour)
         self._min_per_day = _env("MIN_TRADES_PER_DAY", _DEFAULT_MIN_TRADES_PER_DAY, min_trades_per_day)
+        self._max_per_day = _env("MAX_TRADES_PER_DAY", _DEFAULT_MAX_TRADES_PER_DAY, None)
         self._loosen_step = _env("FREQ_LOOSEN_STEP", _DEFAULT_LOOSEN_STEP, loosen_step)
         self._tighten_step = _env("FREQ_TIGHTEN_STEP", _DEFAULT_TIGHTEN_STEP, tighten_step)
         self._max_delta = _env("FREQ_MAX_DELTA", _DEFAULT_MAX_DELTA, max_delta)
@@ -184,10 +187,11 @@ class TradeFrequencyController:
 
         logger.info(
             "📊 TradeFrequencyController started — "
-            "target: %.1f/hr, %.1f/day | step loosen=%.3f tighten=%.3f cap=±%.3f | "
+            "target: %.1f/hr, %.1f–%.1f/day | step loosen=%.3f tighten=%.3f cap=±%.3f | "
             "drought window=%.0fh relax ADX-%.1f vol×%.2f score-%.1f gate-%.0f%%",
             self._min_per_hour,
             self._min_per_day,
+            self._max_per_day,
             self._loosen_step,
             self._tighten_step,
             self._max_delta,
@@ -217,11 +221,8 @@ class TradeFrequencyController:
 
         below_hourly = hourly < self._min_per_hour
         below_daily = daily < self._min_per_day
-        # Well above target = both hourly and daily clearly exceeded
-        well_above = (
-            hourly >= self._min_per_hour * 1.5
-            and daily >= self._min_per_day * 1.5
-        )
+        # Tighten once daily trades reach the hard upper cap (default 15)
+        well_above = daily >= self._max_per_day
 
         if below_hourly or below_daily:
             # Loosen: nudge confidence gate downward
@@ -348,10 +349,7 @@ class TradeFrequencyController:
             daily = self._count_window(now, _DAY_WINDOW_SECS)
             below_hourly = hourly < self._min_per_hour
             below_daily = daily < self._min_per_day
-            well_above = (
-                hourly >= self._min_per_hour * 1.5
-                and daily >= self._min_per_day * 1.5
-            )
+            well_above = daily >= self._max_per_day
             if well_above:
                 mode = "WELL_ABOVE"
             elif below_hourly and below_daily:
