@@ -698,6 +698,110 @@ def _run_bot_startup_and_trading():
         except Exception as e:
             logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # CREDENTIAL VALIDATION — run before any broker connection attempt
+        # ═══════════════════════════════════════════════════════════════════════
+        # Validates that all configured broker credentials are present, non-empty,
+        # and structurally correct.  Logs actionable errors for any issues found
+        # so operators can fix them before the bot wastes time on failed connections.
+        # ═══════════════════════════════════════════════════════════════════════
+        logger.info("=" * 70)
+        logger.info("🔐 CREDENTIAL VALIDATION")
+        logger.info("=" * 70)
+        try:
+            import importlib.util as _iutil
+            _cv_spec = _iutil.spec_from_file_location(
+                "validate_broker_credentials",
+                os.path.join(os.path.dirname(__file__), "validate_broker_credentials.py"),
+            )
+            if _cv_spec and _cv_spec.loader:
+                _cv_mod = _iutil.module_from_spec(_cv_spec)
+                _cv_spec.loader.exec_module(_cv_mod)
+
+                _cv_results = [v() for v in [
+                    _cv_mod._validate_kraken_platform,
+                    _cv_mod._validate_coinbase,
+                    _cv_mod._validate_alpaca,
+                    _cv_mod._validate_binance,
+                    _cv_mod._validate_okx,
+                ]]
+
+                _cv_configured = sum(1 for r in _cv_results if r["configured"])
+                _cv_errors     = sum(1 for r in _cv_results if r["configured"] and not r["valid"])
+
+                for _r in _cv_results:
+                    if not _r["configured"]:
+                        logger.info("   ⚪ %-22s not configured (skipped)", _r["broker"])
+                        continue
+                    if _r["valid"]:
+                        logger.info("   ✅ %-22s credentials look valid", _r["broker"])
+                    else:
+                        logger.error("   ❌ %-22s CREDENTIAL ERRORS:", _r["broker"])
+                        for _issue in _r["issues"]:
+                            logger.error("      → %s", _issue)
+                    for _warn in _r.get("warnings", []):
+                        logger.warning("      ⚠️  %s", _warn)
+
+                if _cv_configured == 0:
+                    logger.error("=" * 70)
+                    logger.error("❌ CREDENTIAL VALIDATION: No broker credentials configured")
+                    logger.error("   The bot cannot trade without at least one broker.")
+                    logger.error("   See CREDENTIAL_SETUP.md for step-by-step instructions.")
+                    logger.error("=" * 70)
+                elif _cv_errors > 0:
+                    logger.warning("=" * 70)
+                    logger.warning(
+                        "⚠️  CREDENTIAL VALIDATION: %d broker(s) have credential errors",
+                        _cv_errors,
+                    )
+                    logger.warning("   These brokers will likely fail to connect.")
+                    logger.warning("   Common fixes:")
+                    logger.warning("     • Kraken 'EAPI:Invalid nonce'  → run reset_kraken_nonce.py")
+                    logger.warning("     • Coinbase 401 Unauthorized    → check PEM newlines in secret")
+                    logger.warning("     • Missing credentials          → see CREDENTIAL_SETUP.md")
+                    logger.warning("=" * 70)
+                else:
+                    logger.info("✅ CREDENTIAL VALIDATION: All configured brokers passed")
+            else:
+                logger.warning("⚠️  validate_broker_credentials.py not found — skipping validation")
+        except Exception as _cv_err:
+            logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # KRAKEN PRE-CONNECTION NONCE RESET
+        # ═══════════════════════════════════════════════════════════════════════
+        # Jump the global Kraken nonce forward before any connection attempt.
+        # This clears any "burned" nonce window left by a previous session and
+        # prevents "EAPI:Invalid nonce" errors on the very first API call.
+        # ═══════════════════════════════════════════════════════════════════════
+        _kraken_creds_present = bool(
+            (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
+            and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
+        )
+        if _kraken_creds_present:
+            logger.info("=" * 70)
+            logger.info("⚡ KRAKEN PRE-CONNECTION NONCE RESET")
+            logger.info("=" * 70)
+            try:
+                from bot.global_kraken_nonce import (
+                    get_global_nonce_manager,
+                    jump_global_kraken_nonce_forward,
+                )
+                _nonce_mgr = get_global_nonce_manager()
+
+                # Jump 60 seconds forward (in milliseconds) to skip any nonces
+                # Kraken may still have cached from the previous session.
+                _jump_ms  = 60 * 1000  # 60 seconds in milliseconds
+                _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
+                logger.info(
+                    "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
+                    _new_nonce,
+                )
+            except ImportError:
+                logger.warning("   ⚠️  global_kraken_nonce module not available — skipping pre-reset")
+            except Exception as _nonce_err:
+                logger.warning("   ⚠️  Nonce pre-reset failed (non-fatal): %s", _nonce_err)
+
         # Portfolio override visibility at startup
         portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
         if portfolio_id:
