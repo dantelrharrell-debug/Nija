@@ -3355,6 +3355,10 @@ class TradingStrategy:
             try:
                 _risk_tier = os.environ.get("RISK_PROFILE", "STARTER").upper()
                 _total_cap = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
+                # Use MICRO tier for micro-cap accounts (<BALANCE_THRESHOLD_MICRO) so that
+                # the TRE's min/max trade-size limits match the account's actual range.
+                if _total_cap < BALANCE_THRESHOLD_MICRO:
+                    _risk_tier = "MICRO"
                 self.tiered_risk_engine = TieredRiskEngine(
                     user_tier=_risk_tier,
                     total_capital=_total_cap,
@@ -6979,6 +6983,14 @@ class TradingStrategy:
                         pass
                 # Re-apply the tradable-size floor for any positions that slipped through
                 _tre_positions = filter_tradable_positions(_tre_positions, _tre_broker_name)
+                # Additionally exclude positions below the exchange minimum order size
+                # ($EXCHANGE_MIN_ORDER_SIZE).  These positions cannot be sold regardless
+                # of their USD value (e.g. 6 USDG-USD = $6 but Kraken requires $10+
+                # minimum sell order), so they must NOT count toward the position cap.
+                _tre_positions = [
+                    p for p in _tre_positions
+                    if float(p.get('size_usd') or 0) >= EXCHANGE_MIN_ORDER_SIZE
+                ]
                 _open_positions = len(_tre_positions)
                 _market_vol = 50.0  # neutral default volatility (0-100 scale)
                 # Use the actual account balance to compute a realistic representative
@@ -6988,10 +7000,14 @@ class TradingStrategy:
                 # all new entries.  user_mode disables entry scanning for the entire cycle,
                 # so this single bad gate was silently preventing every trade.
                 _trade_size = get_dynamic_min_position_size(account_balance)
+                # Pass balance-based max positions so the TRE cap stays in sync with the
+                # rest of the strategy (e.g. 1 position for micro-cap < $50 accounts).
+                _balance_max_pos = get_balance_based_max_positions(account_balance)
                 _tier_ok, _tier_level, _tier_msg = self.tiered_risk_engine.validate_trade(
                     trade_size=_trade_size,
                     current_positions=_open_positions,
                     market_volatility=_market_vol,
+                    max_positions_override=_balance_max_pos,
                 )
                 if not _tier_ok:
                     logger.warning("🛑 TIERED RISK ENGINE: entries blocked — %s", _tier_msg)
@@ -7583,6 +7599,25 @@ class TradingStrategy:
                         f"   🚫 Excluded {_ace_filtered} unsellable position(s) from cap count "
                         f"(below exchange minimum — skipped_unsellable)"
                     )
+            # ─────────────────────────────────────────────────────────────────
+
+            # ── EXCHANGE MINIMUM ORDER SIZE FILTER ───────────────────────────
+            # Positions below EXCHANGE_MIN_ORDER_SIZE cannot be sold regardless
+            # of their USD value (e.g. 6 USDG-USD = $6 but Kraken requires $10+
+            # minimum sell order).  These are effectively "stuck" dust and must
+            # not count toward the position cap or block new entries.
+            _before_min_order = len(current_positions)
+            current_positions = [
+                p for p in current_positions
+                if float(p.get('size_usd') or 0) >= EXCHANGE_MIN_ORDER_SIZE
+            ]
+            _min_order_filtered = _before_min_order - len(current_positions)
+            if _min_order_filtered > 0:
+                logger.info(
+                    f"   🔒 Exchange-min-order filter: excluded {_min_order_filtered} "
+                    f"sub-sellable position(s) (< ${EXCHANGE_MIN_ORDER_SIZE:.2f}) "
+                    f"from position cap"
+                )
             # ─────────────────────────────────────────────────────────────────
 
             # Keep self.current_positions and self.open_positions_count in sync.

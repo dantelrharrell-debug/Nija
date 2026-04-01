@@ -8291,7 +8291,26 @@ class KrakenBroker(BaseBroker):
                     except Exception:
                         pass
 
-                size_usd = balance_val * current_price if current_price > 0 else 0.0
+                # Skip positions we cannot price — cannot determine tradability without a price
+                if current_price <= 0:
+                    logger.debug(
+                        f"⏭️ Skipping {symbol}: price unavailable "
+                        f"(cannot determine tradability)"
+                    )
+                    continue
+
+                size_usd = balance_val * current_price
+
+                # Skip true dust positions (below the hard floor).
+                # Positions between DUST_THRESHOLD_USD and the exchange minimum order
+                # size are still returned here; the trading strategy applies a
+                # higher filter (EXCHANGE_MIN_ORDER_SIZE) when counting positions.
+                if size_usd < DUST_THRESHOLD_USD:
+                    logger.debug(
+                        f"⏭️ Skipping dust position {symbol}: "
+                        f"qty={balance_val}, value=${size_usd:.4f}"
+                    )
+                    continue
 
                 positions.append({
                     'symbol': symbol,
