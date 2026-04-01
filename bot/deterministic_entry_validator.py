@@ -166,7 +166,7 @@ class DeterministicEntryValidator:
     Each gate produces explicit rejection code and message on failure.
     """
     
-    def __init__(self, min_signal_quality: float = 60.0, min_signal_confidence: float = 0.60):
+    def __init__(self, min_signal_quality: float = 40.0, min_signal_confidence: float = 0.45):
         """
         Initialize the deterministic entry validator.
         
