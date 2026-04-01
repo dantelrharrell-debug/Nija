@@ -1105,6 +1105,21 @@ except ImportError:
         get_profit_optimizer = None  # type: ignore
         logger.warning("⚠️ Profit Optimizer not available — default position sizing in use")
 
+# ── Profit Mode Optimizer — dynamic TP scaling + win-rate adjustments + pair ranking ─
+try:
+    from profit_mode_optimizer import get_profit_mode_optimizer
+    PROFIT_MODE_OPTIMIZER_AVAILABLE = True
+    logger.info("✅ Profit Mode Optimizer loaded — dynamic TP, win-rate auto-adjust, pair ranking active")
+except ImportError:
+    try:
+        from bot.profit_mode_optimizer import get_profit_mode_optimizer
+        PROFIT_MODE_OPTIMIZER_AVAILABLE = True
+        logger.info("✅ Profit Mode Optimizer loaded — dynamic TP, win-rate auto-adjust, pair ranking active")
+    except ImportError:
+        PROFIT_MODE_OPTIMIZER_AVAILABLE = False
+        get_profit_mode_optimizer = None  # type: ignore
+        logger.warning("⚠️ Profit Mode Optimizer not available")
+
 # ── Portfolio Profit Engine — total portfolio P&L tracking ───────────────────
 try:
     from portfolio_profit_engine import get_portfolio_profit_engine
@@ -3324,6 +3339,20 @@ class TradingStrategy:
                 self.profit_optimizer = None
         else:
             self.profit_optimizer = None
+
+        # ── Profit Mode Optimizer — dynamic TP scaling + win-rate adjustments + pair ranking ─
+        if PROFIT_MODE_OPTIMIZER_AVAILABLE and get_profit_mode_optimizer is not None:
+            try:
+                self.profit_mode_optimizer = get_profit_mode_optimizer()
+                logger.info(
+                    "✅ Profit Mode Optimizer initialized — "
+                    "dynamic TP scaling + win-rate auto-adjustments + pair ranking"
+                )
+            except Exception as _pmo_err:
+                logger.warning("⚠️ Profit Mode Optimizer init failed: %s", _pmo_err)
+                self.profit_mode_optimizer = None
+        else:
+            self.profit_mode_optimizer = None
 
         if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
             try:
@@ -12384,6 +12413,91 @@ class TradingStrategy:
                                         logger.debug("Auto-Tuning AI Layer skipped for %s: %s", symbol, _at_err)
 
                                 # ═══════════════════════════════════════════════════════
+                                # PROFIT MODE OPTIMIZER — dynamic TP scaling
+                                # Adjusts take-profit distance based on market regime,
+                                # ATR%, ADX trend strength, and recent win/loss streak.
+                                # Layered on top of all other TP adjustments.
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    PROFIT_MODE_OPTIMIZER_AVAILABLE
+                                    and hasattr(self, 'profit_mode_optimizer')
+                                    and self.profit_mode_optimizer is not None
+                                    and analysis.get('action') in (
+                                        'enter_long', 'enter_short', 'buy', 'sell'
+                                    )
+                                ):
+                                    try:
+                                        _pmo = self.profit_mode_optimizer
+                                        _pmo_action = analysis.get('action', '')
+                                        _pmo_entry = float(
+                                            analysis.get('entry_price',
+                                                         analysis.get('price', 0.0)) or 0.0
+                                        )
+                                        _pmo_tp_list = analysis.get('take_profit', [])
+
+                                        if _pmo_entry > 0 and isinstance(_pmo_tp_list, list) and _pmo_tp_list:
+                                            # Gather inputs for TP scaler
+                                            _pmo_regime = str(
+                                                analysis.get('regime',
+                                                             analysis.get('market_regime', 'unknown'))
+                                                or 'unknown'
+                                            )
+                                            _pmo_atr_raw = float(analysis.get('atr', 0.0) or 0.0)
+                                            _pmo_close = float(df['close'].iloc[-1]) if (
+                                                df is not None and len(df) > 0
+                                            ) else _pmo_entry
+                                            _pmo_atr_pct = (
+                                                _pmo_atr_raw / _pmo_close
+                                                if _pmo_close > 0 and _pmo_atr_raw > 0 else 0.015
+                                            )
+                                            _pmo_adx = float(
+                                                analysis.get('adx',
+                                                             indicators.get('adx', 0.0)
+                                                             if indicators else 0.0) or 0.0
+                                            )
+                                            _pmo_streak = int(
+                                                getattr(self, '_win_streak', 0)
+                                            )
+
+                                            _pmo_tp_mult = _pmo.get_tp_multiplier(
+                                                regime=_pmo_regime,
+                                                atr_pct=_pmo_atr_pct,
+                                                adx=_pmo_adx,
+                                                win_streak=_pmo_streak,
+                                            )
+
+                                            if _pmo_tp_mult != 1.0:
+                                                _pmo_new_tp = []
+                                                for _pmo_tp_price in _pmo_tp_list:
+                                                    if _pmo_tp_price and _pmo_tp_price > 0:
+                                                        if _pmo_action in ('enter_long', 'buy'):
+                                                            _pmo_dist = _pmo_tp_price - _pmo_entry
+                                                            _pmo_new_tp.append(
+                                                                _pmo_entry + _pmo_dist * _pmo_tp_mult
+                                                            )
+                                                        else:
+                                                            _pmo_dist = _pmo_entry - _pmo_tp_price
+                                                            _pmo_new_tp.append(
+                                                                _pmo_entry - _pmo_dist * _pmo_tp_mult
+                                                            )
+                                                    else:
+                                                        _pmo_new_tp.append(_pmo_tp_price)
+                                                if _pmo_new_tp:
+                                                    analysis['take_profit'] = _pmo_new_tp
+                                                    logger.info(
+                                                        "   📈 %s: DynamicTP ×%.3f "
+                                                        "(regime=%s atr=%.3f%% adx=%.1f streak=%+d)",
+                                                        symbol, _pmo_tp_mult,
+                                                        _pmo_regime, _pmo_atr_pct * 100,
+                                                        _pmo_adx, _pmo_streak,
+                                                    )
+                                    except Exception as _pmo_tp_err:
+                                        logger.debug(
+                                            "ProfitModeOptimizer TP scaling skipped for %s: %s",
+                                            symbol, _pmo_tp_err,
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
                                 # PROFIT COMPOUNDING ENGINE — auto-compound position sizing
                                 # Grows position size proportionally as account profits
                                 # compound.  Multiplier = current_capital / base_capital
@@ -12955,6 +13069,35 @@ class TradingStrategy:
                                         logger.debug(
                                             "PairPerformanceOptimizer sizing skipped for %s: %s",
                                             symbol, _ppo_size_err,
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
+                                # PROFIT MODE OPTIMIZER — pair ranking size multiplier
+                                # Adjusts position size based on composite pair profitability
+                                # score (win_rate × avg_return × profit_factor / volatility).
+                                # Top 20 %: 1.35×  |  Mid 50 %: 1.15×  |
+                                # Base 30 %: 1.00×  |  Low 20 %: 0.75×
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    PROFIT_MODE_OPTIMIZER_AVAILABLE
+                                    and hasattr(self, 'profit_mode_optimizer')
+                                    and self.profit_mode_optimizer is not None
+                                ):
+                                    try:
+                                        _pmr_mult = self.profit_mode_optimizer.pair_ranker.get_pair_size_multiplier(symbol)
+                                        if _pmr_mult != 1.0:
+                                            _pmr_pre = position_size
+                                            position_size *= _pmr_mult
+                                            _pmr_label = "🏅 RANKED TOP" if _pmr_mult > 1.0 else "📉 RANKED LOW"
+                                            logger.info(
+                                                "   %s %s: PairRank ×%.2f $%.2f → $%.2f",
+                                                _pmr_label, symbol, _pmr_mult,
+                                                _pmr_pre, position_size,
+                                            )
+                                    except Exception as _pmr_size_err:
+                                        logger.debug(
+                                            "ProfitModeOptimizer pair ranking skipped for %s: %s",
+                                            symbol, _pmr_size_err,
                                         )
 
                                 # ═══════════════════════════════════════════════════════
@@ -14531,6 +14674,17 @@ class TradingStrategy:
                 )
             except Exception as _po_rec_err:
                 logger.debug("Profit Optimizer record_trade skipped for %s: %s", symbol, _po_rec_err)
+
+        # 🎯 PROFIT MODE OPTIMIZER — feed outcome to win-rate adjuster
+        if (PROFIT_MODE_OPTIMIZER_AVAILABLE
+                and hasattr(self, 'profit_mode_optimizer')
+                and self.profit_mode_optimizer is not None):
+            try:
+                self.profit_mode_optimizer.record_trade_outcome(
+                    symbol=symbol, is_win=is_win
+                )
+            except Exception as _pmo_rec_err:
+                logger.debug("ProfitModeOptimizer record_trade_outcome skipped for %s: %s", symbol, _pmo_rec_err)
 
         if not self.advanced_manager:
             return
