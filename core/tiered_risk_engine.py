@@ -64,6 +64,16 @@ class TieredRiskEngine:
 
     # Tier-specific risk limits
     TIER_RISK_LIMITS = {
+        "MICRO": RiskLimits(
+            tier_name="MICRO",
+            max_position_size_pct=75.0,
+            max_daily_loss_pct=10.0,
+            max_drawdown_pct=20.0,
+            max_concurrent_positions=1,
+            volatility_threshold=80.0,
+            min_trade_size_usd=1.0,
+            max_trade_size_usd=50.0
+        ),
         "STARTER": RiskLimits(
             tier_name="STARTER",
             max_position_size_pct=15.0,
@@ -165,7 +175,8 @@ class TieredRiskEngine:
         trade_size: float,
         current_positions: int,
         market_volatility: float,
-        asset_class: str = "crypto"
+        asset_class: str = "crypto",
+        max_positions_override: Optional[int] = None,
     ) -> Tuple[bool, RiskLevel, str]:
         """
         Validate a trade through all risk gates.
@@ -175,6 +186,8 @@ class TieredRiskEngine:
             current_positions: Number of currently open positions
             market_volatility: Current market volatility (0-100 scale)
             asset_class: Asset class being traded
+            max_positions_override: When provided, overrides the tier's
+                max_concurrent_positions limit (e.g. balance-based cap).
 
         Returns:
             Tuple of (approved, risk_level, message)
@@ -187,7 +200,9 @@ class TieredRiskEngine:
             return (False, RiskLevel.CRITICAL, f"Kill switch active: {self.kill_switch_reason}")
 
         # Gate 1: Capital Guard
-        capital_ok, capital_msg = self._check_capital_guard(trade_size, current_positions)
+        capital_ok, capital_msg = self._check_capital_guard(
+            trade_size, current_positions, max_positions_override
+        )
         if not capital_ok:
             return (False, RiskLevel.DANGER, capital_msg)
 
@@ -212,7 +227,8 @@ class TieredRiskEngine:
     def _check_capital_guard(
         self,
         trade_size: float,
-        current_positions: int
+        current_positions: int,
+        max_positions_override: Optional[int] = None,
     ) -> Tuple[bool, str]:
         """
         Gate 1: Capital Guard
@@ -235,9 +251,14 @@ class TieredRiskEngine:
         if position_pct > self.limits.max_position_size_pct:
             return (False, f"Position size {position_pct:.1f}% exceeds limit {self.limits.max_position_size_pct:.1f}%")
 
-        # Check concurrent positions
-        if current_positions >= self.limits.max_concurrent_positions:
-            return (False, f"At max positions ({current_positions}/{self.limits.max_concurrent_positions})")
+        # Check concurrent positions — use override when supplied (e.g. balance-based cap)
+        effective_max = (
+            max_positions_override
+            if max_positions_override is not None
+            else self.limits.max_concurrent_positions
+        )
+        if current_positions >= effective_max:
+            return (False, f"At max positions ({current_positions}/{effective_max})")
 
         return (True, "Capital guard passed")
 
