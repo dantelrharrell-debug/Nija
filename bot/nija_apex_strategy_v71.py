@@ -390,6 +390,21 @@ except ImportError:
         MOMENTUM_ENTRY_AVAILABLE = False
         logger.warning("⚠️ Momentum Entry Filter not available — institutional entry only")
 
+# True Profit Tracker — realized P&L after fees, account growth, daily PnL,
+# win rate, avg profit/trade.  Logs NET PROFIT and NEW CASH BALANCE after
+# every full close.
+try:
+    from true_profit_tracker import get_true_profit_tracker as _get_true_profit_tracker
+    TRUE_PROFIT_TRACKER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.true_profit_tracker import get_true_profit_tracker as _get_true_profit_tracker
+        TRUE_PROFIT_TRACKER_AVAILABLE = True
+    except ImportError:
+        _get_true_profit_tracker = None  # type: ignore
+        TRUE_PROFIT_TRACKER_AVAILABLE = False
+        logger.warning("⚠️ TrueProfitTracker not available — true P&L logging disabled")
+
 
 class NIJAApexStrategyV71:
     """
@@ -598,6 +613,16 @@ class NIJAApexStrategyV71:
         self._daily_profit_target_pct: float = self.config.get('daily_profit_target_pct', 0.01)
         # Last computed daily target in USD (updated in analyze_market).
         self._last_daily_target_usd: float = 0.0
+
+        # True Profit Tracker — realized net P&L, account growth, win rate.
+        if TRUE_PROFIT_TRACKER_AVAILABLE and _get_true_profit_tracker is not None:
+            try:
+                self._true_profit_tracker = _get_true_profit_tracker()
+            except Exception as _tpt_init_err:
+                logger.warning("TrueProfitTracker init failed: %s", _tpt_init_err)
+                self._true_profit_tracker = None
+        else:
+            self._true_profit_tracker = None
 
         # SMART REINVEST CYCLES: Re-deploy locked profits only when conditions are perfect.
         # Gates capital redeployment through 7 simultaneous condition checks:
@@ -2033,6 +2058,13 @@ class NIJAApexStrategyV71:
             # Used by _update_safe_profit_mode() after trade closes.
             self._last_daily_target_usd = account_balance * self._daily_profit_target_pct
 
+            # Set starting balance once (first non-zero account balance seen).
+            if self._true_profit_tracker is not None and account_balance > 0:
+                try:
+                    self._true_profit_tracker.set_starting_balance(account_balance)
+                except Exception as _tpt_sb_err:
+                    logger.debug("TrueProfitTracker.set_starting_balance error: %s", _tpt_sb_err)
+
             # Calculate indicators
             indicators = self.calculate_indicators(df)
 
@@ -3301,6 +3333,24 @@ class NIJAApexStrategyV71:
                     # Update safe profit mode with latest daily P&L and locked amounts.
                     # This may activate the mode and block future entries for today.
                     self._update_safe_profit_mode(pnl_usd)
+
+                    # True Profit Tracker — emit mandatory close-log lines:
+                    #   NET PROFIT (after fees): $X.XX
+                    #   NEW CASH BALANCE: $X.XX
+                    if self._true_profit_tracker is not None:
+                        try:
+                            entry_val = pos_size if (pos_size and pos_size > 0) else 0.0
+                            exit_val = entry_val + gross_pnl if (entry_price and entry_price > 0 and pos_size and pos_size > 0) else 0.0
+                            current_bal = getattr(self, '_last_account_balance', 0.0) or 0.0
+                            self._true_profit_tracker.record_trade(
+                                symbol=symbol,
+                                entry_value=entry_val,
+                                exit_value=exit_val,
+                                fees=fee_cost,
+                                current_balance=current_bal,
+                            )
+                        except Exception as _tpt_rec_err:
+                            logger.debug("TrueProfitTracker.record_trade error: %s", _tpt_rec_err)
                 return success
 
             elif action == 'partial_exit':
