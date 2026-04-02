@@ -3340,8 +3340,9 @@ class NIJAApexStrategyV71:
                     if self._true_profit_tracker is not None:
                         try:
                             entry_val = pos_size if (pos_size and pos_size > 0) else 0.0
-                            exit_val = entry_val + gross_pnl if (entry_price and entry_price > 0 and pos_size and pos_size > 0) else 0.0
-                            current_bal = getattr(self, '_last_account_balance', 0.0) or 0.0
+                            # exit_value = entry_value + gross_pnl when P&L is computed
+                            exit_val = (entry_val + gross_pnl) if (entry_val > 0 and entry_price and entry_price > 0) else 0.0
+                            current_bal = float(getattr(self, '_last_account_balance', 0.0) or 0)
                             self._true_profit_tracker.record_trade(
                                 symbol=symbol,
                                 entry_value=entry_val,

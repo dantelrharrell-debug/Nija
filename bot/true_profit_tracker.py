@@ -145,7 +145,7 @@ class TrueProfitTracker:
             trade_num = self._total_trades
             win_rate = (self._wins / self._total_trades * 100) if self._total_trades else 0.0
             avg_profit = self._total_realized_profit / self._total_trades if self._total_trades else 0.0
-            account_growth = (current_balance - self._starting_balance) if (current_balance > 0 and self._starting_balance > 0) else None
+            account_growth = (current_balance - self._starting_balance) if (current_balance > 0 and self._starting_balance > 0) else 0.0
 
             self._save_state()
 
@@ -159,7 +159,7 @@ class TrueProfitTracker:
 
         if current_balance > 0:
             growth_str = ""
-            if account_growth is not None:
+            if self._starting_balance > 0:
                 g_sign = "+" if account_growth >= 0 else ""
                 growth_str = f"  |  account growth: {g_sign}${account_growth:.2f}"
             logger.info(
