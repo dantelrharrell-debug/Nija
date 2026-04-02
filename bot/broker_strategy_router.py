@@ -81,8 +81,9 @@ BROKER_PROFILES: Dict[str, Dict[str, Any]] = {
         # Low fees enable fast scalp trades
         "style": "scalp",
         # Minimum expected gross price move to justify entry (must clear fees + buffer)
-        # 0.8% = 0.62% round-trip + 0.18% net-profit buffer
-        "min_move": 0.008,
+        # 1.0% = 0.62% round-trip + 0.38% net-profit floor
+        # (~$0.38 net on a $100 position, above the $0.30 minimum growth threshold)
+        "min_move": 0.010,
         # Kraken offers good liquidity and fast execution — medium scan cadence
         "speed": "medium",
         # Slightly easier confidence gate — low fees make borderline trades viable
@@ -105,9 +106,8 @@ BROKER_PROFILES: Dict[str, Dict[str, Any]] = {
         "fee": 0.0028,
         # Very low fees make tight scalps highly profitable
         "style": "scalp",
-        # Minimum expected gross price move: 0.5% = 0.28% fees + 0.22% net-profit floor
-        "min_move": 0.005,
-        # Binance has best-in-class liquidity — aggressive fast scanning
+        # Minimum expected gross price move: 1.0% = 0.28% fees + 0.72% net-profit floor
+        "min_move": 0.010,        # Binance has best-in-class liquidity — aggressive fast scanning
         "speed": "fast",
         # Easiest confidence gate — very low fees make marginal trades net-positive
         "confidence_boost": 0.05,
