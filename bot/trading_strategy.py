@@ -1178,6 +1178,21 @@ except ImportError:
         PERF_LOG_CYCLE_INTERVAL = 20
         logger.warning("⚠️ Performance Tracker not available")
 
+# ── True Profit Tracker — realized profit after fees, daily PnL, win rate ────
+try:
+    from true_profit_tracker import get_true_profit_tracker as _get_true_profit_tracker
+    TRUE_PROFIT_TRACKER_AVAILABLE = True
+    logger.info("✅ True Profit Tracker loaded — net profit (after fees) tracking active")
+except ImportError:
+    try:
+        from bot.true_profit_tracker import get_true_profit_tracker as _get_true_profit_tracker
+        TRUE_PROFIT_TRACKER_AVAILABLE = True
+        logger.info("✅ True Profit Tracker loaded — net profit (after fees) tracking active")
+    except ImportError:
+        TRUE_PROFIT_TRACKER_AVAILABLE = False
+        _get_true_profit_tracker = None  # type: ignore
+        logger.warning("⚠️ True Profit Tracker not available")
+
 # ── HF Flip Mode — MUST be imported and created FIRST so env overrides are set
 # ── before any other subsystem singleton is created.
 try:
@@ -3600,6 +3615,7 @@ class TradingStrategy:
         self.rotation_manager = None
         self.pro_mode_enabled = False
         self.ai_capital_rotator = None  # AI Capital Rotation Engine (4-step + meta allocation)
+        self.true_profit_tracker = None  # True Profit Tracker — net profit after fees
 
         # Initialize credential health monitoring to detect credential loss
         # This helps diagnose recurring disconnection issues
@@ -4461,6 +4477,17 @@ class TradingStrategy:
                         logger.debug("PerformanceTracker set_starting_balance skipped: %s", _pt_init_err)
                 elif PERFORMANCE_TRACKER_AVAILABLE and platform_balance <= 0:
                     logger.debug("PerformanceTracker: skipping set_starting_balance — platform_balance=%.2f", platform_balance)
+
+                # 💰 TRUE PROFIT TRACKER — set starting balance for account growth tracking
+                if TRUE_PROFIT_TRACKER_AVAILABLE and _get_true_profit_tracker is not None and platform_balance > 0:
+                    try:
+                        _get_true_profit_tracker().set_starting_balance(platform_balance)
+                        self.true_profit_tracker = _get_true_profit_tracker()
+                    except Exception as _tpt_init_err:
+                        logger.debug("TrueProfitTracker set_starting_balance skipped: %s", _tpt_init_err)
+                        self.true_profit_tracker = None
+                else:
+                    self.true_profit_tracker = None
 
                 # Initialize market adaptation engine
                 try:
@@ -9583,6 +9610,68 @@ class TradingStrategy:
                                 # If this was a stop-loss exit, log it clearly
                                 if 'stop loss' in reason.lower():
                                     logger.info(f"  ✅ SOLD {symbol} @ market due to stop loss")
+
+                                # ── TRUE PROFIT TRACKER — record net profit after fees ────────────
+                                # Capture position data BEFORE track_exit removes it from the tracker.
+                                if (
+                                    TRUE_PROFIT_TRACKER_AVAILABLE
+                                    and hasattr(self, 'true_profit_tracker')
+                                    and self.true_profit_tracker is not None
+                                ):
+                                    try:
+                                        _tpt_gross_pnl = 0.0
+                                        _tpt_entry_usd = 0.0
+                                        _tpt_pos = (
+                                            exit_broker.position_tracker.get_position(symbol)
+                                            if hasattr(exit_broker, 'position_tracker') and exit_broker.position_tracker
+                                            else None
+                                        )
+                                        if _tpt_pos:
+                                            _tpt_entry_price = float(_tpt_pos.get('entry_price') or 0)
+                                            _tpt_entry_usd = _tpt_entry_price * quantity
+                                            try:
+                                                _tpt_exit_price = exit_broker.get_current_price(symbol)
+                                                if _tpt_exit_price and _tpt_exit_price > 0 and _tpt_entry_price > 0:
+                                                    _tpt_gross_pnl = (_tpt_exit_price - _tpt_entry_price) * quantity
+                                            except Exception:
+                                                pass
+                                        # Determine win/loss from gross PnL; fall back to exit reason
+                                        if _tpt_entry_usd > 0:
+                                            _tpt_is_win = _tpt_gross_pnl > 0
+                                        else:
+                                            _profit_kws = ('profit target', 'profit realization', 'profit hit', 'tp')
+                                            _loss_kws = ('stop loss', 'stop-loss', 'loss', 'lockdown', 'drawdown',
+                                                         'emergency', 'protective', 'zombie', 'catastrophic')
+                                            _tpt_is_win = (
+                                                any(kw in reason.lower() for kw in _profit_kws)
+                                                and not any(kw in reason.lower() for kw in _loss_kws)
+                                            )
+                                        self.true_profit_tracker.record_trade(
+                                            symbol=symbol,
+                                            gross_pnl_usd=_tpt_gross_pnl,
+                                            is_win=_tpt_is_win,
+                                            entry_value_usd=_tpt_entry_usd,
+                                            broker=exit_broker_label,
+                                        )
+                                        # Wire record_trade_with_advanced_manager so all subsystems
+                                        # receive the PnL update (method was previously never called).
+                                        try:
+                                            self.record_trade_with_advanced_manager(
+                                                symbol=symbol,
+                                                profit_usd=_tpt_gross_pnl,
+                                                is_win=_tpt_is_win,
+                                            )
+                                        except Exception as _rtam_err:
+                                            logger.debug(
+                                                "record_trade_with_advanced_manager skipped for %s: %s",
+                                                symbol, _rtam_err,
+                                            )
+                                    except Exception as _tpt_err:
+                                        logger.debug(
+                                            "TrueProfitTracker record skipped for %s: %s",
+                                            symbol, _tpt_err,
+                                        )
+
                                 # Track the exit in position tracker (use the correct broker)
                                 if hasattr(exit_broker, 'position_tracker') and exit_broker.position_tracker:
                                     exit_broker.position_tracker.track_exit(symbol, quantity)
