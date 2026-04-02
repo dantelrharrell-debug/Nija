@@ -55,6 +55,12 @@ _BROKER_ROUNDTRIP_FEE: Dict[str, float] = {
     "default":  0.010,  # conservative fallback
 }
 
+# Multiplier to estimate entry position size from gross PnL when entry_value_usd
+# is unavailable.  A 1 % move on a position produces ~1 % of entry value as profit,
+# so gross_pnl × 100 would be the full position — we use 10 as a conservative
+# lower-bound (assumes at least 10 % move) to avoid underestimating fees.
+_PNL_TO_SIZE: float = 10.0
+
 
 # ---------------------------------------------------------------------------
 # State dataclass
@@ -172,16 +178,18 @@ class TrueProfitTracker:
         # ── Estimate fees when not provided ──────────────────────────────────
         if fee_usd is None:
             broker_key = broker.lower()
-            fee_rate = _BROKER_ROUNDTRIP_FEE.get(broker_key)
+            # Exact key lookup first; then partial-match (e.g. "coinbase_advanced" → "coinbase")
+            fee_rate = _BROKER_ROUNDTRIP_FEE.get(broker_key, None)
             if fee_rate is None:
+                fee_rate = _BROKER_ROUNDTRIP_FEE["default"]
                 for k, v in _BROKER_ROUNDTRIP_FEE.items():
                     if k in broker_key:
                         fee_rate = v
                         break
-                else:
-                    fee_rate = _BROKER_ROUNDTRIP_FEE["default"]
-            # Use entry size when available; fall back to a conservative 10× profit estimate
-            base = entry_value_usd if entry_value_usd > 0 else max(abs(gross_pnl_usd) * 10, 1.0)
+            # When entry_value_usd is unknown, estimate position size as the absolute profit
+            # multiplied by _PNL_TO_SIZE: a 1% move on a typical position produces ~1/10th of
+            # the entry value as profit, so 10× is a conservative lower-bound on position size.
+            base = entry_value_usd if entry_value_usd > 0 else max(abs(gross_pnl_usd) * _PNL_TO_SIZE, 1.0)
             fee_usd = base * fee_rate
 
         net_profit = gross_pnl_usd - fee_usd

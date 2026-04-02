@@ -9639,12 +9639,12 @@ class TradingStrategy:
                                         if _tpt_entry_usd > 0:
                                             _tpt_is_win = _tpt_gross_pnl > 0
                                         else:
-                                            _profit_kws = ('profit target', 'profit realization', 'profit hit', 'tp')
-                                            _loss_kws = ('stop loss', 'stop-loss', 'loss', 'lockdown', 'drawdown',
-                                                         'emergency', 'protective', 'zombie', 'catastrophic')
+                                            # Same keyword sets used by the micro-cap win-streak logic below
                                             _tpt_is_win = (
-                                                any(kw in reason.lower() for kw in _profit_kws)
-                                                and not any(kw in reason.lower() for kw in _loss_kws)
+                                                any(kw in reason.lower() for kw in ('profit target', 'profit realization', 'profit hit'))
+                                                and not any(kw in reason.lower() for kw in ('stop loss', 'stop-loss', 'loss', 'lockdown',
+                                                                                             'drawdown', 'emergency', 'protective',
+                                                                                             'zombie', 'catastrophic'))
                                             )
                                         self.true_profit_tracker.record_trade(
                                             symbol=symbol,
@@ -9654,7 +9654,10 @@ class TradingStrategy:
                                             broker=exit_broker_label,
                                         )
                                         # Wire record_trade_with_advanced_manager so all subsystems
-                                        # receive the PnL update (method was previously never called).
+                                        # receive the PnL update (previously never invoked).
+                                        # Subsystems updated include: PnL Analytics Layer, Win Rate
+                                        # Frequency Tuner, Profit Optimizer, Kraken Params Optimizer,
+                                        # Global Drawdown CB, Capital Scaling Engine, and ~20 others.
                                         try:
                                             self.record_trade_with_advanced_manager(
                                                 symbol=symbol,
