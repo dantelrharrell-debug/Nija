@@ -14327,6 +14327,13 @@ class TradingStrategy:
         except Exception as e:
             # Never raise to keep bot loop alive
             logger.error(f"Error in trading cycle: {e}", exc_info=True)
+            # Ensure the cycle counter always advances even when an exception aborts the
+            # cycle before reaching the increment at the end of the try block.  Without
+            # this, cycle_count stays at 0 forever on persistent errors (e.g. Kraken nonce
+            # failures), causing the startup state-reset and the broker reconnect check
+            # (which fires every _cycle % 5 == 0) to run on every single cycle instead of
+            # just the first / every fifth cycle respectively.
+            self.cycle_count += 1
 
     def _get_primary_broker_id(self) -> str:
         """Return a stable string identifier for the currently active broker."""
