@@ -246,6 +246,9 @@ class GlobalKrakenNonceManager:
             self._nonces_since_persist = 0
             self._consecutive_errors = 0
 
+            # Connection-gate: wall-clock timestamp of last hard/nuclear reset (None = never)
+            self._reset_triggered_at: float | None = None
+
             # Statistics tracking
             self._total_nonces_issued = 0
             self._creation_time = time.time()
@@ -267,33 +270,9 @@ class GlobalKrakenNonceManager:
 
         Thread-safe.  Each call returns a value strictly greater than the last.
 
-        Hard cap: if _last_nonce is more than _HARD_CAP_LEAD_NS (60 s) ahead
-        of the wall clock the nonce is reset to now + _STARTUP_JUMP_NS before
-        issuing the next value.  This is a non-negotiable production safety
-        rail — a nonce that far ahead causes persistent EAPI:Invalid nonce
-        errors until the wall clock catches up.
-        """
-        with self._nonce_lock:
-            current_time_ns = time.time_ns()
-
-            # ── HARD CAP: reset if nonce has drifted more than 60 s ahead ──
-            lead_ns = self._last_nonce - current_time_ns
-            if lead_ns > _HARD_CAP_LEAD_NS:
-                _logger.error(
-                    "global_kraken_nonce: nonce drift too large (%.1fs ahead) — "
-                    "resetting to now + 10s to prevent EAPI:Invalid nonce lockout",
-                    lead_ns / _NS_PER_SECOND,
-                )
-                self._last_nonce = current_time_ns + _STARTUP_JUMP_NS
-                self._consecutive_errors = 0
-                self._nonces_since_persist = 0
-                _persist_nonce(self._last_nonce)
-                current_time_ns = time.time_ns()  # refresh so new_nonce calculation uses current time after reset
-
-            new_nonce = max(current_time_ns, self._last_nonce + 1)
         Hard-reset policy (checked BEFORE any increment):
           • lead > 300 s (nuclear): reset to now + 10 s, persist, sleep 5 s
-          • lead >  60 s (hard cap): reset to now + 10 s, persist immediately
+          • lead >  60 s (hard cap): reset to now + 10 s, persist, return immediately
         """
         with self._nonce_lock:
             now = time.time_ns()
@@ -309,6 +288,7 @@ class GlobalKrakenNonceManager:
                 self._last_nonce = now + _STARTUP_JUMP_NS
                 self._consecutive_errors = 0
                 self._nonces_since_persist = 0
+                self._reset_triggered_at = time.time()
                 _persist_nonce(self._last_nonce)
                 # Release lock while sleeping so other threads aren't starved.
                 self._nonce_lock.release()
@@ -330,7 +310,9 @@ class GlobalKrakenNonceManager:
                 self._last_nonce = now + _STARTUP_JUMP_NS
                 self._consecutive_errors = 0
                 self._nonces_since_persist = 0
+                self._reset_triggered_at = time.time()
                 _persist_nonce(self._last_nonce)
+                return self._last_nonce
 
             # ── Normal monotonic increment ────────────────────────────────
             new_nonce = max(now, self._last_nonce + 1)
@@ -486,6 +468,25 @@ class GlobalKrakenNonceManager:
                 )
                 self._consecutive_errors = 0
 
+    def was_reset_recently(self, window_s: float = 300.0) -> bool:
+        """
+        Return True if a hard or nuclear nonce reset was triggered within the
+        last *window_s* seconds (default 5 minutes).
+
+        Use this as a **connection gate**: when True, delay entering new trades
+        for 1–2 scan cycles to let the nonce settle before issuing API calls.
+
+        Args:
+            window_s: Look-back window in seconds.
+
+        Returns:
+            bool: True if a reset occurred within the window, False otherwise.
+        """
+        with self._nonce_lock:
+            if self._reset_triggered_at is None:
+                return False
+            return (time.time() - self._reset_triggered_at) < window_s
+
     # ── Diagnostics ────────────────────────────────────────────────────────
 
     def get_stats(self) -> dict:
@@ -592,6 +593,17 @@ def reset_global_kraken_nonce() -> int:
     return get_global_nonce_manager().reset_to_safe_value()
 
 
+def nonce_reset_triggered_recently(window_s: float = 300.0) -> bool:
+    """
+    Return True if a hard or nuclear nonce reset occurred within the last
+    *window_s* seconds (default 5 minutes).
+
+    Use as a connection gate — when True, skip or delay new trade entries for
+    1–2 scan cycles to let the nonce stabilise before issuing Kraken API calls.
+    """
+    return get_global_nonce_manager().was_reset_recently(window_s)
+
+
 __all__ = [
     "GlobalKrakenNonceManager",
     "get_global_nonce_manager",
@@ -603,5 +615,6 @@ __all__ = [
     "record_kraken_nonce_error",
     "record_kraken_nonce_success",
     "reset_global_kraken_nonce",
+    "nonce_reset_triggered_recently",
     "cleanup_legacy_nonce_files",
 ]
