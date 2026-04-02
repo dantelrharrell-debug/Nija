@@ -18,7 +18,7 @@ Design guarantees
 ✅ Strictly monotonic — never decreases, never repeats
 ✅ Nanosecond precision (19-digit nonces)
 ✅ Auto-recovery: escalating jump sizes on consecutive nonce errors
-   (30 s → 60 s → 120 s, resets on success)
+   (10 s → 20 s → 30 s, resets on success; capped when already far ahead)
 ✅ Legacy per-account nonce files cleaned up on first startup
 
 Usage
@@ -35,6 +35,7 @@ Auto-recovery
     manager = get_global_nonce_manager()
     manager.record_nonce_error()    # call when Kraken returns "invalid nonce"
     manager.record_nonce_success()  # call after a successful API call
+    manager.reset_to_safe_value()   # manual hard-reset when auto-heal is stuck
 """
 
 import glob as _glob
@@ -65,12 +66,20 @@ _MAX_LEAD_NS = 120 * 1_000_000_000  # 2 minutes
 # Nanoseconds per second — used for human-readable log messages.
 _NS_PER_SECOND = 1_000_000_000
 
-# Escalating recovery jumps (nanoseconds): 30 s, 60 s, 120 s
+# Escalating recovery jumps (nanoseconds): 10 s, 20 s, 30 s.
+# Smaller initial jumps avoid overshooting when the nonce is only slightly
+# desynchronized; the jump is also capped dynamically if _last_nonce is
+# already far ahead of the wall clock (see record_nonce_error).
 _RECOVERY_JUMPS_NS = [
+    10 * 1_000_000_000,
+    20 * 1_000_000_000,
     30 * 1_000_000_000,
-    60 * 1_000_000_000,
-    120 * 1_000_000_000,
 ]
+
+# If _last_nonce is already this far ahead of now, cap the recovery jump to
+# _RECOVERY_JUMP_CAP_NS to avoid runaway accumulation.
+_RECOVERY_AHEAD_THRESHOLD_NS = 30 * 1_000_000_000   # 30 seconds
+_RECOVERY_JUMP_CAP_NS        = 10 * 1_000_000_000   # 10 seconds
 
 # Nonce persistence file — survives process restarts so accumulated jumps are not lost
 _NONCE_FILE = os.path.join(
@@ -81,11 +90,6 @@ _PERSIST_EVERY_N = 10  # Write to disk after this many get_nonce() calls (reduce
 # Startup jump applied every time the process starts.  This guarantees we land
 # strictly ahead of any nonce Kraken may still hold from the previous session.
 _STARTUP_JUMP_NS = 10_000_000_000  # +10 seconds in nanoseconds
-
-# Auto-heal: automatically jump the nonce forward after this many consecutive errors.
-_AUTO_HEAL_THRESHOLD = 3
-# How far to jump on an auto-heal event.
-_AUTO_HEAL_JUMP_NS = 60_000_000_000  # +60 seconds in nanoseconds
 
 # ── Disk helpers ───────────────────────────────────────────────────────────────
 
@@ -208,20 +212,11 @@ class GlobalKrakenNonceManager:
                 )
                 persisted = 0  # force the startup-lead path below
 
-            # Always land at least _STARTUP_LEAD_NS ahead of now so a fast
-            # restart cannot replay a nonce Kraken already accepted.
-            self._last_nonce = max(current_ns + _STARTUP_LEAD_NS, persisted)
             # Start strictly ahead of both the wall clock and any previously
             # persisted nonce.  The +10 s jump ensures we are beyond any nonce
             # Kraken still holds from the last session even if the persisted
             # file is slightly stale (up to _PERSIST_EVERY_N−1 calls behind).
             self._last_nonce = max(current_ns, persisted) + _STARTUP_JUMP_NS
-
-            # Persist immediately so a crash right after startup still leaves
-            # a safe anchor for the *next* restart.
-            _persist_nonce(self._last_nonce)
-
-            self._nonce_lock = threading.RLock()
 
             # Persist immediately — this is the single most important write.
             _persist_nonce(self._last_nonce)
@@ -232,15 +227,11 @@ class GlobalKrakenNonceManager:
 
             # Counters
             self._nonces_since_persist = 0
-            # Consecutive nonce-error counter for auto-heal logic
             self._consecutive_errors = 0
 
             # Statistics tracking
             self._total_nonces_issued = 0
             self._creation_time = time.time()
-
-            # Auto-recovery state
-            self._consecutive_errors = 0
 
             self._initialized = True
 
@@ -295,46 +286,57 @@ class GlobalKrakenNonceManager:
 
     def record_nonce_error(self) -> int:
         """
-        Record a Kraken nonce error and auto-heal after repeated failures.
+        Record a Kraken "invalid nonce" error and perform an escalating jump.
 
-        Call this whenever Kraken returns "EAPI:Invalid nonce".  After
-        _AUTO_HEAL_THRESHOLD consecutive errors the nonce is automatically
-        jumped forward by _AUTO_HEAL_JUMP_NS and persisted so the next API
-        call lands well outside Kraken's nonce-acceptance window.
+        Jump schedule (resets after record_nonce_success()):
+          1st error  → +10 s
+          2nd error  → +20 s
+          3rd+ error → +30 s
+
+        Dynamic cap: if _last_nonce is already more than 30 s ahead of the
+        wall clock the jump is capped to 10 s to avoid runaway accumulation.
 
         Returns:
-            int: Current consecutive-error count (resets to 0 after auto-heal)
+            int: Current consecutive-error count after recording this error.
         """
         with self._nonce_lock:
             self._consecutive_errors += 1
             count = self._consecutive_errors
-            if count >= _AUTO_HEAL_THRESHOLD:
-                current_time_ns = time.time_ns()
-                self._last_nonce = max(
-                    current_time_ns + _AUTO_HEAL_JUMP_NS,
-                    self._last_nonce + _AUTO_HEAL_JUMP_NS,
-                )
-                self._nonces_since_persist = 0
-                _persist_nonce(self._last_nonce)
-                self._consecutive_errors = 0
-                _logger.warning(
-                    f"global_kraken_nonce: auto-heal triggered after {count} consecutive "
-                    f"nonce errors; jumped forward +{_AUTO_HEAL_JUMP_NS // 1_000_000_000}s "
-                    f"to {self._last_nonce}"
-                )
-                return 0
+            idx = min(count - 1, len(_RECOVERY_JUMPS_NS) - 1)
+            jump_ns = _RECOVERY_JUMPS_NS[idx]
+
+            current_ns = time.time_ns()
+            current_lead_ns = self._last_nonce - current_ns
+
+            # Cap the jump when we're already well ahead to avoid overshoot.
+            if current_lead_ns > _RECOVERY_AHEAD_THRESHOLD_NS:
+                capped_ns = min(jump_ns, _RECOVERY_JUMP_CAP_NS)
+                if capped_ns < jump_ns:
+                    _logger.debug(
+                        "global_kraken_nonce: capping recovery jump from +%.0fs to +%.0fs "
+                        "(already %.1fs ahead of wall clock)",
+                        jump_ns / _NS_PER_SECOND,
+                        capped_ns / _NS_PER_SECOND,
+                        current_lead_ns / _NS_PER_SECOND,
+                    )
+                jump_ns = capped_ns
+
+            self._last_nonce = max(
+                current_ns + jump_ns,
+                self._last_nonce + jump_ns,
+            )
+            self._nonces_since_persist = 0
+            _persist_nonce(self._last_nonce)
+
+            _logger.warning(
+                "global_kraken_nonce: nonce error #%d — jumped forward +%.0fs "
+                "(lead was %.1fs, now %.1fs ahead of wall clock)",
+                count,
+                jump_ns / _NS_PER_SECOND,
+                current_lead_ns / _NS_PER_SECOND,
+                (self._last_nonce - current_ns) / _NS_PER_SECOND,
+            )
             return count
-
-    def record_success(self) -> None:
-        """
-        Record a successful Kraken API call, resetting the error counter.
-
-        Call this after every successful private API response so that the
-        auto-heal threshold resets and transient single errors do not
-        accumulate toward a spurious auto-heal.
-        """
-        with self._nonce_lock:
-            self._consecutive_errors = 0
 
     def reset_to_safe_value(self) -> int:
         """
@@ -371,31 +373,6 @@ class GlobalKrakenNonceManager:
         with self._nonce_lock:
             return self._last_nonce
 
-    def get_stats(self) -> dict:
-        """
-        Record a Kraken "invalid nonce" error and perform an escalating jump.
-
-        Jump schedule (resets after record_nonce_success()):
-          1st error  → +30 s
-          2nd error  → +60 s
-          3rd+ error → +120 s
-
-        Returns the nanoseconds jumped.
-        """
-        with self._nonce_lock:
-            self._consecutive_errors += 1
-            idx = min(self._consecutive_errors - 1, len(_RECOVERY_JUMPS_NS) - 1)
-            jump_ns = _RECOVERY_JUMPS_NS[idx]
-
-        jump_s = jump_ns / _NS_PER_SECOND
-        _logger.info(
-            "global_kraken_nonce: nonce error #%d — jumping forward %.0f s",
-            self._consecutive_errors,
-            jump_s,
-        )
-        self.jump_forward(jump_ns)
-        return jump_ns
-
     def record_nonce_success(self) -> None:
         """
         Record a successful Kraken API call and reset the error counter.
@@ -427,11 +404,6 @@ class GlobalKrakenNonceManager:
                 "consecutive_errors": self._consecutive_errors,
                 "uptime_seconds": round(uptime, 1),
                 "nonces_per_second": round(rate, 3),
-                'total_nonces_issued': self._total_nonces_issued,
-                'last_nonce': self._last_nonce,
-                'uptime_seconds': uptime,
-                'nonces_per_second': rate,
-                'consecutive_errors': self._consecutive_errors,
             }
 
 
@@ -533,13 +505,6 @@ __all__ = [
     "jump_global_kraken_nonce_forward",
     "record_kraken_nonce_error",
     "record_kraken_nonce_success",
+    "reset_global_kraken_nonce",
     "cleanup_legacy_nonce_files",
-    'GlobalKrakenNonceManager',
-    'get_global_nonce_manager',
-    'get_global_nonce_stats',
-    'get_kraken_nonce',
-    'get_global_kraken_nonce',
-    'get_kraken_api_lock',
-    'jump_global_kraken_nonce_forward',
-    'reset_global_kraken_nonce',
 ]
