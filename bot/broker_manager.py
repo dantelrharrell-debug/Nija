@@ -76,6 +76,7 @@ try:
         record_kraken_nonce_success,
         get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward,
         get_global_nonce_manager,
+        reset_global_kraken_nonce,
     )
 except ImportError:
     try:
@@ -87,6 +88,7 @@ except ImportError:
             record_kraken_nonce_success,
             get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward,
             get_global_nonce_manager,
+            reset_global_kraken_nonce,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -96,6 +98,7 @@ except ImportError:
         record_kraken_nonce_error = None
         record_kraken_nonce_success = None
         get_global_nonce_manager = None
+        reset_global_kraken_nonce = None
 
 # Import Balance Models (FIX 1: Three-part balance model)
 try:
@@ -6507,6 +6510,17 @@ class KrakenBroker(BaseBroker):
                 return False
 
             self.kraken_api = KrakenAPI(self.api)
+
+            # STARTUP NONCE RESET: Hard-reset the global nonce to current time + 10 s
+            # before the first API call.  This clears any stale value left in the
+            # persistence file from a previous run and ensures _last_nonce and disk
+            # are in sync before we attempt the connection test.
+            if self._use_global_nonce and get_global_nonce_manager is not None:
+                try:
+                    get_global_nonce_manager().reset_to_safe_value()
+                    logger.info(f"   🔄 Nonce hard-reset (reset_to_safe_value) complete for {cred_label}")
+                except Exception as _nonce_reset_err:
+                    logger.warning(f"   ⚠️  Nonce reset failed (non-fatal): {_nonce_reset_err}")
 
             # CRITICAL FIX (Jan 17, 2026): Add startup delay before first Kraken API call
             # This ensures:
