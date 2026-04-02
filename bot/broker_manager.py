@@ -6515,9 +6515,9 @@ class KrakenBroker(BaseBroker):
             # before the first API call.  This clears any stale value left in the
             # persistence file from a previous run and ensures _last_nonce and disk
             # are in sync before we attempt the connection test.
-            if self._use_global_nonce and get_global_nonce_manager is not None:
+            if self._use_global_nonce and reset_global_kraken_nonce is not None:
                 try:
-                    get_global_nonce_manager().reset_to_safe_value()
+                    reset_global_kraken_nonce()
                     logger.info(f"   🔄 Nonce hard-reset (reset_to_safe_value) complete for {cred_label}")
                 except Exception as _nonce_reset_err:
                     logger.warning(f"   ⚠️  Nonce reset failed (non-fatal): {_nonce_reset_err}")
