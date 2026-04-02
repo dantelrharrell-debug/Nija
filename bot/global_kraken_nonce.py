@@ -13,6 +13,9 @@ Design guarantees
 ✅ Startup always lands ahead of any previously-accepted Kraken nonce
    (initialized to max(persisted, now_ns + 10 s) and persisted immediately)
 ✅ Runaway accumulation capped at 2 min ahead; resets to now_ns + 10 s
+✅ Hard-reset in get_nonce(): lead > 60 s → snap to now + 10 s instantly
+✅ Nuclear-reset in get_nonce(): lead > 300 s → snap + 5 s sleep
+✅ record_nonce_error() skips forward jump when lead ≥ 60 s (let get_nonce hard-reset instead)
 ✅ Atomic disk writes (write-then-rename) — no half-written files
 ✅ Thread-safe with RLock throughout
 ✅ Strictly monotonic — never decreases, never repeats
@@ -87,6 +90,13 @@ _RECOVERY_JUMP_CAP_NS        = 10 * 1_000_000_000   # 10 seconds
 # safety rail: a nonce >60 s ahead is guaranteed to cause EAPI:Invalid nonce
 # errors on every call until wall-clock catches up.
 _HARD_CAP_LEAD_NS = 60 * 1_000_000_000  # 60 seconds
+# Hard-reset threshold: if lead exceeds this value, snap back to now + 10 s
+# immediately (before any increment or jump).
+_HARD_CAP_LEAD_NS = 60 * 1_000_000_000    # 60 seconds
+
+# Nuclear-reset threshold: if lead exceeds this extreme value, treat as a
+# crash-loop runaway and apply an extra sleep before retrying.
+_NUCLEAR_LEAD_NS  = 300 * 1_000_000_000   # 5 minutes
 
 # Nonce persistence file — survives process restarts so accumulated jumps are not lost
 _NONCE_FILE = os.path.join(
@@ -281,6 +291,49 @@ class GlobalKrakenNonceManager:
                 current_time_ns = time.time_ns()  # refresh so new_nonce calculation uses current time after reset
 
             new_nonce = max(current_time_ns, self._last_nonce + 1)
+        Hard-reset policy (checked BEFORE any increment):
+          • lead > 300 s (nuclear): reset to now + 10 s, persist, sleep 5 s
+          • lead >  60 s (hard cap): reset to now + 10 s, persist immediately
+        """
+        with self._nonce_lock:
+            now = time.time_ns()
+            lead = self._last_nonce - now
+
+            # ── Nuclear recovery (> 5 min) ────────────────────────────────
+            if lead > _NUCLEAR_LEAD_NS:
+                _logger.warning(
+                    "NUCLEAR RESET: nonce was %.1fs ahead of wall clock "
+                    "(> 300 s threshold) — resetting to now + 10 s and sleeping 5 s",
+                    lead / _NS_PER_SECOND,
+                )
+                self._last_nonce = now + _STARTUP_JUMP_NS
+                self._consecutive_errors = 0
+                self._nonces_since_persist = 0
+                _persist_nonce(self._last_nonce)
+                # Release lock while sleeping so other threads aren't starved.
+                self._nonce_lock.release()
+                try:
+                    time.sleep(5)
+                finally:
+                    self._nonce_lock.acquire()
+                # Refresh 'now' and 'lead' after the sleep.
+                now = time.time_ns()
+                lead = self._last_nonce - now
+
+            # ── Hard-cap reset (> 60 s) ───────────────────────────────────
+            elif lead > _HARD_CAP_LEAD_NS:
+                _logger.warning(
+                    "HARD RESET: nonce was %.1fs ahead of wall clock "
+                    "(> 60 s threshold) → reset to now + 10 s",
+                    lead / _NS_PER_SECOND,
+                )
+                self._last_nonce = now + _STARTUP_JUMP_NS
+                self._consecutive_errors = 0
+                self._nonces_since_persist = 0
+                _persist_nonce(self._last_nonce)
+
+            # ── Normal monotonic increment ────────────────────────────────
+            new_nonce = max(now, self._last_nonce + 1)
             self._last_nonce = new_nonce
             self._total_nonces_issued += 1
 
@@ -324,17 +377,33 @@ class GlobalKrakenNonceManager:
         Dynamic cap: if _last_nonce is already more than 30 s ahead of the
         wall clock the jump is capped to 10 s to avoid runaway accumulation.
 
+        Hard-cap guard: if lead already exceeds _HARD_CAP_LEAD_NS (60 s) the
+        forward bump is skipped entirely — get_nonce() will perform a hard
+        reset on the next call instead.
+
         Returns:
             int: Current consecutive-error count after recording this error.
         """
         with self._nonce_lock:
             self._consecutive_errors += 1
             count = self._consecutive_errors
-            idx = min(count - 1, len(_RECOVERY_JUMPS_NS) - 1)
-            jump_ns = _RECOVERY_JUMPS_NS[idx]
 
             current_ns = time.time_ns()
             current_lead_ns = self._last_nonce - current_ns
+
+            # Do not jump forward when already far ahead — the hard-reset in
+            # get_nonce() will handle correction on the next call.
+            if current_lead_ns > _HARD_CAP_LEAD_NS:
+                _logger.warning(
+                    "global_kraken_nonce: nonce error #%d — skipping forward jump "
+                    "(already %.1fs ahead ≥ 60 s hard-cap; get_nonce() will hard-reset)",
+                    count,
+                    current_lead_ns / _NS_PER_SECOND,
+                )
+                return count
+
+            idx = min(count - 1, len(_RECOVERY_JUMPS_NS) - 1)
+            jump_ns = _RECOVERY_JUMPS_NS[idx]
 
             # Cap the jump when we're already well ahead to avoid overshoot.
             if current_lead_ns > _RECOVERY_AHEAD_THRESHOLD_NS:

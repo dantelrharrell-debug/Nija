@@ -6518,12 +6518,29 @@ class KrakenBroker(BaseBroker):
             time.sleep(KRAKEN_STARTUP_DELAY_SECONDS)
             logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
 
-            # PRE-CONNECTION NONCE JUMP: Jump nonce forward before the very first API call.
-            # This clears any "burned" nonce window left by a previous session.
-            # Kraken tracks used nonces for ~60 seconds; a restart may replay an already-
-            # used nonce unless we advance past it proactively.
-            logger.info(f"   ⚡ Jumping nonce forward before connection attempt ({cred_label}) to clear any burned nonce window...")
-            self._immediate_nonce_jump()
+            # PRE-CONNECTION NONCE JUMP: Only jump forward when the nonce is
+            # close to wall-clock time (lead < 5 s).  If the nonce is already
+            # well ahead (≥ 5 s), an extra forward jump would worsen any
+            # existing drift; get_nonce() will apply a hard-reset instead.
+            _pre_jump_lead_s = 0.0
+            if get_global_nonce_manager is not None:
+                try:
+                    _pre_jump_lead_s = get_global_nonce_manager().get_stats().get("lead_seconds", 0.0)
+                except Exception as _e:
+                    logger.debug("   Could not read nonce manager stats: %s", _e)
+
+            if _pre_jump_lead_s < 5.0:
+                logger.info(
+                    f"   ⚡ Jumping nonce forward before connection attempt ({cred_label}) "
+                    f"to clear any burned nonce window (lead={_pre_jump_lead_s:.1f}s < 5s)..."
+                )
+                self._immediate_nonce_jump()
+            else:
+                logger.info(
+                    f"   ⏭  Skipping pre-connection nonce jump ({cred_label}) — "
+                    f"nonce already {_pre_jump_lead_s:.1f}s ahead (≥ 5s); "
+                    f"get_nonce() will hard-reset if drift is extreme."
+                )
 
             # Test connection by fetching account balance with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
