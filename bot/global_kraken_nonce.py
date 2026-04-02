@@ -81,6 +81,13 @@ _RECOVERY_JUMPS_NS = [
 _RECOVERY_AHEAD_THRESHOLD_NS = 30 * 1_000_000_000   # 30 seconds
 _RECOVERY_JUMP_CAP_NS        = 10 * 1_000_000_000   # 10 seconds
 
+# Hard cap on runtime nonce lead-time.  If get_nonce() detects that
+# _last_nonce is further ahead than this the manager performs an immediate
+# reset to now + _STARTUP_JUMP_NS.  This is a non-negotiable production
+# safety rail: a nonce >60 s ahead is guaranteed to cause EAPI:Invalid nonce
+# errors on every call until wall-clock catches up.
+_HARD_CAP_LEAD_NS = 60 * 1_000_000_000  # 60 seconds
+
 # Nonce persistence file — survives process restarts so accumulated jumps are not lost
 _NONCE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "data", "kraken_global_nonce.txt"
@@ -249,9 +256,30 @@ class GlobalKrakenNonceManager:
         Return the next monotonically increasing nonce (nanoseconds).
 
         Thread-safe.  Each call returns a value strictly greater than the last.
+
+        Hard cap: if _last_nonce is more than _HARD_CAP_LEAD_NS (60 s) ahead
+        of the wall clock the nonce is reset to now + _STARTUP_JUMP_NS before
+        issuing the next value.  This is a non-negotiable production safety
+        rail — a nonce that far ahead causes persistent EAPI:Invalid nonce
+        errors until the wall clock catches up.
         """
         with self._nonce_lock:
             current_time_ns = time.time_ns()
+
+            # ── HARD CAP: reset if nonce has drifted more than 60 s ahead ──
+            lead_ns = self._last_nonce - current_time_ns
+            if lead_ns > _HARD_CAP_LEAD_NS:
+                _logger.error(
+                    "global_kraken_nonce: nonce drift too large (%.1fs ahead) — "
+                    "resetting to now + 10s to prevent EAPI:Invalid nonce lockout",
+                    lead_ns / _NS_PER_SECOND,
+                )
+                self._last_nonce = current_time_ns + _STARTUP_JUMP_NS
+                self._consecutive_errors = 0
+                self._nonces_since_persist = 0
+                _persist_nonce(self._last_nonce)
+                current_time_ns = time.time_ns()  # refresh so new_nonce calculation uses current time after reset
+
             new_nonce = max(current_time_ns, self._last_nonce + 1)
             self._last_nonce = new_nonce
             self._total_nonces_issued += 1

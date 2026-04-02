@@ -6772,39 +6772,42 @@ class TradingStrategy:
         # ✅ LAYER 0: RECOVERY CONTROLLER - Capital-first safety check
         # This is the AUTHORITATIVE control layer that sits above all other safety checks
         if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
-            recovery_controller = get_recovery_controller()
-            
-            # Update capital safety assessment if we have balance info
-            if active_broker and hasattr(active_broker, 'get_balance'):
-                try:
-                    balance_result = active_broker.get_balance()
-                    if balance_result and not balance_result[1]:  # No error
-                        current_balance = balance_result[0]
-                        # Count current positions
-                        position_count = len(self.execution_engine.positions) if self.execution_engine else 0
-                        
-                        # Update capital safety assessment
-                        recovery_controller.assess_capital_safety(
-                            current_balance=current_balance,
-                            position_count=position_count
-                        )
-                except Exception as e:
-                    logger.warning(f"Could not update capital safety: {e}")
-            
-            # Check if trading is allowed
-            can_trade_entry, reason = recovery_controller.can_trade("entry")
-            
-            if not can_trade_entry:
-                logger.warning("=" * 80)
-                logger.warning("🛡️  RECOVERY CONTROLLER: ENTRIES BLOCKED")
-                logger.warning("=" * 80)
-                logger.warning(f"   Reason: {reason}")
-                logger.warning(f"   State: {recovery_controller.current_state.value}")
-                logger.warning(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
-                logger.warning(f"   Mode: Position management only (exits/stops)")
-                logger.warning("=" * 80)
-                # Force user mode to block new entries but allow position management
-                user_mode = True
+            try:
+                recovery_controller = get_recovery_controller()
+                
+                # Update capital safety assessment if we have balance info
+                if active_broker and hasattr(active_broker, 'get_balance'):
+                    try:
+                        balance_result = active_broker.get_balance()
+                        if balance_result and not balance_result[1]:  # No error
+                            current_balance = balance_result[0]
+                            # Count current positions
+                            position_count = len(self.execution_engine.positions) if self.execution_engine else 0
+                            
+                            # Update capital safety assessment
+                            recovery_controller.assess_capital_safety(
+                                current_balance=current_balance,
+                                position_count=position_count
+                            )
+                    except Exception as e:
+                        logger.warning(f"Could not update capital safety: {e}")
+                
+                # Check if trading is allowed
+                can_trade_entry, reason = recovery_controller.can_trade("entry")
+                
+                if not can_trade_entry:
+                    logger.warning("=" * 80)
+                    logger.warning("🛡️  RECOVERY CONTROLLER: ENTRIES BLOCKED")
+                    logger.warning("=" * 80)
+                    logger.warning(f"   Reason: {reason}")
+                    logger.warning(f"   State: {recovery_controller.current_state.value}")
+                    logger.warning(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
+                    logger.warning(f"   Mode: Position management only (exits/stops)")
+                    logger.warning("=" * 80)
+                    # Force user mode to block new entries but allow position management
+                    user_mode = True
+            except Exception as _rc_err:
+                logger.warning("Recovery controller check skipped (entries may not be blocked): %s", _rc_err)
 
         # ✅ LAYER 0b: GLOBAL RISK GOVERNOR — cascade-loss circuit breaker
         # Checks daily loss, consecutive losses, equity curve, and exposure concentration.
@@ -7143,13 +7146,19 @@ class TradingStrategy:
             self.apex._cycle_pnl = 0.0
         
         # Display user status banner (trust layer feature)
-        self._display_user_status_banner(broker=active_broker)
+        try:
+            self._display_user_status_banner(broker=active_broker)
+        except Exception as _banner_err:
+            logger.debug("User status banner skipped (%s: %s)", type(_banner_err).__name__, _banner_err)
         
         # Execute heartbeat trade if enabled and due
         if not user_mode:  # Only execute heartbeat in MASTER mode
-            heartbeat_executed = self._execute_heartbeat_trade(broker=active_broker)
-            if heartbeat_executed:
-                logger.info("   ❤️  Heartbeat trade executed - connectivity verified")
+            try:
+                heartbeat_executed = self._execute_heartbeat_trade(broker=active_broker)
+                if heartbeat_executed:
+                    logger.info("   ❤️  Heartbeat trade executed - connectivity verified")
+            except Exception as _hb_err:
+                logger.warning("Heartbeat trade skipped — possible connectivity issue (%s: %s)", type(_hb_err).__name__, _hb_err)
         
         try:
             # 🚨 EMERGENCY: Check if LIQUIDATE_ALL mode is active
