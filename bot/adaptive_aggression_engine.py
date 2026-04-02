@@ -123,9 +123,9 @@ _TIER_DEFAULTS: Dict[AggressionTier, Dict] = {
     # ────────────────────────────────────────────────────────────────
     AggressionTier.MICRO: dict(
         label="Trade Loose 🔓",
-        min_signal_confidence=0.55,   # AI gate: accept 55 %+ signals
-        min_quality_score=50.0,       # Entry quality floor (0-100 scale)
-        min_adx=8.0,                  # Accept weak trends
+        min_signal_confidence=0.30,   # AI gate: accept 30%+ signals (lowered from 55% to allow more entries)
+        min_quality_score=40.0,       # Entry quality floor (lowered from 50 to match 60→40 target)
+        min_adx=5.0,                  # Accept very weak trends (lowered from 8 to 5)
         min_risk_reward=1.5,          # Lower R:R bar
         position_size_pct=20.0,       # 20 % of balance per trade
         max_positions=2,              # Concentrated — 2 simultaneous trades
@@ -133,7 +133,7 @@ _TIER_DEFAULTS: Dict[AggressionTier, Dict] = {
         take_profit_multiplier=1.2,   # Push take-profit 20 % higher for bigger wins
         mtf_required=False,           # MTF confirmation optional — don't block
         regime_strict=False,          # Trade even in CHOP; regime is advisory only
-        ai_skip_score_floor=45.0,     # AI confidence engine: skip only below 45 /100
+        ai_skip_score_floor=40.0,     # AI confidence engine: skip only below 40 /100 (lowered from 45)
     ),
 
     # ────────────────────────────────────────────────────────────────

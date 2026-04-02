@@ -53,8 +53,8 @@ logger = logging.getLogger("nija.ai_engine")
 # Score tier constants
 # ---------------------------------------------------------------------------
 TIER_ELITE = 75.0    # 1.5× position size
-TIER_GOOD = 60.0     # 1.0× position size
-TIER_FAIR = 35.0     # 0.75× position size (lowered from 45 — composite scale tops ~55)
+TIER_GOOD = 40.0     # 1.0× position size (lowered from 60 to allow more qualifying entries)
+TIER_FAIR = 30.0     # 0.75× position size (lowered from 35 to maintain tier separation after TIER_GOOD reduction)
 TIER_FLOOR = 20.0    # 0.5× position size (taken only as top-N, no better option)
 
 # Composite score blend weights (must sum to 1.0)

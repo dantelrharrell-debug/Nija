@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 MARKET_FILTER = {
     'adx_threshold': 7,   # ADX must be > 7 — below 10 allows real market movement
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.05,  # Volume must be > 5% of recent average (was 10%)
+    'volume_threshold': 0.02,  # Volume must be > 2% of recent average (lowered from 5% to allow more entries)
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }

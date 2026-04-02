@@ -75,7 +75,7 @@ class ConnectionPoolConfig:
     pool_maxsize: int = 10          # Connections kept alive per pool
     max_retries: int = 3            # urllib3-level retries (transport only)
     connect_timeout: float = 10.0   # Seconds to wait for TCP connection
-    read_timeout: float = 30.0      # Seconds to wait for server response
+    read_timeout: float = 60.0      # Seconds to wait for server response (increased 30s→60s for Kraken latency)
     backoff_factor: float = 0.5     # urllib3 retry backoff factor
 
 
