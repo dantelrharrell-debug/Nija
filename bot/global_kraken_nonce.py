@@ -131,17 +131,6 @@ def _persist_nonce(nonce: int) -> None:
 def cleanup_legacy_nonce_files() -> None:
     """
     Remove stale per-account nonce files left by older bot versions.
-    """Write nonce to disk atomically (temp-file + rename). Logs debug on failure but never raises."""
-    try:
-        nonce_dir = os.path.dirname(_NONCE_FILE)
-        os.makedirs(nonce_dir, exist_ok=True)
-        tmp_path = _NONCE_FILE + ".tmp"
-        with open(tmp_path, "w") as f:
-            f.write(str(nonce))
-        os.replace(tmp_path, _NONCE_FILE)
-    except (IOError, OSError) as e:
-        import logging as _logging
-        _logging.debug(f"global_kraken_nonce: could not persist nonce to {_NONCE_FILE}: {e}")
 
     Safe to call multiple times; logs a single info line summarising what
     was removed and silently skips files that cannot be deleted.
@@ -305,7 +294,6 @@ class GlobalKrakenNonceManager:
             return self._last_nonce
 
     def record_nonce_error(self) -> int:
-    def record_error(self) -> int:
         """
         Record a Kraken nonce error and auto-heal after repeated failures.
 
