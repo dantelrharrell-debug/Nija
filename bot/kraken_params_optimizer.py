@@ -93,7 +93,7 @@ KRAKEN_MIN_PROFIT_THRESHOLD_MAKER: float = KRAKEN_ROUND_TRIP_MAKER + KRAKEN_PROF
 KRAKEN_DEFAULT_PROFIT_TARGETS: List[Tuple[float, str]] = [
     (0.020, "Kraken TP3 +2.0% (Net +1.38% after 0.62% fees) — MAJOR PROFIT"),
     (0.014, "Kraken TP2 +1.4% (Net +0.78% after fees) — GOOD"),
-    (0.008, "Kraken TP1 +0.8% (Net +0.18% after fees) — MINIMAL"),
+    (0.010, "Kraken TP1 +1.0% (Net +0.38% after fees) — MINIMUM ≥$0.30 net"),
 ]
 
 # ---------------------------------------------------------------------------

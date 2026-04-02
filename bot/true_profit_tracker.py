@@ -49,11 +49,16 @@ _DEFAULT_DATA_PATH = os.path.join(
 # ---------------------------------------------------------------------------
 
 _BROKER_ROUNDTRIP_FEE: Dict[str, float] = {
-    "coinbase": 0.012,  # ~0.6 % taker x 2 sides
-    "kraken":   0.006,  # ~0.3 % taker x 2 sides
-    "binance":  0.002,  # ~0.1 % taker x 2 sides
-    "default":  0.010,  # conservative fallback
+    "coinbase": 0.014,  # (0.60% taker × 2 sides) + 0.20% spread = 1.40%
+    "kraken":   0.0062, # (0.26% taker × 2 sides) + 0.10% spread = 0.62%
+    "binance":  0.0028, # (0.10% taker × 2 sides) + 0.08% spread = 0.28%
+    "default":  0.014,  # conservative fallback (matches Coinbase)
 }
+
+# Minimum net profit per trade to cover fees and deliver real growth.
+# A trade returning less than this value is effectively a break-even or loss
+# once slippage and compounding friction are accounted for.
+MIN_NET_PROFIT_USD: float = float(os.getenv("NIJA_MIN_NET_PROFIT_USD", "0.30"))
 
 # Multiplier to estimate entry position size from gross PnL when entry_value_usd
 # is unavailable.  A 1 % move on a position produces ~1 % of entry value as profit,
@@ -240,6 +245,17 @@ class TrueProfitTracker:
             "(gross $%+.2f - fees $%.2f)",
             emoji, symbol, net_profit, gross_pnl_usd, fee_usd,
         )
+        # Warn when a winning trade returns less than the $0.30 minimum growth
+        # threshold.  Losses are already flagged by the "LOSS" emoji above; this
+        # warning targets trades that ARE fee-positive but too small to contribute
+        # to real account growth (e.g. 0.38% net on a tiny $50 position = $0.19).
+        if 0 < net_profit < MIN_NET_PROFIT_USD:
+            logger.warning(
+                "   ⚠️  BELOW MIN PROFIT: $%.2f net < $%.2f target — "
+                "trade is fee-positive but not growing the account. "
+                "Consider tightening entry filters or waiting for ≥1%% moves.",
+                net_profit, MIN_NET_PROFIT_USD,
+            )
         logger.info(
             "   NEW CASH BALANCE: $%,.2f  |  Account Growth: $%+,.2f",
             _cash_bal, _account_growth,

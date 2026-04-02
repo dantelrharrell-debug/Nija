@@ -101,14 +101,14 @@ DEFAULT_MAX_CONSECUTIVE_LOSSES: int = 4      # cool-down after N straight losses
 DEFAULT_MAX_DRAWDOWN_PCT: float = 0.10       # 10 % from session peak
 
 # Layer 2 – Signal Quality
-# RELAXED (Apr 2026): Lowered from 58 → 45 so the bot can trade in typical
-# ranging / consolidating market conditions.  A score of 58 still blocked many
-# moderate-quality setups in quiet crypto markets.  45 accepts setups that
-# have at least one strong dimension (trend OR momentum OR volume) while
-# still filtering genuinely weak signals with no confirming factors.
+# TIGHTENED (Apr 2026): Raised from 45 → 55 to cut marginal trades that
+# produce sub-1% moves and bleed account value after fees.  A score of 45
+# was admitting too many directionless setups; 55 keeps reasonable trade
+# frequency while requiring at least two confirming dimensions
+# (e.g. trend + momentum, or trend + volume).
 # Override at runtime with the WMX_SIGNAL_THRESHOLD env variable.
 DEFAULT_SIGNAL_THRESHOLD: float = float(
-    os.getenv("WMX_SIGNAL_THRESHOLD", "45")
+    os.getenv("WMX_SIGNAL_THRESHOLD", "55")
 )
 
 # Layer 3 – Profit Consistency
