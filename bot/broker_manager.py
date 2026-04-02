@@ -68,15 +68,29 @@ except ImportError:
 
 # Import Global Kraken Nonce Manager (ONE source for all users - FINAL FIX)
 try:
-    from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
+    from bot.global_kraken_nonce import (
+        get_global_kraken_nonce,
+        get_kraken_api_lock,
+        jump_global_kraken_nonce_forward,
+        record_kraken_nonce_error,
+        record_kraken_nonce_success,
+    )
 except ImportError:
     try:
-        from global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
+        from global_kraken_nonce import (
+            get_global_kraken_nonce,
+            get_kraken_api_lock,
+            jump_global_kraken_nonce_forward,
+            record_kraken_nonce_error,
+            record_kraken_nonce_success,
+        )
     except ImportError:
         # Fallback: Global nonce manager not available
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
         jump_global_kraken_nonce_forward = None
+        record_kraken_nonce_error = None
+        record_kraken_nonce_success = None
 
 # Import Balance Models (FIX 1: Three-part balance model)
 try:
@@ -6054,39 +6068,38 @@ class KrakenBroker(BaseBroker):
         """
         Immediately jump nonce forward when a nonce error is detected.
 
-        This method jumps the nonce forward by 30 seconds to clear the "burned"
-        nonce window and ensure the next API call will succeed.  30 seconds is
-        sufficient to skip past Kraken's ~60-second nonce validation window while
-        keeping future-nonce accumulation manageable across reconnect cycles.
-
-        Thread-safe: Uses the nonce generator's internal lock.
+        Delegates to record_kraken_nonce_error() which performs an escalating
+        jump (30 s → 60 s → 120 s on consecutive errors) and persists the new
+        value to disk immediately.  Thread-safe via the nonce manager's RLock.
         """
         if self._use_global_nonce:
-            # Use global nonce manager to jump forward
-            if jump_global_kraken_nonce_forward is not None:
-                immediate_jump_ms = 30 * 1000  # 30 seconds in milliseconds
-                new_nonce = jump_global_kraken_nonce_forward(immediate_jump_ms)
-                logger.debug(f"   ⚡ Immediately jumped GLOBAL nonce forward by 30s to clear burned nonce window (new nonce: {new_nonce})")
+            if record_kraken_nonce_error is not None:
+                jumped_ns = record_kraken_nonce_error()
+                jumped_s = jumped_ns / 1e9
+                logger.debug(
+                    "   ⚡ Jumped GLOBAL nonce forward by %.0fs (escalating recovery)",
+                    jumped_s,
+                )
+            elif jump_global_kraken_nonce_forward is not None:
+                # Older import without record_kraken_nonce_error — plain 30 s jump
+                new_nonce = jump_global_kraken_nonce_forward(30 * 1000)
+                logger.debug(
+                    "   ⚡ Jumped GLOBAL nonce forward by 30s (new nonce: %d)", new_nonce
+                )
             else:
-                logger.debug(f"   ⚡ Global nonce jump function not available - using time-based recovery")
+                logger.debug("   ⚡ Global nonce jump function not available — timestamp-based recovery")
             return
         elif self._kraken_nonce is not None:
-            # Use KrakenNonce instance (fallback)
-            immediate_jump_ms = 30 * 1000  # 30 seconds in milliseconds
-            new_nonce = self._kraken_nonce.jump_forward(immediate_jump_ms)
-
-            # Persist the jumped nonce to account-specific file
+            # Fallback: legacy per-user KrakenNonce instance
+            new_nonce = self._kraken_nonce.jump_forward(30 * 1000)
             try:
                 with open(self._nonce_file, "w") as f:
                     f.write(str(new_nonce))
             except IOError as e:
                 logging.debug(f"Could not persist jumped nonce: {e}")
-
-            logger.debug(f"   ⚡ Immediately jumped nonce forward by 30s to clear burned nonce window")
+            logger.debug("   ⚡ Jumped nonce forward by 30s (fallback KrakenNonce)")
         else:
-            # FIX 3: Final fallback - use global nonce manager if available, else simple timestamp
-            # No per-instance _last_nonce tracking
-            logger.debug(f"   ⚡ Global nonce manager in use (fallback path) - timestamp-based, no jump needed")
+            logger.debug("   ⚡ No nonce instance available — timestamp-based fallback")
             return
 
     def _kraken_private_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
@@ -6752,6 +6765,10 @@ class KrakenBroker(BaseBroker):
 
                     if balance and 'result' in balance:
                         self.connected = True
+
+                        # Signal successful API call so auto-recovery escalation resets
+                        if record_kraken_nonce_success is not None:
+                            record_kraken_nonce_success()
 
                         if attempt > 1:
                             logger.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
