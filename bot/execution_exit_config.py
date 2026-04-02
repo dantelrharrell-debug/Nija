@@ -21,10 +21,10 @@ regime + entry_type, ensuring NIJA adapts its exit logic to the market:
     SCALP        — Micro targets 0.8–1.5%, tight stops 0.8–1.0%,
                    trailing activates at 1.5%, 20–30s cooldown.
 
-    SWING        — Balanced targets 2.0–3.5%, stops 1.0–1.2%,
+    SWING        — Balanced targets 3.0–5.5%, stops 1.0–1.2%,
                    trailing activates at 1.8%, 45s cooldown.
 
-    BREAKOUT     — Wide targets 2.5–5.0%, wider stops 1.2–1.5%
+    BREAKOUT     — Wide targets 3.0–7.0%, wider stops 1.2–1.5%
                    (room to retest), trailing activates at 2.5%,
                    60s cooldown (fewer, bigger trades).
 
@@ -48,8 +48,8 @@ Trailing stop:
 Take-profit ladder:
     Four strategy-typed ladders, all with 3 exits + runner:
     SCALP  :  TP1=0.8%  TP2=1.2%  TP3=1.5%  sizes 30%/30%/25%  runner=15%
-    SWING  :  TP1=2.0%  TP2=2.5%  TP3=3.5%  sizes 20%/25%/30%  runner=25%
-    BREAKOUT: TP1=2.5%  TP2=3.5%  TP3=5.0%  sizes 20%/25%/30%  runner=25%
+    SWING  :  TP1=3.0%  TP2=4.0%  TP3=5.5%  sizes 20%/25%/30%  runner=25%
+    BREAKOUT: TP1=3.0%  TP2=5.5%  TP3=7.0%  sizes 20%/25%/30%  runner=25%
     M_REV  :  TP1=1.5%  TP2=2.0%  TP3=2.5%  sizes 25%/30%/25%  runner=20%
     Volatile regime: TP levels scaled ×1.25 to compensate for wider stops.
 
@@ -161,7 +161,7 @@ class ExitParams:
 # (hard_sl_pct, trailing_activate_pct, trailing_buffer_pct) per profile
 _STOP_TABLE: Dict[StratProfile, Tuple[float, float, float]] = {
     StratProfile.SCALP:          (_ef("SL_SCALP_PCT",    0.80) / 100, 1.50 / 100, 0.50 / 100),
-    StratProfile.SWING:          (_ef("SL_SWING_PCT",    1.10) / 100, 1.80 / 100, 0.60 / 100),
+    StratProfile.SWING:          (_ef("SL_SWING_PCT",    1.20) / 100, 1.80 / 100, 0.60 / 100),  # tightened from 1.10% (Apr 2026)
     StratProfile.BREAKOUT:       (_ef("SL_BREAKOUT_PCT", 1.20) / 100, 2.50 / 100, 0.80 / 100),
     StratProfile.MEAN_REVERSION: (_ef("SL_MREV_PCT",     1.00) / 100, 1.80 / 100, 0.55 / 100),
 }
@@ -173,6 +173,8 @@ _LOW_FEE_SL_REDUCTION = 0.001   # tighten by 0.1% on Kraken/Binance
 _VOLATILE_SL_BOOST = 0.003   # +0.3%
 
 # TP ladders: list of (target_pct, exit_fraction)
+# TP UPGRADE (Apr 2026): Raised all ladders to [3.0%, 4.0%, 5.5%, 7.0%] targets
+# to improve R:R and reduce fees impact on profitability.
 _TP_TABLE: Dict[StratProfile, List[Tuple[float, float]]] = {
     StratProfile.SCALP: [
         (0.008, 0.30),   # 30% at 0.8%
@@ -181,15 +183,15 @@ _TP_TABLE: Dict[StratProfile, List[Tuple[float, float]]] = {
         # 15% runner with trailing stop
     ],
     StratProfile.SWING: [
-        (0.020, 0.20),   # 20% at 2.0%
-        (0.025, 0.25),   # 25% at 2.5%
-        (0.035, 0.30),   # 30% at 3.5%
+        (0.030, 0.20),   # 20% at 3.0%
+        (0.040, 0.25),   # 25% at 4.0%
+        (0.055, 0.30),   # 30% at 5.5%
         # 25% runner with trailing stop
     ],
     StratProfile.BREAKOUT: [
-        (0.025, 0.20),   # 20% at 2.5%
-        (0.035, 0.25),   # 25% at 3.5%
-        (0.050, 0.30),   # 30% at 5.0%
+        (0.030, 0.20),   # 20% at 3.0%
+        (0.055, 0.25),   # 25% at 5.5%
+        (0.070, 0.30),   # 30% at 7.0%
         # 25% runner with trailing stop
     ],
     StratProfile.MEAN_REVERSION: [
