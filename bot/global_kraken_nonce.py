@@ -84,6 +84,12 @@ _RECOVERY_JUMPS_NS = [
 _RECOVERY_AHEAD_THRESHOLD_NS = 30 * 1_000_000_000   # 30 seconds
 _RECOVERY_JUMP_CAP_NS        = 10 * 1_000_000_000   # 10 seconds
 
+# Hard cap on runtime nonce lead-time.  If get_nonce() detects that
+# _last_nonce is further ahead than this the manager performs an immediate
+# reset to now + _STARTUP_JUMP_NS.  This is a non-negotiable production
+# safety rail: a nonce >60 s ahead is guaranteed to cause EAPI:Invalid nonce
+# errors on every call until wall-clock catches up.
+_HARD_CAP_LEAD_NS = 60 * 1_000_000_000  # 60 seconds
 # Hard-reset threshold: if lead exceeds this value, snap back to now + 10 s
 # immediately (before any increment or jump).
 _HARD_CAP_LEAD_NS = 60 * 1_000_000_000    # 60 seconds
@@ -261,6 +267,30 @@ class GlobalKrakenNonceManager:
 
         Thread-safe.  Each call returns a value strictly greater than the last.
 
+        Hard cap: if _last_nonce is more than _HARD_CAP_LEAD_NS (60 s) ahead
+        of the wall clock the nonce is reset to now + _STARTUP_JUMP_NS before
+        issuing the next value.  This is a non-negotiable production safety
+        rail — a nonce that far ahead causes persistent EAPI:Invalid nonce
+        errors until the wall clock catches up.
+        """
+        with self._nonce_lock:
+            current_time_ns = time.time_ns()
+
+            # ── HARD CAP: reset if nonce has drifted more than 60 s ahead ──
+            lead_ns = self._last_nonce - current_time_ns
+            if lead_ns > _HARD_CAP_LEAD_NS:
+                _logger.error(
+                    "global_kraken_nonce: nonce drift too large (%.1fs ahead) — "
+                    "resetting to now + 10s to prevent EAPI:Invalid nonce lockout",
+                    lead_ns / _NS_PER_SECOND,
+                )
+                self._last_nonce = current_time_ns + _STARTUP_JUMP_NS
+                self._consecutive_errors = 0
+                self._nonces_since_persist = 0
+                _persist_nonce(self._last_nonce)
+                current_time_ns = time.time_ns()  # refresh so new_nonce calculation uses current time after reset
+
+            new_nonce = max(current_time_ns, self._last_nonce + 1)
         Hard-reset policy (checked BEFORE any increment):
           • lead > 300 s (nuclear): reset to now + 10 s, persist, sleep 5 s
           • lead >  60 s (hard cap): reset to now + 10 s, persist immediately
