@@ -72,6 +72,20 @@ _RECOVERY_JUMPS_NS = [
     120 * 1_000_000_000,
 ]
 
+# Nonce persistence file — survives process restarts so accumulated jumps are not lost
+_NONCE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "kraken_global_nonce.txt"
+)
+_PERSIST_EVERY_N = 10  # Write to disk after this many get_nonce() calls (reduced from 100 to shrink crash gap)
+
+# Startup jump applied every time the process starts.  This guarantees we land
+# strictly ahead of any nonce Kraken may still hold from the previous session.
+_STARTUP_JUMP_NS = 10_000_000_000  # +10 seconds in nanoseconds
+
+# Auto-heal: automatically jump the nonce forward after this many consecutive errors.
+_AUTO_HEAL_THRESHOLD = 3
+# How far to jump on an auto-heal event.
+_AUTO_HEAL_JUMP_NS = 60_000_000_000  # +60 seconds in nanoseconds
 
 # ── Disk helpers ───────────────────────────────────────────────────────────────
 
@@ -117,6 +131,17 @@ def _persist_nonce(nonce: int) -> None:
 def cleanup_legacy_nonce_files() -> None:
     """
     Remove stale per-account nonce files left by older bot versions.
+    """Write nonce to disk atomically (temp-file + rename). Logs debug on failure but never raises."""
+    try:
+        nonce_dir = os.path.dirname(_NONCE_FILE)
+        os.makedirs(nonce_dir, exist_ok=True)
+        tmp_path = _NONCE_FILE + ".tmp"
+        with open(tmp_path, "w") as f:
+            f.write(str(nonce))
+        os.replace(tmp_path, _NONCE_FILE)
+    except (IOError, OSError) as e:
+        import logging as _logging
+        _logging.debug(f"global_kraken_nonce: could not persist nonce to {_NONCE_FILE}: {e}")
 
     Safe to call multiple times; logs a single info line summarising what
     was removed and silently skips files that cannot be deleted.
@@ -197,6 +222,17 @@ class GlobalKrakenNonceManager:
             # Always land at least _STARTUP_LEAD_NS ahead of now so a fast
             # restart cannot replay a nonce Kraken already accepted.
             self._last_nonce = max(current_ns + _STARTUP_LEAD_NS, persisted)
+            # Start strictly ahead of both the wall clock and any previously
+            # persisted nonce.  The +10 s jump ensures we are beyond any nonce
+            # Kraken still holds from the last session even if the persisted
+            # file is slightly stale (up to _PERSIST_EVERY_N−1 calls behind).
+            self._last_nonce = max(current_ns, persisted) + _STARTUP_JUMP_NS
+
+            # Persist immediately so a crash right after startup still leaves
+            # a safe anchor for the *next* restart.
+            _persist_nonce(self._last_nonce)
+
+            self._nonce_lock = threading.RLock()
 
             # Persist immediately — this is the single most important write.
             _persist_nonce(self._last_nonce)
@@ -207,6 +243,10 @@ class GlobalKrakenNonceManager:
 
             # Counters
             self._nonces_since_persist = 0
+            # Consecutive nonce-error counter for auto-heal logic
+            self._consecutive_errors = 0
+
+            # Statistics tracking
             self._total_nonces_issued = 0
             self._creation_time = time.time()
 
@@ -265,6 +305,85 @@ class GlobalKrakenNonceManager:
             return self._last_nonce
 
     def record_nonce_error(self) -> int:
+    def record_error(self) -> int:
+        """
+        Record a Kraken nonce error and auto-heal after repeated failures.
+
+        Call this whenever Kraken returns "EAPI:Invalid nonce".  After
+        _AUTO_HEAL_THRESHOLD consecutive errors the nonce is automatically
+        jumped forward by _AUTO_HEAL_JUMP_NS and persisted so the next API
+        call lands well outside Kraken's nonce-acceptance window.
+
+        Returns:
+            int: Current consecutive-error count (resets to 0 after auto-heal)
+        """
+        with self._nonce_lock:
+            self._consecutive_errors += 1
+            count = self._consecutive_errors
+            if count >= _AUTO_HEAL_THRESHOLD:
+                current_time_ns = time.time_ns()
+                self._last_nonce = max(
+                    current_time_ns + _AUTO_HEAL_JUMP_NS,
+                    self._last_nonce + _AUTO_HEAL_JUMP_NS,
+                )
+                self._nonces_since_persist = 0
+                _persist_nonce(self._last_nonce)
+                self._consecutive_errors = 0
+                _logger.warning(
+                    f"global_kraken_nonce: auto-heal triggered after {count} consecutive "
+                    f"nonce errors; jumped forward +{_AUTO_HEAL_JUMP_NS // 1_000_000_000}s "
+                    f"to {self._last_nonce}"
+                )
+                return 0
+            return count
+
+    def record_success(self) -> None:
+        """
+        Record a successful Kraken API call, resetting the error counter.
+
+        Call this after every successful private API response so that the
+        auto-heal threshold resets and transient single errors do not
+        accumulate toward a spurious auto-heal.
+        """
+        with self._nonce_lock:
+            self._consecutive_errors = 0
+
+    def reset_to_safe_value(self) -> int:
+        """
+        Hard-reset the nonce to a safe value for manual recovery.
+
+        Sets the nonce to current nanoseconds + _STARTUP_JUMP_NS and
+        persists immediately.  Use this when the bot is stuck and normal
+        auto-heal has not resolved the desync.
+
+        Returns:
+            int: New nonce value after reset
+        """
+        with self._nonce_lock:
+            self._last_nonce = time.time_ns() + _STARTUP_JUMP_NS
+            self._nonces_since_persist = 0
+            self._consecutive_errors = 0
+            _persist_nonce(self._last_nonce)
+            _logger.warning(
+                f"global_kraken_nonce: manual reset_to_safe_value() called; "
+                f"new nonce = {self._last_nonce}"
+            )
+            return self._last_nonce
+
+    def get_last_nonce(self) -> int:
+        """
+        Return the most recently issued nonce without advancing the counter.
+
+        Useful for external code that needs to snapshot the current nonce
+        position without consuming a new value.
+
+        Returns:
+            int: Last issued nonce (nanoseconds)
+        """
+        with self._nonce_lock:
+            return self._last_nonce
+
+    def get_stats(self) -> dict:
         """
         Record a Kraken "invalid nonce" error and perform an escalating jump.
 
@@ -320,6 +439,11 @@ class GlobalKrakenNonceManager:
                 "consecutive_errors": self._consecutive_errors,
                 "uptime_seconds": round(uptime, 1),
                 "nonces_per_second": round(rate, 3),
+                'total_nonces_issued': self._total_nonces_issued,
+                'last_nonce': self._last_nonce,
+                'uptime_seconds': uptime,
+                'nonces_per_second': rate,
+                'consecutive_errors': self._consecutive_errors,
             }
 
 
@@ -397,6 +521,20 @@ def record_kraken_nonce_success() -> None:
     get_global_nonce_manager().record_nonce_success()
 
 
+def reset_global_kraken_nonce() -> int:
+    """
+    Hard-reset the global nonce to a safe value (current time + 10 s).
+
+    Convenience wrapper around GlobalKrakenNonceManager.reset_to_safe_value().
+    Use when the bot is stuck with repeated "EAPI:Invalid nonce" errors and
+    normal auto-heal has not resolved the desync.
+
+    Returns:
+        int: New nonce value after reset (nanoseconds)
+    """
+    return get_global_nonce_manager().reset_to_safe_value()
+
+
 __all__ = [
     "GlobalKrakenNonceManager",
     "get_global_nonce_manager",
@@ -408,4 +546,12 @@ __all__ = [
     "record_kraken_nonce_error",
     "record_kraken_nonce_success",
     "cleanup_legacy_nonce_files",
+    'GlobalKrakenNonceManager',
+    'get_global_nonce_manager',
+    'get_global_nonce_stats',
+    'get_kraken_nonce',
+    'get_global_kraken_nonce',
+    'get_kraken_api_lock',
+    'jump_global_kraken_nonce_forward',
+    'reset_global_kraken_nonce',
 ]

@@ -23,6 +23,16 @@ logger = logging.getLogger('nija.nonce')
 # Data directory for nonce files
 _data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
+# Use the global nonce manager when available so all nonce values share the
+# same monotonic sequence and per-user nonce files stay consistent with it.
+try:
+    from bot.global_kraken_nonce import get_global_nonce_manager as _get_global_nonce_manager
+except ImportError:
+    try:
+        from global_kraken_nonce import get_global_nonce_manager as _get_global_nonce_manager
+    except ImportError:
+        _get_global_nonce_manager = None
+
 
 class UserNonceManager:
     """
@@ -85,7 +95,7 @@ class UserNonceManager:
 
     def _load_nonce(self, user_id: str) -> int:
         """
-        Load last nonce from user's file.
+        Load last nonce from user's file, migrating microsecond values to nanoseconds.
 
         Args:
             user_id: User identifier
@@ -102,7 +112,20 @@ class UserNonceManager:
             with open(nonce_file, 'r') as f:
                 content = f.read().strip()
                 if content:
-                    return int(content)
+                    value = int(content)
+                    # Migrate: microsecond values (16 digits, ~10^15) → nanoseconds.
+                    # Nanosecond epoch values are ~19 digits (>10^18); microsecond
+                    # values are ~16 digits (10^15–10^16).
+                    _MICROSECOND_THRESHOLD = 10 ** 16
+                    _NANOSECOND_THRESHOLD = 10 ** 18
+                    if value < _NANOSECOND_THRESHOLD:
+                        if value >= _MICROSECOND_THRESHOLD:
+                            # Microseconds → nanoseconds
+                            value = value * 1_000
+                        else:
+                            # Milliseconds or older format → nanoseconds
+                            value = value * 1_000_000
+                    return value
         except (ValueError, IOError) as e:
             logger.debug(f"Could not read nonce file for {user_id}: {e}")
 
@@ -131,6 +154,10 @@ class UserNonceManager:
         """
         Get next nonce for user with automatic self-healing.
 
+        Routes through the global nonce manager when available so that all
+        nonce values share the same monotonic nanosecond sequence, which
+        prevents per-user files from diverging from the live API state.
+
         Args:
             user_id: User identifier
 
@@ -140,15 +167,20 @@ class UserNonceManager:
         lock = self._get_user_lock(user_id)
 
         with lock:
-            # Load last persisted nonce
+            # Prefer the global monotonic manager (nanosecond precision)
+            if _get_global_nonce_manager is not None:
+                try:
+                    nonce = _get_global_nonce_manager().get_nonce()
+                    self._user_nonces[user_id] = nonce
+                    self._save_nonce(user_id, nonce)
+                    return nonce
+                except Exception as e:
+                    logger.debug(f"Global nonce manager unavailable for {user_id}, using local fallback: {e}")
+
+            # Local fallback: nanosecond timestamp for consistency with the global manager
             last_nonce = self._load_nonce(user_id)
-
-            # Get current time-based nonce
-            now_us = int(time.time() * 1000000)
-
-            # Ensure nonce is monotonically increasing
-            # Use max of: current time, last persisted nonce + 1
-            nonce = max(now_us, last_nonce + 1)
+            now_ns = time.time_ns()
+            nonce = max(now_ns, last_nonce + 1)
 
             # Track in memory
             self._user_nonces[user_id] = nonce
@@ -190,6 +222,9 @@ class UserNonceManager:
         """
         Self-healing: Jump nonce forward to clear error window.
 
+        Uses the global nonce manager's auto-heal when available so the
+        jump is applied to the shared sequence and persisted globally.
+
         Args:
             user_id: User identifier
 
@@ -197,25 +232,30 @@ class UserNonceManager:
             bool: True if healing was successful
         """
         try:
-            # Get current nonce
+            if _get_global_nonce_manager is not None:
+                try:
+                    mgr = _get_global_nonce_manager()
+                    mgr.record_error()  # triggers auto-heal inside the manager
+                    healed_nonce = mgr.get_last_nonce()
+                    self._user_nonces[user_id] = healed_nonce
+                    self._save_nonce(user_id, healed_nonce)
+                    logger.info(f"✅ Self-healed nonce for {user_id} via global manager: {healed_nonce}")
+                    self._user_nonce_errors[user_id] = 0
+                    return True
+                except Exception as e:
+                    logger.debug(f"Global nonce manager heal failed for {user_id}: {e}")
+
+            # Local fallback: jump +60 s using nanoseconds
             current_nonce = self._user_nonces.get(user_id, 0)
+            jump_amount = 60_000_000_000  # 60 seconds in nanoseconds
+            now_ns = time.time_ns()
+            healed_nonce = max(now_ns + jump_amount, current_nonce + jump_amount)
 
-            # Jump forward by 60 seconds
-            jump_amount = 60 * 1000000  # 60 seconds in microseconds
-
-            # Calculate new nonce (max of time + jump, current + jump)
-            now_us = int(time.time() * 1000000)
-            healed_nonce = max(now_us + jump_amount, current_nonce + jump_amount)
-
-            # Update and persist
             self._user_nonces[user_id] = healed_nonce
             self._save_nonce(user_id, healed_nonce)
 
             logger.info(f"✅ Self-healed nonce for {user_id}: jumped +60s to {healed_nonce}")
-
-            # Reset error count after successful healing
             self._user_nonce_errors[user_id] = 0
-
             return True
         except Exception as e:
             logger.error(f"Failed to heal nonce for {user_id}: {e}")
