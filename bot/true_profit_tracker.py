@@ -148,29 +148,30 @@ class TrueProfitTracker:
             if balance > 0:
                 self._state.current_cash_balance = balance
                 self._save()
-Tracks realized profits strictly from closed trade math:
 
-    realized_profit = exit_value - entry_value - fees
-
-Also tracks:
-    account_growth  = current_cash_balance - starting_balance
-    daily_pnl       - resets each UTC calendar day
-    win_rate        = wins / total_trades (all-time)
-    avg_profit      = total_realized_profit / total_trades (all-time)
-
-After every close the tracker emits two mandatory INFO log lines::
-
-    💰 NET PROFIT (after fees): +$X.XX  |  trade #N  |  symbol
-    💵 NEW CASH BALANCE: $X.XX  |  account growth: +$X.XX
-
-Then a summary line::
-
-    📊 Daily PnL: $X.XX  |  Win Rate: XX.X% (W/L)  |  Avg Profit/Trade: $X.XX
-
-State is persisted to ``data/true_profit_tracker.json`` so the tracker
-survives bot restarts.
-
-Author: NIJA Trading Systems
+# Tracks realized profits strictly from closed trade math:
+#
+#     realized_profit = exit_value - entry_value - fees
+#
+# Also tracks:
+#     account_growth  = current_cash_balance - starting_balance
+#     daily_pnl       - resets each UTC calendar day
+#     win_rate        = wins / total_trades (all-time)
+#     avg_profit      = total_realized_profit / total_trades (all-time)
+#
+# After every close the tracker emits two mandatory INFO log lines:
+#
+#     NET PROFIT (after fees): +$X.XX  |  trade #N  |  symbol
+#     NEW CASH BALANCE: $X.XX  |  account growth: +$X.XX
+#
+# Then a summary line:
+#
+#     Daily PnL: $X.XX  |  Win Rate: XX.X% (W/L)  |  Avg Profit/Trade: $X.XX
+#
+# State is persisted to ``data/true_profit_tracker.json`` so the tracker
+# survives bot restarts.
+#
+# Author: NIJA Trading Systems
 """
 
 from __future__ import annotations
@@ -396,6 +397,10 @@ class TrueProfitTracker:
         logger.info("   Today PnL         : $%+.2f", r["today_pnl"])
         logger.info("   Today Win Rate    : %.1f%%", r["today_win_rate_pct"])
         logger.info("=" * 60)
+
+    def record_trade(
+        self,
+        symbol: str,
         entry_value: float,
         exit_value: float,
         fees: float,
@@ -418,6 +423,7 @@ class TrueProfitTracker:
 
         with self._lock:
             self._check_daily_reset()
+
 
             # --- All-time ---
             self._total_realized_profit += realized_profit
