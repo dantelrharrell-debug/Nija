@@ -45,6 +45,15 @@ except ImportError:
 
 DRY_RUN = "--dry-run" in sys.argv
 
+# Buffer applied to the nonce on reset.  Must match GlobalKrakenNonceManager's
+# _STARTUP_JUMP_NS (10 s) so the post-restart nonce lead stays well under the
+# 60 s HARD RESET threshold.
+_NONCE_BUFFER_NS = 10 * 1_000_000_000  # 10 seconds in nanoseconds
+_NONCE_BUFFER_MS = _NONCE_BUFFER_NS // 1_000_000  # same buffer for legacy ms files
+
+# Basename of the primary global nonce file — defined once to avoid duplication.
+_GLOBAL_NONCE_FILENAME = "kraken_global_nonce.txt"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,14 +100,15 @@ def _find_nonce_files() -> list[str]:
     """
     Find all Kraken nonce files in the data/ directory.
 
-    Nonce files follow the pattern:
-        data/kraken_nonce_platform.txt
-        data/kraken_nonce_user_daivon_frazier.txt
-        data/kraken_nonce_user_*.txt
+    Includes:
+        data/kraken_global_nonce.txt   — primary global nonce file
+        data/kraken_nonce_platform.txt — legacy per-account files
+        data/kraken_nonce_user_*.txt   — legacy per-account files
     """
     patterns = [
-        "data/kraken_nonce_*.txt",
-        "kraken_nonce_*.txt",          # fallback: root directory
+        f"data/{_GLOBAL_NONCE_FILENAME}",  # primary global nonce (nanoseconds)
+        "data/kraken_nonce_*.txt",          # legacy per-account files (milliseconds)
+        "kraken_nonce_*.txt",               # fallback: root directory
     ]
     found = []
     for pattern in patterns:
@@ -119,7 +129,11 @@ def _find_nonce_files() -> list[str]:
 
 def _reset_global_nonce_manager() -> tuple:
     """
-    Reset the GlobalKrakenNonceManager singleton to a fresh nanosecond timestamp.
+    Reset the GlobalKrakenNonceManager singleton to a fresh nanosecond timestamp
+    and persist the new value to disk.
+
+    Uses reset_to_safe_value() which atomically sets _last_nonce = now + 10 s
+    and writes it to data/kraken_global_nonce.txt.
 
     Returns:
         (success: bool, message: str, new_nonce: int)
@@ -128,19 +142,13 @@ def _reset_global_nonce_manager() -> tuple:
         from bot.global_kraken_nonce import GlobalKrakenNonceManager
         manager = GlobalKrakenNonceManager()
 
-        # Compute a safe new starting nonce:
-        #   current nanoseconds + 60-second buffer
-        # The 60-second buffer ensures we skip past any nonces Kraken may still
-        # have cached from the previous session (Kraken caches nonces ~60 s).
-        buffer_ns  = 60 * 1_000_000_000  # 60 seconds in nanoseconds
-        new_nonce  = time.time_ns() + buffer_ns
+        if DRY_RUN:
+            new_nonce = time.time_ns() + 10 * 1_000_000_000  # preview only
+            return True, f"[DRY-RUN] Would reset GlobalKrakenNonceManager to ~{new_nonce} (now + 10 s)", new_nonce
 
-        if not DRY_RUN:
-            with manager._nonce_lock:
-                manager._last_nonce          = new_nonce
-                manager._total_nonces_issued = 0
-
-        return True, f"GlobalKrakenNonceManager reset to {new_nonce} (now + 60 s buffer)", new_nonce
+        # reset_to_safe_value() updates _last_nonce AND persists to disk atomically.
+        new_nonce = manager.reset_to_safe_value()
+        return True, f"GlobalKrakenNonceManager reset to {new_nonce} (now + 10 s, persisted to disk)", new_nonce
 
     except ImportError:
         return False, "bot.global_kraken_nonce not found — skipping in-memory reset", 0
@@ -189,15 +197,20 @@ def main() -> int:
             old_value = _read_nonce_file(path)
             old_str   = str(old_value) if old_value is not None else "<missing/corrupt>"
 
-            # Compute a safe new nonce value in milliseconds
-            # (persisted nonce files use milliseconds, not nanoseconds)
-            buffer_ms = 60 * 1000  # 60-second buffer in milliseconds
-            new_value = int(time.time() * 1000) + buffer_ms
+            # The global nonce file uses nanosecond precision (19-digit values).
+            # Legacy per-account files used millisecond precision (13-digit values).
+            is_global = os.path.basename(path) == _GLOBAL_NONCE_FILENAME
+            if is_global:
+                new_value = time.time_ns() + _NONCE_BUFFER_NS
+                unit_label = f"+{_NONCE_BUFFER_NS // 1_000_000_000} s buffer (nanoseconds)"
+            else:
+                new_value = int(time.time() * 1000) + _NONCE_BUFFER_MS
+                unit_label = f"+{_NONCE_BUFFER_MS // 1000} s buffer (milliseconds)"
 
             if DRY_RUN:
                 print(f"  [DRY-RUN] {path}")
                 print(f"            old: {old_str}")
-                print(f"            new: {new_value}  (+60 s buffer)")
+                print(f"            new: {new_value}  ({unit_label})")
                 continue
 
             # Backup first
@@ -210,7 +223,7 @@ def main() -> int:
                 _write_nonce_file(path, new_value)
                 print(f"  ✅ Reset: {path}")
                 print(f"     old: {old_str}")
-                print(f"     new: {new_value}  (+60 s buffer)")
+                print(f"     new: {new_value}  ({unit_label})")
             except OSError as exc:
                 print(f"  ❌ Failed to write {path}: {exc}")
                 errors += 1
