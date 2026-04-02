@@ -68,15 +68,22 @@ except ImportError:
 
 # Import Global Kraken Nonce Manager (ONE source for all users - FINAL FIX)
 try:
-    from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
+    from bot.global_kraken_nonce import (
+        get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward,
+        get_global_nonce_manager,
+    )
 except ImportError:
     try:
-        from global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
+        from global_kraken_nonce import (
+            get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward,
+            get_global_nonce_manager,
+        )
     except ImportError:
         # Fallback: Global nonce manager not available
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
         jump_global_kraken_nonce_forward = None
+        get_global_nonce_manager = None
 
 # Import Balance Models (FIX 1: Three-part balance model)
 try:
@@ -6443,10 +6450,13 @@ class KrakenBroker(BaseBroker):
                     DEPRECATED: Generate nonce using timestamp (fallback only).
 
                     FIX 3: No per-instance _last_nonce tracking.
-                    Uses simple timestamp-based nonce (milliseconds since epoch).
+                    Routes through the global nonce manager when available so the
+                    single-writer guarantee is preserved even on this path.
                     """
-                    # FIX 3: Use simple timestamp-based nonce (no per-instance state)
-                    current_nonce = int(time.time() * 1000)
+                    if get_global_kraken_nonce is not None:
+                        current_nonce = get_global_kraken_nonce()
+                    else:
+                        current_nonce = time.time_ns()
 
                     # Persist to account-specific file for restart-safety
                     try:
@@ -6593,11 +6603,13 @@ class KrakenBroker(BaseBroker):
                             else:
                                 logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms for retry {attempt}")
                         else:
-                            # FIX 3: Fallback - no per-instance state, just persist current timestamp
-                            # Global nonce manager should be used - this path is deprecated
+                            # FIX 3: Fallback - route through global nonce manager when available
                             nonce_multiplier = 20 if last_error_was_nonce else 1
                             nonce_jump = nonce_multiplier * 1000 * attempt  # milliseconds
-                            current_nonce = int(time.time() * 1000) + nonce_jump
+                            if jump_global_kraken_nonce_forward is not None:
+                                current_nonce = jump_global_kraken_nonce_forward(nonce_jump)
+                            else:
+                                current_nonce = time.time_ns() + nonce_jump * 1_000_000
 
                             # Persist the jumped nonce to account-specific file
                             try:
@@ -6723,6 +6735,12 @@ class KrakenBroker(BaseBroker):
                                 # Don't wait until the next retry iteration - do it now to clear the burned nonce
                                 if is_nonce_error:
                                     self._immediate_nonce_jump()
+                                    # Notify the global manager so auto-heal can trigger if errors persist
+                                    if get_global_nonce_manager is not None:
+                                        try:
+                                            get_global_nonce_manager().record_error()
+                                        except Exception:
+                                            pass
 
                                 # Reduce log spam for transient errors
                                 # - Nonce errors: Log at INFO level on first attempt, DEBUG on retries (transient, will auto-retry)
@@ -6752,6 +6770,13 @@ class KrakenBroker(BaseBroker):
 
                     if balance and 'result' in balance:
                         self.connected = True
+
+                        # Reset the global nonce error counter on successful connection
+                        if get_global_nonce_manager is not None:
+                            try:
+                                get_global_nonce_manager().record_success()
+                            except Exception:
+                                pass
 
                         if attempt > 1:
                             logger.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
