@@ -6054,23 +6054,25 @@ class KrakenBroker(BaseBroker):
         """
         Immediately jump nonce forward when a nonce error is detected.
 
-        This method jumps the nonce forward by 120 seconds to clear the "burned"
-        nonce window and ensure the next API call will succeed.
+        This method jumps the nonce forward by 30 seconds to clear the "burned"
+        nonce window and ensure the next API call will succeed.  30 seconds is
+        sufficient to skip past Kraken's ~60-second nonce validation window while
+        keeping future-nonce accumulation manageable across reconnect cycles.
 
         Thread-safe: Uses the nonce generator's internal lock.
         """
         if self._use_global_nonce:
             # Use global nonce manager to jump forward
             if jump_global_kraken_nonce_forward is not None:
-                immediate_jump_ms = 120 * 1000  # 120 seconds in milliseconds
+                immediate_jump_ms = 30 * 1000  # 30 seconds in milliseconds
                 new_nonce = jump_global_kraken_nonce_forward(immediate_jump_ms)
-                logger.debug(f"   ⚡ Immediately jumped GLOBAL nonce forward by 120s to clear burned nonce window (new nonce: {new_nonce})")
+                logger.debug(f"   ⚡ Immediately jumped GLOBAL nonce forward by 30s to clear burned nonce window (new nonce: {new_nonce})")
             else:
                 logger.debug(f"   ⚡ Global nonce jump function not available - using time-based recovery")
             return
         elif self._kraken_nonce is not None:
             # Use KrakenNonce instance (fallback)
-            immediate_jump_ms = 120 * 1000  # 120 seconds in milliseconds
+            immediate_jump_ms = 30 * 1000  # 30 seconds in milliseconds
             new_nonce = self._kraken_nonce.jump_forward(immediate_jump_ms)
 
             # Persist the jumped nonce to account-specific file
@@ -6080,7 +6082,7 @@ class KrakenBroker(BaseBroker):
             except IOError as e:
                 logging.debug(f"Could not persist jumped nonce: {e}")
 
-            logger.debug(f"   ⚡ Immediately jumped nonce forward by 120s to clear burned nonce window")
+            logger.debug(f"   ⚡ Immediately jumped nonce forward by 30s to clear burned nonce window")
         else:
             # FIX 3: Final fallback - use global nonce manager if available, else simple timestamp
             # No per-instance _last_nonce tracking
@@ -6559,7 +6561,17 @@ class KrakenBroker(BaseBroker):
                         # Larger jumps for nonce errors ensure we skip well beyond the burned nonce window
                         # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
 
-                        if self._kraken_nonce is not None:
+                        if self._use_global_nonce:
+                            # Use global nonce manager to jump forward (correct path for Railway deployments)
+                            if jump_global_kraken_nonce_forward is not None:
+                                nonce_multiplier = 20 if last_error_was_nonce else 1
+                                nonce_jump_ms = nonce_multiplier * 1000 * attempt
+                                jump_global_kraken_nonce_forward(nonce_jump_ms)
+                                if last_error_was_nonce:
+                                    logger.debug(f"   Jumped GLOBAL nonce forward by {nonce_jump_ms}ms (20x jump for nonce error)")
+                                else:
+                                    logger.debug(f"   Jumped GLOBAL nonce forward by {nonce_jump_ms}ms for retry {attempt}")
+                        elif self._kraken_nonce is not None:
                             # Use KrakenNonce instance (OPTION A) with public method
                             # Use 20x larger nonce jump for nonce-specific errors (INCREASED from 10x)
                             nonce_multiplier = 20 if last_error_was_nonce else 1
