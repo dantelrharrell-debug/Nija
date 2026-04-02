@@ -65,8 +65,8 @@ _W_GATE      = 0.20   # 5-Gate AI gate penalty deduction
 # Hard absolute floor — never execute below this regardless of ranking.
 # NOTE: the composite formula (raw_score * 0.55 + opt_delta * 0.25 - penalty * 0.20)
 # produces values in the 0-60 range, so this floor must be calibrated accordingly.
-# Lowered from 35.0 → 20.0 so that fair signals (raw_score ≥ 36) are not excluded.
-MIN_SCORE_ABSOLUTE = 20.0
+# Raised from 20.0 → 25.0 to filter lower-quality entries (Option C — Apr 2026).
+MIN_SCORE_ABSOLUTE = 25.0
 
 # Default number of top signals to select per cycle
 TOP_N_DEFAULT = 3

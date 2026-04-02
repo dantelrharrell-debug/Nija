@@ -82,7 +82,7 @@ _DEFAULT_MIN_ORDER_USD = 10.0  # Conservative fallback for any unlisted broker
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
 # THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
 # Platform was stuck waiting while users traded on lower-confidence signals.
-MIN_CONFIDENCE = 0.30  # Lowered from 0.50 to allow weaker-confidence signals through
+MIN_CONFIDENCE = 0.35  # Raised from 0.30 to filter lower-quality signals (Option C — Apr 2026)
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Volume gate for entry confirmation in check_long/short_entry.
@@ -516,10 +516,10 @@ class NIJAApexStrategyV71:
         # 2.0%/2.5%/3.5%/5.0% for Coinbase) — see execution_engine.check_stepped_profit_exits.
         self.enable_stepped_exits = self.config.get('enable_stepped_exits', True)
         self.stepped_exit_levels = self.config.get('stepped_exits', {
-            0.025: 0.10,  # Exit 10% at 2.5% profit  (Coinbase-safe: 0.9% NET after fees)
-            0.030: 0.15,  # Exit 15% at 3.0% profit
-            0.040: 0.25,  # Exit 25% at 4.0% profit
-            0.065: 0.50,  # Exit 50% at 6.5% profit  (satisfies 1.5:1 R/R at 1.5% stop)
+            0.030: 0.10,  # Exit 10% at 3.0% profit  (TP upgrade — Apr 2026)
+            0.040: 0.15,  # Exit 15% at 4.0% profit
+            0.055: 0.25,  # Exit 25% at 5.5% profit
+            0.070: 0.50,  # Exit 50% at 7.0% profit  (gross R:R = 7.0/1.2 = 5.8:1 at -1.2% stop)
         })
 
         # AI Momentum Scoring (optional, skeleton for future)
@@ -740,7 +740,7 @@ class NIJAApexStrategyV71:
             logger.info(f"✅ Minimum entry score: {min_score}/100 (relaxed threshold — more signals, 40-75 range)")
         if self.enable_stepped_exits:
             logger.info("✅ Stepped profit-taking: ENABLED (aggressive partial exits)")
-            logger.info(f"   Exit levels: {len(self.stepped_exit_levels)} profit targets (2.5%, 3.0%, 4.0%, 6.5%)")
+            logger.info(f"   Exit levels: {len(self.stepped_exit_levels)} profit targets (3.0%, 4.0%, 5.5%, 7.0%)")
         logger.info(f"✅ Position sizing: {self.config.get('min_position_pct', 0.02)*100:.0f}%-{self.config.get('max_position_pct', 0.10)*100:.0f}% (capital efficient)")
         logger.info(f"✅ Confidence threshold: {MIN_CONFIDENCE*100:.0f}% (balanced quality)")
         logger.info(f"✅ Minimum ADX: {self.min_adx} (soft score contribution; drought relaxation active when idle 2h+)")
@@ -777,9 +777,8 @@ class NIJAApexStrategyV71:
         profit_targets = sorted(self.stepped_exit_levels.keys())
         profit_targets_pct = [pt * 100 for pt in profit_targets]  # Convert to percentages
         
-        # Estimate stop loss percentage (typical ATR-based stop is ~1-2%)
-        # Using conservative 1.5% estimate for validation
-        stop_loss_pct = 1.5
+        # Estimate stop loss percentage (tightened to 1.2% — Option B Apr 2026)
+        stop_loss_pct = 1.2
         
         # Use the highest profit target as primary target
         primary_target_pct = profit_targets_pct[-1] if profit_targets_pct else 6.0
