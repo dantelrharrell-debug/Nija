@@ -154,7 +154,7 @@ Tracks realized profits strictly from closed trade math:
 
 Also tracks:
     account_growth  = current_cash_balance - starting_balance
-    daily_pnl       — resets each UTC calendar day
+    daily_pnl       - resets each UTC calendar day
     win_rate        = wins / total_trades (all-time)
     avg_profit      = total_realized_profit / total_trades (all-time)
 
