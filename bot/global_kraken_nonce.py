@@ -33,9 +33,12 @@ Usage:
         # Make Kraken API call here with nonce
 """
 
+import logging
 import os
 import time
 import threading
+
+_logger = logging.getLogger(__name__)
 
 # Nonce persistence file — survives process restarts so accumulated jumps are not lost
 _NONCE_FILE = os.path.join(
@@ -116,6 +119,26 @@ class GlobalKrakenNonceManager:
             # nonces that Kraken has already accepted (including any jump-forward values).
             persisted = _load_persisted_nonce()
             current_ns = time.time_ns()
+
+            # Guard against runaway nonce accumulation caused by many consecutive failed
+            # reconnect cycles (each failed reconnect can jump the nonce forward ~400 s).
+            # After hundreds of such cycles the persisted nonce can be hours ahead of
+            # real time, which causes Kraken to reject every new nonce with
+            # "EAPI:Invalid nonce" because the value is outside Kraken's acceptance window.
+            # Cap the persisted nonce to at most 2 minutes ahead of the current time; the
+            # pre-connection nonce jump that follows will still push it forward by 30 s so
+            # we remain ahead of any nonce that Kraken accepted in the last ~2 minutes.
+            _MAX_NONCE_AHEAD_NS = 120 * 1_000_000_000  # 2 minutes in nanoseconds
+            if persisted > current_ns + _MAX_NONCE_AHEAD_NS:
+                _excess_s = (persisted - current_ns) / 1_000_000_000
+                _logger.warning(
+                    f"global_kraken_nonce: persisted nonce is {_excess_s:.0f}s ahead of "
+                    f"current time (likely from accumulated failed-reconnect jumps); "
+                    f"resetting to current time to restore Kraken acceptance window."
+                )
+                persisted = current_ns
+                _persist_nonce(persisted)
+
             self._last_nonce = max(current_ns, persisted)
             self._nonce_lock = threading.RLock()
 
