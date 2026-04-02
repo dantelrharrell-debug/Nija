@@ -33,8 +33,40 @@ Usage:
         # Make Kraken API call here with nonce
 """
 
+import os
 import time
 import threading
+
+# Nonce persistence file — survives process restarts so accumulated jumps are not lost
+_NONCE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "kraken_global_nonce.txt"
+)
+_PERSIST_EVERY_N = 100  # Write to disk after this many get_nonce() calls
+
+
+def _load_persisted_nonce() -> int:
+    """Load the last persisted nonce from disk. Returns 0 if not available."""
+    try:
+        if os.path.exists(_NONCE_FILE):
+            with open(_NONCE_FILE, "r") as f:
+                content = f.read().strip()
+                if content:
+                    return int(content)
+    except (ValueError, IOError, OSError) as e:
+        import logging as _logging
+        _logging.debug(f"global_kraken_nonce: could not load persisted nonce from {_NONCE_FILE}: {e}")
+    return 0
+
+
+def _persist_nonce(nonce: int) -> None:
+    """Write nonce to disk. Logs debug on failure but never raises."""
+    try:
+        os.makedirs(os.path.dirname(_NONCE_FILE), exist_ok=True)
+        with open(_NONCE_FILE, "w") as f:
+            f.write(str(nonce))
+    except (IOError, OSError) as e:
+        import logging as _logging
+        _logging.debug(f"global_kraken_nonce: could not persist nonce to {_NONCE_FILE}: {e}")
 
 
 class GlobalKrakenNonceManager:
@@ -80,8 +112,15 @@ class GlobalKrakenNonceManager:
 
             # Nanosecond precision (19 digits)
             # Example: 1768712093048832619
-            self._last_nonce = 0
+            # Load persisted nonce so we survive process restarts without replaying
+            # nonces that Kraken has already accepted (including any jump-forward values).
+            persisted = _load_persisted_nonce()
+            current_ns = time.time_ns()
+            self._last_nonce = max(current_ns, persisted)
             self._nonce_lock = threading.RLock()
+
+            # Counter used to throttle periodic disk persistence in get_nonce()
+            self._nonces_since_persist = 0
 
             # Statistics tracking
             self._total_nonces_issued = 0
@@ -112,6 +151,12 @@ class GlobalKrakenNonceManager:
             self._last_nonce = new_nonce
             self._total_nonces_issued += 1
 
+            # Persist periodically so restarts don't replay already-seen nonces
+            self._nonces_since_persist += 1
+            if self._nonces_since_persist >= _PERSIST_EVERY_N:
+                self._nonces_since_persist = 0
+                _persist_nonce(new_nonce)
+
             return new_nonce
 
     def jump_forward(self, nanoseconds: int) -> int:
@@ -119,6 +164,8 @@ class GlobalKrakenNonceManager:
         Jump the nonce forward by specified nanoseconds.
 
         Used for error recovery when "Invalid nonce" errors occur.
+        The new value is persisted to disk immediately so that a process
+        restart will not send a nonce lower than what Kraken already saw.
 
         Args:
             nanoseconds: Number of nanoseconds to jump forward
@@ -135,6 +182,11 @@ class GlobalKrakenNonceManager:
 
             # Update to the larger value
             self._last_nonce = max(time_based, increment_based)
+
+            # Always persist jumps immediately — they represent large state changes
+            # that must survive restarts so Kraken doesn't reject stale nonces.
+            self._nonces_since_persist = 0
+            _persist_nonce(self._last_nonce)
 
             return self._last_nonce
 

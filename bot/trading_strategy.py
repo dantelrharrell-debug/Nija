@@ -3551,6 +3551,9 @@ class TradingStrategy:
         # Rate limiting warmup state (prevents API bans on startup)
         self.cycle_count = 0             # Track number of cycles for warmup
         self.api_health_score = 100      # 0-100, degrades on errors, recovers on success
+        # Per-broker consecutive reconnect failure counters for backoff logic {broker_type: count}
+        self._reconnect_fail_counts = {}
+        self._reconnect_last_success = {}  # {broker_type: timestamp}
 
         # Candle data cache (prevents duplicate API calls for same market/timeframe)
         self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
@@ -7099,11 +7102,36 @@ class TradingStrategy:
                 if _cycle % 5 == 0:
                     for _bt, _pb in list(self.multi_account_manager.platform_brokers.items()):
                         if _pb is not None and not _pb.connected:
-                            logger.info(
-                                f"🔄 Cycle {_cycle}: Platform {_bt.value.upper()} is offline — "
-                                "attempting background reconnect…"
-                            )
-                            self.multi_account_manager.try_reconnect_platform_broker(_bt)
+                            # Exponential backoff between reconnect cycles for persistent failures.
+                            # Failures are counted per broker; each success resets the counter.
+                            _fail_count = self._reconnect_fail_counts.get(_bt, 0)
+                            # Exponential backoff between reconnect cycles for persistent failures.
+                            # Intervals are multiples of Kraken's ~60s nonce validation window so
+                            # nonces have time to expire before we attempt the next reconnect.
+                            # 0 failures=no wait, 1=30s, 2=60s, 3=120s, 4+=300s
+                            _RECONNECT_BACKOFF_SECONDS = {0: 0, 1: 30, 2: 60, 3: 120}
+                            _RECONNECT_BACKOFF_MAX_SECONDS = 300
+                            _backoff_s = _RECONNECT_BACKOFF_SECONDS.get(_fail_count, _RECONNECT_BACKOFF_MAX_SECONDS)
+                            _last_attempt = self._reconnect_last_success.get(_bt, 0)
+                            if _backoff_s > 0 and (time.time() - _last_attempt) < _backoff_s:
+                                logger.debug(
+                                    f"🔄 Cycle {_cycle}: Platform {_bt.value.upper()} reconnect backoff "
+                                    f"({_fail_count} failures, waiting {_backoff_s}s between attempts)"
+                                )
+                            else:
+                                logger.info(
+                                    f"🔄 Cycle {_cycle}: Platform {_bt.value.upper()} is offline — "
+                                    "attempting background reconnect…"
+                                )
+                                self._reconnect_last_success[_bt] = time.time()
+                                _success = self.multi_account_manager.try_reconnect_platform_broker(_bt)
+                                if _success:
+                                    self._reconnect_fail_counts[_bt] = 0
+                                else:
+                                    self._reconnect_fail_counts[_bt] = _fail_count + 1
+                        elif _pb is not None and _pb.connected:
+                            # Reset failure counter once broker is healthy
+                            self._reconnect_fail_counts[_bt] = 0
             except Exception as _reconnect_err:
                 logger.debug(f"Background platform reconnect check error: {_reconnect_err}")
 
