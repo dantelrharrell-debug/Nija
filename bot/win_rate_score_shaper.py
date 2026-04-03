@@ -208,59 +208,14 @@ def _normalise_regime(regime: Any) -> str:
 
 def _compute_factor(win_rate: float) -> float:
     """
-    Map a historical win-rate to a score multiplier.
-
-    When all five ``NIJA_WRSS_WINRATE_*_FACTOR`` env vars are set, a discrete
-    tiered lookup is used:
-
-    +-----------+--------------------+-------------------------------+
-    | Tier      | Win-rate range     | Default multiplier            |
-    +===========+====================+===============================+
-    | DOMINATING| ≥ 75%              | NIJA_WRSS_WINRATE_DOMINATING  |
-    | STRONG    | [65%, 75%)         | NIJA_WRSS_WINRATE_STRONG      |
-    | NEUTRAL   | [45%, 65%)         | NIJA_WRSS_WINRATE_NEUTRAL     |
-    | STRUGGLING| [30%, 45%)         | NIJA_WRSS_WINRATE_STRUGGLING  |
-    | BROKEN    | < 30%              | NIJA_WRSS_WINRATE_BROKEN      |
-    +-----------+--------------------+-------------------------------+
-
-    When the tier factors are not all set, the legacy continuous linear
-    interpolation is used instead (backward-compatible):
-
-    Neutral band [_TARGET_FLOOR, _TARGET_CEIL] → 1.00×
-    Below _TARGET_FLOOR → linearly dampen to _MAX_DAMPEN at 0% win-rate
-    Above _TARGET_CEIL  → linearly boost  to _MAX_BOOST  at 100% win-rate
-    """
-    if _USE_TIERED_FACTORS:
-        # Discrete tiered lookup — each tier returns a fixed factor.
-        if win_rate >= _TIER_DOMINATING_FLOOR:
-            return float(_WINRATE_DOMINATING_FACTOR)  # type: ignore[arg-type]
-        if win_rate >= _TIER_STRONG_FLOOR:
-            return float(_WINRATE_STRONG_FACTOR)      # type: ignore[arg-type]
-        if win_rate >= _TIER_STRUGGLING_CEIL:
-            return float(_WINRATE_NEUTRAL_FACTOR)     # type: ignore[arg-type]
-        if win_rate >= _TIER_BROKEN_CEIL:
-            return float(_WINRATE_STRUGGLING_FACTOR)  # type: ignore[arg-type]
-        return float(_WINRATE_BROKEN_FACTOR)          # type: ignore[arg-type]
-
-    # Legacy continuous linear interpolation.
-    if win_rate >= _TARGET_CEIL:
-        # Good regime: linear scale from 1.0 → _MAX_BOOST
-        strength = (win_rate - _TARGET_CEIL) / max(1e-9, 1.0 - _TARGET_CEIL)
-        return round(1.0 + strength * (_MAX_BOOST - 1.0), 4)
-    if win_rate <= _TARGET_FLOOR:
-        # Struggling regime: linear scale from 1.0 → _MAX_DAMPEN
-        severity = (_TARGET_FLOOR - win_rate) / max(1e-9, _TARGET_FLOOR)
-        return round(1.0 - severity * (1.0 - _MAX_DAMPEN), 4)
-    # Neutral band
-    return 1.0
     Map a historical win-rate to a score multiplier using a 5-tier stepped table.
 
     Tiers (evaluated top-down):
-      DOMINATING  win_rate ≥ 72 %  →  _FACTOR_DOMINATING  (default 1.30×)
-      STRONG      win_rate ≥ 60 %  →  _FACTOR_STRONG      (default 1.15×)
-      NEUTRAL     win_rate > 45 %  →  _FACTOR_NEUTRAL     (default 1.05×)
-      STRUGGLING  win_rate > 30 %  →  _FACTOR_STRUGGLING  (default 0.90×)
-      BROKEN      win_rate ≤ 30 %  →  _FACTOR_BROKEN      (default 0.70×)
+      DOMINATING  win_rate >= 72%  -> _FACTOR_DOMINATING  (default 1.30x)
+      STRONG      win_rate >= 60%  -> _FACTOR_STRONG      (default 1.15x)
+      NEUTRAL     win_rate >  45%  -> _FACTOR_NEUTRAL     (default 1.05x)
+      STRUGGLING  win_rate >  30%  -> _FACTOR_STRUGGLING  (default 0.90x)
+      BROKEN      win_rate <= 30%  -> _FACTOR_BROKEN      (default 0.70x)
 
     All five factors are individually tunable via
     ``NIJA_WRSS_WINRATE_*_FACTOR`` environment variables.
