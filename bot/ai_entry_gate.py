@@ -244,6 +244,7 @@ class AIEntryGate:
         broker: str = "coinbase",
         entry_type: str = "swing",
         gate_score_reduction: float = 0.0,
+        volume_gate_multiplier: Optional[float] = None,
     ) -> GateResult:
         """
         Run all 5 gates and return a score-based pass/fail decision.
@@ -258,6 +259,10 @@ class AIEntryGate:
             entry_type: Strategy type active for this entry.
             gate_score_reduction: Fractional threshold reduction from
                 drought safeguard (0.0 = no relaxation, 0.10 = 10% easier).
+            volume_gate_multiplier: Optional regime-specific override for the
+                fraction of average volume required (e.g. 0.80 in crisis,
+                0.50 in strong trend).  When ``None`` the default
+                ``_VOL_MULTIPLIER_DEFAULT`` (0.60) is used.
 
         Returns:
             GateResult with pass/fail, total gate score, and per-gate detail.
@@ -289,7 +294,7 @@ class AIEntryGate:
         g1 = self._gate_score(enhanced_score, regime_key, gate_score_reduction)
         gates["gate1_score"] = g1
 
-        g2 = self._gate_volume(df, entry_type)
+        g2 = self._gate_volume(df, entry_type, volume_gate_multiplier)
         gates["gate2_volume"] = g2
 
         g3 = self._gate_volatility(df, indicators, regime_key, entry_type)
@@ -406,8 +411,20 @@ class AIEntryGate:
         )
 
     @staticmethod
-    def _gate_volume(df: pd.DataFrame, entry_type: str) -> GateCheck:
-        """Gate 2: Current bar volume vs 20-bar average liquidity floor."""
+    def _gate_volume(
+        df: pd.DataFrame,
+        entry_type: str,
+        volume_gate_multiplier: Optional[float] = None,
+    ) -> GateCheck:
+        """Gate 2: Current bar volume vs 20-bar average liquidity floor.
+
+        Args:
+            df: OHLCV DataFrame.
+            entry_type: Strategy type (e.g. 'scalp').
+            volume_gate_multiplier: Optional regime-specific override for the
+                minimum volume ratio.  When provided it takes precedence over
+                the scalp/default constants.
+        """
         try:
             avg_vol = df["volume"].iloc[-21:-1].mean() if len(df) >= 21 else df["volume"].mean()
             cur_vol = float(df["volume"].iloc[-1])
@@ -417,7 +434,16 @@ class AIEntryGate:
             return GateCheck(passed=True, name="Volume",
                              detail="volume data unavailable — gate skipped")
 
-        min_mult = _VOL_MULTIPLIER_SCALP if entry_type == "scalp" else _VOL_MULTIPLIER_DEFAULT
+        if volume_gate_multiplier is not None:
+            # Regime-specific override takes priority; scalp always uses the higher of
+            # the regime override and the scalp default so scalp never gets too loose.
+            if entry_type == "scalp":
+                min_mult = max(volume_gate_multiplier, _VOL_MULTIPLIER_SCALP)
+            else:
+                min_mult = volume_gate_multiplier
+        else:
+            min_mult = _VOL_MULTIPLIER_SCALP if entry_type == "scalp" else _VOL_MULTIPLIER_DEFAULT
+
         passed   = ratio >= min_mult
         return GateCheck(
             passed=passed,

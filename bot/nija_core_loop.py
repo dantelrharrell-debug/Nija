@@ -69,19 +69,22 @@ MAX_ENTRIES_PER_CYCLE = 3
 MIN_SCORE_HARD_FLOOR = 20.0
 
 # After this many consecutive zero-signal cycles, progressive score relaxation
-# kicks in: each 5-cycle step reduces the effective floor by another 20% (max 60%).
-# Renamed from ZERO_SIGNAL_STREAK_THRESHOLD; raised 3 → 5 so the bot doesn't
-# collapse into fallback mode on brief quiet patches (TUNE 3, Apr 2026).
-FORCED_ENTRY_STREAK_THRESHOLD: int = 5
+# kicks in: each 5-cycle step reduces the effective floor by a small amount
+# (max 20% total).  Raised 3 → 8 so brief quiet patches do NOT trigger
+# relaxation — the bot holds its quality bar until genuinely dry conditions.
+# Purpose: protect positive-edge discipline; only soften after ~20 min of silence.
+FORCED_ENTRY_STREAK_THRESHOLD: int = 8
 
 # Number of relaxation steps (each step = 5 cycles past threshold).
 MAX_RELAXATION_STEPS: int = 3
 
-# Fractional threshold reduction per step:
-#   step 1  (streak  5–9):  factor 0.20 → floor × 0.80
-#   step 2  (streak 10–14): factor 0.40 → floor × 0.60
-#   step 3  (streak  ≥ 15): factor 0.60 → floor × 0.40  (cap)
-_RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.20, 0.40, 0.60)
+# Fractional threshold reduction per step — deliberately shallow:
+#   step 1  (streak  8–12): factor 0.10 → floor × 0.90  (10% easier)
+#   step 2  (streak 13–17): factor 0.15 → floor × 0.85  (15% easier)
+#   step 3  (streak   ≥18): factor 0.20 → floor × 0.80  (20% — hard cap)
+# Cap is 20% (was 60%) so even in a prolonged drought the gate still requires
+# ~80% of the normal threshold — no entering without a real edge.
+_RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.10, 0.15, 0.20)
 
 
 def _get_relaxation_factor(streak: int) -> float:

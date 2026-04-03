@@ -112,6 +112,22 @@ class RegimeTradingParams:
     # ── Entry score ───────────────────────────────────────────────────────
     min_entry_score: int = 3  # out of 5
 
+    # ── Market condition tuning ───────────────────────────────────────────
+    # How frequently the bot should scan for new entries (seconds between cycles).
+    # Regime hint fed to CycleSpeedController — lower = scan faster.
+    scan_interval_secs: float = 150.0
+
+    # Minimum seconds to wait between re-entries on the same symbol.
+    cooldown_secs: float = 45.0
+
+    # Daily loss cap (% of account) before new entries are halted for the day.
+    # Stricter in adverse regimes, relaxed in strong trends.
+    daily_loss_limit_pct: float = 5.0
+
+    # Fraction of 20-bar average volume the current bar must meet for entry.
+    # Raised in choppy/crisis regimes (need evidence of real participation).
+    volume_gate_multiplier: float = 0.60
+
     # ── Extra metadata ────────────────────────────────────────────────────
     extra: Dict[str, Any] = field(default_factory=dict)
 
@@ -139,6 +155,11 @@ _PARAMS_STRONG_TREND = RegimeTradingParams(
     min_trades_per_hour=2.0,
     min_trades_per_day=18.0,
     min_entry_score=3,
+    # Market condition tuning
+    scan_interval_secs=120.0,    # fast scanning — trending market = more opportunity
+    cooldown_secs=20.0,          # quick re-entry — trend setups repeat
+    daily_loss_limit_pct=5.0,    # full loss budget in favourable conditions
+    volume_gate_multiplier=0.50, # relaxed volume floor — trend brings participation
 )
 
 _PARAMS_WEAK_TREND = RegimeTradingParams(
@@ -160,6 +181,11 @@ _PARAMS_WEAK_TREND = RegimeTradingParams(
     min_trades_per_hour=2.0,
     min_trades_per_day=20.0,
     min_entry_score=3,
+    # Market condition tuning
+    scan_interval_secs=150.0,    # normal scanning cadence
+    cooldown_secs=30.0,          # standard cooldown
+    daily_loss_limit_pct=4.0,    # slightly tighter — trend not yet confirmed
+    volume_gate_multiplier=0.55, # modest volume requirement
 )
 
 _PARAMS_RANGING = RegimeTradingParams(
@@ -181,6 +207,11 @@ _PARAMS_RANGING = RegimeTradingParams(
     min_trades_per_hour=2.5,            # more frequent in ranges
     min_trades_per_day=22.0,
     min_entry_score=4,                  # require higher quality in chop
+    # Market condition tuning
+    scan_interval_secs=180.0,    # slower scanning — setups need to mature
+    cooldown_secs=45.0,          # longer cooldown — avoid thrashing in chop
+    daily_loss_limit_pct=3.0,    # tighter loss limit — ranging eats fees
+    volume_gate_multiplier=0.65, # require decent volume — avoid false breakouts
 )
 
 _PARAMS_EXPANSION = RegimeTradingParams(
@@ -202,6 +233,11 @@ _PARAMS_EXPANSION = RegimeTradingParams(
     min_trades_per_hour=1.5,            # fewer but bigger setups
     min_trades_per_day=15.0,
     min_entry_score=3,
+    # Market condition tuning
+    scan_interval_secs=120.0,    # fast scanning — breakouts develop quickly
+    cooldown_secs=25.0,          # quick re-entry — momentum chains
+    daily_loss_limit_pct=5.0,    # full budget — breakouts have high expectancy
+    volume_gate_multiplier=0.50, # relaxed volume — expansion brings volume naturally
 )
 
 _PARAMS_MEAN_REVERSION = RegimeTradingParams(
@@ -223,6 +259,11 @@ _PARAMS_MEAN_REVERSION = RegimeTradingParams(
     min_trades_per_hour=2.0,
     min_trades_per_day=20.0,
     min_entry_score=4,
+    # Market condition tuning
+    scan_interval_secs=180.0,    # patient scanning — reversals take time to set up
+    cooldown_secs=45.0,          # avoid re-entry on same failed reversal
+    daily_loss_limit_pct=3.0,    # tight loss budget — reversals can fail violently
+    volume_gate_multiplier=0.65, # require volume confirmation for reversals
 )
 
 # CONSOLIDATION → SCALPING:
@@ -247,6 +288,11 @@ _PARAMS_CONSOLIDATION = RegimeTradingParams(
     min_trades_per_hour=4.0,            # 4+ scalps per hour target
     min_trades_per_day=30.0,
     min_entry_score=2,                  # lower bar — volume compensates
+    # Market condition tuning
+    scan_interval_secs=90.0,     # fast scanning — scalp setups appear and vanish quickly
+    cooldown_secs=15.0,          # short cooldown — scalp mode = high frequency
+    daily_loss_limit_pct=4.0,    # moderate limit — many small trades accumulate losses fast
+    volume_gate_multiplier=0.70, # require solid volume — scalps need tight spreads
 )
 
 _PARAMS_VOLATILITY_EXPLOSION = RegimeTradingParams(
@@ -268,6 +314,11 @@ _PARAMS_VOLATILITY_EXPLOSION = RegimeTradingParams(
     min_trades_per_hour=0.5,            # almost no new trades
     min_trades_per_day=5.0,
     min_entry_score=5,                  # require perfect setups only
+    # Market condition tuning
+    scan_interval_secs=300.0,    # slow scanning — conserve resources; wait for calm
+    cooldown_secs=120.0,         # long cooldown — don't chase volatile moves
+    daily_loss_limit_pct=2.0,    # strict 2% cap — protect capital in crisis
+    volume_gate_multiplier=0.80, # high volume required — only trade with real participation
 )
 
 # Legacy 3-regime fallbacks (TRENDING / RANGING / VOLATILE)
@@ -349,7 +400,8 @@ class RegimeStrategyBridge:
                 logger.info(
                     "🔀 REGIME SWITCH: %s → %s | strategy=%s | "
                     "RSI_long=%d-%d | conf_delta=%+.2f | "
-                    "pos_mult=%.2f | sl_atr=%.1f× | tp_mult=%.2f",
+                    "pos_mult=%.2f | sl_atr=%.1f× | tp_mult=%.2f | "
+                    "scan=%.0fs | cooldown=%.0fs | loss_limit=%.1f%% | vol_gate=%.0f%%",
                     prev.upper(), regime_key.upper(),
                     params.strategy_type.value,
                     params.rsi_long_min, params.rsi_long_max,
@@ -357,6 +409,10 @@ class RegimeStrategyBridge:
                     params.position_size_multiplier,
                     params.stop_loss_atr_multiplier,
                     params.take_profit_multiplier,
+                    params.scan_interval_secs,
+                    params.cooldown_secs,
+                    params.daily_loss_limit_pct,
+                    params.volume_gate_multiplier * 100,
                 )
                 self._last_regime = regime_key
 
@@ -374,7 +430,11 @@ class RegimeStrategyBridge:
             f"RSI_long={p.rsi_long_min}-{p.rsi_long_max} | "
             f"pos×{p.position_size_multiplier:.2f} | "
             f"SL {p.stop_loss_atr_multiplier:.1f}×ATR | "
-            f"TP {p.take_profit_atr_multiplier:.1f}×ATR"
+            f"TP {p.take_profit_atr_multiplier:.1f}×ATR | "
+            f"scan={p.scan_interval_secs:.0f}s | "
+            f"cooldown={p.cooldown_secs:.0f}s | "
+            f"loss_limit={p.daily_loss_limit_pct:.1f}% | "
+            f"vol_gate={p.volume_gate_multiplier*100:.0f}%"
         )
 
     def get_all_params(self) -> Dict[str, RegimeTradingParams]:
