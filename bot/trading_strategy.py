@@ -7749,10 +7749,25 @@ class TradingStrategy:
             
             # Get account balance for position sizing
             # NOTE: We no longer return early here - we'll check later for new entries only
-            if not active_broker:
-                logger.warning("⚠️ No active broker - cannot manage positions")
-                logger.info("📡 Monitor mode (no broker connection)")
-                return
+            if not active_broker or not getattr(active_broker, 'connected', False):
+                # Fall back to any connected broker before entering monitor mode
+                _fallback_broker = None
+                if hasattr(self, 'broker_manager') and self.broker_manager:
+                    _fallback_broker = next(
+                        (b for b in self.broker_manager.brokers.values()
+                         if getattr(b, 'connected', False)),
+                        None
+                    )
+                if _fallback_broker is not None:
+                    logger.info(
+                        f"🔄 Execution gate: switching to connected broker "
+                        f"{getattr(_fallback_broker.broker_type, 'value', str(_fallback_broker.broker_type))}"
+                    )
+                    active_broker = _fallback_broker
+                else:
+                    logger.warning("⚠️ No active broker - cannot manage positions")
+                    logger.info("📡 Monitor mode (no broker connection)")
+                    return
             
             if not self.apex:
                 logger.warning("⚠️ Strategy not loaded - position management may be limited")
