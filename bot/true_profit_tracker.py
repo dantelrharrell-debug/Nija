@@ -79,6 +79,9 @@ class _TrueProfitState:
     total_trades: int = 0
     total_wins: int = 0
     total_fees_paid: float = 0.0
+    # Separate win/loss sums for profit-expectancy ratio (avg_win / |avg_loss|)
+    total_wins_pnl: float = 0.0   # sum of net profit on winning trades
+    total_losses_pnl: float = 0.0  # sum of net profit on losing trades (negative)
     # date string (YYYY-MM-DD) -> dict with net_pnl_usd / trades_count / wins
     daily: Dict[str, dict] = field(default_factory=dict)
 
@@ -115,6 +118,8 @@ class TrueProfitTracker:
                 s.total_trades = int(raw.get("total_trades", 0))
                 s.total_wins = int(raw.get("total_wins", 0))
                 s.total_fees_paid = float(raw.get("total_fees_paid", 0.0))
+                s.total_wins_pnl = float(raw.get("total_wins_pnl", 0.0))
+                s.total_losses_pnl = float(raw.get("total_losses_pnl", 0.0))
                 s.daily = raw.get("daily", {})
                 logger.info(
                     "TrueProfitTracker loaded -- %d trades | cumulative net profit $%.2f",
@@ -206,6 +211,9 @@ class TrueProfitTracker:
             s.total_trades += 1
             if is_win:
                 s.total_wins += 1
+                s.total_wins_pnl += net_profit
+            else:
+                s.total_losses_pnl += net_profit
             s.total_fees_paid += fee_usd
 
             # Advance balance estimate
@@ -235,6 +243,11 @@ class TrueProfitTracker:
             _today_wins = s.daily[today]["wins"]
             _today_count = s.daily[today]["trades_count"]
             _total_trades = s.total_trades
+            # Profit-expectancy: avg_win / |avg_loss|  (target ≥ 1.5×)
+            _total_losses = _total_trades - s.total_wins
+            _avg_win = (s.total_wins_pnl / s.total_wins) if s.total_wins > 0 else 0.0
+            _avg_loss = (s.total_losses_pnl / _total_losses) if _total_losses > 0 else 0.0
+            _expectancy_ratio = (_avg_win / abs(_avg_loss)) if _avg_loss < 0 else None
 
             self._save()
 
@@ -267,6 +280,14 @@ class TrueProfitTracker:
             "Total Trades: %d",
             _today_pnl, _today_wr, _win_rate, _avg_profit, _total_trades,
         )
+        # Profit-expectancy ratio log (target ≥ 1.5×)
+        if _expectancy_ratio is not None:
+            _exp_flag = "✅" if _expectancy_ratio >= 1.5 else "⚠️"
+            logger.info(
+                "   %s Profit Expectancy: %.2f× "
+                "(avg win $%+.2f / avg loss $%.2f) — target ≥ 1.5×",
+                _exp_flag, _expectancy_ratio, _avg_win, _avg_loss,
+            )
 
         return net_profit
 
@@ -279,6 +300,10 @@ class TrueProfitTracker:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             today_data = s.daily.get(today, {})
             today_count = today_data.get("trades_count", 0)
+            _total_losses = s.total_trades - s.total_wins
+            _avg_win = (s.total_wins_pnl / s.total_wins) if s.total_wins > 0 else 0.0
+            _avg_loss = (s.total_losses_pnl / _total_losses) if _total_losses > 0 else 0.0
+            _expectancy_ratio = (_avg_win / abs(_avg_loss)) if _avg_loss < 0 else None
             return {
                 "starting_balance": s.starting_balance,
                 "current_cash_balance": s.current_cash_balance,
@@ -292,6 +317,9 @@ class TrueProfitTracker:
                 "avg_profit_per_trade": (
                     s.cumulative_net_profit / s.total_trades
                 ) if s.total_trades > 0 else 0.0,
+                "avg_win_pnl": _avg_win,
+                "avg_loss_pnl": _avg_loss,
+                "expectancy_ratio": _expectancy_ratio,
                 "total_fees_paid": s.total_fees_paid,
                 "today_pnl": today_data.get("net_pnl_usd", 0.0),
                 "today_trades": today_count,
@@ -313,6 +341,13 @@ class TrueProfitTracker:
         logger.info("   Total Trades      : %d", r["total_trades"])
         logger.info("   Win Rate          : %.1f%%", r["win_rate_pct"])
         logger.info("   Avg Profit/Trade  : $%+.2f", r["avg_profit_per_trade"])
+        logger.info("   Avg Win / Avg Loss: $%+.2f / $%.2f", r["avg_win_pnl"], r["avg_loss_pnl"])
+        if r["expectancy_ratio"] is not None:
+            _exp_flag = "✅" if r["expectancy_ratio"] >= 1.5 else "⚠️"
+            logger.info(
+                "   %s Profit Expectancy: %.2f× (target ≥ 1.5×)",
+                _exp_flag, r["expectancy_ratio"],
+            )
         logger.info("   Today PnL         : $%+.2f", r["today_pnl"])
         logger.info("   Today Win Rate    : %.1f%%", r["today_win_rate_pct"])
         logger.info("=" * 60)
