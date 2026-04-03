@@ -205,40 +205,41 @@ MIN_BALANCE_COINBASE = 10.0
 #   - trade_cooldown   = 300s   (5-min per-symbol cooldown between trades — tuned for faster trade flow)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = float('inf')  # Apply to ALL balances — 1 position, 95% capital
-MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 4          # TUNE 6: 3→4 concurrent positions (Apr 2026)
-MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 60.0   # TUNE 6: 90%→60% per position — risk balance (Apr 2026)
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R)
-MICRO_CAP_TRADE_COOLDOWN = 60                    # TUNE 5: 120s→60s per-symbol re-entry gate (Apr 2026)
+
+# ---------------------------------------------------------------------------
+# Micro-cap core parameters — all overridable via NIJA_MICROCAP_* env vars
+# ---------------------------------------------------------------------------
+MICRO_CAP_COMPOUNDING_MAX_POSITIONS    = int(float(os.getenv("NIJA_MICROCAP_MAX_POSITIONS",          "4")))
+MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = float(os.getenv("NIJA_MICROCAP_POSITION_SIZE_PERCENT",     "60.0"))
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT    = float(os.getenv("NIJA_MICROCAP_STOP_LOSS_PERCENT",          "1.5"))
+MICRO_CAP_TRADE_COOLDOWN               = int(float(os.getenv("NIJA_MICROCAP_COOLDOWN_SECONDS",       "60")))
 
 # Tiered profit targets for micro-cap compounding mode
-MICRO_CAP_TP1_PCT = 2.5   # Target 1: 2.5% — partial exit + activate trailing stop (was 3.0%)
-MICRO_CAP_TP2_PCT = 3.5   # Target 2: 3.5% — second partial exit (was 4.5%)
-MICRO_CAP_TP3_PCT = 6.0   # Target 3: 6.0% — final exit / full runner target
-MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT = 2.5  # Trailing stop activates after 2.5% profit (was 3.0%)
+MICRO_CAP_TP1_PCT                      = float(os.getenv("NIJA_MICROCAP_TP1_PERCENT",                "2.5"))
+MICRO_CAP_TP2_PCT                      = float(os.getenv("NIJA_MICROCAP_TP2_PERCENT",                "3.5"))
+MICRO_CAP_TP3_PCT                      = float(os.getenv("NIJA_MICROCAP_TP3_PERCENT",                "6.0"))
+MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT = float(os.getenv("NIJA_MICROCAP_TRAILING_STOP_ACTIVATION_PERCENT", "2.5"))
+
+# When True, relax the AI entry gate (small gate_score_reduction) in
+# sideways / consolidation / ranging regimes so the bot stays active
+# in low-volatility conditions that still carry a positive edge.
+_relax_sideways_raw = os.getenv("NIJA_MICROCAP_RELAX_SIDEWAYS", "true").lower()
+MICRO_CAP_RELAX_SIDEWAYS: bool = _relax_sideways_raw not in ("0", "false", "no")
 
 # Adaptive Profit Scaling — scales target UP in favourable conditions only
-MICRO_CAP_ADAPTIVE_PROFIT_SCALING = True         # Enable adaptive profit scaling
-MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT = 2.5          # Minimum profit target (equals base — was 3.0%)
-MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT = 8.0          # Maximum profit target under scaling (raised for fast scaling)
-MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE = 0.2 # Extra % per consecutive winning trade (up from 0.1)
-MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE = True # Also scale with market volatility
+MICRO_CAP_ADAPTIVE_PROFIT_SCALING = True
+MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT  = MICRO_CAP_TP1_PCT   # floor equals TP1 base
+MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT = 8.0
+MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE = 0.2
+MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE = True
 
 # MICRO-CAP COMPOUNDING MODE HELPERS
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = 2.5  # 2.5% base profit target (was 3.0% — spread + streak bonus added at runtime)
-# Backward-compatible alias used as the static fallback when no spread data is available
-MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R vs base target)
-# NOTE: MICRO_CAP_TRADE_COOLDOWN is also declared above (line ~212) for the primary block.
-# Both declarations are kept in sync intentionally so callers importing from either
-# section get the same value without requiring a forward reference.
-MICRO_CAP_TRADE_COOLDOWN = 60                    # TUNE 5: 120s→60s per-symbol re-entry cooldown (Apr 2026)
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = MICRO_CAP_TP1_PCT   # backward-compat alias
+MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT = MICRO_CAP_TP1_PCT
 
 # Win-streak bonus applied on top of (base + spread) while on a hot streak.
-# The bonus is reset to 0 whenever a trade ends in a loss so the bot does not
-# chase extended targets after momentum ends.
-MICRO_CAP_WIN_STREAK_BONUS_PER_WIN = 0.2  # +0.2% per consecutive win (up from 0.1)
-MICRO_CAP_WIN_STREAK_BONUS_MAX = 1.0      # cap at +1.0% (5 consecutive wins)
+MICRO_CAP_WIN_STREAK_BONUS_PER_WIN = 0.2  # +0.2% per consecutive win
+MICRO_CAP_WIN_STREAK_BONUS_MAX     = 1.0  # cap at +1.0% (5 consecutive wins)
 
 # ---------------------------------------------------------------------------
 # Adaptive compounding / streak settings — tunable via environment variables
@@ -421,6 +422,7 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             'trailing_stop_activation_pct': MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT,
             'stop_loss_pct': MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
             'trade_cooldown': MICRO_CAP_TRADE_COOLDOWN,
+            'relax_sideways': MICRO_CAP_RELAX_SIDEWAYS,
             'adaptive_profit_scaling': MICRO_CAP_ADAPTIVE_PROFIT_SCALING,
             'adaptive_profit_min_pct': MICRO_CAP_ADAPTIVE_PROFIT_MIN_PCT,
             'adaptive_profit_max_pct': MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT,

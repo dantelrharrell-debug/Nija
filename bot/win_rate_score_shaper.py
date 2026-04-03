@@ -108,10 +108,32 @@ logger = logging.getLogger("nija.win_rate_score_shaper")
 _ENABLED: bool = os.getenv("NIJA_WRSS_ENABLED", "1") not in ("0", "false", "False", "no")
 _WINDOW: int = max(5, int(os.getenv("NIJA_WRSS_WINDOW", "25")))
 _MIN_HISTORY: int = max(1, int(os.getenv("NIJA_WRSS_MIN_HISTORY", "5")))
-_MAX_BOOST: float = float(os.getenv("NIJA_WRSS_MAX_BOOST", "1.30"))   # upper clamp
-_MAX_DAMPEN: float = float(os.getenv("NIJA_WRSS_MAX_DAMPEN", "0.70"))  # lower clamp
-_TARGET_FLOOR: float = float(os.getenv("NIJA_WRSS_TARGET_FLOOR", "0.45"))  # neutral bottom
-_TARGET_CEIL: float = float(os.getenv("NIJA_WRSS_TARGET_CEIL", "0.65"))    # neutral top
+
+# ---------------------------------------------------------------------------
+# 5-tier stepped factor table  (env-var overridable)
+# ---------------------------------------------------------------------------
+# Each tier maps a win-rate band to a named multiplier.  Tiers are evaluated
+# top-down; the first matching threshold wins.
+#
+#   Win-rate ≥ 72 %  → DOMINATING  (1.30× default)  strong trust in the regime
+#   Win-rate ≥ 60 %  → STRONG      (1.15× default)  above-neutral performance
+#   Win-rate > 45 %  → NEUTRAL     (1.05× default)  slight upward bias baseline
+#   Win-rate > 30 %  → STRUGGLING  (0.90× default)  below-par; small dampen
+#   Win-rate ≤ 30 %  → BROKEN      (0.70× default)  consistently losing; damp hard
+#
+# Legacy env vars MAX_BOOST / MAX_DAMPEN / TARGET_FLOOR / TARGET_CEIL are no
+# longer read; use the named-tier vars below instead.
+_FACTOR_DOMINATING: float = float(os.getenv("NIJA_WRSS_WINRATE_DOMINATING_FACTOR", "1.30"))
+_FACTOR_STRONG:     float = float(os.getenv("NIJA_WRSS_WINRATE_STRONG_FACTOR",     "1.15"))
+_FACTOR_NEUTRAL:    float = float(os.getenv("NIJA_WRSS_WINRATE_NEUTRAL_FACTOR",    "1.05"))
+_FACTOR_STRUGGLING: float = float(os.getenv("NIJA_WRSS_WINRATE_STRUGGLING_FACTOR", "0.90"))
+_FACTOR_BROKEN:     float = float(os.getenv("NIJA_WRSS_WINRATE_BROKEN_FACTOR",     "0.70"))
+
+# Win-rate thresholds separating the 5 tiers (descending)
+_WR_DOMINATING_THR: float = 0.72   # ≥ this → DOMINATING
+_WR_STRONG_THR:     float = 0.60   # ≥ this → STRONG
+_WR_STRUGGLING_THR: float = 0.45   # > this → NEUTRAL (45 % < wr < 60 %)
+_WR_BROKEN_THR:     float = 0.30   # > this → STRUGGLING (30 % < wr ≤ 45 %)
 
 # Named win-rate tier factors — discrete multipliers per performance bracket.
 # When all five are explicitly set in the environment the tiered lookup is
@@ -231,6 +253,27 @@ def _compute_factor(win_rate: float) -> float:
         return round(1.0 - severity * (1.0 - _MAX_DAMPEN), 4)
     # Neutral band
     return 1.0
+    Map a historical win-rate to a score multiplier using a 5-tier stepped table.
+
+    Tiers (evaluated top-down):
+      DOMINATING  win_rate ≥ 72 %  →  _FACTOR_DOMINATING  (default 1.30×)
+      STRONG      win_rate ≥ 60 %  →  _FACTOR_STRONG      (default 1.15×)
+      NEUTRAL     win_rate > 45 %  →  _FACTOR_NEUTRAL     (default 1.05×)
+      STRUGGLING  win_rate > 30 %  →  _FACTOR_STRUGGLING  (default 0.90×)
+      BROKEN      win_rate ≤ 30 %  →  _FACTOR_BROKEN      (default 0.70×)
+
+    All five factors are individually tunable via
+    ``NIJA_WRSS_WINRATE_*_FACTOR`` environment variables.
+    """
+    if win_rate >= _WR_DOMINATING_THR:
+        return _FACTOR_DOMINATING
+    if win_rate >= _WR_STRONG_THR:
+        return _FACTOR_STRONG
+    if win_rate > _WR_STRUGGLING_THR:
+        return _FACTOR_NEUTRAL
+    if win_rate > _WR_BROKEN_THR:
+        return _FACTOR_STRUGGLING
+    return _FACTOR_BROKEN
 
 
 # ---------------------------------------------------------------------------
@@ -343,12 +386,16 @@ class WinRateScoreShaper:
             factor = _compute_factor(wr) if n >= _MIN_HISTORY else 1.0
             if n < _MIN_HISTORY:
                 status = "🔶 warming up"
+            elif factor >= _FACTOR_DOMINATING:
+                status = f"🚀 dominating ×{factor:.2f}"
+            elif factor >= _FACTOR_STRONG:
+                status = f"✅ strong ×{factor:.2f}"
             elif factor > 1.0:
-                status = f"✅ boosting ×{factor:.2f}"
-            elif factor < 1.0:
-                status = f"⚠️  dampened ×{factor:.2f}"
+                status = f"📈 neutral+ ×{factor:.2f}"
+            elif factor >= _FACTOR_STRUGGLING:
+                status = f"⚠️  struggling ×{factor:.2f}"
             else:
-                status = "⚪ neutral"
+                status = f"🔴 broken ×{factor:.2f}"
             lines.append(
                 f"  {key:<18} {n:>6}  {wr*100:>5.1f}%  ×{factor:.3f}  {status}"
             )
@@ -418,9 +465,14 @@ def get_win_rate_score_shaper() -> Optional[WinRateScoreShaper]:
                 _shaper = WinRateScoreShaper()
                 logger.info(
                     "[WRSS] WinRateScoreShaper initialised "
-                    "(window=%d, min_history=%d, boost=×%.2f, dampen=×%.2f, "
-                    "neutral=%.0f%%–%.0f%%)",
-                    _WINDOW, _MIN_HISTORY, _MAX_BOOST, _MAX_DAMPEN,
-                    _TARGET_FLOOR * 100, _TARGET_CEIL * 100,
+                    "(window=%d, min_history=%d, "
+                    "factors: dominating=×%.2f strong=×%.2f neutral=×%.2f "
+                    "struggling=×%.2f broken=×%.2f, "
+                    "thresholds: ≥%.0f%%=dom ≥%.0f%%=strong >%.0f%%=neutral >%.0f%%=struggling)",
+                    _WINDOW, _MIN_HISTORY,
+                    _FACTOR_DOMINATING, _FACTOR_STRONG, _FACTOR_NEUTRAL,
+                    _FACTOR_STRUGGLING, _FACTOR_BROKEN,
+                    _WR_DOMINATING_THR * 100, _WR_STRONG_THR * 100,
+                    _WR_STRUGGLING_THR * 100, _WR_BROKEN_THR * 100,
                 )
     return _shaper

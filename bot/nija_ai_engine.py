@@ -88,6 +88,20 @@ TIER_ELITE = float(os.getenv("NIJA_SCORE_FLOOR_ELITE", "75.0"))   # 1.5× positi
 TIER_GOOD  = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "34.0"))   # 1.0× position size
 TIER_FAIR  = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "25.0"))   # 0.75× position size
 TIER_FLOOR = 17.0    # 0.5× position size (taken only as top-N, no better option)
+# Score tier constants  (env-var overridable)
+# ---------------------------------------------------------------------------
+# These thresholds drive both _position_multiplier() (size scaling) and the
+# is_elite / is_good properties on AIEngineSignal.
+#
+# Defaults match the micro-cap threshold config:
+#   NIJA_SCORE_FLOOR_ELITE  75  — 1.5× size  (strong conviction)
+#   NIJA_SCORE_FLOOR_GOOD   50  — 1.0× size  (standard entry)
+#   NIJA_SCORE_FLOOR_FAIR   48  — 0.75× size (borderline; just below GOOD)
+#   TIER_FLOOR              17  — 0.5× size  (fallback, top-N only)
+TIER_ELITE: float = float(os.getenv("NIJA_SCORE_FLOOR_ELITE", "75"))
+TIER_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "50"))
+TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "48"))
+TIER_FLOOR: float = 17.0   # hard internal floor — not user-tunable
 
 # Composite score blend weights (must sum to 1.0)
 _W_ENHANCED  = 0.55   # EnhancedEntryScorer contributes most weight
@@ -150,11 +164,18 @@ class _Candidate:
 
 class CycleSpeedController:
     """
-    Adapts the scan cycle interval based on recent signal density.
+    Adapts the scan cycle interval based on recent signal density and market regime.
 
     - Hot market  (>= 2 signals last cycle) → FAST interval (90 s)
     - Normal market                          → NORMAL interval (150 s)
     - Cold market (0 signals, 2+ cold cycles in a row) → SLOW interval (300 s)
+
+    A regime hint (set via ``set_regime_hint``) acts as a soft constraint:
+    - In defensive/crisis regimes (hint ≥ 240 s): interval is floored at hint
+      so the bot never scans faster than the regime recommends.
+    - In trending/scalp regimes (hint ≤ 120 s): interval is capped at hint
+      so the bot always scans at least as fast as the regime requires.
+    - Otherwise the signal-density logic runs freely within [hint×0.8, hint×1.5].
     """
 
     INTERVAL_FAST: int = 90     # 1.5 min
@@ -164,23 +185,52 @@ class CycleSpeedController:
     def __init__(self) -> None:
         self._last_interval: int = self.INTERVAL_NORMAL
         self._cold_streak: int = 0
+        self._regime_hint: int = self.INTERVAL_NORMAL
         self._lock = threading.Lock()
+
+    def set_regime_hint(self, secs: int) -> None:
+        """
+        Provide the market-regime recommended scan interval.
+
+        Called whenever the regime changes (e.g. after ``regime_bridge.get_params``).
+        The hint biases the signal-density logic without fully overriding it.
+
+        Args:
+            secs: Recommended interval in seconds from ``RegimeTradingParams.scan_interval_secs``.
+        """
+        with self._lock:
+            self._regime_hint = max(self.INTERVAL_FAST, int(secs))
 
     def record_cycle(self, signals_found: int) -> int:
         """Record cycle result and return recommended next interval (seconds)."""
         with self._lock:
             if signals_found >= 2:
                 self._cold_streak = 0
-                self._last_interval = self.INTERVAL_FAST
+                signal_interval = self.INTERVAL_FAST
             elif signals_found == 1:
                 self._cold_streak = 0
-                self._last_interval = self.INTERVAL_NORMAL
+                signal_interval = self.INTERVAL_NORMAL
             else:
                 self._cold_streak += 1
                 if self._cold_streak >= 2:
-                    self._last_interval = self.INTERVAL_SLOW
+                    signal_interval = self.INTERVAL_SLOW
                 else:
-                    self._last_interval = self.INTERVAL_NORMAL
+                    signal_interval = self.INTERVAL_NORMAL
+
+            # Apply regime hint as a directional constraint:
+            # - Crisis/defensive (hint ≥ 240s): never scan faster than the regime allows
+            # - Trending/scalp   (hint ≤ 120s): always scan at least as fast as regime needs
+            hint = self._regime_hint
+            if hint >= 240:
+                # Defensive regime — floor the interval at the regime hint
+                self._last_interval = max(signal_interval, hint)
+            elif hint <= 120:
+                # Fast regime — cap the interval at the regime hint
+                self._last_interval = min(signal_interval, hint)
+            else:
+                # Neutral — blend: signal logic governs but bias toward hint
+                self._last_interval = signal_interval
+
             return self._last_interval
 
     @property

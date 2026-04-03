@@ -98,6 +98,18 @@ LEGACY_SIGNAL_THRESHOLD: int = 2
 # is treated as borderline volatility — allowed with reduced position size.
 BORDERLINE_ATR_FLOOR: float = 0.5  # 50 % of minimum → borderline zone
 
+# NIJA_MICROCAP_RELAX_SIDEWAYS: when True (default), apply a small extra
+# gate_score_reduction in consolidation/ranging/sideways regimes so the bot
+# stays active in low-volatility conditions without abandoning edge discipline.
+import os as _os_apex  # local alias — avoids shadowing any existing `os` import
+_relax_sw_raw = _os_apex.getenv("NIJA_MICROCAP_RELAX_SIDEWAYS", "true").lower()
+_MICROCAP_RELAX_SIDEWAYS: bool = _relax_sw_raw not in ("0", "false", "no")
+# Extra fraction added to gate_score_reduction in sideways regimes (capped at 0.20 total).
+# At 0.08 a threshold of 48 becomes 48 × (1 − 0.08) = 44.2 — FAIR signals can just cross.
+_MICROCAP_SIDEWAYS_GATE_REDUCTION: float = float(
+    _os_apex.getenv("NIJA_MICROCAP_SIDEWAYS_GATE_REDUCTION", "0.08")
+)
+
 # Import adaptive minimum sizing engine (Mar 2026)
 try:
     from adaptive_minimum_sizing import get_adaptive_minimum_sizer, AdaptiveMinimumSizer
@@ -1747,6 +1759,21 @@ class NIJAApexStrategyV71:
             except Exception as _rd_err:
                 logger.debug("Regime detection error: %s", _rd_err)
 
+        # ── Propagate regime scan-interval hint to AI engine speed controller ──
+        # Whenever the current regime is known, update the CycleSpeedController
+        # so the between-cycle delay reflects market conditions (e.g. faster in
+        # trending, slower in crisis) rather than signal density alone.
+        if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                and self.current_regime is not None
+                and self.nija_ai_engine is not None):
+            try:
+                _regime_params_hint = self.regime_bridge.get_params(self.current_regime)
+                self.nija_ai_engine.speed_ctrl.set_regime_hint(
+                    int(_regime_params_hint.scan_interval_secs)
+                )
+            except Exception as _hint_err:
+                logger.debug("Speed ctrl regime hint error: %s", _hint_err)
+
         # ── Fallback: no enhanced scoring available ────────────────────────
         if not self.use_enhanced_scoring:
             return legacy_signal, float(legacy_score), legacy_reason, {"legacy_score": legacy_score}
@@ -2092,12 +2119,24 @@ class NIJAApexStrategyV71:
             self._last_account_balance = account_balance
             if self.drawdown_risk_ctrl is not None:
                 try:
+                    # Resolve regime-specific daily loss limit from the bridge so
+                    # crisis/defensive regimes protect capital more aggressively.
+                    _drc_daily_loss_pct: Optional[float] = None
+                    if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                            and self.current_regime is not None):
+                        try:
+                            _drc_daily_loss_pct = self.regime_bridge.get_params(
+                                self.current_regime
+                            ).daily_loss_limit_pct
+                        except Exception:
+                            pass
                     _risk_result = self.drawdown_risk_ctrl.pre_entry_check(
                         account_balance=account_balance,
                         df=df,
                         indicators=indicators,
                         daily_pnl_usd=getattr(self, '_daily_pnl_usd', 0.0),
                         regime=self.current_regime,
+                        daily_loss_limit_pct=_drc_daily_loss_pct,
                     )
                     self._risk_envelope_multiplier = _risk_result.position_multiplier
                     if not _risk_result.can_trade:
@@ -2328,8 +2367,26 @@ class NIJAApexStrategyV71:
                         if self._freq_ctrl is not None else None
                     )
                     _gate_reduction_l = _drought_l.gate_pct_reduction if (_drought_l and _drought_l.active) else 0.0
+                    # NIJA_MICROCAP_RELAX_SIDEWAYS: in consolidation/ranging/sideways
+                    # regimes the gate is relaxed slightly so the bot stays active
+                    # without abandoning edge discipline.
+                    if _MICROCAP_RELAX_SIDEWAYS and self.current_regime is not None:
+                        _regime_str_l = str(getattr(self.current_regime, 'value',
+                                                     self.current_regime)).lower()
+                        if any(r in _regime_str_l for r in
+                               ("consolidation", "ranging", "sideways", "chop")):
+                            _gate_reduction_l = min(0.20, _gate_reduction_l + _MICROCAP_SIDEWAYS_GATE_REDUCTION)
                     if self.ai_entry_gate is not None:
                         try:
+                            _gate_vol_mult_l: Optional[float] = None
+                            if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                                    and self.current_regime is not None):
+                                try:
+                                    _gate_vol_mult_l = self.regime_bridge.get_params(
+                                        self.current_regime
+                                    ).volume_gate_multiplier
+                                except Exception:
+                                    pass
                             _gate_result_l = self.ai_entry_gate.check(
                                 df=df,
                                 indicators=indicators,
@@ -2339,6 +2396,7 @@ class NIJAApexStrategyV71:
                                 broker=broker_name,
                                 entry_type=_entry_type_l,
                                 gate_score_reduction=_gate_reduction_l,
+                                volume_gate_multiplier=_gate_vol_mult_l,
                             )
                             if not _gate_result_l.passed:
                                 logger.debug(
@@ -2734,8 +2792,24 @@ class NIJAApexStrategyV71:
                         if self._freq_ctrl is not None else None
                     )
                     _gate_reduction_s = _drought_s.gate_pct_reduction if (_drought_s and _drought_s.active) else 0.0
+                    # NIJA_MICROCAP_RELAX_SIDEWAYS: mirror the long-side gate relaxation
+                    if _MICROCAP_RELAX_SIDEWAYS and self.current_regime is not None:
+                        _regime_str_s = str(getattr(self.current_regime, 'value',
+                                                     self.current_regime)).lower()
+                        if any(r in _regime_str_s for r in
+                               ("consolidation", "ranging", "sideways", "chop")):
+                            _gate_reduction_s = min(0.20, _gate_reduction_s + _MICROCAP_SIDEWAYS_GATE_REDUCTION)
                     if self.ai_entry_gate is not None:
                         try:
+                            _gate_vol_mult_s: Optional[float] = None
+                            if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                                    and self.current_regime is not None):
+                                try:
+                                    _gate_vol_mult_s = self.regime_bridge.get_params(
+                                        self.current_regime
+                                    ).volume_gate_multiplier
+                                except Exception:
+                                    pass
                             _gate_result_s = self.ai_entry_gate.check(
                                 df=df,
                                 indicators=indicators,
@@ -2745,6 +2819,7 @@ class NIJAApexStrategyV71:
                                 broker=broker_name,
                                 entry_type=_entry_type_s,
                                 gate_score_reduction=_gate_reduction_s,
+                                volume_gate_multiplier=_gate_vol_mult_s,
                             )
                             if not _gate_result_s.passed:
                                 logger.debug(

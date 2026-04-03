@@ -67,13 +67,21 @@ logger = logging.getLogger("nija.score_debugger")
 _ENABLED: bool = os.getenv("NIJA_SCORE_DEBUG", "1") not in ("0", "false", "False", "no")
 _BAR_WIDTH: int = max(5, int(os.getenv("NIJA_SCORE_DEBUG_BAR_WIDTH", "20")))
 
-# Score bins: (low_inclusive, high_exclusive, display_label, emoji)
+# Score floor thresholds — kept in sync with nija_ai_engine.py TIER_* constants
+# via the same env vars so the histogram always reflects the live tier boundaries.
+_FLOOR_ELITE: float = float(os.getenv("NIJA_SCORE_FLOOR_ELITE", "75"))
+_FLOOR_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "50"))
+_FLOOR_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "48"))
+_FLOOR_HARD:  float = 20.0   # absolute minimum — always fixed
+
+# Score bins — derived from the floor constants so they never drift out of sync.
+# FAIR is the critical "candidates just below GOOD" borderline band.
 _BINS: List[Tuple[float, float, str, str]] = [
-    (75.0, 101.0, "ELITE  (≥75) ", "🟢"),
-    (50.0,  75.0, "GOOD  (50-74)", "🟡"),
-    (34.0,  50.0, "FAIR  (34-49)", "🟠"),
-    (20.0,  34.0, "FLOOR (20-33)", "🔴"),
-    ( 0.0,  20.0, "<FLOOR  (<20)", "⛔"),
+    (_FLOOR_ELITE, 101.0,        f"ELITE  (≥{_FLOOR_ELITE:.0f})  ", "🟢"),
+    (_FLOOR_GOOD,  _FLOOR_ELITE, f"GOOD  ({_FLOOR_GOOD:.0f}–{_FLOOR_ELITE:.0f})", "🟡"),
+    (_FLOOR_FAIR,  _FLOOR_GOOD,  f"FAIR  ({_FLOOR_FAIR:.0f}–{_FLOOR_GOOD:.0f}) ", "🟠"),
+    (_FLOOR_HARD,  _FLOOR_FAIR,  f"FLOOR ({_FLOOR_HARD:.0f}–{_FLOOR_FAIR:.0f})", "🔴"),
+    (0.0,          _FLOOR_HARD,  f"<FLOOR  (<{_FLOOR_HARD:.0f}) ",  "⛔"),
 ]
 
 # Human-readable labels for skip reasons recorded by nija_core_loop.
