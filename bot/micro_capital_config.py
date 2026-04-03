@@ -240,6 +240,57 @@ MICRO_CAP_TRADE_COOLDOWN = 60                    # TUNE 5: 120s→60s per-symbol
 MICRO_CAP_WIN_STREAK_BONUS_PER_WIN = 0.2  # +0.2% per consecutive win (up from 0.1)
 MICRO_CAP_WIN_STREAK_BONUS_MAX = 1.0      # cap at +1.0% (5 consecutive wins)
 
+# ---------------------------------------------------------------------------
+# Adaptive compounding / streak settings — tunable via environment variables
+# ---------------------------------------------------------------------------
+
+# Sideways / consolidation relaxation: when True (default), the re-entry
+# cooldown and score gate are relaxed in consolidation/ranging regimes.
+MICRO_CAP_RELAX_SIDEWAYS: bool = (
+    os.getenv("NIJA_MICROCAP_RELAX_SIDEWAYS", "true").lower()
+    not in ("0", "false", "no")
+)
+
+# Dynamic streak bonus: enable/disable per-win compounding bonus.
+MICRO_CAP_DYNAMIC_STREAK_ENABLED: bool = (
+    os.getenv("NIJA_MICROCAP_DYNAMIC_STREAK_ENABLED", "true").lower()
+    not in ("0", "false", "no")
+)
+
+# Streak bonus multiplier: extra % added to the profit target per consecutive
+# winning trade.  Overrides MICRO_CAP_WIN_STREAK_BONUS_PER_WIN when set.
+MICRO_CAP_STREAK_BONUS_MULTIPLIER: float = float(
+    os.getenv("NIJA_MICROCAP_STREAK_BONUS_MULTIPLIER", str(MICRO_CAP_WIN_STREAK_BONUS_PER_WIN))
+)
+
+# Streak decay: if no new trade is entered within this many seconds after the
+# last entry, the win streak is reset to 0 (momentum has faded).
+# 0 disables time-based streak decay.
+MICRO_CAP_STREAK_DECAY_SECONDS: int = int(
+    os.getenv("NIJA_MICROCAP_STREAK_DECAY_SECONDS", "300")
+)
+
+# Adaptive cooldown: replace the fixed re-entry cooldown with a dynamic value
+# that scales with market volatility between min and max bounds.
+MICRO_CAP_ADAPTIVE_COOLDOWN_ENABLED: bool = (
+    os.getenv("NIJA_MICROCAP_ADAPTIVE_COOLDOWN_ENABLED", "true").lower()
+    not in ("0", "false", "no")
+)
+
+# Adaptive cooldown bounds (seconds).
+MICRO_CAP_COOLDOWN_MIN_SECONDS: int = int(
+    os.getenv("NIJA_MICROCAP_COOLDOWN_MIN_SECONDS", "30")
+)
+MICRO_CAP_COOLDOWN_MAX_SECONDS: int = int(
+    os.getenv("NIJA_MICROCAP_COOLDOWN_MAX_SECONDS", "120")
+)
+
+# Volatility factor: scales the effective cooldown toward the maximum bound
+# when the market ATR/volatility percentage is elevated.  A factor of 1.5
+# means volatility 1.5× normal → cooldown reaches the maximum.
+MICRO_CAP_COOLDOWN_VOLATILITY_FACTOR: float = float(
+    os.getenv("NIJA_MICROCAP_COOLDOWN_VOLATILITY_FACTOR", "1.5")
+)
 
 def get_spread_adjusted_profit_target(spread_pct: float, win_streak: int = 0) -> float:
     """
@@ -249,34 +300,38 @@ def get_spread_adjusted_profit_target(spread_pct: float, win_streak: int = 0) ->
         profit_target = base_target + spread + streak_bonus
 
     where:
-        base_target  = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT (1.0%)
+        base_target  = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT (2.5%)
         spread       = current market spread expressed as a percentage
-        streak_bonus = min(MICRO_CAP_WIN_STREAK_BONUS_MAX,
-                          win_streak * MICRO_CAP_WIN_STREAK_BONUS_PER_WIN)
+        streak_bonus = 0 when MICRO_CAP_DYNAMIC_STREAK_ENABLED is False, otherwise
+                       min(MICRO_CAP_WIN_STREAK_BONUS_MAX,
+                           win_streak * MICRO_CAP_STREAK_BONUS_MULTIPLIER)
 
     The streak bonus rewards sustained momentum but is immediately reset to 0
     after any losing trade (win_streak = 0), preventing the bot from chasing
     extended targets when momentum has ended.
 
     Examples (assuming win_streak=0):
-        spread 0.20%  →  profit target 1.20%
-        spread 0.40%  →  profit target 1.40%
-        spread 0.60%  →  profit target 1.60%
+        spread 0.20%  →  profit target 2.70%
+        spread 0.40%  →  profit target 2.90%
+        spread 0.60%  →  profit target 3.10%
 
-    Examples (assuming win_streak=3, bonus=0.3%):
-        spread 0.20%  →  profit target 1.50%
-        spread 0.40%  →  profit target 1.70%
+    Examples (assuming win_streak=3, bonus_multiplier=0.5%):
+        spread 0.20%  →  profit target 4.20%
+        spread 0.40%  →  profit target 4.40%
 
     Args:
         spread_pct: Current bid-ask spread as a decimal fraction (e.g. 0.002 = 0.2%).
         win_streak:  Number of consecutive winning trades. Resets to 0 after any loss.
 
     Returns:
-        Profit target as a percentage (e.g. 1.4 means 1.4%).
+        Profit target as a percentage (e.g. 2.7 means 2.7%).
     """
     spread_as_pct = spread_pct * 100.0
-    streak_bonus = min(MICRO_CAP_WIN_STREAK_BONUS_MAX,
-                       win_streak * MICRO_CAP_WIN_STREAK_BONUS_PER_WIN)
+    if MICRO_CAP_DYNAMIC_STREAK_ENABLED:
+        streak_bonus = min(MICRO_CAP_WIN_STREAK_BONUS_MAX,
+                           win_streak * MICRO_CAP_STREAK_BONUS_MULTIPLIER)
+    else:
+        streak_bonus = 0.0
     return MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT + spread_as_pct + streak_bonus
 
 
@@ -371,6 +426,15 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             'adaptive_profit_max_pct': MICRO_CAP_ADAPTIVE_PROFIT_MAX_PCT,
             'adaptive_profit_win_streak_scale': MICRO_CAP_ADAPTIVE_PROFIT_WIN_STREAK_SCALE,
             'adaptive_profit_volatility_scale': MICRO_CAP_ADAPTIVE_PROFIT_VOLATILITY_SCALE,
+            # Adaptive compounding / streak settings
+            'relax_sideways': MICRO_CAP_RELAX_SIDEWAYS,
+            'dynamic_streak_enabled': MICRO_CAP_DYNAMIC_STREAK_ENABLED,
+            'streak_bonus_multiplier': MICRO_CAP_STREAK_BONUS_MULTIPLIER,
+            'streak_decay_seconds': MICRO_CAP_STREAK_DECAY_SECONDS,
+            'adaptive_cooldown_enabled': MICRO_CAP_ADAPTIVE_COOLDOWN_ENABLED,
+            'cooldown_min_seconds': MICRO_CAP_COOLDOWN_MIN_SECONDS,
+            'cooldown_max_seconds': MICRO_CAP_COOLDOWN_MAX_SECONDS,
+            'cooldown_volatility_factor': MICRO_CAP_COOLDOWN_VOLATILITY_FACTOR,
         }
         logger.info(
             f"🚀 Micro-cap compounding mode ACTIVE "
@@ -381,7 +445,11 @@ def get_micro_cap_compounding_config(balance: float) -> Optional[Dict[str, Union
             f"tp1={MICRO_CAP_TP1_PCT}%, tp2={MICRO_CAP_TP2_PCT}%, tp3={MICRO_CAP_TP3_PCT}%, "
             f"trailing_stop_activation={MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT}%, "
             f"profit_target=base {MICRO_CAP_COMPOUNDING_PROFIT_TARGET_BASE_PCT}% + spread + streak_bonus (dynamic), "
-            f"cooldown={MICRO_CAP_TRADE_COOLDOWN}s"
+            f"cooldown={MICRO_CAP_TRADE_COOLDOWN}s, "
+            f"streak_bonus_mult={MICRO_CAP_STREAK_BONUS_MULTIPLIER}%/win, "
+            f"streak_decay={MICRO_CAP_STREAK_DECAY_SECONDS}s, "
+            f"adaptive_cooldown={'ON' if MICRO_CAP_ADAPTIVE_COOLDOWN_ENABLED else 'OFF'} "
+            f"[{MICRO_CAP_COOLDOWN_MIN_SECONDS}s–{MICRO_CAP_COOLDOWN_MAX_SECONDS}s]"
         )
         return config
 
