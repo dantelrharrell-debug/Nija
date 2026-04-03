@@ -56,7 +56,8 @@ RVOL_THIN    = 0.35  # ≥ 35% → thin (liquidity-poor)
 # < RVOL_THIN → AVOID
 
 # Minimum absolute volume (USD) to consider a market tradable
-MIN_VOLUME_USD = 25_000.0
+# Lowered 25_000 → 18_000 (-28%) to admit more pairs (TUNE 4, Apr 2026).
+MIN_VOLUME_USD = 18_000.0
 
 # Rolling window (bars) for volume baseline
 VOLUME_BASELINE_WINDOW = 24
