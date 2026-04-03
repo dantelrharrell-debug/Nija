@@ -184,6 +184,10 @@ class _BrokerState:
                     + (1.0 - self._ema_alpha) * self._ema_score
                 )
 
+    def update_capital(self, capital_usd: float) -> None:
+        """Update the last-known available capital for this broker state."""
+        self._available_capital_usd = max(0.0, capital_usd)
+
     # ------------------------------------------------------------------
     # Score calculation
     # ------------------------------------------------------------------
@@ -422,7 +426,7 @@ class BrokerPerformanceScorer:
                 self._states[broker] = _BrokerState(
                     broker, self._window, self._ema_alpha
                 )
-            self._states[broker]._available_capital_usd = capital_usd
+            self._states[broker].update_capital(capital_usd)
 
         logger.debug(
             "BrokerPerformanceScorer | %s | available_capital=%.2f USD",

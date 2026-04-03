@@ -124,6 +124,18 @@ except ImportError:
         ENTRY_PRICE_STORE_AVAILABLE = False
         get_entry_price_store = None  # type: ignore
 
+# Import BrokerPerformanceScorer — used for score-based broker auto-promotion
+try:
+    from bot.broker_performance_scorer import get_broker_performance_scorer as _get_broker_performance_scorer
+    _BROKER_PERFORMANCE_SCORER_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_performance_scorer import get_broker_performance_scorer as _get_broker_performance_scorer
+        _BROKER_PERFORMANCE_SCORER_AVAILABLE = True
+    except ImportError:
+        _BROKER_PERFORMANCE_SCORER_AVAILABLE = False
+        _get_broker_performance_scorer = None  # type: ignore
+
 # Import KrakenNonce for per-user nonce generation (DEPRECATED - kept for backward compatibility)
 # NOTE: This is being phased out in favor of GlobalKrakenNonceManager
 try:
@@ -9793,14 +9805,14 @@ class BrokerManager:
                 # Use BrokerPerformanceScorer when available; fall back to
                 # first-connected for resilience during initialisation.
                 best_broker: Optional[BaseBroker] = None
-                try:
-                    from bot.broker_performance_scorer import get_broker_performance_scorer
-                    scorer = get_broker_performance_scorer()
-                    best_name = scorer.get_best_broker(list(connected_brokers.keys()))
-                    if best_name is not None:
-                        best_broker = connected_brokers.get(best_name)
-                except Exception:
-                    pass
+                if _BROKER_PERFORMANCE_SCORER_AVAILABLE and _get_broker_performance_scorer is not None:
+                    try:
+                        scorer = _get_broker_performance_scorer()
+                        best_name = scorer.get_best_broker(list(connected_brokers.keys()))
+                        if best_name is not None:
+                            best_broker = connected_brokers.get(best_name)
+                    except Exception:
+                        pass
 
                 if best_broker is None:
                     best_broker = next(iter(connected_brokers.values()))

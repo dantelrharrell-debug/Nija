@@ -91,6 +91,18 @@ except ImportError:
         WIN_RATE_MAXIMIZER_AVAILABLE = False
         logger.warning("⚠️ Win Rate Maximizer not available - trade filtering/risk caps/profit consistency disabled")
 
+# Import BrokerPerformanceScorer — used for score-based entry broker selection
+try:
+    from broker_performance_scorer import get_broker_performance_scorer as _get_broker_performance_scorer
+    _BROKER_PERFORMANCE_SCORER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.broker_performance_scorer import get_broker_performance_scorer as _get_broker_performance_scorer
+        _BROKER_PERFORMANCE_SCORER_AVAILABLE = True
+    except ImportError:
+        _get_broker_performance_scorer = None  # type: ignore
+        _BROKER_PERFORMANCE_SCORER_AVAILABLE = False
+
 # Import Market Structure Filter (trend + volume + momentum confirmation)
 try:
     from market_structure_filter import structure_valid as _structure_valid
@@ -6384,20 +6396,20 @@ class TradingStrategy:
         # Phase 2: score-based ranking — pick highest composite score
         best_broker = None
         best_name = None
-        try:
-            from bot.broker_performance_scorer import get_broker_performance_scorer
-            scorer = get_broker_performance_scorer()
-            name_to_entry = {name: (idx, broker, name) for idx, broker, name in eligible}
-            best_scored_name = scorer.get_best_broker(list(name_to_entry.keys()))
-            if best_scored_name and best_scored_name in name_to_entry:
-                _, best_broker, best_name = name_to_entry[best_scored_name]
-                logger.info(
-                    f"✅ Selected {best_name.upper()} for entry "
-                    f"(score={scorer.get_score(best_name):.1f}, "
-                    f"priority={name_to_entry[best_scored_name][0] + 1})"
-                )
-        except Exception as _score_err:
-            logger.debug(f"_select_entry_broker: scorer unavailable ({_score_err}), using priority fallback")
+        if _BROKER_PERFORMANCE_SCORER_AVAILABLE and _get_broker_performance_scorer is not None:
+            try:
+                scorer = _get_broker_performance_scorer()
+                name_to_entry = {name: (idx, broker, name) for idx, broker, name in eligible}
+                best_scored_name = scorer.get_best_broker(list(name_to_entry.keys()))
+                if best_scored_name and best_scored_name in name_to_entry:
+                    _, best_broker, best_name = name_to_entry[best_scored_name]
+                    logger.info(
+                        f"✅ Selected {best_name.upper()} for entry "
+                        f"(score={scorer.get_score(best_name):.1f}, "
+                        f"priority={name_to_entry[best_scored_name][0] + 1})"
+                    )
+            except Exception as _score_err:
+                logger.debug(f"_select_entry_broker: scorer error ({_score_err}), using priority fallback")
 
         # Phase 3: fall back to first in priority order if scoring failed
         if best_broker is None:
