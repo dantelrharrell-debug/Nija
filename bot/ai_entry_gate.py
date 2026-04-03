@@ -317,9 +317,23 @@ class AIEntryGate:
         # Cap reduction at 50% and enforce a minimum of 2 points so that
         # at least two gate conditions must still be satisfied.
         capped_reduction = min(gate_score_reduction, 0.50)
+
+        # Use the AdaptiveThresholdController's gate-domain adjustment so the
+        # pass bar tightens when win rate is low and loosens when it is high.
+        # Falls back to the static BASE_ENTRY_SCORE_THRESHOLD if unavailable.
+        try:
+            from nija_ai_engine import get_nija_ai_engine as _get_aie
+            _adaptive_base = _get_aie().threshold_ctrl.get_threshold(BASE_ENTRY_SCORE_THRESHOLD)
+        except Exception:
+            try:
+                from bot.nija_ai_engine import get_nija_ai_engine as _get_aie
+                _adaptive_base = _get_aie().threshold_ctrl.get_threshold(BASE_ENTRY_SCORE_THRESHOLD)
+            except Exception:
+                _adaptive_base = BASE_ENTRY_SCORE_THRESHOLD
+
         effective_threshold = max(
             2,
-            int(BASE_ENTRY_SCORE_THRESHOLD * (1.0 - capped_reduction)),
+            int(_adaptive_base * (1.0 - capped_reduction)),
         )
         passed = total_score >= effective_threshold
 
