@@ -116,6 +116,21 @@ except ImportError:
     except ImportError:
         _SNIPER_TOP_N_DEFAULT = 2
 
+# ---------------------------------------------------------------------------
+# Score Distribution Debugger — optional dependency
+# ---------------------------------------------------------------------------
+_SDD_AVAILABLE = False
+_get_sdd = None  # type: ignore
+try:
+    from score_distribution_debugger import get_score_debugger as _get_sdd  # type: ignore
+    _SDD_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.score_distribution_debugger import get_score_debugger as _get_sdd  # type: ignore
+        _SDD_AVAILABLE = True
+    except ImportError:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -423,21 +438,32 @@ class NijaCoreLoop:
         scored = 0
         blocked = 0
 
+        # Initialise the per-cycle score distribution debugger snapshot.
+        _sdd = _get_sdd() if (_SDD_AVAILABLE and _get_sdd is not None) else None
+        if _sdd is not None:
+            _sdd.start_cycle()
+
         # ── Score every symbol ────────────────────────────────────────────
         for symbol in symbols:
             # Cap: stop scoring once we have 10× the available slots — enough
             # diversity to find the top-N without scanning every symbol when the
             # market has 700+ pairs.
             if len(candidates) >= available_slots * 10:
+                if _sdd is not None:
+                    _sdd.record_skip(symbol, "cap_reached")
                 break
 
             try:
                 df = self._fetch_df(broker, symbol)
                 if df is None or len(df) < 100:
+                    if _sdd is not None:
+                        _sdd.record_skip(symbol, "data_insufficient")
                     continue
 
                 indicators = self.apex.calculate_indicators(df)
                 if not indicators:
+                    if _sdd is not None:
+                        _sdd.record_skip(symbol, "indicators_failed")
                     continue
 
                 # Determine trend from apex market filter
@@ -445,6 +471,8 @@ class NijaCoreLoop:
                     allow, trend, _ = self.apex.check_market_filter(df, indicators)
                     if not allow:
                         blocked += 1
+                        if _sdd is not None:
+                            _sdd.record_skip(symbol, "market_filter")
                         continue
                 except Exception:
                     trend = "uptrend"
@@ -494,6 +522,8 @@ class NijaCoreLoop:
 
             except Exception as sym_err:
                 logger.debug("Phase3 scoring error for %s: %s", symbol, sym_err)
+                if _sdd is not None:
+                    _sdd.record_skip(symbol, "exception")
 
         # ── Rank and select top-N ─────────────────────────────────────────
         if not candidates:
@@ -501,6 +531,12 @@ class NijaCoreLoop:
                 "🔍 Core loop Phase 3: scored=%d symbols, no candidates above floor=%.0f",
                 scored, MIN_SCORE_HARD_FLOOR,
             )
+            if _sdd is not None:
+                _sdd.emit_histogram(
+                    entries_taken=0,
+                    candidates_found=0,
+                    rank_threshold=None,
+                )
             if ai is not None:
                 ai.speed_ctrl.record_cycle(0)
             return 0, blocked, scored
@@ -598,6 +634,15 @@ class NijaCoreLoop:
             except Exception as exec_err:
                 logger.warning("Phase3 execute error for %s: %s", sig.symbol, exec_err)
                 blocked += 1
+
+        # ── Emit score histogram for this cycle ──────────────────────────
+        if _sdd is not None:
+            rank_threshold = selected[0].threshold_used if selected else None
+            _sdd.emit_histogram(
+                entries_taken=entries,
+                candidates_found=len(candidates),
+                rank_threshold=rank_threshold,
+            )
 
         return entries, blocked, scored
 

@@ -51,6 +51,21 @@ import pandas as pd
 logger = logging.getLogger("nija.ai_engine")
 
 # ---------------------------------------------------------------------------
+# Score Distribution Debugger — optional dependency
+# ---------------------------------------------------------------------------
+_SDD_AVAILABLE = False
+_get_sdd = None  # type: ignore
+try:
+    from score_distribution_debugger import get_score_debugger as _get_sdd  # type: ignore
+    _SDD_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.score_distribution_debugger import get_score_debugger as _get_sdd  # type: ignore
+        _SDD_AVAILABLE = True
+    except ImportError:
+        pass
+
+# ---------------------------------------------------------------------------
 # Score tier constants
 # ---------------------------------------------------------------------------
 TIER_ELITE = 75.0    # 1.5× position size
@@ -370,6 +385,16 @@ class NijaAIEngine:
         """
         try:
             composite, breakdown = self._compute_composite(df, indicators, side, regime, broker, entry_type)
+
+            # Feed every composite score (pass or fail) into the distribution debugger
+            # so the per-cycle histogram includes the full picture.
+            if _SDD_AVAILABLE and _get_sdd is not None:
+                try:
+                    _sdd = _get_sdd()
+                    if _sdd is not None:
+                        _sdd.record_score(symbol, composite)
+                except Exception:
+                    pass
 
             # Apply self-adjusting threshold: win-rate feedback nudges the floor
             # ±8 pts in real-time to keep win rate in the 55–65% target band.
