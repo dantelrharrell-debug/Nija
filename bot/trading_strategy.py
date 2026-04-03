@@ -1504,6 +1504,21 @@ except ImportError:
         BROKER_PROFILES = {}  # type: ignore
         logger.warning("⚠️ Broker Strategy Router not available — static broker targets in use")
 
+# ── Broker Performance Scorer — fill-rate/latency/slippage composite score ────
+try:
+    from broker_performance_scorer import get_broker_performance_scorer
+    BROKER_PERFORMANCE_SCORER_AVAILABLE = True
+    logger.info("✅ Broker Performance Scorer loaded — fill-rate / latency scoring active")
+except ImportError:
+    try:
+        from bot.broker_performance_scorer import get_broker_performance_scorer
+        BROKER_PERFORMANCE_SCORER_AVAILABLE = True
+        logger.info("✅ Broker Performance Scorer loaded — fill-rate / latency scoring active")
+    except ImportError:
+        BROKER_PERFORMANCE_SCORER_AVAILABLE = False
+        get_broker_performance_scorer = None  # type: ignore
+        logger.warning("⚠️ Broker Performance Scorer not available — using static broker priority")
+
 # ── Capital Efficiency Mode — account-size-aware thresholds (Steps 1-5) ──────
 try:
     from capital_efficiency_mode import get_capital_efficiency_mode
@@ -2175,6 +2190,24 @@ STOP_LOSS_THRESHOLD = -0.020  # -2.0% primary stop threshold (was -4.0%)
 # Last resort protection - should NEVER be reached in normal operation
 # NORMALIZED FORMAT: -0.03 = -3% (fractional format)
 STOP_LOSS_EMERGENCY = -0.03  # EMERGENCY exit at -3% loss (was -5%, tightened to limit catastrophic losses)
+
+# TIER 0: DEEP DRAWDOWN KILLER
+# Portfolio-level circuit-breaker for positions that are already severely underwater.
+# Fires BEFORE all other tier checks so that legacy/imported positions that somehow
+# bypassed normal stop-loss are still force-exited without waiting for further decay.
+# Threshold is intentionally wide (-20%) to give normal stops room to breathe while
+# guaranteeing capital recovery from catastrophically losing positions.
+STOP_LOSS_DEEP_DRAWDOWN = float(
+    os.environ.get('NIJA_DEEP_DRAWDOWN_STOP_PCT', '-0.20')
+)  # default -20%, overridable via env var
+# Clamp to a sane range: must be negative and not tighter than -1% (which would overlap
+# normal stops) nor looser than -100% (which would never fire).
+if not (-1.0 < STOP_LOSS_DEEP_DRAWDOWN < -0.01):
+    logger.warning(
+        "⚠️ NIJA_DEEP_DRAWDOWN_STOP_PCT=%s is out of range — resetting to -0.20",
+        os.environ.get('NIJA_DEEP_DRAWDOWN_STOP_PCT', '-0.20'),
+    )
+    STOP_LOSS_DEEP_DRAWDOWN = -0.20
 
 # PROFITABILITY GUARD: Minimum loss threshold to reduce noise
 # CRITICAL FIX (Feb 3, 2026): Lowered from -0.25% to -0.05% to avoid creating dead zone
@@ -6373,6 +6406,8 @@ class TradingStrategy:
 
         logger.debug(f"_select_entry_broker called with {len(all_brokers)} brokers: {[bt.value for bt in all_brokers.keys()]}")
 
+        # Collect all eligible brokers (in priority order for tie-breaking)
+        eligible_brokers: list = []  # list of (broker_instance, broker_name, broker_type)
         # Phase 1: collect all eligible brokers (preserving ENTRY_BROKER_PRIORITY order)
         for broker_type in ENTRY_BROKER_PRIORITY:
             broker = all_brokers.get(broker_type)
@@ -6387,6 +6422,40 @@ class TradingStrategy:
             logger.debug(f"   {broker_type.value}: is_eligible={is_eligible}, reason={reason}")
 
             if is_eligible:
+                broker_name = self._get_broker_name(broker)
+                eligible_brokers.append((broker, broker_name, broker_type))
+
+        if not eligible_brokers:
+            # No eligible broker found
+            logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
+            return None, None, eligibility_status
+
+        # ── BrokerPerformanceScorer: rank eligible brokers by composite score ──
+        # When multiple brokers are eligible, prefer the one with the best historical
+        # fill-rate / latency / slippage score.  Falls back to priority-order when the
+        # scorer is unavailable or all brokers have the same default score (50).
+        if BROKER_PERFORMANCE_SCORER_AVAILABLE and get_broker_performance_scorer is not None and len(eligible_brokers) > 1:
+            try:
+                _scorer = get_broker_performance_scorer()
+                candidate_names = [bn for _, bn, _ in eligible_brokers]
+                _best_name = _scorer.get_best_broker(candidate_names)
+                if _best_name:
+                    for _b, _bn, _bt in eligible_brokers:
+                        if _bn == _best_name:
+                            _score = _scorer.get_score(_bn)
+                            logger.info(
+                                f"✅ Selected {_bn.upper()} for entry "
+                                f"(BrokerPerformanceScorer score={_score:.1f}, "
+                                f"priority: {ENTRY_BROKER_PRIORITY.index(_bt) + 1})"
+                            )
+                            return _b, _bn, eligibility_status
+            except Exception as _bps_err:
+                logger.debug(f"BrokerPerformanceScorer selection skipped: {_bps_err}")
+
+        # Fall back to original priority-first selection
+        broker, broker_name, broker_type = eligible_brokers[0]
+        logger.info(f"✅ Selected {broker_name.upper()} for entry (priority: {ENTRY_BROKER_PRIORITY.index(broker_type) + 1})")
+        return broker, broker_name, eligibility_status
                 eligible.append((ENTRY_BROKER_PRIORITY.index(broker_type), broker, self._get_broker_name(broker)))
 
         if not eligible:
@@ -8700,6 +8769,58 @@ class TradingStrategy:
                                         # Tier 1: Primary trading stop (varies by broker and balance)
                                         # Tier 2: Emergency micro-stop to prevent logic failures
                                         # Tier 3: Catastrophic failsafe (last resort)
+
+                                        # ══════════════════════════════════════════════════════
+                                        # TIER 0: DEEP DRAWDOWN KILLER (Apr 2026)
+                                        # Fires BEFORE all tier checks.  Handles legacy/imported
+                                        # positions that are already severely underwater (≤ -20%).
+                                        # Bypasses all normal stop-loss logic to guarantee exit.
+                                        # Threshold env-overridable: NIJA_DEEP_DRAWDOWN_STOP_PCT
+                                        # ══════════════════════════════════════════════════════
+                                        if pnl_percent <= STOP_LOSS_DEEP_DRAWDOWN:
+                                            logger.error(
+                                                f"   🚨 TIER 0 — DEEP DRAWDOWN KILLER: {symbol} "
+                                                f"at {pnl_percent*100:.2f}% "
+                                                f"(threshold: {STOP_LOSS_DEEP_DRAWDOWN*100:.0f}%) "
+                                                f"— forcing immediate exit to limit portfolio drawdown"
+                                            )
+                                            if self.forced_stop_loss:
+                                                _dd_success, _dd_result, _dd_error = self.forced_stop_loss.force_sell_position(
+                                                    symbol=symbol,
+                                                    quantity=quantity,
+                                                    reason=(
+                                                        f"TIER 0 Deep Drawdown Killer: "
+                                                        f"{pnl_percent*100:.2f}% <= "
+                                                        f"{STOP_LOSS_DEEP_DRAWDOWN*100:.0f}%"
+                                                    ),
+                                                )
+                                                if _dd_success:
+                                                    logger.info(f"   ✅ DEEP DRAWDOWN EXIT EXECUTED: {symbol}")
+                                                    if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                        active_broker.position_tracker.track_exit(symbol, quantity)
+                                                    if hasattr(self, 'trades_since_last_cleanup'):
+                                                        self.trades_since_last_cleanup += 1
+                                                else:
+                                                    logger.error(f"   ❌ DEEP DRAWDOWN EXIT FAILED: {_dd_error}")
+                                            else:
+                                                try:
+                                                    _dd_res = active_broker.place_market_order(
+                                                        symbol=symbol,
+                                                        side='sell',
+                                                        quantity=quantity,
+                                                        size_type='base',
+                                                    )
+                                                    if _dd_res and _dd_res.get('status') not in ['error', 'unfilled']:
+                                                        logger.info(f"   ✅ DEEP DRAWDOWN EXIT: {symbol} order={_dd_res.get('order_id', 'N/A')}")
+                                                        if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
+                                                            active_broker.position_tracker.track_exit(symbol, quantity)
+                                                        if hasattr(self, 'trades_since_last_cleanup'):
+                                                            self.trades_since_last_cleanup += 1
+                                                    else:
+                                                        logger.error(f"   ❌ DEEP DRAWDOWN EXIT REJECTED: {_dd_res}")
+                                                except Exception as _dd_exc:
+                                                    logger.error(f"   ❌ DEEP DRAWDOWN EXIT EXCEPTION: {_dd_exc}")
+                                            continue
 
                                         # TIER 1: PRIMARY TRADING STOP-LOSS
                                         # This is the REAL stop-loss for risk management
