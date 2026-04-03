@@ -217,6 +217,7 @@ class DrawdownRiskController:
         indicators: Dict[str, Any],
         daily_pnl_usd: float = 0.0,
         regime: Any = None,
+        daily_loss_limit_pct: Optional[float] = None,
     ) -> RiskEnvelopeResult:
         """
         Run all risk layers.  Returns on first block.
@@ -227,6 +228,10 @@ class DrawdownRiskController:
             indicators: Calculated indicators dict.
             daily_pnl_usd: Today's cumulative P&L in USD (negative = loss).
             regime: Current market regime (for condition check).
+            daily_loss_limit_pct: Optional per-call override for the daily loss
+                cap (% of account).  When provided it supersedes the instance
+                default for this call only — useful for tightening the limit in
+                crisis/defensive regimes without changing the global setting.
 
         Returns:
             ``RiskEnvelopeResult`` with can_trade, multiplier, and reason.
@@ -261,10 +266,17 @@ class DrawdownRiskController:
             )
 
         # ── Layer 2: Daily loss limit ─────────────────────────────────
-        if daily_pnl_pct < -self._daily_loss_limit:
+        # Use per-call override when provided (e.g. tighter limit in crisis regime),
+        # otherwise fall back to the instance-level default.
+        effective_loss_limit = (
+            daily_loss_limit_pct / 100.0
+            if daily_loss_limit_pct is not None
+            else self._daily_loss_limit
+        )
+        if daily_pnl_pct < -effective_loss_limit:
             reason = (
                 f"Daily loss limit reached: {daily_pnl_pct*100:.2f}% < "
-                f"-{self._daily_loss_limit*100:.1f}% limit — "
+                f"-{effective_loss_limit*100:.1f}% limit — "
                 f"halting until tomorrow"
             )
             logger.warning("🛑 %s", reason)
