@@ -366,6 +366,21 @@ class BrokerFailureManager:
             return {name: alloc / total for name, alloc in active.items()}
 
     # ------------------------------------------------------------------
+    # Multi-broker list helpers
+    # ------------------------------------------------------------------
+
+    def get_active_dead_lists(self):
+        """
+        Stub for multi-broker logging.
+        Returns empty lists if no broker tracking is implemented.
+        """
+        active, dead = [], []
+        logger.debug(
+            f"[BrokerFailureManager] Returning stub active/dead lists: {active}/{dead}"
+        )
+        return active, dead
+
+    # ------------------------------------------------------------------
     # Status / logging
     # ------------------------------------------------------------------
 
