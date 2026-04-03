@@ -758,15 +758,19 @@ class IndependentBrokerTrader:
                     # ⛔ CONNECTION GUARD
                     # ─────────────────────────────────────────────────────────────
                     if self.multi_account_manager and not self.multi_account_manager.is_platform_connected(broker_type):
-                        logger.warning(f"⛔ {broker_name}: Trading paused — platform not connected")
-                        self.update_broker_health(broker_name, 'degraded', 'Platform not connected')
-                        if self.failure_manager:
-                            self.failure_manager.record_error(broker_name, 'Platform not connected')
-                            backoff = self.failure_manager.get_retry_delay(broker_name)
+                        # Allow trading if broker is directly connected (platform state may lag)
+                        if getattr(broker, 'connected', False):
+                            logger.info(f"⚠️ {broker_name}: Platform state unconfirmed but broker directly connected — continuing")
                         else:
-                            backoff = 30
-                        stop_flag.wait(backoff)
-                        continue
+                            logger.warning(f"⛔ {broker_name}: Trading paused — platform not connected")
+                            self.update_broker_health(broker_name, 'degraded', 'Platform not connected')
+                            if self.failure_manager:
+                                self.failure_manager.record_error(broker_name, 'Platform not connected')
+                                backoff = self.failure_manager.get_retry_delay(broker_name)
+                            else:
+                                backoff = 30
+                            stop_flag.wait(backoff)
+                            continue
 
                     # ─────────────────────────────────────────────────────────────
                     # 💰 BALANCE CHECK
@@ -955,18 +959,22 @@ class IndependentBrokerTrader:
                 cycle_count += 1
                 logger.info(f"🔄 {broker_name} (USER) - Cycle #{cycle_count}")
 
-                # Guard: ensure the platform broker is still CONNECTED before user trades
+                # Guard: ensure the platform broker is still CONNECTED before user trades,
+                # but allow trading if the user broker itself is directly connected
                 if self.multi_account_manager and not self.multi_account_manager.is_platform_connected(broker_type):
-                    logger.warning(f"⛔ {broker_name} (USER): Trading paused — platform not connected")
-                    if user_id not in self.user_broker_health:
-                        self.user_broker_health[user_id] = {}
-                    self.user_broker_health[user_id][broker_name] = {
-                        'status': 'degraded',
-                        'error': 'Platform not connected',
-                        'last_check': datetime.now()
-                    }
-                    stop_flag.wait(30)
-                    continue
+                    if getattr(broker, 'connected', False):
+                        logger.info(f"⚠️ {broker_name} (USER): Platform state unconfirmed — using direct broker connection")
+                    else:
+                        logger.warning(f"⛔ {broker_name} (USER): Trading paused — platform not connected")
+                        if user_id not in self.user_broker_health:
+                            self.user_broker_health[user_id] = {}
+                        self.user_broker_health[user_id][broker_name] = {
+                            'status': 'degraded',
+                            'error': 'Platform not connected',
+                            'last_check': datetime.now()
+                        }
+                        stop_flag.wait(30)
+                        continue
 
                 # Check if broker is still funded
                 try:
