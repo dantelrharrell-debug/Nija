@@ -658,11 +658,11 @@ except ImportError:
 try:
     from win_rate_score_shaper import get_win_rate_score_shaper as _get_wrss_fn
     WIN_RATE_SCORE_SHAPER_AVAILABLE = True
-except ImportError:
+except (ImportError, SyntaxError):
     try:
         from bot.win_rate_score_shaper import get_win_rate_score_shaper as _get_wrss_fn
         WIN_RATE_SCORE_SHAPER_AVAILABLE = True
-    except ImportError:
+    except (ImportError, SyntaxError):
         WIN_RATE_SCORE_SHAPER_AVAILABLE = False
         _get_wrss_fn = None
 
