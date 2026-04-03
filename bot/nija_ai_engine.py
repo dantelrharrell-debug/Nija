@@ -66,6 +66,21 @@ except ImportError:
         pass
 
 # ---------------------------------------------------------------------------
+# Win-Rate Score Shaper — optional dependency
+# ---------------------------------------------------------------------------
+_WRSS_AVAILABLE = False
+_get_wrss = None  # type: ignore
+try:
+    from win_rate_score_shaper import get_win_rate_score_shaper as _get_wrss  # type: ignore
+    _WRSS_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.win_rate_score_shaper import get_win_rate_score_shaper as _get_wrss  # type: ignore
+        _WRSS_AVAILABLE = True
+    except ImportError:
+        pass
+
+# ---------------------------------------------------------------------------
 # Score tier constants
 # ---------------------------------------------------------------------------
 TIER_ELITE = 75.0    # 1.5× position size
@@ -577,6 +592,23 @@ class NijaAIEngine:
         # Penalty: 8 pts per failed gate, capped at 3 gates (max -24 pts before weighting)
         composite = (raw_score * _W_ENHANCED) + (opt_delta * _W_OPTIMIZER) - (gate_penalty * _W_GATE)
         composite = float(np.clip(composite, 0.0, 100.0))
+
+        # ── Win-rate score shaping by regime ─────────────────────────────
+        # Apply a multiplicative factor derived from the bot's historical
+        # win-rate in this specific regime.  Regimes where the bot wins
+        # consistently get a score boost; regimes where it struggles get a
+        # dampen.  Factor stays at 1.0 when history is insufficient.
+        wrss_factor = 1.0
+        if _WRSS_AVAILABLE and _get_wrss is not None:
+            try:
+                _wrss = _get_wrss()
+                if _wrss is not None:
+                    wrss_factor = _wrss.get_score_multiplier(regime)
+                    if wrss_factor != 1.0:
+                        composite = float(np.clip(composite * wrss_factor, 0.0, 100.0))
+            except Exception:
+                pass
+        breakdown["wrss_factor"] = wrss_factor
         breakdown["composite_score"] = composite
         breakdown["gate_penalty"] = gate_penalty
 
