@@ -196,7 +196,7 @@ _GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 9
 # alone = 1+1 = 2 pts → FAIL; Gate 2+3 = 2+1 = 3 pts → PASS; Gate 1 alone = 3 pts → PASS).
 # Restored to 5.0 once the account balance reaches TARGET_BALANCE ($100)
 # via ``set_gate_pass_threshold`` / ``TradeFrequencyController.check_balance_and_adjust_threshold``.
-BASE_ENTRY_SCORE_THRESHOLD: float = 2.5  # out of 9 — loosened for more trades
+BASE_ENTRY_SCORE_THRESHOLD: float = 2.6  # out of 9 — 2.6 includes B+ setups; below 2.5 = garbage zone
 
 
 # ---------------------------------------------------------------------------

@@ -1274,12 +1274,12 @@ except ImportError:
         logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
     except ImportError:
         MICRO_CAP_COMPOUNDING_AVAILABLE = False
-        MICRO_CAP_TRADE_COOLDOWN = 300  # Default: 5 minutes (matches config constant)
-        MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 3  # Default: 3 positions for frequency + compounding
-        MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 95.0   # 95% — aggressive micro-compounding mode (balance < $150)
+        MICRO_CAP_TRADE_COOLDOWN = 60   # 60s cooldown — TUNE 5 (was 300s/5 min)
+        MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 4  # TUNE 6: 3→4 positions
+        MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 60.0   # TUNE 6: 95%→60% per position
         MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5
         MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5
-        MAX_CONCURRENT_TRADES = 3  # Default: 3-position mode for frequency + compounding
+        MAX_CONCURRENT_TRADES = 4  # TUNE 6: 3→4
         logger.warning("⚠️ Micro-Cap Compounding Config not available - micro-cap mode disabled")
         get_micro_cap_compounding_config = None  # type: ignore
 
@@ -14816,6 +14816,18 @@ class TradingStrategy:
                 self.auto_tuning_ai.record_trade(pnl_usd=profit_usd, is_win=is_win)
             except Exception as _at_rec_err:
                 logger.debug("Auto-Tuning AI Layer record_trade skipped for %s: %s", symbol, _at_rec_err)
+
+        # 🧠 ADAPTIVE THRESHOLD CONTROLLER — feed outcome to NijaAIEngine's real-time
+        # self-adjusting threshold (targets 55–65% win rate; shifts floor ±8 pts).
+        try:
+            from nija_ai_engine import record_trade_outcome as _rto
+            _rto(is_win)
+        except Exception:
+            try:
+                from bot.nija_ai_engine import record_trade_outcome as _rto
+                _rto(is_win)
+            except Exception as _atc_err:
+                logger.debug("AdaptiveThresholdController record skipped: %s", _atc_err)
 
         # 📊 WIN-RATE / FREQUENCY TUNER — feed outcome to update EV-per-hour model
         # Tunes the confidence gate to maximise expected value over time:

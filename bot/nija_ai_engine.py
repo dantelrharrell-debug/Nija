@@ -41,8 +41,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -163,6 +164,90 @@ class CycleSpeedController:
 
 
 # ---------------------------------------------------------------------------
+# Adaptive threshold controller
+# ---------------------------------------------------------------------------
+
+class AdaptiveThresholdController:
+    """
+    Real-time self-adjusting AI score threshold.
+
+    Tracks closed-trade outcomes in a rolling window and nudges
+    MIN_SCORE_ABSOLUTE up or down to keep the win rate inside a
+    55–65 % target band.
+
+    * Win rate < 55 %  → raise bar (+0.5 pts/cycle, max +8 pts)
+    * Win rate > 65 %  → lower bar (−0.5 pts/cycle, max −8 pts)
+    * Win rate in band → hold current adjustment
+
+    Usage
+    -----
+    After each trade closes call ``record_outcome(won=True/False)``.
+    ``NijaAIEngine.evaluate_symbol`` automatically reads
+    ``get_effective_floor(MIN_SCORE_ABSOLUTE)`` on every call.
+    """
+
+    _TARGET_FLOOR:  float = 0.55   # raise threshold below this win rate
+    _TARGET_CEIL:   float = 0.65   # lower threshold above this win rate
+    _WINDOW:        int   = 20     # rolling outcome window
+    _STEP:          float = 0.5    # pts nudged per recompute
+    _MAX_ADJ:       float = 8.0    # maximum |adjustment| in pts
+    _MIN_SAMPLES:   int   = 5      # outcomes needed before any adjustment
+
+    def __init__(self) -> None:
+        self._outcomes: Deque[float] = deque(maxlen=self._WINDOW)
+        self._adjustment: float = 0.0
+        self._lock = threading.Lock()
+
+    # ── Public interface ────────────────────────────────────────────────
+
+    def record_outcome(self, won: bool) -> None:
+        """Call after each trade closes (True = profitable, False = loss)."""
+        with self._lock:
+            self._outcomes.append(1.0 if won else 0.0)
+            self._recompute()
+
+    def get_effective_floor(self, base_floor: float) -> float:
+        """Return base_floor adjusted by the current auto-tune delta."""
+        with self._lock:
+            return max(5.0, base_floor + self._adjustment)
+
+    @property
+    def threshold_delta(self) -> float:
+        """Current adjustment delta (positive = tighter, negative = looser)."""
+        with self._lock:
+            return self._adjustment
+
+    def win_rate(self) -> float:
+        """Current rolling win rate (0.0–1.0). Returns neutral 0.60 before data."""
+        with self._lock:
+            if len(self._outcomes) < self._MIN_SAMPLES:
+                return 0.60
+            return sum(self._outcomes) / len(self._outcomes)
+
+    def status(self) -> str:
+        wr = self.win_rate()
+        with self._lock:
+            n = len(self._outcomes)
+        return (
+            f"win_rate={wr:.1%}  adj={self._adjustment:+.1f}pts  "
+            f"window={n}/{self._WINDOW}"
+        )
+
+    # ── Internal ────────────────────────────────────────────────────────
+
+    def _recompute(self) -> None:
+        """Nudge the adjustment based on the latest window. Must hold _lock."""
+        if len(self._outcomes) < self._MIN_SAMPLES:
+            return
+        wr = sum(self._outcomes) / len(self._outcomes)
+        if wr < self._TARGET_FLOOR:
+            self._adjustment = min(self._MAX_ADJ, self._adjustment + self._STEP)
+        elif wr > self._TARGET_CEIL:
+            self._adjustment = max(-self._MAX_ADJ, self._adjustment - self._STEP)
+        # else: in-band → no change
+
+
+# ---------------------------------------------------------------------------
 # Main AI Engine
 # ---------------------------------------------------------------------------
 
@@ -177,6 +262,7 @@ class NijaAIEngine:
 
     def __init__(self) -> None:
         self.speed_ctrl = CycleSpeedController()
+        self.threshold_ctrl = AdaptiveThresholdController()
         self._lock = threading.Lock()
 
         # Lazy-loaded component references (set on first use)
@@ -255,10 +341,15 @@ class NijaAIEngine:
         try:
             composite, breakdown = self._compute_composite(df, indicators, side, regime, broker, entry_type)
 
-            if composite < MIN_SCORE_ABSOLUTE:
+            # Apply self-adjusting threshold: win-rate feedback nudges the floor
+            # ±8 pts in real-time to keep win rate in the 55–65% target band.
+            effective_floor = self.threshold_ctrl.get_effective_floor(MIN_SCORE_ABSOLUTE)
+
+            if composite < effective_floor:
                 logger.debug(
-                    "   🤖 AI Engine %s %s: score=%.1f < floor=%.1f — skipped",
-                    symbol, side.upper(), composite, MIN_SCORE_ABSOLUTE,
+                    "   🤖 AI Engine %s %s: score=%.1f < floor=%.1f (adj%+.1f) — skipped",
+                    symbol, side.upper(), composite, effective_floor,
+                    self.threshold_ctrl.threshold_delta,
                 )
                 return None
 
@@ -271,7 +362,7 @@ class NijaAIEngine:
                 composite_score=composite,
                 position_multiplier=mult,
                 entry_type=entry_type,
-                threshold_used=MIN_SCORE_ABSOLUTE,
+                threshold_used=effective_floor,
                 reason=reason,
                 metadata=breakdown,
             )
@@ -329,9 +420,11 @@ class NijaAIEngine:
                 slots_used += 1
 
         logger.info(
-            "🤖 AI Engine ranked %d candidates | threshold=%.1f | selected=%d (slots=%d)",
+            "🤖 AI Engine ranked %d candidates | threshold=%.1f (adj%+.1f wr=%.0f%%) | selected=%d (slots=%d)",
             len(ranked),
             threshold,
+            self.threshold_ctrl.threshold_delta,
+            self.threshold_ctrl.win_rate() * 100,
             len(selected),
             available_slots,
         )
@@ -434,19 +527,24 @@ class NijaAIEngine:
 
         return composite, breakdown
 
-    @staticmethod
-    def _adaptive_threshold(ranked: List[AIEngineSignal]) -> float:
+    def _adaptive_threshold(self, ranked: List[AIEngineSignal]) -> float:
         """
         Return the selection threshold for this cycle.
 
-        If fewer than RELAX_CANDIDATE_COUNT candidates score >= TIER_FLOOR,
-        relax to MIN_SCORE_ABSOLUTE so we always execute *something*.
+        Applies the AdaptiveThresholdController delta so the threshold
+        automatically rises/falls to maintain 55–65% win rate.
+
+        If fewer than RELAX_CANDIDATE_COUNT candidates score >= TIER_FLOOR
+        (after delta), relax to MIN_SCORE_ABSOLUTE so we always execute
+        *something*.
         """
-        above_floor = sum(1 for s in ranked if s.composite_score >= TIER_FLOOR)
+        delta = self.threshold_ctrl.threshold_delta
+        adjusted_floor = max(5.0, TIER_FLOOR + delta)
+        above_floor = sum(1 for s in ranked if s.composite_score >= adjusted_floor)
         if above_floor >= RELAX_CANDIDATE_COUNT:
-            return TIER_FLOOR
-        # Relax — take whatever is above the hard minimum
-        return MIN_SCORE_ABSOLUTE
+            return adjusted_floor
+        # Relax — take whatever is above the hard minimum (also delta-adjusted)
+        return max(5.0, MIN_SCORE_ABSOLUTE + delta)
 
     @staticmethod
     def _position_multiplier(score: float) -> float:
@@ -491,3 +589,19 @@ def get_nija_ai_engine() -> NijaAIEngine:
     if _engine is None:
         _engine = NijaAIEngine()
     return _engine
+
+
+def record_trade_outcome(won: bool) -> None:
+    """
+    Convenience function: record a closed trade result into the singleton
+    AI engine's AdaptiveThresholdController.
+
+    Call this after every trade closes so the self-adjusting threshold
+    can maintain the 55–65 % win-rate target band in real-time.
+
+    Example usage in trading_strategy.py or broker_integration.py::
+
+        from nija_ai_engine import record_trade_outcome
+        record_trade_outcome(pnl_usd > 0)
+    """
+    get_nija_ai_engine().threshold_ctrl.record_outcome(won)

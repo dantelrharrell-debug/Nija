@@ -634,14 +634,14 @@ def is_in_momentum_universe(
     return symbol in universe
 
 def check_pair_quality(symbol, bid_price, ask_price, volume_24h=None, atr_pct=None,
-                       max_spread_pct=0.0015, min_volume_usd=100000, min_atr_pct=0.005,
+                       max_spread_pct=0.0020, min_volume_usd=75000, min_atr_pct=0.005,
                        disabled_pairs=None):
     """
     FIX #4: Check if trading pair meets quality standards.
 
     Quality criteria:
-    - Spread < 0.15% (tight spreads reduce costs)
-    - Volume > $100k daily (adequate liquidity)
+    - Spread < 0.20% (loosened from 0.15% to increase pass rate)
+    - Volume > $75k daily (lowered from $100k to admit more pairs)
     - ATR > 0.5% (sufficient price movement)
     - Not in disabled pairs list
 
@@ -651,8 +651,8 @@ def check_pair_quality(symbol, bid_price, ask_price, volume_24h=None, atr_pct=No
         ask_price: Current ask price
         volume_24h: 24-hour volume in USD (optional)
         atr_pct: ATR as percentage of price (optional)
-        max_spread_pct: Maximum acceptable spread (default: 0.15%)
-        min_volume_usd: Minimum 24h volume in USD (default: $100k)
+        max_spread_pct: Maximum acceptable spread (default: 0.20%)
+        min_volume_usd: Minimum 24h volume in USD (default: $75k)
         min_atr_pct: Minimum ATR percentage (default: 0.5%)
         disabled_pairs: List of disabled pair symbols (default: None)
 
