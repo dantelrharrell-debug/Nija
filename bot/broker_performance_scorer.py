@@ -88,15 +88,21 @@ LATENCY_CEILING_MS: float = 2_000.0
 # Slippage normalisation ceiling (bps) — above this the slippage sub-score = 0
 SLIPPAGE_CEILING_BPS: float = 50.0
 
+# Available-capital normalisation ceiling (USD) — above this the capital sub-score = 1.0
+CAPITAL_CEILING_USD: float = 10_000.0
+
 # Default composite score for brokers with insufficient data
 DEFAULT_SCORE: float = 50.0
 
 # Constituent weights (must sum to 1.0)
-W_FILL_SUCCESS: float = 0.30
-W_LATENCY: float = 0.25
-W_SLIPPAGE: float = 0.20
-W_REJECTION: float = 0.15
+# latency 23 % / fill_success 27 % / slippage 17 % / rejection 13 % /
+# connectivity 10 % / available_capital 10 %
+W_FILL_SUCCESS: float = 0.27
+W_LATENCY: float = 0.23
+W_SLIPPAGE: float = 0.17
+W_REJECTION: float = 0.13
 W_CONNECTIVITY: float = 0.10
+W_BALANCE: float = 0.10
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +138,7 @@ class BrokerScoreSnapshot:
     avg_slippage_bps: float         # mean slippage over rolling window
     num_observations: int           # events in rolling window
     insufficient_data: bool         # True when below min_observations threshold
+    available_capital_usd: float = 0.0  # last-reported available balance (USD)
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -159,6 +166,7 @@ class _BrokerState:
         self._ema_alpha = ema_alpha
         self._observations: Deque[OrderObservation] = deque(maxlen=window)
         self._ema_score: Optional[float] = None   # None until first score computed
+        self._available_capital_usd: float = 0.0  # last-reported available balance
 
     # ------------------------------------------------------------------
     # Recording
@@ -223,6 +231,7 @@ class _BrokerState:
         norm_rej = 1.0 - rej_rate                              # invert
         norm_lat = max(0.0, 1.0 - p95_lat / LATENCY_CEILING_MS)  # invert + clamp
         norm_slip = max(0.0, 1.0 - avg_slip / SLIPPAGE_CEILING_BPS)  # invert + clamp
+        norm_capital = min(self._available_capital_usd / CAPITAL_CEILING_USD, 1.0)
 
         # ── Weighted composite ───────────────────────────────────────
         raw = (
@@ -231,6 +240,7 @@ class _BrokerState:
             + W_SLIPPAGE   * norm_slip
             + W_REJECTION  * norm_rej
             + W_CONNECTIVITY * norm_conn
+            + W_BALANCE    * norm_capital
         ) * 100.0
 
         return max(0.0, min(100.0, raw))
@@ -256,6 +266,7 @@ class _BrokerState:
                 avg_slippage_bps=0.0,
                 num_observations=0,
                 insufficient_data=True,
+                available_capital_usd=self._available_capital_usd,
             )
 
         fill_rate = sum(1 for o in obs_list if o.success) / n
@@ -291,6 +302,7 @@ class _BrokerState:
             avg_slippage_bps=round(avg_slip, 4),
             num_observations=n,
             insufficient_data=insufficient,
+            available_capital_usd=round(self._available_capital_usd, 2),
         )
 
 
@@ -389,6 +401,34 @@ class BrokerPerformanceScorer:
             broker, success, rejected, latency_ms, slippage_bps,
         )
 
+    def update_available_capital(self, broker: str, capital_usd: float) -> None:
+        """
+        Update the last-known available capital (USD) for *broker*.
+
+        This is factored into the composite score as the ``available_capital``
+        dimension (weight ``W_BALANCE``).  Call this after every balance fetch so
+        the scorer always reflects current capital availability.
+
+        Parameters
+        ----------
+        broker:
+            Broker / exchange name (e.g. ``"coinbase"``, ``"kraken"``).
+        capital_usd:
+            Available USD balance reported by the broker.
+        """
+        capital_usd = max(0.0, capital_usd)
+        with self._lock:
+            if broker not in self._states:
+                self._states[broker] = _BrokerState(
+                    broker, self._window, self._ema_alpha
+                )
+            self._states[broker]._available_capital_usd = capital_usd
+
+        logger.debug(
+            "BrokerPerformanceScorer | %s | available_capital=%.2f USD",
+            broker, capital_usd,
+        )
+
     # ------------------------------------------------------------------
     # Public API — scoring & routing
     # ------------------------------------------------------------------
@@ -480,12 +520,12 @@ class BrokerPerformanceScorer:
         """Return a human-readable performance table for all tracked brokers."""
         snapshots = self.get_all_snapshots()
         lines = [
-            "=" * 80,
+            "=" * 90,
             "  NIJA BROKER PERFORMANCE SCORER — LIVE RANKINGS",
-            "=" * 80,
+            "=" * 90,
             f"  {'Broker':<35} {'Score':>6}  {'FillOK':>6}  {'Rej':>5}  "
-            f"{'Lat p95':>8}  {'Slip':>7}  {'Obs':>5}",
-            "-" * 80,
+            f"{'Lat p95':>8}  {'Slip':>7}  {'Capital':>9}  {'Obs':>5}",
+            "-" * 90,
         ]
         for s in snapshots:
             flag = "  (low data)" if s.insufficient_data else ""
@@ -495,9 +535,10 @@ class BrokerPerformanceScorer:
                 f"{s.rejection_rate * 100:>4.1f}%  "
                 f"{s.latency_p95_ms:>7.0f}ms  "
                 f"{s.avg_slippage_bps:>6.2f}bp  "
+                f"${s.available_capital_usd:>8.2f}  "
                 f"{s.num_observations:>5}{flag}"
             )
-        lines.append("=" * 80)
+        lines.append("=" * 90)
         return "\n".join(lines)
 
     def get_summary_dict(self) -> Dict[str, object]:
@@ -505,7 +546,7 @@ class BrokerPerformanceScorer:
         snapshots = self.get_all_snapshots()
         return {
             "engine": "BrokerPerformanceScorer",
-            "version": "1.0",
+            "version": "1.1",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "brokers": [
                 {
@@ -517,6 +558,7 @@ class BrokerPerformanceScorer:
                     "avg_latency_ms": s.avg_latency_ms,
                     "latency_p95_ms": s.latency_p95_ms,
                     "avg_slippage_bps": s.avg_slippage_bps,
+                    "available_capital_usd": s.available_capital_usd,
                     "num_observations": s.num_observations,
                     "insufficient_data": s.insufficient_data,
                 }

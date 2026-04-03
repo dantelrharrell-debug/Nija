@@ -9744,35 +9744,79 @@ class BrokerManager:
             logging.warning(f"⚠️  Cannot set {broker_type.value} as primary - not connected")
             return False
 
-    def get_primary_broker(self) -> Optional[BaseBroker]:
+    def get_primary_broker(self, prefer_platform: bool = False) -> Optional[BaseBroker]:
         """
         Get the current primary/active broker.
 
-        Prefers a connected active_broker.  If active_broker is set but
-        disconnected, scans all registered brokers for a connected one and
-        promotes it as the new active_broker.  Falls back to platform_broker
-        or primary_broker for legacy compatibility when no connected broker
-        can be found.
+        This is the single authoritative resolution path for obtaining the
+        active broker.  All code that needs a broker should call this method
+        rather than reading ``self.active_broker`` directly.
 
-        Returns:
-            BaseBroker instance or None if no broker is active
+        Parameters
+        ----------
+        prefer_platform:
+            When ``True`` and the platform broker is connected, return it
+            immediately regardless of ``active_broker``.  Useful for
+            platform-level orchestration that must always use the platform
+            account (e.g. position-cap enforcement, copy-trading).
+
+        Resolution order
+        ----------------
+        1. Platform broker (when ``prefer_platform=True`` and connected).
+        2. ``active_broker`` when it is connected.
+        3. Score-based auto-promotion: rank all connected brokers by their
+           ``BrokerPerformanceScorer`` composite score and promote the winner.
+        4. Disconnected ``active_broker`` (legacy safety net).
+        5. ``platform_broker`` → ``primary_broker`` (final fallback).
+
+        Returns
+        -------
+        BaseBroker instance or None if no broker is active
         """
+        # ── 1. Prefer platform broker ────────────────────────────────
+        if prefer_platform and self.platform_broker is not None:
+            if getattr(self.platform_broker, 'connected', False):
+                return self.platform_broker
+
+        # ── 2. Active broker is healthy ─────────────────────────────
         if self.active_broker is not None:
             if getattr(self.active_broker, 'connected', False):
                 return self.active_broker
-            # active_broker is disconnected — try to find a connected replacement
-            for broker in self.brokers.values():
-                if getattr(broker, 'connected', False):
-                    logger.info(
-                        f"🔄 active_broker ({self.active_broker.broker_type.value}) disconnected — "
-                        f"promoting {broker.broker_type.value} as active"
-                    )
-                    self.active_broker = broker
-                    self.primary_broker_type = broker.broker_type
-                    return broker
+
+            # ── 3. Score-based auto-promotion ────────────────────────
+            connected_brokers = {
+                broker.broker_type.value: broker
+                for broker in self.brokers.values()
+                if getattr(broker, 'connected', False)
+            }
+            if connected_brokers:
+                # Use BrokerPerformanceScorer when available; fall back to
+                # first-connected for resilience during initialisation.
+                best_broker: Optional[BaseBroker] = None
+                try:
+                    from bot.broker_performance_scorer import get_broker_performance_scorer
+                    scorer = get_broker_performance_scorer()
+                    best_name = scorer.get_best_broker(list(connected_brokers.keys()))
+                    if best_name is not None:
+                        best_broker = connected_brokers.get(best_name)
+                except Exception:
+                    pass
+
+                if best_broker is None:
+                    best_broker = next(iter(connected_brokers.values()))
+
+                logger.info(
+                    f"🔄 active_broker ({self.active_broker.broker_type.value}) disconnected — "
+                    f"score-based promotion → {best_broker.broker_type.value}"
+                )
+                self.active_broker = best_broker
+                self.primary_broker_type = best_broker.broker_type
+                return best_broker
+
             # No connected broker found — return the disconnected one for legacy compatibility
             return self.active_broker
-        # Fallback: use the last registered platform broker
+
+        # ── 4. Fallback ──────────────────────────────────────────────
         if self.platform_broker is not None:
             return self.platform_broker
         return self.primary_broker
