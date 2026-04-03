@@ -91,6 +91,18 @@ except ImportError:
         WIN_RATE_MAXIMIZER_AVAILABLE = False
         logger.warning("⚠️ Win Rate Maximizer not available - trade filtering/risk caps/profit consistency disabled")
 
+# Import BrokerPerformanceScorer — used for score-based entry broker selection
+try:
+    from broker_performance_scorer import get_broker_performance_scorer as _get_broker_performance_scorer
+    _BROKER_PERFORMANCE_SCORER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.broker_performance_scorer import get_broker_performance_scorer as _get_broker_performance_scorer
+        _BROKER_PERFORMANCE_SCORER_AVAILABLE = True
+    except ImportError:
+        _get_broker_performance_scorer = None  # type: ignore
+        _BROKER_PERFORMANCE_SCORER_AVAILABLE = False
+
 # Import Market Structure Filter (trend + volume + momentum confirmation)
 try:
     from market_structure_filter import structure_valid as _structure_valid
@@ -6375,10 +6387,13 @@ class TradingStrategy:
 
     def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
         """
-        Select the best broker for new entry (BUY) orders based on priority.
+        Select the best broker for new entry (BUY) orders.
 
-        Checks brokers in ENTRY_BROKER_PRIORITY order and returns the first eligible one.
-        Coinbase is automatically deprioritized if balance < $25.
+        All eligible brokers (connected, not EXIT-ONLY, balance ≥ minimum) are
+        first collected in ``ENTRY_BROKER_PRIORITY`` order; then the one with the
+        highest ``BrokerPerformanceScorer`` composite score is returned.  When the
+        scorer is unavailable the first eligible broker in priority order is used
+        as the fallback, preserving backward compatibility.
 
         Args:
             all_brokers: Dict of {BrokerType: broker_instance} for all available brokers
@@ -6387,12 +6402,13 @@ class TradingStrategy:
             tuple: (broker_instance, broker_name, eligibility_reasons) or (None, None, reasons)
         """
         eligibility_status = {}
+        eligible: list = []  # list of (broker_type_index, broker_instance, broker_name)
 
-        # CRITICAL FIX (Jan 24, 2026): Add debug logging to diagnose broker selection issues
         logger.debug(f"_select_entry_broker called with {len(all_brokers)} brokers: {[bt.value for bt in all_brokers.keys()]}")
 
         # Collect all eligible brokers (in priority order for tie-breaking)
         eligible_brokers: list = []  # list of (broker_instance, broker_name, broker_type)
+        # Phase 1: collect all eligible brokers (preserving ENTRY_BROKER_PRIORITY order)
         for broker_type in ENTRY_BROKER_PRIORITY:
             broker = all_brokers.get(broker_type)
 
@@ -6440,6 +6456,36 @@ class TradingStrategy:
         broker, broker_name, broker_type = eligible_brokers[0]
         logger.info(f"✅ Selected {broker_name.upper()} for entry (priority: {ENTRY_BROKER_PRIORITY.index(broker_type) + 1})")
         return broker, broker_name, eligibility_status
+                eligible.append((ENTRY_BROKER_PRIORITY.index(broker_type), broker, self._get_broker_name(broker)))
+
+        if not eligible:
+            logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
+            return None, None, eligibility_status
+
+        # Phase 2: score-based ranking — pick highest composite score
+        best_broker = None
+        best_name = None
+        if _BROKER_PERFORMANCE_SCORER_AVAILABLE and _get_broker_performance_scorer is not None:
+            try:
+                scorer = _get_broker_performance_scorer()
+                name_to_entry = {name: (idx, broker, name) for idx, broker, name in eligible}
+                best_scored_name = scorer.get_best_broker(list(name_to_entry.keys()))
+                if best_scored_name and best_scored_name in name_to_entry:
+                    _, best_broker, best_name = name_to_entry[best_scored_name]
+                    logger.info(
+                        f"✅ Selected {best_name.upper()} for entry "
+                        f"(score={scorer.get_score(best_name):.1f}, "
+                        f"priority={name_to_entry[best_scored_name][0] + 1})"
+                    )
+            except Exception as _score_err:
+                logger.debug(f"_select_entry_broker: scorer error ({_score_err}), using priority fallback")
+
+        # Phase 3: fall back to first in priority order if scoring failed
+        if best_broker is None:
+            _, best_broker, best_name = eligible[0]
+            logger.info(f"✅ Selected {best_name.upper()} for entry (priority fallback, rank 1)")
+
+        return best_broker, best_name, eligibility_status
 
     def _is_zombie_position(self, pnl_percent: float, entry_time_available: bool, position_age_hours: float) -> bool:
         """
@@ -7826,21 +7872,17 @@ class TradingStrategy:
             # Get account balance for position sizing
             # NOTE: We no longer return early here - we'll check later for new entries only
             if not active_broker or not getattr(active_broker, 'connected', False):
-                # Fall back to any connected broker before entering monitor mode
-                _fallback_broker = None
+                # Delegate broker resolution to broker_manager so all selection
+                # logic lives in one place (get_primary_broker is authoritative).
                 if hasattr(self, 'broker_manager') and self.broker_manager:
-                    _fallback_broker = next(
-                        (b for b in self.broker_manager.brokers.values()
-                         if getattr(b, 'connected', False)),
-                        None
-                    )
-                if _fallback_broker is not None:
-                    logger.info(
-                        f"🔄 Execution gate: switching to connected broker "
-                        f"{getattr(_fallback_broker.broker_type, 'value', str(_fallback_broker.broker_type))}"
-                    )
-                    active_broker = _fallback_broker
-                else:
+                    _resolved = self.broker_manager.get_primary_broker()
+                    if _resolved is not None and getattr(_resolved, 'connected', False):
+                        logger.info(
+                            f"🔄 Execution gate: switching to connected broker "
+                            f"{getattr(_resolved.broker_type, 'value', str(_resolved.broker_type))}"
+                        )
+                        active_broker = _resolved
+                if not active_broker or not getattr(active_broker, 'connected', False):
                     logger.warning("⚠️ No active broker - cannot manage positions")
                     logger.info("📡 Monitor mode (no broker connection)")
                     return
