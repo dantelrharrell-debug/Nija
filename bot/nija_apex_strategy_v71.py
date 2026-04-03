@@ -1147,7 +1147,7 @@ class NIJAApexStrategyV71:
         general_rsi_min = 25
         general_rsi_max = 75
         general_min_atr_pct = 0.5  # 0.5% minimum volatility
-        general_max_spread_pct = 0.15  # 0.15% maximum spread
+        general_max_spread_pct = 0.20  # 0.20% maximum spread (loosened from 0.15% to increase pair pass rate)
         
         # 1. RSI Range Check
         # NOTE: We use the same RSI range for both long and short to avoid extreme conditions

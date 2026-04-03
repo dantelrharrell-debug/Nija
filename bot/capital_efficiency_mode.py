@@ -48,7 +48,7 @@ logger = logging.getLogger("nija.capital_efficiency_mode")
 IDLE_CYCLES_THRESHOLD: int   = 3     # cycles without a trade -> loosen (was 5)
 IDLE_SCORE_DELTA: float      = 0.7   # subtract from min_score when idle (was 0.5)
 IDLE_PERCENTILE_DELTA: float = 0.20  # subtract from pass_percentile when idle
-IDLE_CONFIDENCE_DELTA: float = 0.08  # add to confidence_delta when idle
+IDLE_CONFIDENCE_DELTA: float = 0.18  # add to confidence_delta when idle (raised 0.08→0.18: force opportunity after 100+ dead cycles)
 
 MIN_TRADE_SIZE_USD: float = 10.0     # Step 4: absolute hard floor
 

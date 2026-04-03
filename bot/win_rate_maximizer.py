@@ -101,14 +101,12 @@ DEFAULT_MAX_CONSECUTIVE_LOSSES: int = 4      # cool-down after N straight losses
 DEFAULT_MAX_DRAWDOWN_PCT: float = 0.10       # 10 % from session peak
 
 # Layer 2 – Signal Quality
-# TIGHTENED (Apr 2026): Raised from 45 → 55 to cut marginal trades that
-# produce sub-1% moves and bleed account value after fees.  A score of 45
-# was admitting too many directionless setups; 55 keeps reasonable trade
-# frequency while requiring at least two confirming dimensions
-# (e.g. trend + momentum, or trend + volume).
+# LOOSENED (Apr 2026): Lowered from 55 → 46 (~16%) to increase trade frequency.
+# A threshold of 55 was blocking too many B-grade setups in ranging/normal markets.
+# 46 still requires at least one confirming dimension while admitting more setups.
 # Override at runtime with the WMX_SIGNAL_THRESHOLD env variable.
 DEFAULT_SIGNAL_THRESHOLD: float = float(
-    os.getenv("WMX_SIGNAL_THRESHOLD", "55")
+    os.getenv("WMX_SIGNAL_THRESHOLD", "46")
 )
 
 # Layer 3 – Profit Consistency

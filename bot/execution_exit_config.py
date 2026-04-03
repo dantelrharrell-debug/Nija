@@ -161,7 +161,7 @@ class ExitParams:
 # (hard_sl_pct, trailing_activate_pct, trailing_buffer_pct) per profile
 _STOP_TABLE: Dict[StratProfile, Tuple[float, float, float]] = {
     StratProfile.SCALP:          (_ef("SL_SCALP_PCT",    0.80) / 100, 1.50 / 100, 0.50 / 100),
-    StratProfile.SWING:          (_ef("SL_SWING_PCT",    1.20) / 100, 1.80 / 100, 0.60 / 100),  # tightened from 1.10% (Apr 2026)
+    StratProfile.SWING:          (_ef("SL_SWING_PCT",    1.20) / 100, 2.00 / 100, 0.60 / 100),  # trailing activation 1.80→2.00% (TUNE 7, Apr 2026)
     StratProfile.BREAKOUT:       (_ef("SL_BREAKOUT_PCT", 1.20) / 100, 2.50 / 100, 0.80 / 100),
     StratProfile.MEAN_REVERSION: (_ef("SL_MREV_PCT",     1.00) / 100, 1.80 / 100, 0.55 / 100),
 }
@@ -183,9 +183,9 @@ _TP_TABLE: Dict[StratProfile, List[Tuple[float, float]]] = {
         # 15% runner with trailing stop
     ],
     StratProfile.SWING: [
-        (0.030, 0.20),   # 20% at 3.0%
-        (0.040, 0.25),   # 25% at 4.0%
-        (0.055, 0.30),   # 30% at 5.5%
+        (0.022, 0.20),   # 20% at 2.2%  (was 3.0% — tightened TP1 for faster partial, TUNE 7 Apr 2026)
+        (0.032, 0.25),   # 25% at 3.2%  (was 4.0%, TUNE 7)
+        (0.060, 0.30),   # 30% at 6.0%  (was 5.5% — widened TP3 for bigger runner, TUNE 7)
         # 25% runner with trailing stop
     ],
     StratProfile.BREAKOUT: [
@@ -220,9 +220,10 @@ _REGIME_PROFILE: Dict[str, StratProfile] = {
 }
 
 # Cooldown seconds per activity band
+# "normal" raised 45→60s to match ENTRY_COOLDOWN_SECONDS=60 target (TUNE 5, Apr 2026)
 _COOLDOWN_TABLE: Dict[str, int] = {
     "high":   20,   # >3 trades/hr
-    "normal": 45,   # 1–3 trades/hr
+    "normal": 60,   # 1–3 trades/hr  (was 45)
     "low":    60,   # <1 trade/hr
 }
 

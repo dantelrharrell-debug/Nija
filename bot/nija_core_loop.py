@@ -65,17 +65,46 @@ MAX_ENTRIES_PER_CYCLE = 3
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
-MIN_SCORE_HARD_FLOOR = 25.0
+# Lowered 25.0 → 20.0 to align with MIN_SCORE_ABSOLUTE in nija_ai_engine.py.
+MIN_SCORE_HARD_FLOOR = 20.0
 
-# After this many consecutive zero-signal cycles, the fallback entry logic fires:
-# the top-N candidates are forced through even if their quality is below the
-# normal threshold, so the account is never idle for too long.
-ZERO_SIGNAL_STREAK_THRESHOLD = 5
+# After this many consecutive zero-signal cycles, progressive score relaxation
+# kicks in: each 5-cycle step reduces the effective floor by another 20% (max 60%).
+# Renamed from ZERO_SIGNAL_STREAK_THRESHOLD; raised 3 → 5 so the bot doesn't
+# collapse into fallback mode on brief quiet patches (TUNE 3, Apr 2026).
+FORCED_ENTRY_STREAK_THRESHOLD: int = 5
 
-# Points added to a candidate's composite_score when the fallback entry is active.
-# 20 points on a 0–100 scale corresponds to the +0.20 confidence boost described
-# in the NIJA Profit Mode specification.
-FALLBACK_SCORE_BOOST: float = 20.0
+# Number of relaxation steps (each step = 5 cycles past threshold).
+MAX_RELAXATION_STEPS: int = 3
+
+# Fractional threshold reduction per step:
+#   step 1  (streak  5–9):  factor 0.20 → floor × 0.80
+#   step 2  (streak 10–14): factor 0.40 → floor × 0.60
+#   step 3  (streak  ≥ 15): factor 0.60 → floor × 0.40  (cap)
+_RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.20, 0.40, 0.60)
+
+
+def _get_relaxation_factor(streak: int) -> float:
+    """Return threshold-reduction fraction for the given zero-signal streak.
+
+    Returns 0.0 when below FORCED_ENTRY_STREAK_THRESHOLD.
+    Caps at _RELAXATION_SCHEDULE[MAX_RELAXATION_STEPS] = 0.60.
+    """
+    if streak < FORCED_ENTRY_STREAK_THRESHOLD:
+        return 0.0
+    return _RELAXATION_SCHEDULE[_get_relaxation_step(streak)]
+
+
+def _get_relaxation_step(streak: int) -> int:
+    """Return the (1-based) relaxation step index for the given streak.
+
+    step 1 → streak 5–9, step 2 → streak 10–14, step 3 → streak ≥ 15 (cap).
+    Returns 0 when below FORCED_ENTRY_STREAK_THRESHOLD.
+    """
+    if streak < FORCED_ENTRY_STREAK_THRESHOLD:
+        return 0
+    cycles_past = streak - FORCED_ENTRY_STREAK_THRESHOLD
+    return min(MAX_RELAXATION_STEPS, cycles_past // 5 + 1)
 
 # Attempt to import TOP_N from sniper_filter at module load time.
 # Fallback to 2 when the module is unavailable.
@@ -129,7 +158,7 @@ class NijaCoreLoop:
         self._ai_engine = None
 
         # Consecutive cycles where Phase 3 produced zero entries (used by
-        # the fallback entry mechanism — see ZERO_SIGNAL_STREAK_THRESHOLD).
+        # the progressive relaxation mechanism — see FORCED_ENTRY_STREAK_THRESHOLD).
         self._zero_signal_streak: int = 0
 
         logger.info(
@@ -223,12 +252,21 @@ class NijaCoreLoop:
                     self._zero_signal_streak = 0
                 else:
                     self._zero_signal_streak += 1
-                    if self._zero_signal_streak >= ZERO_SIGNAL_STREAK_THRESHOLD:
+                    _relaxation = _get_relaxation_factor(self._zero_signal_streak)
+                    if _relaxation > 0.0:
+                        _step = _get_relaxation_step(self._zero_signal_streak)
                         logger.warning(
-                            "⚡ Core loop: zero-signal streak=%d (threshold=%d) — "
-                            "fallback entry will activate next cycle if streak persists",
+                            "⚡ Core loop: zero-signal streak=%d — "
+                            "progressive relaxation step=%d/%d (factor=%.1f, floor×%.1f)",
                             self._zero_signal_streak,
-                            ZERO_SIGNAL_STREAK_THRESHOLD,
+                            _step, MAX_RELAXATION_STEPS, _relaxation, 1.0 - _relaxation,
+                        )
+                    elif self._zero_signal_streak == FORCED_ENTRY_STREAK_THRESHOLD - 1:
+                        logger.info(
+                            "⚡ Core loop: zero-signal streak=%d — "
+                            "progressive relaxation activates next cycle (threshold=%d)",
+                            self._zero_signal_streak,
+                            FORCED_ENTRY_STREAK_THRESHOLD,
                         )
             else:
                 logger.info(
@@ -361,10 +399,11 @@ class NijaCoreLoop:
         """
         Score all candidate symbols, rank them, execute top-N.
 
-        When ``zero_signal_streak`` has reached ``ZERO_SIGNAL_STREAK_THRESHOLD``,
-        a forced entry (fallback) activates: the top-N candidates receive a
-        +0.20 confidence boost and have the low-quality bypass flag set so
-        they can cross the entry threshold even in low-signal conditions.
+        When ``zero_signal_streak`` has reached ``FORCED_ENTRY_STREAK_THRESHOLD``,
+        progressive score relaxation activates: each 5-cycle step reduces the
+        effective MIN_SCORE_HARD_FLOOR by 20% (step 1), 40% (step 2), or 60%
+        (step 3, capped).  Candidates below the relaxed floor are filtered out;
+        remaining top-N are force-entered to prevent indefinite idling.
 
         Returns (entries_taken, entries_blocked, symbols_scored).
         """
@@ -473,21 +512,29 @@ class NijaCoreLoop:
             else candidates[:available_slots]
         )
 
-        # ── Fallback entry: activate after too many zero-signal cycles ─────────
-        # When the zero-signal streak has reached the threshold, boost the top-N
-        # candidates and mark them so downstream gates treat them as forced entries.
-        fallback_active = zero_signal_streak >= ZERO_SIGNAL_STREAK_THRESHOLD
+        # ── Progressive relaxation: activate after too many zero-signal cycles ──
+        # Instead of a flat score boost, the effective floor is reduced each 5-cycle
+        # step so quality degrades gradually rather than collapsing all at once.
+        _relaxation = _get_relaxation_factor(zero_signal_streak)
+        fallback_active = _relaxation > 0.0
         if fallback_active:
+            _step = _get_relaxation_step(zero_signal_streak)
+            _effective_floor = MIN_SCORE_HARD_FLOOR * (1.0 - _relaxation)
             logger.warning(
-                "⚡ FALLBACK ENTRY ACTIVE (zero_streak=%d >= threshold=%d) — "
-                "boosting top-%d candidates by +%.0f pts",
-                zero_signal_streak, ZERO_SIGNAL_STREAK_THRESHOLD,
-                _SNIPER_TOP_N_DEFAULT, FALLBACK_SCORE_BOOST,
+                "⚡ PROGRESSIVE RELAXATION step=%d/%d "
+                "(streak=%d factor=%.1f floor=%.1f→%.1f) — top-%d eligible",
+                _step, MAX_RELAXATION_STEPS,
+                zero_signal_streak, _relaxation,
+                MIN_SCORE_HARD_FLOOR, _effective_floor,
+                _SNIPER_TOP_N_DEFAULT,
             )
-            selected = selected[:_SNIPER_TOP_N_DEFAULT]
+            # Filter to candidates above the relaxed floor, then take top-N
+            eligible = [s for s in selected if s.composite_score >= _effective_floor]
+            selected = eligible[:_SNIPER_TOP_N_DEFAULT]
             for sig in selected:
-                sig.composite_score += FALLBACK_SCORE_BOOST
                 sig.metadata["bypass_low_quality"] = True
+                sig.metadata["relaxation_factor"] = _relaxation
+                sig.metadata["relaxation_step"] = _step
                 sig.metadata["fallback_streak"] = zero_signal_streak
 
         # ── Execute selected entries ──────────────────────────────────────
@@ -543,7 +590,7 @@ class NijaCoreLoop:
                         "   ✅ Core loop entry: %s %s score=%.1f mult=×%.2f%s",
                         sig.symbol, sig.side.upper(),
                         sig.composite_score, sig.position_multiplier,
-                        " [FALLBACK]" if fallback_active else "",
+                        f" [RELAX×{sig.metadata.get('relaxation_step', 0)}]" if fallback_active else "",
                     )
                 else:
                     blocked += 1

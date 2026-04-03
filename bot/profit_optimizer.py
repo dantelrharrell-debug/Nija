@@ -107,7 +107,7 @@ class ConfidencePositionSizer:
 class RankerConfig:
     """Tunable parameters for :class:`TradeRankingEngine`."""
     window_size: int      = 50    # Rolling window of recent setup scores
-    pass_percentile: float = 0.65  # Only top 35% of setups pass — optimizes for max profit
+    pass_percentile: float = 0.55  # Top 45% of setups pass — loosened 0.65→0.55 for more trades
     min_window_fill: int  = 5     # Entries required before ranking is enforced
 
 
@@ -116,9 +116,9 @@ class TradeRankingEngine:
     Maintains a rolling window of recent opportunity scores and blocks entry
     on any setup that does not rank in the configured top percentile.
 
-    ``pass_percentile=0.65`` means a setup's score must be at or above the
-    65th percentile of the rolling window to pass — i.e. the top 35%
-    of setups are accepted.
+    ``pass_percentile=0.55`` means a setup's score must be at or above the
+    55th percentile of the rolling window to pass — i.e. the top 45%
+    of setups are accepted (loosened from 0.65 / top 35% to increase trade frequency).
 
     Before the window contains enough samples (``min_window_fill``) every
     setup is allowed through so the bot can start trading immediately.

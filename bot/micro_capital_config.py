@@ -93,7 +93,7 @@ ALLOW_MULTIPLE_ENTRIES_SAME_SYMBOL = False  # DISABLED - one position per symbol
 # market_structure_filter.py for the scoring logic).
 # ============================================================================
 
-MAX_CONCURRENT_TRADES = 5   # Maximum simultaneous open trades (increased from 3 for higher frequency)
+MAX_CONCURRENT_TRADES = 4   # TUNE 6: 3→4 concurrent positions (Apr 2026)
 CAPITAL_PER_TRADE = 18.0    # Percentage of total capital allocated per trade (%) — 5 × 18% = 90% max exposure, keeps 10% buffer
 ENTRY_SCAN_INTERVAL = 10    # Seconds between entry-opportunity scans (was 15 – faster for micro growth)
 MONITOR_INTERVAL = 10       # Seconds between open-position monitoring cycles (was 15)
@@ -205,11 +205,11 @@ MIN_BALANCE_COINBASE = 10.0
 #   - trade_cooldown   = 300s   (5-min per-symbol cooldown between trades — tuned for faster trade flow)
 
 MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = float('inf')  # Apply to ALL balances — 1 position, 95% capital
-MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 3          # 3 concurrent positions — bigger winners + faster compounding
-MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 90.0   # 90% of capital per trade (safer concentrated sizing)
+MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 4          # TUNE 6: 3→4 concurrent positions (Apr 2026)
+MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 60.0   # TUNE 6: 90%→60% per position — risk balance (Apr 2026)
 MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5    # 2.5% profit target (was 3.0% — achievable faster)
 MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R)
-MICRO_CAP_TRADE_COOLDOWN = 120                   # 2-min per-symbol re-entry gate (tightened from 180 s for higher daily trade frequency)
+MICRO_CAP_TRADE_COOLDOWN = 60                    # TUNE 5: 120s→60s per-symbol re-entry gate (Apr 2026)
 
 # Tiered profit targets for micro-cap compounding mode
 MICRO_CAP_TP1_PCT = 2.5   # Target 1: 2.5% — partial exit + activate trailing stop (was 3.0%)
@@ -232,7 +232,7 @@ MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5        # 1.5% stop loss (≥1.67:1 R:R
 # NOTE: MICRO_CAP_TRADE_COOLDOWN is also declared above (line ~212) for the primary block.
 # Both declarations are kept in sync intentionally so callers importing from either
 # section get the same value without requiring a forward reference.
-MICRO_CAP_TRADE_COOLDOWN = 120                   # 2-min per-symbol re-entry cooldown (tightened from 180 s for higher daily trade frequency)
+MICRO_CAP_TRADE_COOLDOWN = 60                    # TUNE 5: 120s→60s per-symbol re-entry cooldown (Apr 2026)
 
 # Win-streak bonus applied on top of (base + spread) while on a hot streak.
 # The bonus is reset to 0 whenever a trade ends in a loss so the bot does not
