@@ -6456,36 +6456,6 @@ class TradingStrategy:
         broker, broker_name, broker_type = eligible_brokers[0]
         logger.info(f"✅ Selected {broker_name.upper()} for entry (priority: {ENTRY_BROKER_PRIORITY.index(broker_type) + 1})")
         return broker, broker_name, eligibility_status
-                eligible.append((ENTRY_BROKER_PRIORITY.index(broker_type), broker, self._get_broker_name(broker)))
-
-        if not eligible:
-            logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
-            return None, None, eligibility_status
-
-        # Phase 2: score-based ranking — pick highest composite score
-        best_broker = None
-        best_name = None
-        if _BROKER_PERFORMANCE_SCORER_AVAILABLE and _get_broker_performance_scorer is not None:
-            try:
-                scorer = _get_broker_performance_scorer()
-                name_to_entry = {name: (idx, broker, name) for idx, broker, name in eligible}
-                best_scored_name = scorer.get_best_broker(list(name_to_entry.keys()))
-                if best_scored_name and best_scored_name in name_to_entry:
-                    _, best_broker, best_name = name_to_entry[best_scored_name]
-                    logger.info(
-                        f"✅ Selected {best_name.upper()} for entry "
-                        f"(score={scorer.get_score(best_name):.1f}, "
-                        f"priority={name_to_entry[best_scored_name][0] + 1})"
-                    )
-            except Exception as _score_err:
-                logger.debug(f"_select_entry_broker: scorer error ({_score_err}), using priority fallback")
-
-        # Phase 3: fall back to first in priority order if scoring failed
-        if best_broker is None:
-            _, best_broker, best_name = eligible[0]
-            logger.info(f"✅ Selected {best_name.upper()} for entry (priority fallback, rank 1)")
-
-        return best_broker, best_name, eligibility_status
 
     def _is_zombie_position(self, pnl_percent: float, entry_time_available: bool, position_age_hours: float) -> bool:
         """
