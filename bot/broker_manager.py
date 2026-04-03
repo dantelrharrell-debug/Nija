@@ -9794,6 +9794,14 @@ class BrokerManager:
             logger.warning("⚠️ No primary broker set - cannot select primary platform")
             return
 
+        # ✅ HARDENING: Short-circuit when the current broker is already healthy.
+        # Avoids redundant balance API calls and Kraken promotion churn on every
+        # cycle when nothing has changed.
+        if (self.active_broker.connected
+                and not getattr(self.active_broker, 'exit_only_mode', False)):
+            logger.debug("✅ Active broker healthy — skipping promotion scan")
+            return
+
         current_primary = self.active_broker.broker_type.value.upper()
 
         # FIX #2: Check if Coinbase is in exit_only mode (Kraken becomes PRIMARY)
