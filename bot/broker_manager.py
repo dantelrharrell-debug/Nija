@@ -9748,15 +9748,29 @@ class BrokerManager:
         """
         Get the current primary/active broker.
 
-        Falls back to platform_broker if active_broker is not set (e.g. when
-        the _platform_locked guard prevented set_primary_broker() from running
-        during add_broker() — the platform_broker attribute is always set for
-        any broker with account_type=="platform").
+        Prefers a connected active_broker.  If active_broker is set but
+        disconnected, scans all registered brokers for a connected one and
+        promotes it as the new active_broker.  Falls back to platform_broker
+        or primary_broker for legacy compatibility when no connected broker
+        can be found.
 
         Returns:
             BaseBroker instance or None if no broker is active
         """
         if self.active_broker is not None:
+            if getattr(self.active_broker, 'connected', False):
+                return self.active_broker
+            # active_broker is disconnected — try to find a connected replacement
+            for broker in self.brokers.values():
+                if getattr(broker, 'connected', False):
+                    logger.info(
+                        f"🔄 active_broker ({self.active_broker.broker_type.value}) disconnected — "
+                        f"promoting {broker.broker_type.value} as active"
+                    )
+                    self.active_broker = broker
+                    self.primary_broker_type = broker.broker_type
+                    return broker
+            # No connected broker found — return the disconnected one for legacy compatibility
             return self.active_broker
         # Fallback: use the last registered platform broker
         if self.platform_broker is not None:
