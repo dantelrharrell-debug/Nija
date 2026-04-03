@@ -6758,6 +6758,21 @@ class TradingStrategy:
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
 
+        # ✅ HARDENING: Validate broker liveness at execution time to prevent
+        # orders being sent on a stale or disconnected reference.  If the broker
+        # is gone, attempt a real-time recovery via broker_manager before giving up.
+        if not active_broker or not getattr(active_broker, 'connected', False):
+            if hasattr(self, 'broker_manager') and self.broker_manager:
+                try:
+                    self.broker_manager.select_primary_platform_broker()
+                    active_broker = self.broker_manager.get_primary_broker()
+                except Exception as _bm_err:
+                    logger.warning("Broker recovery attempt failed: %s", _bm_err)
+                    active_broker = None
+            if not active_broker or not getattr(active_broker, 'connected', False):
+                logger.warning("No active broker at execution time — skipping cycle")
+                return
+
         # SAFETY: account_balance MUST be defined before any reference — even if
         # entry is skipped early.  All downstream code uses `account_balance is not
         # None` guards so 0.0 is the safe sentinel when the broker is unavailable.
