@@ -65,12 +65,14 @@ MAX_ENTRIES_PER_CYCLE = 3
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
-MIN_SCORE_HARD_FLOOR = 25.0
+# Lowered 25.0 → 20.0 to align with MIN_SCORE_ABSOLUTE in nija_ai_engine.py.
+MIN_SCORE_HARD_FLOOR = 20.0
 
 # After this many consecutive zero-signal cycles, the fallback entry logic fires:
 # the top-N candidates are forced through even if their quality is below the
 # normal threshold, so the account is never idle for too long.
-ZERO_SIGNAL_STREAK_THRESHOLD = 5
+# Lowered 5 → 3 to allow B-grade setups earlier (Apr 2026).
+ZERO_SIGNAL_STREAK_THRESHOLD = 3
 
 # Points added to a candidate's composite_score when the fallback entry is active.
 # 20 points on a 0–100 scale corresponds to the +0.20 confidence boost described

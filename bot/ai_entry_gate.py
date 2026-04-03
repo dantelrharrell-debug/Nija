@@ -119,19 +119,20 @@ class GateResult:
 
 # ── Gate 1: AI Score thresholds per regime ──────────────────────────────────
 # Tighter in choppy / crisis regimes, looser when trend gives a clear edge.
+# Lowered ~15% across all regimes (Apr 2026) to increase trade frequency.
 _SCORE_THRESHOLDS: Dict[str, float] = {
-    "strong_trend":         38.0,   # trend gives edge → relax
-    "weak_trend":           40.0,   # default
-    "ranging":              45.0,   # direction hard to call → require better setup
-    "consolidation":        35.0,   # scalp mode → need high frequency
-    "expansion":            40.0,   # breakout → normal bar
-    "mean_reversion":       45.0,   # counter-trend → extra conviction
-    "volatility_explosion": 65.0,   # crisis → near-perfect setups only
+    "strong_trend":         32.0,   # trend gives edge → relax (was 38)
+    "weak_trend":           34.0,   # default (was 40)
+    "ranging":              38.0,   # direction hard to call → require better setup (was 45)
+    "consolidation":        30.0,   # scalp mode → need high frequency (was 35)
+    "expansion":            34.0,   # breakout → normal bar (was 40)
+    "mean_reversion":       38.0,   # counter-trend → extra conviction (was 45)
+    "volatility_explosion": 65.0,   # crisis → near-perfect setups only (unchanged — crisis protection preserved)
     # Legacy 3-regime fallbacks
-    "trending":             38.0,
-    "volatile":             55.0,
+    "trending":             32.0,   # was 38
+    "volatile":             47.0,   # was 55
 }
-_DEFAULT_SCORE_THRESHOLD = 40.0
+_DEFAULT_SCORE_THRESHOLD = 34.0   # was 40.0
 
 # ── Gate 2: Volume multiplier ────────────────────────────────────────────────
 # Current volume must be >= this × 20-bar average.

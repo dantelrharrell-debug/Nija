@@ -53,9 +53,9 @@ logger = logging.getLogger("nija.ai_engine")
 # Score tier constants
 # ---------------------------------------------------------------------------
 TIER_ELITE = 75.0    # 1.5× position size
-TIER_GOOD = 40.0     # 1.0× position size (lowered from 60 to allow more qualifying entries)
-TIER_FAIR = 30.0     # 0.75× position size (lowered from 35 to maintain tier separation after TIER_GOOD reduction)
-TIER_FLOOR = 20.0    # 0.5× position size (taken only as top-N, no better option)
+TIER_GOOD = 34.0     # 1.0× position size (lowered 40→34 ~15% to increase qualifying entries)
+TIER_FAIR = 25.0     # 0.75× position size (lowered 30→25 ~17% to allow B-grade setups)
+TIER_FLOOR = 17.0    # 0.5× position size (taken only as top-N, no better option)
 
 # Composite score blend weights (must sum to 1.0)
 _W_ENHANCED  = 0.55   # EnhancedEntryScorer contributes most weight
@@ -65,15 +65,15 @@ _W_GATE      = 0.20   # 5-Gate AI gate penalty deduction
 # Hard absolute floor — never execute below this regardless of ranking.
 # NOTE: the composite formula (raw_score * 0.55 + opt_delta * 0.25 - penalty * 0.20)
 # produces values in the 0-60 range, so this floor must be calibrated accordingly.
-# Raised from 20.0 → 25.0 to filter lower-quality entries (Option C — Apr 2026).
-MIN_SCORE_ABSOLUTE = 25.0
+# Lowered from 25.0 → 20.0 (~20%) to increase trade frequency (Apr 2026).
+MIN_SCORE_ABSOLUTE = 20.0
 
 # Default number of top signals to select per cycle
 TOP_N_DEFAULT = 3
 
 # Adaptive threshold relaxation: when < this many candidates are above the
 # regime threshold, relax down to TIER_FLOOR so we still get some trades.
-RELAX_CANDIDATE_COUNT = 2
+RELAX_CANDIDATE_COUNT = 1
 
 
 # ---------------------------------------------------------------------------
