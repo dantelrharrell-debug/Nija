@@ -9827,9 +9827,21 @@ class TradingStrategy:
                                                     _tpt_gross_pnl = (_tpt_exit_price - _tpt_entry_price) * quantity
                                             except Exception:
                                                 pass
-                                        # Determine win/loss from gross PnL; fall back to exit reason
+                                        # Determine win/loss from net PnL (gross minus fees);
+                                        # fall back to exit reason keywords when price data
+                                        # is unavailable.  Partial exits (TP1/TP2) must never
+                                        # reach this path — they do not call record_trade_outcome.
                                         if _tpt_entry_usd > 0:
-                                            _tpt_is_win = _tpt_gross_pnl > 0
+                                            try:
+                                                _fee_rate = (
+                                                    exit_broker._get_broker_round_trip_fee()
+                                                    if hasattr(exit_broker, '_get_broker_round_trip_fee')
+                                                    else 0.015
+                                                )
+                                            except Exception:
+                                                _fee_rate = 0.015
+                                            _tpt_net_pnl = _tpt_gross_pnl - (_tpt_entry_usd * _fee_rate)
+                                            _tpt_is_win = _tpt_net_pnl > 0
                                         else:
                                             # Same keyword sets used by the micro-cap win-streak logic below
                                             _tpt_is_win = (

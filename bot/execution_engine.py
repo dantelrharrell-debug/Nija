@@ -1294,6 +1294,23 @@ class ExecutionEngine:
                     logger.info(f"🗑️ FLUSHING POSITION STATE: {symbol}")
                     self.close_position(symbol)
 
+                    # ── ADAPTIVE THRESHOLD CONTROLLER — outcome on FULL close only ──
+                    # Must NOT fire on entry, TP1 partial, trailing activation, or any
+                    # partial exit.  Uses net P&L (after fees) so fee-eroded trades are
+                    # never mis-classified as wins.
+                    try:
+                        from nija_ai_engine import record_trade_outcome as _rto
+                        _rto(net_pnl_pct > 0)
+                    except Exception:
+                        try:
+                            from bot.nija_ai_engine import record_trade_outcome as _rto
+                            _rto(net_pnl_pct > 0)
+                        except Exception as _atc_err:
+                            logger.debug(
+                                "AdaptiveThresholdController record skipped for %s: %s",
+                                symbol, _atc_err,
+                            )
+
                     # FIX #1: Unlock after final settlement (position fully closed)
                     with self._closing_lock:
                         self.closing_positions.discard(symbol)

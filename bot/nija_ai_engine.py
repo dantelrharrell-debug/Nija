@@ -189,13 +189,19 @@ class AdaptiveThresholdController:
     _TARGET_FLOOR:  float = 0.55   # raise threshold below this win rate
     _TARGET_CEIL:   float = 0.65   # lower threshold above this win rate
     _WINDOW:        int   = 20     # rolling outcome window
-    _STEP:          float = 0.5    # pts nudged per recompute
-    _MAX_ADJ:       float = 8.0    # maximum |adjustment| in pts
+    _STEP:          float = 0.5    # composite-score pts nudged per recompute
+    _MAX_ADJ:       float = 8.0    # maximum |composite adjustment| in pts
     _MIN_SAMPLES:   int   = 5      # outcomes needed before any adjustment
+
+    # Gate-domain adjustment — operates in the same units as
+    # BASE_ENTRY_SCORE_THRESHOLD (0-9 scale) so ±3.0 stays meaningful.
+    _GATE_STEP:     float = 0.25   # gate pts nudged per recompute
+    _GATE_MAX_ADJ:  float = 3.0    # maximum |gate adjustment| in pts
 
     def __init__(self) -> None:
         self._outcomes: Deque[float] = deque(maxlen=self._WINDOW)
         self._adjustment: float = 0.0
+        self._gate_adjustment: float = 0.0   # gate-domain tracker (±3.0 max)
         self._lock = threading.Lock()
 
     # ── Public interface ────────────────────────────────────────────────
@@ -210,6 +216,28 @@ class AdaptiveThresholdController:
         """Return base_floor adjusted by the current auto-tune delta."""
         with self._lock:
             return max(5.0, base_floor + self._adjustment)
+
+    def get_threshold(self, base_threshold: float) -> float:
+        """Return ``base_threshold`` nudged by the gate-domain win-rate adjustment.
+
+        Operates in the same units as ``base_threshold`` (e.g. the 0-9 gate
+        scoring scale) so step=0.25 and the ±3.0 clamp stay meaningful.
+        The returned value is floored at 2.0 so at least two gate conditions
+        must always be met regardless of adjustment direction.
+
+        Example::
+
+            adaptive = atc.get_threshold(BASE_ENTRY_SCORE_THRESHOLD)
+            passed   = total_score >= adaptive
+        """
+        with self._lock:
+            return max(2.0, base_threshold + self._gate_adjustment)
+
+    @property
+    def total_trades(self) -> int:
+        """Number of closed-trade outcomes recorded in the rolling window."""
+        with self._lock:
+            return len(self._outcomes)
 
     @property
     def threshold_delta(self) -> float:
@@ -242,8 +270,10 @@ class AdaptiveThresholdController:
         wr = sum(self._outcomes) / len(self._outcomes)
         if wr < self._TARGET_FLOOR:
             self._adjustment = min(self._MAX_ADJ, self._adjustment + self._STEP)
+            self._gate_adjustment = min(self._GATE_MAX_ADJ, self._gate_adjustment + self._GATE_STEP)
         elif wr > self._TARGET_CEIL:
             self._adjustment = max(-self._MAX_ADJ, self._adjustment - self._STEP)
+            self._gate_adjustment = max(-self._GATE_MAX_ADJ, self._gate_adjustment - self._GATE_STEP)
         # else: in-band → no change
 
 
@@ -538,13 +568,24 @@ class NijaAIEngine:
         (after delta), relax to MIN_SCORE_ABSOLUTE so we always execute
         *something*.
         """
+        base_threshold = TIER_FLOOR
         delta = self.threshold_ctrl.threshold_delta
-        adjusted_floor = max(5.0, TIER_FLOOR + delta)
+        adjusted_floor = max(5.0, base_threshold + delta)
         above_floor = sum(1 for s in ranked if s.composite_score >= adjusted_floor)
         if above_floor >= RELAX_CANDIDATE_COUNT:
-            return adjusted_floor
-        # Relax — take whatever is above the hard minimum (also delta-adjusted)
-        return max(5.0, MIN_SCORE_ABSOLUTE + delta)
+            adaptive_threshold = adjusted_floor
+        else:
+            # Relax — take whatever is above the hard minimum (also delta-adjusted)
+            adaptive_threshold = max(5.0, MIN_SCORE_ABSOLUTE + delta)
+
+        logger.info(
+            f"🎯 Adaptive Threshold → base={base_threshold:.2f} "
+            f"adj={delta:+.2f} "
+            f"final={adaptive_threshold:.2f} "
+            f"wr={self.threshold_ctrl.win_rate():.1%} "
+            f"trades={self.threshold_ctrl.total_trades}"
+        )
+        return adaptive_threshold
 
     @staticmethod
     def _position_multiplier(score: float) -> float:
