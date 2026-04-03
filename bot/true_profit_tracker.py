@@ -350,7 +350,7 @@ class TrueProfitTracker:
         logger.info("   Total Trades      : %d", r["total_trades"])
         logger.info("   Win Rate          : %.1f%%", r["win_rate_pct"])
         logger.info("   Avg Profit/Trade  : $%+.2f", r["avg_profit_per_trade"])
-        logger.info("   Avg Win / Avg Loss: $%+.2f / $%.2f", r["avg_win_pnl"], r["avg_loss_pnl"])
+        logger.info("   Avg Win / Avg Loss: $%+.2f / $%+.2f", r["avg_win_pnl"], r["avg_loss_pnl"])
         if r["expectancy_ratio"] is not None:
             _exp_flag = "✅" if r["expectancy_ratio"] >= 1.5 else "⚠️"
             logger.info(

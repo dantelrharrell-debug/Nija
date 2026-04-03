@@ -6392,7 +6392,7 @@ class TradingStrategy:
         logger.debug(f"_select_entry_broker called with {len(all_brokers)} brokers: {[bt.value for bt in all_brokers.keys()]}")
 
         # Collect all eligible brokers (in priority order for tie-breaking)
-        eligible: list = []  # list of (broker_instance, broker_name, broker_type)
+        eligible_brokers: list = []  # list of (broker_instance, broker_name, broker_type)
         for broker_type in ENTRY_BROKER_PRIORITY:
             broker = all_brokers.get(broker_type)
 
@@ -6407,9 +6407,9 @@ class TradingStrategy:
 
             if is_eligible:
                 broker_name = self._get_broker_name(broker)
-                eligible.append((broker, broker_name, broker_type))
+                eligible_brokers.append((broker, broker_name, broker_type))
 
-        if not eligible:
+        if not eligible_brokers:
             # No eligible broker found
             logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
             return None, None, eligibility_status
@@ -6418,13 +6418,13 @@ class TradingStrategy:
         # When multiple brokers are eligible, prefer the one with the best historical
         # fill-rate / latency / slippage score.  Falls back to priority-order when the
         # scorer is unavailable or all brokers have the same default score (50).
-        if BROKER_PERFORMANCE_SCORER_AVAILABLE and get_broker_performance_scorer is not None and len(eligible) > 1:
+        if BROKER_PERFORMANCE_SCORER_AVAILABLE and get_broker_performance_scorer is not None and len(eligible_brokers) > 1:
             try:
                 _scorer = get_broker_performance_scorer()
-                _candidate_names = [bn for _, bn, _ in eligible]
-                _best_name = _scorer.get_best_broker(_candidate_names)
+                candidate_names = [bn for _, bn, _ in eligible_brokers]
+                _best_name = _scorer.get_best_broker(candidate_names)
                 if _best_name:
-                    for _b, _bn, _bt in eligible:
+                    for _b, _bn, _bt in eligible_brokers:
                         if _bn == _best_name:
                             _score = _scorer.get_score(_bn)
                             logger.info(
@@ -6437,7 +6437,7 @@ class TradingStrategy:
                 logger.debug(f"BrokerPerformanceScorer selection skipped: {_bps_err}")
 
         # Fall back to original priority-first selection
-        broker, broker_name, broker_type = eligible[0]
+        broker, broker_name, broker_type = eligible_brokers[0]
         logger.info(f"✅ Selected {broker_name.upper()} for entry (priority: {ENTRY_BROKER_PRIORITY.index(broker_type) + 1})")
         return broker, broker_name, eligibility_status
 
