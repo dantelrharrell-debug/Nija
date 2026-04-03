@@ -654,6 +654,18 @@ except ImportError:
         get_market_regime_engine = None
         RegimeEngineRegime = None
 
+# Import Win-Rate Score Shaper — per-regime score multiplier
+try:
+    from win_rate_score_shaper import get_win_rate_score_shaper as _get_wrss_fn
+    WIN_RATE_SCORE_SHAPER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.win_rate_score_shaper import get_win_rate_score_shaper as _get_wrss_fn
+        WIN_RATE_SCORE_SHAPER_AVAILABLE = True
+    except ImportError:
+        WIN_RATE_SCORE_SHAPER_AVAILABLE = False
+        _get_wrss_fn = None
+
 # Import Global Drawdown Circuit Breaker — system-wide halt on deep drawdown
 try:
     from global_drawdown_circuit_breaker import get_global_drawdown_cb, ProtectionLevel
@@ -14843,25 +14855,14 @@ class TradingStrategy:
 
         # 📈 WIN-RATE SCORE SHAPER — feed outcome with current regime so per-regime
         # win-rate history can shape composite scores in future cycles.
-        try:
-            _wrss_regime = None
-            if (MARKET_REGIME_ENGINE_AVAILABLE
-                    and hasattr(self, 'regime_engine')
-                    and self.regime_engine is not None):
-                _wrss_regime = getattr(self.regime_engine, 'current_regime', None)
-            from win_rate_score_shaper import get_win_rate_score_shaper as _get_wrss_ts
-            _wrss_inst = _get_wrss_ts()
-            if _wrss_inst is not None:
-                _wrss_inst.record_outcome(_wrss_regime, is_win)
-        except Exception:
+        if WIN_RATE_SCORE_SHAPER_AVAILABLE and _get_wrss_fn is not None:
             try:
-                from bot.win_rate_score_shaper import get_win_rate_score_shaper as _get_wrss_ts
                 _wrss_regime = None
                 if (MARKET_REGIME_ENGINE_AVAILABLE
                         and hasattr(self, 'regime_engine')
                         and self.regime_engine is not None):
                     _wrss_regime = getattr(self.regime_engine, 'current_regime', None)
-                _wrss_inst = _get_wrss_ts()
+                _wrss_inst = _get_wrss_fn()
                 if _wrss_inst is not None:
                     _wrss_inst.record_outcome(_wrss_regime, is_win)
             except Exception as _wrss_err:
