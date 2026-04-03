@@ -380,6 +380,24 @@ class BrokerFailureManager:
         )
         return active, dead
 
+    def get_consecutive_errors(self, broker_name: str) -> int:
+        """
+        Stub for consecutive error tracking per broker.
+
+        Parameters
+        ----------
+        broker_name : str
+            The broker identifier to check.
+
+        Returns
+        -------
+        int
+            Number of consecutive errors recorded for this broker.
+            Currently always returns 0 as a placeholder.
+        """
+        logger.debug(f"get_consecutive_errors() called for {broker_name}, returning 0")
+        return 0
+
     # ------------------------------------------------------------------
     # Status / logging
     # ------------------------------------------------------------------
