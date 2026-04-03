@@ -222,6 +222,8 @@ class AdaptiveThresholdController:
 
         Operates in the same units as ``base_threshold`` (e.g. the 0-9 gate
         scoring scale) so step=0.25 and the ±3.0 clamp stay meaningful.
+        The returned value is floored at 2.0 so at least two gate conditions
+        must always be met regardless of adjustment direction.
 
         Example::
 
@@ -229,7 +231,7 @@ class AdaptiveThresholdController:
             passed   = total_score >= adaptive
         """
         with self._lock:
-            return max(0.0, base_threshold + self._gate_adjustment)
+            return max(2.0, base_threshold + self._gate_adjustment)
 
     @property
     def total_trades(self) -> int:
