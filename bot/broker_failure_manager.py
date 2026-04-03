@@ -382,21 +382,18 @@ class BrokerFailureManager:
 
     def get_consecutive_errors(self, broker_name: str) -> int:
         """
-        Stub for consecutive error tracking per broker.
+        Returns the number of consecutive errors recorded for a broker.
 
-        Parameters
-        ----------
-        broker_name : str
-            The broker identifier to check.
+        Args:
+            broker_name (str): The broker identifier.
 
-        Returns
-        -------
-        int
-            Number of consecutive errors recorded for this broker.
-            Currently always returns 0 as a placeholder.
+        Returns:
+            int: Number of consecutive errors (0 if none or unknown broker).
         """
-        logger.debug(f"get_consecutive_errors() called for {broker_name}, returning 0")
-        return 0
+        with self._lock:
+            state = self._states.get(broker_name)
+            count = state.consecutive_errors if state else 0
+        return count
 
     # ------------------------------------------------------------------
     # Status / logging

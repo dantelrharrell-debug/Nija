@@ -5838,8 +5838,8 @@ class KrakenBroker(BaseBroker):
 
     # HTTP timeout for Kraken API calls (in seconds)
     # This prevents indefinite hanging if the API is slow or unresponsive
-    # 30 seconds is reasonable as Kraken normally responds in 1-5 seconds
-    API_TIMEOUT_SECONDS = 30
+    # 12 seconds is sufficient as Kraken normally responds in 1-5 seconds
+    API_TIMEOUT_SECONDS = 12
 
     # Class-level flag to track if detailed permission error instructions have been logged
     # This prevents spamming the logs with duplicate permission error messages
@@ -6046,6 +6046,13 @@ class KrakenBroker(BaseBroker):
         # changes, eliminating redundant API calls.
         self._entry_price_cache: dict = {}
         self._entry_price_cache_lock = threading.Lock()
+
+        # Short-lived price cache for get_current_price().
+        # Stores {symbol: {"price": float, "ts": float}} where ts = time.monotonic().
+        # Used as a fallback when a live ticker fetch times out — if the cached
+        # price is ≤10 s old it is returned so the scan loop is never blocked.
+        self._price_cache: dict = {}
+        self._price_cache_lock = threading.Lock()
 
         # CONNECTION STABILITY: Initialize per-broker watchdog and HTTP pool manager
         # Mirrors the CoinbaseBroker pattern so Kraken connections benefit from the
@@ -7566,6 +7573,19 @@ class KrakenBroker(BaseBroker):
             _ticker_thread.start()
             _ticker_thread.join(10)  # 10-second hard cap per price fetch
             if _ticker_thread.is_alive():
+                # Live fetch timed out — try the short-lived price cache (≤10s old).
+                # Read price and ts atomically under the lock to avoid a race where
+                # another thread could overwrite the entry between the two accesses.
+                with self._price_cache_lock:
+                    cached = self._price_cache.get(symbol)
+                    cached_price = cached["price"] if cached else None
+                    cached_age = (time.monotonic() - cached["ts"]) if cached else None
+                if cached_price is not None and cached_age is not None and cached_age <= 10.0:
+                    logger.debug(
+                        f"⏱️  Ticker fetch for {symbol} timed out — returning cached price "
+                        f"${cached_price:.6f} ({cached_age:.1f}s old)"
+                    )
+                    return cached_price
                 logger.debug(
                     f"⏱️  Ticker fetch for {symbol} timed out (10s) — returning None"
                 )
@@ -7581,6 +7601,8 @@ class KrakenBroker(BaseBroker):
                     last_price = ticker_data.get('c', [None])[0]
                     if last_price:
                         price = float(last_price)
+                        with self._price_cache_lock:
+                            self._price_cache[symbol] = {"price": price, "ts": time.monotonic()}
                         logger.debug(f"✅ Price for {symbol}: ${price:.2f}")
                         return price
                     else:
