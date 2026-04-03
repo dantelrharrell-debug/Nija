@@ -7573,15 +7573,19 @@ class KrakenBroker(BaseBroker):
             _ticker_thread.start()
             _ticker_thread.join(10)  # 10-second hard cap per price fetch
             if _ticker_thread.is_alive():
-                # Live fetch timed out — try the short-lived price cache (≤10s old)
+                # Live fetch timed out — try the short-lived price cache (≤10s old).
+                # Read price and ts atomically under the lock to avoid a race where
+                # another thread could overwrite the entry between the two accesses.
                 with self._price_cache_lock:
                     cached = self._price_cache.get(symbol)
-                if cached and (time.monotonic() - cached["ts"]) <= 10.0:
+                    cached_price = cached["price"] if cached else None
+                    cached_age = (time.monotonic() - cached["ts"]) if cached else None
+                if cached_price is not None and cached_age is not None and cached_age <= 10.0:
                     logger.debug(
                         f"⏱️  Ticker fetch for {symbol} timed out — returning cached price "
-                        f"${cached['price']:.6f} ({time.monotonic() - cached['ts']:.1f}s old)"
+                        f"${cached_price:.6f} ({cached_age:.1f}s old)"
                     )
-                    return cached["price"]
+                    return cached_price
                 logger.debug(
                     f"⏱️  Ticker fetch for {symbol} timed out (10s) — returning None"
                 )

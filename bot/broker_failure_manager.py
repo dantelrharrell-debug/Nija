@@ -392,7 +392,8 @@ class BrokerFailureManager:
         """
         with self._lock:
             state = self._states.get(broker_name)
-            return state.consecutive_errors if state else 0
+            count = state.consecutive_errors if state else 0
+        return count
 
     # ------------------------------------------------------------------
     # Status / logging
