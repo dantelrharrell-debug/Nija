@@ -6511,10 +6511,11 @@ class KrakenBroker(BaseBroker):
 
             self.kraken_api = KrakenAPI(self.api)
 
-            # STARTUP NONCE RESET: Hard-reset the global nonce to current time + 10 s
-            # before the first API call.  This clears any stale value left in the
-            # persistence file from a previous run and ensures _last_nonce and disk
-            # are in sync before we attempt the connection test.
+            # STARTUP NONCE RESET: Hard-reset the global nonce to current time + 25 s
+            # before the first API call.  The 25 s lead absorbs Kraken's clock-drift
+            # tolerance and allows up to two escalating error retries (10 s + 20 s = 30 s)
+            # before the 60 s HARD-RESET threshold is reached, preventing the repeated
+            # HARD-RESET cycle that occurred with the previous 10 s buffer.
             if self._use_global_nonce and reset_global_kraken_nonce is not None:
                 try:
                     reset_global_kraken_nonce()
@@ -6522,13 +6523,11 @@ class KrakenBroker(BaseBroker):
                 except Exception as _nonce_reset_err:
                     logger.warning(f"   ⚠️  Nonce reset failed (non-fatal): {_nonce_reset_err}")
 
-            # CRITICAL FIX (Jan 17, 2026): Add startup delay before first Kraken API call
-            # This ensures:
-            # - Nonce file exists and is initialized properly
-            # - No collision with other user accounts starting simultaneously
-            # - No parallel nonce generation during bootstrap
-            # Similar to Coinbase's 40s delay, but shorter (5s) since we have better nonce handling
-            logger.info(f"   ⏳ Waiting {KRAKEN_STARTUP_DELAY_SECONDS:.1f}s before Kraken connection test (prevents nonce collisions)...")
+            # Startup delay before first Kraken API call.
+            # Ensures the nonce file is fully written and lets the wall clock
+            # advance so the 25 s startup-nonce lead decays naturally.  No
+            # parallel nonce generation can occur during this window.
+            logger.info(f"   ⏳ Waiting {KRAKEN_STARTUP_DELAY_SECONDS:.1f}s before Kraken connection test (nonce stabilisation)...")
             time.sleep(KRAKEN_STARTUP_DELAY_SECONDS)
             logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
 
