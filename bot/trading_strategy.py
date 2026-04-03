@@ -2485,23 +2485,24 @@ except ValueError:
 # After this many consecutive zero-signal cycles (regardless of first-trade
 # state), the bot enters "B-grade" fallback mode: the sniper-filter confidence
 # threshold is lowered by FORCED_ENTRY_CONFIDENCE_DELTA so that slightly weaker
-# but still viable setups can trigger an entry.  This prevents the bot from
-# sitting idle indefinitely while valid opportunities are blocked by an
-# over-strict confidence gate.
+# but still viable setups can trigger an entry.  Raised from 3 → 6 so the
+# fallback only activates after a genuine ~15-minute drought (at 2.5 min/cycle),
+# not after a brief quiet patch that does not imply the filters are too strict.
 # Overridable via FORCED_ENTRY_FALLBACK_CYCLES env var.
 try:
-    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '3'))
+    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '6'))
 except ValueError as _e:
-    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 3", _e)
-    FORCED_ENTRY_FALLBACK_CYCLES = 3
+    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 6", _e)
+    FORCED_ENTRY_FALLBACK_CYCLES = 6
 
 # How much to raise the effective sniper-filter confidence in fallback mode.
-# E.g. 0.10 means the signal needs 0.10 LESS confidence to pass the gate.
+# Reduced from 0.10 → 0.07 to preserve edge discipline: borderline setups get
+# a small nudge rather than a large gate-collapsing boost.
 try:
-    FORCED_ENTRY_CONFIDENCE_DELTA = float(os.getenv('FORCED_ENTRY_CONFIDENCE_DELTA', '0.10'))
+    FORCED_ENTRY_CONFIDENCE_DELTA = float(os.getenv('FORCED_ENTRY_CONFIDENCE_DELTA', '0.07'))
 except ValueError as _e:
-    logger.warning("Invalid FORCED_ENTRY_CONFIDENCE_DELTA env value: %s — using default 0.10", _e)
-    FORCED_ENTRY_CONFIDENCE_DELTA = 0.10
+    logger.warning("Invalid FORCED_ENTRY_CONFIDENCE_DELTA env value: %s — using default 0.07", _e)
+    FORCED_ENTRY_CONFIDENCE_DELTA = 0.07
 
 # Multiplier applied to FORCED_ENTRY_CONFIDENCE_DELTA during first-trade force mode.
 # A higher multiplier ensures the very first trade executes even in difficult markets.
@@ -8005,18 +8006,15 @@ class TradingStrategy:
                 )
 
             # ── FIRST TRADE FILTER BYPASS ─────────────────────────────────────
-            # Until the very first confirmed entry is recorded, relax AI confidence
-            # and MTF confirmation gates so a perfectionist filter stack never
-            # prevents the bot from deploying capital at all.
-            # Condition: first trade not yet executed AND balance is workable (> $50).
-            # Both flags reset to False the moment _first_trade_executed flips True
-            # (see the post-execution block that sets self._first_trade_executed).
+            # Edge discipline: we no longer bypass AI or MTF confirmation gates
+            # for the first trade.  Every entry — including the very first — must
+            # pass the full quality stack.  The first-trade force confidence nudge
+            # (applied in the sniper-filter block below) gives borderline setups a
+            # small lift without circumventing the gate entirely.
+            # _bypass_ai_for_first_trade is kept as False (dead-flag) so downstream
+            # code that references it does not need updating.
             _bypass_ai_for_first_trade = False
             _bypass_mtf_for_first_trade = False
-            if not self._first_trade_executed and account_balance > 50.0 and not user_mode:
-                logger.info("🚀 FIRST TRADE OVERRIDE ACTIVE — bypassing AI and MTF filters until first entry")
-                _bypass_ai_for_first_trade = True
-                _bypass_mtf_for_first_trade = True
 
             # Leak #5 fix: switch profit-lock mode based on account size
             # Under $1K → GROWTH (suspend withdrawals, maximise compounding)
@@ -11410,6 +11408,25 @@ class TradingStrategy:
                                                 symbol, float(_raw_conf), _sf_confidence, account_balance
                                             )
 
+                                        # ── MICRO-CAP COMPOUNDING — borderline edge nudge ─────
+                                        # Micro-cap compounding compounds best when the system is
+                                        # disciplined but slightly more aggressive on borderline
+                                        # setups that are close to the quality threshold.
+                                        # A deliberate +0.04 confidence lift is applied when
+                                        # micro-cap mode is active — this is intentional and
+                                        # explicit, NOT a gate bypass.  The trade still needs
+                                        # real underlying signal quality to pass all gates.
+                                        if _micro_cap_config is not None:
+                                            _mc_nudge = 0.04
+                                            _sf_conf_pre_mc = _sf_confidence
+                                            _sf_confidence = min(1.0, _sf_confidence + _mc_nudge)
+                                            logger.debug(
+                                                "   🔥 Micro-cap borderline nudge [%s]: "
+                                                "conf %.2f→%.2f (+%.2f)",
+                                                symbol, _sf_conf_pre_mc,
+                                                _sf_confidence, _mc_nudge,
+                                            )
+
                                         # ── FORCED ENTRY FALLBACK (B-grade mode) ─────────────
                                         # After FORCED_ENTRY_FALLBACK_CYCLES consecutive zero-
                                         # signal cycles the bot lowers the effective confidence
@@ -12341,10 +12358,21 @@ class TradingStrategy:
                                 # The regime controller evaluates the GLOBAL market
                                 # environment after the scan loop.  Its decision from
                                 # the PREVIOUS cycle is used here to gate entries.
-                                # Exception: bypass regime block when the first-trade
-                                # force trigger is active so initial capital is deployed.
+                                # Exception: bypass regime block for first-trade force,
+                                # BUT only when the regime is not CRISIS — CRISIS always
+                                # wins, even for the first trade, to protect capital.
                                 if not _regime_entries_allowed:
-                                    if not self._first_trade_executed and self._first_trade_force_active:
+                                    _is_crisis = (
+                                        _regime_result is not None
+                                        and RegimeDecision is not None
+                                        and getattr(_regime_result, 'decision', None) == RegimeDecision.CRISIS
+                                    )
+                                    _first_trade_regime_bypass = (
+                                        not self._first_trade_executed
+                                        and self._first_trade_force_active
+                                        and not _is_crisis
+                                    )
+                                    if _first_trade_regime_bypass:
                                         logger.info(
                                             f"   ⚡ {symbol}: REGIME BLOCK overridden by first-trade force trigger"
                                         )
