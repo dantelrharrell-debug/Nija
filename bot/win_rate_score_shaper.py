@@ -70,11 +70,11 @@ NIJA_WRSS_TARGET_CEIL    Win-rate ceiling for neutral zone (default: 0.65).
 Named win-rate tier factors (override the continuous interpolation with
 fixed multipliers per performance bracket):
 
-NIJA_WRSS_WINRATE_DOMINATING_FACTOR   Multiplier when win-rate ≥ 75 % (default: 1.30).
-NIJA_WRSS_WINRATE_STRONG_FACTOR       Multiplier when win-rate in [65 %, 75 %) (default: 1.15).
-NIJA_WRSS_WINRATE_NEUTRAL_FACTOR      Multiplier in the neutral band [45 %, 65 %) (default: 1.05).
-NIJA_WRSS_WINRATE_STRUGGLING_FACTOR   Multiplier when win-rate in [30 %, 45 %) (default: 0.90).
-NIJA_WRSS_WINRATE_BROKEN_FACTOR       Multiplier when win-rate < 30 % (default: 0.70).
+NIJA_WRSS_WINRATE_DOMINATING_FACTOR   Multiplier when win-rate ≥ 75% (default: 1.30).
+NIJA_WRSS_WINRATE_STRONG_FACTOR       Multiplier when win-rate in [65%, 75%) (default: 1.15).
+NIJA_WRSS_WINRATE_NEUTRAL_FACTOR      Multiplier in the neutral band [45%, 65%) (default: 1.05).
+NIJA_WRSS_WINRATE_STRUGGLING_FACTOR   Multiplier when win-rate in [30%, 45%) (default: 0.90).
+NIJA_WRSS_WINRATE_BROKEN_FACTOR       Multiplier when win-rate < 30% (default: 0.70).
 
 When all five WINRATE_*_FACTOR vars are set the continuous linear interpolation
 is replaced by the discrete tiered lookup.  If any of the five is absent, the
@@ -151,10 +151,10 @@ _USE_TIERED_FACTORS: bool = all(
 
 # Win-rate thresholds that separate the five tiers (not configurable —
 # changing these independently of the factors would require a calibration run).
-_TIER_DOMINATING_FLOOR = 0.75   # win_rate ≥ 75 % → DOMINATING
-_TIER_STRONG_FLOOR     = 0.65   # win_rate ≥ 65 % → STRONG  (= _TARGET_CEIL)
-_TIER_STRUGGLING_CEIL  = 0.45   # win_rate < 45 % → STRUGGLING or worse  (= _TARGET_FLOOR)
-_TIER_BROKEN_CEIL      = 0.30   # win_rate < 30 % → BROKEN
+_TIER_DOMINATING_FLOOR = 0.75   # win_rate ≥ 75% → DOMINATING
+_TIER_STRONG_FLOOR     = 0.65   # win_rate ≥ 65% → STRONG  (= _TARGET_CEIL)
+_TIER_STRUGGLING_CEIL  = 0.45   # win_rate < 45% → STRUGGLING or worse  (= _TARGET_FLOOR)
+_TIER_BROKEN_CEIL      = 0.30   # win_rate < 30% → BROKEN
 
 _PERSIST_PATH: str = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -194,19 +194,19 @@ def _compute_factor(win_rate: float) -> float:
     +-----------+--------------------+-------------------------------+
     | Tier      | Win-rate range     | Default multiplier            |
     +===========+====================+===============================+
-    | DOMINATING| ≥ 75 %             | NIJA_WRSS_WINRATE_DOMINATING  |
-    | STRONG    | [65 %, 75 %)       | NIJA_WRSS_WINRATE_STRONG      |
-    | NEUTRAL   | [45 %, 65 %)       | NIJA_WRSS_WINRATE_NEUTRAL     |
-    | STRUGGLING| [30 %, 45 %)       | NIJA_WRSS_WINRATE_STRUGGLING  |
-    | BROKEN    | < 30 %             | NIJA_WRSS_WINRATE_BROKEN      |
+    | DOMINATING| ≥ 75%              | NIJA_WRSS_WINRATE_DOMINATING  |
+    | STRONG    | [65%, 75%)         | NIJA_WRSS_WINRATE_STRONG      |
+    | NEUTRAL   | [45%, 65%)         | NIJA_WRSS_WINRATE_NEUTRAL     |
+    | STRUGGLING| [30%, 45%)         | NIJA_WRSS_WINRATE_STRUGGLING  |
+    | BROKEN    | < 30%              | NIJA_WRSS_WINRATE_BROKEN      |
     +-----------+--------------------+-------------------------------+
 
     When the tier factors are not all set, the legacy continuous linear
     interpolation is used instead (backward-compatible):
 
     Neutral band [_TARGET_FLOOR, _TARGET_CEIL] → 1.00×
-    Below _TARGET_FLOOR → linearly dampen to _MAX_DAMPEN at 0 % win-rate
-    Above _TARGET_CEIL  → linearly boost  to _MAX_BOOST  at 100 % win-rate
+    Below _TARGET_FLOOR → linearly dampen to _MAX_DAMPEN at 0% win-rate
+    Above _TARGET_CEIL  → linearly boost  to _MAX_BOOST  at 100% win-rate
     """
     if _USE_TIERED_FACTORS:
         # Discrete tiered lookup — each tier returns a fixed factor.
