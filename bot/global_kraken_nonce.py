@@ -11,8 +11,8 @@ ONE global monotonic nonce shared across:
 Design guarantees
 ─────────────────
 ✅ Startup always lands ahead of any previously-accepted Kraken nonce
-   (initialized to max(persisted, now_ns + 10 s) and persisted immediately)
-✅ Runaway accumulation capped at 2 min ahead; resets to now_ns + 10 s
+   (initialized to max(persisted+1, now_ns + 25 s) clamped below HARD_CAP)
+✅ Runaway accumulation capped at 2 min ahead; resets to now_ns + 25 s
 ✅ Hard-reset in get_nonce(): lead > 60 s → snap to now + 10 s instantly
 ✅ Nuclear-reset in get_nonce(): lead > 300 s → snap + 5 s sleep
 ✅ record_nonce_error() skips forward jump when lead ≥ 60 s (let get_nonce hard-reset instead)
@@ -59,8 +59,10 @@ _NONCE_FILE = os.path.join(_DATA_DIR, "kraken_global_nonce.txt")
 _PERSIST_EVERY_N = 10
 
 # Startup lead-time: always initialise the nonce at least this many nanoseconds
-# ahead of now so a fast restart cannot replay a nonce Kraken already accepted.
-_STARTUP_LEAD_NS = 10 * 1_000_000_000  # 10 seconds
+# ahead of now.  25 s absorbs typical Kraken clock-drift tolerance and ensures
+# we land above any previously-accepted nonce without triggering the 60 s
+# HARD-RESET threshold on the very first get_nonce() call.
+_STARTUP_LEAD_NS = 25 * 1_000_000_000  # 25 seconds
 
 # Maximum acceptable lead-time.  If the persisted nonce is further ahead than
 # this we assume it came from a crash-loop runaway and reset to now + lead.
@@ -89,10 +91,12 @@ _RECOVERY_JUMP_CAP_NS        = 10 * 1_000_000_000   # 10 seconds
 # reset to now + _STARTUP_JUMP_NS.  This is a non-negotiable production
 # safety rail: a nonce >60 s ahead is guaranteed to cause EAPI:Invalid nonce
 # errors on every call until wall-clock catches up.
-_HARD_CAP_LEAD_NS = 60 * 1_000_000_000  # 60 seconds
-# Hard-reset threshold: if lead exceeds this value, snap back to now + 10 s
-# immediately (before any increment or jump).
 _HARD_CAP_LEAD_NS = 60 * 1_000_000_000    # 60 seconds
+
+# Safety buffer below _HARD_CAP_LEAD_NS used during startup to clamp the
+# candidate nonce so the very first get_nonce() call cannot trigger a HARD
+# RESET.  Effective ceiling: 60 s − 5 s = 55 s.
+_HARD_CAP_BUFFER_NS = 5 * 1_000_000_000   #  5 seconds
 
 # Nuclear-reset threshold: if lead exceeds this extreme value, treat as a
 # crash-loop runaway and apply an extra sleep before retrying.
@@ -104,8 +108,9 @@ _NONCE_FILE = os.path.join(
 )
 _PERSIST_EVERY_N = 10  # Write to disk after this many get_nonce() calls (reduced from 100 to shrink crash gap)
 
-# Startup jump applied every time the process starts.  This guarantees we land
-# strictly ahead of any nonce Kraken may still hold from the previous session.
+# Runtime reset jump applied by HARD and NUCLEAR resets inside get_nonce().
+# Kept at 10 s so mid-session resets are conservative; startup initialisation
+# and reset_to_safe_value() use the larger _STARTUP_LEAD_NS (25 s) instead.
 _STARTUP_JUMP_NS = 10_000_000_000  # +10 seconds in nanoseconds
 
 # ── Disk helpers ───────────────────────────────────────────────────────────────
@@ -185,9 +190,9 @@ class GlobalKrakenNonceManager:
     - Nanosecond precision (19-digit nonces via time.time_ns())
     - Thread-safe (RLock throughout)
     - Strictly monotonic — never repeats or decreases
-    - Survives restarts: initialises to max(persisted, now + 10 s) then
-      persists the startup value immediately
-    - Runaway protection: if persisted > now + 2 min, resets to now + 10 s
+    - Survives restarts: initialises to max(persisted+1, now + 25 s) clamped
+      below the 60 s HARD-RESET threshold, then persists the startup value
+    - Runaway protection: if persisted > now + 2 min, resets to now + 25 s
     - Auto-recovery: escalating nonce jumps on consecutive errors
 
     Usage
@@ -224,16 +229,29 @@ class GlobalKrakenNonceManager:
                 excess_s = (persisted - current_ns) / _NS_PER_SECOND
                 _logger.warning(
                     "global_kraken_nonce: persisted nonce is %.0fs ahead of now "
-                    "(likely from crash-loop jumps); resetting to now + 10 s.",
+                    "(likely from crash-loop jumps); resetting to now + %ds.",
                     excess_s,
+                    _STARTUP_LEAD_NS // _NS_PER_SECOND,
                 )
                 persisted = 0  # force the startup-lead path below
 
-            # Start strictly ahead of both the wall clock and any previously
-            # persisted nonce.  The +10 s jump ensures we are beyond any nonce
-            # Kraken still holds from the last session even if the persisted
-            # file is slightly stale (up to _PERSIST_EVERY_N−1 calls behind).
-            self._last_nonce = max(current_ns, persisted) + _STARTUP_JUMP_NS
+            # Start strictly above the last persisted nonce while keeping a
+            # minimum lead of _STARTUP_LEAD_NS (25 s) from the wall clock.
+            # Clamping: if the candidate would land within _HARD_CAP_BUFFER_NS
+            # (5 s) of the 60 s HARD-RESET threshold, snap back to
+            # now + _STARTUP_LEAD_NS so the very first get_nonce() call does
+            # not immediately trigger a HARD RESET cycle.
+            _safe_max_ns = current_ns + _HARD_CAP_LEAD_NS - _HARD_CAP_BUFFER_NS  # 55 s
+            candidate_ns = max(persisted + 1, current_ns + _STARTUP_LEAD_NS)
+            if candidate_ns > _safe_max_ns:
+                _logger.warning(
+                    "global_kraken_nonce: startup candidate nonce is %.1fs ahead — "
+                    "clamping to now + %.0fs to avoid HARD RESET on first call.",
+                    (candidate_ns - current_ns) / _NS_PER_SECOND,
+                    _STARTUP_LEAD_NS / _NS_PER_SECOND,
+                )
+                candidate_ns = current_ns + _STARTUP_LEAD_NS
+            self._last_nonce = candidate_ns
 
             # Persist immediately — this is the single most important write.
             _persist_nonce(self._last_nonce)
@@ -421,15 +439,17 @@ class GlobalKrakenNonceManager:
         """
         Hard-reset the nonce to a safe value for manual recovery.
 
-        Sets the nonce to current nanoseconds + _STARTUP_JUMP_NS and
-        persists immediately.  Use this when the bot is stuck and normal
-        auto-heal has not resolved the desync.
+        Sets the nonce to current nanoseconds + _STARTUP_LEAD_NS (25 s) and
+        persists immediately.  The 25 s lead absorbs Kraken's clock-drift
+        tolerance and allows up to two escalating error jumps (10 s + 20 s = 30 s)
+        before reaching the 60 s HARD-RESET threshold.  Use this when the bot
+        is stuck and normal auto-heal has not resolved the desync.
 
         Returns:
             int: New nonce value after reset
         """
         with self._nonce_lock:
-            self._last_nonce = time.time_ns() + _STARTUP_JUMP_NS
+            self._last_nonce = time.time_ns() + _STARTUP_LEAD_NS
             self._nonces_since_persist = 0
             self._consecutive_errors = 0
             _persist_nonce(self._last_nonce)
@@ -581,11 +601,14 @@ def record_kraken_nonce_success() -> None:
 
 def reset_global_kraken_nonce() -> int:
     """
-    Hard-reset the global nonce to a safe value (current time + 10 s).
+    Hard-reset the global nonce to a safe value (current time + 25 s).
 
     Convenience wrapper around GlobalKrakenNonceManager.reset_to_safe_value().
-    Use when the bot is stuck with repeated "EAPI:Invalid nonce" errors and
-    normal auto-heal has not resolved the desync.
+    The 25 s lead absorbs Kraken's clock-drift tolerance and gives two
+    escalating error retries (10 s + 20 s = 30 s) before hitting the 60 s
+    HARD-RESET threshold.  Use when the bot is stuck with repeated
+    "EAPI:Invalid nonce" errors and normal auto-heal has not resolved the
+    desync.
 
     Returns:
         int: New nonce value after reset (nanoseconds)
