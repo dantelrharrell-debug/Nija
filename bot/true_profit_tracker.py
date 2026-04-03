@@ -32,7 +32,7 @@ import os
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger("nija.true_profit_tracker")
 
@@ -80,8 +80,8 @@ class _TrueProfitState:
     total_wins: int = 0
     total_fees_paid: float = 0.0
     # Separate win/loss sums for profit-expectancy ratio (avg_win / |avg_loss|)
-    total_wins_pnl: float = 0.0   # sum of net profit on winning trades
-    total_losses_pnl: float = 0.0  # sum of net profit on losing trades (negative)
+    total_wins_pnl: float = 0.0    # sum of net profit on winning trades (positive values)
+    total_losses_pnl: float = 0.0  # sum of net profit on losing trades (actual negative values)
     # date string (YYYY-MM-DD) -> dict with net_pnl_usd / trades_count / wins
     daily: Dict[str, dict] = field(default_factory=dict)
 
@@ -103,6 +103,21 @@ class TrueProfitTracker:
         self._path = data_path
         self._state = _TrueProfitState()
         self._load()
+
+    # -- Private helpers -------------------------------------------------------
+
+    @staticmethod
+    def _calc_expectancy(s: _TrueProfitState) -> Tuple[float, float, Optional[float]]:
+        """Return (avg_win, avg_loss, expectancy_ratio) from state.
+
+        avg_loss is the actual mean net profit on losing trades (a negative value).
+        expectancy_ratio = avg_win / |avg_loss|, or None when no losses are recorded.
+        """
+        total_losses = s.total_trades - s.total_wins
+        avg_win = (s.total_wins_pnl / s.total_wins) if s.total_wins > 0 else 0.0
+        avg_loss = (s.total_losses_pnl / total_losses) if total_losses > 0 else 0.0
+        expectancy_ratio = (avg_win / abs(avg_loss)) if avg_loss < 0 else None
+        return avg_win, avg_loss, expectancy_ratio
 
     # -- Persistence ----------------------------------------------------------
 
@@ -244,10 +259,7 @@ class TrueProfitTracker:
             _today_count = s.daily[today]["trades_count"]
             _total_trades = s.total_trades
             # Profit-expectancy: avg_win / |avg_loss|  (target ≥ 1.5×)
-            _total_losses = _total_trades - s.total_wins
-            _avg_win = (s.total_wins_pnl / s.total_wins) if s.total_wins > 0 else 0.0
-            _avg_loss = (s.total_losses_pnl / _total_losses) if _total_losses > 0 else 0.0
-            _expectancy_ratio = (_avg_win / abs(_avg_loss)) if _avg_loss < 0 else None
+            _avg_win, _avg_loss, _expectancy_ratio = self._calc_expectancy(s)
 
             self._save()
 
@@ -300,10 +312,7 @@ class TrueProfitTracker:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             today_data = s.daily.get(today, {})
             today_count = today_data.get("trades_count", 0)
-            _total_losses = s.total_trades - s.total_wins
-            _avg_win = (s.total_wins_pnl / s.total_wins) if s.total_wins > 0 else 0.0
-            _avg_loss = (s.total_losses_pnl / _total_losses) if _total_losses > 0 else 0.0
-            _expectancy_ratio = (_avg_win / abs(_avg_loss)) if _avg_loss < 0 else None
+            _avg_win, _avg_loss, _expectancy_ratio = self._calc_expectancy(s)
             return {
                 "starting_balance": s.starting_balance,
                 "current_cash_balance": s.current_cash_balance,

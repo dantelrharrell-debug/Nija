@@ -2186,8 +2186,16 @@ STOP_LOSS_EMERGENCY = -0.03  # EMERGENCY exit at -3% loss (was -5%, tightened to
 # Threshold is intentionally wide (-20%) to give normal stops room to breathe while
 # guaranteeing capital recovery from catastrophically losing positions.
 STOP_LOSS_DEEP_DRAWDOWN = float(
-    __import__('os').environ.get('NIJA_DEEP_DRAWDOWN_STOP_PCT', '-0.20')
+    os.environ.get('NIJA_DEEP_DRAWDOWN_STOP_PCT', '-0.20')
 )  # default -20%, overridable via env var
+# Clamp to a sane range: must be negative and not tighter than -1% (which would overlap
+# normal stops) nor looser than -100% (which would never fire).
+if not (-1.0 < STOP_LOSS_DEEP_DRAWDOWN < -0.01):
+    logger.warning(
+        "⚠️ NIJA_DEEP_DRAWDOWN_STOP_PCT=%s is out of range — resetting to -0.20",
+        os.environ.get('NIJA_DEEP_DRAWDOWN_STOP_PCT', '-0.20'),
+    )
+    STOP_LOSS_DEEP_DRAWDOWN = -0.20
 
 # PROFITABILITY GUARD: Minimum loss threshold to reduce noise
 # CRITICAL FIX (Feb 3, 2026): Lowered from -0.25% to -0.05% to avoid creating dead zone
