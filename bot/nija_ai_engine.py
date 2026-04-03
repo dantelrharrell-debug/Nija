@@ -82,6 +82,12 @@ except ImportError:
         pass
 
 # ---------------------------------------------------------------------------
+# Score tier constants — configurable via environment variables
+# ---------------------------------------------------------------------------
+TIER_ELITE = float(os.getenv("NIJA_SCORE_FLOOR_ELITE", "75.0"))   # 1.5× position size
+TIER_GOOD  = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "34.0"))   # 1.0× position size
+TIER_FAIR  = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "25.0"))   # 0.75× position size
+TIER_FLOOR = 17.0    # 0.5× position size (taken only as top-N, no better option)
 # Score tier constants  (env-var overridable)
 # ---------------------------------------------------------------------------
 # These thresholds drive both _position_multiplier() (size scaling) and the

@@ -1267,6 +1267,14 @@ try:
         MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
         MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
         MAX_CONCURRENT_TRADES,
+        MICRO_CAP_RELAX_SIDEWAYS,
+        MICRO_CAP_DYNAMIC_STREAK_ENABLED,
+        MICRO_CAP_STREAK_BONUS_MULTIPLIER,
+        MICRO_CAP_STREAK_DECAY_SECONDS,
+        MICRO_CAP_ADAPTIVE_COOLDOWN_ENABLED,
+        MICRO_CAP_COOLDOWN_MIN_SECONDS,
+        MICRO_CAP_COOLDOWN_MAX_SECONDS,
+        MICRO_CAP_COOLDOWN_VOLATILITY_FACTOR,
     )
     MICRO_CAP_COMPOUNDING_AVAILABLE = True
     logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
@@ -1281,6 +1289,14 @@ except ImportError:
             MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT,
             MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT,
             MAX_CONCURRENT_TRADES,
+            MICRO_CAP_RELAX_SIDEWAYS,
+            MICRO_CAP_DYNAMIC_STREAK_ENABLED,
+            MICRO_CAP_STREAK_BONUS_MULTIPLIER,
+            MICRO_CAP_STREAK_DECAY_SECONDS,
+            MICRO_CAP_ADAPTIVE_COOLDOWN_ENABLED,
+            MICRO_CAP_COOLDOWN_MIN_SECONDS,
+            MICRO_CAP_COOLDOWN_MAX_SECONDS,
+            MICRO_CAP_COOLDOWN_VOLATILITY_FACTOR,
         )
         MICRO_CAP_COMPOUNDING_AVAILABLE = True
         logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
@@ -1292,6 +1308,14 @@ except ImportError:
         MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5
         MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5
         MAX_CONCURRENT_TRADES = 4  # TUNE 6: 3→4
+        MICRO_CAP_RELAX_SIDEWAYS = True
+        MICRO_CAP_DYNAMIC_STREAK_ENABLED = True
+        MICRO_CAP_STREAK_BONUS_MULTIPLIER = 0.2
+        MICRO_CAP_STREAK_DECAY_SECONDS = 300
+        MICRO_CAP_ADAPTIVE_COOLDOWN_ENABLED = True
+        MICRO_CAP_COOLDOWN_MIN_SECONDS = 30
+        MICRO_CAP_COOLDOWN_MAX_SECONDS = 120
+        MICRO_CAP_COOLDOWN_VOLATILITY_FACTOR = 1.5
         logger.warning("⚠️ Micro-Cap Compounding Config not available - micro-cap mode disabled")
         get_micro_cap_compounding_config = None  # type: ignore
 
@@ -12176,11 +12200,71 @@ class TradingStrategy:
                                 #   → risk engine → trade execution
                                 # ═══════════════════════════════════════════════════════
                                 if _micro_cap_config:
-                                    # ── SCALP MODE AGGRESSIVENESS (CONSOLIDATION / RANGING) ──
-                                    # In consolidation/ranging regimes, most consistent scalp
-                                    # profits occur. Halve the re-entry cooldown and reduce the
-                                    # effective min-score gate to increase trade frequency.
-                                    _effective_cooldown = MICRO_CAP_TRADE_COOLDOWN
+                                    # ── STREAK DECAY — reset win streak if market went quiet ──
+                                    # If no position has been entered within streak_decay_seconds
+                                    # the momentum that justified the streak has expired.
+                                    _mc_streak_decay = int(_micro_cap_config.get(
+                                        'streak_decay_seconds', MICRO_CAP_STREAK_DECAY_SECONDS
+                                    ))
+                                    if _mc_streak_decay > 0 and self._micro_cap_win_streak > 0:
+                                        _last_any_trade = max(
+                                            self._micro_cap_last_trade_times.values(), default=0.0
+                                        )
+                                        if _last_any_trade > 0 and (time.time() - _last_any_trade) > _mc_streak_decay:
+                                            logger.info(
+                                                "   ⏱️ Micro-cap win streak DECAYED "
+                                                "(%d → 0, no trade in %.0fs > decay=%ds)",
+                                                self._micro_cap_win_streak,
+                                                time.time() - _last_any_trade,
+                                                _mc_streak_decay,
+                                            )
+                                            self._micro_cap_win_streak = 0
+
+                                    # ── ADAPTIVE COOLDOWN (CONSOLIDATION / RANGING + VOLATILITY) ──
+                                    # Build the effective re-entry cooldown from config keys.
+                                    # When adaptive_cooldown_enabled: scale between min and max
+                                    # based on current market volatility (ATR %).
+                                    # When disabled: fall back to the fixed MICRO_CAP_TRADE_COOLDOWN.
+                                    _mc_adaptive_cd = bool(_micro_cap_config.get(
+                                        'adaptive_cooldown_enabled', MICRO_CAP_ADAPTIVE_COOLDOWN_ENABLED
+                                    ))
+                                    _mc_cd_min = int(_micro_cap_config.get(
+                                        'cooldown_min_seconds', MICRO_CAP_COOLDOWN_MIN_SECONDS
+                                    ))
+                                    _mc_cd_max = int(_micro_cap_config.get(
+                                        'cooldown_max_seconds', MICRO_CAP_COOLDOWN_MAX_SECONDS
+                                    ))
+                                    _mc_cd_vol_factor = float(_micro_cap_config.get(
+                                        'cooldown_volatility_factor', MICRO_CAP_COOLDOWN_VOLATILITY_FACTOR
+                                    ))
+                                    _mc_relax_sideways = bool(_micro_cap_config.get(
+                                        'relax_sideways', MICRO_CAP_RELAX_SIDEWAYS
+                                    ))
+
+                                    if _mc_adaptive_cd:
+                                        # Determine current volatility relative to normal (1.0 = normal).
+                                        _mc_vol_ratio = 1.0
+                                        try:
+                                            _mc_atr_pct = float(
+                                                indicators.get('atr_pct') or
+                                                indicators.get('volatility_pct') or
+                                                analysis.get('atr_pct', 0.0)
+                                            )
+                                            if _mc_atr_pct > 0:
+                                                # Normalise: typical micro-cap ATR% is ~0.5%; scale
+                                                # relative to that so 1.0 = average volatility.
+                                                _mc_vol_ratio = _mc_atr_pct / 0.5
+                                        except Exception:
+                                            pass
+                                        # Clamp ratio to [0, cooldown_volatility_factor] then linearly
+                                        # interpolate between min and max cooldown.
+                                        _mc_vol_t = min(_mc_vol_ratio / max(_mc_cd_vol_factor, 1e-9), 1.0)
+                                        _effective_cooldown = _mc_cd_min + _mc_vol_t * (_mc_cd_max - _mc_cd_min)
+                                    else:
+                                        _effective_cooldown = float(MICRO_CAP_TRADE_COOLDOWN)
+
+                                    # Sideways/consolidation relaxation: reduce cooldown to min floor
+                                    # when in a ranging regime (historically profitable for scalps).
                                     _scalp_regime_str = ""
                                     try:
                                         if _regime_result and hasattr(_regime_result, 'regime'):
@@ -12193,13 +12277,13 @@ class TradingStrategy:
                                         r in _scalp_regime_str
                                         for r in ("consolidation", "ranging")
                                     )
-                                    if _in_scalp_regime:
-                                        _effective_cooldown = MICRO_CAP_TRADE_COOLDOWN * SCALP_REGIME_COOLDOWN_MULTIPLIER
+                                    if _in_scalp_regime and _mc_relax_sideways:
+                                        _prev_cd = _effective_cooldown
+                                        _effective_cooldown = float(_mc_cd_min)
                                         logger.debug(
-                                            "   ⚡ SCALP REGIME [%s][%s]: cooldown %.0f → %.0fs (x%.2f)",
+                                            "   ⚡ SIDEWAYS RELAX [%s][%s]: cooldown %.0f → %.0fs (min floor)",
                                             _scalp_regime_str, symbol,
-                                            MICRO_CAP_TRADE_COOLDOWN, _effective_cooldown,
-                                            SCALP_REGIME_COOLDOWN_MULTIPLIER,
+                                            _prev_cd, _effective_cooldown,
                                         )
 
                                     # 1. Re-entry cooldown: enforce effective cooldown
@@ -12270,7 +12354,7 @@ class TradingStrategy:
                                         )
                                         # Pre-compute components for the log message (avoids re-deriving from total)
                                         _mc_spread_display = _mc_spread_pct * 100.0
-                                        _mc_base = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT  # 1.0%
+                                        _mc_base = MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT  # 2.5%
                                         _mc_streak_bonus = round(_mc_profit_pct - _mc_base - _mc_spread_display, 4)
                                         if action == 'enter_long':
                                             _mc_stop_loss = _mc_entry_price * (1.0 - _mc_stop_pct / 100.0)
