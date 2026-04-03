@@ -98,6 +98,18 @@ LEGACY_SIGNAL_THRESHOLD: int = 2
 # is treated as borderline volatility — allowed with reduced position size.
 BORDERLINE_ATR_FLOOR: float = 0.5  # 50 % of minimum → borderline zone
 
+# NIJA_MICROCAP_RELAX_SIDEWAYS: when True (default), apply a small extra
+# gate_score_reduction in consolidation/ranging/sideways regimes so the bot
+# stays active in low-volatility conditions without abandoning edge discipline.
+import os as _os_apex  # local alias — avoids shadowing any existing `os` import
+_relax_sw_raw = _os_apex.getenv("NIJA_MICROCAP_RELAX_SIDEWAYS", "true").lower()
+_MICROCAP_RELAX_SIDEWAYS: bool = _relax_sw_raw not in ("0", "false", "no")
+# Extra fraction added to gate_score_reduction in sideways regimes (capped at 0.20 total).
+# At 0.08 a threshold of 48 becomes 48 × (1 − 0.08) = 44.2 — FAIR signals can just cross.
+_MICROCAP_SIDEWAYS_GATE_REDUCTION: float = float(
+    _os_apex.getenv("NIJA_MICROCAP_SIDEWAYS_GATE_REDUCTION", "0.08")
+)
+
 # Import adaptive minimum sizing engine (Mar 2026)
 try:
     from adaptive_minimum_sizing import get_adaptive_minimum_sizer, AdaptiveMinimumSizer
@@ -2355,6 +2367,15 @@ class NIJAApexStrategyV71:
                         if self._freq_ctrl is not None else None
                     )
                     _gate_reduction_l = _drought_l.gate_pct_reduction if (_drought_l and _drought_l.active) else 0.0
+                    # NIJA_MICROCAP_RELAX_SIDEWAYS: in consolidation/ranging/sideways
+                    # regimes the gate is relaxed slightly so the bot stays active
+                    # without abandoning edge discipline.
+                    if _MICROCAP_RELAX_SIDEWAYS and self.current_regime is not None:
+                        _regime_str_l = str(getattr(self.current_regime, 'value',
+                                                     self.current_regime)).lower()
+                        if any(r in _regime_str_l for r in
+                               ("consolidation", "ranging", "sideways", "chop")):
+                            _gate_reduction_l = min(0.20, _gate_reduction_l + _MICROCAP_SIDEWAYS_GATE_REDUCTION)
                     if self.ai_entry_gate is not None:
                         try:
                             _gate_vol_mult_l: Optional[float] = None
@@ -2771,6 +2792,13 @@ class NIJAApexStrategyV71:
                         if self._freq_ctrl is not None else None
                     )
                     _gate_reduction_s = _drought_s.gate_pct_reduction if (_drought_s and _drought_s.active) else 0.0
+                    # NIJA_MICROCAP_RELAX_SIDEWAYS: mirror the long-side gate relaxation
+                    if _MICROCAP_RELAX_SIDEWAYS and self.current_regime is not None:
+                        _regime_str_s = str(getattr(self.current_regime, 'value',
+                                                     self.current_regime)).lower()
+                        if any(r in _regime_str_s for r in
+                               ("consolidation", "ranging", "sideways", "chop")):
+                            _gate_reduction_s = min(0.20, _gate_reduction_s + _MICROCAP_SIDEWAYS_GATE_REDUCTION)
                     if self.ai_entry_gate is not None:
                         try:
                             _gate_vol_mult_s: Optional[float] = None

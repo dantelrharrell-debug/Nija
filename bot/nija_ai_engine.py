@@ -40,6 +40,7 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections import deque
 from dataclasses import dataclass, field
@@ -81,12 +82,20 @@ except ImportError:
         pass
 
 # ---------------------------------------------------------------------------
-# Score tier constants
+# Score tier constants  (env-var overridable)
 # ---------------------------------------------------------------------------
-TIER_ELITE = 75.0    # 1.5× position size
-TIER_GOOD = 34.0     # 1.0× position size (lowered 40→34 ~15% to increase qualifying entries)
-TIER_FAIR = 25.0     # 0.75× position size (lowered 30→25 ~17% to allow B-grade setups)
-TIER_FLOOR = 17.0    # 0.5× position size (taken only as top-N, no better option)
+# These thresholds drive both _position_multiplier() (size scaling) and the
+# is_elite / is_good properties on AIEngineSignal.
+#
+# Defaults match the micro-cap threshold config:
+#   NIJA_SCORE_FLOOR_ELITE  75  — 1.5× size  (strong conviction)
+#   NIJA_SCORE_FLOOR_GOOD   50  — 1.0× size  (standard entry)
+#   NIJA_SCORE_FLOOR_FAIR   48  — 0.75× size (borderline; just below GOOD)
+#   TIER_FLOOR              17  — 0.5× size  (fallback, top-N only)
+TIER_ELITE: float = float(os.getenv("NIJA_SCORE_FLOOR_ELITE", "75"))
+TIER_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "50"))
+TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "48"))
+TIER_FLOOR: float = 17.0   # hard internal floor — not user-tunable
 
 # Composite score blend weights (must sum to 1.0)
 _W_ENHANCED  = 0.55   # EnhancedEntryScorer contributes most weight
