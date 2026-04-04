@@ -92,6 +92,20 @@ _RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.10, 0.15, 0.20)
 # market droughts while compounding stays continuous.
 HARD_BYPASS_STREAK_THRESHOLD: int = 40
 
+# One-shot manual forced-entry flag.
+# Set to True externally to force the top-scored candidate in the very next
+# scan cycle, bypassing all quality filters.  The flag is automatically reset
+# to False after a single cycle so exactly one trade is forced.
+# Use module-level access for both reading and writing:
+#   import bot.nija_core_loop as _cl
+#   _cl.FORCE_NEXT_CYCLE = True   # force the next scan cycle
+#   print(_cl.FORCE_NEXT_CYCLE)   # check current state
+# Thread-safety note: the read-and-reset operation inside _phase3_scan_and_enter
+# is protected by _FORCE_LOCK to prevent duplicate forced entries under
+# concurrent callers.
+FORCE_NEXT_CYCLE: bool = False
+_FORCE_LOCK = threading.Lock()
+
 
 def _get_relaxation_factor(streak: int) -> float:
     """Return threshold-reduction fraction for the given zero-signal streak.
@@ -602,6 +616,36 @@ class NijaCoreLoop:
             for sig in selected:
                 sig.metadata["bypass_quality_filter"] = True
                 sig.metadata["hard_bypass_streak"] = zero_signal_streak
+
+        # ── One-cycle forced entry (FORCE_NEXT_CYCLE flag) ───────────────
+        # When FORCE_NEXT_CYCLE is True the top-scored candidate is selected
+        # unconditionally, all quality filters are bypassed, and the flag is
+        # immediately reset so exactly one cycle is forced.
+        # _FORCE_LOCK ensures the read-and-reset is atomic under concurrent callers.
+        global FORCE_NEXT_CYCLE
+        with _FORCE_LOCK:
+            _force_this_cycle = FORCE_NEXT_CYCLE
+            if _force_this_cycle:
+                FORCE_NEXT_CYCLE = False  # reset atomically — one-shot only
+        if _force_this_cycle and candidates:
+            top_candidate = max(candidates, key=lambda s: s.composite_score)
+            top_candidate.metadata["bypass_quality_filter"] = True
+            top_candidate.metadata["hard_bypass_streak"] = zero_signal_streak
+            for c in candidates:
+                logger.info(
+                    "🔹 Candidate: %s | Score: %.1f",
+                    getattr(c, "symbol", "UNKNOWN"),
+                    c.composite_score,
+                )
+            logger.warning(
+                "🚀 FORCE_NEXT_CYCLE active — forcing entry on top candidate "
+                "%s (score=%.1f, streak=%d)",
+                top_candidate.symbol,
+                top_candidate.composite_score,
+                zero_signal_streak,
+            )
+            selected = [top_candidate]
+            fallback_active = True  # ensure the execution block forces the action
 
         # ── Execute selected entries ──────────────────────────────────────
         entries = 0
