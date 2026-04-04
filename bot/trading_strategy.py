@@ -1906,18 +1906,20 @@ MAX_SCAN_SECONDS = 120   # Max seconds allowed for the market scan loop itself
 PRE_SCAN_POSITION_BUDGET_SECONDS = 90  # Max seconds for the position-analysis loop
 
 # Market scanning rotation (prevents scanning same markets every cycle)
-# UPDATED (Mar 2026): Increased batch size targets for 50-200 markets per cycle.
-# The warmup mechanism still exists (MARKET_BATCH_WARMUP_CYCLES=1) but now starts
-# at a much higher baseline (50) so the bot reaches full scan speed immediately.
-MARKET_BATCH_SIZE_MIN = 50   # Minimum markets to scan per cycle (raised from 10→50)
-MARKET_BATCH_SIZE_MAX = 50   # Maximum markets to scan per cycle (reduced 150→50 for faster rotations)
-                             # Both MIN and MAX set to 50 to enforce a fixed batch size and
-                             # keep cycle times at 8–10 min for micro-cap accounts.
+# UPDATED (Apr 2026): Dynamic batch sizing — base 75, idle-mode max 100.
+# When idle_cycles >= 3 the batch grows toward MARKET_BATCH_SIZE_MAX for better
+# coverage; when active trades >= 3 it pulls back to MARKET_BATCH_SIZE_MIN to
+# reduce API pressure and keep cycle times predictable.
+MARKET_BATCH_SIZE_MIN = 75   # Base batch size (raised 50→75 for better market coverage)
+MARKET_BATCH_SIZE_MAX = 100  # Max batch size in idle-boost mode (raised 50→100)
 MARKET_BATCH_WARMUP_CYCLES = 1  # Minimal warmup: full speed after 1 cycle (lowered from 3→1)
+# Dynamic scaling thresholds
+MARKET_BATCH_IDLE_THRESHOLD = 3   # idle cycles before expanding batch toward MAX
+MARKET_BATCH_ACTIVE_THRESHOLD = 3  # open trades before compressing batch back to MIN
 # For micro accounts (balance < $100), scan a targeted batch to keep rotation fast
 # and market conditions fresh — smaller scans enable 8–10 min cycles.
 MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD = 100.0  # USD: below this balance use boosted scan size
-MICRO_ACCOUNT_SCAN_SIZE = 50               # Markets to scan per cycle for micro accounts (reduced 150→50)
+MICRO_ACCOUNT_SCAN_SIZE = 75               # Markets to scan per cycle for micro accounts (raised 50→75)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # ── FIRST TRADE BOOST ──────────────────────────────────────────────────────
@@ -6523,14 +6525,11 @@ class TradingStrategy:
         """
         Get next batch of markets to scan using rotation strategy.
 
-        UPDATED (Jan 10, 2026): Added adaptive batch sizing to prevent API rate limiting
-        - Starts with small batch (5 markets) on fresh start or after API errors
-        - Gradually increases to max batch size (15 markets) over warmup period
-        - Reduces batch size when API health score is low
-
-        This prevents scanning the same markets every cycle and distributes
-        API load across time. With 730 markets and batch size of 5-15,
-        we complete a full rotation in multiple hours.
+        UPDATED (Apr 2026): Dynamic batch sizing based on idle cycles and active trades.
+        - Base batch: MARKET_BATCH_SIZE_MIN (75)
+        - Idle ≥ MARKET_BATCH_IDLE_THRESHOLD (3 cycles) → expand toward MARKET_BATCH_SIZE_MAX (100)
+        - Active trades ≥ MARKET_BATCH_ACTIVE_THRESHOLD (3) → compress back to MARKET_BATCH_SIZE_MIN (75)
+        - API health degraded (<50%) → always use MARKET_BATCH_SIZE_MIN regardless
 
         Args:
             all_markets: Full list of available markets
@@ -6538,22 +6537,51 @@ class TradingStrategy:
         Returns:
             Subset of markets for this cycle
         """
+        # --- Determine idle_cycles and active trade count for dynamic scaling ---
+        _idle_cycles = 0
+        try:
+            if hasattr(self, "capital_efficiency_mode") and self.capital_efficiency_mode is not None:
+                _idle_cycles = self.capital_efficiency_mode.idle_cycles
+        except Exception:
+            pass
+
+        _active_trades = 0
+        try:
+            if hasattr(self, "open_positions") and self.open_positions:
+                _active_trades = len(self.open_positions)
+        except Exception:
+            pass
+
         # Calculate adaptive batch size based on warmup and API health
         if self.cycle_count < MARKET_BATCH_WARMUP_CYCLES:
             # Warmup phase: use minimum batch size
             batch_size = MARKET_BATCH_SIZE_MIN
             logger.info(f"   🔥 Warmup mode: cycle {self.cycle_count + 1}/{MARKET_BATCH_WARMUP_CYCLES}, batch size={batch_size}")
         elif self.api_health_score < 50:
-            # API health degraded: reduce batch size
+            # API health degraded: reduce batch size regardless of idle/active state
             batch_size = MARKET_BATCH_SIZE_MIN
             logger.warning(f"   ⚠️  API health low ({self.api_health_score}%), using reduced batch size={batch_size}")
+        elif _active_trades >= MARKET_BATCH_ACTIVE_THRESHOLD:
+            # Many open trades — reduce scan pressure to keep cycle times fast
+            batch_size = MARKET_BATCH_SIZE_MIN
+            logger.info(
+                f"   📉 Dynamic batch: active_trades={_active_trades} >= {MARKET_BATCH_ACTIVE_THRESHOLD} "
+                f"→ compressed batch size={batch_size}"
+            )
+        elif _idle_cycles >= MARKET_BATCH_IDLE_THRESHOLD:
+            # Bot has been idle — expand scan to find more opportunities
+            batch_size = MARKET_BATCH_SIZE_MAX
+            logger.info(
+                f"   📈 Dynamic batch: idle_cycles={_idle_cycles} >= {MARKET_BATCH_IDLE_THRESHOLD} "
+                f"→ expanded batch size={batch_size} (IDLE BOOST)"
+            )
         elif self.api_health_score < 80:
             # Moderate health: use mid-range batch size
             batch_size = (MARKET_BATCH_SIZE_MIN + MARKET_BATCH_SIZE_MAX) // 2
             logger.info(f"   📊 API health moderate ({self.api_health_score}%), batch size={batch_size}")
         else:
-            # Good health: use maximum batch size
-            batch_size = MARKET_BATCH_SIZE_MAX
+            # Good health, normal state: use base batch size
+            batch_size = MARKET_BATCH_SIZE_MIN
 
         if not MARKET_ROTATION_ENABLED or len(all_markets) <= batch_size:
             # If rotation disabled or fewer markets than batch size, use all markets
