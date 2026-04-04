@@ -134,14 +134,6 @@ ENTRY_TRIGGERS = {
         'required_conditions': 3,  # Minimum 3 out of 5 conditions (was 4)
         'entry_on_close': True,  # Only enter on candle close
     },
-    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback (was 0.5%)
-        'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
-        'entry_on_close': True,  # Only enter on candle close
-    },
-    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback - LOOSENED (was 0.005/0.5%)
-        'required_conditions': 3,  # Minimum 3 out of 5 conditions
-        'entry_on_close': True,  # Only enter on candle close
-    },
     'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback - LOOSENED (was 0.5%) for wider entry zone
 }
 
