@@ -107,6 +107,11 @@ _W_GATE      = 0.17   # 5-Gate AI gate penalty deduction (reduced 0.20→0.17 ~1
 # Lowered from 25.0 → 20.0 → 17.5 → 15.5 (flow-mode, Apr 2026) to increase trade frequency.
 # Override at runtime with NIJA_MIN_SCORE_ABSOLUTE (e.g. 15.5 for AGGRESSIVE/flow mode).
 MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "15.5"))
+# Lowered from 25.0 → 20.0 (~20%) to increase trade frequency (Apr 2026).
+# Lowered again 20.0 → 17.5 to further open the gate in thin-signal conditions.
+# Lowered again 17.5 → 16.5 for flow mode (micro-cap: tight SL 1.5%, frequent + controlled entries).
+# Override at runtime with NIJA_MIN_SCORE_ABSOLUTE.
+MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "16.5"))
 
 # Default number of top signals to select per cycle
 TOP_N_DEFAULT = 3
