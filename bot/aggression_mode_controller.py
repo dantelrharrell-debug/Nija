@@ -1,13 +1,14 @@
 """
 NIJA Aggression Mode Controller
 =================================
-User-configurable aggression modes: SAFE | BALANCED | AGGRESSIVE
+User-configurable aggression modes: SAFE | BALANCED | MODERATE | AGGRESSIVE
 
 Controls entry thresholds, position sizing, and trade frequency
 based on the operator's risk preference. Set via environment variable:
 
     AGGRESSION_MODE=SAFE       # Most selective — capital preservation
     AGGRESSION_MODE=BALANCED   # Balanced risk/reward
+    AGGRESSION_MODE=MODERATE   # Between BALANCED and AGGRESSIVE — quality + frequency
     AGGRESSION_MODE=AGGRESSIVE # More trades, lower thresholds — "print money" (default)
 
 Each mode overlays a parameter delta on top of the base strategy
@@ -33,6 +34,7 @@ logger = logging.getLogger("nija.aggression_mode_controller")
 class AggressionMode(Enum):
     SAFE = "SAFE"
     BALANCED = "BALANCED"
+    MODERATE = "MODERATE"
     AGGRESSIVE = "AGGRESSIVE"
 
 
@@ -131,6 +133,24 @@ BALANCED_PROFILE = ModeProfile(
     emoji="⚖️",
 )
 
+MODERATE_PROFILE = ModeProfile(
+    mode=AggressionMode.MODERATE,
+    description="Quality + frequency — sits between BALANCED and AGGRESSIVE, targeting 10–12/day",
+    confidence_delta=-0.03,          # gently easier to enter than BALANCED
+    signal_strength_multiplier=0.95,
+    position_size_multiplier=1.10,
+    max_position_pct=0.12,           # 12 % cap per trade
+    max_concurrent_positions=7,
+    stop_loss_multiplier=1.07,       # slightly wider stop
+    take_profit_multiplier=0.97,
+    risk_per_trade_pct=1.25,
+    min_trades_per_hour=0.55,
+    min_trades_per_day=12.0,         # 10–12/day target band
+    regime_strict=False,
+    mtf_required=False,
+    emoji="⚡",
+)
+
 AGGRESSIVE_PROFILE = ModeProfile(
     mode=AggressionMode.AGGRESSIVE,
     description="High-quality trades targeting 10–15/day — quality over pure frequency",
@@ -152,6 +172,7 @@ AGGRESSIVE_PROFILE = ModeProfile(
 _MODE_MAP: Dict[AggressionMode, ModeProfile] = {
     AggressionMode.SAFE: SAFE_PROFILE,
     AggressionMode.BALANCED: BALANCED_PROFILE,
+    AggressionMode.MODERATE: MODERATE_PROFILE,
     AggressionMode.AGGRESSIVE: AGGRESSIVE_PROFILE,
 }
 
