@@ -226,6 +226,27 @@ class AITradeQualityFilter:
         
         logger.info(f"AITradeQualityFilter initialized (ML available: {HAS_ML})")
     
+    def set_thresholds(self, win_prob: float, model_conf: float) -> None:
+        """
+        Update the minimum win-probability and model-confidence thresholds.
+
+        Affects both the trained-model prediction path and the heuristic
+        fallback path (fallback override), so the active aggression mode's
+        quality level is respected even when no ML model is loaded.
+
+        Args:
+            win_prob:   New minimum win probability (0-1).  Clamped to [0.1, 0.95].
+            model_conf: New minimum model confidence (0-1).  Clamped to [0.1, 0.95].
+        """
+        self.min_win_probability = max(0.1, min(float(win_prob), 0.95))
+        self.min_model_confidence = max(0.1, min(float(model_conf), 0.95))
+        logger.info(
+            "AITradeQualityFilter thresholds updated — "
+            "min_win_prob=%.2f  min_model_conf=%.2f",
+            self.min_win_probability,
+            self.min_model_confidence,
+        )
+
     def predict(
         self,
         features: TradeFeatures,
