@@ -86,6 +86,12 @@ MAX_RELAXATION_STEPS: int = 3
 # ~80% of the normal threshold — no entering without a real edge.
 _RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.10, 0.15, 0.20)
 
+# After this many consecutive zero-signal cycles, the hard bypass activates:
+# all quality floors are ignored and the top-ranked available candidate is
+# accepted unconditionally.  This guarantees no dead zones during prolonged
+# market droughts while compounding stays continuous.
+HARD_BYPASS_STREAK_THRESHOLD: int = 40
+
 
 def _get_relaxation_factor(streak: int) -> float:
     """Return threshold-reduction fraction for the given zero-signal streak.
@@ -575,6 +581,27 @@ class NijaCoreLoop:
                 sig.metadata["relaxation_factor"] = _relaxation
                 sig.metadata["relaxation_step"] = _step
                 sig.metadata["fallback_streak"] = zero_signal_streak
+
+        # ── Hard bypass: 40+ consecutive zero-signal cycles → accept best available ──
+        # When the progressive relaxation has still not produced entries after a
+        # prolonged drought, skip all quality floors and force the top-ranked
+        # candidate regardless of score.  This guarantees no dead zones and keeps
+        # the compounding engine running continuously.
+        if zero_signal_streak >= HARD_BYPASS_STREAK_THRESHOLD:
+            if not selected and candidates:
+                # Quality floors filtered everything — pick the single best candidate
+                top_candidate = max(candidates, key=lambda s: s.composite_score)
+                selected = [top_candidate]
+                logger.warning(
+                    "🚨 HARD BYPASS activated (streak=%d ≥ %d) — quality floor "
+                    "bypassed, forcing top candidate %s (score=%.1f)",
+                    zero_signal_streak, HARD_BYPASS_STREAK_THRESHOLD,
+                    top_candidate.symbol, top_candidate.composite_score,
+                )
+            fallback_active = True  # ensure forced-entry path runs for selected signals
+            for sig in selected:
+                sig.metadata["bypass_quality_filter"] = True
+                sig.metadata["hard_bypass_streak"] = zero_signal_streak
 
         # ── Execute selected entries ──────────────────────────────────────
         entries = 0
