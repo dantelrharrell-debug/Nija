@@ -31,7 +31,7 @@ Three automatic mode-shifting systems layer on top of the base level:
    * Call ``record_trade_outcome(is_win)`` after each closed trade.
 
 2. **Time-based aggression** (env ``NIJA_TIME_MODE_SWITCHING=1`` to enable, default on)
-   * Quiet crypto hours 00–06 UTC → Mode 3 (force activity in thin markets)
+   * Quiet crypto hours 00–07 UTC → Mode 3 (force activity in thin markets)
    * High-volume US session 13–21 UTC → cap at Mode 2 (stay selective)
    * Other hours → base level unchanged.
 
@@ -300,8 +300,8 @@ class ProfitModeController:
 
         new_level: int
         if loss_streak >= self._LOSING_STREAK_THRESHOLD:
-            # Losing streak — drop to Mode 1 (safe boost) floor
-            new_level = min(base, 1)
+            # Losing streak — drop to Mode 1 (safe boost) floor; never go to 0 (disabled)
+            new_level = max(min(base, 1), 1) if base > 0 else 0
         elif win_streak >= self._WINNING_STREAK_THRESHOLD:
             # Winning streak — bump one level above base, capped at Mode 3
             new_level = min(base + 1, 3)
@@ -332,13 +332,13 @@ class ProfitModeController:
         """
         Apply time-of-day adjustment to *base* and return the adjusted level.
 
-        * Quiet hours (00–06 UTC) → raise to Mode 3 to force activity in thin markets.
+        * Quiet hours (00–07 UTC) → raise to Mode 3 to force activity in thin markets.
         * High-volume US session (13–21 UTC) → cap at Mode 2 to stay selective.
         * Other hours → return *base* unchanged.
         """
         if not self._TIME_MODE_SWITCHING:
             return base
-        hour = datetime.datetime.utcnow().hour
+        hour = datetime.datetime.now(datetime.timezone.utc).hour
         if self._QUIET_HOUR_START <= hour < self._QUIET_HOUR_END:
             adjusted = max(base, 3)
             if adjusted != base:
