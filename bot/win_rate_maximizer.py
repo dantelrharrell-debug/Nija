@@ -101,6 +101,11 @@ DEFAULT_MAX_CONSECUTIVE_LOSSES: int = 4      # cool-down after N straight losses
 DEFAULT_MAX_DRAWDOWN_PCT: float = 0.10       # 10 % from session peak
 
 # Layer 2 – Signal Quality
+# LOOSENED (Apr 2026): Lowered from 55 → 46 → 40 → 34 (flow-mode) to increase trade frequency.
+# 34 is the true activation zone for micro-cap scalping in ranging/normal markets.
+# Override at runtime with WMX_SIGNAL_THRESHOLD or NIJA_WMX_SIGNAL_THRESHOLD env variable.
+DEFAULT_SIGNAL_THRESHOLD: float = float(
+    os.getenv("NIJA_WMX_SIGNAL_THRESHOLD", os.getenv("WMX_SIGNAL_THRESHOLD", "34"))
 # LOOSENED (Apr 2026): Lowered from 55 → 46 (~16%) to increase trade frequency.
 # A threshold of 55 was blocking too many B-grade setups in ranging/normal markets.
 # Lowered again 40 → 36 for flow mode: WMX was the final gate killing borderline setups.

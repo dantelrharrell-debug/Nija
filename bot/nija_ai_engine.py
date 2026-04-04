@@ -97,13 +97,16 @@ TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "30.0"))   # 0.75�
 TIER_FLOOR: float = 17.0   # hard internal floor — not user-tunable
 
 # Composite score blend weights (must sum to 1.0)
-_W_ENHANCED  = 0.55   # EnhancedEntryScorer contributes most weight
+_W_ENHANCED  = 0.58   # EnhancedEntryScorer contributes most weight (raised to offset lower gate penalty)
 _W_OPTIMIZER = 0.25   # EntryOptimizer RSI-div / BB-zone bonus
-_W_GATE      = 0.20   # 5-Gate AI gate penalty deduction
+_W_GATE      = 0.17   # 5-Gate AI gate penalty deduction (reduced 0.20→0.17 ~15% to soften low-quality penalty)
 
 # Hard absolute floor — never execute below this regardless of ranking.
-# NOTE: the composite formula (raw_score * 0.55 + opt_delta * 0.25 - penalty * 0.20)
+# NOTE: the composite formula (raw_score * 0.58 + opt_delta * 0.25 - penalty * 0.17)
 # produces values in the 0-60 range, so this floor must be calibrated accordingly.
+# Lowered from 25.0 → 20.0 → 17.5 → 15.5 (flow-mode, Apr 2026) to increase trade frequency.
+# Override at runtime with NIJA_MIN_SCORE_ABSOLUTE (e.g. 15.5 for AGGRESSIVE/flow mode).
+MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "15.5"))
 # Lowered from 25.0 → 20.0 (~20%) to increase trade frequency (Apr 2026).
 # Lowered again 20.0 → 17.5 to further open the gate in thin-signal conditions.
 # Lowered again 17.5 → 16.5 for flow mode (micro-cap: tight SL 1.5%, frequent + controlled entries).
@@ -597,10 +600,10 @@ class NijaAIEngine:
     ) -> Tuple[float, Dict]:
         """
         Composite score = weighted blend of:
-        1. EnhancedEntryScorer  (0-100)           weight _W_ENHANCED  (0.55)
+        1. EnhancedEntryScorer  (0-100)           weight _W_ENHANCED  (0.58)
         2. EntryOptimizer delta (0-2)  scaled 0-20 weight _W_OPTIMIZER (0.25)
         3. 5-Gate AI gate penalty      -8 per gate failure (max 3)
-                                                   weight _W_GATE      (0.20)
+                                                   weight _W_GATE      (0.17)
 
         Always returns a value in [0, 100].
         """
