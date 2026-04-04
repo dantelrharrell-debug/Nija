@@ -202,24 +202,6 @@ MODERATE_PROFILE = ModeProfile(
     wmx_signal_threshold=42.0,
 )
 
-MODERATE_PROFILE = ModeProfile(
-    mode=AggressionMode.MODERATE,
-    description="Quality + frequency — sits between BALANCED and AGGRESSIVE, floor ≥12 trades/day",
-    confidence_delta=-0.03,          # gently easier to enter than BALANCED
-    signal_strength_multiplier=0.95,
-    position_size_multiplier=1.10,
-    max_position_pct=0.12,           # 12 % cap per trade
-    max_concurrent_positions=7,
-    stop_loss_multiplier=1.07,       # slightly wider stop
-    take_profit_multiplier=0.97,
-    risk_per_trade_pct=1.25,
-    min_trades_per_hour=0.55,
-    min_trades_per_day=12.0,         # floor: at least 12 trades/day
-    regime_strict=False,
-    mtf_required=False,
-    emoji="⚡",
-)
-
 AGGRESSIVE_PROFILE = ModeProfile(
     mode=AggressionMode.AGGRESSIVE,
     description="High-quality trades targeting 10–15/day — quality over pure frequency",
