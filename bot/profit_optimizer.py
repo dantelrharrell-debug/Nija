@@ -52,6 +52,21 @@ from typing import Deque, List, Optional, Tuple
 
 logger = logging.getLogger("nija.profit_optimizer")
 
+# ---------------------------------------------------------------------------
+# Profit Mode Controller — optional dependency
+# ---------------------------------------------------------------------------
+_PMC_AVAILABLE = False
+_get_pmc = None  # type: ignore
+try:
+    from profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+    _PMC_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+        _PMC_AVAILABLE = True
+    except ImportError:
+        pass
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Confidence-based position sizer
@@ -147,15 +162,29 @@ class TradeRankingEngine:
                 )
                 return True
 
+            # Resolve pass_percentile from profit mode if available, falling
+            # back to the configured default.  This allows runtime level changes
+            # (e.g. switching from Level 1 → Level 2) to widen the gate without
+            # restarting the process.
+            if _PMC_AVAILABLE and _get_pmc is not None:
+                try:
+                    effective_percentile = _get_pmc().params.pass_percentile
+                except Exception as _exc:
+                    logger.debug("TradeRanker: profit mode pass_percentile read failed — using config default: %s", _exc)
+                    effective_percentile = self.config.pass_percentile
+            else:
+                effective_percentile = self.config.pass_percentile
+
             # Threshold: the score value at pass_percentile of the window.
             # Only setups scoring >= this value are accepted.
             sorted_scores = sorted(self._scores)
-            idx = int(len(sorted_scores) * self.config.pass_percentile)
+            idx = int(len(sorted_scores) * effective_percentile)
             threshold = sorted_scores[min(idx, len(sorted_scores) - 1)]
 
             passed = score >= threshold
             logger.debug(
                 f"[TradeRanker] {symbol} score={score:.3f} threshold={threshold:.3f} "
+                f"pct={effective_percentile:.2f} "
                 f"({'✅ PASS' if passed else '❌ SKIP'})"
             )
             return passed

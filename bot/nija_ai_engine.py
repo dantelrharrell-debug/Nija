@@ -82,6 +82,21 @@ except ImportError:
         pass
 
 # ---------------------------------------------------------------------------
+# Profit Mode Controller — optional dependency
+# ---------------------------------------------------------------------------
+_PMC_AVAILABLE = False
+_get_pmc = None  # type: ignore
+try:
+    from profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+    _PMC_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+        _PMC_AVAILABLE = True
+    except ImportError:
+        pass
+
+# ---------------------------------------------------------------------------
 # Score tier constants  (env-var overridable)
 # ---------------------------------------------------------------------------
 # These thresholds drive both _position_multiplier() (size scaling) and the
@@ -182,10 +197,28 @@ class CycleSpeedController:
     INTERVAL_SLOW: int = 300    # 5.0 min
 
     def __init__(self) -> None:
-        self._last_interval: int = self.INTERVAL_NORMAL
-        self._cold_streak: int = 0
-        self._regime_hint: int = self.INTERVAL_NORMAL
         self._lock = threading.Lock()
+
+        # Apply profit mode scan-interval overrides (if available)
+        if _PMC_AVAILABLE and _get_pmc is not None:
+            try:
+                _p = _get_pmc().params
+                self._interval_fast: int = _p.interval_fast
+                self._interval_normal: int = _p.interval_normal
+                self._interval_slow: int = _p.interval_slow
+            except Exception as _exc:
+                logger.debug("CycleSpeedController: profit mode read failed — using defaults: %s", _exc)
+                self._interval_fast = self.INTERVAL_FAST
+                self._interval_normal = self.INTERVAL_NORMAL
+                self._interval_slow = self.INTERVAL_SLOW
+        else:
+            self._interval_fast = self.INTERVAL_FAST
+            self._interval_normal = self.INTERVAL_NORMAL
+            self._interval_slow = self.INTERVAL_SLOW
+
+        self._last_interval: int = self._interval_normal
+        self._cold_streak: int = 0
+        self._regime_hint: int = self._interval_normal
 
     def set_regime_hint(self, secs: int) -> None:
         """
@@ -198,23 +231,41 @@ class CycleSpeedController:
             secs: Recommended interval in seconds from ``RegimeTradingParams.scan_interval_secs``.
         """
         with self._lock:
-            self._regime_hint = max(self.INTERVAL_FAST, int(secs))
+            self._regime_hint = max(self._interval_fast, int(secs))
 
     def record_cycle(self, signals_found: int) -> int:
         """Record cycle result and return recommended next interval (seconds)."""
+        # Re-read profit mode intervals each cycle so runtime level changes
+        # take effect without restarting the engine.
+        if _PMC_AVAILABLE and _get_pmc is not None:
+            try:
+                _p = _get_pmc().params
+                _interval_fast = _p.interval_fast
+                _interval_normal = _p.interval_normal
+                _interval_slow = _p.interval_slow
+            except Exception as _exc:
+                logger.debug("CycleSpeedController.record_cycle: profit mode read failed — using init defaults: %s", _exc)
+                _interval_fast = self._interval_fast
+                _interval_normal = self._interval_normal
+                _interval_slow = self._interval_slow
+        else:
+            _interval_fast = self._interval_fast
+            _interval_normal = self._interval_normal
+            _interval_slow = self._interval_slow
+
         with self._lock:
             if signals_found >= 2:
                 self._cold_streak = 0
-                signal_interval = self.INTERVAL_FAST
+                signal_interval = _interval_fast
             elif signals_found == 1:
                 self._cold_streak = 0
-                signal_interval = self.INTERVAL_NORMAL
+                signal_interval = _interval_normal
             else:
                 self._cold_streak += 1
                 if self._cold_streak >= 2:
-                    signal_interval = self.INTERVAL_SLOW
+                    signal_interval = _interval_slow
                 else:
-                    signal_interval = self.INTERVAL_NORMAL
+                    signal_interval = _interval_normal
 
             # Apply regime hint as a directional constraint:
             # - Crisis/defensive (hint ≥ 240s): never scan faster than the regime allows
@@ -239,7 +290,7 @@ class CycleSpeedController:
 
     def reset(self) -> None:
         with self._lock:
-            self._last_interval = self.INTERVAL_NORMAL
+            self._last_interval = self._interval_normal
             self._cold_streak = 0
 
 
@@ -375,9 +426,17 @@ class NijaAIEngine:
         self.threshold_ctrl = AdaptiveThresholdController()
         self._lock = threading.Lock()
 
-        # Instance-level score floor — mirrors module-level MIN_SCORE_ABSOLUTE
-        # but can be updated thread-safely via set_score_floor().
-        self._score_floor: float = MIN_SCORE_ABSOLUTE
+        # Instance-level score floor — seeded from profit mode if available,
+        # otherwise falls back to the module-level MIN_SCORE_ABSOLUTE constant.
+        # Can also be updated at runtime via set_score_floor().
+        if _PMC_AVAILABLE and _get_pmc is not None:
+            try:
+                self._score_floor: float = _get_pmc().params.min_score_absolute
+            except Exception as _exc:
+                logger.debug("NijaAIEngine: profit mode score floor read failed — using default: %s", _exc)
+                self._score_floor = MIN_SCORE_ABSOLUTE
+        else:
+            self._score_floor: float = MIN_SCORE_ABSOLUTE
 
         # Lazy-loaded component references (set on first use)
         self._enhanced_scorer = None
@@ -385,7 +444,10 @@ class NijaAIEngine:
         self._ai_entry_gate = None
         self._regime_bridge = None
 
-        logger.info("✅ NijaAIEngine initialized (rank-first, adaptive-threshold)")
+        logger.info(
+            "✅ NijaAIEngine initialized (rank-first, adaptive-threshold, score_floor=%.1f)",
+            self._score_floor,
+        )
 
     # ------------------------------------------------------------------
     # Component lazy-loaders

@@ -129,6 +129,26 @@ def _get_relaxation_step(streak: int) -> int:
     cycles_past = streak - FORCED_ENTRY_STREAK_THRESHOLD
     return min(MAX_RELAXATION_STEPS, cycles_past // 5 + 1)
 
+
+def _get_relaxation_factor_with_threshold(streak: int, threshold: int) -> float:
+    """Variant of _get_relaxation_factor that accepts a custom streak threshold.
+
+    Used by ``_phase3_scan_and_enter`` to respect profit-mode-overridden thresholds.
+    """
+    if streak < threshold:
+        return 0.0
+    cycles_past = streak - threshold
+    step = min(MAX_RELAXATION_STEPS, cycles_past // 5 + 1)
+    return _RELAXATION_SCHEDULE[step]
+
+
+def _get_relaxation_step_with_threshold(streak: int, threshold: int) -> int:
+    """Variant of _get_relaxation_step that accepts a custom streak threshold."""
+    if streak < threshold:
+        return 0
+    cycles_past = streak - threshold
+    return min(MAX_RELAXATION_STEPS, cycles_past // 5 + 1)
+
 # Attempt to import TOP_N from sniper_filter at module load time.
 # Fallback to 2 when the module is unavailable.
 try:
@@ -151,6 +171,21 @@ except ImportError:
     try:
         from bot.score_distribution_debugger import get_score_debugger as _get_sdd  # type: ignore
         _SDD_AVAILABLE = True
+    except ImportError:
+        pass
+
+# ---------------------------------------------------------------------------
+# Profit Mode Controller — optional dependency
+# ---------------------------------------------------------------------------
+_PMC_AVAILABLE = False
+_get_pmc = None  # type: ignore
+try:
+    from profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+    _PMC_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+        _PMC_AVAILABLE = True
     except ImportError:
         pass
 
@@ -455,11 +490,36 @@ class NijaCoreLoop:
             except ImportError:
                 _AISignal = None  # type: ignore
 
+        # ── Read profit mode parameters (if available) ────────────────────
+        # These override the module-level constants so runtime level changes
+        # take effect immediately without restarting.
+        _pmc_level = 0
+        _effective_hard_floor = MIN_SCORE_HARD_FLOOR
+        _effective_streak_threshold = FORCED_ENTRY_STREAK_THRESHOLD
+        _effective_bypass_threshold = HARD_BYPASS_STREAK_THRESHOLD
+        _volume_fallback_enabled = False
+        if _PMC_AVAILABLE and _get_pmc is not None:
+            try:
+                _pmc_params = _get_pmc().params
+                _pmc_level = _pmc_params.level
+                _effective_hard_floor = _pmc_params.min_score_hard_floor
+                _effective_streak_threshold = _pmc_params.forced_entry_streak_threshold
+                _effective_bypass_threshold = _pmc_params.hard_bypass_streak_threshold
+                _volume_fallback_enabled = _pmc_params.enable_volume_fallback
+            except Exception as _exc:
+                logger.debug("Phase3: profit mode params read failed — using module defaults: %s", _exc)
+
         ai = self._get_ai_engine()
 
         candidates = []   # List[AIEngineSignal | _AISignal]
         scored = 0
         blocked = 0
+
+        # Level 3 top-volume fallback: track the best symbol by recent average volume.
+        _best_volume_symbol: Optional[str] = None
+        _best_volume_side: str = "long"
+        _best_volume_entry_type: str = "swing"
+        _best_volume: float = -1.0
 
         # Initialise the per-cycle score distribution debugger snapshot.
         _sdd = _get_sdd() if (_SDD_AVAILABLE and _get_sdd is not None) else None
@@ -482,6 +542,16 @@ class NijaCoreLoop:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "data_insufficient")
                     continue
+
+                # Track top-volume symbol for Level 3 fallback (before filter checks)
+                if _volume_fallback_enabled and "volume" in df.columns:
+                    try:
+                        avg_vol = float(df["volume"].tail(20).mean())
+                        if avg_vol > _best_volume:
+                            _best_volume = avg_vol
+                            _best_volume_symbol = symbol
+                    except Exception:
+                        pass
 
                 indicators = self.apex.calculate_indicators(df)
                 if not indicators:
@@ -512,6 +582,11 @@ class NijaCoreLoop:
                     if hasattr(self.apex, "_get_broker_name")
                     else "coinbase"
                 )
+
+                # Update top-volume side/entry_type to match the best symbol's context
+                if _volume_fallback_enabled and symbol == _best_volume_symbol:
+                    _best_volume_side = side
+                    _best_volume_entry_type = entry_type
 
                 if ai is not None:
                     sig = ai.evaluate_symbol(
@@ -548,11 +623,38 @@ class NijaCoreLoop:
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "exception")
 
+        # ── Level 3 top-volume fallback: inject candidate if none found ───
+        # When profit mode Level 3 is active and no symbol scored above the
+        # floor, synthesise a micro-trade candidate for the highest-volume
+        # market that was scanned this cycle.
+        if not candidates and _volume_fallback_enabled and _best_volume_symbol and _AISignal is not None:
+            logger.warning(
+                "💰 PROFIT MODE L3 — no candidates; injecting top-volume fallback: "
+                "%s (avg_vol=%.0f)",
+                _best_volume_symbol, _best_volume,
+            )
+            fallback_sig = _AISignal(
+                symbol=_best_volume_symbol,
+                side=_best_volume_side,
+                composite_score=_effective_hard_floor,  # pin to effective floor
+                position_multiplier=0.5,                # conservative micro-trade size
+                entry_type=_best_volume_entry_type,
+                threshold_used=_effective_hard_floor,
+                reason="profit_mode_l3_volume_fallback",
+                metadata={
+                    "profit_mode_level": _pmc_level,
+                    "volume_fallback": True,
+                    "avg_volume": _best_volume,
+                    "bypass_low_quality": True,
+                },
+            )
+            candidates.append(fallback_sig)
+
         # ── Rank and select top-N ─────────────────────────────────────────
         if not candidates:
             logger.info(
                 "🔍 Core loop Phase 3: scored=%d symbols, no candidates above floor=%.0f",
-                scored, MIN_SCORE_HARD_FLOOR,
+                scored, _effective_hard_floor,
             )
             if _sdd is not None:
                 _sdd.emit_histogram(
@@ -574,21 +676,27 @@ class NijaCoreLoop:
         # ── Progressive relaxation: activate after too many zero-signal cycles ──
         # Instead of a flat score boost, the effective floor is reduced each 5-cycle
         # step so quality degrades gradually rather than collapsing all at once.
-        _relaxation = _get_relaxation_factor(zero_signal_streak)
+        # The streak threshold is sourced from profit mode so Level 2/3 trigger
+        # relaxation sooner.
+        _relaxation = _get_relaxation_factor_with_threshold(
+            zero_signal_streak, _effective_streak_threshold
+        )
         fallback_active = _relaxation > 0.0
         if fallback_active:
-            _step = _get_relaxation_step(zero_signal_streak)
-            _effective_floor = MIN_SCORE_HARD_FLOOR * (1.0 - _relaxation)
+            _step = _get_relaxation_step_with_threshold(
+                zero_signal_streak, _effective_streak_threshold
+            )
+            _relaxed_floor = _effective_hard_floor * (1.0 - _relaxation)
             logger.warning(
                 "⚡ PROGRESSIVE RELAXATION step=%d/%d "
                 "(streak=%d factor=%.1f floor=%.1f→%.1f) — top-%d eligible",
                 _step, MAX_RELAXATION_STEPS,
                 zero_signal_streak, _relaxation,
-                MIN_SCORE_HARD_FLOOR, _effective_floor,
+                _effective_hard_floor, _relaxed_floor,
                 _SNIPER_TOP_N_DEFAULT,
             )
             # Filter to candidates above the relaxed floor, then take top-N
-            eligible = [s for s in selected if s.composite_score >= _effective_floor]
+            eligible = [s for s in selected if s.composite_score >= _relaxed_floor]
             selected = eligible[:_SNIPER_TOP_N_DEFAULT]
             for sig in selected:
                 sig.metadata["bypass_low_quality"] = True
@@ -596,12 +704,9 @@ class NijaCoreLoop:
                 sig.metadata["relaxation_step"] = _step
                 sig.metadata["fallback_streak"] = zero_signal_streak
 
-        # ── Hard bypass: 40+ consecutive zero-signal cycles → accept best available ──
-        # When the progressive relaxation has still not produced entries after a
-        # prolonged drought, skip all quality floors and force the top-ranked
-        # candidate regardless of score.  This guarantees no dead zones and keeps
-        # the compounding engine running continuously.
-        if zero_signal_streak >= HARD_BYPASS_STREAK_THRESHOLD:
+        # ── Hard bypass: consecutive zero-signal cycles → accept best available ──
+        # Threshold uses profit mode value so Level 2/3 bypass sooner.
+        if zero_signal_streak >= _effective_bypass_threshold:
             if not selected and candidates:
                 # Quality floors filtered everything — pick the single best candidate
                 top_candidate = max(candidates, key=lambda s: s.composite_score)
@@ -609,7 +714,7 @@ class NijaCoreLoop:
                 logger.warning(
                     "🚨 HARD BYPASS activated (streak=%d ≥ %d) — quality floor "
                     "bypassed, forcing top candidate %s (score=%.1f)",
-                    zero_signal_streak, HARD_BYPASS_STREAK_THRESHOLD,
+                    zero_signal_streak, _effective_bypass_threshold,
                     top_candidate.symbol, top_candidate.composite_score,
                 )
             fallback_active = True  # ensure forced-entry path runs for selected signals
