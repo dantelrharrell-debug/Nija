@@ -195,9 +195,10 @@ class AITradeQualityFilter:
         self.config = config or {}
         
         # Execution threshold — env AI_MIN_WIN_PROB overrides config key
-        _default_win_prob = self.config.get('min_win_probability', 0.55)
-        self.min_win_probability = float(os.getenv('AI_MIN_WIN_PROB', str(_default_win_prob)))  # default 55%
-        self.min_model_confidence = self.config.get('min_model_confidence', 0.70)  # 70%
+        _default_win_prob = self.config.get('min_win_probability', 0.48)
+        self.min_win_probability = float(os.getenv('AI_MIN_WIN_PROB', str(_default_win_prob)))  # default 48%
+        _default_model_conf = self.config.get('min_model_confidence', 0.60)
+        self.min_model_confidence = float(os.getenv('AI_MIN_MODEL_CONF', str(_default_model_conf)))  # default 60%
         
         # Model parameters
         self.model = None
