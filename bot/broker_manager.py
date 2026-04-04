@@ -401,6 +401,21 @@ BROKER_MAX_CONSECUTIVE_ERRORS = 3
 # This ensures we never trade with stale or missing balance data
 BALANCE_FETCH_MAX_RETRIES = 3  # Exactly 3 retries as per capital protection requirements
 
+# Hard timeout (seconds) for Kraken trade-history fetches — applies to both
+# get_real_entry_price() and get_bulk_entry_prices().  If elapsed wall-clock
+# time exceeds this value no further retry/page attempts are started and the
+# function returns whatever it has (or None / {}).  Override via env var.
+_TRADE_HISTORY_TIMEOUT_SECONDS: int = int(os.environ.get('NIJA_TRADE_HISTORY_TIMEOUT', '8'))
+
+# TTL (seconds) for the bulk-entry-price cache stored on KrakenBroker.
+# Subsequent adoption cycles within this window skip the API call entirely.
+_BULK_PRICE_CACHE_TTL_SECONDS: int = int(os.environ.get('NIJA_BULK_PRICE_CACHE_TTL', '300'))
+
+# TTL (seconds) for KrakenBroker.get_account_balance() — if the last
+# successful fetch is younger than this value the cached balance is returned
+# immediately, avoiding a BlockingIO Kraken API round-trip every cycle.
+_KRAKEN_BALANCE_CACHE_TTL_SECONDS: int = int(os.environ.get('NIJA_KRAKEN_BALANCE_CACHE_TTL', '300'))
+
 # Kraken startup delay (Jan 17, 2026) - Critical fix for nonce collisions
 # This delay is applied before the first Kraken API call to ensure:
 # - Nonce file exists and is initialized properly
@@ -6047,6 +6062,16 @@ class KrakenBroker(BaseBroker):
         self._entry_price_cache: dict = {}
         self._entry_price_cache_lock = threading.Lock()
 
+        # Bulk entry-price result cache — avoids re-fetching TradesHistory on
+        # every adoption cycle when positions haven't changed.
+        # Populated by get_bulk_entry_prices(); expires after _BULK_PRICE_CACHE_TTL_SECONDS.
+        self._bulk_entry_prices_cache: Dict[str, float] = {}
+        self._bulk_entry_prices_cache_time: Optional[float] = None
+
+        # Kraken balance cache TTL — get_account_balance() returns the in-memory
+        # value without an API call when the cache is younger than this value.
+        self._kraken_balance_cache_ttl: int = _KRAKEN_BALANCE_CACHE_TTL_SECONDS
+
         # Short-lived price cache for get_current_price().
         # Stores {symbol: {"price": float, "ts": float}} where ts = time.monotonic().
         # Used as a fallback when a live ticker fetch times out — if the cached
@@ -7222,6 +7247,18 @@ class KrakenBroker(BaseBroker):
                     self._is_available = False
                     self.kraken_health = "ERROR"
                     return 0.0
+
+            # ── TTL cache check: skip API call if balance was recently fetched ──────
+            if (self._last_known_balance is not None
+                    and self._balance_last_updated is not None
+                    and (time.time() - self._balance_last_updated) < self._kraken_balance_cache_ttl):
+                _cache_age = time.time() - self._balance_last_updated
+                logger.debug(
+                    f"Kraken balance cache hit ({self.account_identifier}): "
+                    f"${self._last_known_balance:.2f} "
+                    f"(age {_cache_age:.0f}s / TTL {self._kraken_balance_cache_ttl}s)"
+                )
+                return self.balance_cache.get("kraken", self._last_known_balance)
 
             # Get account balance using serialized API call
             # Use MONITORING category for balance checks (conservative rate limiting)
@@ -8526,7 +8563,15 @@ class KrakenBroker(BaseBroker):
         match_pairs.add(f"{symbol_currency}/USDT")
 
         last_exc = None
+        _deadline = time.monotonic() + _TRADE_HISTORY_TIMEOUT_SECONDS
         for attempt in range(3):
+            # Hard-stop: don't start a new attempt after the wall-clock deadline
+            if time.monotonic() > _deadline:
+                logger.warning(
+                    f"[EntryPrice] {symbol}: trade history deadline exceeded "
+                    f"({_TRADE_HISTORY_TIMEOUT_SECONDS}s) — skipping remaining retries"
+                )
+                break
             try:
                 history_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                 response = self._kraken_private_call('TradesHistory', category=history_category)
@@ -8620,6 +8665,20 @@ class KrakenBroker(BaseBroker):
         if not self.api or not symbols:
             return {}
 
+        # ── Bulk entry price cache (TTL) ──────────────────────────────────────
+        # Return the cached result when it is still fresh — this prevents a
+        # blocking TradesHistory API call on every adoption cycle.
+        if (self._bulk_entry_prices_cache
+                and self._bulk_entry_prices_cache_time is not None
+                and (time.time() - self._bulk_entry_prices_cache_time) < _BULK_PRICE_CACHE_TTL_SECONDS):
+            _cache_age = time.time() - self._bulk_entry_prices_cache_time
+            logger.debug(
+                f"   Bulk entry price cache hit "
+                f"({len(self._bulk_entry_prices_cache)} symbol(s), "
+                f"age {_cache_age:.0f}s / TTL {_BULK_PRICE_CACHE_TTL_SECONDS}s)"
+            )
+            return dict(self._bulk_entry_prices_cache)
+
         entry_prices: Dict[str, float] = {}
 
         try:
@@ -8655,11 +8714,20 @@ class KrakenBroker(BaseBroker):
             # all symbols or exhaust available history (up to MAX_PAGES × 50 trades).
             all_buy_trades: Dict[str, list] = {}   # symbol -> [(trade_time, price, vol)]
             history_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
-            MAX_PAGES = 20  # Up to 1 000 trades — enough for typical account history
+            MAX_PAGES = 5  # Cap at 250 trades — keeps the fetch within the hard timeout
             offset = 0
             total_trade_count = None  # filled from first response
+            _bulk_deadline = time.monotonic() + _TRADE_HISTORY_TIMEOUT_SECONDS
 
             for page in range(MAX_PAGES):
+                # Hard wall-clock deadline — don't start another page after timeout
+                if time.monotonic() > _bulk_deadline:
+                    logger.warning(
+                        f"   Bulk fetch: wall-clock deadline ({_TRADE_HISTORY_TIMEOUT_SECONDS}s) "
+                        f"exceeded after {page} page(s) — stopping early"
+                    )
+                    break
+
                 params = {'ofs': offset} if offset > 0 else {}
                 response = self._kraken_private_call('TradesHistory', params, category=history_category)
 
@@ -8726,6 +8794,11 @@ class KrakenBroker(BaseBroker):
                 f"   ✅ Bulk entry prices: {found_count}/{len(symbols)} found"
                 + (f", {missing_count} not found in trade history" if missing_count else "")
             )
+
+            # Persist results in the TTL cache so subsequent adoption cycles are instant
+            if entry_prices:
+                self._bulk_entry_prices_cache = dict(entry_prices)
+                self._bulk_entry_prices_cache_time = time.time()
 
         except Exception as e:
             logger.warning(f"   Bulk entry price fetch failed: {e}")
