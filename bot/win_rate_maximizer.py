@@ -103,10 +103,10 @@ DEFAULT_MAX_DRAWDOWN_PCT: float = 0.10       # 10 % from session peak
 # Layer 2 – Signal Quality
 # LOOSENED (Apr 2026): Lowered from 55 → 46 (~16%) to increase trade frequency.
 # A threshold of 55 was blocking too many B-grade setups in ranging/normal markets.
-# 40 still requires at least one confirming dimension while admitting more setups.
+# Lowered again 40 → 36 for flow mode: WMX was the final gate killing borderline setups.
 # Override at runtime with WMX_SIGNAL_THRESHOLD or NIJA_WMX_SIGNAL_THRESHOLD env variable.
 DEFAULT_SIGNAL_THRESHOLD: float = float(
-    os.getenv("NIJA_WMX_SIGNAL_THRESHOLD", os.getenv("WMX_SIGNAL_THRESHOLD", "40"))
+    os.getenv("NIJA_WMX_SIGNAL_THRESHOLD", os.getenv("WMX_SIGNAL_THRESHOLD", "36"))
 )
 
 # Layer 3 – Profit Consistency
