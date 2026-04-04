@@ -14235,6 +14235,17 @@ class TradingStrategy:
                                     except Exception as _hf_rec_err:
                                         logger.debug("HF scalp record_trade skipped for %s: %s", _ps_symbol, _hf_rec_err)
 
+                                # ── CEM: reset idle counter on confirmed execution ─────
+                                if (
+                                    CAPITAL_EFFICIENCY_MODE_AVAILABLE
+                                    and hasattr(self, 'capital_efficiency_mode')
+                                    and self.capital_efficiency_mode is not None
+                                ):
+                                    try:
+                                        self.capital_efficiency_mode.record_trade()
+                                    except Exception:
+                                        pass
+
                                 # 🎯 STABLE PROFIT MODE — register entry for daily trade count
                                 if (STABLE_PROFIT_MODE_AVAILABLE
                                         and hasattr(self, 'stable_profit_mode')
@@ -14398,6 +14409,19 @@ class TradingStrategy:
                             f"{_trades_executed_this_cycle} trade(s) executed this cycle"
                         )
 
+                        # CEM: if signals existed but nothing actually fired,
+                        # keep the idle counter climbing so idle boost can act.
+                        if (
+                            _trades_executed_this_cycle == 0
+                            and CAPITAL_EFFICIENCY_MODE_AVAILABLE
+                            and hasattr(self, 'capital_efficiency_mode')
+                            and self.capital_efficiency_mode is not None
+                        ):
+                            try:
+                                self.capital_efficiency_mode.record_no_trade()
+                            except Exception:
+                                pass
+
                     # ═══════════════════════════════════════════════════════
                     # MARKET REGIME CONTROLLER — post-scan evaluation
                     # ═══════════════════════════════════════════════════════
@@ -14523,16 +14547,8 @@ class TradingStrategy:
                                 self._zero_signal_streak,
                             )
                         self._zero_signal_streak = 0
-                        # CEM: reset idle counter when trades found
-                        if (
-                            CAPITAL_EFFICIENCY_MODE_AVAILABLE
-                            and hasattr(self, 'capital_efficiency_mode')
-                            and self.capital_efficiency_mode is not None
-                        ):
-                            try:
-                                self.capital_efficiency_mode.record_trade()
-                            except Exception:
-                                pass
+                        # CEM idle counter is managed at execution time (not here),
+                        # so finding signals alone does not reset it.
 
                 except Exception as e:
                     logger.error(f"Error during market scan: {e}", exc_info=True)
