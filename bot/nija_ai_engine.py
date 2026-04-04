@@ -369,6 +369,10 @@ class NijaAIEngine:
         self.threshold_ctrl = AdaptiveThresholdController()
         self._lock = threading.Lock()
 
+        # Instance-level score floor — mirrors module-level MIN_SCORE_ABSOLUTE
+        # but can be updated thread-safely via set_score_floor().
+        self._score_floor: float = MIN_SCORE_ABSOLUTE
+
         # Lazy-loaded component references (set on first use)
         self._enhanced_scorer = None
         self._entry_optimizer = None
@@ -424,6 +428,25 @@ class NijaAIEngine:
     # Public API
     # ------------------------------------------------------------------
 
+    def set_score_floor(self, value: float) -> None:
+        """
+        Override the composite-score floor used by this engine instance.
+
+        Allows the AggressionModeController to push a mode-specific floor
+        without restarting the process.  The new value is applied on the
+        next ``evaluate_symbol`` call.  Thread-safe.
+
+        Args:
+            value: New absolute score floor (0-100).  Clamped to [5.0, 95.0].
+        """
+        clamped = max(5.0, min(float(value), 95.0))
+        with self._lock:
+            self._score_floor = clamped
+        logger.info(
+            "🤖 NijaAIEngine score floor updated → _score_floor=%.1f",
+            clamped,
+        )
+
     def evaluate_symbol(
         self,
         df: pd.DataFrame,
@@ -457,7 +480,9 @@ class NijaAIEngine:
 
             # Apply self-adjusting threshold: win-rate feedback nudges the floor
             # ±8 pts in real-time to keep win rate in the 55–65% target band.
-            effective_floor = self.threshold_ctrl.get_effective_floor(MIN_SCORE_ABSOLUTE)
+            with self._lock:
+                score_floor = self._score_floor
+            effective_floor = self.threshold_ctrl.get_effective_floor(score_floor)
 
             if composite < effective_floor:
                 logger.debug(
@@ -677,7 +702,9 @@ class NijaAIEngine:
             adaptive_threshold = adjusted_floor
         else:
             # Relax — take whatever is above the hard minimum (also delta-adjusted)
-            adaptive_threshold = max(5.0, MIN_SCORE_ABSOLUTE + delta)
+            with self._lock:
+                score_floor = self._score_floor
+            adaptive_threshold = max(5.0, score_floor + delta)
 
         logger.info(
             f"🎯 Adaptive Threshold → base={base_threshold:.2f} "

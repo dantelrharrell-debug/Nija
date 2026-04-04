@@ -385,6 +385,23 @@ class WinRateMaximizer:
     # Public API
     # ------------------------------------------------------------------
 
+    def set_signal_threshold(self, value: float) -> None:
+        """
+        Update the Layer-2 signal quality threshold at runtime.
+
+        Allows the AggressionModeController to push the active mode's
+        wmx_signal_threshold without restarting the process.
+
+        Args:
+            value: New minimum signal score (0-100).  Clamped to [10.0, 100.0].
+        """
+        with self._lock:
+            self.signal_threshold = max(10.0, min(float(value), 100.0))
+        logger.info(
+            "✅ WinRateMaximizer signal threshold updated → %.1f",
+            self.signal_threshold,
+        )
+
     def approve_trade(
         self,
         symbol: str,

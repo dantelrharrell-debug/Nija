@@ -1,18 +1,29 @@
 """
 NIJA Aggression Mode Controller
 =================================
-User-configurable aggression modes: SAFE | BALANCED | AGGRESSIVE
+User-configurable aggression modes: SAFE | BALANCED | MODERATE | AGGRESSIVE
 
 Controls entry thresholds, position sizing, and trade frequency
 based on the operator's risk preference. Set via environment variable:
 
     AGGRESSION_MODE=SAFE       # Most selective — capital preservation
     AGGRESSION_MODE=BALANCED   # Balanced risk/reward
+    AGGRESSION_MODE=MODERATE   # Relaxed quality filter + lowered thresholds (between BALANCED and AGGRESSIVE)
     AGGRESSION_MODE=AGGRESSIVE # More trades, lower thresholds — "print money" (default)
 
 Each mode overlays a parameter delta on top of the base strategy
 thresholds, meaning it works alongside (not against) existing safety
 layers such as the sniper filter, drawdown circuit breaker, etc.
+
+Subsystem wiring
+----------------
+Calling ``apply_to_subsystems()`` (or ``set_mode()``) propagates the
+mode's quality-filter and scoring-threshold overrides into three
+live singletons:
+  • AITradeQualityFilter  — win-prob & model-confidence thresholds
+  • NijaAIEngine          — absolute composite-score floor
+  • AIEntryGate           — gate pass threshold (out of 9 pts)
+  • WinRateMaximizer      — Layer-2 signal quality threshold
 """
 
 from __future__ import annotations
@@ -33,6 +44,7 @@ logger = logging.getLogger("nija.aggression_mode_controller")
 class AggressionMode(Enum):
     SAFE = "SAFE"
     BALANCED = "BALANCED"
+    MODERATE = "MODERATE"
     AGGRESSIVE = "AGGRESSIVE"
 
 
@@ -90,6 +102,25 @@ class ModeProfile:
     # ── Emoji for logs ────────────────────────────────────────────────────────
     emoji: str
 
+    # ── Quality filter thresholds ─────────────────────────────────────────────
+    # Applied to AITradeQualityFilter via apply_to_subsystems().
+    # quality_filter_win_prob   — min ML-predicted win probability (0-1);
+    #                             also governs the heuristic fallback path.
+    # quality_filter_model_conf — min model confidence score (0-1).
+    quality_filter_win_prob: float
+    quality_filter_model_conf: float
+
+    # ── Scoring thresholds ────────────────────────────────────────────────────
+    # score_floor_absolute  — hard composite-score floor in NijaAIEngine
+    #                         (same scale as MIN_SCORE_ABSOLUTE, 0-100).
+    # gate_pass_threshold   — weighted gate pass bar in AIEntryGate
+    #                         (out of 9 total gate pts).
+    # wmx_signal_threshold  — Layer-2 signal quality floor in WinRateMaximizer
+    #                         (0-100 scale, 4-component score).
+    score_floor_absolute: float
+    gate_pass_threshold: float
+    wmx_signal_threshold: float
+
 
 # ---------------------------------------------------------------------------
 # Default profiles
@@ -111,6 +142,13 @@ SAFE_PROFILE = ModeProfile(
     regime_strict=True,
     mtf_required=True,
     emoji="🛡️",
+    # Quality filter — strict
+    quality_filter_win_prob=0.65,
+    quality_filter_model_conf=0.80,
+    # Scoring thresholds — tighter than defaults
+    score_floor_absolute=28.0,
+    gate_pass_threshold=4.0,
+    wmx_signal_threshold=60.0,
 )
 
 BALANCED_PROFILE = ModeProfile(
@@ -129,6 +167,38 @@ BALANCED_PROFILE = ModeProfile(
     regime_strict=False,
     mtf_required=False,
     emoji="⚖️",
+    # Quality filter — standard defaults
+    quality_filter_win_prob=0.55,
+    quality_filter_model_conf=0.70,
+    # Scoring thresholds — current system defaults
+    score_floor_absolute=20.0,
+    gate_pass_threshold=2.6,
+    wmx_signal_threshold=46.0,
+)
+
+MODERATE_PROFILE = ModeProfile(
+    mode=AggressionMode.MODERATE,
+    description="Moderate aggression — relaxed quality filter + lowered thresholds (between BALANCED and AGGRESSIVE)",
+    confidence_delta=-0.03,          # halfway between BALANCED (0.0) and AGGRESSIVE (-0.06)
+    signal_strength_multiplier=0.95,
+    position_size_multiplier=1.10,
+    max_position_pct=0.12,
+    max_concurrent_positions=7,
+    stop_loss_multiplier=1.08,
+    take_profit_multiplier=0.98,
+    risk_per_trade_pct=1.25,
+    min_trades_per_hour=0.55,
+    min_trades_per_day=12.0,
+    regime_strict=False,
+    mtf_required=False,
+    emoji="⚡",
+    # Quality filter — relaxed relative to BALANCED
+    quality_filter_win_prob=0.50,
+    quality_filter_model_conf=0.63,
+    # Scoring thresholds — lowered relative to BALANCED
+    score_floor_absolute=18.5,
+    gate_pass_threshold=2.4,
+    wmx_signal_threshold=42.0,
 )
 
 AGGRESSIVE_PROFILE = ModeProfile(
@@ -147,11 +217,19 @@ AGGRESSIVE_PROFILE = ModeProfile(
     regime_strict=False,
     mtf_required=False,
     emoji="🔥",
+    # Quality filter — most relaxed
+    quality_filter_win_prob=0.46,
+    quality_filter_model_conf=0.58,
+    # Scoring thresholds — most loosened
+    score_floor_absolute=17.0,
+    gate_pass_threshold=2.2,
+    wmx_signal_threshold=37.0,
 )
 
 _MODE_MAP: Dict[AggressionMode, ModeProfile] = {
     AggressionMode.SAFE: SAFE_PROFILE,
     AggressionMode.BALANCED: BALANCED_PROFILE,
+    AggressionMode.MODERATE: MODERATE_PROFILE,
     AggressionMode.AGGRESSIVE: AGGRESSIVE_PROFILE,
 }
 
@@ -175,6 +253,7 @@ class AggressionModeController:
             self._mode.value,
             self.profile.description,
         )
+        self.apply_to_subsystems()
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -212,6 +291,90 @@ class AggressionModeController:
                 "%s AggressionMode changed: %s → %s (%s)",
                 p.emoji, old.value, mode.value, p.description,
             )
+        self.apply_to_subsystems()
+
+    def apply_to_subsystems(self) -> None:
+        """
+        Push the active profile's quality-filter and scoring thresholds into
+        the live singletons that own them.
+
+        Safe to call at any time — each subsystem setter is idempotent and
+        logs its own update message.  ImportError / AttributeError (expected
+        when an optional module is absent) are silently skipped at DEBUG level.
+        Any other exception is logged at WARNING level since it likely indicates
+        a genuine bug in a loaded subsystem.
+        """
+        p = self.profile
+
+        self._wire_subsystem(
+            label="AITradeQualityFilter",
+            module_names=("ai_trade_quality_filter", "bot.ai_trade_quality_filter"),
+            getter_name="get_ai_trade_quality_filter",
+            action=lambda obj: obj.set_thresholds(
+                win_prob=p.quality_filter_win_prob,
+                model_conf=p.quality_filter_model_conf,
+            ),
+        )
+        self._wire_subsystem(
+            label="NijaAIEngine",
+            module_names=("nija_ai_engine", "bot.nija_ai_engine"),
+            getter_name="get_nija_ai_engine",
+            action=lambda obj: obj.set_score_floor(p.score_floor_absolute),
+        )
+        self._wire_subsystem(
+            label="AIEntryGate",
+            module_names=("ai_entry_gate", "bot.ai_entry_gate"),
+            getter_name="set_gate_pass_threshold",
+            action=lambda fn: fn(p.gate_pass_threshold),
+            is_function=True,
+        )
+        self._wire_subsystem(
+            label="WinRateMaximizer",
+            module_names=("win_rate_maximizer", "bot.win_rate_maximizer"),
+            getter_name="get_win_rate_maximizer",
+            action=lambda obj: obj.set_signal_threshold(p.wmx_signal_threshold),
+        )
+
+        logger.info(
+            "%s apply_to_subsystems: win_prob=%.2f model_conf=%.2f "
+            "score_floor=%.1f gate_thr=%.1f wmx_thr=%.1f",
+            p.emoji,
+            p.quality_filter_win_prob,
+            p.quality_filter_model_conf,
+            p.score_floor_absolute,
+            p.gate_pass_threshold,
+            p.wmx_signal_threshold,
+        )
+
+    @staticmethod
+    def _wire_subsystem(
+        label: str,
+        module_names: tuple,
+        getter_name: str,
+        action,
+        is_function: bool = False,
+    ) -> None:
+        """
+        Import ``getter_name`` from the first available module in *module_names*
+        and invoke *action* on the result.
+
+        ImportError / AttributeError are logged at DEBUG (expected when an
+        optional module is absent).  Any other exception is logged at WARNING
+        since it likely indicates a genuine bug in a loaded subsystem.
+        """
+        import importlib
+        for mod_name in module_names:
+            try:
+                mod = importlib.import_module(mod_name)
+                target = getattr(mod, getter_name)
+                obj = target if is_function else target()
+                action(obj)
+                return
+            except (ImportError, AttributeError) as exc:
+                logger.debug("apply_to_subsystems: %s skip (%s: %s)", label, type(exc).__name__, exc)
+            except Exception as exc:
+                logger.warning("apply_to_subsystems: %s error — %s: %s", label, type(exc).__name__, exc)
+                return
 
     def apply_confidence(self, raw_confidence: float) -> float:
         """
@@ -253,6 +416,11 @@ class AggressionModeController:
             "min_trades_per_day": p.min_trades_per_day,
             "regime_strict": p.regime_strict,
             "mtf_required": p.mtf_required,
+            "quality_filter_win_prob": p.quality_filter_win_prob,
+            "quality_filter_model_conf": p.quality_filter_model_conf,
+            "score_floor_absolute": p.score_floor_absolute,
+            "gate_pass_threshold": p.gate_pass_threshold,
+            "wmx_signal_threshold": p.wmx_signal_threshold,
         }
 
 
