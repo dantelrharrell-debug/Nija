@@ -96,10 +96,15 @@ HARD_BYPASS_STREAK_THRESHOLD: int = 40
 # Set to True externally to force the top-scored candidate in the very next
 # scan cycle, bypassing all quality filters.  The flag is automatically reset
 # to False after a single cycle so exactly one trade is forced.
-# Example:
-#   from bot.nija_core_loop import FORCE_NEXT_CYCLE  # read
-#   import bot.nija_core_loop as _cl; _cl.FORCE_NEXT_CYCLE = True  # set
+# Use module-level access for both reading and writing:
+#   import bot.nija_core_loop as _cl
+#   _cl.FORCE_NEXT_CYCLE = True   # force the next scan cycle
+#   print(_cl.FORCE_NEXT_CYCLE)   # check current state
+# Thread-safety note: the read-and-reset operation inside _phase3_scan_and_enter
+# is protected by _FORCE_LOCK to prevent duplicate forced entries under
+# concurrent callers.
 FORCE_NEXT_CYCLE: bool = False
+_FORCE_LOCK = threading.Lock()
 
 
 def _get_relaxation_factor(streak: int) -> float:
@@ -616,9 +621,13 @@ class NijaCoreLoop:
         # When FORCE_NEXT_CYCLE is True the top-scored candidate is selected
         # unconditionally, all quality filters are bypassed, and the flag is
         # immediately reset so exactly one cycle is forced.
+        # _FORCE_LOCK ensures the read-and-reset is atomic under concurrent callers.
         global FORCE_NEXT_CYCLE
-        if FORCE_NEXT_CYCLE and candidates:
-            FORCE_NEXT_CYCLE = False  # reset before side-effects — one-shot only
+        with _FORCE_LOCK:
+            _force_this_cycle = FORCE_NEXT_CYCLE
+            if _force_this_cycle:
+                FORCE_NEXT_CYCLE = False  # reset atomically — one-shot only
+        if _force_this_cycle and candidates:
             top_candidate = max(candidates, key=lambda s: s.composite_score)
             top_candidate.metadata["bypass_quality_filter"] = True
             top_candidate.metadata["hard_bypass_streak"] = zero_signal_streak
