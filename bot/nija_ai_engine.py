@@ -88,12 +88,12 @@ except ImportError:
 # is_elite / is_good properties on AIEngineSignal.
 #
 #   NIJA_SCORE_FLOOR_ELITE  75  — 1.5× size  (strong conviction)
-#   NIJA_SCORE_FLOOR_GOOD   34  — 1.0× size  (standard entry)
-#   NIJA_SCORE_FLOOR_FAIR   25  — 0.75× size (borderline; just below GOOD)
+#   NIJA_SCORE_FLOOR_GOOD   35  — 1.0× size  (standard entry)
+#   NIJA_SCORE_FLOOR_FAIR   30  — 0.75× size (borderline; just below GOOD)
 #   TIER_FLOOR              17  — 0.5× size  (fallback, top-N only)
 TIER_ELITE: float = float(os.getenv("NIJA_SCORE_FLOOR_ELITE", "75.0"))   # 1.5× position size
-TIER_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "34.0"))   # 1.0× position size
-TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "25.0"))   # 0.75× position size
+TIER_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "35.0"))   # 1.0× position size
+TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "30.0"))   # 0.75× position size
 TIER_FLOOR: float = 17.0   # hard internal floor — not user-tunable
 
 # Composite score blend weights (must sum to 1.0)
