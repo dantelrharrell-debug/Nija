@@ -15179,6 +15179,22 @@ class TradingStrategy:
             except Exception as _pmo_rec_err:
                 logger.debug("ProfitModeOptimizer record_trade_outcome skipped for %s: %s", symbol, _pmo_rec_err)
 
+        # 💰 PROFIT MODE CONTROLLER — PnL-aware mode switching
+        # Feeds win/loss outcome so the controller auto-adjusts the active
+        # profit mode level (losing streak → Mode 1, winning streak → Mode 2/3).
+        try:
+            from profit_mode_controller import get_profit_mode_controller as _get_pmc_rto  # type: ignore
+        except ImportError:
+            try:
+                from bot.profit_mode_controller import get_profit_mode_controller as _get_pmc_rto  # type: ignore
+            except ImportError:
+                _get_pmc_rto = None  # type: ignore
+        if _get_pmc_rto is not None:
+            try:
+                _get_pmc_rto().record_trade_outcome(is_win=is_win)
+            except Exception as _pmc_rto_err:
+                logger.debug("ProfitModeController record_trade_outcome skipped for %s: %s", symbol, _pmc_rto_err)
+
         if not self.advanced_manager:
             return
 
