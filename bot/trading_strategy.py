@@ -10909,6 +10909,17 @@ class TradingStrategy:
                                         symbol, _aks_feed_err,
                                     )
 
+                            # ── MARKET FILTER BYPASS ──────────────────────────────────────────
+                            # After 3+ consecutive zero-signal cycles the bot softens all market
+                            # filters so at least the best available candidate can be considered.
+                            _bypass_market_filter: bool = self._zero_signal_streak >= 3
+                            if _bypass_market_filter:
+                                logger.info(
+                                    "   ⚡ Market filter bypass ACTIVE "
+                                    "(zero_signal_streak=%d ≥ 3) — skipping quality/readiness/structure/kill-bad checks",
+                                    self._zero_signal_streak,
+                                )
+
                             # FIX #4: PAIR QUALITY FILTER - Check spread, volume, and ATR before analyzing
                             # Only run if check_pair_quality is available (imported at module level)
                             if check_pair_quality is not None:
@@ -10970,7 +10981,7 @@ class TradingStrategy:
                                         disabled_pairs=DISABLED_PAIRS
                                     )
 
-                                    if not quality_check['quality_acceptable']:
+                                    if not _bypass_market_filter and not quality_check['quality_acceptable']:
                                         reasons = ', '.join(quality_check['reasons_failed'])
                                         logger.debug(f"   ⛔ QUALITY FILTER: {symbol} failed - {reasons}")
                                         filter_stats['market_filter'] += 1
@@ -11026,7 +11037,7 @@ class TradingStrategy:
                                     )
                                     
                                     # Block entries in IDLE mode
-                                    if mode == MarketMode.IDLE:
+                                    if not _bypass_market_filter and mode == MarketMode.IDLE:
                                         logger.debug(f"   ⏸️  {symbol}: IDLE MODE - {details['message']}")
                                         filter_stats['market_filter'] += 1
                                         continue
@@ -11044,7 +11055,7 @@ class TradingStrategy:
                             if MARKET_STRUCTURE_FILTER_AVAILABLE and _structure_valid is not None:
                                 try:
                                     _symbol_structure_passed = _structure_valid(df)
-                                    if not _symbol_structure_passed:
+                                    if not _bypass_market_filter and not _symbol_structure_passed:
                                         logger.debug(
                                             f"   ⛔ {symbol}: Market structure filter blocked entry "
                                             f"(HH/HL trend, volume expansion, or RSI momentum not confirmed)"
@@ -11115,7 +11126,7 @@ class TradingStrategy:
                                 and self.kill_bad_symbols is not None
                             ):
                                 try:
-                                    if self.kill_bad_symbols.should_skip(symbol):
+                                    if not _bypass_market_filter and self.kill_bad_symbols.should_skip(symbol):
                                         _kbs_wr = self.kill_bad_symbols.get_win_rate(symbol)
                                         logger.info(
                                             "   KillBadSymbols: skipping %s "
