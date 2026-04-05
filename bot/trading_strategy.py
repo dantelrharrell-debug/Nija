@@ -1897,7 +1897,7 @@ MAX_CYCLE_SECONDS = 900  # Hard cap on total cycle duration (seconds; raised fro
 # Separate cap for the scan portion only (measured from just before the scan loop).
 # This prevents pre-scan overhead (balance fetch, position management) from eating
 # into the scan budget and triggering 0-market cycles.
-MAX_SCAN_SECONDS = 120   # Max seconds allowed for the market scan loop itself
+MAX_SCAN_SECONDS = 210   # Max seconds allowed for the market scan loop itself (raised from 120 → 210)
 # Hard cap on position-analysis time (the pre-scan phase).
 # pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected; even with the 15s
 # per-call thread timeout each position costs up to 15s.  With this guard, the
@@ -10909,6 +10909,36 @@ class TradingStrategy:
                                         symbol, _aks_feed_err,
                                     )
 
+                            # ── MARKET FILTER BYPASS ──────────────────────────────────────────
+                            # hard_bypass_triggered fires when the bot is in forced-entry mode:
+                            #   • First-trade force (first-trade force timeout elapsed, no trade yet)
+                            #   • B-grade fallback  (FORCED_ENTRY_FALLBACK_CYCLES dry cycles)
+                            # Either condition means we must get a trade through — market filters
+                            # must not block the pipeline at this point.
+                            _hard_bypass_triggered: bool = (
+                                (not self._first_trade_executed and self._first_trade_force_active)
+                                or self._zero_signal_streak >= FORCED_ENTRY_FALLBACK_CYCLES
+                            )
+                            # Softer bypass: 3+ dry cycles also relaxes filters (score-ranking
+                            # will still prefer the highest-quality setup that passes).
+                            _bypass_market_filter: bool = _hard_bypass_triggered or self._zero_signal_streak >= 3
+                            if _hard_bypass_triggered:
+                                _hb_reason = (
+                                    "first-trade-force"
+                                    if (not self._first_trade_executed and self._first_trade_force_active)
+                                    else f"b-grade-fallback(streak={self._zero_signal_streak})"
+                                )
+                                logger.info(
+                                    "   ⚡ HARD BYPASS triggered (%s) — market filters skipped early in pipeline",
+                                    _hb_reason,
+                                )
+                            elif _bypass_market_filter:
+                                logger.info(
+                                    "   ⚡ Market filter bypass ACTIVE "
+                                    "(zero_signal_streak=%d ≥ 3) — skipping quality/readiness/structure/kill-bad checks",
+                                    self._zero_signal_streak,
+                                )
+
                             # FIX #4: PAIR QUALITY FILTER - Check spread, volume, and ATR before analyzing
                             # Only run if check_pair_quality is available (imported at module level)
                             if check_pair_quality is not None:
@@ -10970,7 +11000,7 @@ class TradingStrategy:
                                         disabled_pairs=DISABLED_PAIRS
                                     )
 
-                                    if not quality_check['quality_acceptable']:
+                                    if not _bypass_market_filter and not quality_check['quality_acceptable']:
                                         reasons = ', '.join(quality_check['reasons_failed'])
                                         logger.debug(f"   ⛔ QUALITY FILTER: {symbol} failed - {reasons}")
                                         filter_stats['market_filter'] += 1
@@ -11026,7 +11056,7 @@ class TradingStrategy:
                                     )
                                     
                                     # Block entries in IDLE mode
-                                    if mode == MarketMode.IDLE:
+                                    if not _bypass_market_filter and mode == MarketMode.IDLE:
                                         logger.debug(f"   ⏸️  {symbol}: IDLE MODE - {details['message']}")
                                         filter_stats['market_filter'] += 1
                                         continue
@@ -11044,7 +11074,7 @@ class TradingStrategy:
                             if MARKET_STRUCTURE_FILTER_AVAILABLE and _structure_valid is not None:
                                 try:
                                     _symbol_structure_passed = _structure_valid(df)
-                                    if not _symbol_structure_passed:
+                                    if not _bypass_market_filter and not _symbol_structure_passed:
                                         logger.debug(
                                             f"   ⛔ {symbol}: Market structure filter blocked entry "
                                             f"(HH/HL trend, volume expansion, or RSI momentum not confirmed)"
@@ -11115,7 +11145,7 @@ class TradingStrategy:
                                 and self.kill_bad_symbols is not None
                             ):
                                 try:
-                                    if self.kill_bad_symbols.should_skip(symbol):
+                                    if not _bypass_market_filter and self.kill_bad_symbols.should_skip(symbol):
                                         _kbs_wr = self.kill_bad_symbols.get_win_rate(symbol)
                                         logger.info(
                                             "   KillBadSymbols: skipping %s "
