@@ -2511,15 +2511,14 @@ except ValueError:
 # After this many consecutive zero-signal cycles (regardless of first-trade
 # state), the bot enters "B-grade" fallback mode: the sniper-filter confidence
 # threshold is lowered by FORCED_ENTRY_CONFIDENCE_DELTA so that slightly weaker
-# but still viable setups can trigger an entry.  Raised from 3 → 6 so the
-# fallback only activates after a genuine ~15-minute drought (at 2.5 min/cycle),
-# not after a brief quiet patch that does not imply the filters are too strict.
+# but still viable setups can trigger an entry.  Lowered from 8 → 5 so that
+# even with imperfect/interrupted cycles trades will still happen (~12.5 min).
 # Overridable via FORCED_ENTRY_FALLBACK_CYCLES env var.
 try:
-    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '8'))
+    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '5'))
 except ValueError as _e:
-    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 8", _e)
-    FORCED_ENTRY_FALLBACK_CYCLES = 8
+    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 5", _e)
+    FORCED_ENTRY_FALLBACK_CYCLES = 5
 
 # How much to raise the effective sniper-filter confidence in fallback mode.
 # Increased from 0.07 → 0.12 so fallback actually triggers trades, not just "almost trades".

@@ -90,9 +90,8 @@ _RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.10, 0.15, 0.20)
 # all quality floors are ignored and the top-ranked available candidate is
 # accepted unconditionally.  This guarantees no dead zones during prolonged
 # market droughts while compounding stays continuous.
-# Lowered 40 → 10 → 8 to align with the zero_signal_streak >= 8 force-accept
-# rule (balanced aggression config).
-HARD_BYPASS_STREAK_THRESHOLD: int = 8
+# Lowered 40 → 10 → 8 → 5 to ensure trades happen even with imperfect cycles.
+HARD_BYPASS_STREAK_THRESHOLD: int = 5
 
 # One-shot manual forced-entry flag.
 # Set to True externally to force the top-scored candidate in the very next

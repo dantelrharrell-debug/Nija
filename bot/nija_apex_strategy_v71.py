@@ -2399,9 +2399,26 @@ class NIJAApexStrategyV71:
                                 volume_gate_multiplier=_gate_vol_mult_l,
                             )
                             if not _gate_result_l.passed:
-                                logger.debug(
-                                    "   🚦 %s: AI gate blocked LONG — %s",
-                                    symbol, _gate_result_l.reason,
+                                _gate_score = _gate_result_l.gates.get("gate1_score")
+                                _gate_volume = _gate_result_l.gates.get("gate2_volume")
+                                _gate_spread = _gate_result_l.gates.get("gate4_spread")
+                                _score_detail = (
+                                    "%.1f < %.1f" % (_gate_score.value, _gate_score.threshold)
+                                    if _gate_score else "n/a"
+                                )
+                                logger.warning(
+                                    "❌ ENTRY REJECTED: %s LONG | "
+                                    "score=%.1f (gate1=%s) | "
+                                    "liquidity=%s | spread=%s | "
+                                    "gate_score=%d/%d | %s",
+                                    symbol,
+                                    float(score),
+                                    _score_detail,
+                                    ("pass" if _gate_volume and _gate_volume.passed else "fail"),
+                                    ("pass" if _gate_spread and _gate_spread.passed else "fail"),
+                                    _gate_result_l.gate_score,
+                                    _gate_result_l.gate_max,
+                                    _gate_result_l.reason,
                                 )
                                 return {'action': 'hold', 'reason': _gate_result_l.reason}
                         except Exception as _gate_l_err:
@@ -2822,9 +2839,26 @@ class NIJAApexStrategyV71:
                                 volume_gate_multiplier=_gate_vol_mult_s,
                             )
                             if not _gate_result_s.passed:
-                                logger.debug(
-                                    "   🚦 %s: AI gate blocked SHORT — %s",
-                                    symbol, _gate_result_s.reason,
+                                _gate_score_short = _gate_result_s.gates.get("gate1_score")
+                                _gate_volume_short = _gate_result_s.gates.get("gate2_volume")
+                                _gate_spread_short = _gate_result_s.gates.get("gate4_spread")
+                                _score_detail_short = (
+                                    "%.1f < %.1f" % (_gate_score_short.value, _gate_score_short.threshold)
+                                    if _gate_score_short else "n/a"
+                                )
+                                logger.warning(
+                                    "❌ ENTRY REJECTED: %s SHORT | "
+                                    "score=%.1f (gate1=%s) | "
+                                    "liquidity=%s | spread=%s | "
+                                    "gate_score=%d/%d | %s",
+                                    symbol,
+                                    float(score),
+                                    _score_detail_short,
+                                    ("pass" if _gate_volume_short and _gate_volume_short.passed else "fail"),
+                                    ("pass" if _gate_spread_short and _gate_spread_short.passed else "fail"),
+                                    _gate_result_s.gate_score,
+                                    _gate_result_s.gate_max,
+                                    _gate_result_s.reason,
                                 )
                                 return {'action': 'hold', 'reason': _gate_result_s.reason}
                         except Exception as _gate_s_err:
