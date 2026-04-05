@@ -10740,8 +10740,7 @@ class TradingStrategy:
                                     continue
                                 # Streak is high — allow through, scoring will penalise rank
                                 logger.debug(
-                                    f"   ⚡ {symbol}: low-liquidity allowed (dry streak=%d ≥ %d)",
-                                    self._zero_signal_streak, FORCED_ENTRY_FALLBACK_CYCLES,
+                                    f"   ⚡ {symbol}: low-liquidity allowed (dry streak={self._zero_signal_streak} ≥ {FORCED_ENTRY_FALLBACK_CYCLES})",
                                 )
 
                             # WHITELIST CHECK - Only trade whitelisted symbols if whitelist is enabled
