@@ -10910,10 +10910,29 @@ class TradingStrategy:
                                     )
 
                             # ── MARKET FILTER BYPASS ──────────────────────────────────────────
-                            # After 3+ consecutive zero-signal cycles the bot softens all market
-                            # filters so at least the best available candidate can be considered.
-                            _bypass_market_filter: bool = self._zero_signal_streak >= 3
-                            if _bypass_market_filter:
+                            # hard_bypass_triggered fires when the bot is in forced-entry mode:
+                            #   • First-trade force (first-trade force timeout elapsed, no trade yet)
+                            #   • B-grade fallback  (FORCED_ENTRY_FALLBACK_CYCLES dry cycles)
+                            # Either condition means we must get a trade through — market filters
+                            # must not block the pipeline at this point.
+                            _hard_bypass_triggered: bool = (
+                                (not self._first_trade_executed and self._first_trade_force_active)
+                                or self._zero_signal_streak >= FORCED_ENTRY_FALLBACK_CYCLES
+                            )
+                            # Softer bypass: 3+ dry cycles also relaxes filters (score-ranking
+                            # will still prefer the highest-quality setup that passes).
+                            _bypass_market_filter: bool = _hard_bypass_triggered or self._zero_signal_streak >= 3
+                            if _hard_bypass_triggered:
+                                _hb_reason = (
+                                    "first-trade-force"
+                                    if (not self._first_trade_executed and self._first_trade_force_active)
+                                    else f"b-grade-fallback(streak={self._zero_signal_streak})"
+                                )
+                                logger.info(
+                                    "   ⚡ HARD BYPASS triggered (%s) — market filters skipped early in pipeline",
+                                    _hb_reason,
+                                )
+                            elif _bypass_market_filter:
                                 logger.info(
                                     "   ⚡ Market filter bypass ACTIVE "
                                     "(zero_signal_streak=%d ≥ 3) — skipping quality/readiness/structure/kill-bad checks",
