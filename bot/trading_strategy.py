@@ -1897,7 +1897,7 @@ MAX_CYCLE_SECONDS = 900  # Hard cap on total cycle duration (seconds; raised fro
 # Separate cap for the scan portion only (measured from just before the scan loop).
 # This prevents pre-scan overhead (balance fetch, position management) from eating
 # into the scan budget and triggering 0-market cycles.
-MAX_SCAN_SECONDS = 120   # Max seconds allowed for the market scan loop itself
+MAX_SCAN_SECONDS = 210   # Max seconds allowed for the market scan loop itself (raised from 120 → 210)
 # Hard cap on position-analysis time (the pre-scan phase).
 # pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected; even with the 15s
 # per-call thread timeout each position costs up to 15s.  With this guard, the
