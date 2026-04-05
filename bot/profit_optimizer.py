@@ -122,7 +122,7 @@ class ConfidencePositionSizer:
 class RankerConfig:
     """Tunable parameters for :class:`TradeRankingEngine`."""
     window_size: int      = 50    # Rolling window of recent setup scores
-    pass_percentile: float = 0.65  # Top 35% of setups pass (balanced aggression: 0.55→0.65)
+    pass_percentile: float = 0.55  # Top 45% of setups pass (loosened 0.65→0.55 for small capital)
     min_window_fill: int  = 5     # Entries required before ranking is enforced
 
 

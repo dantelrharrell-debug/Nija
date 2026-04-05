@@ -1432,7 +1432,7 @@ class CoinbaseBroker(BaseBroker):
                     delay = min(base_delay * (1.5 ** attempt), 20.0)  # retry 1: 5s, retry 2: 7.5s (capped at 20s)
                     error_type = "Connection error"
                 elif is_403_error:
-                    delay = min(base_delay * (3 ** attempt), 60.0)   # retry 1: 5s, retry 2: 15s (capped at 60s)
+                    delay = min(base_delay * (3 ** attempt), 30.0)   # retry 1: 5s, retry 2: 15s (capped at 30s)
                     error_type = "Rate limit (403)"
                 else:
                     delay = min(base_delay * (2 ** attempt), 30.0)   # retry 1: 5s, retry 2: 10s (capped at 30s)
