@@ -2557,7 +2557,7 @@ FIRST_TRADE_FORCE_CONFIDENCE_CAP = 0.25         # Max confidence boost allowed i
 # Feature 4 ($100→$1K accelerator mode):
 #   • For accounts in [ACCELERATOR_MIN_BALANCE, ACCELERATOR_MAX_BALANCE) that
 #     are NOT already in micro-cap compounding mode (which has its own sizing),
-#     position size is boosted to ACCELERATOR_POSITION_PCT of balance (25%)
+#     position size is boosted to ACCELERATOR_POSITION_PCT of balance (35%)
 #     instead of the default DYNAMIC_POSITION_SIZE_PCT (18%).
 #   • Micro-cap compounding mode takes precedence because it handles the
 #     $15–$500 range with its own optimised profit-target and stop-loss logic.
@@ -2573,10 +2573,10 @@ MICRO_CLEANUP_INTERVAL         = 3        # Cleanup every 3 cycles for micro acc
 MICRO_FREQ_BOOST_THRESHOLD     = 500.0    # Always use max batch scan below this balance
 ACCELERATOR_MIN_BALANCE        = 100.0    # Lower bound of $100→$1K accelerator range
 ACCELERATOR_MAX_BALANCE        = 1000.0   # Upper bound of $100→$1K accelerator range
-# NOTE: ACCELERATOR_POSITION_PCT is expressed as a percentage (e.g. 25.0 = 25%).
+# NOTE: ACCELERATOR_POSITION_PCT is expressed as a percentage (e.g. 35.0 = 35%).
 # DYNAMIC_POSITION_SIZE_PCT (used elsewhere) is a fraction (e.g. 0.18 = 18%).
 # get_accelerator_position_size_pct() always returns a percentage for consistency.
-ACCELERATOR_POSITION_PCT       = 25.0     # Position-size % in accelerator mode (vs 18% normal)
+ACCELERATOR_POSITION_PCT       = 35.0     # Position-size % in accelerator mode (vs 18% normal)
 
 
 def get_accelerator_position_size_pct(balance: float) -> float:
@@ -2584,11 +2584,11 @@ def get_accelerator_position_size_pct(balance: float) -> float:
 
     Both the in-range return value (``ACCELERATOR_POSITION_PCT``) and the
     out-of-range fallback (``DYNAMIC_POSITION_SIZE_PCT × 100``) are expressed as
-    **percentages** (e.g. 25.0 = 25%).  Multiply by ``account_balance / 100.0``
+    **percentages** (e.g. 35.0 = 35%).  Multiply by ``account_balance / 100.0``
     to obtain a dollar position size.
 
     Note: ``DYNAMIC_POSITION_SIZE_PCT`` is stored as a fraction (0.18) while
-    ``ACCELERATOR_POSITION_PCT`` is stored as a percentage (25.0).  This
+    ``ACCELERATOR_POSITION_PCT`` is stored as a percentage (35.0).  This
     function normalises both to percentages so callers always receive the same
     unit regardless of which branch executes.
 
@@ -2596,7 +2596,7 @@ def get_accelerator_position_size_pct(balance: float) -> float:
         balance: Current account balance in USD.
 
     Returns:
-        Position-size percentage (e.g. 25.0 for 25%).
+        Position-size percentage (e.g. 35.0 for 35%).
     """
     if ACCELERATOR_MIN_BALANCE <= balance < ACCELERATOR_MAX_BALANCE:
         return ACCELERATOR_POSITION_PCT
