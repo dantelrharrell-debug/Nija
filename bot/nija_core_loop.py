@@ -65,15 +65,14 @@ MAX_ENTRIES_PER_CYCLE = 3
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
-# Lowered 25.0 → 20.0 to align with MIN_SCORE_ABSOLUTE in nija_ai_engine.py.
-MIN_SCORE_HARD_FLOOR = 20.0
+# Lowered 25.0 → 20.0 → 14.0 to align with reduced MIN_SCORE_ABSOLUTE in nija_ai_engine.py.
+MIN_SCORE_HARD_FLOOR = 14.0
 
 # After this many consecutive zero-signal cycles, progressive score relaxation
 # kicks in: each 5-cycle step reduces the effective floor by a small amount
-# (max 20% total).  Raised 3 → 8 so brief quiet patches do NOT trigger
-# relaxation — the bot holds its quality bar until genuinely dry conditions.
-# Purpose: protect positive-edge discipline; only soften after ~20 min of silence.
-FORCED_ENTRY_STREAK_THRESHOLD: int = 8
+# (max 20% total).  Lowered 8 → 5 so relaxation triggers sooner during quiet patches.
+# Purpose: force trades earlier in a drought to keep compounding continuous.
+FORCED_ENTRY_STREAK_THRESHOLD: int = 5
 
 # Number of relaxation steps (each step = 5 cycles past threshold).
 MAX_RELAXATION_STEPS: int = 3
