@@ -118,11 +118,11 @@ _LEVELS: dict[int, ProfitModeParams] = {
         interval_slow=300,
         # ── nija_core_loop
         forced_entry_streak_threshold=8,
-        hard_bypass_streak_threshold=40,
+        hard_bypass_streak_threshold=8,    # balanced aggression: force after ~20 min (was 40→10)
         min_score_hard_floor=20.0,
         enable_volume_fallback=False,
         # ── profit_optimizer
-        pass_percentile=0.55,
+        pass_percentile=0.65,              # top 35% pass (balanced aggression: was 0.55)
     ),
     1: ProfitModeParams(
         level=1,

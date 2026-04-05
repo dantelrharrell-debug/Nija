@@ -161,8 +161,8 @@ class ExitParams:
 # (hard_sl_pct, trailing_activate_pct, trailing_buffer_pct) per profile
 _STOP_TABLE: Dict[StratProfile, Tuple[float, float, float]] = {
     StratProfile.SCALP:          (_ef("SL_SCALP_PCT",    0.80) / 100, 1.50 / 100, 0.50 / 100),
-    StratProfile.SWING:          (_ef("SL_SWING_PCT",    1.20) / 100, 2.00 / 100, 0.60 / 100),  # trailing activation 1.80→2.00% (TUNE 7, Apr 2026)
-    StratProfile.BREAKOUT:       (_ef("SL_BREAKOUT_PCT", 1.20) / 100, 2.50 / 100, 0.80 / 100),
+    StratProfile.SWING:          (_ef("SL_SWING_PCT",    1.50) / 100, 2.00 / 100, 0.60 / 100),  # SL 1.2→1.5% (balanced aggression, Apr 2026)
+    StratProfile.BREAKOUT:       (_ef("SL_BREAKOUT_PCT", 1.50) / 100, 2.50 / 100, 0.80 / 100),  # SL 1.2→1.5% (balanced aggression, Apr 2026)
     StratProfile.MEAN_REVERSION: (_ef("SL_MREV_PCT",     1.00) / 100, 1.80 / 100, 0.55 / 100),
 }
 
@@ -177,9 +177,9 @@ _VOLATILE_SL_BOOST = 0.003   # +0.3%
 # to improve R:R and reduce fees impact on profitability.
 _TP_TABLE: Dict[StratProfile, List[Tuple[float, float]]] = {
     StratProfile.SCALP: [
-        (0.008, 0.30),   # 30% at 0.8%
-        (0.012, 0.30),   # 30% at 1.2%
-        (0.015, 0.25),   # 25% at 1.5%
+        (0.012, 0.30),   # 30% at 1.2%  (raised from 0.8% — balanced aggression)
+        (0.018, 0.30),   # 30% at 1.8%  (raised from 1.2%)
+        (0.025, 0.25),   # 25% at 2.5%  (raised from 1.5% to match TAKE_PROFIT target)
         # 15% runner with trailing stop
     ],
     StratProfile.SWING: [
