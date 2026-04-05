@@ -118,7 +118,7 @@ _LEVELS: dict[int, ProfitModeParams] = {
         interval_slow=300,
         # ── nija_core_loop
         forced_entry_streak_threshold=8,
-        hard_bypass_streak_threshold=40,
+        hard_bypass_streak_threshold=10,   # lowered from 40: force after ~25 min of silence
         min_score_hard_floor=20.0,
         enable_volume_fallback=False,
         # ── profit_optimizer

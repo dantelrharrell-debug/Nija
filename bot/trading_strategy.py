@@ -2522,13 +2522,12 @@ except ValueError as _e:
     FORCED_ENTRY_FALLBACK_CYCLES = 6
 
 # How much to raise the effective sniper-filter confidence in fallback mode.
-# Reduced from 0.10 → 0.07 to preserve edge discipline: borderline setups get
-# a small nudge rather than a large gate-collapsing boost.
+# Increased from 0.07 → 0.12 so fallback actually triggers trades, not just "almost trades".
 try:
-    FORCED_ENTRY_CONFIDENCE_DELTA = float(os.getenv('FORCED_ENTRY_CONFIDENCE_DELTA', '0.07'))
+    FORCED_ENTRY_CONFIDENCE_DELTA = float(os.getenv('FORCED_ENTRY_CONFIDENCE_DELTA', '0.12'))
 except ValueError as _e:
-    logger.warning("Invalid FORCED_ENTRY_CONFIDENCE_DELTA env value: %s — using default 0.07", _e)
-    FORCED_ENTRY_CONFIDENCE_DELTA = 0.07
+    logger.warning("Invalid FORCED_ENTRY_CONFIDENCE_DELTA env value: %s — using default 0.12", _e)
+    FORCED_ENTRY_CONFIDENCE_DELTA = 0.12
 
 # Multiplier applied to FORCED_ENTRY_CONFIDENCE_DELTA during first-trade force mode.
 # A higher multiplier ensures the very first trade executes even in difficult markets.
@@ -10731,10 +10730,19 @@ class TradingStrategy:
 
                             # HIGH-LIQUIDITY FILTER - Only trade top 20 pairs by volume
                             # Ensures tight spreads, deep order books, and reliable price action
+                            # Softened: hard-reject only when zero_signal_streak is below fallback
+                            # threshold — on a prolonged dry streak allow wider symbol universe
+                            # (score-ranking will naturally favour the higher-quality setups).
                             if TOP_20_HIGH_LIQUIDITY_SYMBOLS and not is_high_liquidity_symbol(symbol):
-                                logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in top-20 high-liquidity list")
                                 filter_stats['low_quality'] = filter_stats.get('low_quality', 0) + 1
-                                continue
+                                if self._zero_signal_streak < FORCED_ENTRY_FALLBACK_CYCLES:
+                                    logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in top-20 high-liquidity list")
+                                    continue
+                                # Streak is high — allow through, scoring will penalise rank
+                                logger.debug(
+                                    f"   ⚡ {symbol}: low-liquidity allowed (dry streak=%d ≥ %d)",
+                                    self._zero_signal_streak, FORCED_ENTRY_FALLBACK_CYCLES,
+                                )
 
                             # WHITELIST CHECK - Only trade whitelisted symbols if whitelist is enabled
                             if WHITELIST_ENABLED:

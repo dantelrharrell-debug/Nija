@@ -90,7 +90,9 @@ _RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.10, 0.15, 0.20)
 # all quality floors are ignored and the top-ranked available candidate is
 # accepted unconditionally.  This guarantees no dead zones during prolonged
 # market droughts while compounding stays continuous.
-HARD_BYPASS_STREAK_THRESHOLD: int = 40
+# Lowered from 40 → 10 so the bot force-accepts the top signal after ~25 min
+# of silence rather than waiting ~100 min.
+HARD_BYPASS_STREAK_THRESHOLD: int = 10
 
 # One-shot manual forced-entry flag.
 # Set to True externally to force the top-scored candidate in the very next
