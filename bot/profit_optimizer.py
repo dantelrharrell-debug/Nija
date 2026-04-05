@@ -497,6 +497,18 @@ class ProfitOptimizer:
         streak_mult = self.streak_accelerator.get_multiplier()
         final_size = sized * streak_mult
 
+        # Safety cap: combined multiplier (conf × accel × streak) must not
+        # exceed 3.0× base_size to prevent extreme position concentration.
+        _MAX_COMBINED = 3.0
+        if base_size > 0:
+            combined_mult = final_size / base_size
+            if combined_mult > _MAX_COMBINED:
+                final_size = base_size * _MAX_COMBINED
+                logger.debug(
+                    f"[ProfitOptimizer] {symbol} combined mult {combined_mult:.2f}× "
+                    f"capped at {_MAX_COMBINED}×"
+                )
+
         logger.debug(
             f"[ProfitOptimizer] {symbol} "
             f"base=${base_size:.2f} "

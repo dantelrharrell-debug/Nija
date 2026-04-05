@@ -15178,11 +15178,6 @@ class TradingStrategy:
                 )
                 # Win-streak accelerator: update streak and adjust future sizing.
                 self.profit_optimizer.record_win_loss(is_win=is_win)
-                # Mirror into the local _win_streak attribute used elsewhere.
-                if is_win:
-                    self._win_streak = self.profit_optimizer.streak_accelerator.streak
-                else:
-                    self._win_streak = 0
             except Exception as _po_rec_err:
                 logger.debug("Profit Optimizer record_trade skipped for %s: %s", symbol, _po_rec_err)
 
