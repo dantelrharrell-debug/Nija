@@ -122,7 +122,7 @@ class ConfidencePositionSizer:
 class RankerConfig:
     """Tunable parameters for :class:`TradeRankingEngine`."""
     window_size: int      = 50    # Rolling window of recent setup scores
-    pass_percentile: float = 0.55  # Top 45% of setups pass — loosened 0.65→0.55 for more trades
+    pass_percentile: float = 0.65  # Top 35% of setups pass (balanced aggression: 0.55→0.65)
     min_window_fill: int  = 5     # Entries required before ranking is enforced
 
 
@@ -219,27 +219,25 @@ class AccelerationTier:
 
 # Tier ladder — from smallest to largest balance.
 #
-# $74 → $1 000 growth path (targeting $25/day net profit):
+# Auto-scaling path: multipliers grow as balance increases so profits compound
+# faster at every tier boundary.  Compared to the original design these
+# multipliers are more aggressive to match "balanced aggression" mode:
 #
-#   micro      $0–$100   — starting point (~$74); reinvest 60% of wins; full
-#                          size multiplier (1.00×) so every dollar of position
-#                          is used.  Higher reinvest rate vs. the old "seed"
-#                          tier (was 0.50) to compound faster from a small base.
-#   seed       $100–$250 — reinvest 65%, size ×1.10 — first doubling range.
-#   sprout     $250–$500 — $25/day net becomes achievable around ~$300;
-#                          reinvest 70%, size ×1.20.
-#   grow       $500–$750 — capital now generates $50+/day; reinvest 72%, ×1.35.
-#   build      $750–$1K  — final sprint to the $1 000 milestone; reinvest 75%, ×1.50.
-#   scale      $1K–$2.5K — milestone reached; sustain and extend gains.
-#   compound   $2.5K+    — full compounding mode.
+#   micro      $0–$100   — 1.05× (slight edge even at the start)
+#   seed       $100–$250 — 1.20×
+#   sprout     $250–$500 — 1.40×
+#   grow       $500–$750 — 1.60×
+#   build      $750–$1K  — 1.80×
+#   scale      $1K–$2.5K — 2.10×
+#   compound   $2.5K+    — 2.50× (full compounding mode)
 _DEFAULT_TIERS: Tuple[AccelerationTier, ...] = (
-    AccelerationTier(min_balance=0,      reinvest_rate=0.60, size_multiplier=1.00, label="micro"),
-    AccelerationTier(min_balance=100,    reinvest_rate=0.65, size_multiplier=1.10, label="seed"),
-    AccelerationTier(min_balance=250,    reinvest_rate=0.70, size_multiplier=1.20, label="sprout"),
-    AccelerationTier(min_balance=500,    reinvest_rate=0.72, size_multiplier=1.35, label="grow"),
-    AccelerationTier(min_balance=750,    reinvest_rate=0.75, size_multiplier=1.50, label="build"),
-    AccelerationTier(min_balance=1_000,  reinvest_rate=0.80, size_multiplier=1.75, label="scale"),
-    AccelerationTier(min_balance=2_500,  reinvest_rate=0.85, size_multiplier=2.00, label="compound"),
+    AccelerationTier(min_balance=0,      reinvest_rate=0.65, size_multiplier=1.05, label="micro"),
+    AccelerationTier(min_balance=100,    reinvest_rate=0.70, size_multiplier=1.20, label="seed"),
+    AccelerationTier(min_balance=250,    reinvest_rate=0.75, size_multiplier=1.40, label="sprout"),
+    AccelerationTier(min_balance=500,    reinvest_rate=0.78, size_multiplier=1.60, label="grow"),
+    AccelerationTier(min_balance=750,    reinvest_rate=0.80, size_multiplier=1.80, label="build"),
+    AccelerationTier(min_balance=1_000,  reinvest_rate=0.85, size_multiplier=2.10, label="scale"),
+    AccelerationTier(min_balance=2_500,  reinvest_rate=0.88, size_multiplier=2.50, label="compound"),
 )
 
 
@@ -359,18 +357,96 @@ class ProfitAccelerationModel:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4. Win-streak accelerator
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WinStreakAccelerator:
+    """
+    Boosts position size when the bot is on a consecutive-win streak.
+
+    Streak tiers (consecutive wins → size multiplier):
+        0–2   → 1.00×  (neutral — no adjustment)
+        3–4   → 1.20×  (+20% — first momentum confirmation)
+        5–7   → 1.40×  (+40% — sustained momentum)
+        8+    → 1.60×  (+60% — hot streak; hard-capped for safety)
+
+    Any losing trade immediately resets the streak to 0 so the multiplier
+    drops back to 1.00× instantly, preventing runaway sizing after market
+    reversal.
+    """
+
+    # (min_consecutive_wins, size_multiplier)
+    _TIERS: Tuple[Tuple[int, float], ...] = (
+        (0, 1.00),
+        (3, 1.20),
+        (5, 1.40),
+        (8, 1.60),
+    )
+    _MAX_MULTIPLIER: float = 2.00  # Absolute safety cap
+
+    def __init__(self) -> None:
+        self._streak: int = 0
+        self._lock = threading.Lock()
+
+    @property
+    def streak(self) -> int:
+        """Current consecutive win count (read-only)."""
+        with self._lock:
+            return self._streak
+
+    def record_win(self) -> None:
+        """Increment the win streak by one."""
+        with self._lock:
+            self._streak += 1
+            logger.info(
+                "[WinStreakAccel] win streak=%d → size boost ×%.2f",
+                self._streak,
+                self._get_multiplier_locked(),
+            )
+
+    def record_loss(self) -> None:
+        """Reset the win streak to zero on any loss."""
+        with self._lock:
+            if self._streak > 0:
+                logger.info("[WinStreakAccel] streak reset %d → 0 (loss)", self._streak)
+            self._streak = 0
+
+    def get_multiplier(self) -> float:
+        """Return the current size multiplier (1.00× baseline)."""
+        with self._lock:
+            return self._get_multiplier_locked()
+
+    def _get_multiplier_locked(self) -> float:
+        """Compute multiplier — must be called with self._lock held."""
+        mult = 1.00
+        for min_wins, m in self._TIERS:
+            if self._streak >= min_wins:
+                mult = m
+        return min(mult, self._MAX_MULTIPLIER)
+
+    def get_report(self) -> dict:
+        """Return a snapshot of current streak state."""
+        with self._lock:
+            return {
+                "win_streak": self._streak,
+                "size_multiplier": round(self._get_multiplier_locked(), 2),
+            }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Composite facade
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ProfitOptimizer:
     """
-    Thin facade that groups all three profit optimization components so callers
+    Thin facade that groups all four profit optimization components so callers
     need only one import.
 
     Attributes:
-        sizer:       :class:`ConfidencePositionSizer`
-        ranker:      :class:`TradeRankingEngine`
-        accelerator: :class:`ProfitAccelerationModel`
+        sizer:              :class:`ConfidencePositionSizer`
+        ranker:             :class:`TradeRankingEngine`
+        accelerator:        :class:`ProfitAccelerationModel`
+        streak_accelerator: :class:`WinStreakAccelerator`
     """
 
     def __init__(
@@ -379,14 +455,16 @@ class ProfitOptimizer:
         sizer_config: Optional[SizerConfig] = None,
         ranker_config: Optional[RankerConfig] = None,
     ) -> None:
-        self.sizer       = ConfidencePositionSizer(config=sizer_config)
-        self.ranker      = TradeRankingEngine(config=ranker_config)
-        self.accelerator = ProfitAccelerationModel(target_balance=target_balance)
+        self.sizer              = ConfidencePositionSizer(config=sizer_config)
+        self.ranker             = TradeRankingEngine(config=ranker_config)
+        self.accelerator        = ProfitAccelerationModel(target_balance=target_balance)
+        self.streak_accelerator = WinStreakAccelerator()
         logger.info(
             f"[ProfitOptimizer] initialised — "
             f"target=${target_balance:.0f} "
             f"sizer=[{self.sizer.config.min_multiplier}×–{self.sizer.config.max_multiplier}×] "
-            f"ranker=[top {int((1 - self.ranker.config.pass_percentile)*100)}%]"
+            f"ranker=[top {int((1 - self.ranker.config.pass_percentile)*100)}%] "
+            f"win-streak-accel=enabled"
         )
 
     def apply(
@@ -398,7 +476,7 @@ class ProfitOptimizer:
         symbol: str = "",
     ) -> Tuple[float, bool]:
         """
-        Single convenience call that runs all three layers.
+        Single convenience call that runs all four layers.
 
         Returns:
             (adjusted_size, should_enter) — if ``should_enter`` is ``False``
@@ -411,18 +489,34 @@ class ProfitOptimizer:
         # Layer 2: confidence scaling
         sized = self.sizer.scale(base_size=base_size, confidence=confidence)
 
-        # Layer 3: acceleration multiplier
+        # Layer 3: balance-based acceleration multiplier
         accel_mult = self.accelerator.get_multiplier(current_balance)
-        final_size = sized * accel_mult
+        sized = sized * accel_mult
+
+        # Layer 4: win-streak boost
+        streak_mult = self.streak_accelerator.get_multiplier()
+        final_size = sized * streak_mult
 
         logger.debug(
             f"[ProfitOptimizer] {symbol} "
             f"base=${base_size:.2f} "
             f"→ conf×{self.sizer.get_multiplier(confidence):.2f} "
             f"→ accel×{accel_mult:.2f} "
+            f"→ streak×{streak_mult:.2f} "
             f"→ final=${final_size:.2f}"
         )
         return final_size, True
+
+    def record_win_loss(self, is_win: bool) -> None:
+        """
+        Record a trade outcome in the win-streak accelerator.
+
+        Call this once per closed trade so the streak multiplier stays current.
+        """
+        if is_win:
+            self.streak_accelerator.record_win()
+        else:
+            self.streak_accelerator.record_loss()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

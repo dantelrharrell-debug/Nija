@@ -2272,7 +2272,7 @@ HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (10)
 # AGGRESSIVE MODE: Default reduced from MAX_TOTAL_POSITIONS (10) → 5 so new quality
 # trades can be opened even when several older positions remain open.  Operators can
 # raise this limit via the MAX_CONCURRENT_POSITIONS environment variable (max 10).
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '5')
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '4')
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
@@ -2342,7 +2342,7 @@ except ValueError:
 # ⚠️  Positions under $10 face significant fee pressure (~1.4% round-trip on Coinbase).
 # Raise this value (e.g. to 10.0) on well-funded accounts for better fee efficiency.
 BASE_MIN_POSITION_SIZE_USD = 1.0  # Floor minimum ($1 - allows tiny positions when required)
-DYNAMIC_POSITION_SIZE_PCT = 0.18  # 18% of balance per position (locked setting)
+DYNAMIC_POSITION_SIZE_PCT = 0.25  # 25% of balance per position (balanced aggression: 0.18→0.25)
 POSITION_SIZE_WARNING_THRESHOLD_USD = 10.0  # Warn when position is under this amount (near recommended minimum)
 
 # OPTION B: Brokerage-specific minimum trade sizes
@@ -2516,10 +2516,10 @@ except ValueError:
 # not after a brief quiet patch that does not imply the filters are too strict.
 # Overridable via FORCED_ENTRY_FALLBACK_CYCLES env var.
 try:
-    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '6'))
+    FORCED_ENTRY_FALLBACK_CYCLES = int(os.getenv('FORCED_ENTRY_FALLBACK_CYCLES', '8'))
 except ValueError as _e:
-    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 6", _e)
-    FORCED_ENTRY_FALLBACK_CYCLES = 6
+    logger.warning("Invalid FORCED_ENTRY_FALLBACK_CYCLES env value: %s — using default 8", _e)
+    FORCED_ENTRY_FALLBACK_CYCLES = 8
 
 # How much to raise the effective sniper-filter confidence in fallback mode.
 # Increased from 0.07 → 0.12 so fallback actually triggers trades, not just "almost trades".
@@ -2575,7 +2575,7 @@ ACCELERATOR_MAX_BALANCE        = 1000.0   # Upper bound of $100→$1K accelerato
 # NOTE: ACCELERATOR_POSITION_PCT is expressed as a percentage (e.g. 25.0 = 25%).
 # DYNAMIC_POSITION_SIZE_PCT (used elsewhere) is a fraction (e.g. 0.18 = 18%).
 # get_accelerator_position_size_pct() always returns a percentage for consistency.
-ACCELERATOR_POSITION_PCT       = 25.0     # Position-size % in accelerator mode (vs 18% normal)
+ACCELERATOR_POSITION_PCT       = 50.0     # Position-size % in accelerator mode (balanced aggression: 25→50%)
 
 
 def get_accelerator_position_size_pct(balance: float) -> float:
@@ -3652,6 +3652,10 @@ class TradingStrategy:
         # reset to 0 after any losing exit so the bot does not chase extended profit
         # targets when momentum has ended (used by get_spread_adjusted_profit_target).
         self._micro_cap_win_streak: int = 0
+        # Global win streak: tracks consecutive wins across ALL trade modes.
+        # Fed into ProfitOptimizer.streak_accelerator to boost position sizing
+        # when the bot is on a hot streak.  Reset to 0 on any loss.
+        self._win_streak: int = 0
         
         # Trade execution tracking (for trade-based cleanup trigger)
         self.trades_since_last_cleanup = 0  # Trades executed since last forced cleanup
@@ -15172,6 +15176,13 @@ class TradingStrategy:
                     pnl_usd=profit_usd,
                     current_balance=float(_po_bal),
                 )
+                # Win-streak accelerator: update streak and adjust future sizing.
+                self.profit_optimizer.record_win_loss(is_win=is_win)
+                # Mirror into the local _win_streak attribute used elsewhere.
+                if is_win:
+                    self._win_streak = self.profit_optimizer.streak_accelerator.streak
+                else:
+                    self._win_streak = 0
             except Exception as _po_rec_err:
                 logger.debug("Profit Optimizer record_trade skipped for %s: %s", symbol, _po_rec_err)
 
