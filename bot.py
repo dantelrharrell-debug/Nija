@@ -1458,6 +1458,7 @@ def _run_bot_startup_and_trading():
                     "use_independent_trading": use_independent_trading,
                     "health_manager": health_manager,
                 }
+            logger.critical(f"STATE CHECK: {_initialized_state}")
             logger.critical("🧠 STATE STORED — entering supervisor mode")
 
             _log_lifecycle_banner(
