@@ -260,6 +260,10 @@ class MultiAccountBrokerManager:
         self._platform_brokers[broker_type] = broker
         # Mirror into the string-keyed flag dict so _platform_connected stays in sync
         self._platform_connected[broker_type.value] = True
+        # Advance the state machine to CONNECTED — the caller has already verified the
+        # broker is live before passing it here, so wait_for_platform_ready() must not
+        # block for 30 s waiting for a state transition that would never happen.
+        self._mark_platform_connected(broker_type)
         # Mark in the global broker registry so any module can check is_platform()
         if broker_registry is not None:
             broker_registry[broker_type.value]["platform"] = True
@@ -634,12 +638,32 @@ class MultiAccountBrokerManager:
         )
         return False
 
+    def _mark_platform_connected(self, broker_type: BrokerType) -> None:
+        """Advance the state machine to CONNECTED and record the timestamp.
+
+        Extracted as a helper to avoid duplicating these two lines in every
+        place that needs to confirm the platform broker is ready.
+        """
+        self._platform_state[broker_type.value] = ConnectionState.CONNECTED
+        self._last_platform_connected_time[broker_type] = time.time()
+
+    @staticmethod
+    def _broker_ready_flag(broker) -> bool:
+        """Return True when the broker has signalled readiness via its flag.
+
+        Uses ``getattr`` so the check works for any broker type that may not
+        implement the flag (e.g. Coinbase, Alpaca) without raising AttributeError.
+        """
+        return broker is not None and getattr(broker, "_platform_ready_flag", False)
+
     def wait_for_platform_ready(self, broker_type: BrokerType, timeout: int = 30) -> bool:
         """
         Block until the platform broker is fully connected or the timeout expires.
 
         Reads from the explicit ConnectionState machine so it reacts immediately
         when the connection handshake completes, with no guessing or retry counting.
+        Also checks the broker's ``_platform_ready_flag`` for an instant fast-path
+        return when the KrakenBroker handshake has already completed.
 
         Args:
             broker_type: Exchange to wait for.
@@ -650,6 +674,15 @@ class MultiAccountBrokerManager:
         """
         broker_name = broker_type.value.upper()
         start = time.time()
+
+        # Fast path: check broker's _platform_ready_flag before entering the loop.
+        # KrakenBroker sets this flag immediately after the handshake completes so
+        # we avoid the full polling window when the broker is already live.
+        broker = self._platform_brokers.get(broker_type)
+        if self._broker_ready_flag(broker):
+            logger.info(f"✅ Platform {broker_name} ready (fast-path via _platform_ready_flag)")
+            self._mark_platform_connected(broker_type)
+            return True
 
         while time.time() - start < timeout:
             state = self._platform_state.get(broker_type.value)
@@ -662,6 +695,13 @@ class MultiAccountBrokerManager:
             if state == ConnectionState.FAILED:
                 logger.error(f"❌ Platform {broker_name} failed to connect")
                 return False
+
+            # Re-check _platform_ready_flag on every iteration in case the broker
+            # completed its handshake after we entered the loop.
+            if self._broker_ready_flag(broker):
+                logger.info(f"✅ Platform {broker_name} ready (_platform_ready_flag set during wait)")
+                self._mark_platform_connected(broker_type)
+                return True
 
             time.sleep(1)
 
