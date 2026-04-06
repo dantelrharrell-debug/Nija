@@ -60,7 +60,7 @@ try:
     )
 except ImportError:
     SMALL_ACCOUNT_THRESHOLD = 100.0  # Fallback
-    SMALL_ACCOUNT_MAX_POSITION_PCT = 0.20  # Fallback
+    SMALL_ACCOUNT_MAX_POSITION_PCT = 0.30  # Fallback — aligned with MAX_POSITION_SIZE hard limit
     logger.warning("Could not import small account constants from fee_aware_config, using defaults")
 
 # Broker-specific minimum position sizes (Jan 24, 2026)
@@ -473,7 +473,9 @@ class NIJAApexStrategyV71:
         # Initialize components with optimized parameters
         self.risk_manager = RiskManager(
             min_position_pct=self.config.get('min_position_pct', 0.02),
-            max_position_pct=self.config.get('max_position_pct', 0.10)  # OPTIMIZED: 10% max for more positions (was 20%)
+            max_position_pct=self.config.get('max_position_pct', 0.10),  # OPTIMIZED: 10% max for more positions (was 20%)
+            soft_position_limit_pct=0.25,   # Warn at 25% — aligned with MAX_POSITION_SIZE = 0.30
+            hard_position_limit_pct=0.30,   # Block above 30% — MAX_POSITION_SIZE hard limit
         )
         self.execution_engine = ExecutionEngine(broker_client)
 
