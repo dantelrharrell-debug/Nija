@@ -682,16 +682,17 @@ def _run_bot_startup_and_trading():
     global _initialized_state
 
     # ── FAST PATH: init already done — skip straight to supervisor loop ────
+    # Requires full state (strategy + active_threads) to be present so that a
+    # retry after a partial-init failure falls through and finishes setup instead
+    # of calling _rerun_supervisor_loop with an incomplete state dict.
     with _initialized_state_lock:
-        _state_snapshot = _initialized_state.get("strategy")
-    if _state_snapshot is not None:
+        _state_copy = dict(_initialized_state)
+    if _state_copy.get("strategy") is not None and "active_threads" in _state_copy:
         logger.critical("⚠️ BYPASSING INIT — FORCING RUN LOOP")
         logger.info(
             "♻️  Startup already completed — skipping re-init, "
             "re-entering supervisor loop"
         )
-        with _initialized_state_lock:
-            _state_copy = dict(_initialized_state)
         _rerun_supervisor_loop(_state_copy)
         return
 
@@ -1094,6 +1095,8 @@ def _run_bot_startup_and_trading():
             logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
             logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
 
+        logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
+
         # ═══════════════════════════════════════════════════════════════════════
         # BOT INITIALIZATION - This is where Kraken connection happens
         # ═══════════════════════════════════════════════════════════════════════
@@ -1103,14 +1106,25 @@ def _run_bot_startup_and_trading():
             logger.info("   This is where Kraken connection will be established")
             logger.info("   Main thread health server remains responsive during this")
             logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
-            
-            # This is where the actual bot initialization happens
-            # TradingStrategy() constructor:
-            # - Connects to Kraken
-            # - Loads users
-            # - Fetches balances
-            # This can take 30-60 seconds, but health server is already running!
-            strategy = TradingStrategy()
+
+            # STEP 2 — initialize strategy ONCE.
+            # If a previous attempt created TradingStrategy but crashed before
+            # the full state (including active_threads) was stored, reuse the
+            # existing instance rather than reconnecting all brokers again.
+            # TradingStrategy holds broker connections but does not retain
+            # partially-executed trades or corrupt state on init failure, so
+            # reusing it is safe — thread setup simply picks up where it left off.
+            with _initialized_state_lock:
+                _existing_strategy = _initialized_state.get("strategy")
+            if _existing_strategy is not None:
+                logger.info("♻️  Reusing existing TradingStrategy instance from previous attempt")
+                strategy = _existing_strategy
+            else:
+                logger.critical("🚀 CREATING TradingStrategy INSTANCE")
+                strategy = TradingStrategy()
+                with _initialized_state_lock:
+                    _initialized_state["strategy"] = strategy
+                logger.critical("🧠 STATE STORED — entering supervisor mode")
 
             # AUDIT USER BALANCES - Show all user balances regardless of trading status
             # This runs BEFORE trading starts to ensure visibility even if users aren't actively trading
@@ -1472,95 +1486,13 @@ def _run_bot_startup_and_trading():
                 ],
             )
 
-            _orch_cycle = 0
-            while True:
-                try:
-                    _orch_cycle += 1
-                    health_manager.heartbeat()
+            # STEP 3 — ALWAYS run trading loop via the shared supervisor.
+            # Delegates to _rerun_supervisor_loop so the supervisor logic lives
+            # in exactly one place and retries (fast-path) use the same code.
+            with _initialized_state_lock:
+                _state_for_supervisor = dict(_initialized_state)
+            _rerun_supervisor_loop(_state_for_supervisor)
 
-                    # ── Restart any trader thread that died unexpectedly ──────────
-                    for _bname, _entry in list(_active_threads.items()):
-                        _t = _entry["thread"]
-                        _sf = _entry["stop_flag"]
-                        if not _t.is_alive() and not _sf.is_set():
-                            logger.critical(
-                                "💥 [Orchestrator] Trader thread '%s' DIED — restarting…",
-                                _bname.upper(),
-                            )
-                            if _entry["mode"] == "platform":
-                                _new_t, _new_sf = _start_trader_thread(
-                                    strategy.independent_trader,
-                                    _entry["broker_type"],
-                                    _entry["broker"],
-                                )
-                            elif _entry["mode"] == "user":
-                                _new_sf = threading.Event()
-                                _new_t = threading.Thread(
-                                    target=strategy.independent_trader.run_user_broker_trading_loop,
-                                    args=(
-                                        _entry["user_id"],
-                                        _entry["broker_type"],
-                                        _entry["broker"],
-                                        _new_sf,
-                                    ),
-                                    name=f"Trader-{_bname}",
-                                    daemon=True,
-                                )
-                                _new_t.start()
-                            else:
-                                _hf_secs = (
-                                    _hf_bot.get_cycle_interval()
-                                    if _hf_bot is not None
-                                    else 150
-                                )
-                                _new_t, _new_sf = _start_single_broker_thread(
-                                    strategy, _hf_secs
-                                )
-                            _entry["thread"] = _new_t
-                            _entry["stop_flag"] = _new_sf
-                            logger.info(
-                                "   ✅ [Orchestrator] Restarted trader for '%s'",
-                                _bname.upper(),
-                            )
-
-                    # ── Periodic status log every ~3 minutes (18 × 10 s) ─────────
-                    if _orch_cycle % 18 == 0:
-                        _alive = sum(
-                            1 for _e in _active_threads.values() if _e["thread"].is_alive()
-                        )
-                        logger.info(
-                            "💓 [Orchestrator] %d/%d threads alive (supervisor cycle %d)",
-                            _alive,
-                            len(_active_threads),
-                            _orch_cycle,
-                        )
-                        if use_independent_trading and strategy.independent_trader:
-                            strategy.log_multi_broker_status()
-
-                    time.sleep(10)
-
-                except KeyboardInterrupt:
-                    _log_lifecycle_banner(
-                        "⚠️  ORCHESTRATOR INTERRUPTED",
-                        [
-                            "KeyboardInterrupt — stopping all trader threads…",
-                            f"Active threads: {len(_active_threads)}",
-                            *_get_thread_status(),
-                        ],
-                    )
-                    for _entry in _active_threads.values():
-                        _entry["stop_flag"].set()
-                    for _entry in _active_threads.values():
-                        _entry["thread"].join(timeout=5)
-                    break
-                except Exception as _orch_err:
-                    logger.error(
-                        "❌ [Orchestrator] Supervisor loop error: %s — continuing",
-                        _orch_err,
-                        exc_info=True,
-                    )
-                    time.sleep(10)
-                
         except RuntimeError as e:
             if "Broker connection failed" in str(e):
                 _log_exit_point(
