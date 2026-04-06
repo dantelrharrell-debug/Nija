@@ -685,6 +685,7 @@ def _run_bot_startup_and_trading():
     with _initialized_state_lock:
         _state_snapshot = _initialized_state.get("strategy")
     if _state_snapshot is not None:
+        logger.critical("⚠️ BYPASSING INIT — FORCING RUN LOOP")
         logger.info(
             "♻️  Startup already completed — skipping re-init, "
             "re-entering supervisor loop"
@@ -1457,6 +1458,7 @@ def _run_bot_startup_and_trading():
                     "use_independent_trading": use_independent_trading,
                     "health_manager": health_manager,
                 }
+            logger.critical("🧠 STATE STORED — entering supervisor mode")
 
             _log_lifecycle_banner(
                 "🔒 ORCHESTRATOR ACTIVE",
@@ -1710,7 +1712,7 @@ def main():
     logger.info("=" * 70)
     
     startup_thread = threading.Thread(
-        target=_run_bot_startup_and_trading_with_retry,
+        target=_run_bot_startup_and_trading,  # TEMP: no retry wrapper (diagnostic mode)
         daemon=False,  # NOT daemon - we want this to keep running
         name="BotStartup"
     )

@@ -1356,6 +1356,7 @@ class IndependentBrokerTrader:
                 broker_start_count += 1
                 total_threads += 1
 
+                logger.critical("🧠 TRADING THREAD STARTED")
                 logger.info(f"   🚀 TRADING THREAD STARTED for {broker_name_upper} (PLATFORM)")
                 logger.info(f"   📊 Thread name: Trader-{broker_name}")
                 logger.info(f"   🔄 This thread will:")
@@ -1785,6 +1786,7 @@ class IndependentBrokerTrader:
         self.broker_threads[broker_name] = thread
         thread.start()
 
+        logger.critical("🧠 TRADING THREAD STARTED")
         logger.info(f"   🚀 PLATFORM {broker_name.upper()} trading thread started (via connection monitor)")
 
     def _start_user_thread(self, user_id: str, broker_type, broker):
