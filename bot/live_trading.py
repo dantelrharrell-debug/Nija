@@ -23,6 +23,19 @@ def run_live_trading():
     logger.info("Initializing trading bot...")
     try:
         strategy = TradingStrategy()
+        # Post-connection delay: allow nonce state to stabilise before the first
+        # market scan.  The TradingStrategy __init__ already waits 45 s *before*
+        # connecting; this additional pause runs *after* all brokers are connected
+        # so the first run_trading_cycle() does not race against freshly-issued
+        # nonces and trigger nonce-thrashing errors.
+        _post_connect_delay = int(os.getenv("NIJA_POST_CONNECT_DELAY", "7"))
+        if _post_connect_delay > 0:
+            logger.info(
+                f"⏱️  Post-connection stabilisation delay: {_post_connect_delay}s "
+                "(override with NIJA_POST_CONNECT_DELAY env var)"
+            )
+            time.sleep(_post_connect_delay)
+            logger.info("✅ Post-connection delay complete — starting first scan cycle")
         while True:
             start = time.perf_counter()
             strategy.run_trading_cycle()
