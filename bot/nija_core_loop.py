@@ -474,7 +474,7 @@ class NijaCoreLoop:
 
         When ``zero_signal_streak`` has reached ``FORCED_ENTRY_STREAK_THRESHOLD``,
         progressive score relaxation activates: each 5-cycle step reduces the
-        effective MIN_SCORE_HARD_FLOOR by 20% (step 1), 40% (step 2), or 60%
+        effective MIN_SCORE_HARD_FLOOR by 10% (step 1), 15% (step 2), or 20%
         (step 3, capped).  Candidates below the relaxed floor are filtered out;
         remaining top-N are force-entered to prevent indefinite idling.
 

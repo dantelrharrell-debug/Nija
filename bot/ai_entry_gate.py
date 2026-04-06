@@ -16,8 +16,6 @@ Gate 3 — Volatility Range            1 pt   (market conditions)
 Gate 4 — Spread / Slippage           1 pt   (cost safety)
 Gate 5 — Regime Confirmation         2 pts  (market context)
 
-Pass threshold: 3.5 / 9 (≈ 39 %, temporarily loosened).  This means:
-  - Gate 1 alone                   → 3 pts → PASS (int(3.5)=3 floor, 3≥3 passes)
 Pass threshold: 3.5 / 9 (≈ 39 %, temporarily loosened for more trades).  This means:
   - Gate 1 alone                   → 3 pts → PASS  (AI score sufficient)
   - Gate 1 + Gate 2                → 5 pts → PASS

@@ -1960,8 +1960,7 @@ MIN_POSITION_USD = 10.0   # Minimum entry size ($10 ensures fee efficiency and m
 #   DUST_POSITION_USD ($2)    — hard minimum; exchange may reject orders below this
 #   AutoDustSweeper ($5)      — recycles positions worth $2-$5 into BTC/ETH via
 #                               the dust-recycler trigger (total dust ≥ $5 across all symbols)
-DUST_POSITION_USD = 2.0   # Cleanup threshold for existing positions (< $2 = hard dust)
-DUST_POSITION_USD = 5.0   # Cleanup threshold for existing positions (< $5 = dust — SMART FIX: only count positions > $5)
+DUST_POSITION_USD = 5.0   # Cleanup threshold for existing positions (< $5 = dust — only count positions > $5)
 EXCHANGE_MINIMUM_ORDER_USD = 1.00  # Hard floor: exchange rejects orders below this USD value
 
 # ── MINIMUM ENTRY SIZE GATE ──────────────────────────────────────────────────
@@ -2390,7 +2389,7 @@ def get_dynamic_min_position_size(balance: float, broker_name: str = '') -> floa
     )
 
     # Enforce: max(MIN_POSITION_USD floor, base floor, balance-based dynamic, brokerage minimum)
-    # MIN_POSITION_USD is the absolute hard floor (prevents any sub-$5 entry regardless of config)
+    # MIN_POSITION_USD is the absolute hard floor (prevents any sub-$10 entry regardless of config)
     return max(MIN_POSITION_USD, BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
 
 
