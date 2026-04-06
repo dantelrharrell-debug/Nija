@@ -520,8 +520,12 @@ def _run_bot_startup_and_trading_with_retry():
     """
     import time
 
+    _INITIAL_DELAY_SECONDS = 5
+    _BACKOFF_MULTIPLIER = 2
+    _MAX_BACKOFF_EXPONENT = 6   # caps delay at 5 * 2^6 = 320 → clamped to _MAX_DELAY
+    _MAX_DELAY = 60             # seconds — keeps retries responsive
+
     attempt = 0
-    _MAX_DELAY = 60  # cap so retries stay responsive
 
     while True:
         try:
@@ -537,7 +541,10 @@ def _run_bot_startup_and_trading_with_retry():
 
         except Exception as e:
             attempt += 1
-            delay = min(_MAX_DELAY, 5 * (2 ** min(attempt - 1, 6)))  # 5, 10, 20, 40, 60, 60…
+            delay = min(
+                _MAX_DELAY,
+                _INITIAL_DELAY_SECONDS * (_BACKOFF_MULTIPLIER ** min(attempt - 1, _MAX_BACKOFF_EXPONENT)),
+            )
             logger.error(
                 "💥 [Startup] Attempt #%d failed: %s — retrying in %ds",
                 attempt, e, delay, exc_info=True,
@@ -643,22 +650,27 @@ def _run_bot_startup_and_trading():
         # 1. Git metadata (branch/commit must be known)
         # 2. Exchange configuration (warns about disabled exchanges)
         # 3. Trading mode (testing vs. live must be explicit)
+        _validation_critical_failure = False
+        _validation_failure_reason = ""
         try:
             from bot.startup_validation import run_all_validations, display_validation_results
             validation_result = run_all_validations(git_branch, git_commit)
             display_validation_results(validation_result)
-            
-            # If critical failure, raise so retry logic can handle it
             if validation_result.critical_failure:
-                logger.error("=" * 70)
-                logger.error("❌ STARTUP VALIDATION FAILED - will retry")
-                logger.error("=" * 70)
-                health_manager.mark_configuration_error(validation_result.failure_reason)
-                _log_exit_point("Startup validation failed", exit_code=1)
-                raise RuntimeError(f"Critical startup validation failure: {validation_result.failure_reason}")
+                _validation_critical_failure = True
+                _validation_failure_reason = validation_result.failure_reason
         except Exception as e:
             logger.error(f"⚠️  Startup validation failed to run: {e}", exc_info=True)
             logger.warning("   Continuing startup without validation (NOT RECOMMENDED)")
+
+        # Raise OUTSIDE the try/except so the retry wrapper catches it, not this handler
+        if _validation_critical_failure:
+            logger.error("=" * 70)
+            logger.error("❌ STARTUP VALIDATION FAILED - will retry")
+            logger.error("=" * 70)
+            health_manager.mark_configuration_error(_validation_failure_reason)
+            _log_exit_point("Startup validation failed", exit_code=1)
+            raise RuntimeError(f"Critical startup validation failure (will retry): {_validation_failure_reason}")
         
         # Display financial disclaimers (App Store compliance)
         try:
