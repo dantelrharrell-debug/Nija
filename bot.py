@@ -634,9 +634,10 @@ def _run_bot_startup_and_trading_with_retry():
     _BACKOFF_MULTIPLIER = 2
     _MAX_BACKOFF_EXPONENT = 6   # caps delay at 5 * 2^6 = 320 → clamped to _MAX_DELAY
     _MAX_DELAY = 60             # seconds — keeps retries responsive
+    _MAX_CONNECTION_ATTEMPTS = 3  # FIX 4: anti-loop kill switch
 
     attempt = 0
-    connection_attempts = 0  # FIX 4: anti-loop kill switch (temporary debug)
+    connection_attempts = 0
 
     while True:
         try:
@@ -655,7 +656,7 @@ def _run_bot_startup_and_trading_with_retry():
             connection_attempts += 1  # FIX 4: track connection attempts
 
             # FIX 4: anti-loop kill switch — abort if connection keeps looping
-            if connection_attempts > 3:
+            if connection_attempts > _MAX_CONNECTION_ATTEMPTS:
                 logger.critical(
                     "🚨 CONNECTION LOOP DETECTED — FORCING EXIT after %d attempts",
                     connection_attempts,
@@ -729,6 +730,8 @@ def _run_bot_startup_and_trading():
             coinbase_configured = _cred_snap.get("coinbase_configured", False)
             exchanges_configured = _cred_snap.get("exchanges_configured", 0)
         else:
+            logger.info("=" * 70)
+            logger.info("🧵 STARTUP THREAD: Beginning bot initialization")
             logger.info("=" * 70)
             logger.info("While this thread initializes, health server remains responsive")
             logger.info("")
