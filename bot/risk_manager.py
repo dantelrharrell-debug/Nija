@@ -131,7 +131,7 @@ class AdaptiveRiskManager:
                  max_total_exposure=0.60, use_exchange_profiles=False,
                  pro_mode=False, min_free_reserve_pct=0.15, tier_lock=None,
                  max_portfolio_volatility=0.04,
-                 soft_position_limit_pct=0.04, hard_position_limit_pct=0.05,
+                 soft_position_limit_pct=0.25, hard_position_limit_pct=0.30,
                  risk_intelligence: Optional['RiskIntelligenceSystem'] = None):
         """
         Initialize Adaptive Risk Manager - OPTIMIZED FOR HIGH WIN RATE v7.5
@@ -147,8 +147,8 @@ class AdaptiveRiskManager:
             min_free_reserve_pct: Minimum free balance % to maintain in PRO MODE (default 15%)
             tier_lock: If set, locks risk to specific tier limits (e.g., 'SAVER', 'INVESTOR')
             max_portfolio_volatility: Maximum portfolio volatility (default 4% = 0.04) - CRITICAL for aggressive sizing
-            soft_position_limit_pct: Soft limit for single position (default 4% = 0.04) - triggers warning and size reduction
-            hard_position_limit_pct: Hard limit for single position (default 5% = 0.05) - blocks new positions
+            soft_position_limit_pct: Soft limit for single position (default 25% = 0.25) - triggers warning and size reduction
+            hard_position_limit_pct: Hard limit for single position (default 30% = 0.30) - blocks new positions
             risk_intelligence: Optional RiskIntelligenceSystem instance providing correlation-aware
                 exposure control, volatility-adjusted position caps, and drawdown circuit breaker.
         """
@@ -165,8 +165,8 @@ class AdaptiveRiskManager:
         
         # SOFT + HARD ENFORCEMENT (Feb 12, 2026)
         # Provides flexibility with discipline
-        self.soft_position_limit_pct = soft_position_limit_pct  # Default 4% - triggers warning and size reduction
-        self.hard_position_limit_pct = hard_position_limit_pct  # Default 5% - blocks position entirely
+        self.soft_position_limit_pct = soft_position_limit_pct  # Default 25% - triggers warning and size reduction
+        self.hard_position_limit_pct = hard_position_limit_pct  # Default 30% - blocks position entirely
 
         # Track recent trades for streak analysis
         self.recent_trades: List[Dict] = []
@@ -878,7 +878,8 @@ class AdaptiveRiskManager:
                     # - Risk doesn't explode from too-small positions
                     
                     # Store tier floor for enforcement after all adjustments
-                    tier_floor_pct = tier_max_risk_pct
+                    # CAP: Tier floor must never exceed the hard position limit (Fix #1)
+                    tier_floor_pct = min(tier_max_risk_pct, self.hard_position_limit_pct)
                     
                     # For ceiling, use the configured max (not restricted by tier)
                     # This allows upward adjustments beyond tier minimum
@@ -924,8 +925,8 @@ class AdaptiveRiskManager:
         # ==============================================================================
         # Check individual position size limits BEFORE applying to portfolio
         # This provides graduated enforcement:
-        # - Soft warning at 4% → reduce position size by 50%
-        # - Hard block at 5% → reject position entirely
+        # - Soft warning at 25% → reduce position size by 50%
+        # - Hard block at 30% → reject position entirely
         # ==============================================================================
         symbol = breakdown.get('symbol', None)  # Get symbol if provided
         allowed, adjusted_pct, limit_info = self.check_position_limits(final_pct, symbol=symbol)

@@ -56,10 +56,12 @@ _DEFAULT_BROKER_MIN = 10.0  # Conservative fallback
 # ──────────────────────────────────────────────────────────────────────────────
 # How much larger the strategy minimum becomes at *zero* confidence relative to
 # the broker minimum.
-#   edge_multiplier = 2.0 → at confidence 0.0 : strategy_min = 3 × broker_min
-#                           at confidence 0.5  : strategy_min = 2 × broker_min
-#                           at confidence 1.0  : strategy_min = 1 × broker_min
-DEFAULT_EDGE_MULTIPLIER = 2.0
+#   edge_multiplier = 0.5 → at confidence 0.0 : strategy_min = 1.5 × broker_min ($15 for $10 floor)
+#                           at confidence 0.5  : strategy_min = 1.25 × broker_min ($12.50 for $10 floor)
+#                           at confidence 1.0  : strategy_min = 1.0 × broker_min ($10 for $10 floor)
+# Lowered from 2.0 → 0.5 so the adaptive minimum stays in the $10–$15 range,
+# preventing the "$15 trade < $26 minimum → BLOCKED" scenario on small accounts.
+DEFAULT_EDGE_MULTIPLIER = 0.5
 
 # A high-confidence signal is allowed to have its calculated size bumped UP to
 # the broker minimum instead of being skipped outright.
@@ -86,9 +88,9 @@ class AdaptiveMinimumSizer:
         strategy_min = broker_min × (1 + (1 – confidence) × edge_multiplier)
         min_order    = max(broker_min, strategy_min)
 
-    At confidence = 1.0 : min_order == broker_min  (allow minimum)
-    At confidence = 0.5 : min_order == broker_min × 2.0  (need 2× min)
-    At confidence = 0.0 : min_order == broker_min × 3.0  (need 3× min)
+    At confidence = 1.0 : min_order == broker_min           ($10 for $10 floor)
+    At confidence = 0.5 : min_order == broker_min × 1.25    ($12.50 for $10 floor)
+    At confidence = 0.0 : min_order == broker_min × 1.5     ($15 for $10 floor)
     """
 
     def __init__(
