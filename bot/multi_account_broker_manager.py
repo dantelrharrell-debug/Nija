@@ -290,11 +290,13 @@ class MultiAccountBrokerManager:
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
             
-            # Enforce single registration: Check if already registered
+            # Hard-skip: broker already registered — no side effects, no exception
             if broker_type in self._platform_brokers:
-                error_msg = f"❌ INVARIANT VIOLATION: Platform broker {broker_type.value} already registered - duplicate registration not allowed"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
+                logger.info(
+                    "%s already registered — skipping duplicate",
+                    broker_type.value,
+                )
+                return False
             
             broker = None
 

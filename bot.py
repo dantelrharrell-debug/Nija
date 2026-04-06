@@ -28,6 +28,12 @@ except Exception:
     except Exception:
         _hf_bot = None
 
+# ── Module-level singletons — persist across startup retry attempts ────────────
+# These are populated after first successful initialisation and reused by the
+# supervisor-loop-only restart path so TradingStrategy is never created twice.
+_initialized_state: dict = {}
+_initialized_state_lock = threading.Lock()
+
 # Import broker types for error reporting
 try:
     from bot.broker_manager import BrokerType
@@ -510,6 +516,110 @@ def _start_single_broker_thread(strategy, cycle_secs):
     return t, stop_flag
 
 
+def _rerun_supervisor_loop(state: dict) -> None:
+    """
+    Re-enter the supervisor loop using a previously initialised bot state.
+
+    Called by ``_run_bot_startup_and_trading()`` when the module-level
+    ``_initialized_state`` is already populated — i.e. on a *retry* after the
+    supervisor loop crashed.  This avoids recreating ``TradingStrategy`` and
+    re-connecting all brokers on every restart.
+
+    Args:
+        state: dict with keys ``strategy``, ``active_threads``,
+               ``use_independent_trading``, and ``health_manager``.
+    """
+    from bot.health_check import get_health_manager
+
+    strategy = state["strategy"]
+    _active_threads = state["active_threads"]
+    use_independent_trading = state["use_independent_trading"]
+    health_manager = get_health_manager()
+
+    logger.info(
+        "♻️  Re-entering supervisor loop — init already completed "
+        "(%d active thread(s))",
+        len(_active_threads),
+    )
+
+    _orch_cycle = 0
+    while True:
+        try:
+            _orch_cycle += 1
+            health_manager.heartbeat()
+
+            for _bname, _entry in list(_active_threads.items()):
+                _t = _entry["thread"]
+                _sf = _entry["stop_flag"]
+                if not _t.is_alive() and not _sf.is_set():
+                    logger.critical(
+                        "💥 [Orchestrator] Trader thread '%s' DIED — restarting…",
+                        _bname.upper(),
+                    )
+                    if _entry["mode"] == "platform":
+                        _new_t, _new_sf = _start_trader_thread(
+                            strategy.independent_trader,
+                            _entry["broker_type"],
+                            _entry["broker"],
+                        )
+                    elif _entry["mode"] == "user":
+                        _new_sf = threading.Event()
+                        _new_t = threading.Thread(
+                            target=strategy.independent_trader.run_user_broker_trading_loop,
+                            args=(
+                                _entry["user_id"],
+                                _entry["broker_type"],
+                                _entry["broker"],
+                                _new_sf,
+                            ),
+                            name=f"Trader-{_bname}",
+                            daemon=True,
+                        )
+                        _new_t.start()
+                    else:
+                        _hf_secs = (
+                            _hf_bot.get_cycle_interval()
+                            if _hf_bot is not None
+                            else 150
+                        )
+                        _new_t, _new_sf = _start_single_broker_thread(strategy, _hf_secs)
+                    _entry["thread"] = _new_t
+                    _entry["stop_flag"] = _new_sf
+                    logger.info(
+                        "   ✅ [Orchestrator] Restarted trader for '%s'",
+                        _bname.upper(),
+                    )
+
+            if _orch_cycle % 18 == 0:
+                _alive = sum(
+                    1 for _e in _active_threads.values() if _e["thread"].is_alive()
+                )
+                logger.info(
+                    "💓 [Orchestrator] %d/%d threads alive (supervisor cycle %d)",
+                    _alive,
+                    len(_active_threads),
+                    _orch_cycle,
+                )
+                if use_independent_trading and strategy.independent_trader:
+                    strategy.log_multi_broker_status()
+
+            time.sleep(10)
+
+        except KeyboardInterrupt:
+            for _entry in _active_threads.values():
+                _entry["stop_flag"].set()
+            for _entry in _active_threads.values():
+                _entry["thread"].join(timeout=5)
+            raise
+        except Exception as _orch_err:
+            logger.error(
+                "❌ [Orchestrator] Supervisor loop error: %s — continuing",
+                _orch_err,
+                exc_info=True,
+            )
+            time.sleep(10)
+
+
 def _run_bot_startup_and_trading_with_retry():
     """
     Wrapper function that implements startup retry logic.
@@ -564,7 +674,26 @@ def _run_bot_startup_and_trading():
     - User loading  
     - Balance fetching
     - Trading loop initialization
+
+    On a retry after the supervisor loop crashes, the module-level
+    ``_initialized_state`` singleton is used to skip re-initialisation and
+    jump straight to ``_rerun_supervisor_loop()``.
     """
+    global _initialized_state
+
+    # ── FAST PATH: init already done — skip straight to supervisor loop ────
+    with _initialized_state_lock:
+        _state_snapshot = _initialized_state.get("strategy")
+    if _state_snapshot is not None:
+        logger.info(
+            "♻️  Startup already completed — skipping re-init, "
+            "re-entering supervisor loop"
+        )
+        with _initialized_state_lock:
+            _state_copy = dict(_initialized_state)
+        _rerun_supervisor_loop(_state_copy)
+        return
+
     try:
         # Import here to ensure logging is set up
         from bot.health_check import get_health_manager
@@ -1318,6 +1447,17 @@ def _run_bot_startup_and_trading():
             # ═══════════════════════════════════════════════════════════════════════
             # SUPERVISOR LOOP — monitors every 10 s, restarts dead threads
             # ═══════════════════════════════════════════════════════════════════════
+
+            # Persist initialised state (thread-safe) so a supervisor-loop crash
+            # can be retried WITHOUT recreating TradingStrategy or reconnecting brokers.
+            with _initialized_state_lock:
+                _initialized_state = {
+                    "strategy": strategy,
+                    "active_threads": _active_threads,
+                    "use_independent_trading": use_independent_trading,
+                    "health_manager": health_manager,
+                }
+
             _log_lifecycle_banner(
                 "🔒 ORCHESTRATOR ACTIVE",
                 [
