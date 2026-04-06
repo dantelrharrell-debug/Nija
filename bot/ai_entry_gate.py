@@ -118,19 +118,21 @@ class GateResult:
 # ── Gate 1: AI Score thresholds per regime ──────────────────────────────────
 # Tighter in choppy / crisis regimes, looser when trend gives a clear edge.
 # Lowered ~20% across all regimes (Apr 2026) to increase trade frequency.
+# Further relaxed ranging/mean_reversion/volatile/weak_trend (Apr 2026) to
+# allow more entries during sideways and moderate-volatility market conditions.
 _SCORE_THRESHOLDS: Dict[str, float] = {
-    "strong_trend":         25.0,   # trend gives edge → relax (was 38 → 32 → 25)
-    "weak_trend":           27.0,   # default (was 40 → 34 → 27)
-    "ranging":              30.0,   # direction hard to call → require better setup (was 45 → 38 → 30)
-    "consolidation":        24.0,   # scalp mode → need high frequency (was 35 → 30 → 24)
-    "expansion":            27.0,   # breakout → normal bar (was 40 → 34 → 27)
-    "mean_reversion":       30.0,   # counter-trend → extra conviction (was 45 → 38 → 30)
+    "strong_trend":         22.0,   # trend gives edge → relax (was 38 → 32 → 25 → 22)
+    "weak_trend":           22.0,   # default (was 40 → 34 → 27 → 22)
+    "ranging":              24.0,   # direction hard to call → require better setup (was 45 → 38 → 30 → 24)
+    "consolidation":        20.0,   # scalp mode → need high frequency (was 35 → 30 → 24 → 20)
+    "expansion":            22.0,   # breakout → normal bar (was 40 → 34 → 27 → 22)
+    "mean_reversion":       24.0,   # counter-trend → extra conviction (was 45 → 38 → 30 → 24)
     "volatility_explosion": 65.0,   # crisis → near-perfect setups only (unchanged — crisis protection preserved)
     # Legacy 3-regime fallbacks
-    "trending":             25.0,   # was 38 → 32 → 25
-    "volatile":             38.0,   # was 55 → 47 → 38
+    "trending":             22.0,   # was 38 → 32 → 25 → 22
+    "volatile":             32.0,   # was 55 → 47 → 38 → 32
 }
-_DEFAULT_SCORE_THRESHOLD = 27.0   # was 40.0 → 34.0 → 27.0
+_DEFAULT_SCORE_THRESHOLD = 22.0   # was 40.0 → 34.0 → 27.0 → 22.0
 
 # ── Gate 2: Volume multiplier ────────────────────────────────────────────────
 # Current volume must be >= this × 20-bar average.
@@ -195,6 +197,24 @@ _GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 9
 # Restored to 5.0 once the account balance reaches TARGET_BALANCE ($100)
 # via ``set_gate_pass_threshold`` / ``TradeFrequencyController.check_balance_and_adjust_threshold``.
 BASE_ENTRY_SCORE_THRESHOLD: float = 2.6  # out of 9 — 2.6 includes B+ setups; below 2.5 = garbage zone
+
+# ── ATR-based volatility dampening constants ─────────────────────────────────
+# When the market is actively moving the gate pass-threshold is relaxed
+# proportionally so moderate signals can trade.  Three tiers:
+#   ATR% ≥ _ATR_PCT_STRONG  (1.0%) — strong intraday trend; no extra relaxation
+#                                     (regime gate already reflects this edge)
+#   ATR% ≥ _ATR_PCT_MODERATE (0.60%) — moderate movement; 5% gate reduction
+#   ATR% ≥ _ATR_PCT_SCALP   (0.35%) — enough volatility for a scalp; 10% reduction
+# Values calibrated to Coinbase 15-min candle ATR distributions (Apr 2026).
+_ATR_PCT_STRONG           = 1.0    # Strong intraday movement — no extra dampening
+_ATR_PCT_MODERATE         = 0.60   # Moderate movement → mild threshold relaxation
+_ATR_PCT_SCALP            = 0.35   # Sufficient volatility for scalp → larger relaxation
+_ATR_DAMPENING_MODERATE   = 0.05   # Gate reduction at _ATR_PCT_MODERATE level (5%)
+_ATR_DAMPENING_SCALP      = 0.10   # Gate reduction at _ATR_PCT_SCALP level (10%)
+
+# Maximum combined threshold reduction (drought relaxation + ATR dampening).
+# Capped at 55% so that at least ~45% of the normal quality bar must still be met.
+_MAX_TOTAL_THRESHOLD_REDUCTION = 0.55
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +341,31 @@ class AIEntryGate:
         # at least two gate conditions must still be satisfied.
         capped_reduction = min(gate_score_reduction, 0.50)
 
+        # ── ATR-based volatility dampening ───────────────────────────────────
+        # If the market is actively moving (ATR% above a baseline), relax the
+        # gate threshold by up to 10% so moderate signals pass during volatile
+        # sessions.  The dampening is proportional to ATR and capped so core
+        # risk protection is preserved.
+        # Crisis (volatility_explosion) is already hard-blocked above — no risk.
+        _atr_dampening = 0.0
+        try:
+            _atr_series = indicators.get("atr")
+            if _atr_series is not None and len(df) > 0:
+                _atr_val  = float(_atr_series.iloc[-1])
+                _price    = float(df["close"].iloc[-1])
+                _atr_pct  = (_atr_val / _price * 100.0) if _price > 0 else 0.0
+                if _atr_pct >= _ATR_PCT_STRONG:
+                    _atr_dampening = 0.0                  # strong trend — no extra relaxation needed
+                elif _atr_pct >= _ATR_PCT_MODERATE:
+                    _atr_dampening = _ATR_DAMPENING_MODERATE   # moderate movement → 5% easier
+                elif _atr_pct >= _ATR_PCT_SCALP:
+                    _atr_dampening = _ATR_DAMPENING_SCALP      # enough volatility for a scalp → 10% easier
+        except Exception as _e:
+            logger.debug("ATR dampening unavailable: %s", _e)
+
+        # Combine drought reduction + ATR dampening (total cap _MAX_TOTAL_THRESHOLD_REDUCTION)
+        total_reduction = min(capped_reduction + _atr_dampening, _MAX_TOTAL_THRESHOLD_REDUCTION)
+
         # Use the AdaptiveThresholdController's gate-domain adjustment so the
         # pass bar tightens when win rate is low and loosens when it is high.
         # Falls back to the static BASE_ENTRY_SCORE_THRESHOLD if unavailable.
@@ -336,7 +381,7 @@ class AIEntryGate:
 
         effective_threshold = max(
             2,
-            int(_adaptive_base * (1.0 - capped_reduction)),
+            int(_adaptive_base * (1.0 - total_reduction)),
         )
         passed = total_score >= effective_threshold
 

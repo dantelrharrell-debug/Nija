@@ -1950,7 +1950,7 @@ BALANCE_THRESHOLD_SMALL = 500.0   # Preserved for fallback / future use
 
 # Minimum USD notional for any NEW entry order.  Orders below this value are
 # rejected at source to prevent dust accumulation and unproductive fee spend.
-MIN_POSITION_USD = 10.0   # Minimum entry size ($10 ensures fee efficiency and meaningful compounding)
+MIN_POSITION_USD = 5.0    # Minimum entry size (lowered $10→$5, Apr 2026, to allow micro-account setups)
 
 # Dust cleanup threshold for EXISTING positions.  Any open position whose
 # current market value falls below this level is marked for cleanup:
@@ -1967,8 +1967,8 @@ EXCHANGE_MINIMUM_ORDER_USD = 1.00  # Hard floor: exchange rejects orders below t
 # Any new entry whose computed order_size_usd falls below this value is
 # rejected *before* any downstream sizing logic runs.  This prevents dust
 # positions from being opened and ensures every trade covers its fees.
-# Set to the same value as MIN_POSITION_USD ($10) — raise if needed.
-EXCHANGE_MIN_ORDER_SIZE: float = 10.0  # USD — absolute minimum for any new entry order
+# Set to the same value as MIN_POSITION_USD ($5) — raise if needed.
+EXCHANGE_MIN_ORDER_SIZE: float = 5.0   # USD — absolute minimum for any new entry order (lowered $10→$5, Apr 2026)
 
 # "Tradable Positions Only" filter — minimum USD notional for a position to be
 # counted as open (affects position-cap checks, first-trade gate, etc.).
@@ -2389,7 +2389,7 @@ def get_dynamic_min_position_size(balance: float, broker_name: str = '') -> floa
     )
 
     # Enforce: max(MIN_POSITION_USD floor, base floor, balance-based dynamic, brokerage minimum)
-    # MIN_POSITION_USD is the absolute hard floor (prevents any sub-$10 entry regardless of config)
+    # MIN_POSITION_USD is the absolute hard floor (prevents any sub-$5 entry regardless of config)
     return max(MIN_POSITION_USD, BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
 
 
