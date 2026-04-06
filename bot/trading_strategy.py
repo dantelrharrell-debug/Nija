@@ -4679,6 +4679,7 @@ class TradingStrategy:
 
         TradingStrategy._startup_completed = True
         logger.info("✅ TradingStrategy startup latch set — re-initialisation blocked")
+        logger.critical("🚀 TRADING STRATEGY INITIALIZED SUCCESSFULLY")
 
     def adopt_existing_positions(self, broker, broker_name: str = "UNKNOWN", account_id: str = "PLATFORM") -> dict:
         """
