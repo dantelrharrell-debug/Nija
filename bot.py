@@ -513,45 +513,36 @@ def _start_single_broker_thread(strategy, cycle_secs):
 def _run_bot_startup_and_trading_with_retry():
     """
     Wrapper function that implements startup retry logic.
-    
-    This function wraps the actual startup logic with retry capability,
-    preventing permanent failure from transient errors.
+
+    Retries indefinitely with exponential backoff (capped at 60 s) so that
+    transient errors (Kraken nonce, network blip, etc.) never kill the thread
+    permanently.  Only a clean KeyboardInterrupt stops the loop.
     """
-    from bot.startup_diagnostics import StartupRetryManager
     import time
-    
-    # Initialize retry manager
-    # Default: 3 retries with 5 second initial delay (exponential backoff)
-    retry_manager = StartupRetryManager(max_retries=3, initial_delay=5)
-    
+
+    attempt = 0
+    _MAX_DELAY = 60  # cap so retries stay responsive
+
     while True:
         try:
             # Attempt to start the bot
             _run_bot_startup_and_trading()
-            # If we get here, startup succeeded
+            # Normal exit — supervisor loop inside returned cleanly
             return
-            
-        except (KeyboardInterrupt, SystemExit):
-            # Don't retry on explicit exit signals
-            logger.info("Received exit signal, stopping...")
+
+        except KeyboardInterrupt:
+            # Clean shutdown — do not retry
+            logger.info("Received KeyboardInterrupt — stopping startup thread")
             raise
-            
+
         except Exception as e:
-            # Check if we should retry
-            if retry_manager.should_retry(e):
-                retry_manager.record_attempt()
-                delay = retry_manager.get_retry_delay()
-                retry_manager.log_retry_attempt(e, delay)
-                
-                # Wait before retrying
-                time.sleep(delay)
-                
-                # Continue to next iteration (retry)
-                continue
-            else:
-                # All retries exhausted or fatal error
-                retry_manager.log_final_failure(e)
-                raise
+            attempt += 1
+            delay = min(_MAX_DELAY, 5 * (2 ** min(attempt - 1, 6)))  # 5, 10, 20, 40, 60, 60…
+            logger.error(
+                "💥 [Startup] Attempt #%d failed: %s — retrying in %ds",
+                attempt, e, delay, exc_info=True,
+            )
+            time.sleep(delay)
 
 
 def _run_bot_startup_and_trading():
@@ -657,14 +648,14 @@ def _run_bot_startup_and_trading():
             validation_result = run_all_validations(git_branch, git_commit)
             display_validation_results(validation_result)
             
-            # If critical failure, exit before any trading
+            # If critical failure, raise so retry logic can handle it
             if validation_result.critical_failure:
                 logger.error("=" * 70)
-                logger.error("❌ STARTUP VALIDATION FAILED - EXITING")
+                logger.error("❌ STARTUP VALIDATION FAILED - will retry")
                 logger.error("=" * 70)
                 health_manager.mark_configuration_error(validation_result.failure_reason)
                 _log_exit_point("Startup validation failed", exit_code=1)
-                sys.exit(1)
+                raise RuntimeError(f"Critical startup validation failure: {validation_result.failure_reason}")
         except Exception as e:
             logger.error(f"⚠️  Startup validation failed to run: {e}", exc_info=True)
             logger.warning("   Continuing startup without validation (NOT RECOMMENDED)")
@@ -1426,7 +1417,7 @@ def _run_bot_startup_and_trading():
                         *_get_thread_status()
                     ]
                 )
-                sys.exit(1)
+                raise
             else:
                 _log_exit_point(
                     "Fatal Initialization Error",
@@ -1438,7 +1429,7 @@ def _run_bot_startup_and_trading():
                     ]
                 )
                 logger.error(f"Fatal error initializing bot: {e}", exc_info=True)
-                sys.exit(1)
+                raise
         except Exception as e:
             _log_exit_point(
                 "Unhandled Fatal Error in Startup Thread",
@@ -1451,11 +1442,11 @@ def _run_bot_startup_and_trading():
                 ]
             )
             logger.exception(f"❌ Startup thread crashed: {e}")
-            sys.exit(1)
+            raise
             
     except Exception as e:
         logger.exception(f"🧵 ❌ Fatal error in startup thread outer handler: {e}")
-        sys.exit(1)
+        raise
 
 
 def main():
@@ -1608,14 +1599,20 @@ def main():
     while True:
         try:
             supervisor_cycle += 1
-            
-            # Check if startup thread is still alive
+
+            # Check if startup thread is still alive — restart if not
             if not startup_thread.is_alive():
-                logger.warning("⚠️  Startup thread has exited")
-                logger.warning("   This may indicate bot initialization failed")
-                logger.warning("   Check logs above for errors")
-                # Keep supervisor running even if startup dies
-                # This allows health checks to continue reporting
+                logger.critical(
+                    "💥 [Supervisor] BotStartup thread has exited unexpectedly — restarting in 5s"
+                )
+                time.sleep(5)
+                startup_thread = threading.Thread(
+                    target=_run_bot_startup_and_trading_with_retry,
+                    daemon=False,
+                    name="BotStartup",
+                )
+                startup_thread.start()
+                logger.info("✅ [Supervisor] BotStartup thread restarted")
             
             # Log periodic status
             if supervisor_cycle % 12 == 0:  # Every hour at 300s intervals
