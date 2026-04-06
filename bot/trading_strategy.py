@@ -2730,8 +2730,15 @@ class TradingStrategy:
     position limit enforcement.
     """
 
+    # Class-level startup latch: prevents double-initialisation if TradingStrategy()
+    # is accidentally instantiated a second time (e.g. on a startup retry).
+    _startup_completed: bool = False
+
     def __init__(self):
         """Initialize production strategy with multi-broker support."""
+        if TradingStrategy._startup_completed:
+            logger.info("Startup already completed — skipping re-init")
+            return
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
 
         # ── HF Flip Mode — attach the pre-created singleton for later patching ──
@@ -4663,6 +4670,8 @@ class TradingStrategy:
             self.enforcer = None
             self.apex = None
             self.independent_trader = None
+
+        TradingStrategy._startup_completed = True
 
     def adopt_existing_positions(self, broker, broker_name: str = "UNKNOWN", account_id: str = "PLATFORM") -> dict:
         """
@@ -6901,6 +6910,8 @@ class TradingStrategy:
         """
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
+
+        logger.info("🧠 Trading loop tick — scanning markets...")
 
         # ✅ HARDENING: Validate broker liveness at execution time to prevent
         # orders being sent on a stale or disconnected reference.  If the broker

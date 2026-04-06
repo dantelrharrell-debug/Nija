@@ -716,6 +716,11 @@ class IndependentBrokerTrader:
             try:
                 while not stop_flag.is_set():
                     cycle_count += 1
+                    logger.info(
+                        "🧠 [%s] Trading loop tick #%d — scanning markets...",
+                        broker_name,
+                        cycle_count,
+                    )
 
                     # ─────────────────────────────────────────────────────────────
                     # 🔴 DEAD BROKER CHECK (failure_manager — retry with backoff)
