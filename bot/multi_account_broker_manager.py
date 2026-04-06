@@ -312,29 +312,22 @@ class MultiAccountBrokerManager:
                 logger.warning(f"⚠️  Unsupported broker type for platform: {broker_type.value}")
                 return None
 
-            # Mark state as CONNECTING before attempting the handshake
-            self._platform_state[broker_type.value] = ConnectionState.CONNECTING
-            logger.info(f"   🔄 Platform {broker_type.value.upper()} state: CONNECTING")
-
-            # Connect the broker
-            if broker.connect():
-                self._platform_brokers[broker_type] = broker
-                self._platform_state[broker_type.value] = ConnectionState.CONNECTED
-                # Mark in the global broker registry so any module can check is_platform()
-                if broker_registry is not None:
-                    broker_registry[broker_type.value]["platform"] = True
-                    logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
-                logger.info(f"✅ Platform broker added: {broker_type.value}")
-                logger.info(f"   Platform broker registered once, globally")
-                return broker
-            else:
-                self._platform_state[broker_type.value] = ConnectionState.FAILED
-                logger.warning(f"⚠️  Failed to connect platform broker: {broker_type.value}")
-                return None
+            # Registration only — connection lifecycle is managed externally.
+            # ❌ DO NOT call broker.connect() here
+            # ❌ DO NOT trigger reconnect or validate connection
+            self._platform_brokers[broker_type] = broker
+            self._platform_state[broker_type.value] = ConnectionState.DISCONNECTED
+            # Mark in the global broker registry so any module can check is_platform()
+            if broker_registry is not None:
+                broker_registry[broker_type.value]["platform"] = True
+                logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
+            logger.info(f"✅ Platform broker registered (passive): {broker_type.value}")
+            logger.info(f"   Platform broker registered once, globally")
+            return broker
 
         except Exception as e:
             self._platform_state[broker_type.value] = ConnectionState.FAILED
-            logger.error(f"❌ Error adding platform broker {broker_type.value}: {e}")
+            logger.error(f"❌ Error registering platform broker {broker_type.value}: {e}")
             return None
 
     def add_user_broker(self, user_id: str, broker_type: BrokerType) -> Optional[BaseBroker]:
