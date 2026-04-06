@@ -6096,6 +6096,11 @@ class KrakenBroker(BaseBroker):
         # connection routine and return immediately.
         self._connection_already_complete: bool = False
 
+        # Readiness flag — set to True immediately after the handshake completes
+        # so that MultiAccountBrokerManager.wait_for_platform_ready() can detect
+        # a connected broker without waiting for the full polling timeout.
+        self._platform_ready_flag: bool = False
+
     def _initialize_kraken_market_data(self):
         """
         Initialize Kraken market data for dynamic minimum volumes.
@@ -7016,6 +7021,9 @@ class KrakenBroker(BaseBroker):
                         # Mark handshake as complete so future calls to connect()
                         # return immediately without re-running the full routine.
                         self._connection_already_complete = True
+                        # Signal readiness immediately so MultiAccountBrokerManager
+                        # can detect the connected state without polling for 30 s.
+                        self._platform_ready_flag = True
 
                         return True
                     else:
