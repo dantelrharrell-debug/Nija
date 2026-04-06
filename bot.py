@@ -1111,6 +1111,9 @@ def _run_bot_startup_and_trading():
             # If a previous attempt created TradingStrategy but crashed before
             # the full state (including active_threads) was stored, reuse the
             # existing instance rather than reconnecting all brokers again.
+            # TradingStrategy holds broker connections but does not retain
+            # partially-executed trades or corrupt state on init failure, so
+            # reusing it is safe — thread setup simply picks up where it left off.
             with _initialized_state_lock:
                 _existing_strategy = _initialized_state.get("strategy")
             if _existing_strategy is not None:
