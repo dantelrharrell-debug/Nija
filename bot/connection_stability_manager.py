@@ -146,6 +146,10 @@ class ConnectionStabilityManager:
         """
         Register a broker instance and its connection callbacks.
 
+        If a broker is already registered this call is a no-op so that
+        repeated connect() calls during polling / watchdog re-entry do not
+        re-register the same broker multiple times.
+
         Args:
             broker: Broker object (used for logging context only).
             reconnect_fn: Callable that (re-)establishes the connection and
@@ -154,6 +158,11 @@ class ConnectionStabilityManager:
                 ``True`` when the connection is alive.  If omitted the
                 watchdog calls ``reconnect_fn`` to test liveness.
         """
+        if self._broker is not None:
+            logger.debug(
+                f"[{self.broker_name}] Broker already registered — skipping duplicate registration"
+            )
+            return
         self._broker = broker
         self._reconnect_fn = reconnect_fn
         self._health_probe_fn = health_probe_fn
