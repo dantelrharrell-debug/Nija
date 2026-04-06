@@ -119,14 +119,8 @@ _W_GATE      = 0.17   # 5-Gate AI gate penalty deduction (reduced 0.20→0.17 ~1
 # Hard absolute floor — never execute below this regardless of ranking.
 # NOTE: the composite formula (raw_score * 0.58 + opt_delta * 0.25 - penalty * 0.17)
 # produces values in the 0-60 range, so this floor must be calibrated accordingly.
-# Lowered from 25.0 → 20.0 → 17.5 → 15.5 → 12.5 (flow-mode, Apr 2026) to increase trade frequency.
+# Lowered from 25.0 → 20.0 → 17.5 → 16.5 → 13.0 (flow-mode, Apr 2026) to increase trade frequency.
 # Override at runtime with NIJA_MIN_SCORE_ABSOLUTE (e.g. 12.5 for AGGRESSIVE/flow mode).
-MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "12.5"))
-# Lowered from 25.0 → 20.0 (~20%) to increase trade frequency (Apr 2026).
-# Lowered again 20.0 → 17.5 to further open the gate in thin-signal conditions.
-# Lowered again 17.5 → 16.5 for flow mode (micro-cap: tight SL 1.5%, frequent + controlled entries).
-# Lowered again 16.5 → 13.0 to force more entries (Apr 2026 — lower entry threshold pass).
-# Override at runtime with NIJA_MIN_SCORE_ABSOLUTE.
 MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "13.0"))
 
 # Default number of top signals to select per cycle
