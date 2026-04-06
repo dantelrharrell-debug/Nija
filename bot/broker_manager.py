@@ -6091,6 +6091,11 @@ class KrakenBroker(BaseBroker):
         else:
             self._connection_stability_manager = None
 
+        # Guard flag — set to True after the first successful handshake and nonce
+        # stabilisation so that subsequent polling / retry calls skip the full
+        # connection routine and return immediately.
+        self._connection_already_complete: bool = False
+
     def _initialize_kraken_market_data(self):
         """
         Initialize Kraken market data for dynamic minimum volumes.
@@ -6276,6 +6281,14 @@ class KrakenBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        # Skip the full connection routine when a prior successful handshake
+        # has already been recorded.  This prevents repeated nonce resets and
+        # log spam during periodic polling / watchdog re-entry.
+        if self._connection_already_complete:
+            _label = "PLATFORM" if self.account_type == AccountType.PLATFORM else f"USER:{self.user_id}"
+            logger.debug(f"[KrakenBroker:{_label}] Connection already established — skipping reconnect routine")
+            return True
+
         try:
             import krakenex
             from pykrakenapi import KrakenAPI
@@ -6999,6 +7012,10 @@ class KrakenBroker(BaseBroker):
                             )
                             self._connection_stability_manager.mark_connected()
                             self._connection_stability_manager.start_watchdog()
+
+                        # Mark handshake as complete so future calls to connect()
+                        # return immediately without re-running the full routine.
+                        self._connection_already_complete = True
 
                         return True
                     else:
