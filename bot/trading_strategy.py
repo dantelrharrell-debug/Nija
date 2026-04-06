@@ -2739,6 +2739,7 @@ class TradingStrategy:
 
     def __init__(self):
         """Initialize production strategy with multi-broker support."""
+        logger.critical("🔥 ENTERING TradingStrategy __init__")
         with TradingStrategy._startup_lock:
             if TradingStrategy._startup_completed:
                 raise RuntimeError(
@@ -2791,6 +2792,8 @@ class TradingStrategy:
                 logger.info("   All trades are simulated - NO REAL ORDERS PLACED")
                 logger.info("   Broker API calls return mock data")
                 logger.info("=" * 70)
+
+        logger.critical("STEP 1: Loading config (safety controller, dry_run_mode)")
 
         # Load Capital Growth Ladder config (tier-based fixed trade sizes)
         self.capital_growth_rules = self._load_capital_growth_rules()
@@ -2941,6 +2944,8 @@ class TradingStrategy:
         else:
             self.regime_engine = None
 
+        logger.critical("STEP 2: Setting up broker references (market gates, regime controllers)")
+
         # Initialize Risk Budget Engine — risk-first position sizing with performance scaling
         if RISK_BUDGET_ENGINE_AVAILABLE and RiskBudgetEngine is not None:
             try:
@@ -2998,6 +3003,8 @@ class TradingStrategy:
                 self.fragmentation_guard = None
         else:
             self.fragmentation_guard = None
+
+        logger.critical("STEP 3: Risk and protection engines initialized")
 
         # Initialize Volatility Position Sizer — ATR-based position size scaling
         if VOLATILITY_POSITION_SIZING_AVAILABLE and get_volatility_position_sizer is not None:
@@ -3144,6 +3151,8 @@ class TradingStrategy:
                 self.dynamic_sniper_thresholds = None
         else:
             self.dynamic_sniper_thresholds = None
+
+        logger.critical("STEP 4: Position sizing and execution layers initialized")
 
         # ── Profit Priority Cleanup — close losers first ──────────────────────
         if PROFIT_PRIORITY_CLEANUP_AVAILABLE and get_profit_priority_cleanup is not None:
@@ -3459,6 +3468,8 @@ class TradingStrategy:
         else:
             self.profit_mode_optimizer = None
 
+        logger.critical("STEP 5: Profit optimization layers initialized")
+
         if CAPITAL_SCALING_ENGINE_AVAILABLE and get_capital_engine is not None:
             try:
                 _base_cap = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
@@ -3719,6 +3730,8 @@ class TradingStrategy:
         self.ai_capital_rotator = None  # AI Capital Rotation Engine (4-step + meta allocation)
         self.true_profit_tracker = None  # True Profit Tracker — net profit after fees
 
+        logger.critical("STEP 6: Capital and scaling engines initialized")
+
         # Initialize credential health monitoring to detect credential loss
         # This helps diagnose recurring disconnection issues
         try:
@@ -3737,13 +3750,16 @@ class TradingStrategy:
             from continuous_exit_enforcer import get_continuous_exit_enforcer
             logger.info("🛡️ Starting continuous exit enforcer...")
             self.continuous_exit_enforcer = get_continuous_exit_enforcer()
+            logger.critical("BEFORE THREAD START")
             self.continuous_exit_enforcer.start()
+            logger.critical("AFTER THREAD START")
             logger.info("   ✅ Continuous exit enforcer active (checks every 60 seconds)")
         except Exception as e:
             logger.warning(f"⚠️  Could not start continuous exit enforcer: {e}")
             self.continuous_exit_enforcer = None
 
         try:
+            logger.critical("STEP 7: Starting broker manager initialization")
             # Lazy imports to avoid circular deps and allow fallback
             # Note: BrokerType and AccountType are now imported at module level
             from broker_manager import (
@@ -4649,6 +4665,7 @@ class TradingStrategy:
                         logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
 
                 logger.info("✅ TradingStrategy initialized (APEX v7.1 + Multi-Broker + 8-Position Cap)")
+                logger.critical("STEP 8: Broker manager initialized, attaching Nija Core Loop")
 
                 # ── Nija Core Loop — attach to TradingStrategy ────────────────
                 if NIJA_CORE_LOOP_AVAILABLE and get_nija_core_loop is not None and self.apex is not None:
@@ -4679,6 +4696,7 @@ class TradingStrategy:
 
         TradingStrategy._startup_completed = True
         logger.info("✅ TradingStrategy startup latch set — re-initialisation blocked")
+        logger.critical("STEP 9: Finished init")
         logger.critical("🚀 TRADING STRATEGY INITIALIZED SUCCESSFULLY")
 
     def adopt_existing_positions(self, broker, broker_name: str = "UNKNOWN", account_id: str = "PLATFORM") -> dict:
