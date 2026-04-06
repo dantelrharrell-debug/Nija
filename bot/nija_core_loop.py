@@ -65,8 +65,8 @@ MAX_ENTRIES_PER_CYCLE = 3
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
-# Lowered 25.0 → 20.0 → 14.0 to align with reduced MIN_SCORE_ABSOLUTE in nija_ai_engine.py.
-MIN_SCORE_HARD_FLOOR = 14.0
+# Lowered 25.0 → 20.0 → 14.0 → 11.0 to align with reduced MIN_SCORE_ABSOLUTE in nija_ai_engine.py.
+MIN_SCORE_HARD_FLOOR = 11.0
 
 # After this many consecutive zero-signal cycles, progressive score relaxation
 # kicks in: each 5-cycle step reduces the effective floor by a small amount
