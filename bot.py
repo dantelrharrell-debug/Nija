@@ -636,6 +636,7 @@ def _run_bot_startup_and_trading_with_retry():
     _MAX_DELAY = 60             # seconds — keeps retries responsive
 
     attempt = 0
+    connection_attempts = 0  # FIX 4: anti-loop kill switch (temporary debug)
 
     while True:
         try:
@@ -651,6 +652,16 @@ def _run_bot_startup_and_trading_with_retry():
 
         except Exception as e:
             attempt += 1
+            connection_attempts += 1  # FIX 4: track connection attempts
+
+            # FIX 4: anti-loop kill switch — abort if connection keeps looping
+            if connection_attempts > 3:
+                logger.critical(
+                    "🚨 CONNECTION LOOP DETECTED — FORCING EXIT after %d attempts",
+                    connection_attempts,
+                )
+                break
+
             delay = min(
                 _MAX_DELAY,
                 _INITIAL_DELAY_SECONDS * (_BACKOFF_MULTIPLIER ** min(attempt - 1, _MAX_BACKOFF_EXPONENT)),
@@ -696,406 +707,428 @@ def _run_bot_startup_and_trading():
         _rerun_supervisor_loop(_state_copy)
         return
 
+    # ── FIX 3: CONNECTION PHASE GUARD — can only run once ───────────────────
+    # If a previous attempt completed the connection/credential-check phase,
+    # skip it entirely on retry so we never loop back through broker init.
+    with _initialized_state_lock:
+        _connection_already_complete = _initialized_state.get("connection_complete", False)
     try:
         # Import here to ensure logging is set up
         from bot.health_check import get_health_manager
         health_manager = get_health_manager()
-        
-        logger.info("=" * 70)
-        logger.info("🧵 STARTUP THREAD: Beginning bot initialization")
-        logger.info("=" * 70)
-        logger.info("While this thread initializes, health server remains responsive")
-        logger.info("")
-        
-        # Get git metadata - try env vars first, then git commands
-        git_branch = os.getenv("GIT_BRANCH", "")
-        git_commit = os.getenv("GIT_COMMIT", "")
 
-        # Fallback to git commands if env vars not set
-        if not git_branch:
-            try:
-                git_branch = subprocess.check_output(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    cwd=os.path.dirname(__file__),
-                    stderr=subprocess.DEVNULL,
-                    timeout=5
-                ).decode().strip()
-            except Exception:
-                git_branch = "unknown"
-
-        if not git_commit:
-            try:
-                git_commit = subprocess.check_output(
-                    ["git", "rev-parse", "--short", "HEAD"],
-                    cwd=os.path.dirname(__file__),
-                    stderr=subprocess.DEVNULL,
-                    timeout=5
-                ).decode().strip()
-            except Exception:
-                git_commit = "unknown"
-
-        logger.info("=" * 70)
-        logger.info("NIJA TRADING BOT - APEX v7.2.0")
-        logger.info("NIJA TRADING BOT - APEX v7.2")
-        logger.info("🏷 Version: 7.2.0 — Independent Trading Only")
-        logger.info("Branch:          %s", git_branch)
-        logger.info("Commit:          %s", git_commit)
-
-        # Build timestamp: prefer env var injected by CI/Docker, else record startup time
-        build_timestamp = os.getenv("BUILD_TIMESTAMP") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        logger.info("Build timestamp: %s", build_timestamp)
-
-        # Risk mode: derive human-readable label from RISK_PROFILE env var
-        _risk_profile = os.getenv("RISK_PROFILE", "AUTO").upper()
-        _risk_label_map = {
-            "STARTER":  "small-account / STARTER ($50–$99)",
-            "SAVER":    "small-account / SAVER ($100–$249)",
-            "INVESTOR": "INVESTOR ($250–$999)",
-            "INCOME":   "1K mode / INCOME ($1k–$4.9k)",
-            "LIVABLE":  "LIVABLE ($5k–$24.9k)",
-            "BALLER":   "BALLER ($25k+)",
-            "AUTO":     "AUTO (balance-based tier selection)",
-        }
-        risk_mode_label = _risk_label_map.get(_risk_profile, _risk_profile)
-        logger.info("Risk mode:       %s", risk_mode_label)
-
-        # Max positions and allocation % from env vars
-        try:
-            _max_positions = int(os.getenv("MAX_CONCURRENT_POSITIONS", "5"))
-        except ValueError:
-            _max_positions = 5
-        # MAX_TRADE_PERCENT is a decimal fraction (e.g., 0.10 = 10%)
-        _alloc_pct = float(os.getenv("MAX_TRADE_PERCENT", "0.10")) * 100
-        logger.info("Max positions:   %d", _max_positions)
-        logger.info(f"Allocation %:    {_alloc_pct:.0f}%")
-
-        logger.info("=" * 70)
-        logger.info(f"Python version: {sys.version.split()[0]}")
-        logger.info(f"Log file: {LOG_FILE}")
-        logger.info(f"Working directory: {os.getcwd()}")
-        
-        # ═══════════════════════════════════════════════════════════════════════
-        # CRITICAL: Startup Validation (addresses subtle risks)
-        # ═══════════════════════════════════════════════════════════════════════
-        # Validates:
-        # 1. Git metadata (branch/commit must be known)
-        # 2. Exchange configuration (warns about disabled exchanges)
-        # 3. Trading mode (testing vs. live must be explicit)
-        _validation_critical_failure = False
-        _validation_failure_reason = ""
-        try:
-            from bot.startup_validation import run_all_validations, display_validation_results
-            validation_result = run_all_validations(git_branch, git_commit)
-            display_validation_results(validation_result)
-            if validation_result.critical_failure:
-                _validation_critical_failure = True
-                _validation_failure_reason = validation_result.failure_reason
-        except Exception as e:
-            logger.error(f"⚠️  Startup validation failed to run: {e}", exc_info=True)
-            logger.warning("   Continuing startup without validation (NOT RECOMMENDED)")
-
-        # Raise OUTSIDE the try/except so the retry wrapper catches it, not this handler
-        if _validation_critical_failure:
-            logger.error("=" * 70)
-            logger.error("❌ STARTUP VALIDATION FAILED - will retry")
-            logger.error("=" * 70)
-            health_manager.mark_configuration_error(_validation_failure_reason)
-            _log_exit_point("Startup validation failed", exit_code=1)
-            raise RuntimeError(f"Critical startup validation failure (will retry): {_validation_failure_reason}")
-        
-        # Display financial disclaimers (App Store compliance)
-        try:
-            from bot.financial_disclaimers import display_startup_disclaimers, log_compliance_notice
-            display_startup_disclaimers()
-            log_compliance_notice()
-        except ImportError:
-            # Fallback if disclaimers module not available
-            logger.warning("=" * 70)
-            logger.warning("⚠️  RISK WARNING: Trading involves substantial risk of loss")
-            logger.warning("   Only trade with money you can afford to lose")
-            logger.warning("=" * 70)
-        
-        # Display feature flag banner
-        try:
-            from bot.startup_diagnostics import display_feature_flag_banner
-            display_feature_flag_banner()
-        except Exception as e:
-            logger.warning(f"⚠️  Could not display feature flag banner: {e}")
-        
-        # Verify trading capability
-        try:
-            from bot.startup_diagnostics import verify_trading_capability
-            capability_ok, issues = verify_trading_capability()
-            if not capability_ok:
-                logger.warning("⚠️  Trading capability verification found issues")
-                logger.warning("   Bot may not function correctly")
-        except Exception as e:
-            logger.warning(f"⚠️  Could not verify trading capability: {e}")
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # CREDENTIAL VALIDATION — run before any broker connection attempt
-        # ═══════════════════════════════════════════════════════════════════════
-        # Validates that all configured broker credentials are present, non-empty,
-        # and structurally correct.  Logs actionable errors for any issues found
-        # so operators can fix them before the bot wastes time on failed connections.
-        # ═══════════════════════════════════════════════════════════════════════
-        logger.info("=" * 70)
-        logger.info("🔐 CREDENTIAL VALIDATION")
-        logger.info("=" * 70)
-        try:
-            import importlib.util as _iutil
-            _cv_spec = _iutil.spec_from_file_location(
-                "validate_broker_credentials",
-                os.path.join(os.path.dirname(__file__), "validate_broker_credentials.py"),
-            )
-            if _cv_spec and _cv_spec.loader:
-                _cv_mod = _iutil.module_from_spec(_cv_spec)
-                _cv_spec.loader.exec_module(_cv_mod)
-
-                _cv_results = [v() for v in [
-                    _cv_mod._validate_kraken_platform,
-                    _cv_mod._validate_coinbase,
-                    _cv_mod._validate_alpaca,
-                    _cv_mod._validate_binance,
-                    _cv_mod._validate_okx,
-                ]]
-
-                _cv_configured = sum(1 for r in _cv_results if r["configured"])
-                _cv_errors     = sum(1 for r in _cv_results if r["configured"] and not r["valid"])
-
-                for _r in _cv_results:
-                    if not _r["configured"]:
-                        logger.info("   ⚪ %-22s not configured (skipped)", _r["broker"])
-                        continue
-                    if _r["valid"]:
-                        logger.info("   ✅ %-22s credentials look valid", _r["broker"])
-                    else:
-                        logger.error("   ❌ %-22s CREDENTIAL ERRORS:", _r["broker"])
-                        for _issue in _r["issues"]:
-                            logger.error("      → %s", _issue)
-                    for _warn in _r.get("warnings", []):
-                        logger.warning("      ⚠️  %s", _warn)
-
-                if _cv_configured == 0:
-                    logger.error("=" * 70)
-                    logger.error("❌ CREDENTIAL VALIDATION: No broker credentials configured")
-                    logger.error("   The bot cannot trade without at least one broker.")
-                    logger.error("   See CREDENTIAL_SETUP.md for step-by-step instructions.")
-                    logger.error("=" * 70)
-                elif _cv_errors > 0:
-                    logger.warning("=" * 70)
-                    logger.warning(
-                        "⚠️  CREDENTIAL VALIDATION: %d broker(s) have credential errors",
-                        _cv_errors,
-                    )
-                    logger.warning("   These brokers will likely fail to connect.")
-                    logger.warning("   Common fixes:")
-                    logger.warning("     • Kraken 'EAPI:Invalid nonce'  → run reset_kraken_nonce.py")
-                    logger.warning("     • Coinbase 401 Unauthorized    → check PEM newlines in secret")
-                    logger.warning("     • Missing credentials          → see CREDENTIAL_SETUP.md")
-                    logger.warning("=" * 70)
-                else:
-                    logger.info("✅ CREDENTIAL VALIDATION: All configured brokers passed")
-            else:
-                logger.warning("⚠️  validate_broker_credentials.py not found — skipping validation")
-        except Exception as _cv_err:
-            logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # KRAKEN PRE-CONNECTION NONCE RESET
-        # ═══════════════════════════════════════════════════════════════════════
-        # Jump the global Kraken nonce forward before any connection attempt.
-        # This clears any "burned" nonce window left by a previous session and
-        # prevents "EAPI:Invalid nonce" errors on the very first API call.
-        # ═══════════════════════════════════════════════════════════════════════
-        _kraken_creds_present = bool(
-            (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
-            and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
-        )
-        if _kraken_creds_present:
+        # FIX 3: Hard guard — connection/credential phase runs at most once.
+        # If a previous attempt already completed this phase, skip it entirely.
+        if _connection_already_complete:
+            logger.info("♻️  Connection phase already complete — skipping credential checks")
+            # Restore the credential flags stored during the first run so that
+            # later sections (broker connection diagnostics at ~line 1226) still work.
+            with _initialized_state_lock:
+                _cred_snap = dict(_initialized_state)
+            kraken_platform_configured = _cred_snap.get("kraken_platform_configured", False)
+            coinbase_configured = _cred_snap.get("coinbase_configured", False)
+            exchanges_configured = _cred_snap.get("exchanges_configured", 0)
+        else:
             logger.info("=" * 70)
-            logger.info("⚡ KRAKEN PRE-CONNECTION NONCE RESET")
-            logger.info("=" * 70)
-            try:
-                from bot.global_kraken_nonce import (
-                    get_global_nonce_manager,
-                    jump_global_kraken_nonce_forward,
-                )
-                _nonce_mgr = get_global_nonce_manager()
+            logger.info("While this thread initializes, health server remains responsive")
+            logger.info("")
+            
+            # Get git metadata - try env vars first, then git commands
+            git_branch = os.getenv("GIT_BRANCH", "")
+            git_commit = os.getenv("GIT_COMMIT", "")
 
-                # Jump 60 seconds forward (in milliseconds) to skip any nonces
-                # Kraken may still have cached from the previous session.
-                _jump_ms  = 60 * 1000  # 60 seconds in milliseconds
-                _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
-                logger.info(
-                    "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
-                    _new_nonce,
-                )
+            # Fallback to git commands if env vars not set
+            if not git_branch:
+                try:
+                    git_branch = subprocess.check_output(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=os.path.dirname(__file__),
+                        stderr=subprocess.DEVNULL,
+                        timeout=5
+                    ).decode().strip()
+                except Exception:
+                    git_branch = "unknown"
+
+            if not git_commit:
+                try:
+                    git_commit = subprocess.check_output(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        cwd=os.path.dirname(__file__),
+                        stderr=subprocess.DEVNULL,
+                        timeout=5
+                    ).decode().strip()
+                except Exception:
+                    git_commit = "unknown"
+
+            logger.info("=" * 70)
+            logger.info("NIJA TRADING BOT - APEX v7.2.0")
+            logger.info("NIJA TRADING BOT - APEX v7.2")
+            logger.info("🏷 Version: 7.2.0 — Independent Trading Only")
+            logger.info("Branch:          %s", git_branch)
+            logger.info("Commit:          %s", git_commit)
+
+            # Build timestamp: prefer env var injected by CI/Docker, else record startup time
+            build_timestamp = os.getenv("BUILD_TIMESTAMP") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            logger.info("Build timestamp: %s", build_timestamp)
+
+            # Risk mode: derive human-readable label from RISK_PROFILE env var
+            _risk_profile = os.getenv("RISK_PROFILE", "AUTO").upper()
+            _risk_label_map = {
+                "STARTER":  "small-account / STARTER ($50–$99)",
+                "SAVER":    "small-account / SAVER ($100–$249)",
+                "INVESTOR": "INVESTOR ($250–$999)",
+                "INCOME":   "1K mode / INCOME ($1k–$4.9k)",
+                "LIVABLE":  "LIVABLE ($5k–$24.9k)",
+                "BALLER":   "BALLER ($25k+)",
+                "AUTO":     "AUTO (balance-based tier selection)",
+            }
+            risk_mode_label = _risk_label_map.get(_risk_profile, _risk_profile)
+            logger.info("Risk mode:       %s", risk_mode_label)
+
+            # Max positions and allocation % from env vars
+            try:
+                _max_positions = int(os.getenv("MAX_CONCURRENT_POSITIONS", "5"))
+            except ValueError:
+                _max_positions = 5
+            # MAX_TRADE_PERCENT is a decimal fraction (e.g., 0.10 = 10%)
+            _alloc_pct = float(os.getenv("MAX_TRADE_PERCENT", "0.10")) * 100
+            logger.info("Max positions:   %d", _max_positions)
+            logger.info(f"Allocation %:    {_alloc_pct:.0f}%")
+
+            logger.info("=" * 70)
+            logger.info(f"Python version: {sys.version.split()[0]}")
+            logger.info(f"Log file: {LOG_FILE}")
+            logger.info(f"Working directory: {os.getcwd()}")
+            
+            # ═══════════════════════════════════════════════════════════════════════
+            # CRITICAL: Startup Validation (addresses subtle risks)
+            # ═══════════════════════════════════════════════════════════════════════
+            # Validates:
+            # 1. Git metadata (branch/commit must be known)
+            # 2. Exchange configuration (warns about disabled exchanges)
+            # 3. Trading mode (testing vs. live must be explicit)
+            _validation_critical_failure = False
+            _validation_failure_reason = ""
+            try:
+                from bot.startup_validation import run_all_validations, display_validation_results
+                validation_result = run_all_validations(git_branch, git_commit)
+                display_validation_results(validation_result)
+                if validation_result.critical_failure:
+                    _validation_critical_failure = True
+                    _validation_failure_reason = validation_result.failure_reason
+            except Exception as e:
+                logger.error(f"⚠️  Startup validation failed to run: {e}", exc_info=True)
+                logger.warning("   Continuing startup without validation (NOT RECOMMENDED)")
+
+            # Raise OUTSIDE the try/except so the retry wrapper catches it, not this handler
+            if _validation_critical_failure:
+                logger.error("=" * 70)
+                logger.error("❌ STARTUP VALIDATION FAILED - will retry")
+                logger.error("=" * 70)
+                health_manager.mark_configuration_error(_validation_failure_reason)
+                _log_exit_point("Startup validation failed", exit_code=1)
+                raise RuntimeError(f"Critical startup validation failure (will retry): {_validation_failure_reason}")
+            
+            # Display financial disclaimers (App Store compliance)
+            try:
+                from bot.financial_disclaimers import display_startup_disclaimers, log_compliance_notice
+                display_startup_disclaimers()
+                log_compliance_notice()
             except ImportError:
-                logger.warning("   ⚠️  global_kraken_nonce module not available — skipping pre-reset")
-            except Exception as _nonce_err:
-                logger.warning("   ⚠️  Nonce pre-reset failed (non-fatal): %s", _nonce_err)
-
-        # Portfolio override visibility at startup
-        portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
-        if portfolio_id:
-            logger.info("🔧 Portfolio override in use: %s", portfolio_id)
-        else:
-            logger.info("🔧 Portfolio override in use: <none>")
-
-        # Pre-flight check: Verify at least one exchange is configured
-        logger.info("=" * 70)
-        logger.info("🔍 PRE-FLIGHT: Checking Exchange Credentials")
-        logger.info("=" * 70)
-
-        exchanges_configured = 0
-        exchange_status = []
-
-        # Check Coinbase
-        coinbase_configured = bool(
-            os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET")
-        )
-        if coinbase_configured:
-            exchanges_configured += 1
-            exchange_status.append("✅ Coinbase")
-            logger.info("✅ Coinbase credentials detected")
-        else:
-            exchange_status.append("❌ Coinbase")
-            logger.warning("⚠️  Coinbase credentials not configured")
-
-        # Check Kraken Platform
-        kraken_platform_configured = bool(
-            os.getenv("KRAKEN_PLATFORM_API_KEY") and os.getenv("KRAKEN_PLATFORM_API_SECRET")
-        )
-        if kraken_platform_configured:
-            exchanges_configured += 1
-            exchange_status.append("✅ Kraken (Platform)")
-            logger.info("✅ Kraken Platform credentials detected")
-        else:
-            exchange_status.append("❌ Kraken (Platform)")
-            logger.warning("⚠️  Kraken Platform credentials not configured")
-
-        # Check OKX
-        if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
-            exchanges_configured += 1
-            exchange_status.append("✅ OKX")
-            logger.info("✅ OKX credentials detected")
-        else:
-            exchange_status.append("❌ OKX")
-            logger.warning("⚠️  OKX credentials not configured")
-
-        # Check Binance
-        if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
-            exchanges_configured += 1
-            exchange_status.append("✅ Binance")
-            logger.info("✅ Binance credentials detected")
-        else:
-            exchange_status.append("❌ Binance")
-            logger.warning("⚠️  Binance credentials not configured")
-
-        # Check Alpaca Platform
-        if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"):
-            exchanges_configured += 1
-            exchange_status.append("✅ Alpaca (Platform)")
-            logger.info("✅ Alpaca Platform credentials detected")
-        else:
-            exchange_status.append("❌ Alpaca (Platform)")
-            logger.warning("⚠️  Alpaca Platform credentials not configured")
-
-        logger.info("=" * 70)
-        logger.info("CREDENTIAL CHECK SUMMARY")
-        logger.info("=" * 70)
-        for status in exchange_status:
-            logger.info(f"   {status}")
-        logger.info("=" * 70)
-        logger.info(f"Total exchanges configured: {exchanges_configured}")
-        logger.info("=" * 70)
-
-        if exchanges_configured == 0:
-            logger.error("=" * 70)
-            logger.error("❌ FATAL: NO EXCHANGE CREDENTIALS CONFIGURED")
-            logger.error("=" * 70)
-            logger.error("")
-            logger.error("At least one exchange must be configured to run the bot.")
-            logger.error("Configure credentials for at least ONE of:")
-            logger.error("  • Coinbase")
-            logger.error("  • Kraken")
-            logger.error("  • OKX")
-            logger.error("  • Binance")
-            logger.error("  • Alpaca")
-            logger.error("")
-            logger.error("How to configure:")
-            logger.error("1. Edit .env file and add your credentials")
-            logger.error("2. Or set environment variables in your deployment platform:")
-            logger.error("")
-            logger.error("Railway: Settings → Variables → Add")
-            logger.error("Render:  Dashboard → Service → 'Manual Deploy' → 'Deploy latest commit'")
-            logger.error("")
-            logger.error("For detailed help, see:")
-            logger.error("  • SOLUTION_ENABLE_EXCHANGES.md")
-            logger.error("  • RESTART_DEPLOYMENT.md")
-            logger.error("  • Run: python3 diagnose_env_vars.py")
-            logger.error("=" * 70)
-            logger.error("Exiting - No trading possible without credentials")
+                # Fallback if disclaimers module not available
+                logger.warning("=" * 70)
+                logger.warning("⚠️  RISK WARNING: Trading involves substantial risk of loss")
+                logger.warning("   Only trade with money you can afford to lose")
+                logger.warning("=" * 70)
             
-            # Mark as configuration error for health checks
-            health_manager.mark_configuration_error("No exchange credentials configured")
-            
-            # Health server already started at beginning of main()
-            logger.info("Health server already running - will report configuration error status")
-            
-            _log_lifecycle_banner(
-                "⚠️  ENTERING CONFIG ERROR KEEP-ALIVE MODE",
-                [
-                    "No exchange credentials configured - cannot trade",
-                    "Process will stay alive for health monitoring",
-                    "Container will NOT restart automatically",
-                    f"Heartbeat interval: {CONFIG_ERROR_HEARTBEAT_INTERVAL}s",
-                    "Configure credentials and manually restart deployment",
-                    *_get_thread_status()
-                ]
-            )
-            
+            # Display feature flag banner
             try:
-                loop_count = 0
-                while True:
-                    time.sleep(CONFIG_ERROR_HEARTBEAT_INTERVAL)
-                    health_manager.heartbeat()
-                    loop_count += 1
-                    
-                    # Log status every 10 iterations (10 minutes at 60s interval)
-                    if loop_count % 10 == 0:
-                        logger.info(f"⏱️  Config error keep-alive: {loop_count * CONFIG_ERROR_HEARTBEAT_INTERVAL}s elapsed")
-            except KeyboardInterrupt:
-                _log_exit_point(
-                    "Configuration error keep-alive interrupted",
-                    exit_code=0,
-                    details=[
-                        "KeyboardInterrupt in config error keep-alive loop",
-                        "No exchange credentials were configured",
+                from bot.startup_diagnostics import display_feature_flag_banner
+                display_feature_flag_banner()
+            except Exception as e:
+                logger.warning(f"⚠️  Could not display feature flag banner: {e}")
+            
+            # Verify trading capability
+            try:
+                from bot.startup_diagnostics import verify_trading_capability
+                capability_ok, issues = verify_trading_capability()
+                if not capability_ok:
+                    logger.warning("⚠️  Trading capability verification found issues")
+                    logger.warning("   Bot may not function correctly")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not verify trading capability: {e}")
+
+            # ═══════════════════════════════════════════════════════════════════════
+            # CREDENTIAL VALIDATION — run before any broker connection attempt
+            # ═══════════════════════════════════════════════════════════════════════
+            # Validates that all configured broker credentials are present, non-empty,
+            # and structurally correct.  Logs actionable errors for any issues found
+            # so operators can fix them before the bot wastes time on failed connections.
+            # ═══════════════════════════════════════════════════════════════════════
+            logger.info("=" * 70)
+            logger.info("🔐 CREDENTIAL VALIDATION")
+            logger.info("=" * 70)
+            try:
+                import importlib.util as _iutil
+                _cv_spec = _iutil.spec_from_file_location(
+                    "validate_broker_credentials",
+                    os.path.join(os.path.dirname(__file__), "validate_broker_credentials.py"),
+                )
+                if _cv_spec and _cv_spec.loader:
+                    _cv_mod = _iutil.module_from_spec(_cv_spec)
+                    _cv_spec.loader.exec_module(_cv_mod)
+
+                    _cv_results = [v() for v in [
+                        _cv_mod._validate_kraken_platform,
+                        _cv_mod._validate_coinbase,
+                        _cv_mod._validate_alpaca,
+                        _cv_mod._validate_binance,
+                        _cv_mod._validate_okx,
+                    ]]
+
+                    _cv_configured = sum(1 for r in _cv_results if r["configured"])
+                    _cv_errors     = sum(1 for r in _cv_results if r["configured"] and not r["valid"])
+
+                    for _r in _cv_results:
+                        if not _r["configured"]:
+                            logger.info("   ⚪ %-22s not configured (skipped)", _r["broker"])
+                            continue
+                        if _r["valid"]:
+                            logger.info("   ✅ %-22s credentials look valid", _r["broker"])
+                        else:
+                            logger.error("   ❌ %-22s CREDENTIAL ERRORS:", _r["broker"])
+                            for _issue in _r["issues"]:
+                                logger.error("      → %s", _issue)
+                        for _warn in _r.get("warnings", []):
+                            logger.warning("      ⚠️  %s", _warn)
+
+                    if _cv_configured == 0:
+                        logger.error("=" * 70)
+                        logger.error("❌ CREDENTIAL VALIDATION: No broker credentials configured")
+                        logger.error("   The bot cannot trade without at least one broker.")
+                        logger.error("   See CREDENTIAL_SETUP.md for step-by-step instructions.")
+                        logger.error("=" * 70)
+                    elif _cv_errors > 0:
+                        logger.warning("=" * 70)
+                        logger.warning(
+                            "⚠️  CREDENTIAL VALIDATION: %d broker(s) have credential errors",
+                            _cv_errors,
+                        )
+                        logger.warning("   These brokers will likely fail to connect.")
+                        logger.warning("   Common fixes:")
+                        logger.warning("     • Kraken 'EAPI:Invalid nonce'  → run reset_kraken_nonce.py")
+                        logger.warning("     • Coinbase 401 Unauthorized    → check PEM newlines in secret")
+                        logger.warning("     • Missing credentials          → see CREDENTIAL_SETUP.md")
+                        logger.warning("=" * 70)
+                    else:
+                        logger.info("✅ CREDENTIAL VALIDATION: All configured brokers passed")
+                else:
+                    logger.warning("⚠️  validate_broker_credentials.py not found — skipping validation")
+            except Exception as _cv_err:
+                logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
+
+            # ═══════════════════════════════════════════════════════════════════════
+            # KRAKEN PRE-CONNECTION NONCE RESET
+            # ═══════════════════════════════════════════════════════════════════════
+            # Jump the global Kraken nonce forward before any connection attempt.
+            # This clears any "burned" nonce window left by a previous session and
+            # prevents "EAPI:Invalid nonce" errors on the very first API call.
+            # ═══════════════════════════════════════════════════════════════════════
+            _kraken_creds_present = bool(
+                (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
+                and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
+            )
+            if _kraken_creds_present:
+                logger.info("=" * 70)
+                logger.info("⚡ KRAKEN PRE-CONNECTION NONCE RESET")
+                logger.info("=" * 70)
+                try:
+                    from bot.global_kraken_nonce import (
+                        get_global_nonce_manager,
+                        jump_global_kraken_nonce_forward,
+                    )
+                    _nonce_mgr = get_global_nonce_manager()
+
+                    # Jump 60 seconds forward (in milliseconds) to skip any nonces
+                    # Kraken may still have cached from the previous session.
+                    _jump_ms  = 60 * 1000  # 60 seconds in milliseconds
+                    _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
+                    logger.info(
+                        "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
+                        _new_nonce,
+                    )
+                except ImportError:
+                    logger.warning("   ⚠️  global_kraken_nonce module not available — skipping pre-reset")
+                except Exception as _nonce_err:
+                    logger.warning("   ⚠️  Nonce pre-reset failed (non-fatal): %s", _nonce_err)
+
+            # Portfolio override visibility at startup
+            portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
+            if portfolio_id:
+                logger.info("🔧 Portfolio override in use: %s", portfolio_id)
+            else:
+                logger.info("🔧 Portfolio override in use: <none>")
+
+            # Pre-flight check: Verify at least one exchange is configured
+            logger.info("=" * 70)
+            logger.info("🔍 PRE-FLIGHT: Checking Exchange Credentials")
+            logger.info("=" * 70)
+
+            exchanges_configured = 0
+            exchange_status = []
+
+            # Check Coinbase
+            coinbase_configured = bool(
+                os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET")
+            )
+            if coinbase_configured:
+                exchanges_configured += 1
+                exchange_status.append("✅ Coinbase")
+                logger.info("✅ Coinbase credentials detected")
+            else:
+                exchange_status.append("❌ Coinbase")
+                logger.warning("⚠️  Coinbase credentials not configured")
+
+            # Check Kraken Platform
+            kraken_platform_configured = bool(
+                os.getenv("KRAKEN_PLATFORM_API_KEY") and os.getenv("KRAKEN_PLATFORM_API_SECRET")
+            )
+            if kraken_platform_configured:
+                exchanges_configured += 1
+                exchange_status.append("✅ Kraken (Platform)")
+                logger.info("✅ Kraken Platform credentials detected")
+            else:
+                exchange_status.append("❌ Kraken (Platform)")
+                logger.warning("⚠️  Kraken Platform credentials not configured")
+
+            # Check OKX
+            if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
+                exchanges_configured += 1
+                exchange_status.append("✅ OKX")
+                logger.info("✅ OKX credentials detected")
+            else:
+                exchange_status.append("❌ OKX")
+                logger.warning("⚠️  OKX credentials not configured")
+
+            # Check Binance
+            if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
+                exchanges_configured += 1
+                exchange_status.append("✅ Binance")
+                logger.info("✅ Binance credentials detected")
+            else:
+                exchange_status.append("❌ Binance")
+                logger.warning("⚠️  Binance credentials not configured")
+
+            # Check Alpaca Platform
+            if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"):
+                exchanges_configured += 1
+                exchange_status.append("✅ Alpaca (Platform)")
+                logger.info("✅ Alpaca Platform credentials detected")
+            else:
+                exchange_status.append("❌ Alpaca (Platform)")
+                logger.warning("⚠️  Alpaca Platform credentials not configured")
+
+            logger.info("=" * 70)
+            logger.info("CREDENTIAL CHECK SUMMARY")
+            logger.info("=" * 70)
+            for status in exchange_status:
+                logger.info(f"   {status}")
+            logger.info("=" * 70)
+            logger.info(f"Total exchanges configured: {exchanges_configured}")
+            logger.info("=" * 70)
+
+            if exchanges_configured == 0:
+                logger.error("=" * 70)
+                logger.error("❌ FATAL: NO EXCHANGE CREDENTIALS CONFIGURED")
+                logger.error("=" * 70)
+                logger.error("")
+                logger.error("At least one exchange must be configured to run the bot.")
+                logger.error("Configure credentials for at least ONE of:")
+                logger.error("  • Coinbase")
+                logger.error("  • Kraken")
+                logger.error("  • OKX")
+                logger.error("  • Binance")
+                logger.error("  • Alpaca")
+                logger.error("")
+                logger.error("How to configure:")
+                logger.error("1. Edit .env file and add your credentials")
+                logger.error("2. Or set environment variables in your deployment platform:")
+                logger.error("")
+                logger.error("Railway: Settings → Variables → Add")
+                logger.error("Render:  Dashboard → Service → 'Manual Deploy' → 'Deploy latest commit'")
+                logger.error("")
+                logger.error("For detailed help, see:")
+                logger.error("  • SOLUTION_ENABLE_EXCHANGES.md")
+                logger.error("  • RESTART_DEPLOYMENT.md")
+                logger.error("  • Run: python3 diagnose_env_vars.py")
+                logger.error("=" * 70)
+                logger.error("Exiting - No trading possible without credentials")
+                
+                # Mark as configuration error for health checks
+                health_manager.mark_configuration_error("No exchange credentials configured")
+                
+                # Health server already started at beginning of main()
+                logger.info("Health server already running - will report configuration error status")
+                
+                _log_lifecycle_banner(
+                    "⚠️  ENTERING CONFIG ERROR KEEP-ALIVE MODE",
+                    [
+                        "No exchange credentials configured - cannot trade",
+                        "Process will stay alive for health monitoring",
+                        "Container will NOT restart automatically",
+                        f"Heartbeat interval: {CONFIG_ERROR_HEARTBEAT_INTERVAL}s",
+                        "Configure credentials and manually restart deployment",
                         *_get_thread_status()
                     ]
                 )
-                sys.exit(0)
-        elif exchanges_configured < 2:
-            # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
-            suppress_warning = os.getenv("SUPPRESS_SINGLE_EXCHANGE_WARNING", "false").lower() in ("true", "1", "yes")
-            if not suppress_warning:
-                logger.warning("=" * 70)
-                logger.warning("⚠️  SINGLE EXCHANGE TRADING")
-                logger.warning("=" * 70)
-                logger.warning(f"Only {exchanges_configured} exchange configured. Consider enabling more for:")
-                logger.warning("  • Better diversification")
-                logger.warning("  • Reduced API rate limiting")
-                logger.warning("  • More resilient trading")
-                logger.warning("")
-                logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
-                logger.warning("To suppress this warning, set SUPPRESS_SINGLE_EXCHANGE_WARNING=true")
-                logger.warning("=" * 70)
-            logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
-            logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
+                
+                try:
+                    loop_count = 0
+                    while True:
+                        time.sleep(CONFIG_ERROR_HEARTBEAT_INTERVAL)
+                        health_manager.heartbeat()
+                        loop_count += 1
+                        
+                        # Log status every 10 iterations (10 minutes at 60s interval)
+                        if loop_count % 10 == 0:
+                            logger.info(f"⏱️  Config error keep-alive: {loop_count * CONFIG_ERROR_HEARTBEAT_INTERVAL}s elapsed")
+                except KeyboardInterrupt:
+                    _log_exit_point(
+                        "Configuration error keep-alive interrupted",
+                        exit_code=0,
+                        details=[
+                            "KeyboardInterrupt in config error keep-alive loop",
+                            "No exchange credentials were configured",
+                            *_get_thread_status()
+                        ]
+                    )
+                    sys.exit(0)
+            elif exchanges_configured < 2:
+                # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
+                suppress_warning = os.getenv("SUPPRESS_SINGLE_EXCHANGE_WARNING", "false").lower() in ("true", "1", "yes")
+                if not suppress_warning:
+                    logger.warning("=" * 70)
+                    logger.warning("⚠️  SINGLE EXCHANGE TRADING")
+                    logger.warning("=" * 70)
+                    logger.warning(f"Only {exchanges_configured} exchange configured. Consider enabling more for:")
+                    logger.warning("  • Better diversification")
+                    logger.warning("  • Reduced API rate limiting")
+                    logger.warning("  • More resilient trading")
+                    logger.warning("")
+                    logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
+                    logger.warning("To suppress this warning, set SUPPRESS_SINGLE_EXCHANGE_WARNING=true")
+                    logger.warning("=" * 70)
+                logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
+                logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
 
-        logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
+            # Save credential flags so retries can restore them without re-running checks
+            with _initialized_state_lock:
+                _initialized_state["connection_complete"] = True
+                _initialized_state["kraken_platform_configured"] = kraken_platform_configured
+                _initialized_state["coinbase_configured"] = coinbase_configured
+                _initialized_state["exchanges_configured"] = exchanges_configured
+
+            logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
 
         # ═══════════════════════════════════════════════════════════════════════
         # BOT INITIALIZATION - This is where Kraken connection happens
