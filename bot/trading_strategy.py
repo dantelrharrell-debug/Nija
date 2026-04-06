@@ -5,6 +5,7 @@ import random
 import queue
 import json
 import logging
+import threading
 import traceback
 import collections
 from pathlib import Path
@@ -2731,14 +2732,19 @@ class TradingStrategy:
     """
 
     # Class-level startup latch: prevents double-initialisation if TradingStrategy()
-    # is accidentally instantiated a second time (e.g. on a startup retry).
+    # is accidentally called a second time (e.g. on a startup retry).
+    # Protected by a lock to avoid a race condition when multiple threads start up.
     _startup_completed: bool = False
+    _startup_lock = threading.Lock()
 
     def __init__(self):
         """Initialize production strategy with multi-broker support."""
-        if TradingStrategy._startup_completed:
-            logger.info("Startup already completed — skipping re-init")
-            return
+        with TradingStrategy._startup_lock:
+            if TradingStrategy._startup_completed:
+                raise RuntimeError(
+                    "TradingStrategy already initialized — "
+                    "use the existing instance instead of creating a new one"
+                )
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
 
         # ── HF Flip Mode — attach the pre-created singleton for later patching ──
@@ -4672,6 +4678,7 @@ class TradingStrategy:
             self.independent_trader = None
 
         TradingStrategy._startup_completed = True
+        logger.info("✅ TradingStrategy startup latch set — re-initialisation blocked")
 
     def adopt_existing_positions(self, broker, broker_name: str = "UNKNOWN", account_id: str = "PLATFORM") -> dict:
         """

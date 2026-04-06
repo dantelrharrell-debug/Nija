@@ -293,7 +293,7 @@ class MultiAccountBrokerManager:
             # Hard-skip: broker already registered — no side effects, no exception
             if broker_type in self._platform_brokers:
                 logger.info(
-                    "%s already registered — skipping duplicate (hard skip)",
+                    "%s already registered — skipping duplicate",
                     broker_type.value,
                 )
                 return False

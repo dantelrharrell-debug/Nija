@@ -32,6 +32,7 @@ except Exception:
 # These are populated after first successful initialisation and reused by the
 # supervisor-loop-only restart path so TradingStrategy is never created twice.
 _initialized_state: dict = {}
+_initialized_state_lock = threading.Lock()
 
 # Import broker types for error reporting
 try:
@@ -681,12 +682,16 @@ def _run_bot_startup_and_trading():
     global _initialized_state
 
     # ── FAST PATH: init already done — skip straight to supervisor loop ────
-    if _initialized_state:
+    with _initialized_state_lock:
+        _state_snapshot = _initialized_state.get("strategy")
+    if _state_snapshot is not None:
         logger.info(
             "♻️  Startup already completed — skipping re-init, "
             "re-entering supervisor loop"
         )
-        _rerun_supervisor_loop(_initialized_state)
+        with _initialized_state_lock:
+            _state_copy = dict(_initialized_state)
+        _rerun_supervisor_loop(_state_copy)
         return
 
     try:
@@ -1443,14 +1448,15 @@ def _run_bot_startup_and_trading():
             # SUPERVISOR LOOP — monitors every 10 s, restarts dead threads
             # ═══════════════════════════════════════════════════════════════════════
 
-            # Persist initialised state so a supervisor-loop crash can be retried
-            # WITHOUT recreating TradingStrategy or reconnecting brokers.
-            _initialized_state = {
-                "strategy": strategy,
-                "active_threads": _active_threads,
-                "use_independent_trading": use_independent_trading,
-                "health_manager": health_manager,
-            }
+            # Persist initialised state (thread-safe) so a supervisor-loop crash
+            # can be retried WITHOUT recreating TradingStrategy or reconnecting brokers.
+            with _initialized_state_lock:
+                _initialized_state = {
+                    "strategy": strategy,
+                    "active_threads": _active_threads,
+                    "use_independent_trading": use_independent_trading,
+                    "health_manager": health_manager,
+                }
 
             _log_lifecycle_banner(
                 "🔒 ORCHESTRATOR ACTIVE",
