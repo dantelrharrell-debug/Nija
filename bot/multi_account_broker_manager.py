@@ -240,10 +240,10 @@ class MultiAccountBrokerManager:
             broker: Already-created BaseBroker instance
             
         Returns:
-            True if successfully registered
+            True if successfully registered, False if already registered (idempotent)
             
         Raises:
-            RuntimeError: If platform brokers are locked or broker already registered
+            RuntimeError: If platform brokers are locked
         """
         # Enforce immutability: Cannot add brokers after locking
         if self._platform_brokers_locked:
@@ -253,9 +253,8 @@ class MultiAccountBrokerManager:
         
         # Enforce single registration: Check if already registered
         if broker_type in self._platform_brokers:
-            error_msg = f"❌ INVARIANT VIOLATION: Platform broker {broker_type.value} already registered - duplicate registration not allowed"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            logger.warning(f"{broker_type.value} already registered — skipping duplicate")
+            return False
         
         # Register the broker instance
         self._platform_brokers[broker_type] = broker
