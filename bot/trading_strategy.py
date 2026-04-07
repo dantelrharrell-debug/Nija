@@ -2289,7 +2289,7 @@ HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (10)
 # AGGRESSIVE MODE: Default reduced from MAX_TOTAL_POSITIONS (10) → 5 so new quality
 # trades can be opened even when several older positions remain open.  Operators can
 # raise this limit via the MAX_CONCURRENT_POSITIONS environment variable (max 10).
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '4')
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '3')
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
@@ -2368,8 +2368,8 @@ POSITION_SIZE_WARNING_THRESHOLD_USD = 10.0  # Warn when position is under this a
 # Values reflect actual exchange minimums; raise per-broker entries for stricter
 # fee-efficiency enforcement on well-funded accounts.
 BROKERAGE_MIN_TRADE_USD: dict = {
-    'coinbase': 1.0,    # Coinbase actual minimum (~$1); was $10 (fee-efficiency floor)
-    'kraken':   1.0,    # Kraken actual minimum; was $10 (Kraken exchange rules)
+    'coinbase': 5.0,    # Coinbase fee-efficiency floor ($5 minimum)
+    'kraken':   10.5,   # Kraken exchange minimum ($10.50 — enforced to keep trades eligible)
     'binance':  1.0,    # Binance actual minimum; was $10
     'okx':      1.0,    # OKX actual minimum; was $10
     'alpaca':   1.0,    # Alpaca minimum (stocks, lower fees)
@@ -2620,6 +2620,10 @@ def get_accelerator_position_size_pct(balance: float) -> float:
     return DYNAMIC_POSITION_SIZE_PCT * 100.0
 
 # FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
+# UPDATE (Apr 2026): Raised to $10.50 to match Kraken's actual exchange minimum
+# Kraken enforces $10.50 minimum trade size per exchange rules
+MIN_KRAKEN_BALANCE = 10.0   # Minimum balance for Kraken to allow trading (updated from $25)
+MIN_POSITION_SIZE = 10.5    # Minimum position size for Kraken ($10.50 exchange minimum)
 # UPDATE (Jan 22, 2026): Aligned with new tier structure and $10 minimum trade size
 # Kraken enforces $10 minimum trade size per exchange rules
 MIN_KRAKEN_BALANCE = GLOBAL_MIN_TRADE   # Minimum balance for Kraken to allow trading (unified to GLOBAL_MIN_TRADE)
@@ -6573,7 +6577,7 @@ class TradingStrategy:
             self.last_veto_reason = veto_reason
             return False, veto_reason
 
-    def _select_entry_broker(self, all_brokers: Dict[BrokerType, object]) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
+    def _select_entry_broker(self, all_brokers: Dict[BrokerType, object], size_hint: float = 0.0) -> Tuple[Optional[object], Optional[str], Dict[str, str]]:
         """
         Select the best broker for new entry (BUY) orders.
 
@@ -6583,8 +6587,15 @@ class TradingStrategy:
         scorer is unavailable the first eligible broker in priority order is used
         as the fallback, preserving backward compatibility.
 
+        Micro-cap routing: when ``size_hint`` is provided and is below a broker's
+        exchange minimum (from ``BROKERAGE_MIN_TRADE_USD``), that broker is skipped
+        in favour of a lower-floor alternative (e.g. Coinbase / OKX).  This prevents
+        trades that are already smaller than the exchange floor from being routed to
+        an exchange that would reject them.
+
         Args:
             all_brokers: Dict of {BrokerType: broker_instance} for all available brokers
+            size_hint: Estimated position size in USD (0 = unknown / skip routing filter)
 
         Returns:
             tuple: (broker_instance, broker_name, eligibility_reasons) or (None, None, reasons)
@@ -6611,6 +6622,21 @@ class TradingStrategy:
 
             if is_eligible:
                 broker_name = self._get_broker_name(broker)
+                # ── MICRO-CAP ROUTING: skip brokers whose floor exceeds size_hint ──
+                # When a credible size estimate is available, exclude brokers that
+                # would reject the order so we route directly to a lower-floor exchange.
+                if size_hint > 0:
+                    _floor = BROKERAGE_MIN_TRADE_USD.get(broker_name.lower(), BASE_MIN_POSITION_SIZE_USD)
+                    if size_hint < _floor:
+                        eligibility_status[broker_type.value] = (
+                            f"Skipped (size_hint ${size_hint:.2f} < {broker_name} floor ${_floor:.2f})"
+                        )
+                        logger.info(
+                            f"   🔀 MICRO-CAP ROUTING: skipping {broker_name.upper()} "
+                            f"(estimated size ${size_hint:.2f} < exchange floor ${_floor:.2f}) "
+                            f"— routing to lower-floor broker"
+                        )
+                        continue
                 eligible_brokers.append((broker, broker_name, broker_type))
 
         if not eligible_brokers:
@@ -7468,6 +7494,10 @@ class TradingStrategy:
         # 💹 CYCLE P&L TRACKING — reset apex accumulator at cycle start
         if hasattr(self, 'apex') and self.apex is not None:
             self.apex._cycle_pnl = 0.0
+            _apex_class = type(self.apex).__name__
+            logger.info(f"🎯 Strategy injection verified: Using strategy {_apex_class}")
+        else:
+            logger.warning("⚠️ Strategy injection MISSING: self.apex is None — new entries blocked this cycle")
         
         # Display user status banner (trust layer feature)
         try:
@@ -8185,6 +8215,30 @@ class TradingStrategy:
                 self._last_known_balance = account_balance
             # Capture the balance at cycle start for end-of-cycle P&L comparison
             _cycle_start_balance = account_balance
+
+            # ── BALANCE TIMING GUARD DIAGNOSTIC ──────────────────────────────
+            # Log balance freshness each cycle so stale-cache vetoes are visible
+            # in the logs instead of silently blocking entries.
+            _btg_broker_name = self._get_broker_name(active_broker) if active_broker else 'unknown'
+            if hasattr(active_broker, '_balance_last_updated') and active_broker._balance_last_updated is not None:
+                _btg_age = time.time() - active_broker._balance_last_updated
+                if _btg_age <= CACHED_BALANCE_MAX_AGE_SECONDS:
+                    logger.info(
+                        f"✅ BALANCE TIMING GUARD: {_btg_broker_name.upper()} balance fresh "
+                        f"(age={_btg_age:.0f}s ≤ {CACHED_BALANCE_MAX_AGE_SECONDS}s) — "
+                        f"${account_balance:.2f}"
+                    )
+                else:
+                    logger.warning(
+                        f"⏳ BALANCE TIMING GUARD: {_btg_broker_name.upper()} balance STALE "
+                        f"(age={_btg_age:.0f}s > {CACHED_BALANCE_MAX_AGE_SECONDS}s) — "
+                        f"grace mode active (0.5× sizing) — nonce errors may delay refresh"
+                    )
+            else:
+                logger.info(
+                    f"ℹ️  BALANCE TIMING GUARD: {_btg_broker_name.upper()} no timestamp — "
+                    f"${account_balance:.2f} (grace mode active if balance was from cache)"
+                )
 
             # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────
             # Two paths both result in _first_trade_override = True, which expands
@@ -10326,8 +10380,13 @@ class TradingStrategy:
                     else:
                         logger.info(f"      Available brokers for selection: {', '.join([bt.value.upper() for bt in all_brokers.keys()])}")
 
-                    # Select best broker for entry based on priority
-                    entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(all_brokers)
+                    # Select best broker for entry based on priority.
+                    # Pass a size_hint so micro-cap routing can skip high-floor
+                    # exchanges (e.g. Kraken $10.50) when the estimated trade is too small.
+                    _size_hint = account_balance * DYNAMIC_POSITION_SIZE_PCT if account_balance > 0 else 0.0
+                    entry_broker, entry_broker_name, broker_eligibility = self._select_entry_broker(
+                        all_brokers, size_hint=_size_hint
+                    )
 
                     # Note: Broker eligibility logging moved to after exception handler (line ~3420)
                     # to ensure it happens even if an exception occurs
@@ -13809,6 +13868,23 @@ class TradingStrategy:
                                         min_position_size_dynamic = _dmes_raised
                                     except Exception as _dmes_err:
                                         logger.debug("DynamicMinEntrySizer skipped for %s: %s", symbol, _dmes_err)
+
+                                # ── BROKER MINIMUM FLOOR CLAMP ─────────────────────────────────
+                                # After all size multipliers (regime, risk, grace-mode 0.5×, etc.)
+                                # the position could be pushed below the exchange's minimum order
+                                # size.  Clamp it back up to the broker floor so the trade stays
+                                # eligible rather than being silently rejected as too-small dust.
+                                _broker_exchange_floor = BROKERAGE_MIN_TRADE_USD.get(
+                                    broker_name.lower() if broker_name else '',
+                                    BASE_MIN_POSITION_SIZE_USD,
+                                )
+                                if position_size > 0 and position_size < _broker_exchange_floor:
+                                    logger.info(
+                                        f"   📐 {symbol}: Broker floor clamp — "
+                                        f"${position_size:.2f} → ${_broker_exchange_floor:.2f} "
+                                        f"({broker_name or 'exchange'} minimum ${_broker_exchange_floor:.2f})"
+                                    )
+                                    position_size = _broker_exchange_floor
 
                                 # PROFITABILITY WARNING: Small positions have lower profitability
                                 # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
