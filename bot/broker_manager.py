@@ -6312,25 +6312,12 @@ class KrakenBroker(BaseBroker):
                 # Also update global last call time
                 self._last_api_call_time = time.time()
 
-            # Make the API call.
-            # Explicitly stamp the nonce onto every private request so the value
-            # is always sourced from NonceManager regardless of whether krakenex's
-            # internal _nonce() override fired correctly.  This is the belt-and-
-            # suspenders guarantee the user requires.
+            # Stamp the nonce onto every private request from the single
+            # shared NonceManager singleton — no fallback, no alternate path.
             if NonceManager is not None:
                 if params is None:
                     params = {}
-                # Prefer the bound method stored by connect() so we always use
-                # the same already-initialised singleton reference.  Fall back to
-                # self.nonce_manager.get_nonce() when the bound-method shortcut is
-                # not set, and finally to a fresh NonceManager() call so that
-                # _kraken_private_call() is safe to invoke before connect() runs.
-                if getattr(self, '_kraken_private_call_nonce', None) is not None:
-                    params["nonce"] = self._kraken_private_call_nonce()
-                elif getattr(self, 'nonce_manager', None) is not None:
-                    params["nonce"] = self.nonce_manager.get_nonce()
-                else:
-                    params["nonce"] = NonceManager().get_nonce()
+                params["nonce"] = self.nonce_manager.get_nonce()
 
             # Small fixed delay between private calls to prevent ultra-fast bursts
             # from concurrent threads from hitting the API faster than Kraken can

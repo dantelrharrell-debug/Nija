@@ -201,13 +201,13 @@ class NonceManager:
     Thread-safe singleton nonce generator for Kraken API.
 
     Uses millisecond timestamps (13 digits) with a strictly-increasing
-    enforcement: if wall-clock time has not advanced since the last call,
-    the counter is incremented by 1 so every returned value is unique.
+    monotonic guarantee: if wall-clock time has not advanced since the last
+    call the internal counter is incremented by 1, so every returned value
+    is unique and ordered.
 
     ONE singleton instance is shared across every thread and every
-    KrakenBroker account, which means parallel balance/position fetches
-    on the same API key can never produce duplicate or out-of-order
-    nonces.
+    KrakenBroker account so parallel API calls on the same key can never
+    produce duplicate or out-of-order nonces.
 
     Usage::
 
@@ -215,73 +215,39 @@ class NonceManager:
 
         nonce_manager = NonceManager()
         payload["nonce"] = nonce_manager.get_nonce()
-        # — or —
-        self.api._nonce = lambda: str(NonceManager().get_nonce())
     """
 
     _instance = None
-    _lock: threading.Lock = threading.Lock()
+    _instance_lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
-            with cls._lock:
+            with cls._instance_lock:
                 if cls._instance is None:
-                    inst = super().__new__(cls)
-                    _now = time.time()
-                    inst._nonce = int(_now * 1000)
-                    inst._last_ts = _now
-                    inst._thread_lock = threading.Lock()
-                    cls._instance = inst
+                    instance = super().__new__(cls)
+                    instance._init()
+                    cls._instance = instance
         return cls._instance
 
+    def _init(self):
+        self._lock = threading.Lock()
+        self._nonce = int(time.time() * 1000)
+
     def get_nonce(self) -> int:
-        """
-        Return the next strictly-increasing millisecond nonce.
-
-        Thread-safe: protected by an instance-level Lock so concurrent callers
-        from multiple threads or broker accounts always receive distinct,
-        ordered values.
-
-        Returns:
-            int: Milliseconds since epoch, guaranteed > previous return value.
-        """
-        with self._thread_lock:
+        """Return the next strictly-increasing millisecond nonce."""
+        with self._lock:
             now = int(time.time() * 1000)
             if now <= self._nonce:
-                now = self._nonce + 1
-            self._nonce = now
-            self._last_ts = time.time()
+                self._nonce += 1
+            else:
+                self._nonce = now
             return self._nonce
 
-    def peek(self) -> int:
-        """Return the last issued nonce without advancing the counter."""
-        with self._thread_lock:
-            return self._nonce
-
-    def reset_to_safe_value(self, offset_ms: int = 1_000) -> int:
-        """
-        Hard-reset the nonce to current time + *offset_ms* milliseconds.
-
-        Use for manual recovery when repeated "Invalid nonce" errors cannot
-        be resolved by the normal escalating-jump mechanism.  The default
-        1-second offset is the maximum allowed forward jump (FIX 1).
-
-        Args:
-            offset_ms: Milliseconds to add to current time (default 1 000 = 1 s).
-
-        Returns:
-            int: New nonce value after reset.
-        """
-        with self._thread_lock:
-            self._nonce = int(time.time() * 1000) + offset_ms
-            self._last_ts = time.time()
-            _logger.warning(
-                "global_kraken_nonce: NonceManager.reset_to_safe_value() called; "
-                "new nonce = %d (offset +%d ms)",
-                self._nonce,
-                offset_ms,
-            )
-            return self._nonce
+    def reset_to_safe_value(self, offset_ms: int = 1_000) -> None:
+        """Reset nonce to current time + offset_ms milliseconds (default 1 s)."""
+        with self._lock:
+            now = int(time.time() * 1000)
+            self._nonce = now + offset_ms
 
 
 # ── Persistent singleton nonce manager (legacy / advanced recovery) ───────────
@@ -549,39 +515,27 @@ class GlobalKrakenNonceManager:
 
     def record_nonce_error(self) -> int:
         """
-        Record a Kraken "invalid nonce" error and perform an escalating jump.
+        Record a Kraken "invalid nonce" error.
 
-        Jump schedule (resets after record_nonce_success()):
-          1st error  → +10 s
-          2nd error  → +20 s
-          3rd+ error → +30 s
+        For errors 1-2: increments the consecutive-error counter only — no
+        forward jump is applied (FIX 1).  The monotonic get_nonce() keeps
+        issuing the next valid timestamp on every call.
 
-        Dynamic cap: if _last_nonce is already more than 30 s ahead of the
-        wall clock the jump is capped to 10 s to avoid runaway accumulation.
-
-        Hard-cap guard: if lead already exceeds _HARD_CAP_LEAD_NS (60 s) the
-        forward bump is skipped entirely — get_nonce() will perform a hard
-        reset on the next call instead.
-
-        Automatic HARD RESET: if consecutive errors reach
-        _HARD_RESET_ON_CONSECUTIVE_ERRORS (3), a HARD RESET is triggered
-        immediately (snap to now + 25 s, gate closed) rather than continuing
-        to jump forward.  This prevents a runaway error loop from pushing the
-        nonce beyond the 60 s HARD-CAP.
+        After _HARD_RESET_ON_CONSECUTIVE_ERRORS (3) consecutive errors: snap
+        the nonce back to now + 1 s and close the post-reset gate so
+        concurrent callers wait for the first success before proceeding
+        (FIX 3 — reset only on 3 consecutive errors).
 
         Returns:
-            int: Current consecutive-error count after recording this error.
+            int: Current consecutive-error count (0 after a hard reset).
         """
         with self._nonce_lock:
             self._consecutive_errors += 1
             count = self._consecutive_errors
 
             current_ns = time.time_ns()
-            current_lead_ns = self._last_nonce - current_ns
 
-            # ── Automatic HARD RESET after too many consecutive errors ────
-            # Escalating jumps (10 s + 20 s = 30 s by error #2) are approaching
-            # the 60 s HARD-CAP by error #3.  Force a clean snap-back now.
+            # ── Automatic HARD RESET after 3 consecutive errors ────────────
             if count >= _HARD_RESET_ON_CONSECUTIVE_ERRORS:
                 _logger.warning(
                     "global_kraken_nonce: %d consecutive nonce errors — triggering "
@@ -595,64 +549,28 @@ class GlobalKrakenNonceManager:
                 self._reset_triggered_at = time.time()
                 self._post_reset_gate.clear()
                 _persist_nonce(self._last_nonce)
-                return 0  # Indicate clean-slate after hard reset
+                return 0  # Clean-slate after hard reset
 
-            # Do not jump forward when already far ahead — the hard-reset in
-            # get_nonce() will handle correction on the next call.
-            if current_lead_ns > _HARD_CAP_LEAD_NS:
-                _logger.warning(
-                    "global_kraken_nonce: nonce error #%d — skipping forward jump "
-                    "(already %.1fs ahead ≥ 60 s hard-cap; get_nonce() will hard-reset)",
-                    count,
-                    current_lead_ns / _NS_PER_SECOND,
-                )
-                return count
-
-            idx = min(count - 1, len(_RECOVERY_JUMPS_NS) - 1)
-            jump_ns = _RECOVERY_JUMPS_NS[idx]
-
-            # Cap the jump when we're already well ahead to avoid overshoot.
-            if current_lead_ns > _RECOVERY_AHEAD_THRESHOLD_NS:
-                capped_ns = min(jump_ns, _RECOVERY_JUMP_CAP_NS)
-                if capped_ns < jump_ns:
-                    _logger.debug(
-                        "global_kraken_nonce: capping recovery jump from +%.0fs to +%.0fs "
-                        "(already %.1fs ahead of wall clock)",
-                        jump_ns / _NS_PER_SECOND,
-                        capped_ns / _NS_PER_SECOND,
-                        current_lead_ns / _NS_PER_SECOND,
-                    )
-                jump_ns = capped_ns
-
-            self._last_nonce = max(
-                current_ns + jump_ns,
-                self._last_nonce + jump_ns,
-            )
-            self._nonces_since_persist = 0
-            _persist_nonce(self._last_nonce)
-
+            # Errors 1-2: no forward jump — log and let get_nonce() continue.
             _logger.warning(
-                "global_kraken_nonce: nonce error #%d — jumped forward +%.0fs "
-                "(lead was %.1fs, now %.1fs ahead of wall clock)",
+                "global_kraken_nonce: nonce error #%d — no forward jump (FIX 1); "
+                "get_nonce() will continue monotonically",
                 count,
-                jump_ns / _NS_PER_SECOND,
-                current_lead_ns / _NS_PER_SECOND,
-                (self._last_nonce - current_ns) / _NS_PER_SECOND,
             )
             return count
 
-    def reset_to_safe_value(self, offset_ms: int = 2_000) -> int:
+    def reset_to_safe_value(self, offset_ms: int = 1_000) -> int:
         """
         Hard-reset the nonce to a safe value for manual recovery.
 
         Sets the nonce to current nanoseconds + offset_ms milliseconds and
-        persists immediately.  The default of 2 s (2_000 ms) stays within
-        Kraken's nonce acceptance window.  Use this when the bot is stuck
+        persists immediately.  The default of 1 s (1_000 ms) is the maximum
+        allowed forward offset (FIX 1).  Use this when the bot is stuck
         and normal auto-heal has not resolved the desync.
 
         Args:
             offset_ms: Milliseconds ahead of wall clock for the new nonce
-                       (default 2_000 = 2 seconds).
+                       (default 1_000 = 1 second).
 
         Returns:
             int: New nonce value after reset
