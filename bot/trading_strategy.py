@@ -812,17 +812,20 @@ except ImportError:
 # ── Nija Core Loop — rebuilt single-pass scan / rank / enter loop ────────────
 try:
     from nija_core_loop import get_nija_core_loop, NijaCoreLoop
+    import nija_core_loop as _nija_core_loop_module
     NIJA_CORE_LOOP_AVAILABLE = True
     logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
 except ImportError:
     try:
         from bot.nija_core_loop import get_nija_core_loop, NijaCoreLoop
+        import bot.nija_core_loop as _nija_core_loop_module
         NIJA_CORE_LOOP_AVAILABLE = True
         logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
     except ImportError:
         NIJA_CORE_LOOP_AVAILABLE = False
         get_nija_core_loop = None  # type: ignore
         NijaCoreLoop = None  # type: ignore
+        _nija_core_loop_module = None  # type: ignore
 
 # ── Win-Rate / Frequency Tuner — optimise EV by balancing quality vs volume ──
 try:
@@ -4356,17 +4359,34 @@ class TradingStrategy:
                             logger.info(f"✅ USER: {user.name}: TRADING (Broker: {user.broker_type.upper()})")
                             active_user_count += 1
                         else:
-                            # Check if credentials are configured
-                            has_creds = self.multi_account_manager.user_has_credentials(
-                                user.user_id,
-                                BrokerType[user.broker_type.upper()]
-                            )
-                            if has_creds:
-                                # Credentials configured but connection failed
-                                logger.info(f"❌ USER: {user.name}: NOT TRADING (Broker: {user.broker_type.upper()}, Connection failed)")
+                            # Also check platform_account_layer — mark_user_connected() persists
+                            # connection state there even when the MAM broker object is stale.
+                            _pal_user_connected = False
+                            try:
+                                from bot.platform_account_layer import get_platform_account_layer as _get_pal
+                                _pal_status = _get_pal().get_status()
+                                _pal_user_connected = any(
+                                    u.user_id == user.user_id and u.connected
+                                    for u in _pal_status.user_connections
+                                )
+                            except Exception:
+                                pass
+
+                            if _pal_user_connected:
+                                logger.info(f"✅ USER: {user.name}: TRADING (Broker: {user.broker_type.upper()})")
+                                active_user_count += 1
                             else:
-                                # Credentials not configured - informational, not an error
-                                logger.info(f"⚪ USER: {user.name}: NOT CONFIGURED (Broker: {user.broker_type.upper()}, Credentials not set)")
+                                # Check if credentials are configured
+                                has_creds = self.multi_account_manager.user_has_credentials(
+                                    user.user_id,
+                                    BrokerType[user.broker_type.upper()]
+                                )
+                                if has_creds:
+                                    # Credentials configured but connection failed
+                                    logger.info(f"❌ USER: {user.name}: NOT TRADING (Broker: {user.broker_type.upper()}, Connection failed)")
+                                else:
+                                    # Credentials not configured - informational, not an error
+                                    logger.info(f"⚪ USER: {user.name}: NOT CONFIGURED (Broker: {user.broker_type.upper()}, Credentials not set)")
                 else:
                     logger.info("⚪ No user accounts configured")
             except Exception as e:
@@ -4387,6 +4407,11 @@ class TradingStrategy:
             total_active = active_platform_count + active_user_count
             if total_active > 0:
                 logger.info(f"🚀 TRADING ACTIVE: {total_active} account(s) ready")
+                logger.info("🚀 STARTING CORE TRADING LOOP")
+                try:
+                    self._launch_core_trading_loop()
+                except Exception as _loop_start_err:
+                    logger.error(f"❌ Failed to start trading loop: {_loop_start_err}", exc_info=True)
                 logger.info("")
                 logger.info("Next steps:")
                 logger.info("   • Bot will start scanning markets in ~45 seconds")
@@ -5674,6 +5699,32 @@ class TradingStrategy:
             total_capital = 0.0
 
         return total_capital
+
+    def _launch_core_trading_loop(self) -> None:
+        """
+        Start the core trading loop in a background daemon thread.
+
+        Called immediately after the TRADING ACTIVE banner so the loop is
+        guaranteed to run even if the outer orchestrator (bot.py) hits an
+        unexpected error before spawning its own threads.  A module-level
+        guard in nija_core_loop.run_trading_loop prevents a second loop from
+        starting if bot.py's thread already claimed the slot.
+
+        Uses the module-level ``_nija_core_loop_module`` reference that is
+        resolved once at import time (see the try/except block near the top
+        of this file); this avoids repeated dynamic imports inside methods.
+        """
+        import threading as _threading
+        if _nija_core_loop_module is None:
+            logger.warning("⚠️  nija_core_loop not available — core trading loop not started")
+            return
+        _threading.Thread(
+            target=_nija_core_loop_module.run_trading_loop,
+            args=(self,),
+            daemon=True,
+            name="CoreTradingLoop",
+        ).start()
+        logger.info("✅ Core trading loop thread launched")
 
     def _display_user_status_banner(self):
         """

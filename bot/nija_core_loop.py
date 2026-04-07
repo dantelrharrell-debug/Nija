@@ -878,3 +878,63 @@ def get_nija_core_loop(apex_strategy: Any, max_positions: int = 5) -> NijaCoreLo
     if _loop is None:
         _loop = NijaCoreLoop(apex_strategy=apex_strategy, max_positions=max_positions)
     return _loop
+
+
+# ---------------------------------------------------------------------------
+# Standalone trading loop — for use as a daemon thread target
+# ---------------------------------------------------------------------------
+# _loop_guard / _loop_running guard against duplicate loop starts:
+#   - _loop_guard  : Lock that serialises the check-and-set on _loop_running.
+#   - _loop_running: Flag set to True the first time run_trading_loop acquires
+#                    the lock; subsequent callers bail out immediately so only
+#                    one continuous cycle ever runs.
+_loop_guard = threading.Lock()
+_loop_running = False
+
+
+def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
+    """
+    Continuous self-healing trading loop.
+
+    Designed to be launched as a daemon thread target directly from
+    TradingStrategy initialisation so the core trading cycle is
+    guaranteed to start even if the outer orchestrator (bot.py) hits
+    an unexpected exception before starting its own threads.
+
+    Parameters
+    ----------
+    strategy   : TradingStrategy instance
+    cycle_secs : Seconds to sleep between cycles (default 150 = 2.5 min)
+
+    Usage
+    -----
+    threading.Thread(
+        target=nija_core_loop.run_trading_loop,
+        args=(self,),
+        daemon=True,
+    ).start()
+    """
+    global _loop_running
+
+    with _loop_guard:
+        if _loop_running:
+            logger.info("🟡 Core trading loop already active — skipping duplicate start")
+            return
+        _loop_running = True
+
+    logger.info("🟢 Trading loop alive (INITIAL START)")
+
+    cycle = 0
+    while True:
+        try:
+            cycle += 1
+            strategy.run_cycle()
+            time.sleep(cycle_secs)
+        except Exception as _err:
+            logger.error(
+                "❌ Trading loop cycle #%d error: %s — retrying in 15s",
+                cycle,
+                _err,
+                exc_info=True,
+            )
+            time.sleep(15)
