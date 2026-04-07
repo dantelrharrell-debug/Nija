@@ -3797,6 +3797,18 @@ class TradingStrategy:
             from dust_blacklist import get_dust_blacklist
             from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
 
+            # ── UNCONDITIONAL strategy injection ─────────────────────────────
+            # ALWAYS create the strategy here, before any broker/mode gate, so
+            # self.apex is never None due to a conditional skip.  The broker
+            # client is None at this point; it will be updated once the broker
+            # connects (see below).  This mirrors the fix for the pattern:
+            #     if mode == "PRO": self.apex = ApexStrategy()   ← WRONG
+            #     self.apex = ApexStrategy()                     ← CORRECT
+            self.apex = NIJAApexStrategyV71(broker_client=None)
+            if self.apex is None:
+                raise RuntimeError("FATAL: Apex strategy failed to initialize")
+            logger.info(f"✅ Strategy injected: {type(self.apex).__name__}")
+
             # Initialize multi-account broker manager for user-specific trading
             logger.info("=" * 70)
             logger.info("🌐 MULTI-ACCOUNT TRADING MODE ACTIVATED")
@@ -4670,17 +4682,12 @@ class TradingStrategy:
                     self.market_adapter = None
 
                 # Initialize APEX strategy with primary broker
-                self.apex = NIJAApexStrategyV71(broker_client=self.broker)
-                logger.critical("✅ APEX V7.1 LOADED — NIJAApexStrategyV71 instance active and ready")
-                # Strategy injection guard: hard-fail early if the strategy object is
-                # somehow None (e.g. constructor raised a swallowed exception upstream).
-                # Use an explicit check rather than `assert` so it cannot be disabled
-                # with Python's -O optimisation flag.
-                if self.apex is None:
-                    raise RuntimeError(
-                        "Strategy injection failed: NIJAApexStrategyV71 instance is None after construction"
-                    )
-                logger.info("🎯 Strategy injection verified: Using strategy NIJAApexStrategyV71")
+                # Wire the live broker into the already-created strategy instance.
+                # self.apex was unconditionally created above with broker_client=None;
+                # now that the broker is ready, update the reference so all
+                # downstream API calls route through the real connection.
+                self.apex.broker_client = self.broker
+                logger.critical("✅ APEX V7.1 LIVE — broker_client wired to active broker")
 
                 # ── HF Scalping Mode — apply to APEX after construction ────────
                 # Patches confidence, ADX, volume, trend-confirmation thresholds
@@ -4746,7 +4753,8 @@ class TradingStrategy:
             else:
                 logger.warning("Strategy initialized in monitor mode (no active brokers)")
                 self.enforcer = None
-                self.apex = None
+                # self.apex was unconditionally created above — no broker to wire.
+                logger.info("📡 Running broker-less: self.apex already injected without broker_client")
 
         except ImportError as e:
             logger.error(f"Failed to import strategy modules: {e}")
@@ -4754,8 +4762,31 @@ class TradingStrategy:
             self.broker = None
             self.broker_manager = None
             self.enforcer = None
-            self.apex = None
             self.independent_trader = None
+            # Even when broker imports fail, attempt to inject the strategy so
+            # the analysis engine is available for the next cycle.
+            try:
+                from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71 as _ApexCls
+            except ImportError:
+                try:
+                    from nija_apex_strategy_v71 import NIJAApexStrategyV71 as _ApexCls
+                except ImportError:
+                    _ApexCls = None
+            if _ApexCls is not None:
+                try:
+                    self.apex = _ApexCls(broker_client=None)
+                    logger.info(f"✅ Strategy injected: {type(self.apex).__name__}")
+                except Exception as _apex_fallback_err:
+                    logger.critical(
+                        "FATAL: Apex strategy failed to initialize (ImportError fallback): %s",
+                        _apex_fallback_err,
+                    )
+                    raise RuntimeError(
+                        f"FATAL: Apex strategy failed to initialize: {_apex_fallback_err}"
+                    )
+            else:
+                logger.critical("FATAL: Apex strategy failed to initialize — NIJAApexStrategyV71 not importable")
+                raise RuntimeError("FATAL: Apex strategy failed to initialize — NIJAApexStrategyV71 not importable")
 
         TradingStrategy._startup_completed = True
         logger.info("✅ TradingStrategy startup latch set — re-initialisation blocked")
