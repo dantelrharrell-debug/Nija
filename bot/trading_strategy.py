@@ -14014,18 +14014,54 @@ class TradingStrategy:
                                 if position_size < POSITION_SIZE_WARNING_THRESHOLD_USD:
                                     logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
 
-                                # ── FINAL PRE-ORDER SIZE GATE ─────────────────────────────
-                                # calculate_position_size() fuses four models (risk-based,
-                                # ATR volatility, conservative Kelly, hard cap) and VETOES
-                                # trades whose net profit cannot clear execution friction.
-                                # This is the last line of defence before capital leaves the
-                                # account — runs after ALL other sizing/scaling logic.
-                                if CALC_POSITION_SIZE_AVAILABLE and _calc_position_size is not None:
+                                # ── FINAL PRE-ORDER SIZE GATE (TRE + streak/cooldown) ─────
+                                # allocate_capital() is the single authoritative sizing path.
+                                # It fuses: fee-aware cost model, ATR volatility scalar,
+                                # conservative Kelly, tier minimum, streak bonus, and adaptive
+                                # cooldown.  Vetoed trades (size=0 or cooldown active) are
+                                # skipped with a continue so no capital leaves the account.
+                                if ALLOCATE_CAPITAL_AVAILABLE and _allocate_capital is not None:
+                                    try:
+                                        _ac_result = _allocate_capital(
+                                            account_balance = account_balance,
+                                            symbol          = symbol,
+                                            broker_name     = (broker_name or "kraken").lower(),
+                                            analysis        = analysis,
+                                            broker          = active_broker,
+                                            streak          = getattr(self, '_win_streak', 0),
+                                            last_trade_ts   = (
+                                                getattr(self, '_micro_cap_last_trade_times', {}).get(symbol) or None
+                                            ),
+                                        )
+                                        if _ac_result is None:
+                                            logger.info(
+                                                "   🚫 %s: VETOED by allocate_capital "
+                                                "(cooldown active or net profit too low after fees)",
+                                                symbol,
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        # Use the TRE-computed size as the authoritative cap;
+                                        # all prior scaling steps already applied above, so we
+                                        # take the more conservative of the two values.
+                                        _ac_size = float(_ac_result['size_usd'])
+                                        position_size = min(position_size, _ac_size)
+                                        logger.info(
+                                            "   ✅ %s: Final position size: $%.2f  "
+                                            "[streak=%d cd=%ds]",
+                                            symbol, position_size,
+                                            _ac_result.get('streak', 0),
+                                            _ac_result.get('cooldown_sec', 60),
+                                        )
+                                    except Exception as _ac_err:
+                                        logger.debug("allocate_capital gate skipped for %s: %s", symbol, _ac_err)
+                                elif CALC_POSITION_SIZE_AVAILABLE and _calc_position_size is not None:
+                                    # Fallback: plain fee-aware gate (no streak/cooldown)
                                     try:
                                         _cps_sl  = float(analysis.get('stop_loss_pct',     0.02))
                                         _cps_tp  = float(analysis.get('profit_target_pct', 0.035))
                                         _cps_atr = float(analysis.get('atr_pct',           0.02))
-                                        _cps_ep  = float(analysis.get('entry_price',       0.0)) or float(
+                                        _cps_ep  = float(analysis.get('entry_price', 0.0)) or float(
                                             df['close'].iloc[-1] if df is not None and len(df) > 0 else 0.0
                                         )
                                         _cps_wr  = float(getattr(getattr(self, 'performance', None), 'win_rate', None) or 0.55)
@@ -14036,26 +14072,26 @@ class TradingStrategy:
                                             take_profit_pct  = _cps_tp,
                                             atr_pct          = _cps_atr,
                                             win_rate         = _cps_wr,
-                                            broker           = broker_name.lower() if broker_name else "kraken",
+                                            broker           = (broker_name or "kraken").lower(),
                                         )
                                         logger.info(
-                                            f"📊 Position size computed: ${_cps_size:.2f} "
-                                            f"(balance=${account_balance:.2f} sl={_cps_sl*100:.1f}% "
-                                            f"tp={_cps_tp*100:.1f}% atr={_cps_atr*100:.1f}%)"
+                                            "📊 Position size computed: $%.2f "
+                                            "(balance=$%.2f sl=%.1f%% tp=%.1f%% atr=%.1f%%)",
+                                            _cps_size, account_balance,
+                                            _cps_sl * 100, _cps_tp * 100, _cps_atr * 100,
                                         )
                                         if _cps_size <= 0.0:
                                             logger.info(
-                                                f"   🚫 {symbol}: VETOED by calculate_position_size — "
-                                                f"net profit too low after fees/spread/slippage"
+                                                "   🚫 %s: VETOED by calculate_position_size — "
+                                                "net profit too low after fees/spread/slippage",
+                                                symbol,
                                             )
                                             filter_stats['market_filter'] += 1
                                             continue
-                                        # Take the more conservative of the two estimates so
-                                        # existing risk-management caps are never bypassed.
                                         position_size = min(position_size, _cps_size)
-                                        logger.info(f"   ✅ {symbol}: Final position size after gate: ${position_size:.2f}")
+                                        logger.info("   ✅ %s: Final position size: $%.2f", symbol, position_size)
                                     except Exception as _cps_err:
-                                        logger.debug("calculate_position_size gate skipped for %s: %s", symbol, _cps_err)
+                                        logger.debug("calculate_position_size fallback skipped for %s: %s", symbol, _cps_err)
 
                                 # ═══════════════════════════════════════════════════════
                                 # CROSS-ACCOUNT RISK BALANCING — global 6% ceiling
