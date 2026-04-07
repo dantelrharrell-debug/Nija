@@ -2275,7 +2275,7 @@ HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (10)
 # AGGRESSIVE MODE: Default reduced from MAX_TOTAL_POSITIONS (10) → 5 so new quality
 # trades can be opened even when several older positions remain open.  Operators can
 # raise this limit via the MAX_CONCURRENT_POSITIONS environment variable (max 10).
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '4')
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '3')
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
@@ -2354,8 +2354,8 @@ POSITION_SIZE_WARNING_THRESHOLD_USD = 10.0  # Warn when position is under this a
 # Values reflect actual exchange minimums; raise per-broker entries for stricter
 # fee-efficiency enforcement on well-funded accounts.
 BROKERAGE_MIN_TRADE_USD: dict = {
-    'coinbase': 1.0,    # Coinbase actual minimum (~$1); was $10 (fee-efficiency floor)
-    'kraken':   1.0,    # Kraken actual minimum; was $10 (Kraken exchange rules)
+    'coinbase': 5.0,    # Coinbase fee-efficiency floor ($5 minimum)
+    'kraken':   10.5,   # Kraken exchange minimum ($10.50 — enforced to keep trades eligible)
     'binance':  1.0,    # Binance actual minimum; was $10
     'okx':      1.0,    # OKX actual minimum; was $10
     'alpaca':   1.0,    # Alpaca minimum (stocks, lower fees)
@@ -2606,10 +2606,10 @@ def get_accelerator_position_size_pct(balance: float) -> float:
     return DYNAMIC_POSITION_SIZE_PCT * 100.0
 
 # FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
-# UPDATE (Jan 22, 2026): Aligned with new tier structure and $10 minimum trade size
-# Kraken enforces $10 minimum trade size per exchange rules
+# UPDATE (Apr 2026): Raised to $10.50 to match Kraken's actual exchange minimum
+# Kraken enforces $10.50 minimum trade size per exchange rules
 MIN_KRAKEN_BALANCE = 10.0   # Minimum balance for Kraken to allow trading (updated from $25)
-MIN_POSITION_SIZE = 10.0    # Minimum position size for Kraken ($10 minimum trade)
+MIN_POSITION_SIZE = 10.5    # Minimum position size for Kraken ($10.50 exchange minimum)
 
 # BROKER PRIORITY SYSTEM (Jan 22, 2025)
 # Define entry broker priority for BUY orders
@@ -13757,6 +13757,23 @@ class TradingStrategy:
                                         min_position_size_dynamic = _dmes_raised
                                     except Exception as _dmes_err:
                                         logger.debug("DynamicMinEntrySizer skipped for %s: %s", symbol, _dmes_err)
+
+                                # ── BROKER MINIMUM FLOOR CLAMP ─────────────────────────────────
+                                # After all size multipliers (regime, risk, grace-mode 0.5×, etc.)
+                                # the position could be pushed below the exchange's minimum order
+                                # size.  Clamp it back up to the broker floor so the trade stays
+                                # eligible rather than being silently rejected as too-small dust.
+                                _broker_exchange_floor = BROKERAGE_MIN_TRADE_USD.get(
+                                    broker_name.lower() if broker_name else '',
+                                    BASE_MIN_POSITION_SIZE_USD,
+                                )
+                                if position_size > 0 and position_size < _broker_exchange_floor:
+                                    logger.info(
+                                        f"   📐 {symbol}: Broker floor clamp — "
+                                        f"${position_size:.2f} → ${_broker_exchange_floor:.2f} "
+                                        f"({broker_name or 'exchange'} minimum ${_broker_exchange_floor:.2f})"
+                                    )
+                                    position_size = _broker_exchange_floor
 
                                 # PROFITABILITY WARNING: Small positions have lower profitability
                                 # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
