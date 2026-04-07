@@ -1662,7 +1662,7 @@ if _disabled_layers:
 # Single source of truth referenced by BROKER_MIN_BALANCE, MIN_POSITION_USD,
 # EXCHANGE_MIN_ORDER_SIZE, MIN_KRAKEN_BALANCE, and MIN_POSITION_SIZE below.
 # Defined early so it is available to the import-fallback block.
-GLOBAL_MIN_TRADE: float = 5.0
+GLOBAL_MIN_TRADE: float = 10.0
 # ============================================================================
 
 # Position adoption safety constants
@@ -6512,12 +6512,17 @@ class TradingStrategy:
                     )
                     balance = _last_bal
                 else:
-                    _hardcoded_fallback = 74.26
+                    veto_reason = (
+                        f"{broker_name.upper()} balance is 0.0 and no last-known balance available — "
+                        "vetoing entry until a confirmed balance is fetched"
+                    )
                     logger.warning(
                         f"   ⚠️  {broker_name.upper()} balance is 0.0 and no last-known balance — "
-                        f"using hardcoded fallback ${_hardcoded_fallback:.2f} to unblock entry"
+                        "blocking entry until live balance is confirmed"
                     )
-                    balance = _hardcoded_fallback
+                    self.veto_count_session += 1
+                    self.last_veto_reason = veto_reason
+                    return False, veto_reason
             
             broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
             min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
@@ -7390,7 +7395,7 @@ class TradingStrategy:
                 # tier minimum ($20), causing the gate to set user_mode=True and block
                 # all new entries.  user_mode disables entry scanning for the entire cycle,
                 # so this single bad gate was silently preventing every trade.
-                _trade_size = get_dynamic_min_position_size(account_balance)
+                _trade_size = get_dynamic_min_position_size(account_balance, _tre_broker_name)
                 # Pass balance-based max positions so the TRE cap stays in sync with the
                 # rest of the strategy (e.g. 1 position for micro-cap < $50 accounts).
                 _balance_max_pos = get_balance_based_max_positions(account_balance)
