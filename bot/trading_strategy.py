@@ -1658,6 +1658,12 @@ _disabled_layers = [
 if _disabled_layers:
     logger.info("⚙️  DISABLED LAYERS: %s", " | ".join(_disabled_layers))
 # ============================================================================
+# GLOBAL MINIMUM TRADE SIZE
+# Single source of truth referenced by BROKER_MIN_BALANCE, MIN_POSITION_USD,
+# EXCHANGE_MIN_ORDER_SIZE, MIN_KRAKEN_BALANCE, and MIN_POSITION_SIZE below.
+# Defined early so it is available to the import-fallback block.
+GLOBAL_MIN_TRADE: float = 5.0
+# ============================================================================
 
 # Position adoption safety constants
 # When entry price is missing from exchange, use current_price * this multiplier
@@ -1701,7 +1707,7 @@ except ImportError:
             USER = "user"
 
         # Also need MINIMUM_TRADING_BALANCE fallback
-        MINIMUM_TRADING_BALANCE = 10.0  # Default minimum (updated from $25 for new tier structure)
+        MINIMUM_TRADING_BALANCE = GLOBAL_MIN_TRADE  # Aligned to GLOBAL_MIN_TRADE (was 10.0)
 
 # NIJA State Machine for Position Management (Feb 15, 2026)
 # Formal state tracking to ensure deterministic behavior and proper invariants
@@ -1892,6 +1898,13 @@ MARKET_SCAN_DELAY = max(6.0, _raw_scan_delay)  # Hard floor: never below RateLim
 BALANCE_FETCH_TIMEOUT = 60  # Hard timeout for balance API call (increased to 60s to prevent Kraken connection timeouts)
 CACHED_BALANCE_MAX_AGE_SECONDS = 90   # Use cached balance only if fresh (90 s max staleness)
 
+# Balance timing race protection: minimum age (seconds) the balance must have
+# been updated within before entry is allowed.  On startup and after broker
+# reconnects the balance can take 21–60 s to settle; blocking entries during
+# this window prevents sizing decisions based on a stale or missing balance.
+# Set via env var BALANCE_STABLE_SECONDS (default 60 s).
+BALANCE_STABLE_SECONDS: int = int(os.getenv('BALANCE_STABLE_SECONDS', '60'))
+
 # Cycle-level safety cap: if the full trading cycle (balance + positions + scan)
 # takes longer than this, the scan loop breaks early to protect cycle cadence.
 # Worst-case (no cache hits): 100 markets × 8s scan delay ≈ 800s; cap at 900s.
@@ -1954,7 +1967,8 @@ BALANCE_THRESHOLD_SMALL = 500.0   # Preserved for fallback / future use
 
 # Minimum USD notional for any NEW entry order.  Orders below this value are
 # rejected at source to prevent dust accumulation and unproductive fee spend.
-MIN_POSITION_USD = 5.0    # Minimum entry size (lowered $10→$5, Apr 2026, to allow micro-account setups)
+# References GLOBAL_MIN_TRADE — do not duplicate the value here.
+MIN_POSITION_USD = GLOBAL_MIN_TRADE    # Minimum entry size (aligned to GLOBAL_MIN_TRADE)
 
 # Dust cleanup threshold for EXISTING positions.  Any open position whose
 # current market value falls below this level is marked for cleanup:
@@ -1971,8 +1985,8 @@ EXCHANGE_MINIMUM_ORDER_USD = 1.00  # Hard floor: exchange rejects orders below t
 # Any new entry whose computed order_size_usd falls below this value is
 # rejected *before* any downstream sizing logic runs.  This prevents dust
 # positions from being opened and ensures every trade covers its fees.
-# Set to the same value as MIN_POSITION_USD ($5) — raise if needed.
-EXCHANGE_MIN_ORDER_SIZE: float = 5.0   # USD — absolute minimum for any new entry order (lowered $10→$5, Apr 2026)
+# Tied to GLOBAL_MIN_TRADE so there is one place to change the floor.
+EXCHANGE_MIN_ORDER_SIZE: float = GLOBAL_MIN_TRADE   # USD — absolute minimum for any new entry order
 
 # "Tradable Positions Only" filter — minimum USD notional for a position to be
 # counted as open (affects position-cap checks, first-trade gate, etc.).
@@ -2608,8 +2622,8 @@ def get_accelerator_position_size_pct(balance: float) -> float:
 # FIX #3 (Jan 20, 2026): Kraken-specific minimum thresholds
 # UPDATE (Jan 22, 2026): Aligned with new tier structure and $10 minimum trade size
 # Kraken enforces $10 minimum trade size per exchange rules
-MIN_KRAKEN_BALANCE = 10.0   # Minimum balance for Kraken to allow trading (updated from $25)
-MIN_POSITION_SIZE = 10.0    # Minimum position size for Kraken ($10 minimum trade)
+MIN_KRAKEN_BALANCE = GLOBAL_MIN_TRADE   # Minimum balance for Kraken to allow trading (unified to GLOBAL_MIN_TRADE)
+MIN_POSITION_SIZE = GLOBAL_MIN_TRADE    # Minimum position size (unified to GLOBAL_MIN_TRADE)
 
 # BROKER PRIORITY SYSTEM (Jan 22, 2025)
 # Define entry broker priority for BUY orders
@@ -2623,12 +2637,12 @@ ENTRY_BROKER_PRIORITY = [
 ]
 
 # Minimum balance thresholds for broker eligibility
-# UPDATE (Jan 22, 2026): Aligned with new tier structure and $10 Kraken minimum
+# Unified to GLOBAL_MIN_TRADE so there is one place to change the floor.
 BROKER_MIN_BALANCE = {
-    BrokerType.COINBASE: 10.0,  # Coinbase minimum lowered to support SAVER tier
-    BrokerType.KRAKEN: 10.0,    # Kraken minimum is $10 per exchange rules
-    BrokerType.OKX: 10.0,       # Lower minimum for OKX
-    BrokerType.BINANCE: 10.0,   # Lower minimum for Binance
+    BrokerType.COINBASE: GLOBAL_MIN_TRADE,  # Coinbase minimum — aligned to GLOBAL_MIN_TRADE
+    BrokerType.KRAKEN: GLOBAL_MIN_TRADE,    # Kraken minimum — aligned to GLOBAL_MIN_TRADE
+    BrokerType.OKX: GLOBAL_MIN_TRADE,       # OKX minimum — aligned to GLOBAL_MIN_TRADE
+    BrokerType.BINANCE: GLOBAL_MIN_TRADE,   # Binance minimum — aligned to GLOBAL_MIN_TRADE
 }
 
 # ============================================================================
@@ -4654,6 +4668,15 @@ class TradingStrategy:
                 # Initialize APEX strategy with primary broker
                 self.apex = NIJAApexStrategyV71(broker_client=self.broker)
                 logger.critical("✅ APEX V7.1 LOADED — NIJAApexStrategyV71 instance active and ready")
+                # Strategy injection guard: hard-fail early if the strategy object is
+                # somehow None (e.g. constructor raised a swallowed exception upstream).
+                # Use an explicit check rather than `assert` so it cannot be disabled
+                # with Python's -O optimisation flag.
+                if self.apex is None:
+                    raise RuntimeError(
+                        "Strategy injection failed: NIJAApexStrategyV71 instance is None after construction"
+                    )
+                logger.info("🎯 Strategy injection verified: Using strategy NIJAApexStrategyV71")
 
                 # ── HF Scalping Mode — apply to APEX after construction ────────
                 # Patches confidence, ADX, volume, trend-confirmation thresholds
@@ -6497,6 +6520,33 @@ class TradingStrategy:
 
             logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} balance=${balance:.2f}, min=${min_balance:.2f}")
 
+            # ── BALANCE TIMING RACE PROTECTION ──────────────────────────────
+            # On startup and after broker reconnects the balance can take
+            # 21–60 s to settle.  Block entry if the balance hasn't been
+            # refreshed within BALANCE_STABLE_SECONDS to prevent trades being
+            # sized off a stale or uninitialised balance figure.
+            _balance_updated_at = getattr(broker, '_balance_last_updated', None)
+            if _balance_updated_at is None:
+                veto_reason = (
+                    f"{broker_name.upper()} balance not yet fetched — "
+                    "waiting for first successful balance update before entry"
+                )
+                logger.warning(f"   ⏳ BALANCE TIMING GUARD: {veto_reason}")
+                self.veto_count_session += 1
+                self.last_veto_reason = veto_reason
+                return False, veto_reason
+            _balance_age = time.time() - _balance_updated_at
+            if _balance_age > BALANCE_STABLE_SECONDS:
+                veto_reason = (
+                    f"{broker_name.upper()} balance is stale "
+                    f"({_balance_age:.0f}s > {BALANCE_STABLE_SECONDS}s) — "
+                    "waiting for fresh balance before entry"
+                )
+                logger.warning(f"   ⏳ BALANCE TIMING GUARD: {veto_reason}")
+                self.veto_count_session += 1
+                self.last_veto_reason = veto_reason
+                return False, veto_reason
+
             if balance < min_balance:
                 veto_reason = f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
                 logger.info(f"🚫 TRADE VETO: {veto_reason}")
@@ -8043,6 +8093,8 @@ class TradingStrategy:
             if not self.apex:
                 logger.warning("⚠️ Strategy not loaded - position management may be limited")
                 logger.warning("   Will attempt to close positions but cannot open new ones")
+            else:
+                logger.debug("🎯 Using strategy: NIJAApexStrategyV71")
 
             # ⏱️ Sub-step 1: Balance update
             balance_start_time = time.time()
