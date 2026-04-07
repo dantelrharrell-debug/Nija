@@ -209,7 +209,7 @@ class NonceManager:
     enforcement: if wall-clock time has not advanced since the last call,
     the counter is incremented by 1 so every returned value is unique.
 
-    ONE class-level counter is shared across every thread and every
+    ONE singleton instance is shared across every thread and every
     KrakenBroker account, which means parallel balance/position fetches
     on the same API key can never produce duplicate or out-of-order
     nonces.
@@ -218,38 +218,77 @@ class NonceManager:
 
         from bot.global_kraken_nonce import NonceManager
 
-        payload["nonce"] = NonceManager.get_nonce()
+        nonce_manager = NonceManager()
+        payload["nonce"] = nonce_manager.get_nonce()
         # — or —
-        self.api._nonce = lambda: str(NonceManager.get_nonce())
+        self.api._nonce = lambda: str(NonceManager().get_nonce())
     """
 
+    _instance = None
     _lock: threading.Lock = threading.Lock()
-    _last_nonce: int = 0
 
-    @classmethod
-    def get_nonce(cls) -> int:
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    inst = super().__new__(cls)
+                    _now = time.time()
+                    inst._nonce = int(_now * 1000)
+                    inst._last_ts = _now
+                    inst._thread_lock = threading.Lock()
+                    cls._instance = inst
+        return cls._instance
+
+    def get_nonce(self) -> int:
         """
         Return the next strictly-increasing millisecond nonce.
 
-        Thread-safe: protected by a class-level Lock so concurrent callers
+        Thread-safe: protected by an instance-level Lock so concurrent callers
         from multiple threads or broker accounts always receive distinct,
         ordered values.
 
         Returns:
             int: Milliseconds since epoch, guaranteed > previous return value.
         """
-        with cls._lock:
-            nonce = int(time.time() * 1000)
-            if nonce <= cls._last_nonce:
-                nonce = cls._last_nonce + 1
-            cls._last_nonce = nonce
-            return nonce
+        with self._thread_lock:
+            now = int(time.time() * 1000)
+            if now <= self._nonce:
+                now = self._nonce + 1
+            self._nonce = now
+            self._last_ts = time.time()
+            return self._nonce
 
-    @classmethod
-    def peek(cls) -> int:
+    def peek(self) -> int:
         """Return the last issued nonce without advancing the counter."""
-        with cls._lock:
-            return cls._last_nonce
+        with self._thread_lock:
+            return self._nonce
+
+    def reset_to_safe_value(self, offset_ms: int = 25_000) -> int:
+        """
+        Hard-reset the nonce to current time + *offset_ms* milliseconds.
+
+        Use for manual recovery when repeated "Invalid nonce" errors cannot
+        be resolved by the normal escalating-jump mechanism.  The default
+        25-second offset absorbs typical Kraken clock-drift tolerance and
+        allows two escalating error retries (10 s + 20 s = 30 s) before
+        approaching the 60 s HARD-RESET threshold.
+
+        Args:
+            offset_ms: Milliseconds to add to current time (default 25 000 = 25 s).
+
+        Returns:
+            int: New nonce value after reset.
+        """
+        with self._thread_lock:
+            self._nonce = int(time.time() * 1000) + offset_ms
+            self._last_ts = time.time()
+            _logger.warning(
+                "global_kraken_nonce: NonceManager.reset_to_safe_value() called; "
+                "new nonce = %d (offset +%d ms)",
+                self._nonce,
+                offset_ms,
+            )
+            return self._nonce
 
 
 # ── Persistent singleton nonce manager (legacy / advanced recovery) ───────────

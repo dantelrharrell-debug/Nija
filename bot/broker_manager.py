@@ -6066,6 +6066,15 @@ class KrakenBroker(BaseBroker):
         # Prevents race conditions when multiple threads call API simultaneously
         self._nonce_lock = threading.Lock()
 
+        # Instance-level reference to the shared NonceManager singleton.
+        # Populated during connect() once the NonceManager import is confirmed
+        # available; until then kept as None so _kraken_private_call() falls back
+        # to a fresh NonceManager() call.
+        self.nonce_manager = None
+        # Bound method reference (not a call) — set to self.nonce_manager.get_nonce
+        # (no parentheses) in connect() so callers invoke it as self._kraken_private_call_nonce().
+        self._kraken_private_call_nonce = None
+
         # CRITICAL FIX: API call serialization to prevent simultaneous Kraken calls
         # Problem: Multiple threads can call Kraken API simultaneously, causing nonce collisions
         # Solution: Serialize all private API calls through a lock
@@ -6305,7 +6314,17 @@ class KrakenBroker(BaseBroker):
             if NonceManager is not None:
                 if params is None:
                     params = {}
-                params["nonce"] = NonceManager.get_nonce()
+                # Prefer the bound method stored by connect() so we always use
+                # the same already-initialised singleton reference.  Fall back to
+                # self.nonce_manager.get_nonce() when the bound-method shortcut is
+                # not set, and finally to a fresh NonceManager() call so that
+                # _kraken_private_call() is safe to invoke before connect() runs.
+                if getattr(self, '_kraken_private_call_nonce', None) is not None:
+                    params["nonce"] = self._kraken_private_call_nonce()
+                elif getattr(self, 'nonce_manager', None) is not None:
+                    params["nonce"] = self.nonce_manager.get_nonce()
+                else:
+                    params["nonce"] = NonceManager().get_nonce()
 
             # Suppress pykrakenapi's print() statements that flood the console
             with suppress_pykrakenapi_prints():
@@ -6334,6 +6353,61 @@ class KrakenBroker(BaseBroker):
             API response dict
         """
         return self._kraken_private_call(method, params, category)
+
+    def _test_connection(self, retries: int = 5) -> bool:
+        """
+        Test Kraken connectivity with retry and automatic nonce recovery.
+
+        Calls the 'Balance' endpoint up to *retries* times.  On the first
+        success the method returns True.  If two or more consecutive failures
+        occur, ``self.nonce_manager.reset_to_safe_value()`` is called to
+        perform a hard reset of the shared nonce before the next attempt.
+
+        This is intentionally simpler than the full retry loop embedded in
+        ``connect()``.  Use it as a quick connectivity gate when you need to
+        verify that the nonce is synchronised with Kraken before proceeding,
+        without triggering the heavyweight lockout / permission-error handling.
+
+        Args:
+            retries: Maximum number of attempts (default 5).
+
+        Returns:
+            bool: True if a successful response was received within *retries* attempts.
+
+        Raises:
+            RuntimeError: If all attempts are exhausted without a successful response.
+        """
+        balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+        for attempt in range(1, retries + 1):
+            try:
+                result = self._kraken_private_call("Balance", {}, category=balance_category)
+                if result and "result" in result:
+                    logger.info(
+                        "✅ Kraken connection test successful on attempt %d (%s)",
+                        attempt,
+                        self.account_identifier,
+                    )
+                    return True
+                # API returned an error dict rather than raising — treat as failure
+                error_msgs = ", ".join(result.get("error", [])) if result else "empty response"
+                raise Exception(f"API error: {error_msgs}")
+            except Exception as exc:
+                logger.warning(
+                    "⚠️  Kraken connection test attempt %d/%d failed (%s): %s",
+                    attempt,
+                    retries,
+                    self.account_identifier,
+                    exc,
+                )
+                # Hard-reset the nonce after 2+ consecutive failures so we do not
+                # keep replaying a nonce that Kraken has already rejected.
+                if attempt >= 2 and self.nonce_manager is not None:
+                    self.nonce_manager.reset_to_safe_value()
+                if attempt < retries:
+                    time.sleep(attempt * 3)
+        raise RuntimeError(
+            f"❌ Kraken connection test failed after {retries} attempts ({self.account_identifier})"
+        )
 
     def connect(self) -> bool:
         """
@@ -6552,18 +6626,23 @@ class KrakenBroker(BaseBroker):
             # shared across PLATFORM + ALL USERS.
             #
             # NonceManager guarantees strictly-increasing millisecond nonces with
-            # a plain threading.Lock, independent of the global RLock used to
-            # serialise full API calls.  This means:
+            # a per-instance threading.Lock (singleton via __new__), independent
+            # of the global RLock used to serialise full API calls.  This means:
             # 1. No nonce collisions even when balance + position fetches run in
             #    parallel threads on the same API key.
             # 2. Millisecond precision (13 digits) — matches Kraken's expectation.
-            # 3. Singleton counter (class-level) — never reused across accounts.
+            # 3. Singleton instance — never reused across accounts.
 
             if NonceManager is not None:
                 # PRIMARY PATH: simple ms singleton — no RLock re-entry required.
+                # Bind self.nonce_manager so connect() and _test_connection() can
+                # call reset_to_safe_value() directly on the shared instance.
+                self.nonce_manager = NonceManager()
+                self._kraken_private_call_nonce = self.nonce_manager.get_nonce
+
                 def _nonce_monotonic():
                     """Thread-safe ms nonce — single global counter for all accounts."""
-                    return str(NonceManager.get_nonce())
+                    return str(NonceManager().get_nonce())
 
                 logger.debug(f"✅ NonceManager (ms singleton) installed for {cred_label}")
 
@@ -10202,10 +10281,33 @@ class BrokerManager:
             logger.debug(f"✅ Primary broker ({current_primary}) is ready for entries")
 
     def connect_all(self):
-        """Connect to all configured brokers"""
+        """Connect to all configured brokers, platform accounts first.
+
+        Connecting the platform (MASTER) Kraken account before any user
+        accounts ensures the global nonce is stabilised before concurrent
+        user-account threads begin issuing API calls.  This eliminates the
+        most common source of startup nonce collisions on multi-account
+        deployments.
+        """
         logger.info("")
         logger.info("🔌 Connecting to brokers...")
-        for broker in self.brokers.values():
+
+        platform_brokers = [
+            b for b in self.brokers.values()
+            if getattr(b, "account_type", None) == AccountType.PLATFORM
+        ]
+        user_brokers = [
+            b for b in self.brokers.values()
+            if b not in platform_brokers
+        ]
+
+        # Step 1: connect platform broker(s) synchronously so the nonce is
+        # fully stabilised before user accounts begin their connection handshake.
+        for broker in platform_brokers:
+            broker.connect()
+
+        # Step 2: connect remaining (user / non-Kraken) brokers.
+        for broker in user_brokers:
             broker.connect()
 
     def get_broker_for_symbol(self, symbol: str) -> Optional[BaseBroker]:
