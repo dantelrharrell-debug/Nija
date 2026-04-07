@@ -6307,6 +6307,11 @@ class KrakenBroker(BaseBroker):
                     params = {}
                 params["nonce"] = NonceManager.get_nonce()
 
+            # Small fixed delay between private calls to prevent ultra-fast bursts
+            # from concurrent threads from hitting the API faster than Kraken can
+            # process nonces sequentially.
+            time.sleep(0.05)
+
             # Suppress pykrakenapi's print() statements that flood the console
             with suppress_pykrakenapi_prints():
                 if params is None:
@@ -6748,66 +6753,15 @@ class KrakenBroker(BaseBroker):
                             logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
                         time.sleep(delay)
 
-                        # Jump nonce forward on retry to skip any potentially "burned" nonces
-                        # from the failed request. Kraken may have validated but not processed
-                        # the nonce, making it unusable for future requests.
-                        # Jump scales with attempt number and error type:
-                        #   - Normal errors: attempt * 1000ms (1s, 2s, 3s, 4s, 5s for attempts 2,3,4,5)
-                        #   - Nonce errors: attempt * 20000ms (20s, 40s, 60s, 80s, 100s) - 20x larger jumps (INCREASED from 10x)
-                        # Larger jumps for nonce errors ensure we skip well beyond the burned nonce window
-                        # CRITICAL: Maintain monotonic guarantee by taking max of time-based and increment-based
-
-                        if self._use_global_nonce:
-                            # Use global nonce manager to jump forward (correct path for Railway deployments)
-                            if jump_global_kraken_nonce_forward is not None:
-                                nonce_multiplier = 20 if last_error_was_nonce else 1
-                                nonce_jump_ms = nonce_multiplier * 1000 * attempt
-                                jump_global_kraken_nonce_forward(nonce_jump_ms)
-                                if last_error_was_nonce:
-                                    logger.debug(f"   Jumped GLOBAL nonce forward by {nonce_jump_ms}ms (20x jump for nonce error)")
-                                else:
-                                    logger.debug(f"   Jumped GLOBAL nonce forward by {nonce_jump_ms}ms for retry {attempt}")
-                        elif self._kraken_nonce is not None:
-                            # Use KrakenNonce instance (OPTION A) with public method
-                            # Use 20x larger nonce jump for nonce-specific errors (INCREASED from 10x)
-                            nonce_multiplier = 20 if last_error_was_nonce else 1
-                            # Convert from microseconds to milliseconds for KrakenNonce
-                            nonce_jump_ms = nonce_multiplier * 1000 * attempt  # Formula: multiplier * attempt * 1000ms
-
-                            # Jump forward and get new nonce value
-                            new_nonce = self._kraken_nonce.jump_forward(nonce_jump_ms)
-
-                            # Persist the jumped nonce to account-specific file
-                            try:
-                                with open(self._nonce_file, "w") as f:
-                                    f.write(str(new_nonce))
-                            except IOError as e:
-                                logging.debug(f"Could not persist jumped nonce: {e}")
-
-                            if last_error_was_nonce:
-                                logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms (20x jump for nonce error)")
-                            else:
-                                logger.debug(f"   Jumped nonce forward by {nonce_jump_ms}ms for retry {attempt}")
-                        else:
-                            # FIX 3: Fallback - route through global nonce manager when available
-                            nonce_multiplier = 20 if last_error_was_nonce else 1
-                            nonce_jump = nonce_multiplier * 1000 * attempt  # milliseconds
-                            if jump_global_kraken_nonce_forward is not None:
-                                current_nonce = jump_global_kraken_nonce_forward(nonce_jump)
-                            else:
-                                current_nonce = time.time_ns() + nonce_jump * 1_000_000
-
-                            # Persist the jumped nonce to account-specific file
-                            try:
-                                with open(self._nonce_file, "w") as f:
-                                    f.write(str(current_nonce))
-                            except IOError as e:
-                                logging.debug(f"Could not persist nonce: {e}")
-
-                            if last_error_was_nonce:
-                                logger.debug(f"   Jumped nonce forward by {nonce_jump}ms (20x jump for nonce error)")
-                            else:
-                                logger.debug(f"   Jumped nonce forward by {nonce_jump}ms for retry {attempt}")
+                        # Single nonce reset on the first retry only — repeated resets push
+                        # the nonce too far ahead and cause Kraken to reject it.
+                        if attempt == 2:
+                            if self._use_global_nonce and reset_global_kraken_nonce is not None:
+                                try:
+                                    reset_global_kraken_nonce()
+                                    logger.debug(f"   🔄 Nonce reset to safe value on first retry ({cred_label})")
+                                except Exception as _e:
+                                    logger.debug(f"   Could not reset nonce on retry: {_e}")
 
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
