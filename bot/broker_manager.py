@@ -429,6 +429,12 @@ _KRAKEN_BALANCE_CACHE_TTL_SECONDS: int = int(os.environ.get('NIJA_KRAKEN_BALANCE
 # - No parallel nonce generation during bootstrap
 KRAKEN_STARTUP_DELAY_SECONDS = 10.0   # Base startup cooldown (increased from 5 s)
 KRAKEN_STARTUP_DELAY_JITTER  =  5.0   # Additional random jitter (0 – 5 s) to stagger multi-instance starts
+# Minimum inter-call spacing injected in _kraken_private_call() to prevent
+# ultra-fast bursts that can cause nonce-ordering issues on Kraken's servers.
+_KRAKEN_PRIVATE_CALL_SPACING_S: float = 0.05  # 50 ms
+# Retry attempt on which to perform a single nonce reset during connect().
+# Only ONE reset is applied (at this attempt) to avoid pushing the nonce too far ahead.
+_KRAKEN_CONNECT_NONCE_RESET_ATTEMPT: int = 2
 
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
@@ -6310,7 +6316,7 @@ class KrakenBroker(BaseBroker):
             # Small fixed delay between private calls to prevent ultra-fast bursts
             # from concurrent threads from hitting the API faster than Kraken can
             # process nonces sequentially.
-            time.sleep(0.05)
+            time.sleep(_KRAKEN_PRIVATE_CALL_SPACING_S)
 
             # Suppress pykrakenapi's print() statements that flood the console
             with suppress_pykrakenapi_prints():
@@ -6755,7 +6761,7 @@ class KrakenBroker(BaseBroker):
 
                         # Single nonce reset on the first retry only — repeated resets push
                         # the nonce too far ahead and cause Kraken to reject it.
-                        if attempt == 2:
+                        if attempt == _KRAKEN_CONNECT_NONCE_RESET_ATTEMPT:
                             if self._use_global_nonce and reset_global_kraken_nonce is not None:
                                 try:
                                     reset_global_kraken_nonce()

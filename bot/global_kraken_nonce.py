@@ -119,6 +119,10 @@ _STARTUP_JUMP_NS = 2_000_000_000  # +2 seconds in nanoseconds
 # Any lead > 5 s risks Kraken rejecting the nonce as too far in the future.
 _MAX_DRIFT_NS = 5 * 1_000_000_000  # 5 seconds
 
+# Target lead applied by the MAX_DRIFT_GUARD reset inside get_nonce().
+# 1 s keeps the nonce acceptably ahead while staying well within Kraken's window.
+_MAX_DRIFT_RESET_NS = 1 * 1_000_000_000  # 1 second
+
 # Seconds to sleep inside get_nonce() after a NUCLEAR or HARD reset to let
 # Kraken's nonce window expire before the first post-reset API call.
 # Previous values: NUCLEAR=5 s, HARD=0 s.  Raised to 15 s / 5 s respectively.
@@ -430,10 +434,10 @@ class GlobalKrakenNonceManager:
                     "(> 5 s threshold) — resetting to now + 1s",
                     lead / _NS_PER_SECOND,
                 )
-                self._last_nonce = now + 1_000_000_000  # reset to +1s
+                self._last_nonce = now + _MAX_DRIFT_RESET_NS  # reset to +1s
                 self._nonces_since_persist = 0
                 _persist_nonce(self._last_nonce)
-                lead = 1_000_000_000
+                lead = _MAX_DRIFT_RESET_NS
 
             # ── Nuclear recovery (> 5 min) ────────────────────────────────
             if lead > _NUCLEAR_LEAD_NS:
