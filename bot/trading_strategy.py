@@ -4405,9 +4405,14 @@ class TradingStrategy:
 
             # Overall status and recommendations
             total_active = active_platform_count + active_user_count
-            if total_active > 0:
+            platform_account_connected = _broker_connected
+            logger.info(f"DEBUG: active_platform_count={active_platform_count}, active_user_count={active_user_count}, total_active={total_active}")
+            if platform_account_connected or total_active > 0:
                 logger.info(f"🚀 TRADING ACTIVE: {total_active} account(s) ready")
-                logger.info("🚀 STARTING CORE TRADING LOOP")
+                if platform_account_connected:
+                    logger.info("🚀 STARTING CORE TRADING LOOP (platform ready)")
+                else:
+                    logger.info("🚀 STARTING CORE TRADING LOOP")
                 try:
                     self._launch_core_trading_loop()
                 except Exception as _loop_start_err:
