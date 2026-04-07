@@ -6576,7 +6576,12 @@ class KrakenBroker(BaseBroker):
                     single-writer guarantee is preserved even on this path.
                     """
                     if get_global_kraken_nonce is not None:
-                        current_nonce = get_global_kraken_nonce()
+                        _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
+                        if _lock is not None:
+                            with _lock:
+                                current_nonce = get_global_kraken_nonce()
+                        else:
+                            current_nonce = get_global_kraken_nonce()
                     else:
                         current_nonce = time.time_ns()
 

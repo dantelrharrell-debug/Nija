@@ -109,9 +109,10 @@ _NONCE_FILE = os.path.join(
 _PERSIST_EVERY_N = 10  # Write to disk after this many get_nonce() calls (reduced from 100 to shrink crash gap)
 
 # Runtime reset jump applied by HARD and NUCLEAR resets inside get_nonce().
-# Kept at 10 s so mid-session resets are conservative; startup initialisation
-# and reset_to_safe_value() use the larger _STARTUP_LEAD_NS (25 s) instead.
-_STARTUP_JUMP_NS = 10_000_000_000  # +10 seconds in nanoseconds
+# Set to 20 s to provide a wider post-reset cooldown window and reduce
+# "EAPI:Invalid nonce" recurrence; startup initialisation and
+# reset_to_safe_value() use the larger _STARTUP_LEAD_NS (25 s) instead.
+_STARTUP_JUMP_NS = 20_000_000_000  # +20 seconds in nanoseconds
 
 # ── Disk helpers ───────────────────────────────────────────────────────────────
 
