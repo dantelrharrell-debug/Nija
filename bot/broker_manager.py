@@ -71,11 +71,11 @@ try:
     from bot.global_kraken_nonce import (
         NonceManager,
         get_global_kraken_nonce,
+        get_kraken_nonce,
         get_kraken_api_lock,
         jump_global_kraken_nonce_forward,
         record_kraken_nonce_error,
         record_kraken_nonce_success,
-        get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward,
         get_global_nonce_manager,
         reset_global_kraken_nonce,
     )
@@ -84,11 +84,11 @@ except ImportError:
         from global_kraken_nonce import (
             NonceManager,
             get_global_kraken_nonce,
+            get_kraken_nonce,
             get_kraken_api_lock,
             jump_global_kraken_nonce_forward,
             record_kraken_nonce_error,
             record_kraken_nonce_success,
-            get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward,
             get_global_nonce_manager,
             reset_global_kraken_nonce,
         )
@@ -96,6 +96,7 @@ except ImportError:
         # Fallback: Global nonce manager not available
         NonceManager = None
         get_global_kraken_nonce = None
+        get_kraken_nonce = None
         get_kraken_api_lock = None
         jump_global_kraken_nonce_forward = None
         record_kraken_nonce_error = None
@@ -138,17 +139,6 @@ except ImportError:
     except ImportError:
         _BROKER_PERFORMANCE_SCORER_AVAILABLE = False
         _get_broker_performance_scorer = None  # type: ignore
-
-# Import KrakenNonce for per-user nonce generation (DEPRECATED - kept for backward compatibility)
-# NOTE: This is being phased out in favor of GlobalKrakenNonceManager
-try:
-    from bot.kraken_nonce import KrakenNonce
-except ImportError:
-    try:
-        from kraken_nonce import KrakenNonce
-    except ImportError:
-        # Fallback: KrakenNonce not available
-        KrakenNonce = None
 
 # Import Kraken Symbol Mapper for symbol validation and conversion
 try:
@@ -431,7 +421,9 @@ KRAKEN_STARTUP_DELAY_SECONDS = 10.0   # Base startup cooldown (increased from 5 
 KRAKEN_STARTUP_DELAY_JITTER  =  5.0   # Additional random jitter (0 – 5 s) to stagger multi-instance starts
 # Minimum inter-call spacing injected in _kraken_private_call() to prevent
 # ultra-fast bursts that can cause nonce-ordering issues on Kraken's servers.
-_KRAKEN_PRIVATE_CALL_SPACING_S: float = 0.05  # 50 ms
+# Jittered: random.uniform(0.05, 0.15) seconds per call.
+_KRAKEN_PRIVATE_CALL_SPACING_MIN_S: float = 0.05   # 50 ms
+_KRAKEN_PRIVATE_CALL_SPACING_MAX_S: float = 0.15   # 150 ms
 # Retry attempt on which to perform a single nonce reset during connect().
 # Only ONE reset is applied (at this attempt) to avoid pushing the nonce too far ahead.
 _KRAKEN_CONNECT_NONCE_RESET_ATTEMPT: int = 2
@@ -5757,146 +5749,11 @@ class BinanceBroker(BaseBroker):
             return fallback_pairs
 
 
-# ============================================================================
-# KRAKEN NONCE PERSISTENCE
-# ============================================================================
-#
-# CRITICAL FIX (Jan 17, 2026): Persist Kraken nonce across restarts
-#
-# Problem: Without persistence, nonce resets on restart, causing "Invalid nonce"
-# errors if Kraken remembers the previous session's nonce (60+ seconds).
-#
-# Solution: Store nonce in kraken_nonce.txt and load it on startup
-# - Thread-safe: Uses lock to prevent race conditions
-# - Restart-safe: Loads last nonce from file
-# - Monotonic: Always increasing (max of time-based and file-based + 1)
-# ============================================================================
 
-_nonce_lock = threading.Lock()
-# CRITICAL FIX (Jan 17, 2026): Move nonce file to data directory for consistent persistence
-# Other persistent state (progressive_targets.json, capital_allocation.json, open_positions.json)
-# is stored in /data directory. Nonce file should follow the same pattern.
-# This ensures proper persistence in containerized deployments (Railway, Docker, etc.)
-_data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-# DEPRECATED: Use get_kraken_nonce_file() instead to get account-specific nonce file path
-NONCE_FILE = os.path.join(_data_dir, "kraken_nonce.txt")
 
-# PLATFORM account identifier constant (Jan 17, 2026)
-# Used for nonce file migration and account identification
-PLATFORM_ACCOUNT_IDENTIFIER = "platform"
 
-def get_kraken_nonce_file(account_identifier: str = PLATFORM_ACCOUNT_IDENTIFIER) -> str:
-    """
-    Get the nonce file path for a specific Kraken account.
 
-    CRITICAL FIX (Jan 17, 2026): Each account needs its own nonce file to prevent collisions.
-    - PLATFORM account: data/kraken_nonce_platform.txt
-    - USER accounts: data/kraken_nonce_user_daivon.txt, etc.
 
-    Args:
-        account_identifier: Account identifier (e.g., 'platform', 'user_daivon_frazier', 'USER:daivon_frazier')
-                           Will be sanitized to safe filename format.
-
-    Returns:
-        str: Full path to account-specific nonce file
-    """
-    # Sanitize account_identifier for safe filename
-    # Convert 'USER:daivon_frazier' -> 'user_daivon_frazier'
-    # Convert 'PLATFORM' -> 'platform'
-    # Remove any characters that aren't alphanumeric, underscore, or hyphen
-    safe_identifier = account_identifier.lower().replace(':', '_').replace(' ', '_')
-    # Remove any remaining unsafe characters (keep only alphanumeric, underscore, hyphen)
-    # Place hyphen at the start of character class to avoid needing escape
-    safe_identifier = re.sub(r'[^-a-z0-9_]', '', safe_identifier)
-
-    # Ensure data directory exists
-    os.makedirs(_data_dir, exist_ok=True)
-
-    return os.path.join(_data_dir, f"kraken_nonce_{safe_identifier}.txt")
-
-def get_kraken_nonce(account_identifier: str = PLATFORM_ACCOUNT_IDENTIFIER):
-    """
-    Generate Kraken nonce with persistence across restarts.
-
-    CRITICAL FIX (Jan 18, 2026): Changed to use MILLISECONDS (not microseconds) to match
-    KrakenNonce class and Kraken API expectations. Automatically migrates old microsecond
-    nonces to milliseconds.
-
-    CRITICAL FIX (Jan 17, 2026): Now supports account-specific nonce files to prevent
-    nonce collisions between PLATFORM and USER accounts.
-
-    This function:
-    1. Loads last nonce from account-specific nonce file (if exists)
-    2. Migrates from legacy nonce file for PLATFORM account (backward compatibility)
-    3. Converts microsecond nonces to milliseconds (backward compatibility)
-    4. Generates new nonce = max(current_time_ms, last_nonce + 1)
-    5. Persists new nonce to account-specific file
-    6. Returns new nonce
-
-    Thread-safe: Uses lock to prevent race conditions
-    Restart-safe: Persists to file for next restart
-    Account-isolated: Each account has its own nonce file
-
-    Args:
-        account_identifier: Account identifier (default: "master")
-                           Examples: "platform", "user_daivon_frazier", "USER:tania_gilbert"
-
-    Returns:
-        int: New nonce (milliseconds since epoch)
-    """
-    with _nonce_lock:
-        # Get account-specific nonce file
-        nonce_file = get_kraken_nonce_file(account_identifier)
-
-        last_nonce = 0
-
-        # BACKWARD COMPATIBILITY: Migrate legacy PLATFORM nonce file
-        # If this is the PLATFORM account and the new file doesn't exist but the old one does,
-        # migrate the nonce value from the old file to preserve continuity
-        if account_identifier.lower() == PLATFORM_ACCOUNT_IDENTIFIER and not os.path.exists(nonce_file):
-            legacy_nonce_file = os.path.join(_data_dir, "kraken_nonce.txt")
-            if os.path.exists(legacy_nonce_file):
-                try:
-                    with open(legacy_nonce_file, "r") as f:
-                        content = f.read().strip()
-                        if content:
-                            last_nonce = int(content)
-                            logging.info(f"📦 Migrated PLATFORM nonce from legacy file: {last_nonce}")
-                except (ValueError, IOError) as e:
-                    logging.debug(f"Could not migrate legacy nonce file: {e}")
-
-        # Read existing nonce from account-specific file
-        if os.path.exists(nonce_file):
-            try:
-                with open(nonce_file, "r") as f:
-                    content = f.read().strip()
-                    if content:
-                        file_nonce = int(content)
-                        # Use the higher value (from migration or existing file)
-                        last_nonce = max(last_nonce, file_nonce)
-            except (ValueError, IOError) as e:
-                logging.debug(f"Could not read nonce file for {account_identifier}: {e}, starting fresh")
-
-        # CRITICAL FIX (Jan 18, 2026): Detect and convert microsecond nonces to milliseconds
-        # Old code used microseconds (16 digits), new code uses milliseconds (13 digits)
-        # Threshold: 10^14 (100000000000000) safely distinguishes the two
-        MICROSECOND_THRESHOLD = 100000000000000  # 10^14
-        if last_nonce > MICROSECOND_THRESHOLD:
-            # This is in microseconds, convert to milliseconds
-            last_nonce = int(last_nonce / 1000)
-            logging.debug(f"Converted persisted nonce from microseconds to milliseconds for {account_identifier}")
-
-        # Use MILLISECONDS to match KrakenNonce class
-        now = int(time.time() * 1000)  # CHANGED from 1000000 (microseconds) to 1000 (milliseconds)
-        nonce = max(now, last_nonce + 1)
-
-        try:
-            with open(nonce_file, "w") as f:
-                f.write(str(nonce))
-        except IOError as e:
-            logging.debug(f"Could not write nonce file for {account_identifier}: {e}")
-
-        return nonce
 
 
 class KrakenBroker(BaseBroker):
@@ -6006,84 +5863,12 @@ class KrakenBroker(BaseBroker):
         else:
             self.account_identifier = f"USER:{user_id}" if user_id else "USER:unknown"
 
-        # CRITICAL FIX (Jan 17, 2026): Each account uses its own nonce file
-        # This prevents nonce collisions between PLATFORM and USER accounts
-        # - PLATFORM: data/kraken_nonce_platform.txt
-        # - USER accounts: data/kraken_nonce_user_daivon_frazier.txt, etc.
-        self._nonce_file = get_kraken_nonce_file(self.account_identifier)
+        # ONE global source of nonces for all accounts and threads — no per-instance setup needed.
+        logger.debug(f"   ✅ Using GLOBAL KrakenNonceManager for {self.account_identifier}")
 
-        # VERIFICATION: Ensure nonce file path is unique per account (prevent cross-contamination)
-        # This assertion protects against regression bugs where nonce files might be shared
-        if account_type == AccountType.PLATFORM:
-            assert "platform" in self._nonce_file.lower(), f"PLATFORM nonce file must contain 'platform': {self._nonce_file}"
-        else:
-            # USER accounts: user_id is guaranteed to be non-None (validated above at line 3607-3608)
-            assert user_id.lower() in self._nonce_file.lower(), f"USER nonce file must contain user_id '{user_id}': {self._nonce_file}"
-
-        logger.debug(f"   Nonce file for {self.account_identifier}: {self._nonce_file}")
-
-        # ✅ FIX 3: Timestamp-based Kraken Nonce (Global Nonce Manager)
-        # ONE global nonce source shared across PLATFORM + ALL USERS
-        #
-        # This is the correct solution per FIX 3 requirements:
-        # - Uses int(time.time() * 1000) for milliseconds since epoch
-        # - Monotonically increasing (time only moves forward)
-        # - No persistence needed (timestamps are always fresh)
-        # - Thread-safe (built-in time function)
-        # - Scales to any number of users
-        # - NO per-instance _last_nonce tracking
-        #
-        # Architecture:
-        # - get_global_kraken_nonce() returns current timestamp in ms
-        # - All Kraken API calls (master + users) use this ONE function
-        # - Simple, reliable, Railway-ready
-        if get_global_kraken_nonce is not None:
-            # Use global timestamp-based nonce (Railway-safe)
-            self._use_global_nonce = True
-            self._kraken_nonce = None  # Not used with global timestamp
-            logger.debug(f"   ✅ Using GLOBAL Kraken Nonce (timestamp-based) for {self.account_identifier}")
-        elif KrakenNonce is not None:
-            # Fallback to per-user KrakenNonce (DEPRECATED but kept for compatibility)
-            logger.warning(f"   ⚠️  Global nonce manager not available, falling back to per-user KrakenNonce")
-            self._use_global_nonce = False
-
-            # Load persisted nonce from file and initialize KrakenNonce with it
-            persisted_nonce = get_kraken_nonce(self.account_identifier)
-            self._kraken_nonce = KrakenNonce()
-
-            # Proper microsecond/millisecond conversion
-            current_time_ms = int(time.time() * 1000)
-            MICROSECOND_THRESHOLD = 100000000000000  # 10^14
-
-            if persisted_nonce > MICROSECOND_THRESHOLD:
-                persisted_nonce_ms = int(persisted_nonce / 1000)
-                logger.debug(f"   Converted persisted nonce from microseconds ({persisted_nonce}) to milliseconds ({persisted_nonce_ms})")
-            else:
-                persisted_nonce_ms = persisted_nonce
-
-            initial_nonce = max(persisted_nonce_ms, current_time_ms)
-            self._kraken_nonce.set_initial_value(initial_nonce)
-
-            logger.debug(f"   ✅ KrakenNonce instance created for {self.account_identifier} (fallback), initial nonce: {initial_nonce}ms")
-        else:
-            # ⚠️ DEPRECATED: This fallback is kept for backward compatibility only
-            # Should not be used in production - global nonce manager should always be available
-            logger.warning(f"   ⚠️  No nonce managers available, using deprecated fallback")
-            self._use_global_nonce = False
-            self._kraken_nonce = None
-            # Note: _last_nonce is DEPRECATED and should be removed in future versions
-
-        # Thread lock to ensure nonce generation is thread-safe
-        # Prevents race conditions when multiple threads call API simultaneously
-        self._nonce_lock = threading.Lock()
-
-        # Instance-level reference to the shared NonceManager singleton.
-        # Populated during connect() once the NonceManager import is confirmed
-        # available; until then kept as None so _kraken_private_call() falls back
-        # to a fresh NonceManager() call.
+        # Instance-level reference to the shared nonce manager singleton.
+        # Populated during connect() from get_global_nonce_manager().
         self.nonce_manager = None
-        # Bound method reference (not a call) — set to self.nonce_manager.get_nonce
-        # (no parentheses) in connect() so callers invoke it as self._kraken_private_call_nonce().
         self._kraken_private_call_nonce = None
 
         # CRITICAL FIX: API call serialization to prevent simultaneous Kraken calls
@@ -6279,19 +6064,15 @@ class KrakenBroker(BaseBroker):
                 # Also update global last call time
                 self._last_api_call_time = time.time()
 
-            # Stamp the nonce onto every private request from the single
-            # shared NonceManager singleton — no fallback, no alternate path.
-            _tracking = NonceManager is not None
-            if _tracking:
-                if params is None:
-                    params = {}
-                params["nonce"] = self.nonce_manager.get_nonce()
-                self.nonce_manager.begin_request()
+            # Stamp the nonce from the ONE global singleton — no fallback, no per-account source.
+            if params is None:
+                params = {}
+            params["nonce"] = get_kraken_nonce()
+            self.nonce_manager.begin_request()
 
-            # Small fixed delay between private calls to prevent ultra-fast bursts
-            # from concurrent threads from hitting the API faster than Kraken can
-            # process nonces sequentially.
-            time.sleep(_KRAKEN_PRIVATE_CALL_SPACING_S)
+            # Jitter delay: 50–150 ms per call — prevents burst calls that cause
+            # nonce-ordering issues on Kraken's servers.
+            time.sleep(random.uniform(_KRAKEN_PRIVATE_CALL_SPACING_MIN_S, _KRAKEN_PRIVATE_CALL_SPACING_MAX_S))
 
             try:
                 # Suppress pykrakenapi's print() statements that flood the console
@@ -6301,8 +6082,7 @@ class KrakenBroker(BaseBroker):
                     else:
                         result = self.api.query_private(method, params)
             finally:
-                if _tracking:
-                    self.nonce_manager.end_request()
+                self.nonce_manager.end_request()
 
             return result
 
@@ -6574,105 +6354,22 @@ class KrakenBroker(BaseBroker):
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
 
-            # Override _nonce to use NonceManager — ONE ms-precision singleton
-            # shared across PLATFORM + ALL USERS.
-            #
-            # NonceManager guarantees strictly-increasing millisecond nonces with
-            # a per-instance threading.Lock (singleton via __new__), independent
-            # of the global RLock used to serialise full API calls.  This means:
-            # 1. No nonce collisions even when balance + position fetches run in
-            #    parallel threads on the same API key.
-            # 2. Millisecond precision (13 digits) — matches Kraken's expectation.
-            # 3. Singleton instance — never reused across accounts.
+            # Install the single global nonce generator.
+            # ONE source of nonces across every broker, account, and thread.
+            self.nonce_manager = get_global_nonce_manager()
+            self._kraken_private_call_nonce = self.nonce_manager.get_nonce
 
-            if NonceManager is not None:
-                # PRIMARY PATH: simple ms singleton — no RLock re-entry required.
-                # Bind self.nonce_manager so connect() and _test_connection() can
-                # call reset_to_safe_value() directly on the shared instance.
-                self.nonce_manager = NonceManager()
-                self._kraken_private_call_nonce = self.nonce_manager.get_nonce
-
-                def _nonce_monotonic():
-                    """Thread-safe ms nonce — single global counter for all accounts."""
-                    return str(NonceManager().get_nonce())
-
-                logger.debug(f"✅ NonceManager (ms singleton) installed for {cred_label}")
-
-            elif self._kraken_nonce is not None:
-                # Fallback: Use per-user KrakenNonce instance (DEPRECATED)
-                def _nonce_monotonic():
-                    """
-                    Generate nonce using KrakenNonce instance (DEPRECATED).
-
-                    Thread-safe: KrakenNonce uses internal lock.
-                    Monotonic: Each nonce is strictly greater than previous.
-                    Persistent: Nonces are saved to account-specific file.
-                    """
-                    nonce = self._kraken_nonce.next()
-
-                    # Persist to account-specific file for restart-safety
-                    try:
-                        with open(self._nonce_file, "w") as f:
-                            f.write(str(nonce))
-                    except IOError as e:
-                        logging.debug(f"Could not persist nonce: {e}")
-
-                    return str(nonce)
-
-                logger.debug(f"✅ KrakenNonce generator installed for {cred_label} (fallback)")
-            else:
-                # Final fallback to basic implementation
-                def _nonce_monotonic():
-                    """
-                    DEPRECATED: Generate nonce using timestamp (fallback only).
-
-                    FIX 3: No per-instance _last_nonce tracking.
-                    Routes through the global nonce manager when available so the
-                    single-writer guarantee is preserved even on this path.
-                    """
-                    if get_global_kraken_nonce is not None:
-                        _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
-                        if _lock is not None:
-                            with _lock:
-                                current_nonce = get_global_kraken_nonce()
-                        else:
-                            current_nonce = get_global_kraken_nonce()
-                    else:
-                        current_nonce = time.time_ns()
-
-                    # Persist to account-specific file for restart-safety
-                    try:
-                        with open(self._nonce_file, "w") as f:
-                            f.write(str(current_nonce))
-                    except IOError as e:
-                        logging.debug(f"Could not persist nonce: {e}")
-
-                    return str(current_nonce)
-
-                logger.debug(f"⚠️  DEPRECATED: Basic fallback nonce generator installed for {cred_label} (should use global nonce manager)")
+            def _nonce_monotonic() -> str:
+                """Thread-safe ms nonce — single global counter for all accounts."""
+                return str(get_kraken_nonce())
 
             # Replace the nonce generator
             # NOTE: This directly overrides the internal _nonce method of krakenex.API
             try:
                 self.api._nonce = _nonce_monotonic
-                # Log initial nonce value for debugging nonce-related issues (only if debug enabled)
-                # IMPORTANT: use get_last_nonce() (peek-without-consume) instead of
-                # get_global_kraken_nonce() to avoid wasting a nonce for a log line.
                 if logger.isEnabledFor(logging.DEBUG):
-                    if self._use_global_nonce:
-                        # Peek at the current nonce WITHOUT advancing the counter.
-                        _mgr = get_global_nonce_manager() if get_global_nonce_manager is not None else None
-                        test_nonce = _mgr.get_last_nonce() if _mgr is not None else 0
-                        logger.debug(f"   Initial nonce (GLOBAL): {test_nonce} (timestamp-based, peek only)")
-                    elif self._kraken_nonce is not None:
-                        # KrakenNonce uses milliseconds
-                        current_time_ms = int(time.time() * 1000)
-                        offset_seconds = (self._kraken_nonce.last - current_time_ms) / 1000.0
-                        logger.debug(f"   Initial nonce (fallback): {self._kraken_nonce.last}ms (current time + {offset_seconds:.2f}s)")
-                    else:
-                        # FIX 3: Basic fallback uses timestamp (no _last_nonce tracking)
-                        current_time_ms = int(time.time() * 1000)
-                        logger.debug(f"   Initial nonce (basic fallback): {current_time_ms}ms (timestamp-based)")
+                    _mgr = get_global_nonce_manager()
+                    logger.debug(f"   Initial nonce (GLOBAL): {_mgr.get_last_nonce()} (peek only, counter not advanced)")
             except AttributeError as e:
                 self.last_connection_error = f"Nonce generator override failed: {str(e)}"
                 logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
@@ -6686,11 +6383,11 @@ class KrakenBroker(BaseBroker):
             # lands safely ahead of any nonce Kraken may still hold from a
             # previous session.  This is the only place reset_to_safe_value()
             # is called proactively; subsequent resets are triggered only by
-            # NonceManager.record_error() after 3 consecutive errors with no
-            # active in-flight requests.
-            if NonceManager is not None:
-                NonceManager().reset_to_safe_value()
-                logger.debug(f"   🔄 Startup nonce reset complete for {cred_label}")
+            # KrakenNonceManager.record_error() after 3 consecutive errors with
+            # no active in-flight requests.
+            get_global_nonce_manager().reset_to_safe_value()
+            logger.debug(f"   🔄 Startup nonce reset complete for {cred_label}")
+
 
             # Startup delay before first Kraken API call.
             # A random jitter staggers simultaneous multi-account starts so they
@@ -6835,14 +6532,8 @@ class KrakenBroker(BaseBroker):
                                 last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
 
                                 if is_nonce_error:
-                                    if NonceManager is not None:
-                                        NonceManager().record_error()
-
-                                # Reduce log spam for transient errors
-                                # - Nonce errors: Log at INFO level on first attempt, DEBUG on retries (transient, will auto-retry)
-                                # - Other retryable errors: Log as WARNING only on first attempt
-                                # - All retries after first attempt: Log at DEBUG level for diagnostics
-                                error_type = "lockout" if is_lockout_error else "nonce" if is_nonce_error else "retryable"
+                                    if get_global_nonce_manager is not None:
+                                        get_global_nonce_manager().record_error()
 
                                 # For nonce errors, log at INFO level on first attempt so users know what failed
                                 # Log at DEBUG level on retries to reduce spam
@@ -6868,8 +6559,8 @@ class KrakenBroker(BaseBroker):
                         self.connected = True
 
                         # Record success — resets the consecutive-error counter
-                        if NonceManager is not None:
-                            NonceManager().record_success()
+                        if get_global_nonce_manager is not None:
+                            get_global_nonce_manager().record_success()
 
                         if attempt > 1:
                             logger.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
@@ -7157,8 +6848,8 @@ class KrakenBroker(BaseBroker):
                         last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
 
                         if is_nonce_error:
-                            if NonceManager is not None:
-                                NonceManager().record_error()
+                            if get_global_nonce_manager is not None:
+                                get_global_nonce_manager().record_error()
 
                         # Log retryable errors appropriately:
                         # - Timeout errors: Already logged above (special case)

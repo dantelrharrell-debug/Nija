@@ -788,13 +788,21 @@ def _kraken_private_request(
     """
     Make an authenticated Kraken private API request.
 
-    Uses a fresh millisecond-precision nonce on every call so this script
-    never interferes with the bot's own nonce state.
+    Uses the global KrakenNonceManager so every nonce is strictly monotonic
+    and consistent with the bot's nonce state.
     """
+    try:
+        from bot.global_kraken_nonce import get_kraken_nonce as _get_kraken_nonce
+    except ImportError:
+        try:
+            from global_kraken_nonce import get_kraken_nonce as _get_kraken_nonce
+        except ImportError:
+            _get_kraken_nonce = lambda: int(time.time() * 1000)  # noqa: E731
+
     url_path = f"/0/private/{endpoint}"
     url = f"https://api.kraken.com{url_path}"
 
-    nonce = str(int(time.time() * 1000))
+    nonce = str(_get_kraken_nonce())
     post_data = {"nonce": nonce}
     if data:
         post_data.update(data)
