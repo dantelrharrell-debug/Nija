@@ -411,7 +411,7 @@ RISK_CONFIG_STARTER = {
     # Position Management
     'max_concurrent_positions': 1,  # Only 1 position
     'max_position_concentration': 0.15,  # 15% max per position
-    'min_trade_size_usd': 10.0,  # $10 minimum trade
+    'min_trade_size_usd': 5.0,   # $5 minimum trade (micro-cap compatible, Apr 2026 lowered from $10)
     'max_trade_size_usd': 25.0,  # $25 maximum trade
 
     # Circuit Breakers

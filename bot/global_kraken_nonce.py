@@ -16,6 +16,7 @@ Design guarantees
 ✅ Hard-reset in get_nonce(): lead > 60 s → snap to now + 25 s, sleep 5 s
 ✅ Nuclear-reset in get_nonce(): lead > 300 s → snap + 15 s sleep
 ✅ record_nonce_error() skips forward jump when lead ≥ 60 s (let get_nonce hard-reset instead)
+✅ record_nonce_error() triggers HARD RESET automatically after 3 consecutive errors
 ✅ Atomic disk writes (write-then-rename) — no half-written files
 ✅ Thread-safe with RLock throughout
 ✅ Strictly monotonic — never decreases, never repeats
@@ -44,6 +45,7 @@ Auto-recovery
 import glob as _glob
 import logging
 import os
+import random
 import tempfile
 import time
 import threading
@@ -119,6 +121,17 @@ _STARTUP_JUMP_NS = 25_000_000_000  # +25 seconds in nanoseconds
 # Previous values: NUCLEAR=5 s, HARD=0 s.  Raised to 15 s / 5 s respectively.
 _POST_NUCLEAR_SLEEP_S: float = 15.0  # was 5 s
 _POST_HARD_SLEEP_S: float = 5.0      # was 0 s (none)
+
+# Consecutive nonce error threshold that triggers an immediate HARD RESET instead
+# of continuing to jump forward.  After 3 consecutive nonce errors the escalating
+# jumps (10 s + 20 s + 30 s = 60 s) have already pushed the nonce to the HARD-CAP
+# boundary; forcing a snap-back at this point is safer than risking a lockout.
+_HARD_RESET_ON_CONSECUTIVE_ERRORS: int = 3
+
+# Maximum random jitter (seconds) added to each caller that was waiting on the
+# post-reset gate when it opens.  Spreading out concurrent callers prevents a burst
+# of back-to-back Kraken requests immediately after a reset.
+_POST_RESET_JITTER_MAX_S: float = 1.5
 
 # ── Disk helpers ───────────────────────────────────────────────────────────────
 
@@ -283,10 +296,10 @@ class GlobalKrakenNonceManager:
             self._post_reset_gate: threading.Event = threading.Event()
             self._post_reset_gate.set()
             # Maximum seconds a caller will wait for the gate to reopen before
-            # giving up and proceeding anyway.  65 s is chosen to be just over
+            # giving up and proceeding anyway.  70 s is chosen to be just over
             # the HARD_CAP lead (60 s) so any caller that waited for the gate
             # is guaranteed to have a valid nonce window by the time it proceeds.
-            self._post_reset_gate_timeout_s: float = 65.0
+            self._post_reset_gate_timeout_s: float = 70.0
 
             # Statistics tracking
             self._total_nonces_issued = 0
@@ -328,6 +341,17 @@ class GlobalKrakenNonceManager:
                 _gate_opened = self._post_reset_gate.wait(
                     timeout=self._post_reset_gate_timeout_s
                 )
+                if _gate_opened:
+                    # Add random jitter before reacquiring the lock so that multiple
+                    # threads that were all blocked on this gate stagger their
+                    # subsequent Kraken requests rather than hitting the API in a burst.
+                    _jitter = random.uniform(0.0, _POST_RESET_JITTER_MAX_S)
+                    if _jitter > 0.05:
+                        _logger.debug(
+                            "global_kraken_nonce: post-reset jitter %.2fs applied",
+                            _jitter,
+                        )
+                        time.sleep(_jitter)
                 self._nonce_lock.acquire()
                 if not _gate_opened:
                     _logger.warning(
@@ -439,6 +463,12 @@ class GlobalKrakenNonceManager:
         forward bump is skipped entirely — get_nonce() will perform a hard
         reset on the next call instead.
 
+        Automatic HARD RESET: if consecutive errors reach
+        _HARD_RESET_ON_CONSECUTIVE_ERRORS (3), a HARD RESET is triggered
+        immediately (snap to now + 25 s, gate closed) rather than continuing
+        to jump forward.  This prevents a runaway error loop from pushing the
+        nonce beyond the 60 s HARD-CAP.
+
         Returns:
             int: Current consecutive-error count after recording this error.
         """
@@ -448,6 +478,24 @@ class GlobalKrakenNonceManager:
 
             current_ns = time.time_ns()
             current_lead_ns = self._last_nonce - current_ns
+
+            # ── Automatic HARD RESET after too many consecutive errors ────
+            # Escalating jumps (10 s + 20 s = 30 s by error #2) are approaching
+            # the 60 s HARD-CAP by error #3.  Force a clean snap-back now.
+            if count >= _HARD_RESET_ON_CONSECUTIVE_ERRORS:
+                _logger.warning(
+                    "global_kraken_nonce: %d consecutive nonce errors — triggering "
+                    "HARD RESET (snap to now + %ds, gate closed)",
+                    count,
+                    _STARTUP_JUMP_NS // _NS_PER_SECOND,
+                )
+                self._last_nonce = current_ns + _STARTUP_JUMP_NS
+                self._consecutive_errors = 0
+                self._nonces_since_persist = 0
+                self._reset_triggered_at = time.time()
+                self._post_reset_gate.clear()
+                _persist_nonce(self._last_nonce)
+                return 0  # Indicate clean-slate after hard reset
 
             # Do not jump forward when already far ahead — the hard-reset in
             # get_nonce() will handle correction on the next call.
