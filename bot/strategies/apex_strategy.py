@@ -155,5 +155,8 @@ try:
 except ImportError:
     try:
         from nija_apex_strategy_v71 import NIJAApexStrategyV71 as ApexStrategy
-    except ImportError:
-        ApexStrategy = None  # type: ignore[assignment,misc]
+    except ImportError as _apex_err:
+        raise RuntimeError(
+            "FATAL: Apex strategy failed to initialize — "
+            f"nija_apex_strategy_v71.NIJAApexStrategyV71 could not be imported: {_apex_err}"
+        ) from _apex_err

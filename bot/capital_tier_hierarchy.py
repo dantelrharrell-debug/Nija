@@ -29,6 +29,18 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("nija.capital_tier_hierarchy")
 
+# ── Tier position constants ───────────────────────────────────────────────────
+# MICRO_PLATFORM: minimum position allocation for small-balance accounts.
+# Ensures fee-viability — positions below this threshold can't clear execution costs.
+MICRO_PLATFORM_MIN_POSITION_PCT = 0.40   # 40 % floor for STARTER/SAVER accounts
+
+# MICRO_CAP_SYMBOL_HARD_CAP: never allocate more than 35 % of balance to a
+# single micro-cap (low market-cap, high-risk) symbol.
+MICRO_CAP_SYMBOL_HARD_CAP_PCT   = 0.35   # 35 % ceiling per micro-cap symbol
+
+# Standard maximum position — applies to non-micro-cap symbols / all tiers.
+STANDARD_MAX_POSITION_PCT       = 0.40   # 40 % ceiling for standard assets
+
 
 class CapitalTier(Enum):
     """Capital tiers with associated balance ranges"""
@@ -117,22 +129,35 @@ class TierPositionRules:
         
         return target_pct
     
-    def validate_position_size(self, size_usd: float, balance: float) -> Tuple[bool, str]:
+    def validate_position_size(
+        self, size_usd: float, balance: float, is_micro_cap: bool = False
+    ) -> Tuple[bool, str]:
         """
         Validate if a position size meets tier requirements.
-        
+
+        Args:
+            size_usd:     Proposed position size in USD.
+            balance:      Current account balance in USD.
+            is_micro_cap: When True, applies the 35 % micro-cap hard cap instead
+                          of the standard 40 % ceiling.
+
         Returns:
             (is_valid, reason_if_invalid)
         """
         # Check minimum size
         if size_usd < self.min_position_size_usd:
             return (False, f"Position ${size_usd:.2f} below tier minimum ${self.min_position_size_usd:.2f}")
-        
-        # Check maximum size — 40% of balance (reduced from 80%, Fix 4)
-        max_size = balance * 0.40
+
+        # Check maximum size — 35 % for micro-cap symbols, 40 % otherwise
+        cap_pct = MICRO_CAP_SYMBOL_HARD_CAP_PCT if is_micro_cap else STANDARD_MAX_POSITION_PCT
+        max_size = balance * cap_pct
         if size_usd > max_size:
-            return (False, f"Position ${size_usd:.2f} exceeds maximum ${max_size:.2f} (40% of balance)")
-        
+            label = "micro-cap hard cap" if is_micro_cap else "maximum"
+            return (
+                False,
+                f"Position ${size_usd:.2f} exceeds {label} ${max_size:.2f} ({cap_pct*100:.0f}% of balance)",
+            )
+
         return (True, "")
 
 

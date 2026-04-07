@@ -1158,9 +1158,35 @@ def _run_bot_startup_and_trading():
             else:
                 logger.critical("🚀 CREATING TradingStrategy INSTANCE")
                 strategy = TradingStrategy()
+                if strategy is None:
+                    raise RuntimeError(
+                        "FATAL: TradingStrategy() returned None — "
+                        "strategy failed to initialize.  Check broker credentials "
+                        "and apex strategy import."
+                    )
                 with _initialized_state_lock:
                     _initialized_state["strategy"] = strategy
                 logger.critical("🧠 STATE STORED — entering supervisor mode")
+
+            # ── MICRO_PLATFORM tier floor validation ─────────────────────────
+            # Confirm that the sizing module's MICRO_PLATFORM minimum position
+            # floor is set to 40 %.  A mismatch here causes under-sized positions
+            # that cannot clear execution fees on small accounts.
+            try:
+                from bot.risk.sizing import MICRO_PLATFORM_MIN_POSITION_PCT as _mp_pct
+                _expected_mp = 0.40
+                if abs(_mp_pct - _expected_mp) > 1e-6:
+                    logger.error(
+                        "❌ TIER FLOOR MISMATCH: MICRO_PLATFORM_MIN_POSITION_PCT=%.2f "
+                        "(expected %.2f) — update bot/risk/sizing.py",
+                        _mp_pct, _expected_mp,
+                    )
+                else:
+                    logger.info(
+                        "✅ MICRO_PLATFORM tier floor: %.0f%% (correct)", _mp_pct * 100
+                    )
+            except ImportError:
+                logger.warning("⚠️  Could not verify MICRO_PLATFORM tier floor — bot/risk/sizing.py not found")
 
             # AUDIT USER BALANCES - Show all user balances regardless of trading status
             # This runs BEFORE trading starts to ensure visibility even if users aren't actively trading

@@ -84,37 +84,6 @@ except ImportError:
         logger.warning("   LIVE CAPITAL VERIFIED check will be skipped")
         get_hard_controls = None
 
-# Import Execution Intelligence Layer
-try:
-    from bot.execution_intelligence import (
-        get_execution_intelligence,
-        MarketMicrostructure,
-        ExecutionIntelligence,
-        ExecutionPlan,
-        OrderType as EIOrderType
-    )
-    EXECUTION_INTELLIGENCE_AVAILABLE = True
-    logger.info("✅ Execution Intelligence Layer loaded - Elite execution optimization active")
-except ImportError:
-    try:
-        from execution_intelligence import (
-            get_execution_intelligence,
-            MarketMicrostructure,
-            ExecutionIntelligence,
-            ExecutionPlan,
-            OrderType as EIOrderType
-        )
-        EXECUTION_INTELLIGENCE_AVAILABLE = True
-        logger.info("✅ Execution Intelligence Layer loaded - Elite execution optimization active")
-    except ImportError:
-        EXECUTION_INTELLIGENCE_AVAILABLE = False
-        logger.warning("⚠️ Execution Intelligence Layer not available - using basic execution")
-        get_execution_intelligence = None
-        MarketMicrostructure = None
-        ExecutionIntelligence = None
-        ExecutionPlan = None
-        EIOrderType = None
-
 # Constants
 VALID_ORDER_STATUSES = ['open', 'closed', 'filled', 'pending']
 LOG_SEPARATOR = "=" * 70
