@@ -1511,6 +1511,11 @@ class CoinbaseBroker(BaseBroker):
                 logging.error("❌ Coinbase API credentials not found")
                 return False
 
+            # Normalize PEM key: Railway/Docker env vars may store newlines as
+            # literal '\n' two-character sequences instead of real newlines.
+            if '\\n' in api_secret:
+                api_secret = api_secret.replace('\\n', '\n')
+
             # Initialize REST client
             self.client = RESTClient(api_key=api_key, api_secret=api_secret)
 
