@@ -6379,6 +6379,8 @@ class KrakenBroker(BaseBroker):
                 api_key = api_key_raw.strip()
                 api_secret = api_secret_raw.strip()
                 cred_label = f"USER:{self.user_id}"
+                _env_check_val = os.environ.get('KRAKEN_USER_TANIA_GILBERT_API_KEY')
+                logger.info(f"ENV CHECK: KRAKEN_USER_TANIA_GILBERT_API_KEY={'SET' if _env_check_val else 'None'} (len={len(_env_check_val) if _env_check_val else 0})")
 
             # Enhanced validation: detect if variables are set but contain only whitespace
             key_is_set = api_key_raw != ""
