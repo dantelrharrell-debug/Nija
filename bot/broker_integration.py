@@ -1083,8 +1083,9 @@ class KrakenBrokerAdapter(BrokerInterface):
             # Attach the same global nonce manager so nonces remain monotonic
             if get_global_kraken_nonce is not None:
                 def _global_nonce():
-                    if get_kraken_api_lock is not None:
-                        with get_kraken_api_lock():
+                    _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
+                    if _lock is not None:
+                        with _lock:
                             return str(get_global_kraken_nonce())
                     return str(get_global_kraken_nonce())
                 self._secondary_api._nonce = _global_nonce
@@ -1129,8 +1130,9 @@ class KrakenBrokerAdapter(BrokerInterface):
             if get_global_kraken_nonce is not None:
                 def _global_nonce():
                     """Generate nonce using global manager (nanosecond precision)."""
-                    if get_kraken_api_lock is not None:
-                        with get_kraken_api_lock():
+                    _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
+                    if _lock is not None:
+                        with _lock:
                             return str(get_global_kraken_nonce())
                     return str(get_global_kraken_nonce())
 
