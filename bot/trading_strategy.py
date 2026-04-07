@@ -593,6 +593,21 @@ except ImportError:
         _calc_position_size = None
         logger.warning("⚠️ calculate_position_size not available — pre-order gate disabled")
 
+# Import allocate_capital from the TRE-aware sizing module
+try:
+    from bot.risk.sizing import allocate_capital as _allocate_capital
+    ALLOCATE_CAPITAL_AVAILABLE = True
+    logger.info("✅ allocate_capital (TRE wrapper) loaded — canonical sizing path active")
+except ImportError:
+    try:
+        from risk.sizing import allocate_capital as _allocate_capital
+        ALLOCATE_CAPITAL_AVAILABLE = True
+        logger.info("✅ allocate_capital (TRE wrapper) loaded (risk.sizing)")
+    except ImportError:
+        ALLOCATE_CAPITAL_AVAILABLE = False
+        _allocate_capital = None
+        logger.warning("⚠️ allocate_capital not available — falling back to legacy sizing")
+
 # Import Cross-Broker Arbitrage Monitor — venue price divergence awareness
 try:
     from cross_broker_arbitrage_monitor import get_arb_monitor, ArbSignalStrength
