@@ -152,7 +152,7 @@ class TierPositionRules:
         cap_pct = MICRO_CAP_SYMBOL_HARD_CAP_PCT if is_micro_cap else STANDARD_MAX_POSITION_PCT
         max_size = balance * cap_pct
         if size_usd > max_size:
-            label = "micro-cap hard cap" if is_micro_cap else "maximum"
+            label = "micro-cap maximum" if is_micro_cap else "maximum"
             return (
                 False,
                 f"Position ${size_usd:.2f} exceeds {label} ${max_size:.2f} ({cap_pct*100:.0f}% of balance)",

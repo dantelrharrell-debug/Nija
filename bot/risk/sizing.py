@@ -105,6 +105,17 @@ _DEFAULT_TP1_PCT: float = 0.015   # 1.5 %
 _DEFAULT_TP2_PCT: float = 0.025   # 2.5 %
 _DEFAULT_TP3_PCT: float = 0.040   # 4.0 %
 
+# ── TP tier spacing when tp2/tp3 are not provided in analysis ────────────────
+# tp2 = tp1 × _TP_TIER_SPACING; tp3 = tp2 × _TP_TIER_SPACING
+_TP_TIER_SPACING: float = 1.5
+
+# ── ATR inverse scalar bounds and baseline ────────────────────────────────────
+# scalar = clamp(ATR_SCALAR_BASELINE / atr_pct, ATR_SCALAR_MIN, ATR_SCALAR_MAX)
+# High volatility (atr > baseline) → shrink position; low → slightly grow it.
+_ATR_SCALAR_MIN:      float = 0.5    # never size below 50 % of base
+_ATR_SCALAR_MAX:      float = 1.2    # cap upward scaling at 120 %
+_ATR_SCALAR_BASELINE: float = 0.02   # 2 % ATR → neutral scalar (1.0×)
+
 # ── Cooldown constants ────────────────────────────────────────────────────────
 _COOLDOWN_BASE_SEC:  int = 60    # base cooldown when streak = 0
 _COOLDOWN_MIN_SEC:   int = 30    # floor — never shorter than this
@@ -322,13 +333,15 @@ def allocate_capital(
     # Ensure ordering and floor from apex_config minimum profit target
     _min_profit = _get_min_profit_target()
     tp1_pct = max(tp1_pct, _min_profit)
-    tp2_pct = max(tp2_pct, tp1_pct * 1.5)
-    tp3_pct = max(tp3_pct, tp2_pct * 1.5)
+    tp2_pct = max(tp2_pct, tp1_pct * _TP_TIER_SPACING)
+    tp3_pct = max(tp3_pct, tp2_pct * _TP_TIER_SPACING)
 
     # ── Net-profit veto — TP1 − friction < 1.2 % → reject ───────────────────
     # Ensures the bot never enters a trade whose first target cannot clear the
     # minimum post-friction profit margin.
-    _friction = float(os.environ.get("NIJA_FRICTION_PCT", str(_FALLBACK_FRICTION_PCT)))
+    _raw_friction = float(os.environ.get("NIJA_FRICTION_PCT", str(_FALLBACK_FRICTION_PCT)))
+    # Clamp friction to a sane range to guard against misconfigured env vars.
+    _friction = max(0.0, min(0.10, _raw_friction))
     _net_at_tp1 = tp1_pct - _friction
     if _net_at_tp1 < _MIN_NET_PROFIT_AT_TP1:
         logger.warning(
@@ -360,9 +373,9 @@ def allocate_capital(
         return None
 
     # ── 1b. ATR inverse scalar — reduce size when volatility is elevated ──────
-    # ATR > 3 % → scale down; ATR < 1 % → scale up slightly (capped at 1.2×).
+    # scalar = clamp(ATR_SCALAR_BASELINE / atr, ATR_SCALAR_MIN, ATR_SCALAR_MAX)
     if atr > 0:
-        _atr_scalar = max(0.5, min(1.2, 0.02 / atr))
+        _atr_scalar = max(_ATR_SCALAR_MIN, min(_ATR_SCALAR_MAX, _ATR_SCALAR_BASELINE / atr))
         if abs(_atr_scalar - 1.0) > 0.01:
             _pre_atr = size
             size = math.floor(size * _atr_scalar * 100) / 100
