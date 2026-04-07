@@ -13,8 +13,8 @@ Design guarantees
 ✅ Startup always lands ahead of any previously-accepted Kraken nonce
    (initialized to max(persisted+1, now_ns + 25 s) clamped below HARD_CAP)
 ✅ Runaway accumulation capped at 2 min ahead; resets to now_ns + 25 s
-✅ Hard-reset in get_nonce(): lead > 60 s → snap to now + 10 s instantly
-✅ Nuclear-reset in get_nonce(): lead > 300 s → snap + 5 s sleep
+✅ Hard-reset in get_nonce(): lead > 60 s → snap to now + 25 s, sleep 5 s
+✅ Nuclear-reset in get_nonce(): lead > 300 s → snap + 15 s sleep
 ✅ record_nonce_error() skips forward jump when lead ≥ 60 s (let get_nonce hard-reset instead)
 ✅ Atomic disk writes (write-then-rename) — no half-written files
 ✅ Thread-safe with RLock throughout
@@ -109,10 +109,16 @@ _NONCE_FILE = os.path.join(
 _PERSIST_EVERY_N = 10  # Write to disk after this many get_nonce() calls (reduced from 100 to shrink crash gap)
 
 # Runtime reset jump applied by HARD and NUCLEAR resets inside get_nonce().
-# Set to 20 s to provide a wider post-reset cooldown window and reduce
-# "EAPI:Invalid nonce" recurrence; startup initialisation and
-# reset_to_safe_value() use the larger _STARTUP_LEAD_NS (25 s) instead.
-_STARTUP_JUMP_NS = 20_000_000_000  # +20 seconds in nanoseconds
+# Raised from 20 s → 25 s to match _STARTUP_LEAD_NS and give Kraken more room
+# to accept the new nonce before the next call arrives.  Startup initialisation
+# and reset_to_safe_value() also use 25 s (via _STARTUP_LEAD_NS).
+_STARTUP_JUMP_NS = 25_000_000_000  # +25 seconds in nanoseconds
+
+# Seconds to sleep inside get_nonce() after a NUCLEAR or HARD reset to let
+# Kraken's nonce window expire before the first post-reset API call.
+# Previous values: NUCLEAR=5 s, HARD=0 s.  Raised to 15 s / 5 s respectively.
+_POST_NUCLEAR_SLEEP_S: float = 15.0  # was 5 s
+_POST_HARD_SLEEP_S: float = 5.0      # was 0 s (none)
 
 # ── Disk helpers ───────────────────────────────────────────────────────────────
 
@@ -268,6 +274,20 @@ class GlobalKrakenNonceManager:
             # Connection-gate: wall-clock timestamp of last hard/nuclear reset (None = never)
             self._reset_triggered_at: float | None = None
 
+            # Post-reset serialization gate.
+            # After a HARD or NUCLEAR reset the gate is *cleared* (closed).  Only ONE
+            # in-flight API call is allowed until record_nonce_success() opens the gate
+            # again.  This prevents a burst of concurrent requests from racing to Kraken
+            # with back-to-back nonces before the first one is confirmed valid.
+            # The gate starts *set* (open) so normal startup traffic is unrestricted.
+            self._post_reset_gate: threading.Event = threading.Event()
+            self._post_reset_gate.set()
+            # Maximum seconds a caller will wait for the gate to reopen before
+            # giving up and proceeding anyway.  65 s is chosen to be just over
+            # the HARD_CAP lead (60 s) so any caller that waited for the gate
+            # is guaranteed to have a valid nonce window by the time it proceeds.
+            self._post_reset_gate_timeout_s: float = 65.0
+
             # Statistics tracking
             self._total_nonces_issued = 0
             self._creation_time = time.time()
@@ -290,10 +310,33 @@ class GlobalKrakenNonceManager:
         Thread-safe.  Each call returns a value strictly greater than the last.
 
         Hard-reset policy (checked BEFORE any increment):
-          • lead > 300 s (nuclear): reset to now + 10 s, persist, sleep 5 s
-          • lead >  60 s (hard cap): reset to now + 10 s, persist, return immediately
+          • lead > 300 s (nuclear): reset to now + 25 s, persist, sleep 15 s
+          • lead >  60 s (hard cap): reset to now + 25 s, persist, sleep 5 s
+
+        Post-reset gate:
+          After a HARD or NUCLEAR reset the internal ``_post_reset_gate`` Event
+          is cleared so that subsequent callers block until
+          ``record_nonce_success()`` opens the gate.  This ensures only one
+          request races to Kraken at a time while the nonce window is settling.
         """
         with self._nonce_lock:
+            # ── Post-reset gate — block until first success after a reset ──
+            if not self._post_reset_gate.is_set():
+                # Release the nonce lock while waiting to avoid deadlock
+                # (record_nonce_success also acquires _nonce_lock).
+                self._nonce_lock.release()
+                _gate_opened = self._post_reset_gate.wait(
+                    timeout=self._post_reset_gate_timeout_s
+                )
+                self._nonce_lock.acquire()
+                if not _gate_opened:
+                    _logger.warning(
+                        "global_kraken_nonce: post-reset gate timed out after %.0fs "
+                        "— opening automatically to avoid permanent stall",
+                        self._post_reset_gate_timeout_s,
+                    )
+                    self._post_reset_gate.set()
+
             now = time.time_ns()
             lead = self._last_nonce - now
 
@@ -301,18 +344,21 @@ class GlobalKrakenNonceManager:
             if lead > _NUCLEAR_LEAD_NS:
                 _logger.warning(
                     "NUCLEAR RESET: nonce was %.1fs ahead of wall clock "
-                    "(> 300 s threshold) — resetting to now + 10 s and sleeping 5 s",
+                    "(> 300 s threshold) — resetting to now + %ds and sleeping %.0fs",
                     lead / _NS_PER_SECOND,
+                    _STARTUP_JUMP_NS // _NS_PER_SECOND,
+                    _POST_NUCLEAR_SLEEP_S,
                 )
                 self._last_nonce = now + _STARTUP_JUMP_NS
                 self._consecutive_errors = 0
                 self._nonces_since_persist = 0
                 self._reset_triggered_at = time.time()
+                self._post_reset_gate.clear()  # Block concurrent callers until success
                 _persist_nonce(self._last_nonce)
                 # Release lock while sleeping so other threads aren't starved.
                 self._nonce_lock.release()
                 try:
-                    time.sleep(5)
+                    time.sleep(_POST_NUCLEAR_SLEEP_S)
                 finally:
                     self._nonce_lock.acquire()
                 # Refresh 'now' and 'lead' after the sleep.
@@ -323,15 +369,25 @@ class GlobalKrakenNonceManager:
             elif lead > _HARD_CAP_LEAD_NS:
                 _logger.warning(
                     "HARD RESET: nonce was %.1fs ahead of wall clock "
-                    "(> 60 s threshold) → reset to now + 10 s",
+                    "(> 60 s threshold) → reset to now + %ds, sleeping %.0fs",
                     lead / _NS_PER_SECOND,
+                    _STARTUP_JUMP_NS // _NS_PER_SECOND,
+                    _POST_HARD_SLEEP_S,
                 )
                 self._last_nonce = now + _STARTUP_JUMP_NS
                 self._consecutive_errors = 0
                 self._nonces_since_persist = 0
                 self._total_nonces_issued += 1
                 self._reset_triggered_at = time.time()
+                self._post_reset_gate.clear()  # Block concurrent callers until success
                 _persist_nonce(self._last_nonce)
+                # Brief sleep so Kraken's nonce window has time to accept the new
+                # base nonce before the next API call arrives.
+                self._nonce_lock.release()
+                try:
+                    time.sleep(_POST_HARD_SLEEP_S)
+                finally:
+                    self._nonce_lock.acquire()
                 return self._last_nonce
 
             # ── Normal monotonic increment ────────────────────────────────
@@ -454,6 +510,7 @@ class GlobalKrakenNonceManager:
             self._last_nonce = time.time_ns() + _STARTUP_LEAD_NS
             self._nonces_since_persist = 0
             self._consecutive_errors = 0
+            self._post_reset_gate.clear()  # Gate callers until first success after this reset
             _persist_nonce(self._last_nonce)
             _logger.warning(
                 f"global_kraken_nonce: manual reset_to_safe_value() called; "
@@ -479,7 +536,8 @@ class GlobalKrakenNonceManager:
         Record a successful Kraken API call and reset the error counter.
 
         Call this after every successful private API response to keep the
-        escalating recovery schedule accurate.
+        escalating recovery schedule accurate.  Also opens the post-reset gate
+        so the next queued caller may proceed.
         """
         with self._nonce_lock:
             if self._consecutive_errors > 0:
@@ -489,6 +547,15 @@ class GlobalKrakenNonceManager:
                     self._consecutive_errors,
                 )
                 self._consecutive_errors = 0
+            # Open the post-reset gate on every success.  If we were in a
+            # post-reset hold, this unblocks the next waiting caller so it can
+            # proceed with its own nonce.
+            if not self._post_reset_gate.is_set():
+                _logger.info(
+                    "global_kraken_nonce: post-reset gate opened — "
+                    "first successful API call after reset confirmed"
+                )
+                self._post_reset_gate.set()
 
     def was_reset_recently(self, window_s: float = 300.0) -> bool:
         """

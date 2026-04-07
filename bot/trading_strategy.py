@@ -3761,6 +3761,11 @@ class TradingStrategy:
             logger.warning(f"⚠️  Could not start continuous exit enforcer: {e}")
             self.continuous_exit_enforcer = None
 
+        # Default apex to None before the broker initialization block so that
+        # any non-ImportError exception raised inside the try block cannot cause
+        # an AttributeError when downstream code accesses self.apex.
+        self.apex = None
+
         try:
             logger.critical("STEP 7: Starting broker manager initialization")
             # Lazy imports to avoid circular deps and allow fallback
@@ -13738,13 +13743,13 @@ class TradingStrategy:
 
                                 # PROFITABILITY WARNING: Small positions have lower profitability
                                 # Fees are ~1.4% round-trip, so very small positions face significant fee pressure
-                                # DYNAMIC MINIMUM: Position must meet max(10.00, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min, volatility+fee floor)
+                                # DYNAMIC MINIMUM: Position must meet max(MIN_POSITION_USD, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min, volatility+fee floor)
                                 if position_size < min_position_size_dynamic:
                                     filter_stats['position_too_small'] += 1
                                     # FIX #3 (Jan 19, 2026): Explicit trade rejection logging
                                     logger.info(f"   ❌ Entry rejected for {symbol}")
                                     logger.info(f"      Reason: Position size ${position_size:.2f} < ${min_position_size_dynamic:.2f} minimum")
-                                    logger.info(f"      💡 Dynamic minimum = max($10.00, ${account_balance:.2f} × {DYNAMIC_POSITION_SIZE_PCT*100:.0f}%, brokerage_min[{broker_name}], vol+fee floor) = ${min_position_size_dynamic:.2f}")
+                                    logger.info(f"      💡 Dynamic minimum = max(${MIN_POSITION_USD:.2f}, ${account_balance:.2f} × {DYNAMIC_POSITION_SIZE_PCT*100:.0f}%, brokerage_min[{broker_name}], vol+fee floor) = ${min_position_size_dynamic:.2f}")
                                     logger.info(f"      💡 Small positions face severe fee impact (~1.4% round-trip)")
                                     # Calculate break-even % needed: (fee_dollars / position_size) * 100
                                     breakeven_pct = (position_size * 0.014 / position_size) * 100 if position_size > 0 else 0

@@ -7063,7 +7063,7 @@ class KrakenBroker(BaseBroker):
                         # NOTE: time.sleep() blocking is INTENTIONAL - we want to pause execution
                         # to ensure proper timing between API calls. This is a synchronous operation
                         # during bot startup, not an async/event-driven context.
-                        post_connection_delay = 2.0  # 2 seconds post-connection cooldown
+                        post_connection_delay = 10.0  # 10 seconds post-connection cooldown (increased from 2 s to allow nonce to settle)
                         logger.info(f"   ⏳ Post-connection cooldown: {post_connection_delay:.1f}s (prevents nonce errors)...")
                         time.sleep(post_connection_delay)
                         logger.debug(f"   ✅ Cooldown complete - ready for balance checks")
