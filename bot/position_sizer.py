@@ -21,26 +21,34 @@ logger = logging.getLogger('nija.position_sizer')
 
 # Minimum position sizes (exchange-specific)
 # These prevent creating dust positions that can't be sold
-# Updated Jan 22, 2026: Added exchange-specific minimums
+# Updated Apr 2026: Unified to GLOBAL_MIN_TRADE from trading_strategy.py
 
-# KRAKEN: $10 minimum trade + fees
-# With ~0.4% maker fee (limit orders), we need $10.04+ to have $10 after entry fee
-# With ~0.6% taker fee (market orders), we need $10.06+ to have $10 after entry fee
-# Conservative: use $10.50 to ensure we're always above $10 after fees
-KRAKEN_MIN_TRADE_USD = 10.50  # $10 Kraken minimum + fee buffer
+# Import the single source-of-truth minimum from trading_strategy.
+# Fall back to 5.0 if the import is unavailable (e.g. standalone test runs).
+try:
+    from bot.trading_strategy import GLOBAL_MIN_TRADE as _GLOBAL_MIN_TRADE
+except ImportError:
+    try:
+        from trading_strategy import GLOBAL_MIN_TRADE as _GLOBAL_MIN_TRADE
+    except ImportError:
+        _GLOBAL_MIN_TRADE = 5.0  # fallback
 
-# COINBASE: $5 minimum to stay well clear of exchange floor and avoid dust creation
-COINBASE_MIN_TRADE_USD = 5.0
+# KRAKEN: $10 minimum trade + fees.  The exchange hard-rejects orders under $10,
+# so we keep a fee buffer above GLOBAL_MIN_TRADE to be safe.
+KRAKEN_MIN_TRADE_USD = max(10.50, _GLOBAL_MIN_TRADE)  # $10 Kraken exchange floor + fee buffer
+
+# COINBASE / default: aligned to GLOBAL_MIN_TRADE
+COINBASE_MIN_TRADE_USD = _GLOBAL_MIN_TRADE
 
 # Default minimum for other exchanges
-MIN_POSITION_USD = 5.0  # Minimum $5 USD value for any position (avoids dust + rejections)
+MIN_POSITION_USD = _GLOBAL_MIN_TRADE  # Minimum USD value for any position (avoids dust + rejections)
 
 # Exchange-specific minimums (with fee buffers)
 EXCHANGE_MIN_TRADE_USD = {
     'kraken': KRAKEN_MIN_TRADE_USD,      # $10.50 (accounts for Kraken $10 min + fees)
-    'coinbase': COINBASE_MIN_TRADE_USD,  # $5.00
-    'okx': 5.0,                          # Raised from $1 to $5 to avoid dust
-    'binance': 10.0,                     # Binance also has ~$10 minimums
+    'coinbase': COINBASE_MIN_TRADE_USD,  # GLOBAL_MIN_TRADE
+    'okx': _GLOBAL_MIN_TRADE,           # aligned to GLOBAL_MIN_TRADE
+    'binance': _GLOBAL_MIN_TRADE,       # aligned to GLOBAL_MIN_TRADE
 }
 
 # Per-symbol exchange minimums — some assets have higher notional floors on

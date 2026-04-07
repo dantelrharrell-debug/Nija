@@ -53,6 +53,14 @@ class PortfolioState:
     available_cash: float
     open_positions: Dict[str, Position] = field(default_factory=dict)
     min_reserve_pct: float = 0.10  # Minimum 10% reserve to keep as cash
+    # State integrity: last confirmed positive cash value — used as fallback when
+    # a broker refresh returns 0 or a negative figure.
+    _last_known_cash: float = field(default=0.0, init=False, repr=False)
+
+    def __post_init__(self):
+        # Seed last-known-cash from the initial balance if it is valid.
+        if self.available_cash > 0:
+            self._last_known_cash = self.available_cash
 
     @property
     def total_position_value(self) -> float:
@@ -225,9 +233,21 @@ class PortfolioState:
         """
         Update available cash balance.
 
+        State integrity protection: if new_cash is zero or negative, the value is
+        rejected and the last-known-good balance is returned instead so that a
+        transient API error can never zero-out the portfolio.
+
         Args:
             new_cash: New available cash amount
         """
+        if new_cash <= 0:
+            logger.warning(
+                "Rejecting invalid balance update (%.2f) — using last known good: %.2f",
+                new_cash,
+                self._last_known_cash,
+            )
+            return
+        self._last_known_cash = new_cash
         self.available_cash = new_cash
 
     def get_summary(self) -> Dict:
@@ -358,8 +378,11 @@ class PortfolioStateManager:
             PortfolioState: Platform portfolio state
         """
         if self.platform_portfolio is None:
-            self.platform_portfolio = PortfolioState(available_cash=available_cash)
-            logger.info(f"Platform portfolio initialized with ${available_cash:.2f}")
+            # Guard against initialising with an invalid balance — fall back to 0
+            # so update_cash()'s guard fires on the first real broker refresh.
+            init_cash = available_cash if available_cash > 0 else 0.0
+            self.platform_portfolio = PortfolioState(available_cash=init_cash)
+            logger.info(f"Platform portfolio initialized with ${init_cash:.2f}")
         else:
             # Portfolio already exists - only update cash balance, preserve positions
             old_cash = self.platform_portfolio.available_cash
@@ -420,12 +443,15 @@ class PortfolioStateManager:
         """
         Update a portfolio state from broker data.
 
+        State integrity: if available_cash is zero or negative the update is
+        delegated to update_cash() which will keep the last-known-good value.
+
         Args:
             portfolio: Portfolio state to update
             available_cash: Current available cash from broker
             positions: List of position dicts from broker
         """
-        # Update cash
+        # Update cash (update_cash guards against invalid/zero values)
         portfolio.update_cash(available_cash)
 
         # Clear and rebuild positions
