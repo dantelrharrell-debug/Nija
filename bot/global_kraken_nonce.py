@@ -9,17 +9,17 @@ Rules
 ✅ ONE singleton (KrakenNonceManager) shared across every thread and every account
 ✅ Strictly monotonic — never repeats, never decreases
 ✅ Safe across threads, retries, and container restarts
-✅ Thread-safe via a single Lock
+✅ Thread-safe via a module-level Lock
 ✅ Cross-process persistence — nonce survives restarts via an atomic file store
 ✅ Startup jump (+10 s ahead of wall-clock) prevents stale-nonce on hot restart
-✅ Escalating reset backoff: 10 s → 20 s → 30 s → 60 s on repeated errors
+✅ Escalating jump backoff on repeated errors
+✅ Manual jump control via jump_forward()
 
 Usage
 ─────
-    from bot.global_kraken_nonce import KrakenNonceManager, get_kraken_api_lock
+    from bot.global_kraken_nonce import get_kraken_nonce
 
-    nonce_manager = KrakenNonceManager()
-    payload["nonce"] = nonce_manager.next_nonce()
+    nonce = get_kraken_nonce()
 """
 
 import glob as _glob
@@ -33,18 +33,23 @@ _logger = logging.getLogger(__name__)
 # ── Persistence file ──────────────────────────────────────────────────────────
 # Written atomically (write-then-rename) with mode 0600.
 # Falls back gracefully if the directory is read-only.
-_NONCE_FILE = os.path.join(
+_STATE_FILE = os.path.join(
     os.environ.get("NIJA_DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data")),
     "kraken_nonce.state",
 )
+# Keep _NONCE_FILE as an alias so any code that imported it directly still works.
+_NONCE_FILE = _STATE_FILE
 
-# ── Tuning constants (milliseconds unless noted) ──────────────────────────────
-_STARTUP_JUMP_MS: int = 10_000       # lead on first start / hot restart
-_STARTUP_CLAMP_MS: int = 55_000      # never start more than 55 s ahead
-_RESET_OFFSET_MS: int = 60_000       # baseline reset offset (was 1 s — now 60 s)
-# Escalating reset offsets applied on consecutive errors
-_ERROR_OFFSETS_MS: tuple = (10_000, 20_000, 30_000, 60_000)
-_ERROR_RESET_THRESHOLD: int = 3     # first N errors: no reset; from N onwards: escalating backoff
+_PERSISTED_PERMISSIONS = 0o600
+
+# ── Module-level lock (shared by all callers) ─────────────────────────────────
+_LOCK = threading.Lock()
+
+# ── Tuning constants (milliseconds) ──────────────────────────────────────────
+_STARTUP_JUMP_MS: int = 10_000      # lead on first start / hot restart
+_STARTUP_CLAMP_MS: int = 55_000     # never start more than 55 s ahead
+_RESET_OFFSET_MS: int = 60_000      # offset used by reset_to_safe_value()
+_ERROR_RESET_THRESHOLD: int = 3     # errors < threshold: no jump; at threshold: apply backoff
 
 # ── API serialisation lock ────────────────────────────────────────────────────
 # Kraken rejects parallel private calls on the same API key.
@@ -55,30 +60,6 @@ _KRAKEN_API_LOCK = threading.RLock()
 def get_kraken_api_lock() -> threading.RLock:
     """Return the process-wide Kraken API serialisation lock."""
     return _KRAKEN_API_LOCK
-
-
-# ── Persistence helpers ───────────────────────────────────────────────────────
-
-def _read_persisted_nonce() -> int:
-    """Return the last persisted nonce, or 0 if unavailable."""
-    try:
-        with open(_NONCE_FILE, "r") as fh:
-            return int(fh.read().strip())
-    except Exception:
-        return 0
-
-
-def _write_persisted_nonce(value: int) -> None:
-    """Atomically persist *value* to the nonce state file (write + rename)."""
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(_NONCE_FILE)), exist_ok=True)
-        tmp = _NONCE_FILE + ".tmp"
-        with open(tmp, "w") as fh:
-            fh.write(str(value))
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, _NONCE_FILE)
-    except Exception as exc:
-        _logger.debug("KrakenNonceManager: could not persist nonce (%s)", exc)
 
 
 # ── Single nonce manager ──────────────────────────────────────────────────────
@@ -93,7 +74,7 @@ class KrakenNonceManager:
     - Safe across threads
     - Safe across retries and container restarts (file persistence)
     - Startup jump prevents stale-nonce on hot restart
-    - Escalating backoff on consecutive nonce errors
+    - Escalating jump backoff on consecutive nonce errors
     - Works in Railway / container environments
 
     ONE instance is shared across every thread and every account — there is
@@ -113,51 +94,38 @@ class KrakenNonceManager:
         return cls._instance
 
     def _init(self):
-        self._lock = threading.Lock()
-        self._consecutive_errors = 0
-        self._active_requests = 0
-
-        now_ms = int(time.time() * 1000)
-        persisted = _read_persisted_nonce()
-
-        # Start well ahead of both the persisted value and wall-clock so that
-        # any in-flight nonces from a previous process are already stale.
-        startup = max(persisted + 1, now_ms + _STARTUP_JUMP_MS)
-        # Clamp: never start so far ahead that Kraken's window rejects us.
-        startup = min(startup, now_ms + _STARTUP_CLAMP_MS)
-        self._last_nonce = startup
-        _write_persisted_nonce(self._last_nonce)
-
+        self._error_count = 0
+        os.makedirs(os.path.dirname(os.path.abspath(_STATE_FILE)), exist_ok=True)
+        self._last_nonce = self._load_last_nonce()
+        self._persist()
         _logger.info(
-            "KrakenNonceManager: init nonce=%d (persisted=%d, now=%d, lead=%+d ms)",
-            self._last_nonce, persisted, now_ms, self._last_nonce - now_ms,
+            "KrakenNonceManager: init nonce=%d (lead=%+d ms)",
+            self._last_nonce, self._last_nonce - int(time.time() * 1000),
         )
 
     # ── Core nonce generation ──────────────────────────────────────────────
 
     def next_nonce(self) -> int:
-        """Return the next strictly-increasing millisecond nonce and persist it."""
-        with self._lock:
-            now = int(time.time() * 1000)
-
-            # Enforce strict monotonic increase
-            if now <= self._last_nonce:
-                self._last_nonce += 1
-            else:
-                self._last_nonce = now
-
-            _write_persisted_nonce(self._last_nonce)
+        """Return the next strictly-increasing nonce and persist it."""
+        with _LOCK:
+            self._last_nonce += 1
+            self._persist()
             return self._last_nonce
 
-    # Alias for backward compatibility with broker_manager.py and others
     def get_nonce(self) -> int:
         """Alias for next_nonce() — backward compatibility."""
         return self.next_nonce()
 
     def get_last_nonce(self) -> int:
         """Return the last issued nonce without advancing it."""
-        with self._lock:
+        with _LOCK:
             return self._last_nonce
+
+    def jump_forward(self, ms: int) -> None:
+        """Manually advance nonce by *ms* milliseconds."""
+        with _LOCK:
+            self._last_nonce += ms
+            self._persist()
 
     def reset_to_safe_value(self, offset_ms: int = _RESET_OFFSET_MS) -> None:
         """
@@ -166,72 +134,96 @@ class KrakenNonceManager:
         Use after confirmed Kraken 'invalid nonce' responses to skip past any
         nonces that may have been used by other processes or prior requests.
         """
-        with self._lock:
+        with _LOCK:
             new_val = int(time.time() * 1000) + offset_ms
             _logger.warning(
                 "KrakenNonceManager: reset_to_safe_value → %d (offset=%d ms)",
                 new_val, offset_ms,
             )
             self._last_nonce = new_val
-            _write_persisted_nonce(self._last_nonce)
+            self._persist()
 
-    # ── Active-request tracking ────────────────────────────────────────────
+    # ── Active-request tracking (no-ops — retained for backward compatibility) ──
 
     def begin_request(self) -> None:
-        """Call before every Kraken private API request."""
-        with self._lock:
-            self._active_requests += 1
+        """No-op — retained for backward compatibility."""
+        pass
 
     def end_request(self) -> None:
-        """Call after every Kraken private API request (success or failure)."""
-        with self._lock:
-            if self._active_requests > 0:
-                self._active_requests -= 1
+        """No-op — retained for backward compatibility."""
+        pass
 
     # ── Error / success tracking ───────────────────────────────────────────
 
     def record_error(self) -> None:
         """
-        Record a Kraken 'invalid nonce' error.
+        Record a Kraken 'invalid nonce' error with escalating jump backoff.
 
-        Uses an escalating backoff table:
-          error 1-2 : no reset (allow natural retry)
-          error 3   : reset to now + 10 s
-          error 4   : reset to now + 20 s
-          error 5   : reset to now + 30 s
-          error 6+  : reset to now + 60 s
+        Uses a cumulative forward-jump table:
+          errors 1–2  : no jump (allow natural monotonic retry)
+          error  3    : jump nonce forward +10 s
+          error  4    : jump nonce forward +20 s
+          error  5    : jump nonce forward +30 s
+          error  6+   : jump nonce forward +60 s
 
-        The reset is skipped while there are in-flight requests (another
-        thread is mid-call and will produce a higher nonce naturally).
+        Counter resets to zero only on record_success().
         """
-        with self._lock:
-            self._consecutive_errors += 1
-            errors = self._consecutive_errors
-
-            if errors < _ERROR_RESET_THRESHOLD:
-                # First two errors: let monotonic logic self-correct
-                return
-
-            if self._active_requests > 0:
-                # In-flight requests will yield higher nonces — wait
-                return
-
-            # Pick escalating offset
-            idx = min(errors - _ERROR_RESET_THRESHOLD, len(_ERROR_OFFSETS_MS) - 1)
-            offset = _ERROR_OFFSETS_MS[idx]
-            new_val = int(time.time() * 1000) + offset
-            _logger.warning(
-                "KrakenNonceManager: %d consecutive nonce errors — "
-                "resetting to now + %d ms (nonce=%d)",
-                errors, offset, new_val,
-            )
-            self._last_nonce = new_val
-            _write_persisted_nonce(self._last_nonce)
+        with _LOCK:
+            self._error_count += 1
+            jump = self._calculate_backoff(self._error_count)
+            if jump > 0:
+                self._last_nonce += jump
+                self._persist()
+                _logger.warning(
+                    "KrakenNonceManager: nonce error #%d — jumped forward %d ms (nonce=%d)",
+                    self._error_count, jump, self._last_nonce,
+                )
 
     def record_success(self) -> None:
-        """Reset the consecutive-error counter after a successful API call."""
-        with self._lock:
-            self._consecutive_errors = 0
+        """Reset the error counter after a successful API call."""
+        with _LOCK:
+            self._error_count = 0
+
+    # ── Private helpers ────────────────────────────────────────────────────
+
+    def _load_last_nonce(self) -> int:
+        """Compute startup nonce from persisted state and wall-clock."""
+        now_ms = int(time.time() * 1000)
+        persisted = 0
+        try:
+            with open(_STATE_FILE, "r") as fh:
+                persisted = int(fh.read().strip())
+        except (FileNotFoundError, ValueError):
+            pass
+        # Start safely ahead of both persisted value and current time.
+        start_nonce = max(persisted + _STARTUP_JUMP_MS, now_ms + _STARTUP_JUMP_MS)
+        # Clamp: never start so far ahead that Kraken's window rejects us.
+        start_nonce = min(start_nonce, now_ms + _STARTUP_CLAMP_MS)
+        return start_nonce
+
+    def _persist(self) -> None:
+        """Persist nonce atomically to disk (write-then-rename, chmod 0600)."""
+        try:
+            tmp_file = _STATE_FILE + ".tmp"
+            with open(tmp_file, "w") as fh:
+                fh.write(str(self._last_nonce))
+            os.chmod(tmp_file, _PERSISTED_PERMISSIONS)
+            os.replace(tmp_file, _STATE_FILE)
+        except Exception as exc:
+            _logger.debug("KrakenNonceManager: could not persist nonce (%s)", exc)
+
+    def _calculate_backoff(self, error_count: int) -> int:
+        """Return the forward-jump (ms) for the given consecutive error count."""
+        if error_count <= 2:
+            return 0
+        elif error_count == 3:
+            return 10_000
+        elif error_count == 4:
+            return 20_000
+        elif error_count == 5:
+            return 30_000
+        else:  # 6+
+            return 60_000
 
 
 # ── Backward-compatibility aliases ───────────────────────────────────────────
@@ -287,9 +279,7 @@ def reset_global_kraken_nonce() -> None:
 
 def jump_global_kraken_nonce_forward(milliseconds: int) -> None:
     """Jump the nonce forward by *milliseconds* (manual recovery helper)."""
-    with _nonce_manager._lock:
-        _nonce_manager._last_nonce += milliseconds
-        _write_persisted_nonce(_nonce_manager._last_nonce)
+    _nonce_manager.jump_forward(milliseconds)
 
 
 def nonce_reset_triggered_recently(window_s: float = 300.0) -> bool:
