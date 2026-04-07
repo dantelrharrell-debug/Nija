@@ -7339,6 +7339,22 @@ class TradingStrategy:
             except Exception as _cse_gate_err:
                 logger.debug("Capital Scaling Engine gate check skipped: %s", _cse_gate_err)
 
+        # ⚠️  DIAGNOSTIC OVERRIDE — for controlled testing only.
+        # Set NIJA_BYPASS_SAFETY_USER_MODE=1 to allow new entries even when one
+        # or more safety checks would normally force user_mode=True.  This lets
+        # operators verify that the apex strategy fires correctly without having
+        # to disable individual safety gates.
+        # NEVER enable this override in live production without understanding which
+        # gate is blocking entries and why.
+        if not explicit_user_mode and user_mode and os.environ.get("NIJA_BYPASS_SAFETY_USER_MODE") == "1":
+            logger.warning("=" * 72)
+            logger.warning("⚠️  NIJA_BYPASS_SAFETY_USER_MODE=1 — SAFETY USER_MODE OVERRIDE ACTIVE")
+            logger.warning("   New entries are PERMITTED despite one or more safety gates.")
+            logger.warning("   This override is for DIAGNOSTIC / CONTROLLED TESTING ONLY.")
+            logger.warning("   DO NOT leave this enabled in live production trading.")
+            logger.warning("=" * 72)
+            user_mode = False
+
         # Log mode for clarity.  Distinguish between:
         #   USER   — caller explicitly requested user mode (copy-trade accounts)
         #   PLATFORM (entries blocked) — safety checks forced entry-only mode on a platform account
