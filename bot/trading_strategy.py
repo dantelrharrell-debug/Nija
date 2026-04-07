@@ -7499,19 +7499,20 @@ class TradingStrategy:
                 return  # Skip normal trading cycle
 
             # CRITICAL: Enforce position cap first
-            if self.enforcer:
+            _enforcer = getattr(self, 'enforcer', None)
+            if _enforcer is not None:
                 logger.info(f"🔍 Enforcing position cap (max {MAX_POSITIONS_ALLOWED})...")
-                success, result = self.enforcer.enforce_cap()
+                success, result = _enforcer.enforce_cap()
                 if result['excess'] > 0:
                     logger.warning(f"⚠️ Excess positions detected: {result['excess']} over cap")
                     logger.info(f"   Sold {result['sold']} positions")
                 # Sync enforcer's unsellable marks into the strategy's filter dict so
                 # the per-cycle position-count filtering (and TRE gate above) can exclude
                 # positions that the enforcer confirmed are below the exchange minimum.
-                if hasattr(self.enforcer, '_unsellable_positions') and self.enforcer._unsellable_positions:
+                if hasattr(_enforcer, '_unsellable_positions') and _enforcer._unsellable_positions:
                     if not hasattr(self, 'unsellable_positions'):
                         self.unsellable_positions = {}
-                    for _sym, _ts in self.enforcer._unsellable_positions.items():
+                    for _sym, _ts in _enforcer._unsellable_positions.items():
                         if _sym not in self.unsellable_positions:
                             self.unsellable_positions[_sym] = _ts
                             logger.info(
