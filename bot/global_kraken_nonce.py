@@ -22,6 +22,7 @@ Usage
     payload["nonce"] = nonce_manager.next_nonce()
 """
 
+import glob as _glob
 import logging
 import os
 import threading
@@ -43,6 +44,7 @@ _STARTUP_CLAMP_MS: int = 55_000      # never start more than 55 s ahead
 _RESET_OFFSET_MS: int = 60_000       # baseline reset offset (was 1 s — now 60 s)
 # Escalating reset offsets applied on consecutive errors
 _ERROR_OFFSETS_MS: tuple = (10_000, 20_000, 30_000, 60_000)
+_ERROR_RESET_THRESHOLD: int = 3     # first N errors: no reset; from N onwards: escalating backoff
 
 # ── API serialisation lock ────────────────────────────────────────────────────
 # Kraken rejects parallel private calls on the same API key.
@@ -206,7 +208,7 @@ class KrakenNonceManager:
             self._consecutive_errors += 1
             errors = self._consecutive_errors
 
-            if errors < 3:
+            if errors < _ERROR_RESET_THRESHOLD:
                 # First two errors: let monotonic logic self-correct
                 return
 
@@ -215,7 +217,7 @@ class KrakenNonceManager:
                 return
 
             # Pick escalating offset
-            idx = min(errors - 3, len(_ERROR_OFFSETS_MS) - 1)
+            idx = min(errors - _ERROR_RESET_THRESHOLD, len(_ERROR_OFFSETS_MS) - 1)
             offset = _ERROR_OFFSETS_MS[idx]
             new_val = int(time.time() * 1000) + offset
             _logger.warning(
@@ -297,7 +299,6 @@ def nonce_reset_triggered_recently(window_s: float = 300.0) -> bool:
 
 def cleanup_legacy_nonce_files() -> None:
     """Remove old per-account nonce text files left by earlier implementations."""
-    import glob as _glob
     data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
     for path in _glob.glob(os.path.join(data_dir, "kraken_nonce*.txt")):
         try:
