@@ -883,6 +883,11 @@ def get_nija_core_loop(apex_strategy: Any, max_positions: int = 5) -> NijaCoreLo
 # ---------------------------------------------------------------------------
 # Standalone trading loop — for use as a daemon thread target
 # ---------------------------------------------------------------------------
+# _loop_guard / _loop_running guard against duplicate loop starts:
+#   - _loop_guard  : Lock that serialises the check-and-set on _loop_running.
+#   - _loop_running: Flag set to True the first time run_trading_loop acquires
+#                    the lock; subsequent callers bail out immediately so only
+#                    one continuous cycle ever runs.
 _loop_guard = threading.Lock()
 _loop_running = False
 

@@ -812,17 +812,20 @@ except ImportError:
 # ── Nija Core Loop — rebuilt single-pass scan / rank / enter loop ────────────
 try:
     from nija_core_loop import get_nija_core_loop, NijaCoreLoop
+    import nija_core_loop as _nija_core_loop_module
     NIJA_CORE_LOOP_AVAILABLE = True
     logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
 except ImportError:
     try:
         from bot.nija_core_loop import get_nija_core_loop, NijaCoreLoop
+        import bot.nija_core_loop as _nija_core_loop_module
         NIJA_CORE_LOOP_AVAILABLE = True
         logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
     except ImportError:
         NIJA_CORE_LOOP_AVAILABLE = False
         get_nija_core_loop = None  # type: ignore
         NijaCoreLoop = None  # type: ignore
+        _nija_core_loop_module = None  # type: ignore
 
 # ── Win-Rate / Frequency Tuner — optimise EV by balancing quality vs volume ──
 try:
@@ -5706,18 +5709,17 @@ class TradingStrategy:
         unexpected error before spawning its own threads.  A module-level
         guard in nija_core_loop.run_trading_loop prevents a second loop from
         starting if bot.py's thread already claimed the slot.
+
+        Uses the module-level ``_nija_core_loop_module`` reference that is
+        resolved once at import time (see the try/except block near the top
+        of this file); this avoids repeated dynamic imports inside methods.
         """
         import threading as _threading
-        try:
-            import nija_core_loop as _nija_core_loop
-        except ImportError:
-            try:
-                from bot import nija_core_loop as _nija_core_loop
-            except ImportError:
-                logger.warning("⚠️  nija_core_loop not available — core trading loop not started")
-                return
+        if _nija_core_loop_module is None:
+            logger.warning("⚠️  nija_core_loop not available — core trading loop not started")
+            return
         _threading.Thread(
-            target=_nija_core_loop.run_trading_loop,
+            target=_nija_core_loop_module.run_trading_loop,
             args=(self,),
             daemon=True,
             name="CoreTradingLoop",
