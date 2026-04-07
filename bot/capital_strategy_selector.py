@@ -290,7 +290,7 @@ ADVANCED_STRATEGY = StrategyProfile(
     # Aggressive targets with trailing stop
     min_profit_target_pct=0.020,  # 2.0 %
     max_profit_target_pct=0.120,  # 12.0 %
-    stop_loss_pct=0.015,          # 1.5 %
+    stop_loss_pct=0.020,          # 2.0% — raised from 1.5% (Fix 3: must clear noise + fees)
     use_trailing_stop=True,
     trailing_stop_pct=0.010,
 

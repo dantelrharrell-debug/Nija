@@ -16,6 +16,33 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+# ── Fee-aware minimum profit target (Fix 2) ────────────────────────────────
+def get_min_profit_target() -> float:
+    """
+    Return the absolute minimum profit target needed to overcome execution costs.
+
+    Components
+    ----------
+    fee      : 0.52 %  — Kraken/Coinbase taker fee (round-trip)
+    spread   : 0.40 %  — typical bid/ask spread for liquid crypto pairs
+    slippage : 0.20 %  — conservative market-impact estimate
+    buffer   : 1.00 %  — real profit margin after all friction
+
+    Total    : ~2.12 % — use max(base_target, get_min_profit_target()) at entry
+               so the effective floor is whichever is higher.
+
+    Returns
+    -------
+    float : minimum profit as a decimal fraction (e.g. 0.0212 = 2.12 %)
+    """
+    fee       = 0.0052   # taker fee (both sides combined)
+    spread    = 0.004    # bid/ask spread
+    slippage  = 0.002    # market impact / partial-fill slippage
+    cost      = fee + spread + slippage
+    buffer    = 0.01     # minimum real profit margin
+    return cost + buffer  # ≈ 0.0212 (2.12 %)
+
 # ═══════════════════════════════════════════════════════════════════
 # MARKET FILTER PARAMETERS
 # ═══════════════════════════════════════════════════════════════════
@@ -214,7 +241,7 @@ TAKE_PROFIT = {
             'action': 'tighten_trailing',
         },
     ],
-    'default_target': 0.025,  # 2.5% default target (OPTIMIZED: reduced from 3.0% for more consistent wins)
+    'default_target': 0.035,  # 3.5% default target — raised from 2.5% (Fix 1: must clear execution friction)
     'description': '33/33/34 tiered exits of original position size: TP1 exits 33% at 1.5% profit, TP2 exits 33% at 2.5% profit, TP3 exits final 34% at 4.0% profit',
 }
 
@@ -848,7 +875,7 @@ STOP_LOSS_CONFIG = {
     # ATR-Based Stops
     'atr_stop_multiplier': 1.5,  # Stop = 1.5x ATR below entry
     'min_stop_pct': 0.003,  # Minimum 0.3% stop-loss
-    'max_stop_pct': 0.015,  # Maximum 1.5% stop-loss
+    'max_stop_pct': 0.025,  # 2.5% maximum — raised from 1.5% (Fix 3: SL must exceed noise + fees)
 
     # Stop-Loss Adjustment
     'adjust_stop_on_tp1': True,  # Move stop to breakeven at TP1
@@ -1140,7 +1167,7 @@ EXCHANGE_PROFILES = {
     'coinbase': {
         'min_position_pct': 0.15,  # 15% minimum
         'max_position_pct': 0.30,  # 30% maximum
-        'min_profit_target': 0.025,  # 2.5% minimum (high fees)
+        'min_profit_target': 0.035,  # 3.5% minimum — raised from 2.5% (Fix 1: high Coinbase fees)
         'max_trades_per_day': 15,  # Quality over quantity
     },
     'okx': {
@@ -1152,7 +1179,7 @@ EXCHANGE_PROFILES = {
     'kraken': {
         'min_position_pct': 0.10,  # 10% minimum
         'max_position_pct': 0.25,  # 25% maximum
-        'min_profit_target': 0.020,  # 2.0% minimum (medium fees)
+        'min_profit_target': 0.035,  # 3.5% minimum — raised from 2.0% (Fix 1: Kraken fees + spread)
         'max_trades_per_day': 20,  # Balanced frequency
     },
 }

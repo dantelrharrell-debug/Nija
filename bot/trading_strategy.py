@@ -578,6 +578,36 @@ except ImportError:
         get_volatility_position_sizer = None
         VolatilityPositionSizer = None
 
+# Import calculate_position_size — final pre-order size gate (cost model + Kelly + ATR)
+try:
+    from position_sizer import calculate_position_size as _calc_position_size
+    CALC_POSITION_SIZE_AVAILABLE = True
+    logger.info("✅ calculate_position_size loaded — fee-aware pre-order sizing gate active")
+except ImportError:
+    try:
+        from bot.position_sizer import calculate_position_size as _calc_position_size
+        CALC_POSITION_SIZE_AVAILABLE = True
+        logger.info("✅ calculate_position_size loaded (bot.position_sizer)")
+    except ImportError:
+        CALC_POSITION_SIZE_AVAILABLE = False
+        _calc_position_size = None
+        logger.warning("⚠️ calculate_position_size not available — pre-order gate disabled")
+
+# Import allocate_capital from the TRE-aware sizing module
+try:
+    from bot.risk.sizing import allocate_capital as _allocate_capital
+    ALLOCATE_CAPITAL_AVAILABLE = True
+    logger.info("✅ allocate_capital (TRE wrapper) loaded — canonical sizing path active")
+except ImportError:
+    try:
+        from risk.sizing import allocate_capital as _allocate_capital
+        ALLOCATE_CAPITAL_AVAILABLE = True
+        logger.info("✅ allocate_capital (TRE wrapper) loaded (risk.sizing)")
+    except ImportError:
+        ALLOCATE_CAPITAL_AVAILABLE = False
+        _allocate_capital = None
+        logger.warning("⚠️ allocate_capital not available — falling back to legacy sizing")
+
 # Import Cross-Broker Arbitrage Monitor — venue price divergence awareness
 try:
     from cross_broker_arbitrage_monitor import get_arb_monitor, ArbSignalStrength
@@ -3797,6 +3827,18 @@ class TradingStrategy:
             from dust_blacklist import get_dust_blacklist
             from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
 
+            # ── UNCONDITIONAL strategy injection ─────────────────────────────
+            # ALWAYS create the strategy here, before any broker/mode gate, so
+            # self.apex is never None due to a conditional skip.  The broker
+            # client is None at this point; it will be updated once the broker
+            # connects (see below).  This mirrors the fix for the pattern:
+            #     if mode == "PRO": self.apex = ApexStrategy()   ← WRONG
+            #     self.apex = ApexStrategy()                     ← CORRECT
+            self.apex = NIJAApexStrategyV71(broker_client=None)
+            if self.apex is None:
+                raise RuntimeError("FATAL: Apex strategy failed to initialize")
+            logger.info(f"✅ Strategy injected: {type(self.apex).__name__}")
+
             # Initialize multi-account broker manager for user-specific trading
             logger.info("=" * 70)
             logger.info("🌐 MULTI-ACCOUNT TRADING MODE ACTIVATED")
@@ -4670,17 +4712,12 @@ class TradingStrategy:
                     self.market_adapter = None
 
                 # Initialize APEX strategy with primary broker
-                self.apex = NIJAApexStrategyV71(broker_client=self.broker)
-                logger.critical("✅ APEX V7.1 LOADED — NIJAApexStrategyV71 instance active and ready")
-                # Strategy injection guard: hard-fail early if the strategy object is
-                # somehow None (e.g. constructor raised a swallowed exception upstream).
-                # Use an explicit check rather than `assert` so it cannot be disabled
-                # with Python's -O optimisation flag.
-                if self.apex is None:
-                    raise RuntimeError(
-                        "Strategy injection failed: NIJAApexStrategyV71 instance is None after construction"
-                    )
-                logger.info("🎯 Strategy injection verified: Using strategy NIJAApexStrategyV71")
+                # Wire the live broker into the already-created strategy instance.
+                # self.apex was unconditionally created above with broker_client=None;
+                # now that the broker is ready, update the reference so all
+                # downstream API calls route through the real connection.
+                self.apex.broker_client = self.broker
+                logger.critical("✅ APEX V7.1 LIVE — broker_client wired to active broker")
 
                 # ── HF Scalping Mode — apply to APEX after construction ────────
                 # Patches confidence, ADX, volume, trend-confirmation thresholds
@@ -4746,7 +4783,8 @@ class TradingStrategy:
             else:
                 logger.warning("Strategy initialized in monitor mode (no active brokers)")
                 self.enforcer = None
-                self.apex = None
+                # self.apex was unconditionally created above — no broker to wire.
+                logger.info("📡 Running broker-less: self.apex already injected without broker_client")
 
         except ImportError as e:
             logger.error(f"Failed to import strategy modules: {e}")
@@ -4754,8 +4792,31 @@ class TradingStrategy:
             self.broker = None
             self.broker_manager = None
             self.enforcer = None
-            self.apex = None
             self.independent_trader = None
+            # Even when broker imports fail, attempt to inject the strategy so
+            # the analysis engine is available for the next cycle.
+            try:
+                from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71 as _ApexCls
+            except ImportError:
+                try:
+                    from nija_apex_strategy_v71 import NIJAApexStrategyV71 as _ApexCls
+                except ImportError:
+                    _ApexCls = None
+            if _ApexCls is not None:
+                try:
+                    self.apex = _ApexCls(broker_client=None)
+                    logger.info(f"✅ Strategy injected: {type(self.apex).__name__}")
+                except Exception as _apex_fallback_err:
+                    logger.critical(
+                        "FATAL: Apex strategy failed to initialize (ImportError fallback): %s",
+                        _apex_fallback_err,
+                    )
+                    raise RuntimeError(
+                        f"FATAL: Apex strategy failed to initialize: {_apex_fallback_err}"
+                    )
+            else:
+                logger.critical("FATAL: Apex strategy failed to initialize — NIJAApexStrategyV71 not importable")
+                raise RuntimeError("FATAL: Apex strategy failed to initialize — NIJAApexStrategyV71 not importable")
 
         TradingStrategy._startup_completed = True
         logger.info("✅ TradingStrategy startup latch set — re-initialisation blocked")
@@ -13952,6 +14013,85 @@ class TradingStrategy:
                                 # Warn if position is near the minimum but allowed
                                 if position_size < POSITION_SIZE_WARNING_THRESHOLD_USD:
                                     logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
+
+                                # ── FINAL PRE-ORDER SIZE GATE (TRE + streak/cooldown) ─────
+                                # allocate_capital() is the single authoritative sizing path.
+                                # It fuses: fee-aware cost model, ATR volatility scalar,
+                                # conservative Kelly, tier minimum, streak bonus, and adaptive
+                                # cooldown.  Vetoed trades (size=0 or cooldown active) are
+                                # skipped with a continue so no capital leaves the account.
+                                if ALLOCATE_CAPITAL_AVAILABLE and _allocate_capital is not None:
+                                    try:
+                                        _ac_result = _allocate_capital(
+                                            account_balance = account_balance,
+                                            symbol          = symbol,
+                                            broker_name     = (broker_name or "kraken").lower(),
+                                            analysis        = analysis,
+                                            broker          = active_broker,
+                                            streak          = getattr(self, '_win_streak', 0),
+                                            last_trade_ts   = (
+                                                getattr(self, '_micro_cap_last_trade_times', {}).get(symbol) or None
+                                            ),
+                                        )
+                                        if _ac_result is None:
+                                            logger.info(
+                                                "   🚫 %s: VETOED by allocate_capital "
+                                                "(cooldown active or net profit too low after fees)",
+                                                symbol,
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        # Use the TRE-computed size as the authoritative cap;
+                                        # all prior scaling steps already applied above, so we
+                                        # take the more conservative of the two values.
+                                        _ac_size = float(_ac_result['size_usd'])
+                                        position_size = min(position_size, _ac_size)
+                                        logger.info(
+                                            "   ✅ %s: Final position size: $%.2f  "
+                                            "[streak=%d cd=%ds]",
+                                            symbol, position_size,
+                                            _ac_result.get('streak', 0),
+                                            _ac_result.get('cooldown_sec', 60),
+                                        )
+                                    except Exception as _ac_err:
+                                        logger.debug("allocate_capital gate skipped for %s: %s", symbol, _ac_err)
+                                elif CALC_POSITION_SIZE_AVAILABLE and _calc_position_size is not None:
+                                    # Fallback: plain fee-aware gate (no streak/cooldown)
+                                    try:
+                                        _cps_sl  = float(analysis.get('stop_loss_pct',     0.02))
+                                        _cps_tp  = float(analysis.get('profit_target_pct', 0.035))
+                                        _cps_atr = float(analysis.get('atr_pct',           0.02))
+                                        _cps_ep  = float(analysis.get('entry_price', 0.0)) or float(
+                                            df['close'].iloc[-1] if df is not None and len(df) > 0 else 0.0
+                                        )
+                                        _cps_wr  = float(getattr(getattr(self, 'performance', None), 'win_rate', None) or 0.55)
+                                        _cps_size = _calc_position_size(
+                                            account_balance  = account_balance,
+                                            entry_price      = _cps_ep,
+                                            stop_loss_pct    = _cps_sl,
+                                            take_profit_pct  = _cps_tp,
+                                            atr_pct          = _cps_atr,
+                                            win_rate         = _cps_wr,
+                                            broker           = (broker_name or "kraken").lower(),
+                                        )
+                                        logger.info(
+                                            "📊 Position size computed: $%.2f "
+                                            "(balance=$%.2f sl=%.1f%% tp=%.1f%% atr=%.1f%%)",
+                                            _cps_size, account_balance,
+                                            _cps_sl * 100, _cps_tp * 100, _cps_atr * 100,
+                                        )
+                                        if _cps_size <= 0.0:
+                                            logger.info(
+                                                "   🚫 %s: VETOED by calculate_position_size — "
+                                                "net profit too low after fees/spread/slippage",
+                                                symbol,
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        position_size = min(position_size, _cps_size)
+                                        logger.info("   ✅ %s: Final position size: $%.2f", symbol, position_size)
+                                    except Exception as _cps_err:
+                                        logger.debug("calculate_position_size fallback skipped for %s: %s", symbol, _cps_err)
 
                                 # ═══════════════════════════════════════════════════════
                                 # CROSS-ACCOUNT RISK BALANCING — global 6% ceiling

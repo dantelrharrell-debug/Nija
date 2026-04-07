@@ -210,15 +210,25 @@ MICRO_CAP_COMPOUNDING_BALANCE_THRESHOLD = float('inf')  # Apply to ALL balances 
 # Micro-cap core parameters — all overridable via NIJA_MICROCAP_* env vars
 # ---------------------------------------------------------------------------
 MICRO_CAP_COMPOUNDING_MAX_POSITIONS    = int(float(os.getenv("NIJA_MICROCAP_MAX_POSITIONS",          "4")))
-MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = float(os.getenv("NIJA_MICROCAP_POSITION_SIZE_PERCENT",     "60.0"))
-MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT    = float(os.getenv("NIJA_MICROCAP_STOP_LOSS_PERCENT",          "1.5"))
+# Fix 4: Reduced from 60% → 35% — overexposure per trade kills micro-cap accounts
+# via volatility clustering.  35% keeps enough capital in reserve for 2-3 concurrent
+# positions without a single bad candle wiping the balance.
+MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = float(os.getenv("NIJA_MICROCAP_POSITION_SIZE_PERCENT",     "35.0"))
+# Fix 3: Raised SL from 1.5% → 2.0% so noise + fees cannot hunt the stop.
+# Execution friction (fee 0.52% + spread 0.4% + slippage 0.2% = 1.12%) must be
+# comfortably inside the stop — 2.0% provides the required clearance.
+MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT    = float(os.getenv("NIJA_MICROCAP_STOP_LOSS_PERCENT",          "2.0"))
 MICRO_CAP_TRADE_COOLDOWN               = int(float(os.getenv("NIJA_MICROCAP_COOLDOWN_SECONDS",       "60")))
 
 # Tiered profit targets for micro-cap compounding mode
-MICRO_CAP_TP1_PCT                      = float(os.getenv("NIJA_MICROCAP_TP1_PERCENT",                "2.5"))
-MICRO_CAP_TP2_PCT                      = float(os.getenv("NIJA_MICROCAP_TP2_PERCENT",                "3.5"))
-MICRO_CAP_TP3_PCT                      = float(os.getenv("NIJA_MICROCAP_TP3_PERCENT",                "6.0"))
-MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT = float(os.getenv("NIJA_MICROCAP_TRAILING_STOP_ACTIVATION_PERCENT", "2.5"))
+# Fix 1: TP1 raised from 2.5% → 3.5% (minimum), ideal 4–5%.
+# Rationale: cost = fee(0.52%) + spread(0.4%) + slippage(0.2%) = 1.12%; adding
+# a 1% real profit margin and 1.38% safety buffer gives the 3.5% floor.
+MICRO_CAP_TP1_PCT                      = float(os.getenv("NIJA_MICROCAP_TP1_PERCENT",                "3.5"))
+MICRO_CAP_TP2_PCT                      = float(os.getenv("NIJA_MICROCAP_TP2_PERCENT",                "4.5"))
+MICRO_CAP_TP3_PCT                      = float(os.getenv("NIJA_MICROCAP_TP3_PERCENT",                "7.0"))
+# Trailing-stop activation tracks TP1 so profits are locked in from first exit.
+MICRO_CAP_TRAILING_STOP_ACTIVATION_PCT = float(os.getenv("NIJA_MICROCAP_TRAILING_STOP_ACTIVATION_PERCENT", "3.5"))
 
 # When True, relax the AI entry gate (small gate_score_reduction) in
 # sideways / consolidation / ranging regimes so the bot stays active

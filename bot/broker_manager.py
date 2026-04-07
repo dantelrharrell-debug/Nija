@@ -69,6 +69,7 @@ except ImportError:
 # Import Global Kraken Nonce Manager (ONE source for all users - FINAL FIX)
 try:
     from bot.global_kraken_nonce import (
+        NonceManager,
         get_global_kraken_nonce,
         get_kraken_api_lock,
         jump_global_kraken_nonce_forward,
@@ -81,6 +82,7 @@ try:
 except ImportError:
     try:
         from global_kraken_nonce import (
+            NonceManager,
             get_global_kraken_nonce,
             get_kraken_api_lock,
             jump_global_kraken_nonce_forward,
@@ -92,6 +94,7 @@ except ImportError:
         )
     except ImportError:
         # Fallback: Global nonce manager not available
+        NonceManager = None
         get_global_kraken_nonce = None
         get_kraken_api_lock = None
         jump_global_kraken_nonce_forward = None
@@ -3325,27 +3328,59 @@ class CoinbaseBroker(BaseBroker):
 
                 # Use positional client_order_id to avoid SDK signature mismatch
                 logger.info(f"📤 Placing BUY order: {symbol}, quote_size=${quote_size_rounded:.2f}")
-                logger.info(f"   Using Coinbase Advanced Trade v3 API (market_order_buy)")
                 if self.portfolio_uuid:
                     logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
                 else:
                     logger.info(f"   This API can ONLY trade from Advanced Trade portfolio, NOT Consumer wallets")
 
-                # Include portfolio_uuid if we have it
-                order_kwargs = {
-                    'client_order_id': client_order_id,
-                    'product_id': symbol,
-                    'quote_size': str(quote_size_rounded)
-                }
+                # ── Fix 5: Maker-preferred orders (Coinbase) ──────────────────
+                # When NIJA_PREFER_MAKER_ORDERS=true (default) attempt a
+                # post-only limit order at the current ask price so we pay the
+                # maker fee (0 % on Coinbase Advanced) instead of the taker fee
+                # (0.60 %).  On rejection we fall back to market_order_buy.
+                import os as _os
+                _cb_prefer_maker = _os.environ.get("NIJA_PREFER_MAKER_ORDERS", "true").lower() not in ("0", "false", "no")
+                order = None
 
-                # Note: The Coinbase SDK market_order_buy may not support portfolio_uuid parameter
-                # It routes to the default portfolio automatically
-                # The real fix is to ensure funds are in the default trading portfolio
-                order = self.client.market_order_buy(
-                    client_order_id,
-                    product_id=symbol,
-                    quote_size=str(quote_size_rounded)
-                )
+                if _cb_prefer_maker:
+                    try:
+                        _cb_price = self.get_current_price(symbol)
+                        if _cb_price and _cb_price > 0:
+                            # base_size = quote / price, rounded to 8 dp
+                            import math as _math
+                            _cb_base = _math.floor((quote_size_rounded / _cb_price) * 1e8) / 1e8
+                            logger.info(
+                                f"📌 MAKER BUY [{symbol}]: {_cb_base:.8f} @ ${_cb_price:.8f} "
+                                f"(post-only limit, Coinbase)"
+                            )
+                            order = self.client.create_order(
+                                client_order_id=client_order_id,
+                                product_id=symbol,
+                                side="BUY",
+                                order_configuration={
+                                    'limit_limit_gtc': {
+                                        'base_size':  str(_cb_base),
+                                        'limit_price': str(round(_cb_price, 8)),
+                                        'post_only':  True,
+                                    }
+                                },
+                                **({'portfolio_id': self.portfolio_uuid} if getattr(self, 'portfolio_uuid', None) else {})
+                            )
+                        else:
+                            _cb_prefer_maker = False
+                    except Exception as _cb_maker_err:
+                        logger.warning(f"⚠️  Coinbase maker BUY failed ({_cb_maker_err}) — retrying as market")
+                        order = None
+                        _cb_prefer_maker = False
+
+                if not _cb_prefer_maker or order is None:
+                    # Market fallback (original path)
+                    logger.info(f"   Using Coinbase market_order_buy (taker)")
+                    order = self.client.market_order_buy(
+                        client_order_id,
+                        product_id=symbol,
+                        quote_size=str(quote_size_rounded)
+                    )
             else:
                 # SELL order - use base_size (crypto amount) or quote_size (USD value)
                 if size_type == 'base':
@@ -6262,7 +6297,16 @@ class KrakenBroker(BaseBroker):
                 # Also update global last call time
                 self._last_api_call_time = time.time()
 
-            # Make the API call (nonce is generated by _nonce_monotonic function)
+            # Make the API call.
+            # Explicitly stamp the nonce onto every private request so the value
+            # is always sourced from NonceManager regardless of whether krakenex's
+            # internal _nonce() override fired correctly.  This is the belt-and-
+            # suspenders guarantee the user requires.
+            if NonceManager is not None:
+                if params is None:
+                    params = {}
+                params["nonce"] = NonceManager.get_nonce()
+
             # Suppress pykrakenapi's print() statements that flood the console
             with suppress_pykrakenapi_prints():
                 if params is None:
@@ -6504,47 +6548,24 @@ class KrakenBroker(BaseBroker):
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
 
-            # Override _nonce to use simplified timestamp-based nonce (Railway-safe)
-            # This prevents "EAPI:Invalid nonce" errors by using ONE global timestamp source
+            # Override _nonce to use NonceManager — ONE ms-precision singleton
             # shared across PLATFORM + ALL USERS.
             #
-            # Benefits:
-            # 1. No nonce collisions (timestamps only move forward)
-            # 2. Millisecond precision (13 digits) - adequate for API calls
-            # 3. Thread-safe (built-in time function)
-            # 4. Scales to any number of users
-            # 5. No file persistence needed (timestamps are always fresh)
+            # NonceManager guarantees strictly-increasing millisecond nonces with
+            # a plain threading.Lock, independent of the global RLock used to
+            # serialise full API calls.  This means:
+            # 1. No nonce collisions even when balance + position fetches run in
+            #    parallel threads on the same API key.
+            # 2. Millisecond precision (13 digits) — matches Kraken's expectation.
+            # 3. Singleton counter (class-level) — never reused across accounts.
 
-            if self._use_global_nonce:
-                # Use global timestamp-based nonce (Railway-safe)
+            if NonceManager is not None:
+                # PRIMARY PATH: simple ms singleton — no RLock re-entry required.
                 def _nonce_monotonic():
-                    """
-                    Generate nonce using timestamp (Railway-safe).
+                    """Thread-safe ms nonce — single global counter for all accounts."""
+                    return str(NonceManager.get_nonce())
 
-                    ONE global source for PLATFORM + ALL USERS.
-                    - Nanosecond precision (19 digits)
-                    - Thread-safe: nonce increment is wrapped in get_kraken_api_lock()
-                      (RLock — safe to re-enter when called from _kraken_private_call())
-                    - No collisions (strictly monotonic via GlobalKrakenNonceManager)
-                    - No file persistence needed for each call (manager handles it)
-                    """
-                    # Acquire the API serialisation lock before incrementing the nonce
-                    # so that concurrent threads cannot interleave nonce generation.
-                    # get_kraken_api_lock() returns an RLock, making this safe to call
-                    # even when _kraken_private_call() already holds the same lock.
-                    _api_lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
-                    _get_nonce = get_global_kraken_nonce  # captured at closure-creation time
-                    if _api_lock is not None and _get_nonce is not None:
-                        with _api_lock:
-                            nonce = _get_nonce()
-                    elif _get_nonce is not None:
-                        nonce = _get_nonce()
-                    else:
-                        # Last-resort fallback: bare nanosecond timestamp
-                        nonce = time.time_ns()
-                    return str(nonce)
-
-                logger.debug(f"✅ GLOBAL Kraken Nonce (timestamp-based) installed for {cred_label}")
+                logger.debug(f"✅ NonceManager (ms singleton) installed for {cred_label}")
 
             elif self._kraken_nonce is not None:
                 # Fallback: Use per-user KrakenNonce instance (DEPRECATED)
@@ -8267,15 +8288,53 @@ class KrakenBroker(BaseBroker):
 
                     logging.info(f"   ✅ Volume validation passed: {volume_for_order:.8f} meets Kraken minimums")
 
-            # Place market order using serialized API call
-            # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
-            # Use category-specific rate limiting for entry vs exit operations
-            order_params = {
-                'pair': kraken_symbol,
-                'type': order_type,
-                'ordertype': 'market',
-                'volume': str(volume_for_order)
-            }
+            # ── Fix 5: Maker-preferred orders ────────────────────────────────
+            # When NIJA_PREFER_MAKER_ORDERS=true (default), place a post-only
+            # limit order at the current price so the order rests in the book
+            # and pays the maker fee (~0.16 %) instead of the taker fee (~0.26 %).
+            # This cuts round-trip fees nearly in half.
+            #
+            # Kraken post-only: ordertype=limit + oflags=post
+            #   • If the order would cross the spread and fill immediately, Kraken
+            #     rejects it with "EOrder:Post only order".  We catch that rejection
+            #     and fall back to a plain market order so execution is never lost.
+            #   • For SELL orders we fetch the current price here (reuses the price
+            #     already fetched for BUY conversions above when available).
+            _prefer_maker = os.environ.get("NIJA_PREFER_MAKER_ORDERS", "true").lower() not in ("0", "false", "no")
+
+            if _prefer_maker:
+                # Reuse current_price already fetched above; fetch if not yet set.
+                _maker_price = locals().get('current_price') or None
+                if not _maker_price or _maker_price <= 0:
+                    try:
+                        _maker_price = self.get_current_price(symbol)
+                    except Exception:
+                        _maker_price = None
+
+                if _maker_price and _maker_price > 0:
+                    order_params = {
+                        'pair':      kraken_symbol,
+                        'type':      order_type,
+                        'ordertype': 'limit',
+                        'price':     str(round(_maker_price, 8)),
+                        'volume':    str(volume_for_order),
+                        'oflags':    'post',   # post-only — guarantees maker fill
+                    }
+                    logging.info(
+                        f"📌 MAKER order [{symbol}]: {order_type} {volume_for_order:.8f} "
+                        f"@ ${_maker_price:.8f} (post-only, oflags=post)"
+                    )
+                else:
+                    # Price unavailable — fall back to market silently
+                    _prefer_maker = False
+
+            if not _prefer_maker:
+                order_params = {
+                    'pair':      kraken_symbol,
+                    'type':      order_type,
+                    'ordertype': 'market',
+                    'volume':    str(volume_for_order),
+                }
 
             # Determine API category: ENTRY for buy, EXIT for sell
             if KrakenAPICategory is not None:
@@ -8284,6 +8343,25 @@ class KrakenBroker(BaseBroker):
                 api_category = None
 
             result = self._kraken_private_call('AddOrder', order_params, category=api_category)
+
+            # ── Maker-order fallback: retry as market if post-only was rejected ──
+            if (
+                _prefer_maker
+                and result
+                and result.get('error')
+                and any('Post only' in str(e) or 'post only' in str(e).lower() for e in result['error'])
+            ):
+                logging.warning(
+                    f"⚠️  Post-only order rejected for {symbol} (would cross spread) — "
+                    f"retrying as market order"
+                )
+                fallback_params = {
+                    'pair':      kraken_symbol,
+                    'type':      order_type,
+                    'ordertype': 'market',
+                    'volume':    str(volume_for_order),
+                }
+                result = self._kraken_private_call('AddOrder', fallback_params, category=api_category)
 
             # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
             # DO NOT allow rejected orders to be recorded as successful trades

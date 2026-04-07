@@ -39,7 +39,7 @@ except ImportError:
 
 # Import exchange capabilities for SHORT entry validation and fee-aware profit targets
 try:
-    from exchange_capabilities import can_short, get_broker_capabilities, get_min_profit_target
+    from exchange_capabilities import can_short, get_broker_capabilities, get_min_profit_target as _get_exchange_min_profit_target
     EXCHANGE_CAPABILITIES_AVAILABLE = True
 except ImportError:
     EXCHANGE_CAPABILITIES_AVAILABLE = False
@@ -47,7 +47,8 @@ except ImportError:
 
 # Import position sizer for minimum position validation
 try:
-    from position_sizer import MIN_POSITION_USD
+    from position_sizer import MIN_POSITION_USD, calculate_position_size as _calc_position_size
+    _CALC_POSITION_SIZE_AVAILABLE = True
 except ImportError:
     MIN_POSITION_USD = 2.0  # Default to $2 minimum (lowered from $5 on Jan 21, 2026)
     logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $2.00")
@@ -885,17 +886,19 @@ class NIJAApexStrategyV71:
             Minimum profit target as decimal (e.g., 0.035 = 3.5%)
         """
         if not EXCHANGE_CAPABILITIES_AVAILABLE:
-            # Fallback to conservative default if capabilities not available
-            return 0.025  # 2.5% default target
+            # Fix 1+2: floor raised to 3.5%; fee-aware calc used as secondary floor.
+            from apex_config import get_min_profit_target
+            return max(0.035, get_min_profit_target())  # 3.5% minimum profit target
 
         broker_name = self._get_broker_name()
         try:
-            min_target = get_min_profit_target(broker_name, symbol, use_limit_order)
+            min_target = _get_exchange_min_profit_target(broker_name, symbol, use_limit_order)
             logger.debug(f"Fee-aware profit target for {broker_name}/{symbol}: {min_target*100:.2f}%")
             return min_target
         except Exception as e:
             logger.warning(f"Could not get fee-aware target for {broker_name}/{symbol}: {e}")
-            return 0.025  # 2.5% fallback
+            from apex_config import get_min_profit_target
+            return max(0.035, get_min_profit_target())  # 3.5% fallback
 
     def _get_broker_capabilities(self, symbol: str):
         """

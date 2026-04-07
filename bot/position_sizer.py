@@ -15,6 +15,7 @@ This ensures:
 """
 
 import logging
+import math
 from typing import Dict, Optional
 
 logger = logging.getLogger('nija.position_sizer')
@@ -310,6 +311,135 @@ def calculate_user_position_size(
             'reason': f'Calculation error: {e}',
             'scale_factor': 0
         }
+
+
+
+
+def calculate_position_size(
+    account_balance: float,
+    entry_price: float,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+    atr_pct: float,
+    win_rate: float = 0.55,
+    broker: str = "kraken",
+    max_risk_pct: float = 0.01,    # 1% base risk per trade
+    max_position_pct: float = 0.40, # 40% hard cap
+) -> float:
+    """
+    Optimal position size in USD combining four complementary models.
+
+    Models applied (most conservative wins):
+      1. Risk-based sizing     — risk exactly ``max_risk_pct`` of balance on the
+                                 effective stop (stop + execution friction).
+      2. Volatility scalar     — reduce size when ATR > 2%; hold size when calm.
+      3. Conservative Kelly    — fraction of balance suggested by the Kelly
+                                 criterion, capped at 25% to avoid overbetting.
+      4. Hard cap              — never exceed ``max_position_pct`` of balance.
+
+    A trade is **vetoed** (returns 0.0) when the expected net profit after fees,
+    spread, and slippage is less than 1.2 %.  This eliminates "death by fees"
+    on thin entries.
+
+    Parameters
+    ----------
+    account_balance : float
+        Current trading balance in USD.
+    entry_price : float
+        Expected fill price (used for base-currency conversion if needed).
+    stop_loss_pct : float
+        Hard stop distance as a decimal (e.g. 0.02 = 2 %).
+    take_profit_pct : float
+        Primary take-profit target as a decimal (e.g. 0.035 = 3.5 %).
+    atr_pct : float
+        Current ATR expressed as a fraction of price (e.g. 0.02 = 2 %).
+    win_rate : float
+        Estimated win rate for Kelly calculation (default 55 %).
+    broker : str
+        Broker name — used to look up exchange-specific minimum trade size.
+    max_risk_pct : float
+        Maximum fraction of balance to risk on one trade (default 1 %).
+    max_position_pct : float
+        Hard ceiling on position size as a fraction of balance (default 40 %).
+
+    Returns
+    -------
+    float
+        Position size in USD rounded down to 2 decimal places.
+        Returns 0.0 when the trade is vetoed by the cost model.
+    """
+    # ── 1. Broker constraints ─────────────────────────────────────────
+    BROKER_MIN_TRADE: Dict[str, float] = {
+        "kraken":   10.5,
+        "coinbase": 1.0,
+        "binance":  10.0,
+        "okx":      1.0,
+    }
+    min_trade = BROKER_MIN_TRADE.get(broker.lower(), 10.0)
+
+    # ── 2. Execution cost model ───────────────────────────────────────
+    fee_rate   = 0.0026 * 2  # taker round-trip ≈ 0.52 %
+    spread     = 0.004        # bid/ask spread  ≈ 0.40 %
+    slippage   = 0.002        # market impact   ≈ 0.20 %
+    total_cost = fee_rate + spread + slippage   # ≈ 1.12 %
+
+    # ── 3. Validate trade viability ───────────────────────────────────
+    expected_net_profit = take_profit_pct - total_cost
+    if expected_net_profit <= 0.012:
+        # Require at least 1.2 % real profit after friction — veto otherwise.
+        logger.info(
+            "calculate_position_size: trade VETOED — net profit %.2f %% ≤ 1.20 %% "
+            "(tp=%.2f %%, cost=%.2f %%)",
+            expected_net_profit * 100, take_profit_pct * 100, total_cost * 100,
+        )
+        return 0.0
+
+    # ── 4. Risk-based sizing ──────────────────────────────────────────
+    risk_amount  = account_balance * max_risk_pct
+    effective_sl = stop_loss_pct + total_cost  # widen SL for friction
+    if effective_sl <= 0:
+        return 0.0
+    position_size_risk = risk_amount / effective_sl
+
+    # ── 5. Volatility scalar (ATR-based) ─────────────────────────────
+    # Normalise around a 2 % ATR reference; high ATR → smaller size.
+    if atr_pct > 0:
+        volatility_scalar = min(1.0, 0.02 / atr_pct)
+    else:
+        volatility_scalar = 1.0
+    position_size_vol = position_size_risk * volatility_scalar
+
+    # ── 6. Conservative Kelly fraction ───────────────────────────────
+    edge     = (win_rate * take_profit_pct) - ((1.0 - win_rate) * stop_loss_pct)
+    variance = take_profit_pct ** 2
+    kelly_fraction    = max(0.0, min(edge / variance if variance > 0 else 0.0, 0.25))
+    position_size_kelly = account_balance * kelly_fraction
+
+    # ── 7. Combine models — take the most conservative ────────────────
+    raw_size = min(
+        position_size_vol,
+        position_size_kelly,
+        account_balance * max_position_pct,
+    )
+
+    # ── 8. Enforce broker minimum ─────────────────────────────────────
+    final_size = max(raw_size, min_trade)
+
+    # ── 9. Final hard cap ─────────────────────────────────────────────
+    cap = account_balance * max_position_pct
+    if final_size > cap:
+        final_size = cap
+
+    # ── 10. Round down to 2 decimal places for exchange precision ─────
+    final_size = math.floor(final_size * 100) / 100
+
+    logger.debug(
+        "calculate_position_size: balance=$%.2f tp=%.2f%% sl=%.2f%% atr=%.2f%% "
+        "→ risk=$%.2f vol=$%.2f kelly=$%.2f → final=$%.2f",
+        account_balance, take_profit_pct * 100, stop_loss_pct * 100, atr_pct * 100,
+        position_size_risk, position_size_vol, position_size_kelly, final_size,
+    )
+    return final_size
 
 
 def validate_position_size(

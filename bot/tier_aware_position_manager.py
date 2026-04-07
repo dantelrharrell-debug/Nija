@@ -306,8 +306,8 @@ class TierAwarePositionManager:
         else:
             tier_name = "INCOME"  # Fallback
         
-        # Calculate available capital (80% of balance)
-        available_capital = balance * 0.80
+        # Calculate available capital — capped at 40% per-trade maximum (Fix 4)
+        available_capital = balance * 0.40
         
         # Create validation context
         context = ValidationContext(

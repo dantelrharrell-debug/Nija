@@ -143,3 +143,17 @@ class ApexTrendStrategy(BaseStrategy):
             "trailing_stop_distance": self.trailing_stop_distance,
         }
 
+
+
+# ---------------------------------------------------------------------------
+# ApexStrategy — canonical alias used by trading_strategy.py injection step.
+# Points to the production NIJAApexStrategyV71 so `from bot.strategies.apex_strategy
+# import ApexStrategy` works without changing call sites.
+# ---------------------------------------------------------------------------
+try:
+    from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71 as ApexStrategy
+except ImportError:
+    try:
+        from nija_apex_strategy_v71 import NIJAApexStrategyV71 as ApexStrategy
+    except ImportError:
+        ApexStrategy = None  # type: ignore[assignment,misc]

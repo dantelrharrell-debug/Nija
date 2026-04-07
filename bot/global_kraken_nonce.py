@@ -199,7 +199,60 @@ def cleanup_legacy_nonce_files() -> None:
         _logger.info("global_kraken_nonce: removed %d legacy nonce file(s): %s", len(removed), removed)
 
 
-# ── Singleton nonce manager ────────────────────────────────────────────────────
+# ── Simple singleton nonce manager (primary path) ────────────────────────────
+
+class NonceManager:
+    """
+    Thread-safe singleton nonce generator for Kraken API.
+
+    Uses millisecond timestamps (13 digits) with a strictly-increasing
+    enforcement: if wall-clock time has not advanced since the last call,
+    the counter is incremented by 1 so every returned value is unique.
+
+    ONE class-level counter is shared across every thread and every
+    KrakenBroker account, which means parallel balance/position fetches
+    on the same API key can never produce duplicate or out-of-order
+    nonces.
+
+    Usage::
+
+        from bot.global_kraken_nonce import NonceManager
+
+        payload["nonce"] = NonceManager.get_nonce()
+        # — or —
+        self.api._nonce = lambda: str(NonceManager.get_nonce())
+    """
+
+    _lock: threading.Lock = threading.Lock()
+    _last_nonce: int = 0
+
+    @classmethod
+    def get_nonce(cls) -> int:
+        """
+        Return the next strictly-increasing millisecond nonce.
+
+        Thread-safe: protected by a class-level Lock so concurrent callers
+        from multiple threads or broker accounts always receive distinct,
+        ordered values.
+
+        Returns:
+            int: Milliseconds since epoch, guaranteed > previous return value.
+        """
+        with cls._lock:
+            nonce = int(time.time() * 1000)
+            if nonce <= cls._last_nonce:
+                nonce = cls._last_nonce + 1
+            cls._last_nonce = nonce
+            return nonce
+
+    @classmethod
+    def peek(cls) -> int:
+        """Return the last issued nonce without advancing the counter."""
+        with cls._lock:
+            return cls._last_nonce
+
+
+# ── Persistent singleton nonce manager (legacy / advanced recovery) ───────────
 
 class GlobalKrakenNonceManager:
     """
@@ -749,6 +802,7 @@ def nonce_reset_triggered_recently(window_s: float = 300.0) -> bool:
 
 
 __all__ = [
+    "NonceManager",
     "GlobalKrakenNonceManager",
     "get_global_nonce_manager",
     "get_global_nonce_stats",
