@@ -6071,7 +6071,8 @@ class KrakenBroker(BaseBroker):
         # available; until then kept as None so _kraken_private_call() falls back
         # to a fresh NonceManager() call.
         self.nonce_manager = None
-        # Bound method shortcut — set to self.nonce_manager.get_nonce in connect().
+        # Bound method reference (not a call) — set to self.nonce_manager.get_nonce
+        # (no parentheses) in connect() so callers invoke it as self._kraken_private_call_nonce().
         self._kraken_private_call_nonce = None
 
         # CRITICAL FIX: API call serialization to prevent simultaneous Kraken calls
@@ -6313,11 +6314,15 @@ class KrakenBroker(BaseBroker):
             if NonceManager is not None:
                 if params is None:
                     params = {}
-                # Use instance-level nonce_manager when available (set in connect());
-                # fall back to a fresh singleton call so _kraken_private_call() is safe
-                # to invoke even before connect() has run (e.g. during tests).
+                # Prefer the bound method stored by connect() so we always use
+                # the same already-initialised singleton reference.  Fall back to
+                # self.nonce_manager.get_nonce() when the bound-method shortcut is
+                # not set, and finally to a fresh NonceManager() call so that
+                # _kraken_private_call() is safe to invoke before connect() runs.
                 if getattr(self, '_kraken_private_call_nonce', None) is not None:
                     params["nonce"] = self._kraken_private_call_nonce()
+                elif getattr(self, 'nonce_manager', None) is not None:
+                    params["nonce"] = self.nonce_manager.get_nonce()
                 else:
                     params["nonce"] = NonceManager().get_nonce()
 
@@ -6404,7 +6409,7 @@ class KrakenBroker(BaseBroker):
             f"❌ Kraken connection test failed after {retries} attempts ({self.account_identifier})"
         )
 
-
+    def connect(self) -> bool:
         """
         Connect to Kraken Pro API with retry logic.
 

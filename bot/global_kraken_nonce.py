@@ -232,8 +232,9 @@ class NonceManager:
             with cls._lock:
                 if cls._instance is None:
                     inst = super().__new__(cls)
-                    inst._nonce = int(time.time() * 1000)
-                    inst._last_ts = time.time()
+                    _now = time.time()
+                    inst._nonce = int(_now * 1000)
+                    inst._last_ts = _now
                     inst._thread_lock = threading.Lock()
                     cls._instance = inst
         return cls._instance
