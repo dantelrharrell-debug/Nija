@@ -48,6 +48,14 @@ class NonceManager:
 
     ONE instance is shared across every thread and every account — there is
     no second nonce source anywhere in the codebase.
+
+    Reset policy
+    ────────────
+    reset_to_safe_value() is called:
+      • Once at bot startup (from KrakenBroker.connect())
+      • Automatically when record_error() is called for the 3rd consecutive
+        time AND there are no active in-flight requests (_active_requests == 0)
+    It is NEVER called per-account, per-retry, or from drift-detection logic.
     """
 
     _instance = None
@@ -65,6 +73,10 @@ class NonceManager:
     def _init(self):
         self._lock = threading.Lock()
         self._nonce = int(time.time() * 1000)
+        self._consecutive_errors = 0
+        self._active_requests = 0
+
+    # ── Core nonce generation ──────────────────────────────────────────────
 
     def get_nonce(self) -> int:
         """Return the next strictly-increasing millisecond nonce."""
@@ -77,9 +89,47 @@ class NonceManager:
             return self._nonce
 
     def reset_to_safe_value(self, offset_ms: int = 1_000) -> None:
-        """Reset nonce to now + offset_ms milliseconds (default 1 s, startup only)."""
+        """Reset nonce to now + offset_ms milliseconds (default 1 s)."""
         with self._lock:
             self._nonce = int(time.time() * 1000) + offset_ms
+
+    # ── Active-request tracking ────────────────────────────────────────────
+
+    def begin_request(self) -> None:
+        """Call before every Kraken private API request."""
+        with self._lock:
+            self._active_requests += 1
+
+    def end_request(self) -> None:
+        """Call after every Kraken private API request (success or failure)."""
+        with self._lock:
+            if self._active_requests > 0:
+                self._active_requests -= 1
+
+    # ── Error / success tracking ───────────────────────────────────────────
+
+    def record_error(self) -> None:
+        """
+        Record a Kraken 'invalid nonce' error.
+
+        Increments the consecutive-error counter.  When the counter reaches 3
+        AND there are no in-flight requests, the nonce is reset to now + 1 s
+        and the counter is cleared.  No reset is performed on errors 1 or 2.
+        """
+        with self._lock:
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= 3 and self._active_requests == 0:
+                _logger.warning(
+                    "NonceManager: 3 consecutive nonce errors with no active requests "
+                    "— resetting nonce to now + 1 s"
+                )
+                self._nonce = int(time.time() * 1000) + 1_000
+                self._consecutive_errors = 0
+
+    def record_success(self) -> None:
+        """Reset the consecutive-error counter after a successful API call."""
+        with self._lock:
+            self._consecutive_errors = 0
 
 
 # ── Legacy compatibility shims ────────────────────────────────────────────────
@@ -108,11 +158,13 @@ def get_global_nonce_stats() -> dict:
 
 
 def record_kraken_nonce_error() -> None:
-    """No-op: forward jumps have been removed (FIX 1)."""
+    """Record a nonce error on the shared NonceManager (resets after 3 + idle)."""
+    NonceManager().record_error()
 
 
 def record_kraken_nonce_success() -> None:
-    """No-op: escalation counter has been removed."""
+    """Record a successful call — resets the consecutive-error counter."""
+    NonceManager().record_success()
 
 
 def reset_global_kraken_nonce() -> None:

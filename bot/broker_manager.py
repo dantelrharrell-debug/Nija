@@ -6276,22 +6276,28 @@ class KrakenBroker(BaseBroker):
 
             # Stamp the nonce onto every private request from the single
             # shared NonceManager singleton — no fallback, no alternate path.
-            if NonceManager is not None:
+            _tracking = NonceManager is not None
+            if _tracking:
                 if params is None:
                     params = {}
                 params["nonce"] = self.nonce_manager.get_nonce()
+                self.nonce_manager.begin_request()
 
             # Small fixed delay between private calls to prevent ultra-fast bursts
             # from concurrent threads from hitting the API faster than Kraken can
             # process nonces sequentially.
             time.sleep(_KRAKEN_PRIVATE_CALL_SPACING_S)
 
-            # Suppress pykrakenapi's print() statements that flood the console
-            with suppress_pykrakenapi_prints():
-                if params is None:
-                    result = self.api.query_private(method)
-                else:
-                    result = self.api.query_private(method, params)
+            try:
+                # Suppress pykrakenapi's print() statements that flood the console
+                with suppress_pykrakenapi_prints():
+                    if params is None:
+                        result = self.api.query_private(method)
+                    else:
+                        result = self.api.query_private(method, params)
+            finally:
+                if _tracking:
+                    self.nonce_manager.end_request()
 
             return result
 
@@ -6316,26 +6322,11 @@ class KrakenBroker(BaseBroker):
 
     def _test_connection(self, retries: int = 5) -> bool:
         """
-        Test Kraken connectivity with retry and automatic nonce recovery.
+        Test Kraken connectivity with retry logic.
 
-        Calls the 'Balance' endpoint up to *retries* times.  On the first
-        success the method returns True.  If two or more consecutive failures
-        occur, ``self.nonce_manager.reset_to_safe_value()`` is called to
-        perform a hard reset of the shared nonce before the next attempt.
-
-        This is intentionally simpler than the full retry loop embedded in
-        ``connect()``.  Use it as a quick connectivity gate when you need to
-        verify that the nonce is synchronised with Kraken before proceeding,
-        without triggering the heavyweight lockout / permission-error handling.
-
-        Args:
-            retries: Maximum number of attempts (default 5).
-
-        Returns:
-            bool: True if a successful response was received within *retries* attempts.
-
-        Raises:
-            RuntimeError: If all attempts are exhausted without a successful response.
+        Calls the 'Balance' endpoint up to *retries* times.  Returns True on
+        the first success.  Uses a fixed 3-second delay between retries — no
+        nonce resets or forward jumps are applied here.
         """
         balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
         for attempt in range(1, retries + 1):
@@ -6686,6 +6677,16 @@ class KrakenBroker(BaseBroker):
 
             self.kraken_api = KrakenAPI(self.api)
 
+            # ONE startup reset — sets nonce to now + 1 s so the first API call
+            # lands safely ahead of any nonce Kraken may still hold from a
+            # previous session.  This is the only place reset_to_safe_value()
+            # is called proactively; subsequent resets are triggered only by
+            # NonceManager.record_error() after 3 consecutive errors with no
+            # active in-flight requests.
+            if NonceManager is not None:
+                NonceManager().reset_to_safe_value()
+                logger.debug(f"   🔄 Startup nonce reset complete for {cred_label}")
+
             # Startup delay before first Kraken API call.
             # A random jitter staggers simultaneous multi-account starts so they
             # do not all fire their first API call at the exact same millisecond.
@@ -6828,16 +6829,9 @@ class KrakenBroker(BaseBroker):
                                 last_error_was_lockout = is_lockout_error
                                 last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
 
-                                # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
-                                # Don't wait until the next retry iteration - do it now to clear the burned nonce
                                 if is_nonce_error:
-                                    self._immediate_nonce_jump()
-                                    # Notify the global manager so auto-heal can trigger if errors persist
-                                    if get_global_nonce_manager is not None:
-                                        try:
-                                            get_global_nonce_manager().record_nonce_error()
-                                        except Exception:
-                                            pass
+                                    if NonceManager is not None:
+                                        NonceManager().record_error()
 
                                 # Reduce log spam for transient errors
                                 # - Nonce errors: Log at INFO level on first attempt, DEBUG on retries (transient, will auto-retry)
@@ -6868,15 +6862,9 @@ class KrakenBroker(BaseBroker):
                     if balance and 'result' in balance:
                         self.connected = True
 
-                        # Signal successful API call so auto-recovery escalation resets
-                        if record_kraken_nonce_success is not None:
-                            record_kraken_nonce_success()
-                        # Reset the global nonce error counter on successful connection
-                        if get_global_nonce_manager is not None:
-                            try:
-                                get_global_nonce_manager().record_nonce_success()
-                            except Exception:
-                                pass
+                        # Record success — resets the consecutive-error counter
+                        if NonceManager is not None:
+                            NonceManager().record_success()
 
                         if attempt > 1:
                             logger.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
@@ -7163,10 +7151,9 @@ class KrakenBroker(BaseBroker):
                         last_error_was_lockout = is_lockout_error
                         last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
 
-                        # CRITICAL FIX: Immediately jump nonce forward on first nonce error detection
-                        # Don't wait until the next retry iteration - do it now to clear the burned nonce
                         if is_nonce_error:
-                            self._immediate_nonce_jump()
+                            if NonceManager is not None:
+                                NonceManager().record_error()
 
                         # Log retryable errors appropriately:
                         # - Timeout errors: Already logged above (special case)
