@@ -50,6 +50,16 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# ── Fee-aware minimum profit target ──────────────────────────────────────────
+try:
+    from bot.apex_config import get_min_profit_target as _get_min_profit_target
+except ImportError:
+    try:
+        from apex_config import get_min_profit_target as _get_min_profit_target  # type: ignore[no-redef]
+    except ImportError:
+        def _get_min_profit_target() -> float:  # type: ignore[misc]
+            return 0.0212  # 2.12% fallback
+
 # ── Re-export base sizer so callers only need one import ──────────────────────
 try:
     from position_sizer import calculate_position_size
@@ -72,8 +82,39 @@ _BROKER_MIN_USD: Dict[str, float] = {
 _DEFAULT_BROKER_MIN_USD: float = 10.0
 
 # ── Default TRE risk parameters ───────────────────────────────────────────────
-_DEFAULT_MAX_RISK_PCT:     float = 0.01   # 1 % of account per trade
-_DEFAULT_MAX_POSITION_PCT: float = 0.40   # 40 % hard cap (Fix 4)
+_DEFAULT_MAX_RISK_PCT:     float = 0.01   # 1 % of account per trade (Kelly ≤ 1%)
+_DEFAULT_MAX_POSITION_PCT: float = 0.40   # 40 % hard cap (micro-platform floor)
+
+# ── Micro-cap symbol hard cap (high-risk / low-liquidity assets) ──────────────
+# Never allocate more than 35 % of balance to a single micro-cap symbol.
+_MICRO_CAP_HARD_CAP_PCT:   float = 0.35
+
+# ── MICRO_PLATFORM tier floor — small accounts must use ≥ 40 % per position ──
+# Ensures positions are large enough to be fee-viable on STARTER/SAVER accounts.
+MICRO_PLATFORM_MIN_POSITION_PCT: float = 0.40
+
+# ── Execution friction fallback (fee + spread + slippage without buffer) ──────
+# Used when per-symbol live rates are unavailable.
+_FALLBACK_FRICTION_PCT: float = 0.0062  # 0.62 %
+
+# ── Minimum net profit required at TP1 after friction deduction ──────────────
+_MIN_NET_PROFIT_AT_TP1: float = 0.012   # 1.2 %
+
+# ── Default TP tier percentages (aligned with apex_config.py TAKE_PROFIT) ────
+_DEFAULT_TP1_PCT: float = 0.015   # 1.5 %
+_DEFAULT_TP2_PCT: float = 0.025   # 2.5 %
+_DEFAULT_TP3_PCT: float = 0.040   # 4.0 %
+
+# ── TP tier spacing when tp2/tp3 are not provided in analysis ────────────────
+# tp2 = tp1 × _TP_TIER_SPACING; tp3 = tp2 × _TP_TIER_SPACING
+_TP_TIER_SPACING: float = 1.5
+
+# ── ATR inverse scalar bounds and baseline ────────────────────────────────────
+# scalar = clamp(ATR_SCALAR_BASELINE / atr_pct, ATR_SCALAR_MIN, ATR_SCALAR_MAX)
+# High volatility (atr > baseline) → shrink position; low → slightly grow it.
+_ATR_SCALAR_MIN:      float = 0.5    # never size below 50 % of base
+_ATR_SCALAR_MAX:      float = 1.2    # cap upward scaling at 120 %
+_ATR_SCALAR_BASELINE: float = 0.02   # 2 % ATR → neutral scalar (1.0×)
 
 # ── Cooldown constants ────────────────────────────────────────────────────────
 _COOLDOWN_BASE_SEC:  int = 60    # base cooldown when streak = 0
@@ -428,6 +469,7 @@ def allocate_capital(
     broker: Any = None,
     streak: int = 0,
     last_trade_ts: Optional[float] = None,
+    is_micro_cap: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     High-level capital allocator — execution-ready position dict or None.
@@ -457,7 +499,8 @@ def allocate_capital(
         Lowercase broker identifier, e.g. ``"kraken"`` or ``"coinbase"``.
     analysis : dict, optional
         Output of ``apex.analyze_market()``.  Keys used:
-        ``atr_pct``, ``stop_loss_pct``, ``profit_target_pct``, ``entry_price``.
+        ``atr_pct``, ``stop_loss_pct``, ``profit_target_pct``, ``entry_price``,
+        ``tp1_pct``, ``tp2_pct``, ``tp3_pct``.
     broker : object, optional
         Broker instance — used for live price lookup when *entry_price* is
         missing from *analysis*.
@@ -466,15 +509,18 @@ def allocate_capital(
     last_trade_ts : float or None
         Unix timestamp of the last trade on *symbol* (``time.time()`` style).
         Pass ``None`` or ``0`` to skip the cooldown gate.
+    is_micro_cap : bool
+        When ``True`` applies the 35 % hard cap instead of the default 40 %.
 
     Returns
     -------
     dict or None
         Execution dict with keys ``symbol``, ``broker``, ``size_usd``,
-        ``stop_loss_pct``, ``take_profit_pct``, ``entry_price``,
-        ``cooldown_sec``, ``streak``.
+        ``stop_loss_pct``, ``tp1_pct``, ``tp2_pct``, ``tp3_pct``,
+        ``take_profit_pct`` (alias for tp1_pct), ``entry_price``,
+        ``cooldown_sec``, ``streak``, ``post_only``.
         Returns ``None`` when the trade is vetoed (cooldown active, size ≤ 0,
-        or net profit too low after fees).
+        insufficient net profit at TP1, or hard cap exceeded).
     """
     _a = analysis or {}
 
@@ -492,8 +538,36 @@ def allocate_capital(
 
     atr = float(_a.get("atr_pct",           0.02))
     sl  = float(_a.get("stop_loss_pct",      0.02))
-    tp  = float(_a.get("profit_target_pct",  0.035))
     ep  = float(_a.get("entry_price",        0.0))
+
+    # ── Resolve TP tier percentages ───────────────────────────────────────────
+    # Prefer explicit tp1/tp2/tp3 from analysis; fall back to apex_config defaults.
+    tp1_pct = float(_a.get("tp1_pct", _a.get("profit_target_pct", _DEFAULT_TP1_PCT)))
+    tp2_pct = float(_a.get("tp2_pct", _DEFAULT_TP2_PCT))
+    tp3_pct = float(_a.get("tp3_pct", _DEFAULT_TP3_PCT))
+
+    # Ensure ordering and floor from apex_config minimum profit target
+    _min_profit = _get_min_profit_target()
+    tp1_pct = max(tp1_pct, _min_profit)
+    tp2_pct = max(tp2_pct, tp1_pct * _TP_TIER_SPACING)
+    tp3_pct = max(tp3_pct, tp2_pct * _TP_TIER_SPACING)
+
+    # ── Net-profit veto — TP1 − friction < 1.2 % → reject ───────────────────
+    # Ensures the bot never enters a trade whose first target cannot clear the
+    # minimum post-friction profit margin.
+    _raw_friction = float(os.environ.get("NIJA_FRICTION_PCT", str(_FALLBACK_FRICTION_PCT)))
+    # Clamp friction to a sane range to guard against misconfigured env vars.
+    _friction = max(0.0, min(0.10, _raw_friction))
+    _net_at_tp1 = tp1_pct - _friction
+    if _net_at_tp1 < _MIN_NET_PROFIT_AT_TP1:
+        logger.warning(
+            "⚠️  allocate_capital: NET-PROFIT VETO for %s — "
+            "TP1(%.2f%%) − friction(%.2f%%) = %.2f%% < required %.2f%%",
+            symbol,
+            tp1_pct * 100, _friction * 100, _net_at_tp1 * 100,
+            _MIN_NET_PROFIT_AT_TP1 * 100,
+        )
+        return None
 
     # ── 1. Compute raw TRE size ───────────────────────────────────────────────
     size = tre_compute_position_size(
@@ -502,7 +576,7 @@ def allocate_capital(
         broker_name      = broker_name,
         atr_pct          = atr,
         stop_loss_pct    = sl,
-        take_profit_pct  = tp,
+        take_profit_pct  = tp1_pct,
         entry_price      = ep,
         broker           = broker,
     )
@@ -513,6 +587,18 @@ def allocate_capital(
             symbol,
         )
         return None
+
+    # ── 1b. ATR inverse scalar — reduce size when volatility is elevated ──────
+    # scalar = clamp(ATR_SCALAR_BASELINE / atr, ATR_SCALAR_MIN, ATR_SCALAR_MAX)
+    if atr > 0:
+        _atr_scalar = max(_ATR_SCALAR_MIN, min(_ATR_SCALAR_MAX, _ATR_SCALAR_BASELINE / atr))
+        if abs(_atr_scalar - 1.0) > 0.01:
+            _pre_atr = size
+            size = math.floor(size * _atr_scalar * 100) / 100
+            logger.debug(
+                "📐 ATR scalar %.2f× applied to %s: $%.2f → $%.2f (atr=%.1f%%)",
+                _atr_scalar, symbol, _pre_atr, size, atr * 100,
+            )
 
     # ── 2. Streak bonus — slight size increase on hot streaks ─────────────────
     # +0.2 % per consecutive win, capped at +10 % of the computed size.
@@ -545,16 +631,24 @@ def allocate_capital(
             )
             return None
 
-    # ── 4. Final hard cap — never exceed max_position_pct of balance ──────────
-    max_position = float(os.environ.get("NIJA_TRE_MAX_POSITION_PCT", str(_DEFAULT_MAX_POSITION_PCT)))
-    cap = math.floor(account_balance * max_position * 100) / 100
+    # ── 4. Hard cap — micro-cap 35 %, standard 40 % ───────────────────────────
+    # Micro-cap assets carry higher liquidity risk; stricter ceiling applies.
+    _hard_cap_pct = _MICRO_CAP_HARD_CAP_PCT if is_micro_cap else float(
+        os.environ.get("NIJA_TRE_MAX_POSITION_PCT", str(_DEFAULT_MAX_POSITION_PCT))
+    )
+    cap = math.floor(account_balance * _hard_cap_pct * 100) / 100
     if size > cap:
-        logger.debug("allocate_capital: %s size capped $%.2f → $%.2f (%.0f%% of balance)", symbol, size, cap, max_position * 100)
+        logger.debug(
+            "allocate_capital: %s size capped $%.2f → $%.2f (%.0f%% of balance%s)",
+            symbol, size, cap, _hard_cap_pct * 100,
+            " — micro-cap" if is_micro_cap else "",
+        )
         size = cap
 
     logger.info(
-        "📊 Position size computed: $%.2f  [%s | streak=%d | cd=%ds]",
+        "📊 Position size computed: $%.2f  [%s | streak=%d | cd=%ds | tp1=%.1f%% tp2=%.1f%% tp3=%.1f%%]",
         size, symbol, streak, cooldown_sec,
+        tp1_pct * 100, tp2_pct * 100, tp3_pct * 100,
     )
 
     return {
@@ -562,8 +656,14 @@ def allocate_capital(
         "broker":          broker_name,
         "size_usd":        size,
         "stop_loss_pct":   sl,
-        "take_profit_pct": tp,
+        # TP tiers as percentage fractions
+        "tp1_pct":         tp1_pct,
+        "tp2_pct":         tp2_pct,
+        "tp3_pct":         tp3_pct,
+        # Legacy alias consumed by parts of the system that use take_profit_pct
+        "take_profit_pct": tp1_pct,
         "entry_price":     ep,
         "cooldown_sec":    cooldown_sec,
         "streak":          streak,
+        "post_only":       True,
     }

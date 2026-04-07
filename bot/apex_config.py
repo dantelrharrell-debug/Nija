@@ -43,6 +43,24 @@ def get_min_profit_target() -> float:
     buffer    = 0.01     # minimum real profit margin
     return cost + buffer  # ≈ 0.0212 (2.12 %)
 
+
+# ── Centralized tier position constants ─────────────────────────────────────
+# MICRO_PLATFORM: minimum position allocation for small-balance (STARTER/SAVER)
+# platform accounts.  40 % ensures positions are fee-viable at account floor.
+MICRO_PLATFORM_MIN_POSITION = 0.40   # 40 % floor for micro/small accounts
+
+# Hard cap for micro-cap *symbols* (low market-cap, high-risk assets).
+# Applied independently of the MICRO_PLATFORM floor above.
+MICRO_CAP_SYMBOL_HARD_CAP  = 0.35   # 35 % ceiling per micro-cap symbol
+
+# TP1 / TP2 / TP3 defaults — shared across strategy modules
+TP1_DEFAULT_PCT = 0.015   # 1.5 %
+TP2_DEFAULT_PCT = 0.025   # 2.5 %
+TP3_DEFAULT_PCT = 0.040   # 4.0 %
+
+# SL floor — stop-loss must be at least this far from entry
+SL_FLOOR_PCT = 0.004      # 0.4 % minimum stop distance
+
 # ═══════════════════════════════════════════════════════════════════
 # MARKET FILTER PARAMETERS
 # ═══════════════════════════════════════════════════════════════════
@@ -109,8 +127,7 @@ MARKET_FILTERING = {
 
 ENTRY_CONFIG = {
     # Signal Scoring (6 possible confirmations)
-    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED for frequency (was 4)
-    'min_signal_score': 3,  # Minimum confirmations required (out of 6) - LOOSENED (was 4) for more entries
+    'min_signal_score': 3,  # Minimum confirmations required (out of 6) — loosened for frequency
     'a_plus_signal_score': 6,  # Perfect setup score
 
     # Required Conditions
@@ -144,8 +161,6 @@ ENTRY_TRIGGERS = {
             'MACD histogram uptick (growing)',
             'Volume confirmation (>50% avg)',
         ],
-        'required_conditions': 3,  # Minimum 3 out of 5 conditions (was 4)
-        'required_conditions': 3,  # Minimum 3 out of 5 conditions - LOOSENED (was 4)
         'required_conditions': 3,  # Minimum 3 out of 5 conditions
         'entry_on_close': True,  # Only enter on candle close
     },
@@ -158,10 +173,10 @@ ENTRY_TRIGGERS = {
             'MACD histogram downtick (shrinking)',
             'Volume confirmation (>50% avg)',
         ],
-        'required_conditions': 3,  # Minimum 3 out of 5 conditions (was 4)
+        'required_conditions': 3,  # Minimum 3 out of 5 conditions
         'entry_on_close': True,  # Only enter on candle close
     },
-    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback - LOOSENED (was 0.5%) for wider entry zone
+    'pullback_threshold': 0.010,  # 1.0% distance to EMA21/VWAP for pullback
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -296,8 +311,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
-        'adx_threshold': 7,  # ADX < 7 indicates chop - slightly below min_adx (8) to avoid edge cases
-        'adx_threshold': 6,  # ADX < 6 indicates chop — set 1 lower than min_adx (7)
+        'adx_threshold': 6,  # ADX < 6 indicates chop — 1 lower than min_adx (7) to avoid edge cases
     },
 }
 
