@@ -342,6 +342,8 @@ check_*.sh
 verify_*.py
 verify_*.sh
 validate_*.py
+# Allow pre-flight credential checker (used as a permanent bot utility)
+!validate_all_env_vars.py
 validate_*.sh
 diagnose_*.py
 diagnose_*.sh
