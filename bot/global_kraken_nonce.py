@@ -328,6 +328,7 @@ class GlobalKrakenNonceManager:
                 self._last_nonce = now + _STARTUP_JUMP_NS
                 self._consecutive_errors = 0
                 self._nonces_since_persist = 0
+                self._total_nonces_issued += 1
                 self._reset_triggered_at = time.time()
                 _persist_nonce(self._last_nonce)
                 return self._last_nonce
@@ -554,15 +555,19 @@ get_global_kraken_nonce = get_kraken_nonce
 # ── Global API serialisation lock ─────────────────────────────────────────────
 
 # Kraken rejects parallel private calls on the same API key — serialise them.
-_KRAKEN_API_LOCK = threading.Lock()
+# Use RLock so _nonce_monotonic() can safely re-acquire it when called from
+# within _kraken_private_call() (which already holds this lock).
+_KRAKEN_API_LOCK = threading.RLock()
 
 
-def get_kraken_api_lock() -> threading.Lock:
+def get_kraken_api_lock() -> threading.RLock:
     """
     Return the process-wide Kraken API serialisation lock.
 
     Acquire this lock around every private Kraken API call to prevent
-    parallel writes that would cause nonce ordering violations.
+    parallel writes that would cause nonce ordering violations.  The lock
+    is an RLock so that _nonce_monotonic() can safely re-acquire it when
+    invoked from within _kraken_private_call() (which already holds it).
 
     Usage::
 

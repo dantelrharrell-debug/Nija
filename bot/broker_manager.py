@@ -421,7 +421,8 @@ _KRAKEN_BALANCE_CACHE_TTL_SECONDS: int = int(os.environ.get('NIJA_KRAKEN_BALANCE
 # - Nonce file exists and is initialized properly
 # - No collision with other user accounts starting simultaneously
 # - No parallel nonce generation during bootstrap
-KRAKEN_STARTUP_DELAY_SECONDS = 5.0  # Similar to Coinbase's 40s delay but shorter due to better nonce handling
+KRAKEN_STARTUP_DELAY_SECONDS = 10.0   # Base startup cooldown (increased from 5 s)
+KRAKEN_STARTUP_DELAY_JITTER  =  5.0   # Additional random jitter (0 – 5 s) to stagger multi-instance starts
 
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
@@ -6518,12 +6519,26 @@ class KrakenBroker(BaseBroker):
                     Generate nonce using timestamp (Railway-safe).
 
                     ONE global source for PLATFORM + ALL USERS.
-                    - Millisecond precision (13 digits)
-                    - Thread-safe (uses time.time())
-                    - No collisions (time only moves forward)
-                    - No file persistence needed
+                    - Nanosecond precision (19 digits)
+                    - Thread-safe: nonce increment is wrapped in get_kraken_api_lock()
+                      (RLock — safe to re-enter when called from _kraken_private_call())
+                    - No collisions (strictly monotonic via GlobalKrakenNonceManager)
+                    - No file persistence needed for each call (manager handles it)
                     """
-                    nonce = get_global_kraken_nonce()
+                    # Acquire the API serialisation lock before incrementing the nonce
+                    # so that concurrent threads cannot interleave nonce generation.
+                    # get_kraken_api_lock() returns an RLock, making this safe to call
+                    # even when _kraken_private_call() already holds the same lock.
+                    _api_lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
+                    _get_nonce = get_global_kraken_nonce  # captured at closure-creation time
+                    if _api_lock is not None and _get_nonce is not None:
+                        with _api_lock:
+                            nonce = _get_nonce()
+                    elif _get_nonce is not None:
+                        nonce = _get_nonce()
+                    else:
+                        # Last-resort fallback: bare nanosecond timestamp
+                        nonce = time.time_ns()
                     return str(nonce)
 
                 logger.debug(f"✅ GLOBAL Kraken Nonce (timestamp-based) installed for {cred_label}")
@@ -6581,11 +6596,14 @@ class KrakenBroker(BaseBroker):
             try:
                 self.api._nonce = _nonce_monotonic
                 # Log initial nonce value for debugging nonce-related issues (only if debug enabled)
+                # IMPORTANT: use get_last_nonce() (peek-without-consume) instead of
+                # get_global_kraken_nonce() to avoid wasting a nonce for a log line.
                 if logger.isEnabledFor(logging.DEBUG):
                     if self._use_global_nonce:
-                        # Global nonce manager uses milliseconds (13 digits)
-                        test_nonce = get_global_kraken_nonce()
-                        logger.debug(f"   Initial nonce (GLOBAL): {test_nonce}ms (timestamp-based)")
+                        # Peek at the current nonce WITHOUT advancing the counter.
+                        _mgr = get_global_nonce_manager() if get_global_nonce_manager is not None else None
+                        test_nonce = _mgr.get_last_nonce() if _mgr is not None else 0
+                        logger.debug(f"   Initial nonce (GLOBAL): {test_nonce} (timestamp-based, peek only)")
                     elif self._kraken_nonce is not None:
                         # KrakenNonce uses milliseconds
                         current_time_ms = int(time.time() * 1000)
@@ -6620,8 +6638,13 @@ class KrakenBroker(BaseBroker):
             # Ensures the nonce file is fully written and lets the wall clock
             # advance so the 25 s startup-nonce lead decays naturally.  No
             # parallel nonce generation can occur during this window.
-            logger.info(f"   ⏳ Waiting {KRAKEN_STARTUP_DELAY_SECONDS:.1f}s before Kraken connection test (nonce stabilisation)...")
-            time.sleep(KRAKEN_STARTUP_DELAY_SECONDS)
+            # A random jitter (0 – KRAKEN_STARTUP_DELAY_JITTER s) staggers
+            # simultaneous multi-instance or multi-account starts so they do
+            # not all fire their first API call at the exact same millisecond.
+            _startup_jitter = random.uniform(0, KRAKEN_STARTUP_DELAY_JITTER)
+            _startup_total  = KRAKEN_STARTUP_DELAY_SECONDS + _startup_jitter
+            logger.info(f"   ⏳ Waiting {_startup_total:.1f}s before Kraken connection test (nonce stabilisation, jitter={_startup_jitter:.1f}s)...")
+            time.sleep(_startup_total)
             logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
 
             # PRE-CONNECTION NONCE JUMP: Only jump forward when the nonce is
