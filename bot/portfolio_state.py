@@ -54,8 +54,9 @@ class PortfolioState:
     open_positions: Dict[str, Position] = field(default_factory=dict)
     min_reserve_pct: float = 0.10  # Minimum 10% reserve to keep as cash
     # State integrity: last confirmed positive cash value — used as fallback when
-    # a broker refresh returns 0 or a negative figure.
-    _last_known_cash: float = field(default=0.0, init=False, repr=False)
+    # a broker refresh returns 0 or a negative figure.  None means no positive
+    # balance has ever been observed for this portfolio instance.
+    _last_known_cash: Optional[float] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         # Seed last-known-cash from the initial balance if it is valid.
@@ -242,9 +243,9 @@ class PortfolioState:
         """
         if new_cash <= 0:
             logger.warning(
-                "Rejecting invalid balance update (%.2f) — using last known good: %.2f",
+                "Rejecting invalid balance update (%.2f) — using last known good: %s",
                 new_cash,
-                self._last_known_cash,
+                f"${self._last_known_cash:.2f}" if self._last_known_cash is not None else "None (no valid balance seen yet)",
             )
             return
         self._last_known_cash = new_cash
@@ -378,11 +379,18 @@ class PortfolioStateManager:
             PortfolioState: Platform portfolio state
         """
         if self.platform_portfolio is None:
-            # Guard against initialising with an invalid balance — fall back to 0
-            # so update_cash()'s guard fires on the first real broker refresh.
-            init_cash = available_cash if available_cash > 0 else 0.0
-            self.platform_portfolio = PortfolioState(available_cash=init_cash)
-            logger.info(f"Platform portfolio initialized with ${init_cash:.2f}")
+            # Create the portfolio with whatever balance is provided.  An invalid
+            # (≤0) starting balance is logged but not blocked here — the portfolio
+            # is still created so the system can start up; the first real broker
+            # refresh via update_cash() will populate a valid balance.
+            if available_cash <= 0:
+                logger.warning(
+                    "initialize_platform_portfolio called with invalid balance %.2f — "
+                    "portfolio created; balance will be set on first successful broker refresh",
+                    available_cash,
+                )
+            self.platform_portfolio = PortfolioState(available_cash=max(0.0, available_cash))
+            logger.info(f"Platform portfolio initialized with ${available_cash:.2f}")
         else:
             # Portfolio already exists - only update cash balance, preserve positions
             old_cash = self.platform_portfolio.available_cash

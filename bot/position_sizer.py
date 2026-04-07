@@ -33,9 +33,13 @@ except ImportError:
     except ImportError:
         _GLOBAL_MIN_TRADE = 5.0  # fallback
 
-# KRAKEN: $10 minimum trade + fees.  The exchange hard-rejects orders under $10,
-# so we keep a fee buffer above GLOBAL_MIN_TRADE to be safe.
-KRAKEN_MIN_TRADE_USD = max(10.50, _GLOBAL_MIN_TRADE)  # $10 Kraken exchange floor + fee buffer
+# KRAKEN: The exchange hard-rejects orders under $10 regardless of GLOBAL_MIN_TRADE.
+# KRAKEN_MIN_TRADE_USD is intentionally a separate constant from GLOBAL_MIN_TRADE because
+# it represents an immutable exchange-level constraint, not a configurable policy floor.
+# The fee buffer (+$0.50) covers ~0.4–0.6% taker fees so the net filled value stays ≥$10.
+# If GLOBAL_MIN_TRADE is ever raised above 10.50 the higher value takes precedence.
+_KRAKEN_EXCHANGE_FLOOR = 10.50   # Kraken hard minimum: $10 + ~$0.50 fee buffer
+KRAKEN_MIN_TRADE_USD = max(_KRAKEN_EXCHANGE_FLOOR, _GLOBAL_MIN_TRADE)  # never below exchange floor
 
 # COINBASE / default: aligned to GLOBAL_MIN_TRADE
 COINBASE_MIN_TRADE_USD = _GLOBAL_MIN_TRADE

@@ -4670,9 +4670,12 @@ class TradingStrategy:
                 logger.critical("✅ APEX V7.1 LOADED — NIJAApexStrategyV71 instance active and ready")
                 # Strategy injection guard: hard-fail early if the strategy object is
                 # somehow None (e.g. constructor raised a swallowed exception upstream).
-                assert self.apex is not None, (
-                    "Strategy injection failed: NIJAApexStrategyV71 instance is None after construction"
-                )
+                # Use an explicit check rather than `assert` so it cannot be disabled
+                # with Python's -O optimisation flag.
+                if self.apex is None:
+                    raise RuntimeError(
+                        "Strategy injection failed: NIJAApexStrategyV71 instance is None after construction"
+                    )
                 logger.info("🎯 Strategy injection verified: Using strategy NIJAApexStrategyV71")
 
                 # ── HF Scalping Mode — apply to APEX after construction ────────
