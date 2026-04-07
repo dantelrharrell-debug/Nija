@@ -997,6 +997,14 @@ class IndependentBrokerTrader:
                         # Wait before rechecking
                         stop_flag.wait(60)
                         continue
+                    # Mark user as connected now that we have a confirmed live balance
+                    if get_platform_account_layer is not None:
+                        try:
+                            _pal = get_platform_account_layer()
+                            _pal.mark_user_connected(user_id, connected=True, balance_usd=balance)
+                            logger.debug(f"   ✅ {broker_name}: marked user '{user_id}' connected (balance=${balance:.2f})")
+                        except Exception as _pal_err:
+                            logger.debug(f"   mark_user_connected skipped: {_pal_err}")
                 except Exception as balance_err:
                     logger.error(f"❌ {broker_name} (USER) balance check failed: {balance_err}")
                     if user_id not in self.user_broker_health:
