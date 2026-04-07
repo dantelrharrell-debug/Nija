@@ -161,9 +161,9 @@ class ExitParams:
 # (hard_sl_pct, trailing_activate_pct, trailing_buffer_pct) per profile
 _STOP_TABLE: Dict[StratProfile, Tuple[float, float, float]] = {
     StratProfile.SCALP:          (_ef("SL_SCALP_PCT",    0.80) / 100, 1.50 / 100, 0.50 / 100),
-    StratProfile.SWING:          (_ef("SL_SWING_PCT",    1.50) / 100, 2.00 / 100, 0.60 / 100),  # SL 1.2→1.5% (balanced aggression, Apr 2026)
-    StratProfile.BREAKOUT:       (_ef("SL_BREAKOUT_PCT", 1.50) / 100, 2.50 / 100, 0.80 / 100),  # SL 1.2→1.5% (balanced aggression, Apr 2026)
-    StratProfile.MEAN_REVERSION: (_ef("SL_MREV_PCT",     1.00) / 100, 1.80 / 100, 0.55 / 100),
+    StratProfile.SWING:          (_ef("SL_SWING_PCT",    2.00) / 100, 2.50 / 100, 0.60 / 100),  # Fix 3: SL 1.5→2.0% (must clear noise + fees)
+    StratProfile.BREAKOUT:       (_ef("SL_BREAKOUT_PCT", 2.00) / 100, 2.80 / 100, 0.80 / 100),  # Fix 3: SL 1.5→2.0%
+    StratProfile.MEAN_REVERSION: (_ef("SL_MREV_PCT",     2.00) / 100, 2.50 / 100, 0.55 / 100),  # Fix 3: SL 1.0→2.0%
 }
 
 # Hard SL reduction for low-fee brokers (basis points → fraction)
