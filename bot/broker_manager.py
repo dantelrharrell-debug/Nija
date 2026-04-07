@@ -6192,44 +6192,6 @@ class KrakenBroker(BaseBroker):
             logger.warning("   Will use static minimum volumes as fallback")
             return False
 
-    def _immediate_nonce_jump(self):
-        """
-        Immediately jump nonce forward when a nonce error is detected.
-
-        Delegates to record_kraken_nonce_error() which performs an escalating
-        jump (30 s → 60 s → 120 s on consecutive errors) and persists the new
-        value to disk immediately.  Thread-safe via the nonce manager's RLock.
-        """
-        if self._use_global_nonce:
-            if record_kraken_nonce_error is not None:
-                jumped_ns = record_kraken_nonce_error()
-                jumped_s = jumped_ns / 1e9
-                logger.debug(
-                    "   ⚡ Jumped GLOBAL nonce forward by %.0fs (escalating recovery)",
-                    jumped_s,
-                )
-            elif jump_global_kraken_nonce_forward is not None:
-                # Older import without record_kraken_nonce_error — plain 30 s jump
-                new_nonce = jump_global_kraken_nonce_forward(30 * 1000)
-                logger.debug(
-                    "   ⚡ Jumped GLOBAL nonce forward by 30s (new nonce: %d)", new_nonce
-                )
-            else:
-                logger.debug("   ⚡ Global nonce jump function not available — timestamp-based recovery")
-            return
-        elif self._kraken_nonce is not None:
-            # Fallback: legacy per-user KrakenNonce instance
-            new_nonce = self._kraken_nonce.jump_forward(30 * 1000)
-            try:
-                with open(self._nonce_file, "w") as f:
-                    f.write(str(new_nonce))
-            except IOError as e:
-                logging.debug(f"Could not persist jumped nonce: {e}")
-            logger.debug("   ⚡ Jumped nonce forward by 30s (fallback KrakenNonce)")
-        else:
-            logger.debug("   ⚡ No nonce instance available — timestamp-based fallback")
-            return
-
     def _kraken_private_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
         """
         CRITICAL: Serialized wrapper for Kraken private API calls.
@@ -6397,12 +6359,8 @@ class KrakenBroker(BaseBroker):
                     self.account_identifier,
                     exc,
                 )
-                # Hard-reset the nonce after 2+ consecutive failures so we do not
-                # keep replaying a nonce that Kraken has already rejected.
-                if attempt >= 2 and self.nonce_manager is not None:
-                    self.nonce_manager.reset_to_safe_value()
                 if attempt < retries:
-                    time.sleep(attempt * 3)
+                    time.sleep(3)
         raise RuntimeError(
             f"❌ Kraken connection test failed after {retries} attempts ({self.account_identifier})"
         )
@@ -6728,69 +6686,21 @@ class KrakenBroker(BaseBroker):
 
             self.kraken_api = KrakenAPI(self.api)
 
-            # STARTUP NONCE RESET: Hard-reset the global nonce to current time + 25 s
-            # before the first API call.  The 25 s lead absorbs Kraken's clock-drift
-            # tolerance and allows up to two escalating error retries (10 s + 20 s = 30 s)
-            # before the 60 s HARD-RESET threshold is reached, preventing the repeated
-            # HARD-RESET cycle that occurred with the previous 10 s buffer.
-            if self._use_global_nonce and reset_global_kraken_nonce is not None:
-                try:
-                    reset_global_kraken_nonce()
-                    logger.info(f"   🔄 Nonce hard-reset (reset_to_safe_value) complete for {cred_label}")
-                except Exception as _nonce_reset_err:
-                    logger.warning(f"   ⚠️  Nonce reset failed (non-fatal): {_nonce_reset_err}")
-
             # Startup delay before first Kraken API call.
-            # Ensures the nonce file is fully written and lets the wall clock
-            # advance so the 25 s startup-nonce lead decays naturally.  No
-            # parallel nonce generation can occur during this window.
-            # A random jitter (0 – KRAKEN_STARTUP_DELAY_JITTER s) staggers
-            # simultaneous multi-instance or multi-account starts so they do
-            # not all fire their first API call at the exact same millisecond.
+            # A random jitter staggers simultaneous multi-account starts so they
+            # do not all fire their first API call at the exact same millisecond.
             _startup_jitter = random.uniform(0, KRAKEN_STARTUP_DELAY_JITTER)
             _startup_total  = KRAKEN_STARTUP_DELAY_SECONDS + _startup_jitter
-            logger.info(f"   ⏳ Waiting {_startup_total:.1f}s before Kraken connection test (nonce stabilisation, jitter={_startup_jitter:.1f}s)...")
+            logger.info(f"   ⏳ Waiting {_startup_total:.1f}s before Kraken connection test (jitter={_startup_jitter:.1f}s)...")
             time.sleep(_startup_total)
             logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
 
-            # PRE-CONNECTION NONCE JUMP: Only jump forward when the nonce is
-            # close to wall-clock time (lead < 5 s).  If the nonce is already
-            # well ahead (≥ 5 s), an extra forward jump would worsen any
-            # existing drift; get_nonce() will apply a hard-reset instead.
-            _pre_jump_lead_s = 0.0
-            if get_global_nonce_manager is not None:
-                try:
-                    _pre_jump_lead_s = get_global_nonce_manager().get_stats().get("lead_seconds", 0.0)
-                except Exception as _e:
-                    logger.debug("   Could not read nonce manager stats: %s", _e)
-
-            if _pre_jump_lead_s < 5.0:
-                logger.info(
-                    f"   ⚡ Jumping nonce forward before connection attempt ({cred_label}) "
-                    f"to clear any burned nonce window (lead={_pre_jump_lead_s:.1f}s < 5s)..."
-                )
-                self._immediate_nonce_jump()
-            else:
-                logger.info(
-                    f"   ⏭  Skipping pre-connection nonce jump ({cred_label}) — "
-                    f"nonce already {_pre_jump_lead_s:.1f}s ahead (≥ 5s); "
-                    f"get_nonce() will hard-reset if drift is extreme."
-                )
-
             # Test connection by fetching account balance with retry logic
-            # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
-            # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
-            # Special handling for "Temporary lockout" errors which require much longer delays (2-5 minutes)
-            # Special handling for "Invalid nonce" errors which require shorter delays
-            # CRITICAL FIX (Jan 18, 2026): Reduced nonce_base_delay from 60s to 3s
-            # The _immediate_nonce_jump() already jumps nonce forward by 120s, so we don't need
-            # to wait out the nonce window - just need a brief pause to avoid hammering the API
             max_attempts = 5
-            base_delay = 5.0  # Base delay for normal retryable errors
-            nonce_base_delay = 3.0  # 3 seconds base delay for "Invalid nonce" errors (REDUCED from 60s)
-            lockout_base_delay = 120.0  # 2 minutes base delay for "Temporary lockout" errors
-            last_error_was_lockout = False  # Track if previous attempt was a lockout error
-            last_error_was_nonce = False  # Track if previous attempt was a nonce error
+            base_delay = 5.0        # exponential backoff for normal errors
+            lockout_base_delay = 120.0  # 2 min per step for "Temporary lockout"
+            last_error_was_lockout = False
+            last_error_was_nonce = False
 
             for attempt in range(1, max_attempts + 1):
                 try:
@@ -6799,41 +6709,16 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"   Testing Kraken connection ({cred_label})...")
 
                     if attempt > 1:
-                        # Add delay before retry with exponential backoff
-                        # For "Temporary lockout" errors, use much longer delays: 120s, 240s, 360s, 480s (2min, 4min, 6min, 8min)
-                        # For "Invalid nonce" errors, use moderate delays: 60s, 120s, 180s, 240s (60s increments - INCREASED from 30s)
-                        # For other errors, use shorter delays: 5s, 10s, 20s, 40s
                         if last_error_was_lockout:
-                            # Linear scaling for lockout: (attempt-1) * 120s = 120s, 240s, 360s, 480s for attempts 2,3,4,5
                             delay = lockout_base_delay * (attempt - 1)
-                            # Log at INFO level for long delays so users know why it's taking time
-                            # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
                             logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
                         elif last_error_was_nonce:
-                            # Linear scaling for nonce errors: (attempt-1) * 3s = 3s, 6s, 9s, 12s for attempts 2,3,4,5
-                            # Short delays are sufficient since _immediate_nonce_jump() already jumped nonce by 120s
-                            # REDUCED from 60s increments to avoid long startup delays
-                            delay = nonce_base_delay * (attempt - 1)
-                            # Log at INFO level so users see progress
-                            # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
+                            delay = 5.0
                             logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
                         else:
-                            # Exponential backoff for normal errors: 5s, 10s, 20s, 40s for attempts 2,3,4,5
                             delay = base_delay * (2 ** (attempt - 2))
-                            # Log at INFO level so users see progress
-                            # CRITICAL FIX (Jan 18, 2026): Removed attempt < max_attempts check to log ALL retries
                             logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
                         time.sleep(delay)
-
-                        # Single nonce reset on the first retry only — repeated resets push
-                        # the nonce too far ahead and cause Kraken to reject it.
-                        if attempt == _KRAKEN_CONNECT_NONCE_RESET_ATTEMPT:
-                            if self._use_global_nonce and reset_global_kraken_nonce is not None:
-                                try:
-                                    reset_global_kraken_nonce()
-                                    logger.debug(f"   🔄 Nonce reset to safe value on first retry ({cred_label})")
-                                except Exception as _e:
-                                    logger.debug(f"   Could not reset nonce on retry: {_e}")
 
                     # The _nonce_monotonic() function automatically handles nonce generation
                     # with guaranteed strict monotonic increase. No manual nonce refresh needed.
