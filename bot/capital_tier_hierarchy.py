@@ -128,10 +128,10 @@ class TierPositionRules:
         if size_usd < self.min_position_size_usd:
             return (False, f"Position ${size_usd:.2f} below tier minimum ${self.min_position_size_usd:.2f}")
         
-        # Check maximum size (should not exceed 80% of balance)
-        max_size = balance * 0.80
+        # Check maximum size — 40% of balance (reduced from 80%, Fix 4)
+        max_size = balance * 0.40
         if size_usd > max_size:
-            return (False, f"Position ${size_usd:.2f} exceeds maximum ${max_size:.2f} (80% of balance)")
+            return (False, f"Position ${size_usd:.2f} exceeds maximum ${max_size:.2f} (40% of balance)")
         
         return (True, "")
 

@@ -135,7 +135,7 @@ class ScalpConfig:
     trailing_stop_atr_mult: float = 0.6   # ATR-based alternative
 
     # ── Fee-aware minimum gross profit ────────────────────────────────────
-    min_gross_profit_pct: float = 0.025   # must exceed this for net profit
+    min_gross_profit_pct: float = 0.035   # Fix 1: raised from 2.5% — must exceed fee+spread+slippage+buffer
 
     # ── Frequency ─────────────────────────────────────────────────────────
     target_trades_per_hour: float = 4.0

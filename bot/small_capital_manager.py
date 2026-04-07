@@ -36,7 +36,7 @@ class SmallCapitalManager:
             'position_size_pct': 0.10,  # Only 10% per trade
             'max_concurrent': 2,  # Only 2 positions max
             'profit_target_pct': 0.07,  # Need 7% to offset fees
-            'stop_loss_pct': 0.015,  # Tight 1.5% stops
+            'stop_loss_pct': 0.020,  # 2.0% stop — raised from 1.5% (Fix 3: must clear noise + fees)
             'trades_per_day': 2,  # Max 2 trades/day (reduce fees)
             'description': 'DESPERATE MODE - Success unlikely, deposit recommended',
             'success_rate': 0.05  # 5% chance of success
@@ -46,7 +46,7 @@ class SmallCapitalManager:
             'position_size_pct': 0.15,  # 15% per trade
             'max_concurrent': 3,  # 3 positions
             'profit_target_pct': 0.06,  # 6% targets
-            'stop_loss_pct': 0.015,  # 1.5% stops
+            'stop_loss_pct': 0.020,  # 2.0% stop — raised from 1.5% (Fix 3)
             'trades_per_day': 3,  # Max 3 trades/day
             'description': 'DIFFICULT MODE - Low success rate, consider depositing',
             'success_rate': 0.15  # 15% chance

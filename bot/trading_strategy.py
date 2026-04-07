@@ -578,6 +578,21 @@ except ImportError:
         get_volatility_position_sizer = None
         VolatilityPositionSizer = None
 
+# Import calculate_position_size — final pre-order size gate (cost model + Kelly + ATR)
+try:
+    from position_sizer import calculate_position_size as _calc_position_size
+    CALC_POSITION_SIZE_AVAILABLE = True
+    logger.info("✅ calculate_position_size loaded — fee-aware pre-order sizing gate active")
+except ImportError:
+    try:
+        from bot.position_sizer import calculate_position_size as _calc_position_size
+        CALC_POSITION_SIZE_AVAILABLE = True
+        logger.info("✅ calculate_position_size loaded (bot.position_sizer)")
+    except ImportError:
+        CALC_POSITION_SIZE_AVAILABLE = False
+        _calc_position_size = None
+        logger.warning("⚠️ calculate_position_size not available — pre-order gate disabled")
+
 # Import Cross-Broker Arbitrage Monitor — venue price divergence awareness
 try:
     from cross_broker_arbitrage_monitor import get_arb_monitor, ArbSignalStrength
@@ -13983,6 +13998,49 @@ class TradingStrategy:
                                 # Warn if position is near the minimum but allowed
                                 if position_size < POSITION_SIZE_WARNING_THRESHOLD_USD:
                                     logger.warning(f"   ⚠️  Small position: ${position_size:.2f} - profitability may be limited by fees")
+
+                                # ── FINAL PRE-ORDER SIZE GATE ─────────────────────────────
+                                # calculate_position_size() fuses four models (risk-based,
+                                # ATR volatility, conservative Kelly, hard cap) and VETOES
+                                # trades whose net profit cannot clear execution friction.
+                                # This is the last line of defence before capital leaves the
+                                # account — runs after ALL other sizing/scaling logic.
+                                if CALC_POSITION_SIZE_AVAILABLE and _calc_position_size is not None:
+                                    try:
+                                        _cps_sl  = float(analysis.get('stop_loss_pct',     0.02))
+                                        _cps_tp  = float(analysis.get('profit_target_pct', 0.035))
+                                        _cps_atr = float(analysis.get('atr_pct',           0.02))
+                                        _cps_ep  = float(analysis.get('entry_price',       0.0)) or float(
+                                            df['close'].iloc[-1] if df is not None and len(df) > 0 else 0.0
+                                        )
+                                        _cps_wr  = float(getattr(getattr(self, 'performance', None), 'win_rate', None) or 0.55)
+                                        _cps_size = _calc_position_size(
+                                            account_balance  = account_balance,
+                                            entry_price      = _cps_ep,
+                                            stop_loss_pct    = _cps_sl,
+                                            take_profit_pct  = _cps_tp,
+                                            atr_pct          = _cps_atr,
+                                            win_rate         = _cps_wr,
+                                            broker           = broker_name.lower() if broker_name else "kraken",
+                                        )
+                                        logger.info(
+                                            f"📊 Position size computed: ${_cps_size:.2f} "
+                                            f"(balance=${account_balance:.2f} sl={_cps_sl*100:.1f}% "
+                                            f"tp={_cps_tp*100:.1f}% atr={_cps_atr*100:.1f}%)"
+                                        )
+                                        if _cps_size <= 0.0:
+                                            logger.info(
+                                                f"   🚫 {symbol}: VETOED by calculate_position_size — "
+                                                f"net profit too low after fees/spread/slippage"
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+                                        # Take the more conservative of the two estimates so
+                                        # existing risk-management caps are never bypassed.
+                                        position_size = min(position_size, _cps_size)
+                                        logger.info(f"   ✅ {symbol}: Final position size after gate: ${position_size:.2f}")
+                                    except Exception as _cps_err:
+                                        logger.debug("calculate_position_size gate skipped for %s: %s", symbol, _cps_err)
 
                                 # ═══════════════════════════════════════════════════════
                                 # CROSS-ACCOUNT RISK BALANCING — global 6% ceiling

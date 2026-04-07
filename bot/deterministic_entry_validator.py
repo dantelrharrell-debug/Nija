@@ -286,15 +286,15 @@ class DeterministicEntryValidator:
                    f"❌ REJECTED: INSUFFICIENT_CAPITAL - Available ${context.available_capital:.2f} "
                    f"< Required ${context.proposed_size_usd:.2f} (shortfall: ${context.proposed_size_usd - context.available_capital:.2f})")
         
-        # Check that we're not using more than 80% of balance for a single position
-        max_single_position = context.balance * 0.80
+        # Single-position cap: 40% of balance (reduced from 80%, Fix 4)
+        max_single_position = context.balance * 0.40
         if context.proposed_size_usd > max_single_position:
             details['capital_validation']['proposed'] = context.proposed_size_usd
             details['capital_validation']['maximum'] = max_single_position
-            
+
             return (False, RejectionCode.TIER_POSITION_SIZE_TOO_LARGE,
                    f"❌ REJECTED: TIER_POSITION_SIZE_TOO_LARGE - Position ${context.proposed_size_usd:.2f} "
-                   f"exceeds maximum ${max_single_position:.2f} (80% of balance)")
+                   f"exceeds maximum ${max_single_position:.2f} (40% of balance)")
         
         details['capital_validation']['status'] = 'PASSED'
         return (True, RejectionCode.VALIDATION_PASSED, "")

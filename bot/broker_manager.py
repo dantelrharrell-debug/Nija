@@ -3328,27 +3328,59 @@ class CoinbaseBroker(BaseBroker):
 
                 # Use positional client_order_id to avoid SDK signature mismatch
                 logger.info(f"📤 Placing BUY order: {symbol}, quote_size=${quote_size_rounded:.2f}")
-                logger.info(f"   Using Coinbase Advanced Trade v3 API (market_order_buy)")
                 if self.portfolio_uuid:
                     logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
                 else:
                     logger.info(f"   This API can ONLY trade from Advanced Trade portfolio, NOT Consumer wallets")
 
-                # Include portfolio_uuid if we have it
-                order_kwargs = {
-                    'client_order_id': client_order_id,
-                    'product_id': symbol,
-                    'quote_size': str(quote_size_rounded)
-                }
+                # ── Fix 5: Maker-preferred orders (Coinbase) ──────────────────
+                # When NIJA_PREFER_MAKER_ORDERS=true (default) attempt a
+                # post-only limit order at the current ask price so we pay the
+                # maker fee (0 % on Coinbase Advanced) instead of the taker fee
+                # (0.60 %).  On rejection we fall back to market_order_buy.
+                import os as _os
+                _cb_prefer_maker = _os.environ.get("NIJA_PREFER_MAKER_ORDERS", "true").lower() not in ("0", "false", "no")
+                order = None
 
-                # Note: The Coinbase SDK market_order_buy may not support portfolio_uuid parameter
-                # It routes to the default portfolio automatically
-                # The real fix is to ensure funds are in the default trading portfolio
-                order = self.client.market_order_buy(
-                    client_order_id,
-                    product_id=symbol,
-                    quote_size=str(quote_size_rounded)
-                )
+                if _cb_prefer_maker:
+                    try:
+                        _cb_price = self.get_current_price(symbol)
+                        if _cb_price and _cb_price > 0:
+                            # base_size = quote / price, rounded to 8 dp
+                            import math as _math
+                            _cb_base = _math.floor((quote_size_rounded / _cb_price) * 1e8) / 1e8
+                            logger.info(
+                                f"📌 MAKER BUY [{symbol}]: {_cb_base:.8f} @ ${_cb_price:.8f} "
+                                f"(post-only limit, Coinbase)"
+                            )
+                            order = self.client.create_order(
+                                client_order_id=client_order_id,
+                                product_id=symbol,
+                                side="BUY",
+                                order_configuration={
+                                    'limit_limit_gtc': {
+                                        'base_size':  str(_cb_base),
+                                        'limit_price': str(round(_cb_price, 8)),
+                                        'post_only':  True,
+                                    }
+                                },
+                                **({'portfolio_id': self.portfolio_uuid} if getattr(self, 'portfolio_uuid', None) else {})
+                            )
+                        else:
+                            _cb_prefer_maker = False
+                    except Exception as _cb_maker_err:
+                        logger.warning(f"⚠️  Coinbase maker BUY failed ({_cb_maker_err}) — retrying as market")
+                        order = None
+                        _cb_prefer_maker = False
+
+                if not _cb_prefer_maker or order is None:
+                    # Market fallback (original path)
+                    logger.info(f"   Using Coinbase market_order_buy (taker)")
+                    order = self.client.market_order_buy(
+                        client_order_id,
+                        product_id=symbol,
+                        quote_size=str(quote_size_rounded)
+                    )
             else:
                 # SELL order - use base_size (crypto amount) or quote_size (USD value)
                 if size_type == 'base':
@@ -8256,15 +8288,53 @@ class KrakenBroker(BaseBroker):
 
                     logging.info(f"   ✅ Volume validation passed: {volume_for_order:.8f} meets Kraken minimums")
 
-            # Place market order using serialized API call
-            # Kraken API: AddOrder(pair, type, ordertype, volume, ...)
-            # Use category-specific rate limiting for entry vs exit operations
-            order_params = {
-                'pair': kraken_symbol,
-                'type': order_type,
-                'ordertype': 'market',
-                'volume': str(volume_for_order)
-            }
+            # ── Fix 5: Maker-preferred orders ────────────────────────────────
+            # When NIJA_PREFER_MAKER_ORDERS=true (default), place a post-only
+            # limit order at the current price so the order rests in the book
+            # and pays the maker fee (~0.16 %) instead of the taker fee (~0.26 %).
+            # This cuts round-trip fees nearly in half.
+            #
+            # Kraken post-only: ordertype=limit + oflags=post
+            #   • If the order would cross the spread and fill immediately, Kraken
+            #     rejects it with "EOrder:Post only order".  We catch that rejection
+            #     and fall back to a plain market order so execution is never lost.
+            #   • For SELL orders we fetch the current price here (reuses the price
+            #     already fetched for BUY conversions above when available).
+            _prefer_maker = os.environ.get("NIJA_PREFER_MAKER_ORDERS", "true").lower() not in ("0", "false", "no")
+
+            if _prefer_maker:
+                # Reuse current_price already fetched above; fetch if not yet set.
+                _maker_price = locals().get('current_price') or None
+                if not _maker_price or _maker_price <= 0:
+                    try:
+                        _maker_price = self.get_current_price(symbol)
+                    except Exception:
+                        _maker_price = None
+
+                if _maker_price and _maker_price > 0:
+                    order_params = {
+                        'pair':      kraken_symbol,
+                        'type':      order_type,
+                        'ordertype': 'limit',
+                        'price':     str(round(_maker_price, 8)),
+                        'volume':    str(volume_for_order),
+                        'oflags':    'post',   # post-only — guarantees maker fill
+                    }
+                    logging.info(
+                        f"📌 MAKER order [{symbol}]: {order_type} {volume_for_order:.8f} "
+                        f"@ ${_maker_price:.8f} (post-only, oflags=post)"
+                    )
+                else:
+                    # Price unavailable — fall back to market silently
+                    _prefer_maker = False
+
+            if not _prefer_maker:
+                order_params = {
+                    'pair':      kraken_symbol,
+                    'type':      order_type,
+                    'ordertype': 'market',
+                    'volume':    str(volume_for_order),
+                }
 
             # Determine API category: ENTRY for buy, EXIT for sell
             if KrakenAPICategory is not None:
@@ -8273,6 +8343,25 @@ class KrakenBroker(BaseBroker):
                 api_category = None
 
             result = self._kraken_private_call('AddOrder', order_params, category=api_category)
+
+            # ── Maker-order fallback: retry as market if post-only was rejected ──
+            if (
+                _prefer_maker
+                and result
+                and result.get('error')
+                and any('Post only' in str(e) or 'post only' in str(e).lower() for e in result['error'])
+            ):
+                logging.warning(
+                    f"⚠️  Post-only order rejected for {symbol} (would cross spread) — "
+                    f"retrying as market order"
+                )
+                fallback_params = {
+                    'pair':      kraken_symbol,
+                    'type':      order_type,
+                    'ordertype': 'market',
+                    'volume':    str(volume_for_order),
+                }
+                result = self._kraken_private_call('AddOrder', fallback_params, category=api_category)
 
             # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
             # DO NOT allow rejected orders to be recorded as successful trades
