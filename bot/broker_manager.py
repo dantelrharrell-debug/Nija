@@ -414,7 +414,10 @@ _BULK_PRICE_CACHE_TTL_SECONDS: int = int(os.environ.get('NIJA_BULK_PRICE_CACHE_T
 # TTL (seconds) for KrakenBroker.get_account_balance() — if the last
 # successful fetch is younger than this value the cached balance is returned
 # immediately, avoiding a BlockingIO Kraken API round-trip every cycle.
-_KRAKEN_BALANCE_CACHE_TTL_SECONDS: int = int(os.environ.get('NIJA_KRAKEN_BALANCE_CACHE_TTL', '300'))
+# Default is 55 s (5 s below the BALANCE_STABLE_SECONDS guard threshold of 60 s)
+# so that a fresh API call is always made before the timing guard fires and
+# blocks new entries.  Override via NIJA_KRAKEN_BALANCE_CACHE_TTL env var.
+_KRAKEN_BALANCE_CACHE_TTL_SECONDS: int = int(os.environ.get('NIJA_KRAKEN_BALANCE_CACHE_TTL', '55'))
 
 # Kraken startup delay (Jan 17, 2026) - Critical fix for nonce collisions
 # This delay is applied before the first Kraken API call to ensure:
@@ -6900,7 +6903,7 @@ class KrakenBroker(BaseBroker):
                                     # Notify the global manager so auto-heal can trigger if errors persist
                                     if get_global_nonce_manager is not None:
                                         try:
-                                            get_global_nonce_manager().record_error()
+                                            get_global_nonce_manager().record_nonce_error()
                                         except Exception:
                                             pass
 
@@ -6939,7 +6942,7 @@ class KrakenBroker(BaseBroker):
                         # Reset the global nonce error counter on successful connection
                         if get_global_nonce_manager is not None:
                             try:
-                                get_global_nonce_manager().record_success()
+                                get_global_nonce_manager().record_nonce_success()
                             except Exception:
                                 pass
 
