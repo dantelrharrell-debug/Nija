@@ -117,8 +117,8 @@ _STARTUP_JUMP_NS = 25_000_000_000  # +25 seconds in nanoseconds
 # Seconds to sleep inside get_nonce() after a NUCLEAR or HARD reset to let
 # Kraken's nonce window expire before the first post-reset API call.
 # Previous values: NUCLEAR=5 s, HARD=0 s.  Raised to 15 s / 5 s respectively.
-_POST_NUCLEAR_SLEEP_S: float = 15.0   # was 5 s
-_POST_HARD_SLEEP_S:    float =  5.0   # was 0 s (none)
+_POST_NUCLEAR_SLEEP_S: float = 15.0  # was 5 s
+_POST_HARD_SLEEP_S: float = 5.0      # was 0 s (none)
 
 # ── Disk helpers ───────────────────────────────────────────────────────────────
 
@@ -282,7 +282,10 @@ class GlobalKrakenNonceManager:
             # The gate starts *set* (open) so normal startup traffic is unrestricted.
             self._post_reset_gate: threading.Event = threading.Event()
             self._post_reset_gate.set()
-            # Maximum seconds a caller will wait for the gate to reopen before giving up.
+            # Maximum seconds a caller will wait for the gate to reopen before
+            # giving up and proceeding anyway.  65 s is chosen to be just over
+            # the HARD_CAP lead (60 s) so any caller that waited for the gate
+            # is guaranteed to have a valid nonce window by the time it proceeds.
             self._post_reset_gate_timeout_s: float = 65.0
 
             # Statistics tracking
