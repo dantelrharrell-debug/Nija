@@ -50,6 +50,7 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
 import time
 import threading
 from dataclasses import dataclass, field
@@ -65,8 +66,9 @@ MAX_ENTRIES_PER_CYCLE = 3
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
-# Lowered 25.0 → 20.0 → 14.0 → 11.0 to align with reduced MIN_SCORE_ABSOLUTE in nija_ai_engine.py.
-MIN_SCORE_HARD_FLOOR = 11.0
+# Lowered 25.0 → 20.0 → 14.0 → 11.0 → 8.0 to allow more entries during dry spells.
+# Override at runtime with NIJA_CORE_MIN_SCORE env var.
+MIN_SCORE_HARD_FLOOR = float(os.environ.get("NIJA_CORE_MIN_SCORE", "8.0"))
 
 # After this many consecutive zero-signal cycles, progressive score relaxation
 # kicks in: each 5-cycle step reduces the effective floor by a small amount
@@ -293,6 +295,11 @@ class NijaCoreLoop:
         result = CoreLoopResult()
         cycle_start = time.time()
 
+        logger.info(
+            "🟢 Trading loop alive — scanning %d symbols (balance=$%.2f open=%d)",
+            len(symbols), balance, open_positions_count,
+        )
+
         # ── Phase 1: Safety gate ──────────────────────────────────────────
         can_enter, safety_reason = self._phase1_safety(broker, balance)
         if not can_enter:
@@ -309,6 +316,10 @@ class NijaCoreLoop:
         if not user_mode:
             available_slots = max(0, self.max_positions - effective_open)
             if available_slots > 0:
+                logger.info(
+                    "🔍 Scanning markets — %d symbols | slots=%d open=%d",
+                    len(symbols), available_slots, effective_open,
+                )
                 entries, blocked, scored = self._phase3_scan_and_enter(
                     broker=broker,
                     balance=balance,
@@ -589,6 +600,7 @@ class NijaCoreLoop:
                     _best_volume_entry_type = entry_type
 
                 if ai is not None:
+                    logger.debug("🔎 Evaluating signal — %s (%s)", symbol, side)
                     sig = ai.evaluate_symbol(
                         df=df,
                         indicators=indicators,
