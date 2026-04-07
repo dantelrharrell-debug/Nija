@@ -8094,6 +8094,13 @@ class KrakenBroker(BaseBroker):
                 # Use Kraken minimum from imported constant
                 kraken_min = KRAKEN_MINIMUM_ORDER_USD or 10.00
 
+                # Log pre-clamp size so multiplier chain is always visible in logs,
+                # regardless of whether the floor adjustment fires.
+                logging.info(
+                    f"   📐 Kraken size check [{symbol}]: "
+                    f"pre-clamp=${quantity:.2f} | floor=${kraken_min:.2f}"
+                )
+
                 if quantity < kraken_min:
                     # Check if this trade was auto-resized down due to tier limits
                     # using explicit flag set during tier validation above
@@ -8147,6 +8154,13 @@ class KrakenBroker(BaseBroker):
                             logging.info(f"   Adjusted size: ${quantity:.2f}")
                             logging.info(f"   Reason: Meeting Kraken's ${kraken_min:.2f} minimum order value")
                             logging.info(LOG_SEPARATOR)
+
+                # Log post-clamp size so the final quantity submitted to Kraken
+                # is always visible regardless of whether the floor fired.
+                logging.info(
+                    f"   ✅ Kraken size check [{symbol}]: "
+                    f"post-clamp=${quantity:.2f}"
+                )
 
             # ✅ PRE-FLIGHT BALANCE CHECK: Verify sufficient funds BEFORE sending to Kraken API
             # This prevents "EOrder:Insufficient funds" rejections from the API
