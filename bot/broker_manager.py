@@ -4808,7 +4808,19 @@ class AlpacaBroker(BaseBroker):
                 user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
                 api_key = os.getenv(f"ALPACA_USER_{user_env_name}_API_KEY", "").strip()
                 api_secret = os.getenv(f"ALPACA_USER_{user_env_name}_API_SECRET", "").strip()
-                paper_str = os.getenv(f"ALPACA_USER_{user_env_name}_PAPER", "true").strip()
+                # Fallback: also try the full user_id in uppercase
+                # e.g. ALPACA_USER_TANIA_GILBERT_API_KEY for user_id='tania_gilbert'
+                if not api_key or not api_secret:
+                    full_env_name = self.user_id.upper()
+                    if full_env_name != user_env_name:
+                        if not api_key:
+                            api_key = os.getenv(f"ALPACA_USER_{full_env_name}_API_KEY", "").strip()
+                        if not api_secret:
+                            api_secret = os.getenv(f"ALPACA_USER_{full_env_name}_API_SECRET", "").strip()
+                paper_str = os.getenv(
+                    f"ALPACA_USER_{user_env_name}_PAPER",
+                    os.getenv(f"ALPACA_USER_{self.user_id.upper()}_PAPER", "true"),
+                ).strip()
                 paper = paper_str.lower() == "true"
                 cred_label = f"USER:{self.user_id}"
 
@@ -6347,6 +6359,23 @@ class KrakenBroker(BaseBroker):
                 secret_name = f"KRAKEN_USER_{user_env_name}_API_SECRET"
                 api_key_raw = os.getenv(key_name, "")
                 api_secret_raw = os.getenv(secret_name, "")
+                # Fallback: also try the full user_id in uppercase
+                # e.g. KRAKEN_USER_TANIA_GILBERT_API_KEY for user_id='tania_gilbert'
+                # This fixes the contradiction where PAL discovers credentials via the full
+                # env var name but KrakenBroker only looks at the first word of user_id.
+                if not api_key_raw or not api_secret_raw:
+                    full_env_name = self.user_id.upper()
+                    if full_env_name != user_env_name:
+                        full_key_name = f"KRAKEN_USER_{full_env_name}_API_KEY"
+                        full_secret_name = f"KRAKEN_USER_{full_env_name}_API_SECRET"
+                        if not api_key_raw:
+                            api_key_raw = os.getenv(full_key_name, "")
+                            if api_key_raw:
+                                key_name = full_key_name
+                        if not api_secret_raw:
+                            api_secret_raw = os.getenv(full_secret_name, "")
+                            if api_secret_raw:
+                                secret_name = full_secret_name
                 api_key = api_key_raw.strip()
                 api_secret = api_secret_raw.strip()
                 cred_label = f"USER:{self.user_id}"
