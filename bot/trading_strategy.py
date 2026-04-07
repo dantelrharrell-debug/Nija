@@ -7423,7 +7423,7 @@ class TradingStrategy:
         # to disable individual safety gates.
         # NEVER enable this override in live production without understanding which
         # gate is blocking entries and why.
-        if not explicit_user_mode and user_mode and os.environ.get("NIJA_BYPASS_SAFETY_USER_MODE", "1") == "1":
+        if not explicit_user_mode and user_mode and os.environ.get("NIJA_BYPASS_SAFETY_USER_MODE", "0") == "1":
             logger.warning("=" * 72)
             logger.warning("⚠️  NIJA_BYPASS_SAFETY_USER_MODE=1 — SAFETY USER_MODE OVERRIDE ACTIVE")
             logger.warning("   New entries are PERMITTED despite one or more safety gates.")
