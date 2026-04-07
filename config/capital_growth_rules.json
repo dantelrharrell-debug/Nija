@@ -10,5 +10,14 @@
   "expansion_trade_size": 300,
   "capital_engine_trade_size": 500,
 
-  "max_capital_per_trade_pct": 25
+  "max_capital_per_trade_pct": 25,
+
+  "tiers": {
+    "MICRO_PLATFORM": {
+      "floor_pct": 40.0,
+      "max_capital_per_trade_pct": 40.0,
+      "min_trade_size_usd": 1.0,
+      "max_trade_size_usd": 1000.0
+    }
+  }
 }
