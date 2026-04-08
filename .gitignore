@@ -381,6 +381,7 @@ example_*.py
 !test_mvp_components.py  # Keep MVP test suite
 !test_dry_run_mode.py  # Keep dry-run mode test (operational test)
 test_*.py
+!test_kraken_connection.py  # Keep Kraken connection tester (operational tool)
 !test_v2_balance.py
 !bot/test_*.py  # Keep bot tests
 !bot/tests/test_*.py  # Keep bot/tests directory tests
