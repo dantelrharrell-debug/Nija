@@ -62,6 +62,7 @@ _DATA_DIR = os.environ.get(
     "NIJA_DATA_DIR",
     os.path.join(_REPO_ROOT, "data"),
 )
+_NTP_SERVER = os.environ.get("NIJA_NTP_SERVER", "pool.ntp.org")
 
 _STATE_FILE       = os.path.join(_DATA_DIR, "kraken_nonce.state")
 _LOCK_FILE        = _STATE_FILE + ".lock"
@@ -79,20 +80,20 @@ def _check_ntp() -> bool:
     try:
         import ntplib
         client = ntplib.NTPClient()
-        resp = client.request("pool.ntp.org", version=3, timeout=3.0)
+        resp = client.request(_NTP_SERVER, version=3, timeout=3.0)
         offset_s = resp.offset
         ok = abs(offset_s) <= 1.0
         status = "✅ OK" if ok else "❌ DRIFT"
-        print(f"  NTP clock: {status}  offset={offset_s:+.3f} s vs pool.ntp.org")
+        print(f"  NTP clock: {status}  offset={offset_s:+.3f} s vs {_NTP_SERVER}")
         if not ok:
             print(
                 f"\n  ⚠️  Clock drift ({offset_s:+.3f} s) exceeds Kraken's ±1 s tolerance."
-                "\n  Fix first:  sudo ntpdate pool.ntp.org"
+                f"\n  Fix first:  sudo ntpdate {_NTP_SERVER}"
                 "\n              (or: sudo systemctl restart systemd-timesyncd)"
             )
         return ok
     except ImportError:
-        print("  NTP check skipped (ntplib not installed — pip install ntplib==0.4.0)")
+        print("  NTP check skipped (ntplib not installed — pip install ntplib)")
         return True   # unknown — don't block the reset
     except Exception as exc:
         print(f"  NTP check failed ({exc}) — skipping")
@@ -103,7 +104,11 @@ def _check_duplicate_process() -> bool:
     """Return True if another NIJA process appears to be running."""
     try:
         import fcntl
-        with open(_LOCK_FILE, "w") as fh:
+        # Use 'a' (append) mode so we do not truncate a file that an active
+        # NIJA process may have open, and to avoid creating a zero-byte lock
+        # file when the data directory is empty (it would then be deleted by
+        # _delete_files, which is harmless but confusing).
+        with open(_LOCK_FILE, "a") as fh:
             try:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fcntl.flock(fh, fcntl.LOCK_UN)

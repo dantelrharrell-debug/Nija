@@ -321,6 +321,21 @@ class AdaptiveNonceOffsetEngine:
                 "timing_floor_ms": _AO_STARTUP_DELAY_MS + _AO_JITTER_MS + _AO_RETRY_BUFFER_MS,
             }
 
+    def reset_state(self) -> None:
+        """
+        Clear the EMA and calibration history so the next ``get_optimal_step()``
+        call returns the conservative timing floor rather than a potentially-stale
+        small EMA value.
+
+        Called by ``KrakenNonceManager.force_resync()`` and by the
+        ``NIJA_FORCE_NONCE_RESYNC=1`` startup path to guarantee a fresh
+        probe-calibration on the next ``connect()``.
+        """
+        with self._lock:
+            self._history = []
+            self._ema_gap_ms = 0.0
+        _logger.debug("AdaptiveNonceOffsetEngine: state reset (EMA cleared)")
+
     # ── Private ───────────────────────────────────────────────────────────
 
     def _compute(self) -> int:
@@ -480,9 +495,7 @@ class KrakenNonceManager:
             # with the conservative timing floor (not a stale small EMA).
             _engine = AdaptiveNonceOffsetEngine._instance
             if _engine is not None:
-                with _engine._lock:
-                    _engine._history = []
-                    _engine._ema_gap_ms = 0.0
+                _engine.reset_state()
 
         # NTP check first — clock drift is the #1 cause of Kraken nonce errors.
         # Kraken is extremely sensitive: even a few seconds off triggers
@@ -640,9 +653,7 @@ class KrakenNonceManager:
             # Reset the AdaptiveNonceOffsetEngine in-memory state.
             _engine = AdaptiveNonceOffsetEngine._instance
             if _engine is not None:
-                with _engine._lock:
-                    _engine._history = []
-                    _engine._ema_gap_ms = 0.0
+                _engine.reset_state()
 
             # Reset the in-process error counter and trading pause.
             self._error_count = 0
