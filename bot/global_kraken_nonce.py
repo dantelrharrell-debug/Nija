@@ -57,7 +57,7 @@ _LOCK = threading.Lock()
 
 # ── Nonce tuning constants (milliseconds) ─────────────────────────────────────
 _STARTUP_JUMP_MS: int = 10_000      # added to persisted nonce on hot restart
-_RESET_OFFSET_MS: int = 60_000      # offset used by reset_to_safe_value()
+_RESET_OFFSET_MS: int = 300_000     # offset used by reset_to_safe_value()
 
 # ── Nuclear reset / trading-pause constants ───────────────────────────────────
 # When consecutive nonce errors exceed this threshold the manager performs a
