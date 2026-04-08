@@ -3716,7 +3716,7 @@ class TradingStrategy:
         # the startup path (connect_users_from_config call below) when users
         # actually connect.  Reset to False when the platform broker drops so
         # the background reconnect loop can re-admit users on recovery.
-        self._users_connected_after_platform: dict = {}  # {BrokerType: bool}
+        self._users_connected_after_platform: dict[BrokerType, bool] = {}  # {BrokerType: bool}
 
         # Candle data cache (prevents duplicate API calls for same market/timeframe)
         self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
@@ -4109,7 +4109,7 @@ class TradingStrategy:
             # Mark each platform broker type whose users were just connected so
             # the background reconnect loop knows not to re-run connect_users_from_config
             # unless the platform broker later drops and recovers.
-            for _bt in list(self.multi_account_manager.platform_brokers.keys()):
+            for _bt in self.multi_account_manager.platform_brokers:
                 self._users_connected_after_platform[_bt] = True
 
             # Track which users were successfully connected
