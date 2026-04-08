@@ -691,15 +691,13 @@ def validate_data_directory() -> StartupValidationResult:
     Returns:
         StartupValidationResult with data directory check findings
     """
+    import pathlib
     result = StartupValidationResult()
-    data_dir = os.environ.get(
-        "NIJA_DATA_DIR",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data"),
-    )
-    data_dir = os.path.abspath(data_dir)
+    _default_data_dir = pathlib.Path(__file__).parent.parent / "data"
+    data_dir = os.path.abspath(os.environ.get("NIJA_DATA_DIR", str(_default_data_dir)))
 
     try:
-        os.makedirs(data_dir, mode=0o750, exist_ok=True)
+        os.makedirs(data_dir, mode=0o700, exist_ok=True)
     except OSError as exc:
         result.add_risk(
             StartupRisk.DATA_DIR_UNAVAILABLE,
