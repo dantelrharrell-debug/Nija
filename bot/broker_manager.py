@@ -9038,12 +9038,14 @@ class OKXBroker(BaseBroker):
 
             if not api_key or not api_secret or not passphrase:
                 # Partial credentials are more likely a misconfiguration — warn at WARNING level
-                missing = [var_name for var_name, val in [
-                    ("OKX_API_KEY", api_key),
-                    ("OKX_API_SECRET", api_secret),
-                    ("OKX_PASSPHRASE", passphrase),
-                ] if not val]
-                have_any = api_key or api_secret or passphrase
+                missing = []
+                if not api_key:
+                    missing.append("OKX_API_KEY")
+                if not api_secret:
+                    missing.append("OKX_API_SECRET")
+                if not passphrase:
+                    missing.append("OKX_PASSPHRASE")
+                have_any = bool(api_key or api_secret or passphrase)
                 if have_any:
                     logging.warning(
                         "⚠️  OKX credentials partially configured — missing: %s (skipping OKX)",
