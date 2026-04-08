@@ -78,6 +78,8 @@ try:
         record_kraken_nonce_success,
         get_global_nonce_manager,
         reset_global_kraken_nonce,
+        is_nonce_trading_paused,
+        get_nonce_pause_remaining,
     )
 except ImportError:
     try:
@@ -91,6 +93,8 @@ except ImportError:
             record_kraken_nonce_success,
             get_global_nonce_manager,
             reset_global_kraken_nonce,
+            is_nonce_trading_paused,
+            get_nonce_pause_remaining,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -103,6 +107,8 @@ except ImportError:
         record_kraken_nonce_success = None
         get_global_nonce_manager = None
         reset_global_kraken_nonce = None
+        is_nonce_trading_paused = None
+        get_nonce_pause_remaining = None
 
 # Import Balance Models (FIX 1: Three-part balance model)
 try:
@@ -6038,6 +6044,18 @@ class KrakenBroker(BaseBroker):
 
         # Serialize API calls - only one call at a time across ALL accounts
         with global_lock:
+            # Respect nonce-triggered trading pause (nuclear reset recovery)
+            if is_nonce_trading_paused is not None and is_nonce_trading_paused():
+                remaining = get_nonce_pause_remaining() if get_nonce_pause_remaining is not None else 0.0
+                logger.warning(
+                    "⏸️  Kraken API call BLOCKED — nonce trading pause active "
+                    "(%.0f s remaining). Waiting before proceeding.",
+                    remaining,
+                )
+                # Wait out the remainder of the pause (max 60 s guard)
+                wait = min(remaining + 0.5, 65.0)
+                time.sleep(wait)
+
             # Enforce minimum delay between calls (per-category tracking)
             with self._api_call_lock:
                 current_time = time.time()

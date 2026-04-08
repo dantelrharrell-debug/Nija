@@ -29,6 +29,14 @@ import os
 import threading
 import time
 
+# fcntl is available on Linux/macOS; skip on Windows
+try:
+    import fcntl as _fcntl
+    _FCNTL_AVAILABLE = True
+except ImportError:
+    _fcntl = None  # type: ignore[assignment]
+    _FCNTL_AVAILABLE = False
+
 _logger = logging.getLogger(__name__)
 
 # ── Persistence file ──────────────────────────────────────────────────────────
@@ -46,6 +54,14 @@ _LOCK = threading.Lock()
 # ── Nonce tuning constants (milliseconds) ─────────────────────────────────────
 _STARTUP_JUMP_MS: int = 10_000      # added to persisted nonce on hot restart
 _RESET_OFFSET_MS: int = 60_000      # offset used by reset_to_safe_value()
+
+# ── Nuclear reset / trading-pause constants ───────────────────────────────────
+# When consecutive nonce errors exceed this threshold the manager performs a
+# "nuclear" reset (30-minute forward jump) and pauses all trading for
+# _TRADING_PAUSE_S seconds so Kraken's nonce window can catch up.
+_NUCLEAR_RESET_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_THRESHOLD", "10"))
+_NUCLEAR_RESET_OFFSET_MS: int = 1_800_000   # 30 min — beats any previously stored nonce
+_TRADING_PAUSE_S: float = float(os.environ.get("NIJA_NONCE_PAUSE_SECONDS", "60"))
 _ERROR_RESET_THRESHOLD: int = 3     # errors < threshold: no jump
 
 # Corruption guard thresholds — if persisted nonce is this far ahead of
@@ -184,6 +200,7 @@ class KrakenNonceManager:
 
     def _init(self) -> None:
         self._error_count = 0
+        self._trading_paused_until: float = 0.0   # epoch seconds; 0 = not paused
         os.makedirs(os.path.dirname(os.path.abspath(_STATE_FILE)), exist_ok=True)
         cleanup_legacy_nonce_files()
 
@@ -256,6 +273,17 @@ class KrakenNonceManager:
     def end_request(self) -> None:
         pass
 
+    def is_paused(self) -> bool:
+        """Return True when trading is paused after a nuclear nonce reset."""
+        with _LOCK:
+            return time.time() < self._trading_paused_until
+
+    def get_pause_remaining(self) -> float:
+        """Return seconds remaining in the trading pause (0.0 when not paused)."""
+        with _LOCK:
+            remaining = self._trading_paused_until - time.time()
+            return max(0.0, remaining)
+
     # ── Error / success tracking ──────────────────────────────────────────
 
     def record_error(self) -> None:
@@ -268,10 +296,31 @@ class KrakenNonceManager:
           error  5   : jump +30 s
           error  6+  : jump +60 s
 
+        When the consecutive error count reaches _NUCLEAR_RESET_THRESHOLD
+        a nuclear reset (+30 min) is applied and trading is paused for
+        _TRADING_PAUSE_S seconds so Kraken's nonce window can recover.
+
         Counter resets only on record_success().
         """
         with _LOCK:
             self._error_count += 1
+
+            # Nuclear reset after too many consecutive failures
+            if self._error_count >= _NUCLEAR_RESET_THRESHOLD:
+                floor = int(time.time() * 1000) + _NUCLEAR_RESET_OFFSET_MS
+                # Always increase — never decrease a runaway nonce
+                new_nonce = max(floor, self._last_nonce + 1)
+                _logger.error(
+                    "🚨 KrakenNonceManager: NUCLEAR RESET after %d consecutive errors — "
+                    "nonce → +30 min floor (%d → %d) and pausing trading for %.0f s",
+                    self._error_count, self._last_nonce, new_nonce, _TRADING_PAUSE_S,
+                )
+                self._last_nonce = new_nonce
+                self._persist()
+                self._trading_paused_until = time.time() + _TRADING_PAUSE_S
+                self._error_count = 0   # reset so escalation can start fresh
+                return
+
             jump = self._backoff_ms(self._error_count)
             if jump > 0:
                 self._last_nonce += jump
@@ -325,11 +374,20 @@ class KrakenNonceManager:
         return max(persisted + _STARTUP_JUMP_MS, now_ms + _STARTUP_JUMP_MS)
 
     def _persist(self) -> None:
-        """Atomically write nonce to disk (write-then-rename, mode 0600)."""
+        """Atomically write nonce to disk (write-then-rename, mode 0600).
+
+        Uses an exclusive advisory lock (fcntl.LOCK_EX) on the .tmp file so
+        that two processes can never interleave their writes — even if the
+        process lock in bot.py is bypassed.
+        """
         try:
             tmp = _STATE_FILE + ".tmp"
             with open(tmp, "w") as fh:
+                if _FCNTL_AVAILABLE:
+                    _fcntl.flock(fh, _fcntl.LOCK_EX)
                 fh.write(str(self._last_nonce))
+                if _FCNTL_AVAILABLE:
+                    _fcntl.flock(fh, _fcntl.LOCK_UN)
             os.chmod(tmp, _PERSISTED_PERMISSIONS)
             os.replace(tmp, _STATE_FILE)
         except Exception as exc:
@@ -393,6 +451,16 @@ def nonce_reset_triggered_recently(window_s: float = 300.0) -> bool:
     return False  # tracking removed; retained for compatibility
 
 
+def is_nonce_trading_paused() -> bool:
+    """Return True when a nuclear nonce reset has triggered a trading pause."""
+    return _nonce_manager.is_paused()
+
+
+def get_nonce_pause_remaining() -> float:
+    """Return seconds remaining in the nonce-triggered trading pause (0.0 when clear)."""
+    return _nonce_manager.get_pause_remaining()
+
+
 __all__ = [
     "KrakenNonceManager",
     "NonceManager",
@@ -407,6 +475,8 @@ __all__ = [
     "reset_global_kraken_nonce",
     "jump_global_kraken_nonce_forward",
     "nonce_reset_triggered_recently",
+    "is_nonce_trading_paused",
+    "get_nonce_pause_remaining",
     "cleanup_legacy_nonce_files",
     "check_ntp_sync",
     "log_ntp_clock_status",

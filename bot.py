@@ -77,7 +77,63 @@ if os.path.exists('EMERGENCY_STOP'):
     print("")
     sys.exit(0)
 
-# Infrastructure-grade health server with liveness and readiness probes
+# ── Process lock — prevent multiple bot instances ─────────────────────────────
+# Only ONE process should ever touch the Kraken API key.  A second instance
+# would generate its own nonce sequence, immediately desyncing from the first
+# and producing continuous "EAPI:Invalid nonce" errors on both.
+_PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "nija.pid")
+
+
+def _acquire_process_lock() -> None:
+    """
+    Write PID file and abort if another bot instance is already running.
+
+    Stale PID files (process no longer exists) are silently overwritten so a
+    clean restart after a crash always succeeds.
+    """
+    os.makedirs(os.path.dirname(_PID_FILE), exist_ok=True)
+
+    if os.path.exists(_PID_FILE):
+        try:
+            with open(_PID_FILE) as _pf:
+                _old_pid = int(_pf.read().strip())
+            os.kill(_old_pid, 0)   # signal 0 = "does this PID exist?"
+            # Process is alive — refuse to start
+            print("\n" + "┏" + "━" * 78 + "┓")
+            print(f"┃ 🚫 DUPLICATE INSTANCE BLOCKED                                             ┃")
+            print(f"┃ Another NIJA bot is already running (PID {_old_pid:<33}) ┃")
+            print(f"┃ Only ONE process may hold the Kraken API key at a time.                 ┃")
+            print(f"┃ Stop the running bot first:  pkill -f bot.py                            ┃")
+            print(f"┃ Then remove the lock:        rm {_PID_FILE[-40:]:<42} ┃")
+            print("┗" + "━" * 78 + "┛\n")
+            sys.exit(1)
+        except (ProcessLookupError, ValueError, OSError):
+            # Stale PID file — the previous process is gone; safe to overwrite.
+            pass
+
+    with open(_PID_FILE, "w") as _pf:
+        _pf.write(str(os.getpid()))
+
+    import atexit
+    atexit.register(_release_process_lock)
+    print(f"🔒 Process lock acquired (PID {os.getpid()}) — {_PID_FILE}")
+
+
+def _release_process_lock() -> None:
+    """Remove the PID file on clean exit."""
+    try:
+        if os.path.exists(_PID_FILE):
+            with open(_PID_FILE) as _pf:
+                _stored = int(_pf.read().strip())
+            if _stored == os.getpid():
+                os.remove(_PID_FILE)
+    except Exception:
+        pass
+
+
+_acquire_process_lock()
+
+
 def _start_health_server():
     """
     Start HTTP health server with Railway-optimized liveness endpoint.
@@ -356,6 +412,7 @@ def _get_thread_status():
 
 def _handle_signal(sig, frame):
     """Handle shutdown signals (SIGTERM, SIGINT) with visual logging."""
+    _release_process_lock()
     signal_name = signal.Signals(sig).name if hasattr(signal, 'Signals') else str(sig)
     _log_exit_point(
         f"Signal {signal_name} received",
