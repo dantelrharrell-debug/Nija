@@ -3711,6 +3711,12 @@ class TradingStrategy:
         # Per-broker consecutive reconnect failure counters for backoff logic {broker_type: count}
         self._reconnect_fail_counts = {}
         self._reconnect_last_success = {}  # {broker_type: timestamp}
+        # Track whether user accounts have been connected at least once after
+        # their platform broker came online.  Starts as False; set to True by
+        # the startup path (connect_users_from_config call below) when users
+        # actually connect.  Reset to False when the platform broker drops so
+        # the background reconnect loop can re-admit users on recovery.
+        self._users_connected_after_platform: dict = {}  # {BrokerType: bool}
 
         # Candle data cache (prevents duplicate API calls for same market/timeframe)
         self.candle_cache = {}           # {symbol: (timestamp, candles_data)}
@@ -4099,6 +4105,12 @@ class TradingStrategy:
 
             # Use the new config-based user loading system
             connected_user_brokers = self.multi_account_manager.connect_users_from_config()
+
+            # Mark each platform broker type whose users were just connected so
+            # the background reconnect loop knows not to re-run connect_users_from_config
+            # unless the platform broker later drops and recovers.
+            for _bt in list(self.multi_account_manager.platform_brokers.keys()):
+                self._users_connected_after_platform[_bt] = True
 
             # Track which users were successfully connected
             user_brokers = []
@@ -7566,11 +7578,38 @@ class TradingStrategy:
                                 _success = self.multi_account_manager.try_reconnect_platform_broker(_bt)
                                 if _success:
                                     self._reconnect_fail_counts[_bt] = 0
+                                    # Re-admit user accounts that were blocked when the platform
+                                    # failed at startup.  Only runs once per recovery event.
+                                    if not self._users_connected_after_platform.get(_bt, False):
+                                        logger.info(
+                                            f"🔄 Platform {_bt.value.upper()} recovered — "
+                                            "reconnecting user accounts now…"
+                                        )
+                                        try:
+                                            self.multi_account_manager.connect_users_from_config()
+                                            self._users_connected_after_platform[_bt] = True
+                                            logger.info(
+                                                f"✅ User accounts reconnected after "
+                                                f"Platform {_bt.value.upper()} recovery"
+                                            )
+                                        except Exception as _usr_err:
+                                            logger.warning(
+                                                f"⚠️  User reconnect after platform recovery failed: {_usr_err}"
+                                            )
                                 else:
                                     self._reconnect_fail_counts[_bt] = _fail_count + 1
                         elif _pb is not None and _pb.connected:
                             # Reset failure counter once broker is healthy
                             self._reconnect_fail_counts[_bt] = 0
+                        else:
+                            # Broker dropped (was connected, now disconnected) — reset the
+                            # user-connected flag so they are re-admitted on next recovery.
+                            if self._users_connected_after_platform.get(_bt, False):
+                                logger.warning(
+                                    f"⚠️  Platform {_bt.value.upper()} went offline — "
+                                    "user accounts will be reconnected on recovery"
+                                )
+                                self._users_connected_after_platform[_bt] = False
             except Exception as _reconnect_err:
                 logger.debug(f"Background platform reconnect check error: {_reconnect_err}")
 
