@@ -15,6 +15,10 @@ Rules
 ✅ Escalating jump backoff on repeated errors
 ✅ Manual jump control via jump_forward()
 ✅ NTP clock check at startup — Kraken requires system clock within ±1 second
+✅ Cross-process safe — fcntl advisory lock on every nonce increment prevents
+   two concurrently-running processes from issuing duplicate or out-of-order nonces
+✅ Wall-clock guard — auto-advances nonce when it falls behind wall-clock time
+   (handles "expiring" nuclear-reset nonces after 30+ minutes in an error loop)
 
 Usage
 ─────
@@ -80,10 +84,58 @@ _NTP_WARN_OFFSET_S: float = 0.5   # warn early so operators act before it breaks
 # ── API serialisation lock ────────────────────────────────────────────────────
 _KRAKEN_API_LOCK = threading.RLock()
 
+# ── Cross-process lock file ───────────────────────────────────────────────────
+# Used by _CrossProcessLock to serialise nonce reads/writes across concurrently
+# running bot processes (e.g. container restart overlap, duplicate start).
+_LOCK_FILE = _STATE_FILE + ".lock"
+
 
 def get_kraken_api_lock() -> threading.RLock:
     """Return the process-wide Kraken API serialisation lock."""
     return _KRAKEN_API_LOCK
+
+
+# ── Cross-process exclusive lock ──────────────────────────────────────────────
+
+class _CrossProcessLock:
+    """
+    Context manager that acquires an exclusive advisory lock on *_LOCK_FILE*
+    via ``fcntl.flock`` (Linux / macOS only).
+
+    On platforms without fcntl the context manager is a no-op so the code
+    remains portable to Windows.  The lock is automatically released when the
+    file descriptor is closed — even if the holding process crashes — so there
+    is no risk of a permanently-stuck lock file.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._fh = None
+
+    def __enter__(self) -> "_CrossProcessLock":
+        if _FCNTL_AVAILABLE:
+            try:
+                # Open in write mode — the file is used purely as a lock target
+                # and stores no data; truncation on each open is intentional.
+                self._fh = open(self._path, "w")
+                _fcntl.flock(self._fh, _fcntl.LOCK_EX)
+            except Exception as exc:
+                _logger.debug(
+                    "KrakenNonceManager: cross-process lock unavailable (%s) — "
+                    "proceeding without cross-process serialisation",
+                    exc,
+                )
+                self._fh = None
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self._fh is not None:
+            try:
+                _fcntl.flock(self._fh, _fcntl.LOCK_UN)
+                self._fh.close()
+            except Exception:
+                pass
+            self._fh = None
 
 
 # ── NTP helpers (module-level so validate_all_env_vars.py can import them) ────
@@ -209,8 +261,13 @@ class KrakenNonceManager:
         # continuous "EAPI:Invalid nonce" errors that block ALL accounts.
         log_ntp_clock_status()
 
-        self._last_nonce = self._load_last_nonce()
-        self._persist()
+        # Startup is the most likely moment for two processes to race.  Hold the
+        # cross-process lock for the entire read → compute → write sequence so a
+        # second process starting at the same time cannot claim the same nonce.
+        with _LOCK:
+            with _CrossProcessLock(_LOCK_FILE):
+                self._last_nonce = self._load_last_nonce()
+                self._persist()
         lead_ms = self._last_nonce - int(time.time() * 1000)
         _logger.info(
             "KrakenNonceManager: ready — nonce=%d  lead=%+d ms",
@@ -220,11 +277,62 @@ class KrakenNonceManager:
     # ── Core ──────────────────────────────────────────────────────────────
 
     def next_nonce(self) -> int:
-        """Return the next strictly-increasing nonce and persist it."""
+        """Return the next strictly-increasing nonce and persist it.
+
+        Cross-process safe: acquires an exclusive advisory ``fcntl`` lock on
+        *_LOCK_FILE* so two concurrently-running bot processes (e.g. a duplicate
+        container start or a crash-loop restart overlap) never issue the same
+        nonce to Kraken.
+
+        Also auto-advances the nonce when it has fallen behind wall-clock time.
+        This handles the scenario where a nuclear-reset nonce (+30 min) was set
+        over 30 minutes ago and the bot remained in an error loop — Kraken
+        rejects nonces whose ms-timestamp is significantly in the past.
+        """
         with _LOCK:
-            self._last_nonce += 1
-            self._persist()
-            return self._last_nonce
+            with _CrossProcessLock(_LOCK_FILE):
+                # ── Cross-process sync ──────────────────────────────────────
+                # Re-read the state file to pick up any nonce advance written
+                # by another process (e.g. a nuclear reset in Process B that
+                # put the high-water mark above this process's in-memory value).
+                file_nonce = self._read_state_file_raw()
+                if file_nonce == 0 and self._last_nonce > 0:
+                    _logger.debug(
+                        "KrakenNonceManager: cross-proc sync — state file returned 0 "
+                        "(file missing or unreadable); using in-memory nonce (%d)",
+                        self._last_nonce,
+                    )
+                elif file_nonce > self._last_nonce:
+                    _logger.info(
+                        "KrakenNonceManager: cross-proc sync — in-memory nonce "
+                        "(%d) advanced to file value (%d, delta=%+d ms)",
+                        self._last_nonce, file_nonce,
+                        file_nonce - self._last_nonce,
+                    )
+                    self._last_nonce = file_nonce
+
+                # ── Wall-clock guard ────────────────────────────────────────
+                # If the nonce has fallen behind the current wall-clock time,
+                # advance it forward.  This happens when a nuclear-reset nonce
+                # (+30 min) is more than 30 minutes old — Kraken rejects the
+                # stale ms-timestamp.  Advancing to now+_STARTUP_JUMP_MS
+                # ensures the very next nonce is accepted.
+                now_ms = int(time.time() * 1000)
+                if self._last_nonce < now_ms:
+                    new_floor = now_ms + _STARTUP_JUMP_MS
+                    _logger.warning(
+                        "KrakenNonceManager: nonce (%d) fell behind wall-clock "
+                        "(%d) by %d ms — auto-advancing to now+%d ms (%d)",
+                        self._last_nonce, now_ms,
+                        now_ms - self._last_nonce,
+                        _STARTUP_JUMP_MS, new_floor,
+                    )
+                    self._last_nonce = new_floor
+
+                # ── Monotonic increment ─────────────────────────────────────
+                self._last_nonce += 1
+                self._persist()
+                return self._last_nonce
 
     def get_nonce(self) -> int:
         """Alias for next_nonce() — backward compatibility."""
@@ -307,16 +415,29 @@ class KrakenNonceManager:
 
             # Nuclear reset after too many consecutive failures
             if self._error_count >= _NUCLEAR_RESET_THRESHOLD:
-                floor = int(time.time() * 1000) + _NUCLEAR_RESET_OFFSET_MS
-                # Always increase — never decrease a runaway nonce
-                new_nonce = max(floor, self._last_nonce + 1)
-                _logger.error(
-                    "🚨 KrakenNonceManager: NUCLEAR RESET after %d consecutive errors — "
-                    "nonce → +30 min floor (%d → %d) and pausing trading for %.0f s",
-                    self._error_count, self._last_nonce, new_nonce, _TRADING_PAUSE_S,
-                )
-                self._last_nonce = new_nonce
-                self._persist()
+                with _CrossProcessLock(_LOCK_FILE):
+                    # Read the file so the nuclear nonce beats the highest value
+                    # written by any other concurrently-running process.
+                    # If the read fails (returns 0) fall back safely to the
+                    # in-memory value via the max() below.
+                    file_nonce = self._read_state_file_raw()
+                    if file_nonce == 0 and self._last_nonce > 0:
+                        _logger.warning(
+                            "KrakenNonceManager: nuclear reset — state file unreadable; "
+                            "using in-memory high-water mark (%d)",
+                            self._last_nonce,
+                        )
+                    high_water = max(file_nonce, self._last_nonce)
+                    floor = int(time.time() * 1000) + _NUCLEAR_RESET_OFFSET_MS
+                    # Always increase — never decrease a runaway nonce
+                    new_nonce = max(floor, high_water + 1)
+                    _logger.error(
+                        "🚨 KrakenNonceManager: NUCLEAR RESET after %d consecutive errors — "
+                        "nonce → +30 min floor (%d → %d) and pausing trading for %.0f s",
+                        self._error_count, self._last_nonce, new_nonce, _TRADING_PAUSE_S,
+                    )
+                    self._last_nonce = new_nonce
+                    self._persist()
                 self._trading_paused_until = time.time() + _TRADING_PAUSE_S
                 self._error_count = 0   # reset so escalation can start fresh
                 return
@@ -347,9 +468,21 @@ class KrakenNonceManager:
 
     # ── Private helpers ───────────────────────────────────────────────────
 
+    def _read_state_file_raw(self) -> int:
+        """Read and return the raw persisted nonce value (0 on any error)."""
+        try:
+            with open(_STATE_FILE, encoding="utf-8") as fh:
+                return int(fh.read().strip())
+        except (FileNotFoundError, ValueError, OSError, UnicodeDecodeError):
+            return 0
+
     def _load_last_nonce(self) -> int:
         """
         Compute the startup nonce from persisted state and wall-clock.
+
+        Must be called while holding *both* the in-process ``_LOCK`` and the
+        cross-process ``_CrossProcessLock`` so that the read → compute → write
+        sequence in ``_init()`` is atomic across threads and processes.
 
         Key design decision: we do NOT clamp the result to a maximum lead.
         The old _STARTUP_CLAMP_MS=55 s clamp silently *decreased* the nonce
@@ -358,12 +491,7 @@ class KrakenNonceManager:
         Kraken's nonce rule is purely monotonic — no documented upper bound.
         """
         now_ms = int(time.time() * 1000)
-        persisted = 0
-        try:
-            with open(_STATE_FILE) as fh:
-                persisted = int(fh.read().strip())
-        except (FileNotFoundError, ValueError):
-            pass
+        persisted = self._read_state_file_raw()
 
         lead_ms = persisted - now_ms
         if lead_ms > _CORRUPTION_RESET_MS:
