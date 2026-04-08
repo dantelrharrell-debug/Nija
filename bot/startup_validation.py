@@ -10,8 +10,9 @@ This module provides validation for:
 """
 
 import os
+import re
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
 logger = logging.getLogger("nija")
@@ -23,6 +24,7 @@ class StartupRisk(Enum):
     DISABLED_EXCHANGE_WARNING = "disabled_exchange_warning"
     MODE_AMBIGUOUS = "mode_ambiguous"
     NO_EXCHANGES_ENABLED = "no_exchanges_enabled"
+    NO_VIABLE_BROKER = "no_viable_broker"
     PLATFORM_NOT_CONFIGURED_FIRST = "platform_not_configured_first"
 
 
@@ -133,72 +135,291 @@ def validate_git_metadata(git_branch: str, git_commit: str) -> StartupValidation
     return result
 
 
+# ---------------------------------------------------------------------------
+# Credential format / placeholder helpers
+# ---------------------------------------------------------------------------
+
+# Placeholder patterns that indicate a credential was never filled in
+_PLACEHOLDER_PATTERNS = re.compile(
+    r"^(your[_\-]?|replace[_\-]?|change[_\-]?|insert[_\-]?|fill[_\-]?|"
+    r"xxx|placeholder|example|sample|test|dummy|fake|todo|none|null|n/?a|"
+    r"<.+>|\[.+\]|\{.+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
+    r"secret[_\-]?here|\*+)$",
+    re.IGNORECASE,
+)
+
+# Minimum sensible lengths for each credential type
+_MIN_LENGTHS: Dict[str, int] = {
+    "kraken_key": 10,
+    "kraken_secret": 32,
+    "coinbase_key": 10,
+    "coinbase_secret": 20,
+    "alpaca_key": 10,
+    "alpaca_secret": 20,
+    "binance_key": 16,
+    "binance_secret": 16,
+    "okx_key": 8,
+    "okx_secret": 8,
+    "okx_passphrase": 4,
+}
+
+
+def _is_placeholder(value: str) -> bool:
+    """Return True if the value looks like an unfilled placeholder."""
+    stripped = value.strip()
+    return bool(_PLACEHOLDER_PATTERNS.match(stripped))
+
+
+def _credential_looks_valid(value: Optional[str], min_len: int = 8) -> bool:
+    """
+    Return True if *value* is set, non-empty, not a placeholder, and meets
+    the minimum length requirement.
+    """
+    if not value or not value.strip():
+        return False
+    v = value.strip()
+    if len(v) < min_len:
+        return False
+    if _is_placeholder(v):
+        return False
+    return True
+
+
+def _kraken_credentials_viable() -> Tuple[bool, str]:
+    """
+    Check whether Kraken credentials look viable.
+
+    Accepts the new KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET pair
+    **or** the legacy KRAKEN_API_KEY / KRAKEN_API_SECRET pair (broker_manager.py
+    uses both with the legacy keys as a fallback).
+
+    Returns (viable: bool, which_pair: str)
+    """
+    key = (os.getenv("KRAKEN_PLATFORM_API_KEY") or
+           os.getenv("KRAKEN_API_KEY", "")).strip()
+    secret = (os.getenv("KRAKEN_PLATFORM_API_SECRET") or
+              os.getenv("KRAKEN_API_SECRET", "")).strip()
+
+    if (_credential_looks_valid(key, _MIN_LENGTHS["kraken_key"]) and
+            _credential_looks_valid(secret, _MIN_LENGTHS["kraken_secret"])):
+        if os.getenv("KRAKEN_PLATFORM_API_KEY", "").strip():
+            return True, "KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET"
+        return True, "KRAKEN_API_KEY / KRAKEN_API_SECRET (legacy)"
+    return False, ""
+
+
+def _coinbase_credentials_viable() -> Tuple[bool, str]:
+    """
+    Check whether Coinbase credentials look viable.
+
+    Accepts both the new Cloud API key format
+    (``organizations/{org_id}/apiKeys/{key_id}``) and the shorter legacy key
+    format.  The secret must contain PEM markers **or** be a sufficiently long
+    non-placeholder string (some integrations store only the raw EC key body).
+    """
+    key = os.getenv("COINBASE_API_KEY", "").strip()
+    secret = os.getenv("COINBASE_API_SECRET", "").strip()
+
+    if not _credential_looks_valid(key, _MIN_LENGTHS["coinbase_key"]):
+        return False, ""
+    if not _credential_looks_valid(secret, _MIN_LENGTHS["coinbase_secret"]):
+        return False, ""
+    # If the secret looks like a PEM key (recommended) that's a strong signal
+    if "-----BEGIN" in secret or "-----END" in secret:
+        return True, "COINBASE_API_KEY / COINBASE_API_SECRET (PEM format)"
+    return True, "COINBASE_API_KEY / COINBASE_API_SECRET"
+
+
+def _alpaca_credentials_viable() -> Tuple[bool, str]:
+    """Check whether Alpaca credentials look viable."""
+    key = os.getenv("ALPACA_API_KEY", "").strip()
+    secret = os.getenv("ALPACA_API_SECRET", "").strip()
+    if (_credential_looks_valid(key, _MIN_LENGTHS["alpaca_key"]) and
+            _credential_looks_valid(secret, _MIN_LENGTHS["alpaca_secret"])):
+        return True, "ALPACA_API_KEY / ALPACA_API_SECRET"
+    return False, ""
+
+
+def _binance_credentials_viable() -> Tuple[bool, str]:
+    """Check whether Binance credentials look viable."""
+    key = os.getenv("BINANCE_API_KEY", "").strip()
+    secret = os.getenv("BINANCE_API_SECRET", "").strip()
+    if (_credential_looks_valid(key, _MIN_LENGTHS["binance_key"]) and
+            _credential_looks_valid(secret, _MIN_LENGTHS["binance_secret"])):
+        return True, "BINANCE_API_KEY / BINANCE_API_SECRET"
+    return False, ""
+
+
+def _okx_credentials_viable() -> Tuple[bool, str]:
+    """Check whether OKX credentials look viable."""
+    key = os.getenv("OKX_API_KEY", "").strip()
+    secret = os.getenv("OKX_API_SECRET", "").strip()
+    passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
+    if (_credential_looks_valid(key, _MIN_LENGTHS["okx_key"]) and
+            _credential_looks_valid(secret, _MIN_LENGTHS["okx_secret"]) and
+            _credential_looks_valid(passphrase, _MIN_LENGTHS["okx_passphrase"])):
+        return True, "OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE"
+    return False, ""
+
+
 def validate_exchange_configuration() -> StartupValidationResult:
     """
-    Validate exchange configuration and warn about disabled exchanges.
-    
-    Risk: Exchanges may be disabled in code without clear runtime warnings,
-    leaving operators unaware that certain brokers are not available.
-    
+    Validate exchange configuration and check that at least one broker is viable.
+
+    A broker is *viable* when its required credentials are:
+      - Present (not empty / not set)
+      - Not placeholder values (e.g. "your_api_key_here")
+      - Long enough to be real credentials
+
+    This check does **not** make live API calls; it only inspects environment
+    variables.  The bot will refuse to start when zero viable brokers are found.
+
     Returns:
         StartupValidationResult with validation findings
     """
     result = StartupValidationResult()
-    
-    # Track which exchanges are configured and which are disabled in code
-    exchanges_configured = []
-    exchanges_disabled_in_code = []
-    
-    # Coinbase - KNOWN TO BE DISABLED IN CODE (broker_manager.py)
-    if os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET"):
-        exchanges_configured.append("Coinbase")
-        # Coinbase is hardcoded as disabled in bot/broker_manager.py
-        exchanges_disabled_in_code.append("Coinbase")
+
+    viable_brokers: List[str] = []
+
+    # ------------------------------------------------------------------
+    # Kraken (Primary / Platform broker)
+    # Accepts KRAKEN_PLATFORM_API_KEY or legacy KRAKEN_API_KEY as fallback.
+    # ------------------------------------------------------------------
+    kraken_key_set = bool(
+        os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY")
+    )
+    kraken_secret_set = bool(
+        os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET")
+    )
+    kraken_viable, kraken_pair = _kraken_credentials_viable()
+
+    if kraken_viable:
+        viable_brokers.append("Kraken (Platform)")
+        result.add_info(f"✅ Kraken Platform credentials configured and viable ({kraken_pair})")
+    elif kraken_key_set or kraken_secret_set:
         result.add_risk(
-            StartupRisk.DISABLED_EXCHANGE_WARNING,
-            "Coinbase credentials configured BUT exchange is DISABLED in code"
+            StartupRisk.NO_VIABLE_BROKER,
+            "Kraken credentials are set but appear to be placeholders or incomplete — "
+            "set KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET with real values",
         )
         result.add_warning(
-            "⚠️  COINBASE IS DISABLED: Credentials are set but Coinbase integration "
-            "is hardcoded as disabled in bot/broker_manager.py. Trading will NOT occur on Coinbase."
+            "⚠️  KRAKEN CREDENTIALS INVALID: One or both values look like placeholders.\n"
+            "    Required format:\n"
+            "      KRAKEN_PLATFORM_API_KEY=<alphanumeric key from kraken.com/u/security/api>\n"
+            "      KRAKEN_PLATFORM_API_SECRET=<base64 secret (60+ chars)>\n"
+            "    Legacy alternative:\n"
+            "      KRAKEN_API_KEY=<key>   KRAKEN_API_SECRET=<secret>"
         )
-    
-    # Kraken Platform (Primary Broker)
-    if os.getenv("KRAKEN_PLATFORM_API_KEY") and os.getenv("KRAKEN_PLATFORM_API_SECRET"):
-        exchanges_configured.append("Kraken (Platform)")
-        result.add_info("✅ Kraken Platform credentials configured and enabled")
-    
-    # OKX
-    if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
-        exchanges_configured.append("OKX")
-        result.add_info("✅ OKX credentials configured")
-    
+    else:
+        result.add_info("ℹ️  Kraken credentials not configured (optional if another broker is set)")
+
+    # ------------------------------------------------------------------
+    # Coinbase (fully supported — not disabled in code)
+    # ------------------------------------------------------------------
+    coinbase_key_set = bool(os.getenv("COINBASE_API_KEY"))
+    coinbase_secret_set = bool(os.getenv("COINBASE_API_SECRET"))
+    coinbase_viable, coinbase_pair = _coinbase_credentials_viable()
+
+    if coinbase_viable:
+        viable_brokers.append("Coinbase")
+        result.add_info(f"✅ Coinbase credentials configured and viable ({coinbase_pair})")
+    elif coinbase_key_set or coinbase_secret_set:
+        result.add_risk(
+            StartupRisk.NO_VIABLE_BROKER,
+            "Coinbase credentials are set but appear to be placeholders or incomplete — "
+            "verify COINBASE_API_KEY and COINBASE_API_SECRET",
+        )
+        result.add_warning(
+            "⚠️  COINBASE CREDENTIALS INVALID: One or both values look like placeholders.\n"
+            "    Required format (Cloud API Key):\n"
+            "      COINBASE_API_KEY=organizations/{org_id}/apiKeys/{key_id}\n"
+            "      COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----\\n<base64>\\n-----END EC PRIVATE KEY-----\n"
+            "    Get credentials at: https://portal.cdp.coinbase.com/"
+        )
+    else:
+        result.add_info("ℹ️  Coinbase credentials not configured (optional)")
+
+    # ------------------------------------------------------------------
     # Binance
-    if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
-        exchanges_configured.append("Binance")
-        result.add_info("✅ Binance credentials configured")
-    
-    # Alpaca Platform
-    if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"):
-        exchanges_configured.append("Alpaca (Platform)")
-        result.add_info("✅ Alpaca Platform credentials configured")
-    
-    # Critical: No exchanges enabled
-    enabled_exchanges = [e for e in exchanges_configured if e not in exchanges_disabled_in_code]
-    if len(enabled_exchanges) == 0:
+    # ------------------------------------------------------------------
+    binance_key_set = bool(os.getenv("BINANCE_API_KEY"))
+    binance_secret_set = bool(os.getenv("BINANCE_API_SECRET"))
+    binance_viable, binance_pair = _binance_credentials_viable()
+
+    if binance_viable:
+        viable_brokers.append("Binance")
+        result.add_info(f"✅ Binance credentials configured and viable ({binance_pair})")
+    elif binance_key_set or binance_secret_set:
+        result.add_warning(
+            "⚠️  BINANCE CREDENTIALS INVALID: Values look like placeholders.\n"
+            "    Required format:\n"
+            "      BINANCE_API_KEY=<64-char alphanumeric key>\n"
+            "      BINANCE_API_SECRET=<64-char alphanumeric secret>\n"
+            "    Get credentials at: https://www.binance.com/en/my/settings/api-management"
+        )
+    else:
+        result.add_info("ℹ️  Binance credentials not configured (optional)")
+
+    # ------------------------------------------------------------------
+    # OKX
+    # ------------------------------------------------------------------
+    okx_key_set = bool(os.getenv("OKX_API_KEY"))
+    okx_viable, okx_pair = _okx_credentials_viable()
+
+    if okx_viable:
+        viable_brokers.append("OKX")
+        result.add_info(f"✅ OKX credentials configured and viable ({okx_pair})")
+    elif okx_key_set:
+        result.add_warning(
+            "⚠️  OKX CREDENTIALS INVALID: Values look like placeholders.\n"
+            "    Required format:\n"
+            "      OKX_API_KEY=<alphanumeric key>\n"
+            "      OKX_API_SECRET=<alphanumeric secret>\n"
+            "      OKX_PASSPHRASE=<your passphrase (set when creating the API key)>\n"
+            "    Get credentials at: https://www.okx.com/account/my-api"
+        )
+    else:
+        result.add_info("ℹ️  OKX credentials not configured (optional)")
+
+    # ------------------------------------------------------------------
+    # Alpaca
+    # ------------------------------------------------------------------
+    alpaca_key_set = bool(os.getenv("ALPACA_API_KEY"))
+    alpaca_viable, alpaca_pair = _alpaca_credentials_viable()
+
+    if alpaca_viable:
+        viable_brokers.append("Alpaca")
+        result.add_info(f"✅ Alpaca credentials configured and viable ({alpaca_pair})")
+    elif alpaca_key_set:
+        result.add_warning(
+            "⚠️  ALPACA CREDENTIALS INVALID: Values look like placeholders.\n"
+            "    Required format:\n"
+            "      ALPACA_API_KEY=PK<alphanumeric>  (live) or CK<alphanumeric> (paper)\n"
+            "      ALPACA_API_SECRET=<alphanumeric secret>\n"
+            "      ALPACA_PAPER=true  # set false for live trading\n"
+            "    Get credentials at: https://alpaca.markets/"
+        )
+    else:
+        result.add_info("ℹ️  Alpaca credentials not configured (optional)")
+
+    # ------------------------------------------------------------------
+    # Summary — require at least one viable broker
+    # ------------------------------------------------------------------
+    result.add_info(f"Viable brokers: {len(viable_brokers)} — {', '.join(viable_brokers) if viable_brokers else 'NONE'}")
+
+    if not viable_brokers:
         result.mark_critical_failure(
-            "No exchanges are enabled. At least one exchange must be configured and enabled."
+            "No viable broker credentials found. At least one exchange must have valid, "
+            "non-placeholder credentials set. Check environment variables for: "
+            "KRAKEN_PLATFORM_API_KEY/SECRET (or KRAKEN_API_KEY/SECRET), "
+            "COINBASE_API_KEY/SECRET, BINANCE_API_KEY/SECRET, "
+            "OKX_API_KEY/SECRET/PASSPHRASE, or ALPACA_API_KEY/SECRET."
         )
         result.add_risk(
-            StartupRisk.NO_EXCHANGES_ENABLED,
-            "CRITICAL: No enabled exchanges detected - trading cannot occur"
+            StartupRisk.NO_VIABLE_BROKER,
+            "CRITICAL: No viable broker — trading cannot occur"
         )
-    
-    # Summary
-    result.add_info(f"Total exchanges configured: {len(exchanges_configured)}")
-    result.add_info(f"Total exchanges enabled: {len(enabled_exchanges)}")
-    result.add_info(f"Disabled in code: {', '.join(exchanges_disabled_in_code) if exchanges_disabled_in_code else 'none'}")
-    
+
     return result
 
 
