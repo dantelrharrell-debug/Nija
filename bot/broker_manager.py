@@ -1623,7 +1623,11 @@ class CoinbaseBroker(BaseBroker):
                     error_msg = str(e)
                     error_msg_lower = error_msg.lower()
 
-                    # Distinguish between 403 (API key temporarily blocked) and 429 (rate limit quota)
+                    # Distinguish between error types to decide retry strategy
+                    is_401_unauthorized = (
+                        '401' in error_msg_lower or
+                        'unauthorized' in error_msg_lower
+                    )
                     is_403_forbidden = (
                         '403' in error_msg_lower or
                         'forbidden' in error_msg_lower or
@@ -1638,6 +1642,18 @@ class CoinbaseBroker(BaseBroker):
                         'timeout', 'connection', 'network', 'service unavailable',
                         '503', '504', 'temporary', 'try again'
                     ])
+
+                    # 401 Unauthorized means invalid credentials — retrying is pointless
+                    if is_401_unauthorized:
+                        logging.error("❌ Coinbase authentication failed (401 Unauthorized)")
+                        logging.error("   Your COINBASE_API_KEY or COINBASE_API_SECRET is invalid.")
+                        logging.error("   Possible causes:")
+                        logging.error("   1. API key was revoked or expired")
+                        logging.error("   2. Wrong key/secret values in environment")
+                        logging.error("   3. API key created for wrong account or environment")
+                        logging.error("   Fix: Verify credentials at https://www.coinbase.com/settings/api")
+                        logging.error("   Then run: python3 validate_all_env_vars.py")
+                        return False
 
                     is_retryable = is_403_forbidden or is_429_rate_limit or is_network_error
 
@@ -5355,8 +5371,13 @@ class BinanceBroker(BaseBroker):
             use_testnet = os.getenv("BINANCE_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
 
             if not api_key or not api_secret:
-                # Silently skip - Binance is optional, no need for scary error messages
-                logging.info("⚠️  Binance credentials not configured (skipping)")
+                # Partial credentials are more likely a misconfiguration — warn at WARNING level
+                if api_key and not api_secret:
+                    logging.warning("⚠️  Binance BINANCE_API_KEY is set but BINANCE_API_SECRET is missing — skipping Binance")
+                elif api_secret and not api_key:
+                    logging.warning("⚠️  Binance BINANCE_API_SECRET is set but BINANCE_API_KEY is missing — skipping Binance")
+                else:
+                    logging.info("ℹ️  Binance credentials not configured (optional broker — skipping)")
                 return False
 
             # Initialize Binance client
@@ -9016,8 +9037,20 @@ class OKXBroker(BaseBroker):
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
 
             if not api_key or not api_secret or not passphrase:
-                # Silently skip - OKX is optional, no need for scary error messages
-                logging.info("⚠️  OKX credentials not configured (skipping)")
+                # Partial credentials are more likely a misconfiguration — warn at WARNING level
+                missing = [v for v, val in [
+                    ("OKX_API_KEY", api_key),
+                    ("OKX_API_SECRET", api_secret),
+                    ("OKX_PASSPHRASE", passphrase),
+                ] if not val]
+                have_any = api_key or api_secret or passphrase
+                if have_any:
+                    logging.warning(
+                        "⚠️  OKX credentials partially configured — missing: %s (skipping OKX)",
+                        ", ".join(missing),
+                    )
+                else:
+                    logging.info("ℹ️  OKX credentials not configured (optional broker — skipping)")
                 return False
 
 
