@@ -564,7 +564,7 @@ class KrakenNonceManager:
                 "lock.  Stop ALL duplicate NIJA processes before this reset takes "
                 "effect, otherwise the competing process will continue advancing "
                 "Kraken's expected nonce and the reset will be ineffective.  "
-                "Run: pkill -f bot.py  (or stop the Railway/Heroku deployment)."
+                "Run: pkill -f bot.py  (or stop the active deployment)."
             )
 
         # Startup is the most likely moment for two processes to race.  Hold the
@@ -765,10 +765,26 @@ class KrakenNonceManager:
             return time.time() < self._trading_paused_until
 
     def get_pause_remaining(self) -> float:
-        """Return seconds remaining in the trading pause (0.0 when not paused)."""
+        """Return seconds remaining in the nonce-triggered trading pause (0.0 when clear)."""
         with _LOCK:
             remaining = self._trading_paused_until - time.time()
             return max(0.0, remaining)
+
+    @property
+    def is_deep_reset_active(self) -> bool:
+        """
+        Return True when deep-reset mode is active for this instance.
+
+        Deep-reset mode is enabled by setting ``NIJA_DEEP_NONCE_RESET=1`` before
+        the singleton is constructed.  It activates:
+
+          * a 60-min NTP-corrected startup floor in ``_init()``
+          * 12 × 10-min (120 min) probe coverage in ``probe_and_resync()``
+
+        This property is the single source of truth — ``probe_and_resync()``
+        reads it so the activation logic is never duplicated.
+        """
+        return getattr(self, "_deep_reset_active", False)
 
     # ── Error / success tracking ──────────────────────────────────────────
 
@@ -904,25 +920,22 @@ class KrakenNonceManager:
         """
         # Resolve adaptive step — deep-reset mode overrides with larger step/attempts
         ao = AdaptiveNonceOffsetEngine()
-        _deep_mode = os.environ.get("NIJA_DEEP_NONCE_RESET", "").strip() == "1" or (
-            hasattr(self, "_deep_reset_active") and self._deep_reset_active
-        )
         if step_ms > 0:
             effective_step = step_ms
-        elif _deep_mode:
+        elif self.is_deep_reset_active:
             effective_step = _DEEP_PROBE_STEP_MS
         else:
             effective_step = ao.get_optimal_step()
 
         effective_max_attempts = (
-            max(max_attempts, _DEEP_PROBE_MAX_ATTEMPTS) if _deep_mode else max_attempts
+            max(max_attempts, _DEEP_PROBE_MAX_ATTEMPTS) if self.is_deep_reset_active else max_attempts
         )
 
         _logger.info(
             "KrakenNonceManager.probe_and_resync: starting nonce calibration "
             "(step=%d ms [%.1f min], max_attempts=%d%s, nonce=%d)",
             effective_step, effective_step / 60_000, effective_max_attempts,
-            " [DEEP]" if _deep_mode else "",
+            " [DEEP]" if self.is_deep_reset_active else "",
             self.get_last_nonce(),
         )
 
