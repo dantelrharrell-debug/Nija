@@ -276,6 +276,8 @@ def reset_nonce() -> tuple:
         if not DRY_RUN:
             # Jump 15 min ahead of wall-clock to beat any previously stored nonce.
             mgr.reset_to_safe_value(offset_ms=_RESET_OFFSET_MS)
+            # Jump 60 s ahead of wall-clock — same as reset_to_safe_value()
+            mgr.reset_to_safe_value(offset_ms=300_000)
 
         new_nonce = mgr.get_last_nonce()
         lead_ms = new_nonce - int(time.time() * 1000)
