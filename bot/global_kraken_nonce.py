@@ -451,6 +451,39 @@ class KrakenNonceManager:
         os.makedirs(os.path.dirname(os.path.abspath(_STATE_FILE)), exist_ok=True)
         cleanup_legacy_nonce_files()
 
+        # NIJA_FORCE_NONCE_RESYNC=1 → wipe persisted state + adaptive-offset EMA
+        # before initialising so the next probe_and_resync() starts from a clean
+        # slate.  Useful when the container's nonce state is too far behind
+        # Kraken's server-side floor (e.g. after multiple nuclear resets or a
+        # long outage).  The env var is intentionally checked only at _init()
+        # time so it has no effect once the singleton is running.
+        if os.environ.get("NIJA_FORCE_NONCE_RESYNC", "").strip() == "1":
+            _logger.warning(
+                "KrakenNonceManager: NIJA_FORCE_NONCE_RESYNC=1 — wiping nonce "
+                "state and adaptive-offset EMA for a guaranteed fresh calibration"
+            )
+            for _path in (
+                _STATE_FILE,
+                _STATE_FILE + ".lock",
+                _STATE_FILE + ".tmp",
+                _AO_STATE_FILE,
+                _AO_STATE_FILE + ".tmp",
+            ):
+                try:
+                    os.remove(_path)
+                    _logger.debug("KrakenNonceManager: removed %s", _path)
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:
+                    _logger.debug("KrakenNonceManager: could not remove %s (%s)", _path, exc)
+            # Reset the AdaptiveNonceOffsetEngine singleton so it starts fresh
+            # with the conservative timing floor (not a stale small EMA).
+            _engine = AdaptiveNonceOffsetEngine._instance
+            if _engine is not None:
+                with _engine._lock:
+                    _engine._history = []
+                    _engine._ema_gap_ms = 0.0
+
         # NTP check first — clock drift is the #1 cause of Kraken nonce errors.
         # Kraken is extremely sensitive: even a few seconds off triggers
         # continuous "EAPI:Invalid nonce" errors that block ALL accounts.
@@ -567,6 +600,64 @@ class KrakenNonceManager:
                     self._last_nonce, floor,
                     self._last_nonce - int(time.time() * 1000),
                 )
+
+    def force_resync(self) -> None:
+        """
+        Hard reset the nonce state for a guaranteed-clean startup.
+
+        Wipes ``data/kraken_nonce.state`` (and related lock/tmp files) **and**
+        clears the ``AdaptiveNonceOffsetEngine`` EMA so the next
+        ``probe_and_resync()`` starts from the conservative timing floor rather
+        than a potentially-stale small EMA.
+
+        Call this from a maintenance script or a one-off Railway shell command
+        when NIJA is stopped and you need to guarantee a clean sync on the
+        next restart.  The same effect is achieved at boot time by setting the
+        environment variable ``NIJA_FORCE_NONCE_RESYNC=1`` before starting.
+
+        Safe to call while the process is running (acquires ``_LOCK``), but for
+        best results stop NIJA first so no new nonces are issued after the wipe.
+        """
+        with _LOCK:
+            for _path in (
+                _STATE_FILE,
+                _STATE_FILE + ".lock",
+                _STATE_FILE + ".tmp",
+                _AO_STATE_FILE,
+                _AO_STATE_FILE + ".tmp",
+            ):
+                try:
+                    os.remove(_path)
+                    _logger.debug("KrakenNonceManager.force_resync: removed %s", _path)
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:
+                    _logger.debug(
+                        "KrakenNonceManager.force_resync: could not remove %s (%s)",
+                        _path, exc,
+                    )
+
+            # Reset the AdaptiveNonceOffsetEngine in-memory state.
+            _engine = AdaptiveNonceOffsetEngine._instance
+            if _engine is not None:
+                with _engine._lock:
+                    _engine._history = []
+                    _engine._ema_gap_ms = 0.0
+
+            # Reset the in-process error counter and trading pause.
+            self._error_count = 0
+            self._trading_paused_until = 0.0
+
+            # Advance nonce to now + RESET_OFFSET_MS so the very next call
+            # lands safely above Kraken's window.
+            self._last_nonce = int(time.time() * 1000) + _RESET_OFFSET_MS
+            self._persist()
+
+            _logger.warning(
+                "KrakenNonceManager.force_resync: state wiped — nonce set to "
+                "now+%d ms (%d).  Restart NIJA to begin fresh probe calibration.",
+                _RESET_OFFSET_MS, self._last_nonce,
+            )
 
     # ── Backward-compat no-ops ────────────────────────────────────────────
 
@@ -967,6 +1058,17 @@ def reset_global_kraken_nonce() -> None:
     _nonce_manager.reset_to_safe_value()
 
 
+def force_resync_kraken_nonce() -> None:
+    """
+    Module-level shortcut for ``KrakenNonceManager.force_resync()``.
+
+    Wipes ``data/kraken_nonce.state`` and the adaptive-offset EMA, then
+    sets the nonce to ``now + 5 min`` so the very next API call is accepted.
+    For operator / maintenance-script use — stop NIJA before calling this.
+    """
+    _nonce_manager.force_resync()
+
+
 def jump_global_kraken_nonce_forward(milliseconds: int) -> None:
     _nonce_manager.jump_forward(milliseconds)
 
@@ -1018,6 +1120,7 @@ __all__ = [
     "record_kraken_nonce_error",
     "record_kraken_nonce_success",
     "reset_global_kraken_nonce",
+    "force_resync_kraken_nonce",
     "jump_global_kraken_nonce_forward",
     "probe_and_resync_nonce",
     "nonce_reset_triggered_recently",
