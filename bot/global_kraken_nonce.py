@@ -336,10 +336,14 @@ class KrakenNonceManager:
             _logger.debug("KrakenNonceManager: persist failed (%s)", exc)
 
     def _backoff_ms(self, error_count: int) -> int:
-        if error_count <= 2:   return 0
-        if error_count == 3:   return 10_000
-        if error_count == 4:   return 20_000
-        if error_count == 5:   return 30_000
+        if error_count <= 2:
+            return 0
+        if error_count == 3:
+            return 10_000
+        if error_count == 4:
+            return 20_000
+        if error_count == 5:
+            return 30_000
         return 60_000  # 6+
 
 

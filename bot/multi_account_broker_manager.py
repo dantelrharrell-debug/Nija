@@ -132,6 +132,12 @@ class MultiAccountBrokerManager:
         # Tracks each broker through DISCONNECTED → CONNECTING → CONNECTED / FAILED
         self._platform_state: Dict[str, ConnectionState] = {}
 
+        # Broker types that attempted a platform connection but failed.
+        # This set is populated by mark_platform_failed() so that the HARD BLOCK in
+        # connect_users_from_config() can see failed attempts even when the broker was
+        # never added to _platform_brokers (which only holds successfully-connected brokers).
+        self._platform_failed_types: set = set()
+
         # User account brokers - structure: {user_id: {BrokerType: BaseBroker}}
         self.user_brokers: Dict[str, Dict[BrokerType, BaseBroker]] = {}
 
@@ -646,6 +652,29 @@ class MultiAccountBrokerManager:
         """
         self._platform_state[broker_type.value] = ConnectionState.CONNECTED
         self._last_platform_connected_time[broker_type] = time.time()
+        # Clear any previous failure record now that the platform is live
+        self._platform_failed_types.discard(broker_type)
+
+    def mark_platform_failed(self, broker_type: BrokerType) -> None:
+        """
+        Record that a platform connection ATTEMPT was made but FAILED.
+
+        Call this from trading_strategy.py (or any startup path) when a
+        platform broker's connect() returns False.  This ensures that the
+        HARD BLOCK in connect_users_from_config() can see the failure even
+        though the broker was never added to _platform_brokers (which only
+        stores successfully-connected brokers).
+
+        USER accounts will be blocked from connecting until the platform
+        either succeeds (clears this flag) or is explicitly retried.
+        """
+        self._platform_state[broker_type.value] = ConnectionState.FAILED
+        self._platform_failed_types.add(broker_type)
+        logger.error(
+            "⛔ Platform %s connection FAILED — user accounts BLOCKED until "
+            "platform reconnects.  Fix credentials or network, then restart.",
+            broker_type.value.upper(),
+        )
 
     @staticmethod
     def _broker_ready_flag(broker) -> bool:
@@ -656,7 +685,7 @@ class MultiAccountBrokerManager:
         """
         return broker is not None and getattr(broker, "_platform_ready_flag", False)
 
-    def wait_for_platform_ready(self, broker_type: BrokerType, timeout: int = 30) -> bool:
+    def wait_for_platform_ready(self, broker_type: BrokerType, timeout: int = None) -> bool:
         """
         Block until the platform broker is fully connected or the timeout expires.
 
@@ -667,11 +696,16 @@ class MultiAccountBrokerManager:
 
         Args:
             broker_type: Exchange to wait for.
-            timeout: Maximum seconds to wait before giving up (default: 30).
+            timeout: Maximum seconds to wait before giving up.
+                     Defaults to NIJA_PLATFORM_WAIT_TIMEOUT env var (default 120 s).
+                     Kraken's connect() with exponential backoff can take up to ~75 s,
+                     so the default is deliberately longer than the old 30 s.
 
         Returns:
             bool: True if platform reached CONNECTED state within the timeout.
         """
+        if timeout is None:
+            timeout = int(os.environ.get("NIJA_PLATFORM_WAIT_TIMEOUT", "120"))
         broker_name = broker_type.value.upper()
         start = time.time()
 
@@ -1362,16 +1396,33 @@ class MultiAccountBrokerManager:
             dict: Summary of connected users by brokerage
                   Format: {brokerage: [user_ids]}
         """
-        # HARD BLOCK: wait for every registered platform broker to reach CONNECTED
-        # before touching any user accounts.  This eliminates race conditions where
-        # user connections are attempted while the platform handshake is still in
-        # progress (CONNECTING state).
+        # HARD BLOCK — Platform must connect FIRST.
+        # Two cases to guard:
+        #   A) Platform broker registered (normal path): wait until CONNECTED.
+        #   B) Platform connection ATTEMPTED but failed before registration:
+        #      mark_platform_failed() populates _platform_failed_types so we
+        #      can catch this even though the broker is not in _platform_brokers.
+        #
+        # Kraken is extremely sensitive to clock drift and nonce ordering.
+        # Even a few seconds of clock skew triggers continuous "EAPI:Invalid nonce"
+        # errors that block ALL accounts.  Platform must stabilise first.
         for broker_type in list(self._platform_brokers.keys()):
             if not self.wait_for_platform_ready(broker_type):
-                logger.warning(
-                    f"⚠️ Skipping user connections — platform {broker_type.value.upper()} not ready"
+                logger.error(
+                    "⛔ PLATFORM-FIRST RULE: platform %s not ready — "
+                    "skipping ALL user connections to protect nonce integrity.",
+                    broker_type.value.upper(),
                 )
                 return {}
+
+        for broker_type in list(self._platform_failed_types):
+            logger.error(
+                "⛔ PLATFORM-FIRST RULE: platform %s connection previously FAILED — "
+                "refusing to connect user accounts.  Fix platform credentials/network "
+                "and restart the bot.",
+                broker_type.value.upper(),
+            )
+            return {}
 
         # Import user loader
         try:
