@@ -300,7 +300,21 @@ def _verify_env() -> None:
     else:
         _ev.info("✅ All required environment variables are present")
 
-    # Auto-activate the trading state machine when LIVE_CAPITAL_VERIFIED=true
+    # Kraken platform credentials must BOTH be present or BOTH absent.
+    # A partial configuration (key without secret, or vice versa) causes the
+    # platform-first gate to mark Kraken as failed at startup, which permanently
+    # blocks user accounts from connecting for the lifetime of the process.
+    kraken_api_key    = os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY")
+    kraken_api_secret = os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET")
+    if bool(kraken_api_key) != bool(kraken_api_secret):
+        _ev.warning(
+            "⚠️  Kraken credentials are INCOMPLETE — set BOTH "
+            "KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET "
+            "(or leave both empty to disable Kraken). "
+            "A partial config causes the platform-first gate to block ALL user accounts."
+        )
+    elif kraken_api_key and kraken_api_secret:
+        _ev.info("✅ Kraken platform credentials detected")
     _lcv = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
     if _lcv in ("true", "1", "yes", "enabled"):
         try:

@@ -74,8 +74,6 @@ try:
         get_kraken_nonce,
         get_kraken_api_lock,
         jump_global_kraken_nonce_forward,
-        record_kraken_nonce_error,
-        record_kraken_nonce_success,
         get_global_nonce_manager,
         reset_global_kraken_nonce,
         is_nonce_trading_paused,
@@ -89,8 +87,6 @@ except ImportError:
             get_kraken_nonce,
             get_kraken_api_lock,
             jump_global_kraken_nonce_forward,
-            record_kraken_nonce_error,
-            record_kraken_nonce_success,
             get_global_nonce_manager,
             reset_global_kraken_nonce,
             is_nonce_trading_paused,
@@ -103,8 +99,6 @@ except ImportError:
         get_kraken_nonce = None
         get_kraken_api_lock = None
         jump_global_kraken_nonce_forward = None
-        record_kraken_nonce_error = None
-        record_kraken_nonce_success = None
         get_global_nonce_manager = None
         reset_global_kraken_nonce = None
         is_nonce_trading_paused = None
