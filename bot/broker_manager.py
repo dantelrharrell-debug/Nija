@@ -78,6 +78,7 @@ try:
         reset_global_kraken_nonce,
         is_nonce_trading_paused,
         get_nonce_pause_remaining,
+        probe_and_resync_nonce,
     )
 except ImportError:
     try:
@@ -91,6 +92,7 @@ except ImportError:
             reset_global_kraken_nonce,
             is_nonce_trading_paused,
             get_nonce_pause_remaining,
+            probe_and_resync_nonce,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -103,6 +105,7 @@ except ImportError:
         reset_global_kraken_nonce = None
         is_nonce_trading_paused = None
         get_nonce_pause_remaining = None
+        probe_and_resync_nonce = None
 
 # Import Balance Models (FIX 1: Three-part balance model)
 try:
@@ -427,6 +430,14 @@ _KRAKEN_PRIVATE_CALL_SPACING_MAX_S: float = 0.15   # 150 ms
 # Retry attempt on which to perform a single nonce reset during connect().
 # Only ONE reset is applied (at this attempt) to avoid pushing the nonce too far ahead.
 _KRAKEN_CONNECT_NONCE_RESET_ATTEMPT: int = 2
+# Per-attempt probe jump during connect() nonce resync handshake.
+# 0 = let AdaptiveNonceOffsetEngine choose (recommended); set an explicit value
+# (e.g. 300_000 = 5 min) via env NIJA_NONCE_PROBE_STEP_MS to override.
+_NONCE_PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_PROBE_STEP_MS", "0"))
+# Fallback step used by the retry-loop probe jump when _NONCE_PROBE_STEP_MS==0
+# (i.e. when AdaptiveOffsetEngine owns the step during the pre-flight probe but
+# the retry loop still needs a concrete jump value).
+_KRAKEN_CONNECT_PROBE_FALLBACK_MS: int = 300_000   # 5 min
 
 # ── Platform-first gate ───────────────────────────────────────────────────────
 # When the Kraken PLATFORM account connects successfully, it sets this Event so
@@ -6450,6 +6461,36 @@ class KrakenBroker(BaseBroker):
             time.sleep(_startup_total)
             logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
 
+            # ── Nonce resync handshake ────────────────────────────────────────
+            # Probe Kraken's server-side nonce floor BEFORE the main retry loop.
+            # This resolves all three root-cause nonce failure scenarios:
+            #
+            #   1. Another process still running — cross-process lock detected;
+            #      adaptive step is automatically larger to clear any gap.
+            #   2. Kraken expecting a much higher nonce — ephemeral-filesystem
+            #      restart (Railway/Heroku) loses state file; Kraken's floor is
+            #      far ahead.  Probe jumps +adaptive_step until accepted.
+            #   3. Clock slightly off — probe converges to the correct range even
+            #      if NTP drift has pushed our nonces outside the ±1 s window.
+            #
+            # AdaptiveNonceOffsetEngine records each outcome (how many jump steps
+            # were needed) and feeds an EMA so subsequent restarts land in range
+            # on the very first probe attempt instead of iterating several times.
+            if probe_and_resync_nonce is not None:
+                _probe_cat = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+                logger.info(f"   🔍 Nonce resync handshake: calibrating nonce to Kraken's server window ({cred_label})...")
+                _probe_ok = probe_and_resync_nonce(
+                    lambda: self._kraken_private_call("Balance", {}, category=_probe_cat),
+                    step_ms=_NONCE_PROBE_STEP_MS,   # 0 = let AdaptiveOffsetEngine choose
+                )
+                if _probe_ok:
+                    logger.info(f"   ✅ Nonce resync handshake complete for {cred_label}")
+                else:
+                    logger.warning(
+                        f"   ⚠️  Nonce resync handshake did not fully calibrate for {cred_label} "
+                        f"— proceeding with connection retry loop"
+                    )
+
             # Test connection by fetching account balance with retry logic
             max_attempts = 5
             base_delay = 5.0        # exponential backoff for normal errors
@@ -6586,6 +6627,20 @@ class KrakenBroker(BaseBroker):
                                 if is_nonce_error:
                                     if get_global_nonce_manager is not None:
                                         get_global_nonce_manager().record_error()
+                                    # Apply a probe-step jump on top of record_error()'s small
+                                    # escalating jump so we converge to Kraken's nonce window
+                                    # quickly even if the pre-flight handshake didn't fully
+                                    # calibrate (e.g. network was too slow during probe).
+                                    if jump_global_kraken_nonce_forward is not None:
+                                        # When _NONCE_PROBE_STEP_MS==0 the adaptive engine chose
+                                        # the step during the pre-flight probe.  For the retry loop
+                                        # we fall back to the same static default (_PROBE_STEP_MS).
+                                        _jump_step = _NONCE_PROBE_STEP_MS if _NONCE_PROBE_STEP_MS > 0 else _KRAKEN_CONNECT_PROBE_FALLBACK_MS
+                                        jump_global_kraken_nonce_forward(_jump_step)
+                                        logger.info(
+                                            f"   🔄 Nonce probe jump +{_jump_step // 1000}s applied "
+                                            f"({cred_label}, attempt {attempt}/{max_attempts})"
+                                        )
 
                                 # For nonce errors, log at INFO level on first attempt so users know what failed
                                 # Log at DEBUG level on retries to reduce spam

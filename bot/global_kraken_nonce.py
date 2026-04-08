@@ -28,6 +28,7 @@ Usage
 """
 
 import glob as _glob
+import json
 import logging
 import os
 import threading
@@ -67,6 +68,47 @@ _NUCLEAR_RESET_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_THRESHOLD
 _NUCLEAR_RESET_OFFSET_MS: int = 1_800_000   # 30 min — beats any previously stored nonce
 _TRADING_PAUSE_S: float = float(os.environ.get("NIJA_NONCE_PAUSE_SECONDS", "60"))
 _ERROR_RESET_THRESHOLD: int = 3     # errors < threshold: no jump
+
+# ── Nonce resync / probe-calibration constants ────────────────────────────────
+# Used by probe_and_resync() to dynamically find Kraken's current nonce floor.
+# Each failed probe call jumps the nonce forward by _PROBE_STEP_MS.
+# Up to _PROBE_MAX_ATTEMPTS attempts are made before giving up.
+# Default: 6 × 5 min = 30 min of forward coverage — enough to outlast any
+# previous bot session's nuclear-reset or error-accumulation nonce.
+_PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_PROBE_STEP_MS", "300000"))      # 5 min per step
+_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "6"))  # up to 30 min
+
+# ── Adaptive Offset Engine constants ─────────────────────────────────────────
+# The Adaptive Offset Engine replaces the fixed _PROBE_STEP_MS with a learned
+# offset computed from two signals:
+#
+#   offset = max(
+#       startup_delay + jitter + retry_buffer,   ← timing-based floor
+#       observed_nonce_gap + safety_margin        ← gap-based floor (learned)
+#   )
+#
+# On the first run (no history) the timing floor is used.  After each
+# successful probe calibration the engine records the observed gap via an
+# Exponential Moving Average (EMA, α=0.3) so the estimate improves over time.
+# The learned state is persisted to `data/kraken_nonce_offsets.json`.
+
+_AO_STATE_FILE: str = os.path.join(
+    os.environ.get("NIJA_DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data")),
+    "kraken_nonce_offsets.json",
+)
+
+# Timing components (ms) — mirror the broker_manager.py startup timing so the
+# engine's floor reflects the real cost of a container restart.
+_AO_STARTUP_DELAY_MS: int = int(os.environ.get("NIJA_AO_STARTUP_DELAY_MS", "15000"))  # 15 s startup delay
+_AO_JITTER_MS: int        = int(os.environ.get("NIJA_AO_JITTER_MS",        "5000"))   # 5 s max jitter
+_AO_RETRY_BUFFER_MS: int  = int(os.environ.get("NIJA_AO_RETRY_BUFFER_MS",  "25000"))  # 5 retries × 5 s
+
+# Gap-based component
+_AO_SAFETY_MARGIN_MS: int = int(os.environ.get("NIJA_AO_SAFETY_MARGIN_MS", "60000"))  # 60 s above observed gap
+
+# EMA learning parameters
+_AO_EMA_ALPHA: float = 0.3   # weight for the most recent observation (30%)
+_AO_HISTORY_WINDOW: int = 10  # persist up to 10 historical calibration records
 
 # Corruption guard thresholds — if persisted nonce is this far ahead of
 # wall-clock the state file is likely corrupted.
@@ -136,6 +178,159 @@ class _CrossProcessLock:
             except Exception:
                 pass
             self._fh = None
+
+
+# ── Adaptive Offset Engine ────────────────────────────────────────────────────
+
+class AdaptiveNonceOffsetEngine:
+    """
+    Learns the optimal nonce probe-step / startup-jump offset over time.
+
+    Formula
+    -------
+    On each call to ``get_optimal_step()`` the engine returns:
+
+        offset = max(
+            startup_delay + jitter + retry_buffer,   # timing floor
+            observed_nonce_gap + safety_margin        # learned gap floor
+        )
+
+    The *timing floor* is a deterministic lower bound derived from the real
+    cost of a container restart (startup delay + jitter + retry overhead).
+
+    The *gap floor* is learned from historical probe calibrations: every time
+    ``probe_and_resync()`` succeeds it records the total ms it had to jump
+    over.  The engine maintains an Exponential Moving Average (EMA, α=0.3)
+    of those gaps so the estimate converges quickly while still adapting to
+    changes in deployment patterns.
+
+    The learned state (EMA + history) is persisted to
+    ``data/kraken_nonce_offsets.json`` so the engine retains knowledge across
+    container restarts.  Atomic write-then-rename prevents corruption.
+
+    Singleton
+    ---------
+    Use ``get_adaptive_offset_engine()`` to obtain the shared instance.
+    """
+
+    _instance: "AdaptiveNonceOffsetEngine | None" = None
+    _instance_lock = threading.Lock()
+
+    def __new__(cls) -> "AdaptiveNonceOffsetEngine":
+        if cls._instance is None:
+            with cls._instance_lock:
+                if cls._instance is None:
+                    obj = super().__new__(cls)
+                    obj._init()
+                    cls._instance = obj
+        return cls._instance  # type: ignore[return-value]
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────
+
+    def _init(self) -> None:
+        self._lock = threading.Lock()
+        self._history: list[dict] = []  # list of {"gap_ms": int, "ts": float}
+        self._ema_gap_ms: float = 0.0
+        self._load()
+
+    def _load(self) -> None:
+        """Load persisted EMA and history from disk (silent on error)."""
+        try:
+            with open(_AO_STATE_FILE, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self._history = data.get("history", [])[-_AO_HISTORY_WINDOW:]
+            raw_ema = data.get("ema_gap_ms", 0.0)
+            self._ema_gap_ms = float(raw_ema) if raw_ema and raw_ema > 0 else 0.0
+            if self._ema_gap_ms > 0:
+                _logger.info(
+                    "AdaptiveNonceOffsetEngine: loaded — ema_gap=%.0f ms (%.1f min), "
+                    "history=%d observations",
+                    self._ema_gap_ms, self._ema_gap_ms / 60_000, len(self._history),
+                )
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):
+            pass   # first run or corrupt file — start fresh
+        except Exception as exc:
+            _logger.debug("AdaptiveNonceOffsetEngine: load error (%s)", exc)
+
+    def _save(self) -> None:
+        """Atomically persist EMA and history (silent on error)."""
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(_AO_STATE_FILE)), exist_ok=True)
+            data = {
+                "ema_gap_ms": self._ema_gap_ms,
+                "history": self._history[-_AO_HISTORY_WINDOW:],
+                "updated_ts": time.time(),
+            }
+            tmp = _AO_STATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            os.replace(tmp, _AO_STATE_FILE)
+        except Exception as exc:
+            _logger.debug("AdaptiveNonceOffsetEngine: save error (%s)", exc)
+
+    # ── Public API ────────────────────────────────────────────────────────
+
+    def get_optimal_step(self) -> int:
+        """
+        Return the adaptive offset (ms) to use as a probe step or startup jump.
+
+        When no calibration history exists the timing floor is returned;
+        otherwise the learned gap-based floor is blended in via EMA.
+        """
+        with self._lock:
+            return self._compute()
+
+    def record_calibration(self, failed_attempts: int, step_ms: int) -> None:
+        """
+        Record the outcome of a completed probe_and_resync() run.
+
+        Args:
+            failed_attempts: number of times the nonce was rejected before
+                             success (0 = calibrated on first try).
+            step_ms:         the step size used during that probe run.
+        """
+        with self._lock:
+            observed_gap = failed_attempts * step_ms
+            self._history.append({"gap_ms": observed_gap, "ts": time.time()})
+            self._history = self._history[-_AO_HISTORY_WINDOW:]
+
+            if self._ema_gap_ms <= 0:
+                self._ema_gap_ms = float(observed_gap)
+            else:
+                self._ema_gap_ms = (
+                    _AO_EMA_ALPHA * observed_gap
+                    + (1.0 - _AO_EMA_ALPHA) * self._ema_gap_ms
+                )
+            new_step = self._compute()
+            _logger.info(
+                "AdaptiveNonceOffsetEngine: recorded gap=%d ms (failed=%d × %d ms) "
+                "→ ema=%.0f ms → next_step=%d ms (%.1f min)",
+                observed_gap, failed_attempts, step_ms,
+                self._ema_gap_ms, new_step, new_step / 60_000,
+            )
+            self._save()
+
+    def get_stats(self) -> dict:
+        """Return current engine state for diagnostics."""
+        with self._lock:
+            step = self._compute()
+            return {
+                "ema_gap_ms": self._ema_gap_ms,
+                "observations": len(self._history),
+                "optimal_step_ms": step,
+                "timing_floor_ms": _AO_STARTUP_DELAY_MS + _AO_JITTER_MS + _AO_RETRY_BUFFER_MS,
+            }
+
+    # ── Private ───────────────────────────────────────────────────────────
+
+    def _compute(self) -> int:
+        """Compute adaptive offset — caller must hold self._lock."""
+        timing_floor = _AO_STARTUP_DELAY_MS + _AO_JITTER_MS + _AO_RETRY_BUFFER_MS
+        if self._ema_gap_ms > 0:
+            gap_floor = int(self._ema_gap_ms) + _AO_SAFETY_MARGIN_MS
+            return max(timing_floor, gap_floor)
+        # No history — fall back to the static probe step (conservative default)
+        return max(timing_floor, _PROBE_STEP_MS)
 
 
 # ── NTP helpers (module-level so validate_all_env_vars.py can import them) ────
@@ -466,6 +661,175 @@ class KrakenNonceManager:
                 )
                 self._trading_paused_until = 0.0
 
+    # ── Nonce resync / probe-calibration ─────────────────────────────────
+
+    def probe_and_resync(
+        self,
+        api_call_fn,
+        *,
+        step_ms: int = 0,            # 0 = let the adaptive engine decide
+        max_attempts: int = _PROBE_MAX_ATTEMPTS,
+    ) -> bool:
+        """
+        Nonce resync handshake: probe Kraken's server-side nonce floor and
+        jump forward until an API call is accepted.
+
+        This resolves three root causes of "EAPI:Invalid nonce":
+
+          1. **Another process still running** — a stale container or duplicate
+             bot instance may have advanced Kraken's expected nonce far beyond
+             what this process's state file records.
+
+          2. **Kraken expecting a much higher nonce** — on ephemeral filesystems
+             (Railway, Heroku, Render) the state file is wiped on container
+             restart.  Kraken still remembers the last nonce it accepted from
+             the previous session, which can be 30+ minutes ahead of wall-clock.
+
+          3. **Clock sync slightly off** — even a few seconds of NTP drift can
+             push nonces outside Kraken's ±1 s acceptance window.  Jumping by
+             probe steps quickly lands us back in an acceptable range.
+
+        Adaptive Offset Engine
+        ----------------------
+        When *step_ms* is 0 (default) the step is computed by
+        ``AdaptiveNonceOffsetEngine.get_optimal_step()``:
+
+            step = max(
+                startup_delay + jitter + retry_buffer,   # timing floor
+                observed_nonce_gap + safety_margin        # learned floor
+            )
+
+        This means the system **learns** the right offset over time — after the
+        first successful calibration the next restart will likely succeed on
+        attempt 1 rather than needing multiple probe jumps.
+
+        Args:
+            api_call_fn: ``callable() → dict``
+                Must return a Kraken API response dict (with ``"error"`` key).
+                Typically wraps ``broker._kraken_private_call("Balance", {})``.
+                On a network exception the probe stops immediately — the error
+                is not a nonce issue and retrying would not help.
+            step_ms: Forward-jump per failed probe.  Pass ``0`` (default) to
+                     let the Adaptive Offset Engine choose.  Pass an explicit
+                     value (e.g. ``300_000``) to override.
+            max_attempts: Maximum probe attempts (default: ``_PROBE_MAX_ATTEMPTS``,
+                          env ``NIJA_NONCE_PROBE_MAX_ATTEMPTS``).
+
+        Returns:
+            ``True``  — Kraken accepted the call; nonce is calibrated.
+            ``False`` — All attempts exhausted or a non-nonce error occurred.
+        """
+        # Resolve adaptive step
+        ao = AdaptiveNonceOffsetEngine()
+        effective_step = step_ms if step_ms > 0 else ao.get_optimal_step()
+
+        _logger.info(
+            "KrakenNonceManager.probe_and_resync: starting nonce calibration "
+            "(step=%d ms [%.1f min], max_attempts=%d, nonce=%d)",
+            effective_step, effective_step / 60_000, max_attempts, self.get_last_nonce(),
+        )
+
+        # Stale-process warning
+        if self.detect_other_process_running():
+            _logger.warning(
+                "⚠️  KrakenNonceManager.probe_and_resync: another bot process "
+                "appears to be holding the nonce lock — nonce gap may be larger "
+                "than expected.  Stop duplicate processes to prevent conflicts."
+            )
+
+        failed_attempts = 0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = api_call_fn()
+            except Exception as exc:
+                # Network / auth error — not a nonce issue; stop probing.
+                _logger.debug(
+                    "KrakenNonceManager.probe_and_resync: attempt %d/%d — "
+                    "exception (%s); stopping (not a nonce issue)",
+                    attempt, max_attempts, exc,
+                )
+                # Record a zero-gap calibration (nonce was fine, stopped for
+                # other reasons) so EMA is not inflated.
+                ao.record_calibration(failed_attempts=0, step_ms=effective_step)
+                return False
+
+            if not isinstance(result, dict):
+                _logger.debug(
+                    "KrakenNonceManager.probe_and_resync: attempt %d/%d — "
+                    "unexpected response type %s; stopping",
+                    attempt, max_attempts, type(result).__name__,
+                )
+                return False
+
+            errors = result.get("error") or []
+            error_str = ", ".join(errors)
+            is_nonce_err = any(
+                kw in error_str.lower()
+                for kw in ("invalid nonce", "eapi:invalid nonce", "nonce window")
+            )
+
+            if not is_nonce_err:
+                # Success or non-nonce error — calibration complete.
+                if not errors:
+                    _logger.info(
+                        "✅ KrakenNonceManager.probe_and_resync: calibrated on "
+                        "attempt %d/%d (failed=%d) — nonce=%d",
+                        attempt, max_attempts, failed_attempts, self.get_last_nonce(),
+                    )
+                else:
+                    _logger.debug(
+                        "KrakenNonceManager.probe_and_resync: attempt %d/%d — "
+                        "non-nonce error (%s); nonce calibration not required",
+                        attempt, max_attempts, error_str,
+                    )
+                # Teach the engine how many jumps were actually needed.
+                ao.record_calibration(
+                    failed_attempts=failed_attempts, step_ms=effective_step
+                )
+                return True
+
+            # Nonce rejected — count it and jump forward.
+            failed_attempts += 1
+            with _LOCK:
+                self._last_nonce += effective_step
+                self._persist()
+            _logger.warning(
+                "KrakenNonceManager.probe_and_resync: attempt %d/%d — "
+                "nonce rejected (%s), jumped +%d ms → nonce=%d",
+                attempt, max_attempts, error_str, effective_step, self._last_nonce,
+            )
+
+        _logger.error(
+            "❌ KrakenNonceManager.probe_and_resync: calibration FAILED after "
+            "%d attempts (total jump: +%d ms). nonce=%d. "
+            "Check for duplicate processes or reset the nonce state file.",
+            max_attempts, effective_step * max_attempts, self.get_last_nonce(),
+        )
+        return False
+
+    @staticmethod
+    def detect_other_process_running() -> bool:
+        """
+        Non-blocking check: return ``True`` if another bot process appears to
+        hold the cross-process nonce lock right now.
+
+        Uses ``fcntl.LOCK_NB`` (non-blocking) to try acquiring the exclusive
+        lock.  If the attempt fails with ``BlockingIOError`` another process
+        is holding it.  Always returns ``False`` on platforms without fcntl.
+        """
+        if not _FCNTL_AVAILABLE:
+            return False
+        try:
+            with open(_LOCK_FILE, "w") as fh:
+                try:
+                    _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                    _fcntl.flock(fh, _fcntl.LOCK_UN)
+                    return False   # lock was free — no other process
+                except (BlockingIOError, OSError):
+                    return True    # lock is held by another process
+        except Exception:
+            return False
+
     # ── Private helpers ───────────────────────────────────────────────────
 
     def _read_state_file_raw(self) -> int:
@@ -508,8 +872,25 @@ class KrakenNonceManager:
                 lead_ms, lead_ms / 60_000,
             )
 
+        if persisted == 0:
+            _logger.warning(
+                "KrakenNonceManager: no persisted nonce (fresh start or ephemeral FS). "
+                "Kraken's server-side floor may be much higher — "
+                "probe_and_resync() will calibrate on connect()."
+            )
+
+        # Use the adaptive startup jump so we land above Kraken's learned floor
+        # rather than always jumping only +10 s.  Falls back to _STARTUP_JUMP_MS
+        # when AdaptiveNonceOffsetEngine has no history yet.
+        ao_step = AdaptiveNonceOffsetEngine().get_optimal_step()
+        adaptive_jump = max(ao_step, _STARTUP_JUMP_MS)
+        _logger.debug(
+            "KrakenNonceManager._load_last_nonce: adaptive_jump=%d ms (ao=%d, floor=%d)",
+            adaptive_jump, ao_step, _STARTUP_JUMP_MS,
+        )
+
         # Always advance beyond persisted AND ensure minimum lead from wall-clock.
-        return max(persisted + _STARTUP_JUMP_MS, now_ms + _STARTUP_JUMP_MS)
+        return max(persisted + adaptive_jump, now_ms + adaptive_jump)
 
     def _persist(self) -> None:
         """Atomically write nonce to disk (write-then-rename, mode 0600).
@@ -547,8 +928,13 @@ class KrakenNonceManager:
 NonceManager = KrakenNonceManager
 GlobalKrakenNonceManager = KrakenNonceManager
 
-# ── Module-level singleton ────────────────────────────────────────────────────
+# ── Module-level singletons ───────────────────────────────────────────────────
 _nonce_manager = KrakenNonceManager()
+
+
+def get_adaptive_offset_engine() -> AdaptiveNonceOffsetEngine:
+    """Return the shared AdaptiveNonceOffsetEngine singleton."""
+    return AdaptiveNonceOffsetEngine()
 
 
 # ── Public shortcuts ──────────────────────────────────────────────────────────
@@ -585,6 +971,25 @@ def jump_global_kraken_nonce_forward(milliseconds: int) -> None:
     _nonce_manager.jump_forward(milliseconds)
 
 
+def probe_and_resync_nonce(api_call_fn, *, step_ms: int = 0, max_attempts: int = _PROBE_MAX_ATTEMPTS) -> bool:
+    """
+    Module-level shortcut for ``KrakenNonceManager.probe_and_resync()``.
+
+    Probes Kraken's server-side nonce floor and jumps forward until an API
+    call succeeds.  Uses the ``AdaptiveNonceOffsetEngine`` to compute the
+    optimal step size (pass ``step_ms > 0`` to override).
+
+    Typical usage in ``broker_manager.py``::
+
+        probe_and_resync_nonce(
+            lambda: self._kraken_private_call("Balance", {})
+        )
+    """
+    return _nonce_manager.probe_and_resync(
+        api_call_fn, step_ms=step_ms, max_attempts=max_attempts
+    )
+
+
 def nonce_reset_triggered_recently(window_s: float = 300.0) -> bool:
     return False  # tracking removed; retained for compatibility
 
@@ -603,15 +1008,18 @@ __all__ = [
     "KrakenNonceManager",
     "NonceManager",
     "GlobalKrakenNonceManager",
+    "AdaptiveNonceOffsetEngine",
     "get_kraken_api_lock",
     "get_kraken_nonce",
     "get_global_kraken_nonce",
     "get_global_nonce_manager",
     "get_global_nonce_stats",
+    "get_adaptive_offset_engine",
     "record_kraken_nonce_error",
     "record_kraken_nonce_success",
     "reset_global_kraken_nonce",
     "jump_global_kraken_nonce_forward",
+    "probe_and_resync_nonce",
     "nonce_reset_triggered_recently",
     "is_nonce_trading_paused",
     "get_nonce_pause_remaining",
