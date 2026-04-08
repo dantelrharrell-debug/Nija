@@ -139,10 +139,15 @@ def validate_git_metadata(git_branch: str, git_commit: str) -> StartupValidation
 # Credential format / placeholder helpers
 # ---------------------------------------------------------------------------
 
-# Placeholder patterns that indicate a credential was never filled in
+# Placeholder patterns that indicate a credential was never filled in.
+# Patterns are anchored (^...$) and only match the *entire* value, so a real
+# credential that merely *starts with* a common word (e.g. "testnet-key-abc")
+# will NOT be flagged.  The word-boundary approach handles variants like
+# "test", "testkey", "test_key", "test123" while leaving longer real keys alone.
 _PLACEHOLDER_PATTERNS = re.compile(
-    r"^(your[_\-]?|replace[_\-]?|change[_\-]?|insert[_\-]?|fill[_\-]?|"
-    r"xxx|placeholder|example|sample|test|dummy|fake|todo|none|null|n/?a|"
+    r"^(your[_\-]?.*|replace[_\-]?.*|change[_\-]?me?|insert[_\-]?.*|fill[_\-]?.*|"
+    r"xxx+|placeholder.*|example.*|sample.*|testkey|test[_\-]api|test[_\-]secret|"
+    r"dummy.*|fake.*|todo.*|none|null|n/?a|"
     r"<.+>|\[.+\]|\{.+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
     r"secret[_\-]?here|\*+)$",
     re.IGNORECASE,
@@ -195,14 +200,20 @@ def _kraken_credentials_viable() -> Tuple[bool, str]:
 
     Returns (viable: bool, which_pair: str)
     """
-    key = (os.getenv("KRAKEN_PLATFORM_API_KEY") or
-           os.getenv("KRAKEN_API_KEY", "")).strip()
-    secret = (os.getenv("KRAKEN_PLATFORM_API_SECRET") or
-              os.getenv("KRAKEN_API_SECRET", "")).strip()
+    # Use explicit strip() checks so an empty KRAKEN_PLATFORM_API_KEY=""
+    # does not silently fall through to the legacy key via the `or` short-circuit.
+    platform_key = os.getenv("KRAKEN_PLATFORM_API_KEY", "").strip()
+    platform_secret = os.getenv("KRAKEN_PLATFORM_API_SECRET", "").strip()
+    legacy_key = os.getenv("KRAKEN_API_KEY", "").strip()
+    legacy_secret = os.getenv("KRAKEN_API_SECRET", "").strip()
+
+    # Prefer platform credentials; fall back to legacy only when platform is absent.
+    key = platform_key if platform_key else legacy_key
+    secret = platform_secret if platform_secret else legacy_secret
 
     if (_credential_looks_valid(key, _MIN_LENGTHS["kraken_key"]) and
             _credential_looks_valid(secret, _MIN_LENGTHS["kraken_secret"])):
-        if os.getenv("KRAKEN_PLATFORM_API_KEY", "").strip():
+        if platform_key:
             return True, "KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET"
         return True, "KRAKEN_API_KEY / KRAKEN_API_SECRET (legacy)"
     return False, ""
@@ -334,6 +345,8 @@ def validate_exchange_configuration() -> StartupValidationResult:
             "    Required format (Cloud API Key):\n"
             "      COINBASE_API_KEY=organizations/{org_id}/apiKeys/{key_id}\n"
             "      COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----\\n<base64>\\n-----END EC PRIVATE KEY-----\n"
+            "    In Railway/Docker: use literal \\\\n (backslash-n) to represent newlines\n"
+            "    in the PEM block — broker_manager.py converts them automatically.\n"
             "    Get credentials at: https://portal.cdp.coinbase.com/"
         )
     else:
