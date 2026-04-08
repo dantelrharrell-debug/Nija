@@ -136,6 +136,8 @@ okx==2.1.2
 # Kraken Pro API
 krakenex==2.2.2
 pykrakenapi==0.3.2
+# NTP clock-sync check — used by KrakenNonceManager to detect clock drift (Kraken requires ±1 s)
+ntplib==0.4.0
 # Binance API
 python-binance==1.0.21
 # Alpaca Trading API (for stock trading and paper trading)

@@ -65,19 +65,87 @@ def get_kraken_api_lock() -> threading.RLock:
     return _KRAKEN_API_LOCK
 
 
-def cleanup_legacy_nonce_files() -> None:
-    """Remove old per-account nonce text files left by earlier implementations."""
-    data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
-    for path in _glob.glob(os.path.join(data_dir, "kraken_nonce*.txt")):
-        try:
-            os.remove(path)
-            _logger.debug("KrakenNonceManager: removed legacy nonce file %s", path)
-        except Exception:
-            pass
+# ── NTP clock-sync constants ──────────────────────────────────────────────────
+_NTP_SERVER: str = "pool.ntp.org"
+_NTP_TIMEOUT_S: float = 3.0          # query timeout — must be fast on startup
+_NTP_STRICT_OFFSET_S: float = 1.0    # Kraken requires clock within ±1 second
+_NTP_WARN_OFFSET_S: float = 0.5      # warn earlier so operators act before it's critical
+
+
+def check_ntp_sync() -> dict:
+    """
+    Query pool.ntp.org and return a dict with clock-sync results.
+
+    Returns
+    -------
+    dict with keys:
+      ok          bool   — True if offset is within ±_NTP_STRICT_OFFSET_S
+      offset_s    float  — signed offset: system − NTP (positive = system ahead)
+      server      str    — NTP server used
+      error       str    — empty string on success, error description on failure
+    """
+    result = {"ok": False, "offset_s": 0.0, "server": _NTP_SERVER, "error": ""}
+    try:
+        import ntplib  # optional dep — graceful fallback if missing
+        client = ntplib.NTPClient()
+        response = client.request(_NTP_SERVER, version=3, timeout=_NTP_TIMEOUT_S)
+        offset = response.offset  # seconds, positive means system clock is AHEAD
+        result["offset_s"] = offset
+        result["ok"] = abs(offset) <= _NTP_STRICT_OFFSET_S
+    except ImportError:
+        result["error"] = "ntplib not installed — skipping NTP check"
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
+
+
+def log_ntp_clock_status() -> bool:
+    """
+    Run an NTP check and log the result at the appropriate level.
+
+    Returns True if the clock is within the ±1 s Kraken tolerance, False otherwise.
+    Logs a clear remediation message so operators know exactly what to run.
+    """
+    r = check_ntp_sync()
+
+    if r["error"]:
+        _logger.warning(
+            "⚠️  NTP clock check skipped (%s).  "
+            "Ensure system clock is synced: sudo ntpdate %s",
+            r["error"], _NTP_SERVER,
+        )
+        return True  # unknown — don't block startup, but warn
+
+    offset_ms = r["offset_s"] * 1000
+    abs_offset_s = abs(r["offset_s"])
+
+    if not r["ok"]:
+        # Clock is off by more than ±1 s — Kraken will reject nonces
+        _logger.error(
+            "❌ CLOCK DRIFT DETECTED: system clock is %+.3f s (%+.0f ms) vs NTP (%s). "
+            "Kraken requires ±1 s accuracy — nonce errors WILL occur.  "
+            "Fix: sudo ntpdate %s  (or enable chrony/timesyncd).",
+            r["offset_s"], offset_ms, _NTP_SERVER, _NTP_SERVER,
+        )
+        return False
+    elif abs_offset_s > _NTP_WARN_OFFSET_S:
+        # Within tolerance but getting close — warn early
+        _logger.warning(
+            "⚠️  Clock drift: system is %+.3f s (%+.0f ms) vs NTP (%s). "
+            "Still within Kraken's ±1 s window, but monitor closely.  "
+            "Recommend: sudo ntpdate %s",
+            r["offset_s"], offset_ms, _NTP_SERVER, _NTP_SERVER,
+        )
+        return True
+    else:
+        _logger.info(
+            "✅ NTP clock OK: offset %+.3f s vs %s (Kraken ±1 s tolerance met).",
+            r["offset_s"], _NTP_SERVER,
+        )
+        return True
 
 
 
-class KrakenNonceManager:
     """
     Thread-safe, strictly monotonic, cross-process-persistent nonce generator
     for Kraken.
