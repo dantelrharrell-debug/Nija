@@ -1,5 +1,5 @@
 {
-  "current_state": "OFF",
+  "current_state": "EMERGENCY_STOP",
   "history": [
     {
       "from": "EMERGENCY_STOP",
@@ -36,7 +36,13 @@
       "to": "OFF",
       "reason": "Manual reset: Emergency stop was triggered by test trigger on 2026-03-11; cleared to restore live trading",
       "timestamp": "2026-03-23T05:32:02.000000"
+    },
+    {
+      "from": "OFF",
+      "to": "EMERGENCY_STOP",
+      "reason": "Kill switch activated: PortfolioGate: Test trigger",
+      "timestamp": "2026-04-08T22:09:50.804837"
     }
   ],
-  "last_updated": "2026-03-23T05:32:02.000000"
+  "last_updated": "2026-04-08T22:09:50.804845"
 }
