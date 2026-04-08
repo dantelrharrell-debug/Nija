@@ -331,9 +331,19 @@ class KrakenNonceManager:
                 )
 
     def record_success(self) -> None:
-        """Reset the consecutive-error counter after a successful API call."""
+        """Reset the consecutive-error counter after a successful API call.
+
+        Also clears any active trading pause so that connected user accounts
+        resume immediately once the platform Kraken nonce issue is resolved,
+        rather than waiting for the full pause timer to expire.
+        """
         with _LOCK:
             self._error_count = 0
+            if self._trading_paused_until > 0.0:
+                _logger.info(
+                    "✅ KrakenNonceManager: trading pause cleared on successful API call"
+                )
+                self._trading_paused_until = 0.0
 
     # ── Private helpers ───────────────────────────────────────────────────
 
