@@ -72,7 +72,10 @@ _OFFSETS_TMP_FILE = _OFFSETS_FILE + ".tmp"
 
 # Env vars for deep-resync mode
 _DEEP_PROBE_STEP_MS    = 600_000   # 10 min per probe step
-_DEEP_PROBE_ATTEMPTS   = 8         # 8 × 10 min = 80 min of forward coverage
+_DEEP_PROBE_ATTEMPTS   = 12        # 12 × 10 min = 120 min of forward coverage
+# Startup floor written to state file in --deep mode so the bot starts well
+# above Kraken's high-water mark without relying solely on probe calibration.
+_DEEP_FLOOR_AHEAD_MS   = 3_600_000  # 60 min ahead of wall-clock
 
 
 def _check_ntp() -> bool:
@@ -98,6 +101,28 @@ def _check_ntp() -> bool:
     except Exception as exc:
         print(f"  NTP check failed ({exc}) — skipping")
         return True
+
+
+def _get_ntp_backward_drift_ms() -> int:
+    """
+    Return the backward-drift correction in milliseconds.
+
+    When the host clock is *behind* NTP (system time < true UTC), any nonce
+    floor computed from ``time.time()`` will be lower than what Kraken expects.
+    Adding this correction ensures the written floor is safe even on a drifted
+    clock.  Returns 0 when the clock is ahead, NTP is unavailable, or the
+    measured lag is negligible (< 100 ms).
+    """
+    try:
+        import ntplib
+        client = ntplib.NTPClient()
+        resp = client.request(_NTP_SERVER, version=3, timeout=3.0)
+        if resp.offset >= 0.0:
+            return 0   # clock is ahead of NTP — no under-count risk
+        lag_ms = int(abs(resp.offset) * 1000)
+        return lag_ms if lag_ms >= 100 else 0
+    except Exception:
+        return 0
 
 
 def _check_duplicate_process() -> bool:
@@ -146,6 +171,41 @@ def _show_current_state() -> None:
         print("  Adaptive EMA:   <no offsets file>")
     except Exception as exc:
         print(f"  Adaptive EMA:   <unreadable — {exc}>")
+
+
+def _write_deep_floor(dry_run: bool) -> None:
+    """
+    Write a deep-floor nonce (now + 60 min + NTP backward-drift) to the state
+    file so the bot starts well above Kraken's high-water mark on the next
+    restart without relying solely on probe_and_resync() to find the floor.
+
+    The NTP backward-drift correction is added so that hosts with a clock that
+    is *behind* true UTC still produce a floor that is at or above Kraken's
+    expected value.
+    """
+    ntp_corr_ms = _get_ntp_backward_drift_ms()
+    floor_ms = int(time.time() * 1000) + _DEEP_FLOOR_AHEAD_MS + ntp_corr_ms
+    lead_s = (_DEEP_FLOOR_AHEAD_MS + ntp_corr_ms) / 1000
+
+    if dry_run:
+        print(
+            f"  [DRY RUN] Would write deep floor: nonce≈{floor_ms} "
+            f"(lead=+{lead_s:.0f} s, NTP correction=+{ntp_corr_ms} ms)"
+        )
+        return
+
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        tmp = _STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(str(floor_ms))
+        os.replace(tmp, _STATE_FILE)
+        print(
+            f"  ✅ Deep floor written: nonce={floor_ms} "
+            f"(lead=+{lead_s:.0f} s, NTP correction=+{ntp_corr_ms} ms)"
+        )
+    except Exception as exc:
+        print(f"  ⚠️  Could not write deep floor: {exc}")
 
 
 def _delete_files(dry_run: bool) -> None:
@@ -197,8 +257,10 @@ def main() -> int:
     parser.add_argument(
         "--deep", action="store_true",
         help=(
-            "Print restart command with larger probe step (10 min × 8 = 80 min "
-            "coverage) — use when multiple nuclear resets have occurred."
+            "Deep reset: write a 60-min NTP-corrected startup floor to the state "
+            "file and print restart command with 10 min × 12 = 120 min probe "
+            "coverage.  Use when multiple nuclear resets have occurred or the "
+            "probe calibration failed with the standard settings."
         ),
     )
     parser.add_argument(
@@ -212,14 +274,15 @@ def main() -> int:
     print("=" * 70)
 
     # ── 1. NTP check ──────────────────────────────────────────────────────
+    total_steps = 5 if args.deep else 4
     if not args.skip_ntp:
-        print("\n[1/4] NTP clock check:")
+        print(f"\n[1/{total_steps}] NTP clock check:")
         _check_ntp()
     else:
-        print("\n[1/4] NTP clock check: skipped (--skip-ntp)")
+        print(f"\n[1/{total_steps}] NTP clock check: skipped (--skip-ntp)")
 
     # ── 2. Duplicate process check ────────────────────────────────────────
-    print("\n[2/4] Duplicate process check:")
+    print(f"\n[2/{total_steps}] Duplicate process check:")
     if _check_duplicate_process():
         print(
             "  ⚠️  Another NIJA process appears to be holding the nonce lock!\n"
@@ -235,13 +298,20 @@ def main() -> int:
         print("  ✅ No other NIJA process detected.")
 
     # ── 3. Show current state ─────────────────────────────────────────────
-    print("\n[3/4] Current nonce state:")
+    print(f"\n[3/{total_steps}] Current nonce state:")
     _show_current_state()
 
     # ── 4. Delete files ───────────────────────────────────────────────────
     action = "Would delete" if args.dry_run else "Deleting"
-    print(f"\n[4/4] {action} nonce state files:")
+    print(f"\n[4/{total_steps}] {action} nonce state files:")
     _delete_files(dry_run=args.dry_run)
+
+    # ── 5. Deep floor (--deep only) ───────────────────────────────────────
+    # Write a 60-min NTP-corrected nonce to the state file so the bot starts
+    # far above Kraken's high-water mark without needing many probe rounds.
+    if args.deep:
+        print(f"\n[5/{total_steps}] Writing NTP-corrected deep startup floor:")
+        _write_deep_floor(dry_run=args.dry_run)
 
     # ── Done ──────────────────────────────────────────────────────────────
     print("\n" + "=" * 70)
@@ -253,13 +323,17 @@ def main() -> int:
         print()
         if args.deep:
             print(
-                "  Restart NIJA with the deep-resync env vars (80 min coverage):\n"
-                f"\n    NIJA_FORCE_NONCE_RESYNC=1 \\\n"
-                f"    NIJA_NONCE_PROBE_STEP_MS={_DEEP_PROBE_STEP_MS} \\\n"
-                f"    NIJA_NONCE_PROBE_MAX_ATTEMPTS={_DEEP_PROBE_ATTEMPTS} \\\n"
+                "  Restart NIJA with the deep-resync env vars (120 min coverage):\n"
+                f"\n    NIJA_DEEP_NONCE_RESET=1 \\\n"
+                f"    NIJA_FORCE_NONCE_RESYNC=1 \\\n"
                 "    python bot.py\n"
-                "\n  On Railway: add the three env vars above in the service settings,\n"
-                "  then redeploy."
+                "\n  On Railway: add the two env vars above in the service settings,\n"
+                "  then redeploy.  They will be ignored on subsequent restarts once\n"
+                "  the state file is healthy.\n"
+                "\n  Advanced override (if 120 min is still insufficient):\n"
+                f"    NIJA_NONCE_DEEP_STEP_MS={_DEEP_PROBE_STEP_MS} \\\n"
+                f"    NIJA_NONCE_DEEP_MAX_ATTEMPTS={_DEEP_PROBE_ATTEMPTS} \\\n"
+                "    python bot.py"
             )
         else:
             print(
