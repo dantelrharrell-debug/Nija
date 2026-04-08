@@ -26,6 +26,8 @@ class StartupRisk(Enum):
     NO_EXCHANGES_ENABLED = "no_exchanges_enabled"
     NO_VIABLE_BROKER = "no_viable_broker"
     PLATFORM_NOT_CONFIGURED_FIRST = "platform_not_configured_first"
+    NTP_CLOCK_DRIFT = "ntp_clock_drift"
+    DATA_DIR_UNAVAILABLE = "data_dir_unavailable"
 
 
 class StartupValidationResult:
@@ -613,6 +615,116 @@ def validate_account_hierarchy() -> StartupValidationResult:
     return result
 
 
+def validate_ntp_clock() -> StartupValidationResult:
+    """
+    Validate that the system clock is synchronized within Kraken's ±1 s tolerance.
+
+    A clock that is more than 1 second off from NTP will cause Kraken to reject
+    every private API call with "EAPI:Invalid nonce", blocking ALL accounts.
+
+    Returns:
+        StartupValidationResult with NTP check findings
+    """
+    result = StartupValidationResult()
+    try:
+        try:
+            from bot.global_kraken_nonce import check_ntp_sync
+        except ImportError:
+            from global_kraken_nonce import check_ntp_sync  # type: ignore[import]
+
+        r = check_ntp_sync()
+    except Exception as exc:
+        result.add_warning(
+            f"NTP check could not run ({exc}). "
+            "Verify clock manually: sudo ntpdate pool.ntp.org"
+        )
+        result.add_info("Install ntplib to enable NTP checks: pip install ntplib==0.4.0")
+        return result
+
+    if r.get("error"):
+        result.add_warning(
+            f"NTP check skipped: {r['error']}. "
+            "Verify clock manually: sudo ntpdate pool.ntp.org"
+        )
+        result.add_info("Install ntplib to enable NTP checks: pip install ntplib==0.4.0")
+        return result
+
+    offset_s = r.get("offset_s", 0.0)
+    server = r.get("server", "pool.ntp.org")
+    offset_ms = int(offset_s * 1000)
+    abs_s = abs(offset_s)
+
+    if not r.get("ok"):
+        result.add_risk(
+            StartupRisk.NTP_CLOCK_DRIFT,
+            f"CLOCK DRIFT: system clock is {offset_s:+.3f} s ({offset_ms:+d} ms) vs {server}. "
+            "Kraken requires ±1 s accuracy — nonce errors WILL occur on ALL accounts."
+        )
+        result.add_warning(
+            f"Fix clock drift now:\n"
+            "  sudo ntpdate pool.ntp.org\n"
+            "  OR enable chrony: sudo systemctl start chronyd"
+        )
+    elif abs_s > 0.5:
+        result.add_warning(
+            f"Clock drift warning: {offset_s:+.3f} s ({offset_ms:+d} ms) vs {server}. "
+            "Within ±1 s Kraken window but approaching the limit. "
+            "Recommend: sudo ntpdate pool.ntp.org"
+        )
+        result.add_info(f"NTP clock check: within tolerance (±1 s) — {offset_s:+.3f} s vs {server}")
+    else:
+        result.add_info(
+            f"✅ NTP clock OK: {offset_s:+.3f} s vs {server} (within Kraken ±1 s tolerance)"
+        )
+
+    return result
+
+
+def validate_data_directory() -> StartupValidationResult:
+    """
+    Ensure the NIJA data directory exists and is writable.
+
+    The data directory stores the Kraken nonce state file and other
+    persistence files.  If it cannot be created or is not writable the
+    nonce manager will fail on its first write, causing Kraken nonce errors.
+
+    Returns:
+        StartupValidationResult with data directory check findings
+    """
+    import pathlib
+    result = StartupValidationResult()
+    _default_data_dir = pathlib.Path(__file__).parent.parent / "data"
+    data_dir = os.path.abspath(os.environ.get("NIJA_DATA_DIR", str(_default_data_dir)))
+
+    try:
+        os.makedirs(data_dir, mode=0o700, exist_ok=True)
+    except OSError as exc:
+        result.add_risk(
+            StartupRisk.DATA_DIR_UNAVAILABLE,
+            f"Cannot create data directory {data_dir!r}: {exc}. "
+            "Kraken nonce persistence will fail — nonce errors on every restart."
+        )
+        result.add_warning(
+            f"Fix: ensure the process has write access to {data_dir!r}, "
+            "or set NIJA_DATA_DIR to a writable path."
+        )
+        return result
+
+    if not os.access(data_dir, os.W_OK):
+        result.add_risk(
+            StartupRisk.DATA_DIR_UNAVAILABLE,
+            f"Data directory {data_dir!r} exists but is not writable. "
+            "Kraken nonce persistence will fail — nonce errors on every restart."
+        )
+        result.add_warning(
+            f"Fix: chmod u+w {data_dir!r} or set NIJA_DATA_DIR to a writable path."
+        )
+    else:
+        result.add_info(f"✅ Data directory OK: {data_dir!r}")
+
+    return result
+
+
 def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationResult:
     """
     Run all startup validations and combine results.
@@ -658,7 +770,23 @@ def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationRe
     if hierarchy_result.critical_failure:
         combined.mark_critical_failure(hierarchy_result.failure_reason)
 
-    # 5. Combined check: escalate to critical failure when live trading with unknown git metadata.
+    # 5. Validate NTP clock synchronization (Kraken requires system clock within ±1 s)
+    ntp_result = validate_ntp_clock()
+    combined.risks.extend(ntp_result.risks)
+    combined.warnings.extend(ntp_result.warnings)
+    combined.info.extend(ntp_result.info)
+    if ntp_result.critical_failure:
+        combined.mark_critical_failure(ntp_result.failure_reason)
+
+    # 6. Validate data directory (nonce persistence, position files, etc.)
+    data_dir_result = validate_data_directory()
+    combined.risks.extend(data_dir_result.risks)
+    combined.warnings.extend(data_dir_result.warnings)
+    combined.info.extend(data_dir_result.info)
+    if data_dir_result.critical_failure:
+        combined.mark_critical_failure(data_dir_result.failure_reason)
+
+    # 7. Combined check: escalate to critical failure when live trading with unknown git metadata.
     # Running untraceable code in live mode is prohibited for auditability.
     live_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes")
     dry_run = os.getenv("DRY_RUN_MODE", "false").lower() in ("true", "1", "yes")
