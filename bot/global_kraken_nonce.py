@@ -78,6 +78,23 @@ _ERROR_RESET_THRESHOLD: int = 3     # errors < threshold: no jump
 _PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_PROBE_STEP_MS", "300000"))      # 5 min per step
 _PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "6"))  # up to 30 min
 
+# ── Deep-reset constants ──────────────────────────────────────────────────────
+# Activated by NIJA_DEEP_NONCE_RESET=1.  Provides 120-minute probe coverage
+# and an NTP-corrected startup floor to survive worst-case nonce gaps caused by:
+#   • Multiple consecutive nuclear resets from a previous session
+#   • Host clock drift (backward) undervaluing the computed nonce floor
+#   • A competing process that raced ahead while this one was down
+#
+# Deep startup floor: nonce is set to at least now + _DEEP_STARTUP_FLOOR_MS so
+# that the first probe step starts well above Kraken's recorded high-water mark.
+_DEEP_PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_DEEP_STEP_MS", "600000"))         # 10 min per step
+_DEEP_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_DEEP_MAX_ATTEMPTS", "12"))   # 12 × 10 min = 120 min
+_DEEP_STARTUP_FLOOR_MS: int = 3_600_000   # 60 min lead on startup when deep-reset is active
+
+# Extra probe attempts automatically added when a duplicate process is detected
+# holding the nonce lock, since that process may have advanced the floor further.
+_DUPLICATE_PROC_EXTRA_ATTEMPTS: int = 6
+
 # ── Adaptive Offset Engine constants ─────────────────────────────────────────
 # The Adaptive Offset Engine replaces the fixed _PROBE_STEP_MS with a learned
 # offset computed from two signals:
@@ -430,6 +447,32 @@ def cleanup_legacy_nonce_files() -> None:
             pass
 
 
+def _get_ntp_backward_drift_ms() -> int:
+    """
+    Return the backward-clock-drift correction in milliseconds.
+
+    Kraken's nonce floor is anchored to true UTC time.  If the host clock is
+    *behind* NTP (``offset_s < 0``), every nonce computed from ``time.time()``
+    will be below what Kraken expects.  We compensate by adding the absolute
+    lag to any nonce floor derived from ``time.time()``.
+
+    Returns 0 when:
+      • the clock is ahead of NTP (no under-counting risk)
+      • ntplib is unavailable or the NTP query fails
+      • the measured lag is negligible (< 100 ms)
+
+    This function caches nothing and re-queries NTP on every call so it always
+    reflects the current drift, even if the system clock changed between calls.
+    """
+    r = check_ntp_sync()
+    if r.get("error") or r.get("offset_s", 0.0) >= 0.0:
+        # Clock is ahead of NTP or unknown — no backward-drift correction needed.
+        return 0
+    # offset_s < 0 → system is behind NTP by |offset_s| seconds.
+    lag_ms = int(abs(r["offset_s"]) * 1000)
+    return lag_ms if lag_ms >= 100 else 0
+
+
 # ── Nonce manager ─────────────────────────────────────────────────────────────
 
 class KrakenNonceManager:
@@ -466,16 +509,27 @@ class KrakenNonceManager:
         os.makedirs(os.path.dirname(os.path.abspath(_STATE_FILE)), exist_ok=True)
         cleanup_legacy_nonce_files()
 
+        # ── Detect deep-reset mode ─────────────────────────────────────────
+        # NIJA_DEEP_NONCE_RESET=1 applies a 60-min NTP-corrected startup floor
+        # and extends probe_and_resync() to 12 × 10-min = 120-min coverage.
+        # Use this when NIJA_FORCE_NONCE_RESYNC=1 alone is insufficient because:
+        #   • multiple nuclear resets put Kraken's floor >30 min ahead
+        #   • host clock drift caused the computed floor to undershoot
+        #   • a competing process advanced the nonce while this one was down
+        _deep_reset = os.environ.get("NIJA_DEEP_NONCE_RESET", "").strip() == "1"
+        self._deep_reset_active: bool = _deep_reset
+
         # NIJA_FORCE_NONCE_RESYNC=1 → wipe persisted state + adaptive-offset EMA
         # before initialising so the next probe_and_resync() starts from a clean
         # slate.  Useful when the container's nonce state is too far behind
         # Kraken's server-side floor (e.g. after multiple nuclear resets or a
         # long outage).  The env var is intentionally checked only at _init()
         # time so it has no effect once the singleton is running.
-        if os.environ.get("NIJA_FORCE_NONCE_RESYNC", "").strip() == "1":
+        if os.environ.get("NIJA_FORCE_NONCE_RESYNC", "").strip() == "1" or _deep_reset:
             _logger.warning(
-                "KrakenNonceManager: NIJA_FORCE_NONCE_RESYNC=1 — wiping nonce "
-                "state and adaptive-offset EMA for a guaranteed fresh calibration"
+                "KrakenNonceManager: %s — wiping nonce state and adaptive-offset "
+                "EMA for a guaranteed fresh calibration",
+                "NIJA_DEEP_NONCE_RESET=1" if _deep_reset else "NIJA_FORCE_NONCE_RESYNC=1",
             )
             for _path in (
                 _STATE_FILE,
@@ -502,12 +556,39 @@ class KrakenNonceManager:
         # continuous "EAPI:Invalid nonce" errors that block ALL accounts.
         log_ntp_clock_status()
 
+        # Warn loudly if another bot process is still running.  A competing
+        # process will keep issuing nonces after our reset, making it ineffective.
+        if KrakenNonceManager.detect_other_process_running():
+            _logger.error(
+                "🚨 KrakenNonceManager: another bot process is holding the nonce "
+                "lock.  Stop ALL duplicate NIJA processes before this reset takes "
+                "effect, otherwise the competing process will continue advancing "
+                "Kraken's expected nonce and the reset will be ineffective.  "
+                "Run: pkill -f bot.py  (or stop the Railway/Heroku deployment)."
+            )
+
         # Startup is the most likely moment for two processes to race.  Hold the
         # cross-process lock for the entire read → compute → write sequence so a
         # second process starting at the same time cannot claim the same nonce.
         with _LOCK:
             with _CrossProcessLock(_LOCK_FILE):
                 self._last_nonce = self._load_last_nonce()
+
+                # Deep-reset mode: advance nonce to a 60-min NTP-corrected floor
+                # so probe_and_resync() starts well above Kraken's high-water mark
+                # even after many consecutive nuclear resets.
+                if _deep_reset:
+                    ntp_corr_ms = _get_ntp_backward_drift_ms()
+                    deep_floor = int(time.time() * 1000) + _DEEP_STARTUP_FLOOR_MS + ntp_corr_ms
+                    if deep_floor > self._last_nonce:
+                        _logger.warning(
+                            "KrakenNonceManager: DEEP RESET — startup floor "
+                            "now+%d ms + NTP correction +%d ms → %d  (was %d)",
+                            _DEEP_STARTUP_FLOOR_MS, ntp_corr_ms,
+                            deep_floor, self._last_nonce,
+                        )
+                        self._last_nonce = deep_floor
+
                 self._persist()
         lead_ms = self._last_nonce - int(time.time() * 1000)
         _logger.info(
@@ -821,26 +902,47 @@ class KrakenNonceManager:
             ``True``  — Kraken accepted the call; nonce is calibrated.
             ``False`` — All attempts exhausted or a non-nonce error occurred.
         """
-        # Resolve adaptive step
+        # Resolve adaptive step — deep-reset mode overrides with larger step/attempts
         ao = AdaptiveNonceOffsetEngine()
-        effective_step = step_ms if step_ms > 0 else ao.get_optimal_step()
+        _deep_mode = os.environ.get("NIJA_DEEP_NONCE_RESET", "").strip() == "1" or (
+            hasattr(self, "_deep_reset_active") and self._deep_reset_active
+        )
+        if step_ms > 0:
+            effective_step = step_ms
+        elif _deep_mode:
+            effective_step = _DEEP_PROBE_STEP_MS
+        else:
+            effective_step = ao.get_optimal_step()
+
+        effective_max_attempts = (
+            max(max_attempts, _DEEP_PROBE_MAX_ATTEMPTS) if _deep_mode else max_attempts
+        )
 
         _logger.info(
             "KrakenNonceManager.probe_and_resync: starting nonce calibration "
-            "(step=%d ms [%.1f min], max_attempts=%d, nonce=%d)",
-            effective_step, effective_step / 60_000, max_attempts, self.get_last_nonce(),
+            "(step=%d ms [%.1f min], max_attempts=%d%s, nonce=%d)",
+            effective_step, effective_step / 60_000, effective_max_attempts,
+            " [DEEP]" if _deep_mode else "",
+            self.get_last_nonce(),
         )
 
-        # Stale-process warning
+        # Duplicate-process check: a competing process advances Kraken's nonce
+        # floor concurrently, so we need more attempts to catch up.
         if self.detect_other_process_running():
             _logger.warning(
                 "⚠️  KrakenNonceManager.probe_and_resync: another bot process "
                 "appears to be holding the nonce lock — nonce gap may be larger "
                 "than expected.  Stop duplicate processes to prevent conflicts."
             )
+            effective_max_attempts += _DUPLICATE_PROC_EXTRA_ATTEMPTS
+            _logger.warning(
+                "KrakenNonceManager.probe_and_resync: duplicate process detected — "
+                "boosting max_attempts to %d to cover the larger nonce gap",
+                effective_max_attempts,
+            )
 
         failed_attempts = 0
-        for attempt in range(1, max_attempts + 1):
+        for attempt in range(1, effective_max_attempts + 1):
             try:
                 result = api_call_fn()
             except Exception as exc:
@@ -848,7 +950,7 @@ class KrakenNonceManager:
                 _logger.debug(
                     "KrakenNonceManager.probe_and_resync: attempt %d/%d — "
                     "exception (%s); stopping (not a nonce issue)",
-                    attempt, max_attempts, exc,
+                    attempt, effective_max_attempts, exc,
                 )
                 # Record a zero-gap calibration (nonce was fine, stopped for
                 # other reasons) so EMA is not inflated.
@@ -859,7 +961,7 @@ class KrakenNonceManager:
                 _logger.debug(
                     "KrakenNonceManager.probe_and_resync: attempt %d/%d — "
                     "unexpected response type %s; stopping",
-                    attempt, max_attempts, type(result).__name__,
+                    attempt, effective_max_attempts, type(result).__name__,
                 )
                 return False
 
@@ -876,13 +978,13 @@ class KrakenNonceManager:
                     _logger.info(
                         "✅ KrakenNonceManager.probe_and_resync: calibrated on "
                         "attempt %d/%d (failed=%d) — nonce=%d",
-                        attempt, max_attempts, failed_attempts, self.get_last_nonce(),
+                        attempt, effective_max_attempts, failed_attempts, self.get_last_nonce(),
                     )
                 else:
                     _logger.debug(
                         "KrakenNonceManager.probe_and_resync: attempt %d/%d — "
                         "non-nonce error (%s); nonce calibration not required",
-                        attempt, max_attempts, error_str,
+                        attempt, effective_max_attempts, error_str,
                     )
                 # Teach the engine how many jumps were actually needed.
                 ao.record_calibration(
@@ -898,14 +1000,14 @@ class KrakenNonceManager:
             _logger.warning(
                 "KrakenNonceManager.probe_and_resync: attempt %d/%d — "
                 "nonce rejected (%s), jumped +%d ms → nonce=%d",
-                attempt, max_attempts, error_str, effective_step, self._last_nonce,
+                attempt, effective_max_attempts, error_str, effective_step, self._last_nonce,
             )
 
         _logger.error(
             "❌ KrakenNonceManager.probe_and_resync: calibration FAILED after "
             "%d attempts (total jump: +%d ms). nonce=%d. "
             "Check for duplicate processes or reset the nonce state file.",
-            max_attempts, effective_step * max_attempts, self.get_last_nonce(),
+            effective_max_attempts, effective_step * effective_max_attempts, self.get_last_nonce(),
         )
         return False
 
