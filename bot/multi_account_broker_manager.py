@@ -14,6 +14,7 @@ Each account trades independently with its own:
 """
 
 import logging
+import os
 import queue
 import sys
 import threading
