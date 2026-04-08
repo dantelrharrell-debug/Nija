@@ -42,6 +42,11 @@ except ImportError:
 DRY_RUN     = "--dry-run"     in sys.argv
 SKIP_TEST   = "--no-live-test" in sys.argv
 
+# ── Reset nonce offset ────────────────────────────────────────────────────────
+# 15 minutes ahead of wall-clock.  Aggressive by design: this must beat ANY
+# previously stored nonce even if the bot ran after a failed reset attempt.
+_RESET_OFFSET_MS = 900_000
+
 # Add bot/ to path so we can import the nonce manager
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "bot"))
 
@@ -62,6 +67,61 @@ _NONCE_PATTERNS = [
     os.path.join(_DATA_DIR, "kraken_nonce*.txt"),
     os.path.join(_DATA_DIR, "kraken_global_nonce.txt"),
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0 — Running-process check
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BOT_PATTERNS = ["bot.py", "trading_strategy.py", "nija_core_loop.py",
+                 "tradingview_webhook.py", "start.sh"]
+
+
+def check_no_bot_running() -> bool:
+    """
+    Scan the process list for known bot entry-points.
+
+    Returns True when no bot processes are detected (safe to proceed).
+    Returns False and prints instructions when bot processes are found.
+
+    IMPORTANT: Even ONE API call made by a running bot after the nonce reset
+    will generate a nonce higher than the reset value, re-introducing the
+    very desync this script is trying to fix.
+    """
+    _head("0 — Running-Process Check  (bot MUST be stopped first)")
+    import subprocess
+
+    bot_pids: list = []
+    try:
+        result = subprocess.run(
+            ["ps", "aux"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if any(pat in line for pat in _BOT_PATTERNS):
+                # Ignore the current reset script itself
+                if "reset_kraken_nonce" not in line and "grep" not in line:
+                    bot_pids.append(line.strip())
+    except Exception as exc:
+        _warn(f"Could not read process list: {exc}")
+        _warn("Verify manually: ps aux | grep python")
+        return True  # unknown — don't block
+
+    if bot_pids:
+        _fail(f"Detected {len(bot_pids)} running bot process(es):")
+        for p in bot_pids:
+            _info(f"  {p[:120]}")
+        print()
+        _fail("A running bot will re-desync the nonce immediately after reset.")
+        _info("Stop the bot FIRST, then re-run this script:")
+        _info("  pkill -f bot.py")
+        _info("  pkill -f trading_strategy.py")
+        _info("  pkill -f nija_core_loop.py")
+        _info("Verify with: ps aux | grep python")
+        return False
+
+    _ok("No running bot processes detected — safe to reset.")
+    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,14 +274,14 @@ def reset_nonce() -> tuple:
         old_nonce = mgr.get_last_nonce()
 
         if not DRY_RUN:
-            # Jump 60 s ahead of wall-clock — same as reset_to_safe_value()
-            mgr.reset_to_safe_value(offset_ms=60_000)
+            # Jump 15 min ahead of wall-clock to beat any previously stored nonce.
+            mgr.reset_to_safe_value(offset_ms=_RESET_OFFSET_MS)
 
         new_nonce = mgr.get_last_nonce()
         lead_ms = new_nonce - int(time.time() * 1000)
 
         if DRY_RUN:
-            _info(f"[DRY RUN] Would reset nonce from {old_nonce} to ~{int(time.time()*1000) + 60_000}")
+            _info(f"[DRY RUN] Would reset nonce from {old_nonce} to ~{int(time.time()*1000) + _RESET_OFFSET_MS}")
         else:
             _ok(f"Nonce reset: {old_nonce} → {new_nonce}  (lead = +{lead_ms:,} ms)")
             assert new_nonce > old_nonce or lead_ms > 0, "New nonce is not ahead of old — check reset logic"
@@ -287,8 +347,13 @@ def main() -> int:
         print(_c("33", "  [DRY RUN — no files will be written]"))
     print(_c("1", "=" * 60))
 
+    bot_ok   = check_no_bot_running()
     clock_ok = check_clock()
     creds_ok = check_credentials()
+
+    if not bot_ok and not DRY_RUN:
+        _fail("Aborting: stop the bot first, then re-run this script.")
+        return 1
 
     _head("3 — Nonce Files")
     nonce_files = find_nonce_files()
@@ -308,6 +373,10 @@ def main() -> int:
 
     _head("Summary")
     ok = True
+    if not bot_ok:
+        _warn("Bot process check was skipped or processes were found — verify manually")
+    else:
+        _ok("No running bot processes at reset time")
     if not clock_ok:
         _fail("System clock is off — fix with: sudo ntpdate pool.ntp.org")
         ok = False
