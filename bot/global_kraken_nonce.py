@@ -46,10 +46,13 @@ _PERSISTED_PERMISSIONS = 0o600
 _LOCK = threading.Lock()
 
 # ── Tuning constants (milliseconds) ──────────────────────────────────────────
-_STARTUP_JUMP_MS: int = 10_000      # lead on first start / hot restart
-_STARTUP_CLAMP_MS: int = 55_000     # never start more than 55 s ahead
+_STARTUP_JUMP_MS: int = 10_000      # lead added to persisted nonce on hot restart
 _RESET_OFFSET_MS: int = 60_000      # offset used by reset_to_safe_value()
 _ERROR_RESET_THRESHOLD: int = 3     # errors < threshold: no jump; at threshold: apply backoff
+# Corruption guard: if persisted nonce is more than this far ahead of wall-clock,
+# it is likely corrupted (e.g. the file was written from a future date or by a bug).
+_CORRUPTION_WARN_MS: int  = 600_000    # 10 minutes — warn but keep value
+_CORRUPTION_RESET_MS: int = 86_400_000 # 24 hours  — reset to safe value (clear corruption)
 
 # ── API serialisation lock ────────────────────────────────────────────────────
 # Kraken rejects parallel private calls on the same API key.
@@ -62,7 +65,17 @@ def get_kraken_api_lock() -> threading.RLock:
     return _KRAKEN_API_LOCK
 
 
-# ── Single nonce manager ──────────────────────────────────────────────────────
+def cleanup_legacy_nonce_files() -> None:
+    """Remove old per-account nonce text files left by earlier implementations."""
+    data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+    for path in _glob.glob(os.path.join(data_dir, "kraken_nonce*.txt")):
+        try:
+            os.remove(path)
+            _logger.debug("KrakenNonceManager: removed legacy nonce file %s", path)
+        except Exception:
+            pass
+
+
 
 class KrakenNonceManager:
     """
@@ -96,12 +109,15 @@ class KrakenNonceManager:
     def _init(self):
         self._error_count = 0
         os.makedirs(os.path.dirname(os.path.abspath(_STATE_FILE)), exist_ok=True)
+        cleanup_legacy_nonce_files()
         self._last_nonce = self._load_last_nonce()
         self._persist()
+        lead_ms = self._last_nonce - int(time.time() * 1000)
         _logger.info(
             "KrakenNonceManager: init nonce=%d (lead=%+d ms)",
-            self._last_nonce, self._last_nonce - int(time.time() * 1000),
+            self._last_nonce, lead_ms,
         )
+        self._log_clock_health(lead_ms)
 
     # ── Core nonce generation ──────────────────────────────────────────────
 
@@ -129,19 +145,30 @@ class KrakenNonceManager:
 
     def reset_to_safe_value(self, offset_ms: int = _RESET_OFFSET_MS) -> None:
         """
-        Reset nonce to now + offset_ms milliseconds (default 60 s).
+        Advance nonce to at least now + offset_ms milliseconds (default 60 s).
+
+        This method only ever *increases* the nonce — it will never decrease
+        it below the current value, so it is safe to call proactively from
+        connect() without risking a Kraken "invalid nonce" rejection.
 
         Use after confirmed Kraken 'invalid nonce' responses to skip past any
         nonces that may have been used by other processes or prior requests.
         """
         with _LOCK:
-            new_val = int(time.time() * 1000) + offset_ms
-            _logger.warning(
-                "KrakenNonceManager: reset_to_safe_value → %d (offset=%d ms)",
-                new_val, offset_ms,
-            )
-            self._last_nonce = new_val
-            self._persist()
+            floor = int(time.time() * 1000) + offset_ms
+            if floor > self._last_nonce:
+                _logger.warning(
+                    "KrakenNonceManager: reset_to_safe_value → %d (offset=%d ms, was=%d)",
+                    floor, offset_ms, self._last_nonce,
+                )
+                self._last_nonce = floor
+                self._persist()
+            else:
+                _logger.debug(
+                    "KrakenNonceManager: reset_to_safe_value skipped — already ahead "
+                    "(nonce=%d, floor=%d, lead=%+d ms)",
+                    self._last_nonce, floor, self._last_nonce - int(time.time() * 1000),
+                )
 
     # ── Active-request tracking (no-ops — retained for backward compatibility) ──
 
@@ -186,6 +213,32 @@ class KrakenNonceManager:
 
     # ── Private helpers ────────────────────────────────────────────────────
 
+    def _log_clock_health(self, lead_ms: int) -> None:
+        """Log a clock-health diagnostic at startup to help operators detect NTP issues."""
+        import datetime as _dt
+        utc_now = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        if lead_ms < 0:
+            # Nonce is BEHIND wall-clock — possible after a large forward NTP correction
+            _logger.warning(
+                "KrakenNonceManager: startup nonce is %d ms BEHIND wall-clock (%s). "
+                "This can happen if the system clock jumped forward (NTP step). "
+                "The bot will auto-recover via next_nonce(), but verify NTP sync.",
+                abs(lead_ms), utc_now,
+            )
+        elif lead_ms > _CORRUPTION_WARN_MS:
+            _logger.warning(
+                "KrakenNonceManager: startup nonce lead is %d ms (%.1f min) — "
+                "system clock: %s.  Large lead is normal after error-recovery but "
+                "verify NTP sync if Kraken nonce errors persist.",
+                lead_ms, lead_ms / 60_000, utc_now,
+            )
+        else:
+            _logger.debug(
+                "KrakenNonceManager: clock health OK — system clock: %s, "
+                "nonce lead: %+d ms",
+                utc_now, lead_ms,
+            )
+
     def _load_last_nonce(self) -> int:
         """Compute startup nonce from persisted state and wall-clock."""
         now_ms = int(time.time() * 1000)
@@ -195,10 +248,38 @@ class KrakenNonceManager:
                 persisted = int(fh.read().strip())
         except (FileNotFoundError, ValueError):
             pass
-        # Start safely ahead of both persisted value and current time.
+
+        # Corruption guard: if persisted is unreasonably far in the future it
+        # probably means the state file was corrupted (e.g. written with bad
+        # data or from a system with a severely wrong clock).
+        lead_ms = persisted - now_ms
+        if lead_ms > _CORRUPTION_RESET_MS:
+            _logger.error(
+                "KrakenNonceManager: persisted nonce is %d ms (%.1f h) ahead of "
+                "wall-clock — likely corrupted, resetting to safe value.",
+                lead_ms, lead_ms / 3_600_000,
+            )
+            persisted = 0  # treat as fresh start; reset to now + jump
+        elif lead_ms > _CORRUPTION_WARN_MS:
+            _logger.warning(
+                "KrakenNonceManager: persisted nonce is %d ms (%.1f min) ahead of "
+                "wall-clock — system clock may have drifted backward or the nonce "
+                "accumulated large error-recovery jumps.  Recommend NTP sync.",
+                lead_ms, lead_ms / 60_000,
+            )
+
+        # Always advance at least _STARTUP_JUMP_MS beyond the persisted value so
+        # we skip past any nonces that Kraken already received in the previous
+        # session.  Also ensure we are at least _STARTUP_JUMP_MS ahead of the
+        # current wall-clock.
+        #
+        # NOTE: We intentionally do NOT clamp the result to a "maximum lead"
+        # here.  The old _STARTUP_CLAMP_MS=55 s clamp would silently DECREASE
+        # the nonce whenever error-recovery backoffs had pushed it beyond 45 s
+        # ahead, causing Kraken to reject the very next call after a restart.
+        # Kraken's nonce contract is purely monotonic — there is no documented
+        # upper-bound on how far ahead a nonce may be.
         start_nonce = max(persisted + _STARTUP_JUMP_MS, now_ms + _STARTUP_JUMP_MS)
-        # Clamp: never start so far ahead that Kraken's window rejects us.
-        start_nonce = min(start_nonce, now_ms + _STARTUP_CLAMP_MS)
         return start_nonce
 
     def _persist(self) -> None:
