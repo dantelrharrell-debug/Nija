@@ -428,6 +428,17 @@ _KRAKEN_PRIVATE_CALL_SPACING_MAX_S: float = 0.15   # 150 ms
 # Only ONE reset is applied (at this attempt) to avoid pushing the nonce too far ahead.
 _KRAKEN_CONNECT_NONCE_RESET_ATTEMPT: int = 2
 
+# ── Platform-first gate ───────────────────────────────────────────────────────
+# When the Kraken PLATFORM account connects successfully, it sets this Event so
+# that USER accounts waiting in connect() can proceed.  USER accounts poll this
+# flag for up to NIJA_USER_PLATFORM_WAIT (default 120 s) before connecting.
+#
+# Rule: Kraken is extremely sensitive to clock drift and nonce ordering.
+# The platform account MUST connect and stabilise its nonce FIRST.
+# User accounts connecting simultaneously risk nonce-window collisions.
+_PLATFORM_KRAKEN_READY: threading.Event = threading.Event()
+_USER_PLATFORM_WAIT_S: int = int(os.environ.get("NIJA_USER_PLATFORM_WAIT", "120"))
+
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
     'your_passphrase', 'YOUR_PASSPHRASE',
@@ -6160,6 +6171,31 @@ class KrakenBroker(BaseBroker):
             logger.debug(f"[KrakenBroker:{_label}] Connection already established — skipping reconnect routine")
             return True
 
+        # ── PLATFORM-FIRST GATE (USER accounts only) ─────────────────────────
+        # Kraken is extremely sensitive to clock drift and nonce ordering.
+        # The PLATFORM account must connect and stabilise its nonce before any
+        # USER account begins its own connection handshake.  Concurrent nonce
+        # windows from multiple API keys are the #1 source of "EAPI:Invalid nonce"
+        # errors on multi-account deployments.
+        if self.account_type == AccountType.USER:
+            if not _PLATFORM_KRAKEN_READY.is_set():
+                logger.info(
+                    "⏳ USER %s waiting for PLATFORM Kraken to connect first "
+                    "(up to %d s) …",
+                    self.user_id, _USER_PLATFORM_WAIT_S,
+                )
+                ready = _PLATFORM_KRAKEN_READY.wait(timeout=_USER_PLATFORM_WAIT_S)
+                if not ready:
+                    logger.error(
+                        "⛔ USER %s: PLATFORM Kraken did not connect within %d s. "
+                        "Refusing USER connection to protect nonce integrity. "
+                        "Fix platform credentials/clock, then restart the bot.",
+                        self.user_id, _USER_PLATFORM_WAIT_S,
+                    )
+                    self.connected = False
+                    return False
+                logger.info("✅ PLATFORM ready — proceeding with USER %s connection.", self.user_id)
+
         try:
             import krakenex
             from pykrakenapi import KrakenAPI
@@ -6702,6 +6738,14 @@ class KrakenBroker(BaseBroker):
                         # Signal readiness immediately so MultiAccountBrokerManager
                         # can detect the connected state without polling for 30 s.
                         self._platform_ready_flag = True
+
+                        # Signal the module-level Event so USER accounts waiting in
+                        # connect() can proceed now that the platform nonce is stable.
+                        if self.account_type == AccountType.PLATFORM:
+                            _PLATFORM_KRAKEN_READY.set()
+                            logger.info(
+                                "✅ PLATFORM Kraken connected — USER accounts may now connect."
+                            )
 
                         return True
                     else:

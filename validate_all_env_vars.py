@@ -139,6 +139,95 @@ def _check_pair(key_name: str, secret_name: str) -> bool:
 
 # ── Section checks ─────────────────────────────────────────────────────────────
 
+def check_ntp() -> bool:
+    """Check system clock against NTP. Returns True if within ±1 s."""
+    _section("NTP Clock Sync  (Kraken requires system clock within ±1 second)")
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "bot"))
+        from global_kraken_nonce import check_ntp_sync
+        r = check_ntp_sync()
+    except Exception:
+        r = {"ok": False, "offset_s": 0.0, "server": "pool.ntp.org",
+             "error": "could not import check_ntp_sync"}
+
+    if r["error"]:
+        _warn(f"NTP check skipped: {r['error']}")
+        _info("Verify manually: sudo ntpdate pool.ntp.org")
+        return True  # unknown — don't block
+
+    offset_ms = r["offset_s"] * 1000
+    abs_s = abs(r["offset_s"])
+    server = r["server"]
+
+    if not r["ok"]:
+        _fail(
+            f"CLOCK DRIFT: system is {r['offset_s']:+.3f} s ({offset_ms:+.0f} ms) "
+            f"vs {server}"
+        )
+        _fail("Kraken requires ±1 s accuracy — nonce errors WILL occur on ALL accounts.")
+        _info("Fix: sudo ntpdate pool.ntp.org")
+        _info("     OR enable chrony: sudo systemctl start chronyd")
+        return False
+    elif abs_s > 0.5:
+        _warn(
+            f"Clock drift: {r['offset_s']:+.3f} s ({offset_ms:+.0f} ms) vs {server} "
+            f"(within ±1 s but approaching limit)"
+        )
+        _info("Recommend: sudo ntpdate pool.ntp.org")
+        return True
+    else:
+        _ok(f"Clock OK: {r['offset_s']:+.3f} s vs {server} — within Kraken ±1 s tolerance")
+        return True
+
+
+def check_nonce_cache() -> None:
+    """Report nonce cache file status (informational only)."""
+    _section("Kraken Nonce Cache")
+    import glob as _glob
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    patterns = [
+        os.path.join(data_dir, "kraken_nonce.state"),
+        os.path.join(data_dir, "kraken_nonce*.json"),
+        os.path.join(data_dir, "kraken_nonce*.txt"),
+    ]
+    found = []
+    for p in patterns:
+        found.extend(_glob.glob(p))
+
+    if not found:
+        _ok("No nonce cache files found (clean state)")
+        return
+
+    now_ms = int(__import__("time").time() * 1000)
+    for path in sorted(set(found)):
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+            nonce = int(raw)
+            lead_ms = nonce - now_ms
+            if lead_ms > 86_400_000:
+                _fail(
+                    f"{os.path.basename(path)}: nonce={nonce}  "
+                    f"lead=+{lead_ms//3600000:.1f} h — LIKELY CORRUPTED"
+                )
+                _info("  Fix: python3 reset_kraken_nonce.py")
+            elif lead_ms > 600_000:
+                _warn(
+                    f"{os.path.basename(path)}: nonce={nonce}  "
+                    f"lead=+{lead_ms//60000:.1f} min (large — check NTP sync)"
+                )
+            elif lead_ms < -5000:
+                _warn(
+                    f"{os.path.basename(path)}: nonce={nonce}  "
+                    f"lead={lead_ms} ms (BEHIND clock — clock may have jumped forward)"
+                )
+                _info("  Fix: python3 reset_kraken_nonce.py")
+            else:
+                _ok(f"{os.path.basename(path)}: nonce={nonce}  lead=+{lead_ms} ms (healthy)")
+        except Exception as exc:
+            _warn(f"{os.path.basename(path)}: could not read ({exc})")
+
+
 def check_kraken_platform() -> bool:
     """Check NIJA platform (bot's own Kraken account)."""
     _section("Kraken PLATFORM account  (NIJA AI engine)")
@@ -299,6 +388,10 @@ def main() -> int:
     print(_c("1", "  NIJA — Environment Variable Validation"))
     print(_c("1", "=" * 60))
 
+    # Clock check first — bad clock breaks everything on Kraken
+    ntp_ok = check_ntp()
+    check_nonce_cache()
+
     # Required checks (failures block the bot)
     platform_ok = check_kraken_platform()
     tania_ok = check_kraken_user_tania()
@@ -314,6 +407,7 @@ def main() -> int:
     _section("Summary")
 
     required = [
+        ("NTP clock sync", ntp_ok),
         ("Kraken PLATFORM", platform_ok),
         ("Kraken USER — Tania Gilbert", tania_ok),
         ("Kraken USER — Daivon Frazier", daivon_ok),

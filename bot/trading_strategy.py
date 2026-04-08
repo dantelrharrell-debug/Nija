@@ -3953,6 +3953,13 @@ class TradingStrategy:
                     # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
 
+                    # PLATFORM-FIRST RULE: signal that platform failed so
+                    # connect_users_from_config() will block user accounts.
+                    try:
+                        self.multi_account_manager.mark_platform_failed(BrokerType.KRAKEN)
+                    except Exception:
+                        pass
+
             except Exception as e:
                 # CRITICAL FIX (Jan 17, 2026): Handle exceptions consistently with connection failures
                 # Even if broker initialization throws an exception, register it for retry if possible
@@ -3964,11 +3971,24 @@ class TradingStrategy:
 
                     # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
+
+                    # PLATFORM-FIRST RULE: signal that platform failed so
+                    # connect_users_from_config() will block user accounts.
+                    try:
+                        self.multi_account_manager.mark_platform_failed(BrokerType.KRAKEN)
+                    except Exception:
+                        pass
                 else:
                     # Broker object was never created - can't retry
                     logger.error(f"   ❌ Kraken PLATFORM initialization failed: {e}")
                     logger.error("   ❌ Kraken will not be available for trading")
                     self._log_broker_independence_message()
+
+                    # PLATFORM-FIRST RULE: even with no broker object, record the failure
+                    try:
+                        self.multi_account_manager.mark_platform_failed(BrokerType.KRAKEN)
+                    except Exception:
+                        pass
 
             # Add delay between broker connections
             time.sleep(2.0)  # Increased from 0.5s to 2.0s
