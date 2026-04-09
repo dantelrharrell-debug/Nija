@@ -1957,8 +1957,8 @@ PRE_SCAN_POSITION_BUDGET_SECONDS = 90  # Max seconds for the position-analysis l
 # When idle_cycles >= 3 the batch grows toward MARKET_BATCH_SIZE_MAX for better
 # coverage; when active trades >= 3 it pulls back to MARKET_BATCH_SIZE_MIN to
 # reduce API pressure and keep cycle times predictable.
-MARKET_BATCH_SIZE_MIN = 75   # Base batch size (raised 50→75 for better market coverage)
-MARKET_BATCH_SIZE_MAX = 100  # Max batch size in idle-boost mode (raised 50→100)
+MARKET_BATCH_SIZE_MIN = 100  # Base batch size (raised 75→100 for better market coverage)
+MARKET_BATCH_SIZE_MAX = 150  # Max batch size in idle-boost mode (raised 100→150)
 MARKET_BATCH_WARMUP_CYCLES = 1  # Minimal warmup: full speed after 1 cycle (lowered from 3→1)
 # Dynamic scaling thresholds
 MARKET_BATCH_IDLE_THRESHOLD = 3   # idle cycles before expanding batch toward MAX
@@ -1966,7 +1966,7 @@ MARKET_BATCH_ACTIVE_THRESHOLD = 3  # open trades before compressing batch back t
 # For micro accounts (balance < $100), scan a targeted batch to keep rotation fast
 # and market conditions fresh — smaller scans enable 8–10 min cycles.
 MICRO_ACCOUNT_SCAN_BOOST_THRESHOLD = 100.0  # USD: below this balance use boosted scan size
-MICRO_ACCOUNT_SCAN_SIZE = 75               # Markets to scan per cycle for micro accounts (raised 50→75)
+MICRO_ACCOUNT_SCAN_SIZE = 100               # Markets to scan per cycle for micro accounts (raised 75→100)
 MARKET_ROTATION_ENABLED = True  # Rotate through different market batches each cycle
 
 # ── FIRST TRADE BOOST ──────────────────────────────────────────────────────
@@ -2079,38 +2079,46 @@ ZOMBIE_PNL_THRESHOLD = 0.01  # Consider position "stuck" if abs(P&L) < this % (0
 # MICRO TIER ($10-$100): Aggressive profit-taking, build capital fast
 # TP UPGRADE (Apr 2026): Raised targets to [3.0%, 4.0%, 5.5%, 7.0%] to flip positive EV
 # after fees by widening R:R and reducing the number of marginal trades.
+# TP1 LOWER (Apr 2026): Added 2.5% minimum to capture micro-moves.
 PROFIT_TARGETS_MICRO = [
     (0.070, "Profit target +7.0% (Micro tier) - EXCELLENT"),
     (0.055, "Profit target +5.5% (Micro tier) - VERY GOOD"),
     (0.040, "Profit target +4.0% (Micro tier) - GOOD"),
     (0.030, "Profit target +3.0% (Micro tier) - MINIMUM (ensures net profit after broker fees)"),
+    (0.025, "Profit target +2.5% (Micro tier) - MICRO-MOVE capture"),
 ]
 
 # SMALL TIER ($100-$1000): Balanced approach
 # TP UPGRADE (Apr 2026): Raised targets to [3.0%, 4.0%, 5.5%, 7.0%].
+# TP1 LOWER (Apr 2026): Added 2.5% minimum to capture micro-moves.
 PROFIT_TARGETS_SMALL = [
     (0.070, "Profit target +7.0% (Small tier) - EXCELLENT"),
     (0.055, "Profit target +5.5% (Small tier) - VERY GOOD"),
     (0.040, "Profit target +4.0% (Small tier) - GOOD"),
     (0.030, "Profit target +3.0% (Small tier) - MINIMUM"),
+    (0.025, "Profit target +2.5% (Small tier) - MICRO-MOVE capture"),
 ]
 
 # MEDIUM TIER ($1000-$10000): Let winners run more
 # TP UPGRADE (Apr 2026): Raised targets to [3.0%, 4.0%, 5.5%, 7.0%].
+# TP1 LOWER (Apr 2026): Added 2.5% minimum to capture micro-moves.
 PROFIT_TARGETS_MEDIUM = [
     (0.070, "Profit target +7.0% (Medium tier) - MAJOR PROFIT"),
     (0.055, "Profit target +5.5% (Medium tier) - EXCELLENT"),
     (0.040, "Profit target +4.0% (Medium tier) - GOOD"),
     (0.030, "Profit target +3.0% (Medium tier) - ACCEPTABLE"),
+    (0.025, "Profit target +2.5% (Medium tier) - MICRO-MOVE capture"),
 ]
 
 # LARGE TIER ($10000+): Maximum profit potential
 # TP UPGRADE (Apr 2026): Raised targets to [3.0%, 4.0%, 5.5%, 7.0%].
+# TP1 LOWER (Apr 2026): Added 2.5% minimum to capture micro-moves.
 PROFIT_TARGETS_LARGE = [
     (0.070, "Profit target +7.0% (Large tier) - MAJOR PROFIT"),
     (0.055, "Profit target +5.5% (Large tier) - EXCELLENT"),
     (0.040, "Profit target +4.0% (Large tier) - GOOD"),
     (0.030, "Profit target +3.0% (Large tier) - ACCEPTABLE"),
+    (0.025, "Profit target +2.5% (Large tier) - MICRO-MOVE capture"),
 ]
 
 # Default fallback targets (medium tier)
@@ -2166,11 +2174,13 @@ DEFAULT_PROTECTION_MIN_PROFIT = 0.020
 # Kraken fees: ~0.6% round-trip (0.26% taker fee × 2 sides + ~0.1% spread safety margin)
 # TP UPGRADE (Apr 2026): Raised targets to [3.0%, 4.0%, 5.5%, 7.0%] with -1.2% stop.
 # Minimum 3.0% gross → net +2.4%, giving gross R:R = 3.0/1.2 = 2.5:1 — strong positive EV.
+# TP1 LOWER (Apr 2026): Added 2.5% to capture micro-moves. Net +1.9% after 0.6% fees.
 PROFIT_TARGETS_KRAKEN = [
     (0.070, "Profit target +7.0% (Net +6.4% after 0.6% fees) - MAJOR PROFIT"),    # Major profit - let winners run
     (0.055, "Profit target +5.5% (Net +4.9% after 0.6% fees) - EXCELLENT"),        # Excellent profit
     (0.040, "Profit target +4.0% (Net +3.4% after 0.6% fees) - GOOD"),             # Good profit
     (0.030, "Profit target +3.0% (Net +2.4% after 0.6% fees) - MINIMUM"),          # Minimum: positive EV
+    (0.025, "Profit target +2.5% (Net +1.9% after 0.6% fees) - MICRO-MOVE"),       # Micro-move capture
 ]
 
 # 🚨 COINBASE PROFIT FIX (Jan 2026) - ENSURE NET PROFITABILITY
@@ -2178,11 +2188,13 @@ PROFIT_TARGETS_KRAKEN = [
 # Coinbase fees are 1.4% round-trip (0.7% entry + 0.7% exit)
 # TP UPGRADE (Apr 2026): Raised targets to [3.0%, 4.0%, 5.5%, 7.0%] with -1.2% stop.
 # Minimum 3.0% gross → net +1.6%, giving gross R:R = 3.0/1.2 = 2.5:1 — meaningful positive EV.
+# TP1 LOWER (Apr 2026): Added 2.5% to capture micro-moves. Net +1.1% after 1.4% fees.
 PROFIT_TARGETS_COINBASE = [
     (0.070, "Profit target +7.0% (Net +5.6% after 1.4% fees) - MAJOR PROFIT"),    # Major profit - let winners run
     (0.055, "Profit target +5.5% (Net +4.1% after 1.4% fees) - EXCELLENT"),        # Excellent profit
     (0.040, "Profit target +4.0% (Net +2.6% after 1.4% fees) - GOOD"),             # Good profit
     (0.030, "Profit target +3.0% (Net +1.6% after 1.4% fees) - MINIMUM"),          # Minimum acceptable profit
+    (0.025, "Profit target +2.5% (Net +1.1% after 1.4% fees) - MICRO-MOVE"),       # Micro-move capture
 ]
 
 # Binance fees: ~0.2% round-trip (0.1% taker fee x 2 sides)
@@ -6799,9 +6811,9 @@ class TradingStrategy:
         Get next batch of markets to scan using rotation strategy.
 
         UPDATED (Apr 2026): Dynamic batch sizing based on idle cycles and active trades.
-        - Base batch: MARKET_BATCH_SIZE_MIN (75)
-        - Idle ≥ MARKET_BATCH_IDLE_THRESHOLD (3 cycles) → expand toward MARKET_BATCH_SIZE_MAX (100)
-        - Active trades ≥ MARKET_BATCH_ACTIVE_THRESHOLD (3) → compress back to MARKET_BATCH_SIZE_MIN (75)
+        - Base batch: MARKET_BATCH_SIZE_MIN (100)
+        - Idle ≥ MARKET_BATCH_IDLE_THRESHOLD (3 cycles) → expand toward MARKET_BATCH_SIZE_MAX (150)
+        - Active trades ≥ MARKET_BATCH_ACTIVE_THRESHOLD (3) → compress back to MARKET_BATCH_SIZE_MIN (100)
         - API health degraded (<50%) → always use MARKET_BATCH_SIZE_MIN regardless
 
         Args:
