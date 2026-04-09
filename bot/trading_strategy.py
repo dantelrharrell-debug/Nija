@@ -2253,12 +2253,12 @@ PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to 
 # Crypto typical noise is ±1-2%; a -1.2% stop caused excessive premature exits.
 # With profit targets of 3.0-7.0%, a -2.0% stop gives minimum 1.5:1 R:R (acceptable aggressive).
 STOP_LOSS_PRIMARY_KRAKEN = -0.020  # -2.0% for Kraken (widened from -1.2% for moderate/aggressive)
-STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.018  # -1.8% minimum
+STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.020  # -2.0% minimum (matches primary)
 STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.035  # -3.5% maximum (wider band for aggressive mode)
 
 # Coinbase: widened to -2.0% (from -1.2%) for moderate/aggressive mode
 STOP_LOSS_PRIMARY_COINBASE = -0.020  # -2.0% primary stop for Coinbase (widened from -1.2%)
-COINBASE_STOP_LOSS_MIN = -0.018  # -1.8% minimum
+COINBASE_STOP_LOSS_MIN = -0.020  # -2.0% minimum (matches primary)
 COINBASE_STOP_LOSS_MAX = -0.035  # -3.5% maximum
 
 # Remove the "exit on ANY loss" requirement - this was causing premature exits
@@ -2269,7 +2269,7 @@ COINBASE_PROFIT_LOCK_ENABLED = True  # Enable aggressive profit-taking on Coinba
 # TIER 2: EMERGENCY STOP (Logic failure prevention)
 # Scaled proportionally with widened primary stop for moderate/aggressive mode.
 STOP_LOSS_MICRO = -0.030  # -3.0% emergency backstop (was -2.0%, widened for moderate/aggressive)
-STOP_LOSS_WARNING = -0.020  # -2.0% warn level (matches new primary stop)
+STOP_LOSS_WARNING = -0.015  # -1.5% early-warning level (fires before primary -2.0% stop)
 STOP_LOSS_THRESHOLD = -0.030  # -3.0% primary stop threshold (was -2.0%)
 
 # TIER 3: CATASTROPHIC FAILSAFE
