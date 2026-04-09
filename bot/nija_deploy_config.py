@@ -188,43 +188,42 @@ SIGNAL_CONFIG = {
 # ═══════════════════════════════════════════════════════════════════
 
 RISK_CONFIG = {
-    # Position sizing — reduced slightly during initial live validation
-    "base_position_size_pct": 0.03,   # 3% of balance per trade (conservative start)
-    "max_position_size_pct": 0.10,    # Hard cap at 10%
+    # Position sizing — moderate/aggressive live settings
+    "base_position_size_pct": 0.08,   # 8% of balance per trade (moderate/aggressive)
+    "max_position_size_pct": 0.20,    # Hard cap at 20%
     "min_position_size_usd": 10.0,    # Exchange minimum
 
-    # Stop-loss
-    "stop_loss_pct": 0.012,           # 1.2% stop-loss per trade
-    "atr_stop_multiplier": 1.5,       # Alternative: 1.5× ATR below entry
+    # Stop-loss — widened for moderate/aggressive mode (room to breathe)
+    "stop_loss_pct": 0.020,           # 2.0% stop-loss per trade (was 1.2%)
+    "atr_stop_multiplier": 1.8,       # Alternative: 1.8× ATR below entry (was 1.5×)
 
-    # Drawdown circuit-breakers
-    "max_daily_loss_pct": 0.025,      # Halt trading at -2.5% daily
-    "max_drawdown_pct": 0.12,         # Halt trading at -12% drawdown from peak
-    "drawdown_reduce_at_pct": 0.08,   # Cut position size by 50% at -8% drawdown
+    # Drawdown circuit-breakers — loosened for moderate/aggressive mode
+    "max_daily_loss_pct": 0.05,       # Halt trading at -5% daily (was -2.5%)
+    "max_drawdown_pct": 0.20,         # Halt trading at -20% drawdown from peak (was -12%)
+    "drawdown_reduce_at_pct": 0.12,   # Cut position size by 50% at -12% drawdown (was -8%)
 
     # Consecutive-loss protection (smart burn-down)
-    "consecutive_loss_limit": 3,
-    "burn_down_position_pct": 0.02,   # Reduce to 2% for next 3 trades after 3 losses
+    "consecutive_loss_limit": 4,
+    "burn_down_position_pct": 0.04,   # Reduce to 4% for next 3 trades after losses (was 2%)
     "burn_down_trade_count": 3,
 
     # Daily profit lock
-    "profit_lock_trigger_pct": 0.03,  # Lock profits after +3% daily
-    "profit_lock_min_score": 5,       # Only A+ trades after profit lock
-    "profit_lock_max_size_pct": 0.025,
+    "profit_lock_trigger_pct": 0.05,  # Lock profits after +5% daily (was +3%)
+    "profit_lock_min_score": 4,       # Allow quality trades after profit lock (was 5)
+    "profit_lock_max_size_pct": 0.04,
 
     # Exposure limits
-    "max_total_exposure_pct": 0.60,   # Max 60% of balance in open positions
-    "max_positions": 8,               # Max concurrent open positions
+    "max_total_exposure_pct": 0.80,   # Max 80% of balance in open positions (was 60%)
+    "max_positions": 10,              # Max concurrent open positions (was 8)
     "max_positions_per_symbol": 1,
 
     # Trade frequency
-    "max_trades_per_day": 20,
-    "max_trades_per_hour": 8,
-    "min_seconds_between_trades": 30,
+    "max_trades_per_day": 30,
+    "max_trades_per_hour": 12,
+    "min_seconds_between_trades": 20,
 
     # Daily trade limits per market type
-    # (crypto is the active market; stocks/futures limits are reserved for future multi-asset support)
-    "max_daily_trades_crypto": 20,
+    "max_daily_trades_crypto": 30,
     "max_daily_trades_stocks": 10,   # Future: stocks support
     "max_daily_trades_futures": 7,   # Future: futures support
 }

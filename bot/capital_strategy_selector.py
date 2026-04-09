@@ -192,36 +192,36 @@ MICRO_STRATEGY = StrategyProfile(
     min_balance=0.0,
     max_balance=1_000.0,
     description=(
-        "Ultra-conservative capital preservation mode for accounts under $1,000. "
-        "Single high-confidence positions, tight stops, no leverage."
+        "Moderate-aggression compounding mode for accounts under $1,000. "
+        "Multiple concurrent positions, trailing stops, moderate compounding."
     ),
 
-    # Risk: 1 % of capital per trade, never more than 2 simultaneous positions
-    risk_per_trade_pct=0.01,
-    max_positions=2,
-    max_daily_trades=5,
-    daily_loss_limit_pct=0.03,  # Halt after 3 % daily loss
+    # Risk: 2.5 % of capital per trade, up to 4 simultaneous positions (moderate)
+    risk_per_trade_pct=0.025,
+    max_positions=4,
+    max_daily_trades=12,
+    daily_loss_limit_pct=0.05,  # Halt after 5 % daily loss
 
-    # Indicators — standard dual-RSI (9/14)
+    # Indicators — standard dual-RSI (9/14) with wider thresholds for more signals
     rsi_short_period=9,
     rsi_long_period=14,
-    rsi_oversold=30.0,
-    rsi_overbought=70.0,
+    rsi_oversold=32.0,
+    rsi_overbought=68.0,
     atr_period=14,
 
-    # Tight profit targets / stops
-    min_profit_target_pct=0.010,  # 1.0 %
-    max_profit_target_pct=0.030,  # 3.0 %
-    stop_loss_pct=0.008,          # 0.8 %
-    use_trailing_stop=False,
-    trailing_stop_pct=0.005,
+    # Wider profit targets / stops for moderate mode
+    min_profit_target_pct=0.015,  # 1.5 %
+    max_profit_target_pct=0.060,  # 6.0 %
+    stop_loss_pct=0.015,          # 1.5 % (widened from 0.8 % — room to breathe)
+    use_trailing_stop=True,
+    trailing_stop_pct=0.008,
 
     # Feature flags
-    allowed_regimes=["TRENDING", "RANGING"],
-    compounding_strategy="conservative",
+    allowed_regimes=["TRENDING", "RANGING", "VOLATILE", "BREAKOUT"],
+    compounding_strategy="moderate",
     enable_leverage=False,
     enable_copy_trading=False,
-    require_high_confidence=True,
+    require_high_confidence=False,
 )
 
 #: NORMAL strategy — accounts $1,000–$9,999
@@ -231,33 +231,33 @@ NORMAL_STRATEGY = StrategyProfile(
     min_balance=1_000.0,
     max_balance=10_000.0,
     description=(
-        "Balanced growth mode for accounts between $1,000 and $10,000. "
-        "Moderate risk, trailing stops, moderate compounding."
+        "Aggressive growth mode for accounts between $1,000 and $10,000. "
+        "Higher risk per trade, more positions, trailing stops, aggressive compounding."
     ),
 
-    # Risk: 2 % of capital per trade, up to 5 simultaneous positions
-    risk_per_trade_pct=0.02,
-    max_positions=5,
-    max_daily_trades=15,
-    daily_loss_limit_pct=0.05,  # Halt after 5 % daily loss
+    # Risk: 3.5 % of capital per trade, up to 8 simultaneous positions (aggressive)
+    risk_per_trade_pct=0.035,
+    max_positions=8,
+    max_daily_trades=25,
+    daily_loss_limit_pct=0.07,  # Halt after 7 % daily loss
 
-    # Indicators — standard dual-RSI (9/14)
+    # Indicators — standard dual-RSI (9/14) with wider thresholds for more signals
     rsi_short_period=9,
     rsi_long_period=14,
-    rsi_oversold=32.0,
-    rsi_overbought=68.0,
+    rsi_oversold=33.0,
+    rsi_overbought=67.0,
     atr_period=14,
 
     # Wider targets with trailing stop
-    min_profit_target_pct=0.015,  # 1.5 %
-    max_profit_target_pct=0.060,  # 6.0 %
-    stop_loss_pct=0.012,          # 1.2 %
+    min_profit_target_pct=0.018,  # 1.8 %
+    max_profit_target_pct=0.090,  # 9.0 %
+    stop_loss_pct=0.018,          # 1.8 % (widened from 1.2 % — aggressive mode)
     use_trailing_stop=True,
-    trailing_stop_pct=0.008,
+    trailing_stop_pct=0.010,
 
     # Feature flags
-    allowed_regimes=["TRENDING", "RANGING", "VOLATILE", "BREAKOUT"],
-    compounding_strategy="moderate",
+    allowed_regimes=["TRENDING", "RANGING", "VOLATILE", "BREAKOUT", "REVERSAL"],
+    compounding_strategy="aggressive",
     enable_leverage=False,
     enable_copy_trading=False,
     require_high_confidence=False,
