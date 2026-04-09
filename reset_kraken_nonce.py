@@ -15,10 +15,16 @@ What it does:
   7. Optionally runs a live Kraken balance call to confirm recovery.
 
 Usage:
-    python3 reset_kraken_nonce.py [--dry-run] [--no-live-test]
+    python3 reset_kraken_nonce.py [--dry-run] [--no-live-test] [--deep]
 
     --dry-run       Show what would change without writing anything.
     --no-live-test  Skip the live Kraken API test after reset.
+    --deep          Deep reset: activate NIJA_DEEP_NONCE_RESET=1 which sets a
+                    60-minute NTP-corrected startup floor and extends the nonce
+                    probe to 12 × 10-minute steps (120 min total coverage).
+                    Use this when the standard reset is insufficient — e.g.
+                    after multiple consecutive nuclear resets, after a long
+                    outage, or when the host clock drifted backward.
 
 Exit codes:
     0  Reset succeeded (or dry-run completed).
@@ -41,6 +47,13 @@ except ImportError:
 
 DRY_RUN     = "--dry-run"     in sys.argv
 SKIP_TEST   = "--no-live-test" in sys.argv
+DEEP_RESET  = "--deep"        in sys.argv
+
+# Activate deep-reset mode early — before the nonce module is imported so that
+# KrakenNonceManager._init() picks it up when the singleton is constructed.
+if DEEP_RESET:
+    os.environ["NIJA_DEEP_NONCE_RESET"] = "1"
+    os.environ["NIJA_FORCE_NONCE_RESYNC"] = "1"
 
 # ── Reset nonce offset ────────────────────────────────────────────────────────
 # 30 minutes ahead of wall-clock (nuclear offset).  This must beat ANY
@@ -263,27 +276,32 @@ def reset_nonce() -> tuple:
     Returns (old_nonce, new_nonce) or (None, None) on import failure.
     """
     _head("4 — Reset Nonce Manager")
+    # Deep reset uses a 60-min floor (DEEP_STARTUP_FLOOR_MS); standard reset uses 30 min.
+    offset_ms = 3_600_000 if DEEP_RESET else _RESET_OFFSET_MS
     try:
         import importlib
         import global_kraken_nonce as gnm
         # Force a fresh singleton (delete the instance so _init() re-runs)
         gnm.KrakenNonceManager._instance = None
+        gnm.AdaptiveNonceOffsetEngine._instance = None
         importlib.reload(gnm)
 
         mgr = gnm.KrakenNonceManager()
         old_nonce = mgr.get_last_nonce()
 
         if not DRY_RUN:
-            # Jump 30 min ahead of wall-clock (nuclear) to beat any previously stored nonce.
-            mgr.reset_to_safe_value(offset_ms=_RESET_OFFSET_MS)
+            # Jump to at least now + offset_ms ahead of wall-clock.
+            # Deep mode: 60 min; standard mode: 30 min nuclear offset.
+            mgr.reset_to_safe_value(offset_ms=offset_ms)
 
         new_nonce = mgr.get_last_nonce()
         lead_ms = new_nonce - int(time.time() * 1000)
 
         if DRY_RUN:
-            _info(f"[DRY RUN] Would reset nonce from {old_nonce} to ~{int(time.time()*1000) + _RESET_OFFSET_MS}")
+            _info(f"[DRY RUN] Would reset nonce from {old_nonce} to ~{int(time.time()*1000) + offset_ms}")
         else:
-            _ok(f"Nonce reset: {old_nonce} → {new_nonce}  (lead = +{lead_ms:,} ms)")
+            mode_tag = " [DEEP — 60 min floor]" if DEEP_RESET else " [30 min floor]"
+            _ok(f"Nonce reset{mode_tag}: {old_nonce} → {new_nonce}  (lead = +{lead_ms:,} ms)")
             assert new_nonce > old_nonce or lead_ms > 0, "New nonce is not ahead of old — check reset logic"
         return old_nonce, new_nonce
     except Exception as exc:
@@ -345,6 +363,8 @@ def main() -> int:
     print(_c("1", "  NIJA — Kraken Nonce Reset Utility"))
     if DRY_RUN:
         print(_c("33", "  [DRY RUN — no files will be written]"))
+    if DEEP_RESET:
+        print(_c("33", "  [DEEP RESET — 60-min NTP floor + 120-min probe coverage]"))
     print(_c("1", "=" * 60))
 
     bot_ok   = check_no_bot_running()
@@ -398,7 +418,12 @@ def main() -> int:
     if ok:
         print(_c("32", _c("1", "✅  Nonce reset complete — restart the bot now.")))
         print()
-        print("Next step:  ./start.sh")
+        if DEEP_RESET:
+            print("Deep reset complete. Start with NIJA_DEEP_NONCE_RESET=1 on first boot:")
+            print("  NIJA_DEEP_NONCE_RESET=1 ./start.sh")
+        else:
+            print("Next step:  ./start.sh")
+            print("If nonce errors persist, run: python3 reset_kraken_nonce.py --deep")
     else:
         print(_c("31", _c("1", "❌  Reset completed with warnings — fix the issues above first.")))
         print()
