@@ -23,17 +23,17 @@ automatically soften every filter layer by 10–20 %:
 
 Configuration via environment variables (all optional):
 
-    MIN_TRADES_PER_HOUR=0.5        # default: 0.5 (~12/day pace)
-    MIN_TRADES_PER_DAY=10.0       # default: 10.0 (lower bound of 10-15 target)
-    MAX_TRADES_PER_DAY=15.0       # default: 15.0 (upper bound — tighten above this)
-    FREQ_LOOSEN_STEP=0.03         # per-cycle confidence nudge (subtracted)
+    MIN_TRADES_PER_HOUR=2.0        # default: 2.0 (~48/day pace)
+    MIN_TRADES_PER_DAY=20.0       # default: 20.0 (lower bound of 20-50 target)
+    MAX_TRADES_PER_DAY=50.0       # default: 50.0 (upper bound — tighten above this)
+    FREQ_LOOSEN_STEP=0.06         # per-cycle confidence nudge (subtracted)
     FREQ_TIGHTEN_STEP=0.02        # per-cycle confidence nudge (added)
-    FREQ_MAX_DELTA=0.15           # max |confidence_delta| allowed
-    DROUGHT_WINDOW_HOURS=2.0      # hours without a trade → drought mode
-    DROUGHT_ADX_REDUCTION=3.0     # ADX points removed in drought
-    DROUGHT_VOLUME_MULTIPLIER=0.5 # volume threshold multiplied in drought
-    DROUGHT_SCORE_REDUCTION=0.5   # entry-score points removed in drought
-    DROUGHT_GATE_PCT=0.10         # AI-gate score threshold reduced by this %
+    FREQ_MAX_DELTA=0.25           # max |confidence_delta| allowed
+    DROUGHT_WINDOW_HOURS=0.5      # hours without a trade → drought mode (30 min)
+    DROUGHT_ADX_REDUCTION=5.0     # ADX points removed in drought
+    DROUGHT_VOLUME_MULTIPLIER=0.4 # volume threshold multiplied in drought
+    DROUGHT_SCORE_REDUCTION=1.0   # entry-score points removed in drought
+    DROUGHT_GATE_PCT=0.25         # AI-gate score threshold reduced by this %
 
 The controller is intentionally lightweight: it does NOT gate entries
 directly.  Instead callers read ``get_confidence_delta()`` and
@@ -56,19 +56,19 @@ logger = logging.getLogger("nija.trade_frequency_controller")
 # Constants (can be overridden by env vars)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MIN_TRADES_PER_HOUR: float = 0.5
-_DEFAULT_MIN_TRADES_PER_DAY: float = 10.0   # Lower bound of the 10-15 trades/day target band
-_DEFAULT_MAX_TRADES_PER_DAY: float = 15.0   # Upper bound — tighten confidence gate above this level
-_DEFAULT_LOOSEN_STEP: float = 0.03
+_DEFAULT_MIN_TRADES_PER_HOUR: float = 2.0
+_DEFAULT_MIN_TRADES_PER_DAY: float = 20.0   # Lower bound of the 20-50 trades/day target band
+_DEFAULT_MAX_TRADES_PER_DAY: float = 50.0   # Upper bound — tighten confidence gate above this level
+_DEFAULT_LOOSEN_STEP: float = 0.06
 _DEFAULT_TIGHTEN_STEP: float = 0.02
-_DEFAULT_MAX_DELTA: float = 0.15
+_DEFAULT_MAX_DELTA: float = 0.25
 
 # Drought safeguard defaults
-_DEFAULT_DROUGHT_WINDOW_SECS: float = 7200.0   # 2 hours
-_DEFAULT_DROUGHT_ADX_REDUCTION: float = 3.0    # subtract 3 ADX points
-_DEFAULT_DROUGHT_VOL_MULTIPLIER: float = 0.5   # halve volume threshold
-_DEFAULT_DROUGHT_SCORE_REDUCTION: float = 0.5  # shave 0.5 from entry score
-_DEFAULT_DROUGHT_GATE_PCT: float = 0.10        # lower AI-gate threshold by 10 %
+_DEFAULT_DROUGHT_WINDOW_SECS: float = 1800.0   # 30 minutes (was 2 hours)
+_DEFAULT_DROUGHT_ADX_REDUCTION: float = 5.0    # subtract 5 ADX points (was 3)
+_DEFAULT_DROUGHT_VOL_MULTIPLIER: float = 0.4   # cut volume threshold to 40% (was 50%)
+_DEFAULT_DROUGHT_SCORE_REDUCTION: float = 1.0  # shave 1.0 from entry score (was 0.5)
+_DEFAULT_DROUGHT_GATE_PCT: float = 0.25        # lower AI-gate threshold by 25% (was 10%)
 
 # Rolling window sizes
 _HOUR_WINDOW_SECS: float = 3600.0
@@ -160,7 +160,7 @@ class TradeFrequencyController:
         self._max_delta = _env("FREQ_MAX_DELTA", _DEFAULT_MAX_DELTA, max_delta)
 
         # Drought safeguard parameters
-        self._drought_window = _env("DROUGHT_WINDOW_HOURS", 2.0, None) * 3600.0
+        self._drought_window = _env("DROUGHT_WINDOW_HOURS", 0.5, None) * 3600.0
         self._drought_adx_reduction = _env(
             "DROUGHT_ADX_REDUCTION", _DEFAULT_DROUGHT_ADX_REDUCTION, None
         )

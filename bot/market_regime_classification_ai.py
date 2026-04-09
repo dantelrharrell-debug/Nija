@@ -169,7 +169,7 @@ class MarketRegimeClassificationAI:
         
         # Classification parameters
         self.lookback_period = self.config.get('lookback_period', 50)
-        self.min_confidence = self.config.get('min_confidence', 0.6)
+        self.min_confidence = self.config.get('min_confidence', 0.35)
         self.regime_persistence = self.config.get('regime_persistence', 5)  # bars
         
         # ML classifier (if available)

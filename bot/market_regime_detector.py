@@ -513,7 +513,7 @@ class MarketRegimeDetectionEngine:
     def __init__(self, config: Optional[Dict] = None):
         cfg = config or {}
         self.persistence_bars: int = cfg.get("persistence_bars", 5)
-        self.min_confidence: float = cfg.get("min_confidence", 0.55)
+        self.min_confidence: float = cfg.get("min_confidence", 0.30)
         self.switch_margin: float = cfg.get("switch_margin", 0.10)
         self.history_size: int = cfg.get("history_size", 200)
 

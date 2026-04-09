@@ -101,11 +101,11 @@ DEFAULT_MAX_CONSECUTIVE_LOSSES: int = 4      # cool-down after N straight losses
 DEFAULT_MAX_DRAWDOWN_PCT: float = 0.10       # 10 % from session peak
 
 # Layer 2 – Signal Quality
-# LOOSENED (Apr 2026): Lowered 70 → 55 → 46 → 40 → 34 → 27 → 18 (weak-signal mode).
-# 18 allows B/C grade momentum setups that would previously be blocked in dead markets.
+# LOOSENED (Apr 2026): Lowered 70 → 55 → 46 → 40 → 34 → 27 → 18 → 12 (confirmation-trade mode).
+# 12 allows weak B/C grade momentum setups to execute and build trade history.
 # Override at runtime with WMX_SIGNAL_THRESHOLD or NIJA_WMX_SIGNAL_THRESHOLD env variable.
 DEFAULT_SIGNAL_THRESHOLD: float = float(
-    os.getenv("NIJA_WMX_SIGNAL_THRESHOLD", os.getenv("WMX_SIGNAL_THRESHOLD", "18"))
+    os.getenv("NIJA_WMX_SIGNAL_THRESHOLD", os.getenv("WMX_SIGNAL_THRESHOLD", "12"))
 )
 
 # Layer 3 – Profit Consistency

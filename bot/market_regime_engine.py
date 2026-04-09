@@ -116,8 +116,8 @@ REGIME_BEHAVIOR: dict[Regime, RegimeBehavior] = {
         label="🟢 Bull",
     ),
     Regime.CHOP: RegimeBehavior(
-        position_size_multiplier=0.60,
-        trade_frequency_multiplier=0.50,
+        position_size_multiplier=0.80,
+        trade_frequency_multiplier=0.85,
         stop_loss_multiplier=1.10,
         label="🟡 Chop",
     ),

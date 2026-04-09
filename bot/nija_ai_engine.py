@@ -125,9 +125,9 @@ _W_OPTIMIZER = 0.24   # EntryOptimizer RSI-div / BB-zone bonus
 _W_GATE      = 0.12   # 5-Gate penalty deduction (softened: 0.17→0.12)
 
 # Hard absolute floor — never execute below this regardless of ranking.
-# Lowered from 25.0 → 10.0 → 6.0 (flow-mode, Apr 2026) to unlock Weak Signal entry.
+# Lowered from 25.0 → 10.0 → 6.0 → 4.0 (confirmation-trade mode, Apr 2026) to maximise entries.
 # Override at runtime with NIJA_MIN_SCORE_ABSOLUTE.
-MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "6.0"))
+MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "4.0"))
 
 # Default number of top signals to select per cycle
 TOP_N_DEFAULT = 3
