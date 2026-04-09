@@ -1337,11 +1337,11 @@ except ImportError:
     except ImportError:
         MICRO_CAP_COMPOUNDING_AVAILABLE = False
         MICRO_CAP_TRADE_COOLDOWN = 60   # 60s cooldown — TUNE 5 (was 300s/5 min)
-        MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 4  # TUNE 6: 3→4 positions
-        MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 60.0   # TUNE 6: 95%→60% per position
+        MICRO_CAP_COMPOUNDING_MAX_POSITIONS = 6  # moderate/aggressive: 4→6 positions
+        MICRO_CAP_COMPOUNDING_POSITION_SIZE_PCT = 75.0   # moderate/aggressive: 60%→75% per position
         MICRO_CAP_COMPOUNDING_PROFIT_TARGET_PCT = 2.5
         MICRO_CAP_COMPOUNDING_STOP_LOSS_PCT = 1.5
-        MAX_CONCURRENT_TRADES = 4  # TUNE 6: 3→4
+        MAX_CONCURRENT_TRADES = 6  # moderate/aggressive: 4→6
         MICRO_CAP_RELAX_SIDEWAYS = True
         MICRO_CAP_DYNAMIC_STREAK_ENABLED = True
         MICRO_CAP_STREAK_BONUS_MULTIPLIER = 0.2
@@ -2389,7 +2389,7 @@ except ValueError:
 # ⚠️  Positions under $10 face significant fee pressure (~1.4% round-trip on Coinbase).
 # Raise this value (e.g. to 10.0) on well-funded accounts for better fee efficiency.
 BASE_MIN_POSITION_SIZE_USD = 1.0  # Floor minimum ($1 - allows tiny positions when required)
-DYNAMIC_POSITION_SIZE_PCT = 0.25  # 25% of balance per position (balanced aggression: 0.18→0.25)
+DYNAMIC_POSITION_SIZE_PCT = 0.35  # 35% of balance per position (moderate/aggressive: 0.25→0.35)
 POSITION_SIZE_WARNING_THRESHOLD_USD = 10.0  # Warn when position is under this amount (near recommended minimum)
 
 # OPTION B: Brokerage-specific minimum trade sizes
@@ -2622,7 +2622,7 @@ ACCELERATOR_MAX_BALANCE        = 1000.0   # Upper bound of $100→$1K accelerato
 # DYNAMIC_POSITION_SIZE_PCT (used elsewhere) is a fraction (e.g. 0.18 = 18%).
 # get_accelerator_position_size_pct() always returns a percentage for consistency.
 ACCELERATOR_POSITION_PCT       = 35.0     # Position-size % in accelerator mode (vs 18% normal)
-ACCELERATOR_POSITION_PCT       = 50.0     # Position-size % in accelerator mode (balanced aggression: 25→50%)
+ACCELERATOR_POSITION_PCT       = 65.0     # Position-size % in accelerator mode (moderate/aggressive: 50→65%)
 
 
 def get_accelerator_position_size_pct(balance: float) -> float:
