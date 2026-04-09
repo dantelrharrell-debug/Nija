@@ -305,7 +305,8 @@ class NijaCoreLoop:
 
         Parameters
         ----------
-        broker              : Broker client instance
+        broker              : Broker client instance (falls back to
+                              ``apex.broker_client`` when None)
         balance             : Current account equity (USD)
         symbols             : Ordered list of symbols to scan
         open_positions_count: Number of currently open positions
@@ -315,6 +316,25 @@ class NijaCoreLoop:
         -------
         CoreLoopResult with entries taken, next recommended interval, etc.
         """
+        # ── Broker resolution: fall back to apex.broker_client when the
+        # caller did not pass an explicit broker (or passed None).  This
+        # covers the common case where run_scan_phase is called from
+        # run_trading_loop → strategy.run_cycle without an explicit broker arg.
+        if broker is None:
+            broker = getattr(self.apex, "broker_client", None)
+
+        # Guard: if still no broker or broker is disconnected, bail early so
+        # individual per-symbol fetches don't silently return None for every
+        # symbol and produce a zero-signal cycle.
+        if broker is None or not getattr(broker, "connected", True):
+            logger.warning(
+                "🔴 Core loop: no broker connected — skipping scan phase "
+                "(broker=%r connected=%r)",
+                broker,
+                getattr(broker, "connected", None) if broker is not None else None,
+            )
+            return CoreLoopResult()
+
         result = CoreLoopResult()
         cycle_start = time.time()
 
