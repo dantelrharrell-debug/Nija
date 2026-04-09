@@ -66,33 +66,37 @@ MAX_ENTRIES_PER_CYCLE = 3
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
-# Lowered 25.0 → 20.0 → 14.0 → 11.0 → 8.0 to allow more entries during dry spells.
+# Lowered 25.0 → 20.0 → 14.0 → 11.0 → 8.0 → 5.0 (micro-account mode, Apr 2026).
 # Override at runtime with NIJA_CORE_MIN_SCORE env var.
-MIN_SCORE_HARD_FLOOR = float(os.environ.get("NIJA_CORE_MIN_SCORE", "8.0"))
+MIN_SCORE_HARD_FLOOR = float(os.environ.get("NIJA_CORE_MIN_SCORE", "5.0"))
+
+# ── DEAD ZONE detection ──────────────────────────────────────────────────────
+# When zero_signal_streak reaches DEAD_ZONE_STREAK_THRESHOLD the bot is
+# officially in a "dead zone" — normal AI scoring is producing nothing usable.
+# In dead-zone mode TWO things happen simultaneously:
+#   1. Momentum-Only Entry Mode activates (relaxed RSI 52/48 + vol check).
+#   2. Volume fallback is enabled regardless of profit-mode level.
+# This guarantees at least one candidate per cycle during range-bound markets.
+DEAD_ZONE_STREAK_THRESHOLD: int = int(os.environ.get("NIJA_DEAD_ZONE_STREAK", "2"))
 
 # After this many consecutive zero-signal cycles, progressive score relaxation
-# kicks in: each 5-cycle step reduces the effective floor by a small amount
-# (max 20% total).  Lowered 8 → 5 so relaxation triggers sooner during quiet patches.
-# Purpose: force trades earlier in a drought to keep compounding continuous.
-FORCED_ENTRY_STREAK_THRESHOLD: int = 5
+# kicks in: each 3-cycle step (was 5) reduces the effective floor.
+# Lowered 8 → 5 → 2 so relaxation triggers within 2 missed cycles.
+FORCED_ENTRY_STREAK_THRESHOLD: int = int(os.environ.get("NIJA_FORCED_ENTRY_STREAK", "2"))
 
-# Number of relaxation steps (each step = 5 cycles past threshold).
+# Number of relaxation steps (each step = 3 cycles past threshold).
 MAX_RELAXATION_STEPS: int = 3
 
-# Fractional threshold reduction per step — deliberately shallow:
-#   step 1  (streak  8–12): factor 0.10 → floor × 0.90  (10% easier)
-#   step 2  (streak 13–17): factor 0.15 → floor × 0.85  (15% easier)
-#   step 3  (streak   ≥18): factor 0.20 → floor × 0.80  (20% — hard cap)
-# Cap is 20% (was 60%) so even in a prolonged drought the gate still requires
-# ~80% of the normal threshold — no entering without a real edge.
-_RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.10, 0.15, 0.20)
+# Fractional threshold reduction per step:
+#   step 1 (streak  2–4): factor 0.15 → floor × 0.85
+#   step 2 (streak  5–7): factor 0.25 → floor × 0.75
+#   step 3 (streak   ≥8): factor 0.40 → floor × 0.60  (hard cap)
+_RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.15, 0.25, 0.40)
 
 # After this many consecutive zero-signal cycles, the hard bypass activates:
 # all quality floors are ignored and the top-ranked available candidate is
-# accepted unconditionally.  This guarantees no dead zones during prolonged
-# market droughts while compounding stays continuous.
-# Lowered 40 → 10 → 8 → 5 to ensure trades happen even with imperfect cycles.
-HARD_BYPASS_STREAK_THRESHOLD: int = 5
+# accepted unconditionally.  Lowered 40 → 10 → 8 → 5 → 3.
+HARD_BYPASS_STREAK_THRESHOLD: int = int(os.environ.get("NIJA_HARD_BYPASS_STREAK", "3"))
 
 # One-shot manual forced-entry flag.
 # Set to True externally to force the top-scored candidate in the very next
@@ -123,24 +127,21 @@ def _get_relaxation_factor(streak: int) -> float:
 def _get_relaxation_step(streak: int) -> int:
     """Return the (1-based) relaxation step index for the given streak.
 
-    step 1 → streak 5–9, step 2 → streak 10–14, step 3 → streak ≥ 15 (cap).
+    step 1 → streak 2–4, step 2 → streak 5–7, step 3 → streak ≥ 8 (cap).
     Returns 0 when below FORCED_ENTRY_STREAK_THRESHOLD.
     """
     if streak < FORCED_ENTRY_STREAK_THRESHOLD:
         return 0
     cycles_past = streak - FORCED_ENTRY_STREAK_THRESHOLD
-    return min(MAX_RELAXATION_STEPS, cycles_past // 5 + 1)
+    return min(MAX_RELAXATION_STEPS, cycles_past // 3 + 1)
 
 
 def _get_relaxation_factor_with_threshold(streak: int, threshold: int) -> float:
-    """Variant of _get_relaxation_factor that accepts a custom streak threshold.
-
-    Used by ``_phase3_scan_and_enter`` to respect profit-mode-overridden thresholds.
-    """
+    """Variant of _get_relaxation_factor that accepts a custom streak threshold."""
     if streak < threshold:
         return 0.0
     cycles_past = streak - threshold
-    step = min(MAX_RELAXATION_STEPS, cycles_past // 5 + 1)
+    step = min(MAX_RELAXATION_STEPS, cycles_past // 3 + 1)
     return _RELAXATION_SCHEDULE[step]
 
 
@@ -149,7 +150,7 @@ def _get_relaxation_step_with_threshold(streak: int, threshold: int) -> int:
     if streak < threshold:
         return 0
     cycles_past = streak - threshold
-    return min(MAX_RELAXATION_STEPS, cycles_past // 5 + 1)
+    return min(MAX_RELAXATION_STEPS, cycles_past // 3 + 1)
 
 # Attempt to import TOP_N from sniper_filter at module load time.
 # Fallback to 2 when the module is unavailable.
@@ -188,6 +189,28 @@ except ImportError:
     try:
         from bot.profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
         _PMC_AVAILABLE = True
+    except ImportError:
+        pass
+
+# ---------------------------------------------------------------------------
+# Momentum Entry Filter — relaxed dead-zone checkers
+# ---------------------------------------------------------------------------
+_MOMENTUM_FILTER_AVAILABLE = False
+_check_mom_long_relaxed = None   # type: ignore
+_check_mom_short_relaxed = None  # type: ignore
+try:
+    from momentum_entry_filter import (  # type: ignore
+        check_momentum_long_relaxed as _check_mom_long_relaxed,
+        check_momentum_short_relaxed as _check_mom_short_relaxed,
+    )
+    _MOMENTUM_FILTER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.momentum_entry_filter import (  # type: ignore
+            check_momentum_long_relaxed as _check_mom_long_relaxed,
+            check_momentum_short_relaxed as _check_mom_short_relaxed,
+        )
+        _MOMENTUM_FILTER_AVAILABLE = True
     except ImportError:
         pass
 
@@ -520,13 +543,26 @@ class NijaCoreLoop:
             except Exception as _exc:
                 logger.debug("Phase3: profit mode params read failed — using module defaults: %s", _exc)
 
+        # Dead-zone flag: volume fallback and Momentum-Only Entry Mode are
+        # always active once zero_signal_streak reaches DEAD_ZONE_STREAK_THRESHOLD,
+        # regardless of profit-mode level.
+        _dead_zone = zero_signal_streak >= DEAD_ZONE_STREAK_THRESHOLD
+        if _dead_zone:
+            _volume_fallback_enabled = True
+            logger.warning(
+                "🌑 DEAD ZONE detected (streak=%d ≥ %d) — "
+                "enabling momentum-only entry mode + volume fallback",
+                zero_signal_streak, DEAD_ZONE_STREAK_THRESHOLD,
+            )
+
         ai = self._get_ai_engine()
 
-        candidates = []   # List[AIEngineSignal | _AISignal]
+        candidates = []        # List[AIEngineSignal | _AISignal]  — AI-scored
+        momentum_candidates = []  # collected from relaxed momentum scan
         scored = 0
         blocked = 0
 
-        # Level 3 top-volume fallback: track the best symbol by recent average volume.
+        # Always-on top-volume tracker (feeds volume fallback for any streak)
         _best_volume_symbol: Optional[str] = None
         _best_volume_side: str = "long"
         _best_volume_entry_type: str = "swing"
@@ -554,8 +590,8 @@ class NijaCoreLoop:
                         _sdd.record_skip(symbol, "data_insufficient")
                     continue
 
-                # Track top-volume symbol for Level 3 fallback (before filter checks)
-                if _volume_fallback_enabled and "volume" in df.columns:
+                # Always track top-volume symbol (feeds volume fallback)
+                if "volume" in df.columns:
                     try:
                         avg_vol = float(df["volume"].tail(20).mean())
                         if avg_vol > _best_volume:
@@ -595,10 +631,11 @@ class NijaCoreLoop:
                 )
 
                 # Update top-volume side/entry_type to match the best symbol's context
-                if _volume_fallback_enabled and symbol == _best_volume_symbol:
+                if symbol == _best_volume_symbol:
                     _best_volume_side = side
                     _best_volume_entry_type = entry_type
 
+                # ── Standard AI scoring ───────────────────────────────────
                 if ai is not None:
                     logger.debug("🔎 Evaluating signal — %s (%s)", symbol, side)
                     sig = ai.evaluate_symbol(
@@ -628,6 +665,38 @@ class NijaCoreLoop:
                         )
                         candidates.append(sig)
 
+                # ── Momentum-Only Entry Mode (dead zone) ──────────────────
+                # When in a dead zone run the lightweight relaxed momentum
+                # checker on every symbol.  Passing symbols are collected as
+                # B/C grade candidates (score pinned to TIER_FLOOR) regardless
+                # of whether they passed the full AI scoring above.
+                if _dead_zone and _MOMENTUM_FILTER_AVAILABLE and _AISignal is not None:
+                    try:
+                        if side == "long" and _check_mom_long_relaxed is not None:
+                            mom_ok, mom_score, mom_reason = _check_mom_long_relaxed(df, indicators)
+                        elif side == "short" and _check_mom_short_relaxed is not None:
+                            mom_ok, mom_score, mom_reason = _check_mom_short_relaxed(df, indicators)
+                        else:
+                            mom_ok = False
+                        if mom_ok:
+                            momentum_candidates.append(_AISignal(
+                                symbol=symbol,
+                                side=side,
+                                composite_score=_effective_hard_floor,
+                                position_multiplier=0.75,   # B/C grade — reduced size
+                                entry_type="momentum",
+                                threshold_used=_effective_hard_floor,
+                                reason=f"[MOMENTUM_ONLY] {mom_reason}",
+                                metadata={
+                                    "dead_zone": True,
+                                    "momentum_score": mom_score,
+                                    "bypass_low_quality": True,
+                                    "weak_signal_entry": True,
+                                },
+                            ))
+                    except Exception as _me:
+                        logger.debug("Momentum-Only check failed for %s: %s", symbol, _me)
+
                 scored += 1
 
             except Exception as sym_err:
@@ -635,29 +704,49 @@ class NijaCoreLoop:
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "exception")
 
-        # ── Level 3 top-volume fallback: inject candidate if none found ───
-        # When profit mode Level 3 is active and no symbol scored above the
-        # floor, synthesise a micro-trade candidate for the highest-volume
-        # market that was scanned this cycle.
+        # ── Merge momentum candidates when AI candidates are scarce ──────
+        # If we're in dead-zone mode and have fewer AI candidates than slots,
+        # pad from the momentum list (highest-score first) up to available_slots.
+        if _dead_zone and momentum_candidates and len(candidates) < available_slots:
+            # Deduplicate — don't add a momentum candidate for a symbol already
+            # represented in the AI-scored list.
+            existing_symbols = {s.symbol for s in candidates}
+            new_mom = [s for s in momentum_candidates if s.symbol not in existing_symbols]
+            # Sort by score descending, take as many as needed to fill slots
+            new_mom.sort(key=lambda s: s.composite_score, reverse=True)
+            slots_needed = available_slots - len(candidates)
+            candidates.extend(new_mom[:slots_needed])
+            if new_mom:
+                logger.warning(
+                    "🔥 MOMENTUM-ONLY MODE — injecting %d/%d momentum candidates "
+                    "(streak=%d, slots_needed=%d)",
+                    min(len(new_mom), slots_needed), len(new_mom),
+                    zero_signal_streak, slots_needed,
+                )
+
+        # ── Volume fallback: inject top-volume candidate when still empty ─
+        # Active whenever _volume_fallback_enabled (always true in dead zone;
+        # also true for profit-mode Level 3).
         if not candidates and _volume_fallback_enabled and _best_volume_symbol and _AISignal is not None:
             logger.warning(
-                "💰 PROFIT MODE L3 — no candidates; injecting top-volume fallback: "
-                "%s (avg_vol=%.0f)",
+                "💰 VOLUME FALLBACK — no candidates after momentum scan; "
+                "injecting highest-volume symbol: %s (avg_vol=%.0f)",
                 _best_volume_symbol, _best_volume,
             )
             fallback_sig = _AISignal(
                 symbol=_best_volume_symbol,
                 side=_best_volume_side,
-                composite_score=_effective_hard_floor,  # pin to effective floor
-                position_multiplier=0.5,                # conservative micro-trade size
+                composite_score=_effective_hard_floor,
+                position_multiplier=0.50,               # conservative micro-trade size
                 entry_type=_best_volume_entry_type,
                 threshold_used=_effective_hard_floor,
-                reason="profit_mode_l3_volume_fallback",
+                reason="volume_fallback_guaranteed_activity",
                 metadata={
                     "profit_mode_level": _pmc_level,
                     "volume_fallback": True,
                     "avg_volume": _best_volume,
                     "bypass_low_quality": True,
+                    "dead_zone": _dead_zone,
                 },
             )
             candidates.append(fallback_sig)
@@ -686,10 +775,7 @@ class NijaCoreLoop:
         )
 
         # ── Progressive relaxation: activate after too many zero-signal cycles ──
-        # Instead of a flat score boost, the effective floor is reduced each 5-cycle
-        # step so quality degrades gradually rather than collapsing all at once.
-        # The streak threshold is sourced from profit mode so Level 2/3 trigger
-        # relaxation sooner.
+        # Each 3-cycle step reduces the effective floor by 15% / 25% / 40%.
         _relaxation = _get_relaxation_factor_with_threshold(
             zero_signal_streak, _effective_streak_threshold
         )
@@ -701,9 +787,9 @@ class NijaCoreLoop:
             _relaxed_floor = _effective_hard_floor * (1.0 - _relaxation)
             logger.warning(
                 "⚡ PROGRESSIVE RELAXATION step=%d/%d "
-                "(streak=%d factor=%.1f floor=%.1f→%.1f) — top-%d eligible",
+                "(streak=%d factor=%.0f%% floor=%.1f→%.1f) — top-%d eligible",
                 _step, MAX_RELAXATION_STEPS,
-                zero_signal_streak, _relaxation,
+                zero_signal_streak, _relaxation * 100,
                 _effective_hard_floor, _relaxed_floor,
                 _SNIPER_TOP_N_DEFAULT,
             )

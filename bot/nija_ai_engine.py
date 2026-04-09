@@ -102,26 +102,32 @@ except ImportError:
 # These thresholds drive both _position_multiplier() (size scaling) and the
 # is_elite / is_good properties on AIEngineSignal.
 #
-#   NIJA_SCORE_FLOOR_ELITE  75  — 1.5× size  (strong conviction)
-#   NIJA_SCORE_FLOOR_GOOD   28  — 1.0× size  (standard entry; was 35)
-#   NIJA_SCORE_FLOOR_FAIR   22  — 0.75× size (borderline; just below GOOD; was 30)
-#   TIER_FLOOR              13  — 0.5× size  (fallback, top-N only; was 17)
+#   NIJA_SCORE_FLOOR_ELITE  75  — 1.5× size  (A+ conviction)
+#   NIJA_SCORE_FLOOR_GOOD   20  — 1.0× size  (A grade; was 28)
+#   NIJA_SCORE_FLOOR_FAIR   15  — 0.85× size (B grade; was 22)
+#   TIER_FLOOR               8  — 0.75× size (C grade fallback; was 13)
+#   TIER_WEAK                4  — 0.50× size (Weak Signal / dead-zone entry; new)
+#
+# WEAK SIGNAL ENTRY MODE: B/C grade setups (TIER_FAIR..TIER_FLOOR) are now
+# allowed with reduced position size.  TIER_WEAK catches dead-zone cycles
+# where even C-grade fails — the bot always has something to trade.
 TIER_ELITE: float = float(os.getenv("NIJA_SCORE_FLOOR_ELITE", "75.0"))   # 1.5× position size
-TIER_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "28.0"))   # 1.0× position size (was 35)
-TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "22.0"))   # 0.75× position size (was 30)
-TIER_FLOOR: float = 13.0   # hard internal floor — not user-tunable (was 17)
+TIER_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "20.0"))   # 1.0× position size (was 28)
+TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "15.0"))   # 0.85× position size (was 22)
+TIER_FLOOR: float = float(os.getenv("NIJA_SCORE_FLOOR_FLOOR", "8.0"))    # 0.75× position size (was 13)
+TIER_WEAK:  float = float(os.getenv("NIJA_SCORE_FLOOR_WEAK",  "4.0"))    # 0.50× size — dead-zone B/C entry
 
 # Composite score blend weights (must sum to 1.0)
-_W_ENHANCED  = 0.58   # EnhancedEntryScorer contributes most weight (raised to offset lower gate penalty)
-_W_OPTIMIZER = 0.25   # EntryOptimizer RSI-div / BB-zone bonus
-_W_GATE      = 0.17   # 5-Gate AI gate penalty deduction (reduced 0.20→0.17 ~15% to soften low-quality penalty)
+# Raised _W_ENHANCED 0.58→0.64, lowered _W_GATE 0.17→0.12 so the gate
+# penalty no longer buries setups that fail 1-2 soft gates in dead markets.
+_W_ENHANCED  = 0.64   # EnhancedEntryScorer — primary signal weight
+_W_OPTIMIZER = 0.24   # EntryOptimizer RSI-div / BB-zone bonus
+_W_GATE      = 0.12   # 5-Gate penalty deduction (softened: 0.17→0.12)
 
 # Hard absolute floor — never execute below this regardless of ranking.
-# NOTE: the composite formula (raw_score * 0.58 + opt_delta * 0.25 - penalty * 0.17)
-# produces values in the 0-60 range, so this floor must be calibrated accordingly.
-# Lowered from 25.0 → 20.0 → 17.5 → 16.5 → 13.0 → 10.0 (flow-mode, Apr 2026) to increase trade frequency.
-# Override at runtime with NIJA_MIN_SCORE_ABSOLUTE (e.g. 8.0 for AGGRESSIVE/flow mode).
-MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "10.0"))
+# Lowered from 25.0 → 10.0 → 6.0 (flow-mode, Apr 2026) to unlock Weak Signal entry.
+# Override at runtime with NIJA_MIN_SCORE_ABSOLUTE.
+MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "6.0"))
 
 # Default number of top signals to select per cycle
 TOP_N_DEFAULT = 3
@@ -502,7 +508,7 @@ class NijaAIEngine:
         Args:
             value: New absolute score floor (0-100).  Clamped to [5.0, 95.0].
         """
-        clamped = max(5.0, min(float(value), 95.0))
+        clamped = max(TIER_WEAK, min(float(value), 95.0))
         with self._lock:
             self._score_floor = clamped
         logger.info(
@@ -716,12 +722,13 @@ class NijaAIEngine:
                         1 for g in (gate_result.gates or {}).values()
                         if hasattr(g, "passed") and not g.passed
                     )
-                    gate_penalty = min(n_failed, 3) * 8.0
+                    gate_penalty = min(n_failed, 3) * 5.0
             except Exception as exc:
                 logger.debug("AIEntryGate error: %s", exc)
 
         # ── Weighted composite ────────────────────────────────────────────
-        # Penalty: 8 pts per failed gate, capped at 3 gates (max -24 pts before weighting)
+        # Penalty: 5 pts per failed gate, capped at 3 gates (max -15 pts before weighting)
+        # Reduced from 8→5 per gate so B/C grade setups are not buried by soft-gate failures.
         composite = (raw_score * _W_ENHANCED) + (opt_delta * _W_OPTIMIZER) - (gate_penalty * _W_GATE)
         composite = float(np.clip(composite, 0.0, 100.0))
 
@@ -754,12 +761,13 @@ class NijaAIEngine:
         automatically rises/falls to maintain 55–65% win rate.
 
         If fewer than RELAX_CANDIDATE_COUNT candidates score >= TIER_FLOOR
-        (after delta), relax to MIN_SCORE_ABSOLUTE so we always execute
-        *something*.
+        (after delta), relax down to MIN_SCORE_ABSOLUTE so we always execute
+        something.  Floor is TIER_WEAK (never below 4.0) to allow Weak Signal
+        entries during dead-zone cycles.
         """
         base_threshold = TIER_FLOOR
         delta = self.threshold_ctrl.threshold_delta
-        adjusted_floor = max(5.0, base_threshold + delta)
+        adjusted_floor = max(TIER_WEAK, base_threshold + delta)
         above_floor = sum(1 for s in ranked if s.composite_score >= adjusted_floor)
         if above_floor >= RELAX_CANDIDATE_COUNT:
             adaptive_threshold = adjusted_floor
@@ -767,7 +775,7 @@ class NijaAIEngine:
             # Relax — take whatever is above the hard minimum (also delta-adjusted)
             with self._lock:
                 score_floor = self._score_floor
-            adaptive_threshold = max(5.0, score_floor + delta)
+            adaptive_threshold = max(TIER_WEAK, score_floor + delta)
 
         logger.info(
             f"🎯 Adaptive Threshold → base={base_threshold:.2f} "
@@ -780,16 +788,33 @@ class NijaAIEngine:
 
     @staticmethod
     def _position_multiplier(score: float) -> float:
-        """Map composite score to position-size multiplier."""
+        """Map composite score to position-size multiplier.
+
+        Tiers (Apr 2026 — aggressive micro-account sizing):
+            ELITE  ≥ 75  → 1.50× (A+ conviction)
+            GOOD   ≥ 20  → 1.00× (A grade)
+            FAIR   ≥ 15  → 0.85× (B grade — raised from 0.75)
+            FLOOR  ≥  8  → 0.75× (C grade — raised from 0.50)
+            WEAK   ≥  4  → 0.50× (dead-zone weak signal entry)
+            <  4         → 0.40× (emergency bypass only)
+
+        Env NIJA_AGGRESSIVE_SIZE_MULT (default 1.0) scales every tier
+        by a constant factor — set to 1.25 for high-frequency $50-$100 mode.
+        """
+        _agg = float(os.getenv("NIJA_AGGRESSIVE_SIZE_MULT", "1.0"))
         if score >= TIER_ELITE:
-            return 1.5
-        if score >= TIER_GOOD:
-            return 1.0
-        if score >= TIER_FAIR:
-            return 0.75
-        if score >= TIER_FLOOR:
-            return 0.5
-        return 0.4
+            base = 1.5
+        elif score >= TIER_GOOD:
+            base = 1.0
+        elif score >= TIER_FAIR:
+            base = 0.85
+        elif score >= TIER_FLOOR:
+            base = 0.75
+        elif score >= TIER_WEAK:
+            base = 0.50
+        else:
+            base = 0.40
+        return round(min(base * _agg, 2.0), 4)
 
     @staticmethod
     def _build_reason(

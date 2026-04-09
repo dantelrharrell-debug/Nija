@@ -59,6 +59,15 @@ _STRUCT_WINDOW: int           = int(_ef("MOMENTUM_STRUCT_WINDOW", 10))
 _BREAKOUT_WINDOW: int         = int(_ef("BREAKOUT_WINDOW", 20))
 _BREAKOUT_VOL_SURGE: float    = _ef("BREAKOUT_VOL_SURGE", 1.4)
 
+# Dead-zone / Weak-Signal relaxed RSI thresholds (Apr 2026).
+# Used by check_momentum_long_relaxed / check_momentum_short_relaxed when the
+# bot is in a dead zone (zero-signal streak ≥ 2 cycles).  Requires less
+# momentum confirmation so B/C grade setups can still trigger a trade.
+# Also reduces the volume-surge requirement to 1× avg (any positive volume).
+_RSI_BULL_DEAD_ZONE: float    = _ef("MOMENTUM_RSI_BULL_DEAD_ZONE", 52.0)
+_RSI_BEAR_DEAD_ZONE: float    = _ef("MOMENTUM_RSI_BEAR_DEAD_ZONE", 48.0)
+_DEAD_ZONE_VOL_SURGE: float   = _ef("MOMENTUM_DEAD_ZONE_VOL_SURGE", 0.9)  # 90% of avg is OK
+
 # Balance-based threshold tightening — mirrors trade_frequency_controller constants.
 TARGET_BALANCE: float = 100.0       # tighten AI entry threshold once balance hits this
 TIGHTENED_ENTRY_SCORE: float = 5.0  # restored threshold when TARGET_BALANCE is reached
@@ -316,3 +325,123 @@ def check_balance_and_adjust_threshold(current_balance: float) -> None:
                 "check_balance_and_adjust_threshold: "
                 "could not update ai_entry_gate threshold: %s", exc,
             )
+
+
+# ---------------------------------------------------------------------------
+# Dead-Zone / Weak-Signal relaxed momentum checks (Apr 2026)
+# ---------------------------------------------------------------------------
+# These are simplified versions of check_momentum_long / check_momentum_short
+# designed for "dead zone" market cycles where the full momentum check fires
+# nothing.  Key differences vs the standard checks:
+#
+#   • RSI thresholds: 52 bull / 48 bear  (standard: 55/45)
+#   • Volume gate:    any positive vol vs 90% of avg  (standard: > avg)
+#   • Confirmation:   RSI alone is enough (1/2 → passes)
+#   • Score:          always 1.5 (B-grade) so size is capped at TIER_FAIR mult
+#
+# Activation: nija_core_loop._phase3_scan_and_enter calls these when
+# zero_signal_streak >= DEAD_ZONE_STREAK_THRESHOLD (default 2 cycles).
+# ---------------------------------------------------------------------------
+
+def check_momentum_long_relaxed(
+    df: pd.DataFrame,
+    indicators: Dict,
+) -> Tuple[bool, float, str]:
+    """
+    Relaxed long momentum check for dead-zone / weak-signal mode.
+
+    Passes when RSI > _RSI_BULL_DEAD_ZONE (52) alone — volume/structure are
+    optional confirmations that bump the score but are not required.
+
+    Returns:
+        (signal, score, reason)
+        score 1.0 = RSI only, 1.5 = RSI + 1 confirm, 2.0 = RSI + both
+    """
+    try:
+        rsi_series = indicators.get("rsi", indicators.get("rsi_14"))
+        if rsi_series is None:
+            return False, 0.0, "relaxed_momentum_long: RSI unavailable"
+
+        rsi = _last(rsi_series)
+
+        if rsi <= _RSI_BULL_DEAD_ZONE:
+            return False, 0.0, f"relaxed_momentum_long: RSI {rsi:.1f} ≤ {_RSI_BULL_DEAD_ZONE}"
+
+        confirmations = 0
+        parts = [f"RSI {rsi:.1f}>{_RSI_BULL_DEAD_ZONE}(relaxed)"]
+
+        # Volume gate — 90% of avg is OK (dead-zone markets have thin volume)
+        if "volume" in df.columns and len(df) > _VOL_WINDOW:
+            cur_vol = float(df["volume"].iloc[-1])
+            avg_vol = float(df["volume"].iloc[-(_VOL_WINDOW + 1):-1].mean())
+            if avg_vol > 0 and cur_vol >= avg_vol * _DEAD_ZONE_VOL_SURGE:
+                confirmations += 1
+                parts.append(f"vol≥{_DEAD_ZONE_VOL_SURGE:.0%}avg({cur_vol/avg_vol:.2f}×)")
+
+        # Structure break (same as standard check)
+        if len(df) > _STRUCT_WINDOW + 1:
+            prior_high = float(df["close"].iloc[-(_STRUCT_WINDOW + 1):-1].max())
+            close = _last(df["close"])
+            if close > prior_high:
+                confirmations += 1
+                parts.append(f"struct break({close:.4f}>{prior_high:.4f})")
+
+        # RSI alone is sufficient in dead-zone mode
+        score = 1.0 + confirmations * 0.5
+        reason = f"relaxed_momentum_long [{confirmations} extra confirms]: {' | '.join(parts)}"
+        logger.debug("  ✅ %s", reason)
+        return True, score, reason
+
+    except Exception as exc:
+        logger.warning("relaxed_momentum_long error: %s", exc)
+        return False, 0.0, f"relaxed_momentum_long error: {exc}"
+
+
+def check_momentum_short_relaxed(
+    df: pd.DataFrame,
+    indicators: Dict,
+) -> Tuple[bool, float, str]:
+    """
+    Relaxed short momentum check for dead-zone / weak-signal mode.
+
+    Passes when RSI < _RSI_BEAR_DEAD_ZONE (48) alone.
+
+    Returns:
+        (signal, score, reason)
+        score 1.0 = RSI only, 1.5 = RSI + 1 confirm, 2.0 = RSI + both
+    """
+    try:
+        rsi_series = indicators.get("rsi", indicators.get("rsi_14"))
+        if rsi_series is None:
+            return False, 0.0, "relaxed_momentum_short: RSI unavailable"
+
+        rsi = _last(rsi_series)
+
+        if rsi >= _RSI_BEAR_DEAD_ZONE:
+            return False, 0.0, f"relaxed_momentum_short: RSI {rsi:.1f} ≥ {_RSI_BEAR_DEAD_ZONE}"
+
+        confirmations = 0
+        parts = [f"RSI {rsi:.1f}<{_RSI_BEAR_DEAD_ZONE}(relaxed)"]
+
+        if "volume" in df.columns and len(df) > _VOL_WINDOW:
+            cur_vol = float(df["volume"].iloc[-1])
+            avg_vol = float(df["volume"].iloc[-(_VOL_WINDOW + 1):-1].mean())
+            if avg_vol > 0 and cur_vol >= avg_vol * _DEAD_ZONE_VOL_SURGE:
+                confirmations += 1
+                parts.append(f"vol≥{_DEAD_ZONE_VOL_SURGE:.0%}avg({cur_vol/avg_vol:.2f}×)")
+
+        if len(df) > _STRUCT_WINDOW + 1:
+            prior_low = float(df["close"].iloc[-(_STRUCT_WINDOW + 1):-1].min())
+            close = _last(df["close"])
+            if close < prior_low:
+                confirmations += 1
+                parts.append(f"struct break({close:.4f}<{prior_low:.4f})")
+
+        score = 1.0 + confirmations * 0.5
+        reason = f"relaxed_momentum_short [{confirmations} extra confirms]: {' | '.join(parts)}"
+        logger.debug("  ✅ %s", reason)
+        return True, score, reason
+
+    except Exception as exc:
+        logger.warning("relaxed_momentum_short error: %s", exc)
+        return False, 0.0, f"relaxed_momentum_short error: {exc}"
