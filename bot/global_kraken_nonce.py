@@ -64,19 +64,34 @@ _RESET_OFFSET_MS: int = 300_000     # offset used by reset_to_safe_value()
 # When consecutive nonce errors exceed this threshold the manager performs a
 # "nuclear" reset (30-minute forward jump) and pauses all trading for
 # _TRADING_PAUSE_S seconds so Kraken's nonce window can catch up.
-_NUCLEAR_RESET_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_THRESHOLD", "10"))
+#
+# Threshold lowered from 10 → 5: fewer consecutive errors before the nuclear
+# jump fires, preventing repeated small backoff jumps from compounding into an
+# ever-growing nonce lead.
+#
+# Pause raised from 60 s → 300 s: a 30-min nuclear jump warrants a 5-minute
+# pause so the probe_and_resync handshake (which may need several 10-min steps)
+# can complete before new user-account connections attempt to use the nonce.
+_NUCLEAR_RESET_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_THRESHOLD", "5"))
 _NUCLEAR_RESET_OFFSET_MS: int = 1_800_000   # 30 min — beats any previously stored nonce
-_TRADING_PAUSE_S: float = float(os.environ.get("NIJA_NONCE_PAUSE_SECONDS", "60"))
+_TRADING_PAUSE_S: float = float(os.environ.get("NIJA_NONCE_PAUSE_SECONDS", "300"))
 _ERROR_RESET_THRESHOLD: int = 3     # errors < threshold: no jump
+
+# After this many consecutive nuclear resets within one session the manager
+# automatically activates deep-probe mode (12 × 10 min = 120 min coverage),
+# exactly as if NIJA_DEEP_NONCE_RESET=1 had been set at startup.
+_AUTO_DEEP_RESET_THRESHOLD: int = int(os.environ.get("NIJA_AUTO_DEEP_THRESHOLD", "2"))
 
 # ── Nonce resync / probe-calibration constants ────────────────────────────────
 # Used by probe_and_resync() to dynamically find Kraken's current nonce floor.
 # Each failed probe call jumps the nonce forward by _PROBE_STEP_MS.
 # Up to _PROBE_MAX_ATTEMPTS attempts are made before giving up.
-# Default: 6 × 5 min = 30 min of forward coverage — enough to outlast any
-# previous bot session's nuclear-reset or error-accumulation nonce.
-_PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_PROBE_STEP_MS", "300000"))      # 5 min per step
-_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "6"))  # up to 30 min
+#
+# Default coverage raised from 6 × 5 min (30 min) → 12 × 5 min (60 min) so
+# a single nuclear reset (+30 min) plus accumulated backoff jumps is always
+# within range without requiring NIJA_DEEP_NONCE_RESET=1.
+_PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_PROBE_STEP_MS", "300000"))       # 5 min per step
+_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "12")) # up to 60 min
 
 # ── Deep-reset constants ──────────────────────────────────────────────────────
 # Activated by NIJA_DEEP_NONCE_RESET=1.  Provides 120-minute probe coverage
@@ -506,6 +521,10 @@ class KrakenNonceManager:
     def _init(self) -> None:
         self._error_count = 0
         self._trading_paused_until: float = 0.0   # epoch seconds; 0 = not paused
+        # Tracks how many nuclear resets have fired in this session.  When it
+        # reaches _AUTO_DEEP_RESET_THRESHOLD, deep-probe mode is automatically
+        # activated so probe_and_resync() uses the wider 120-min coverage window.
+        self._nuclear_reset_count: int = 0
         os.makedirs(os.path.dirname(os.path.abspath(_STATE_FILE)), exist_ok=True)
         cleanup_legacy_nonce_files()
 
@@ -736,8 +755,9 @@ class KrakenNonceManager:
             if _engine is not None:
                 _engine.reset_state()
 
-            # Reset the in-process error counter and trading pause.
+            # Reset the in-process error counter, nuclear reset counter, and trading pause.
             self._error_count = 0
+            self._nuclear_reset_count = 0
             self._trading_paused_until = 0.0
 
             # Advance nonce to now + RESET_OFFSET_MS so the very next call
@@ -769,6 +789,12 @@ class KrakenNonceManager:
         with _LOCK:
             remaining = self._trading_paused_until - time.time()
             return max(0.0, remaining)
+
+    @property
+    def nuclear_reset_count(self) -> int:
+        """Return the number of nuclear resets that have fired in this session."""
+        with _LOCK:
+            return self._nuclear_reset_count
 
     @property
     def is_deep_reset_active(self) -> bool:
@@ -834,6 +860,31 @@ class KrakenNonceManager:
                     self._persist()
                 self._trading_paused_until = time.time() + _TRADING_PAUSE_S
                 self._error_count = 0   # reset so escalation can start fresh
+
+                # ── Auto deep-reset escalation ──────────────────────────────
+                # Each nuclear reset adds 30 min to Kraken's expected nonce
+                # floor.  After _AUTO_DEEP_RESET_THRESHOLD consecutive nuclear
+                # resets the standard 60-min probe coverage (12 × 5 min) may
+                # no longer be sufficient.  Automatically switch to deep-probe
+                # mode (12 × 10 min = 120 min) so the next probe_and_resync()
+                # can reach Kraken's floor without manual intervention.
+                self._nuclear_reset_count += 1
+                if self._nuclear_reset_count >= _AUTO_DEEP_RESET_THRESHOLD and not self._deep_reset_active:
+                    self._deep_reset_active = True
+                    _logger.error(
+                        "🔴 KrakenNonceManager: %d consecutive nuclear resets — "
+                        "AUTO-ACTIVATING deep-probe mode (12 × 10 min = 120 min coverage). "
+                        "Kraken's server-side nonce floor is now 60+ min ahead. "
+                        "IMMEDIATE ACTION REQUIRED:\n"
+                        "  1. Stop ALL Railway services / deployments using this API key.\n"
+                        "  2. Delete the compromised Kraken API key and create a NEW one\n"
+                        "     (set Nonce Window = 10000 on the new key).\n"
+                        "  3. Update KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET.\n"
+                        "  4. Set NIJA_DEEP_NONCE_RESET=1 on the first restart.\n"
+                        "  5. Deploy ONE instance only.\n"
+                        "The bot will continue probing with extended coverage (120 min) "
+                        "but a new API key is the only guaranteed fix.",
+                    )
                 return
 
             jump = self._backoff_ms(self._error_count)
@@ -1169,7 +1220,13 @@ def get_global_nonce_manager() -> KrakenNonceManager:
 
 
 def get_global_nonce_stats() -> dict:
-    return {"last_nonce": _nonce_manager.get_last_nonce()}
+    return {
+        "last_nonce": _nonce_manager.get_last_nonce(),
+        "nuclear_reset_count": _nonce_manager.nuclear_reset_count,
+        "deep_reset_active": _nonce_manager.is_deep_reset_active,
+        "trading_paused": _nonce_manager.is_paused(),
+        "pause_remaining_s": _nonce_manager.get_pause_remaining(),
+    }
 
 
 def record_kraken_nonce_error() -> None:
