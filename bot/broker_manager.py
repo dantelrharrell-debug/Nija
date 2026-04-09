@@ -458,6 +458,18 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
     'password', 'PASSWORD'
 ]
 
+# Regex that detects unfilled placeholder values in API credentials (e.g.
+# "your_kraken_api_key_here", "your_kraken_private_key_here", "<your-secret>").
+# Anchored so real keys that happen to start with a common word are NOT flagged.
+_KRAKEN_PLACEHOLDER_RE = re.compile(
+    r"^(your[_\-]?.*|replace[_\-]?.*|change[_\-]?me?|insert[_\-]?.*|fill[_\-]?.*|"
+    r"xxx+|placeholder.*|example.*|sample.*|testkey|test[_\-]api|test[_\-]secret|"
+    r"dummy.*|fake.*|todo.*|none|null|n/?a|"
+    r"<.+>|\[.+\]|\{.+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
+    r"secret[_\-]?here|\*+)$",
+    re.IGNORECASE,
+)
+
 # Logging constants
 LOG_SEPARATOR = "=" * 70
 
@@ -6344,6 +6356,24 @@ class KrakenBroker(BaseBroker):
                 logger.warning("      1. Remove any leading/trailing spaces or newlines from the values")
                 logger.warning("      2. Ensure the values are not just whitespace characters")
                 logger.warning("      3. Re-deploy after fixing the values")
+                return False
+
+            # Check for placeholder values (e.g. "your_kraken_api_key_here" from .env templates)
+            key_is_placeholder = bool(api_key and _KRAKEN_PLACEHOLDER_RE.match(api_key))
+            secret_is_placeholder = bool(api_secret and _KRAKEN_PLACEHOLDER_RE.match(api_secret))
+            if key_is_placeholder or secret_is_placeholder:
+                self.credentials_configured = False
+                self.last_connection_error = "Credentials appear to be unfilled placeholder values"
+                logger.warning(f"⚠️  Kraken credentials appear to be PLACEHOLDER VALUES for {cred_label}")
+                if key_is_placeholder:
+                    logger.warning(f"   {key_name}: '{api_key}' looks like a template placeholder")
+                if secret_is_placeholder:
+                    logger.warning(f"   {secret_name}: value looks like a template placeholder")
+                logger.warning("   🔧 FIX: Replace the placeholder with your real Kraken Classic API credentials:")
+                logger.warning("      1. Go to https://www.kraken.com/u/security/api")
+                logger.warning("      2. Generate a Classic API key (NOT OAuth) with trading permissions")
+                logger.warning("      3. Set KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET")
+                logger.warning("      4. Restart the bot")
                 return False
 
             # SMART CACHE MANAGEMENT: If credentials exist NOW, clear any previous permission error cache
