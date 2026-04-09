@@ -2249,32 +2249,33 @@ PROFIT_PROTECTION_NEVER_BREAKEVEN = True  # Never allow profitable positions to 
 # stop losses must be proportionally sized to maintain good risk/reward
 
 # TIER 1: PRIMARY TRADING STOP-LOSS
-# Tightened to -1.2% (from -1.5%) to reduce losses per trade (Option B — Apr 2026).
-# With profit targets of 3.0-7.0%, a -1.2% stop gives minimum 2.5:1 R:R.
-STOP_LOSS_PRIMARY_KRAKEN = -0.012  # -1.2% for Kraken (tightened from -1.5%)
-STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.012  # -1.2% minimum
-STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.020  # -2.0% maximum (tight band to limit losses)
+# Widened to -2.0% (from -1.2%) for moderate/aggressive mode — gives trades room to breathe.
+# Crypto typical noise is ±1-2%; a -1.2% stop caused excessive premature exits.
+# With profit targets of 3.0-7.0%, a -2.0% stop gives minimum 1.5:1 R:R (acceptable aggressive).
+STOP_LOSS_PRIMARY_KRAKEN = -0.020  # -2.0% for Kraken (widened from -1.2% for moderate/aggressive)
+STOP_LOSS_PRIMARY_KRAKEN_MIN = -0.020  # -2.0% minimum (matches primary)
+STOP_LOSS_PRIMARY_KRAKEN_MAX = -0.035  # -3.5% maximum (wider band for aggressive mode)
 
-# Coinbase: tightened to -1.2% (from -1.5%) to reduce losses per trade (Option B — Apr 2026)
-STOP_LOSS_PRIMARY_COINBASE = -0.012  # -1.2% primary stop for Coinbase (tightened from -1.5%)
-COINBASE_STOP_LOSS_MIN = -0.012  # -1.2% minimum
-COINBASE_STOP_LOSS_MAX = -0.020  # -2.0% maximum
+# Coinbase: widened to -2.0% (from -1.2%) for moderate/aggressive mode
+STOP_LOSS_PRIMARY_COINBASE = -0.020  # -2.0% primary stop for Coinbase (widened from -1.2%)
+COINBASE_STOP_LOSS_MIN = -0.020  # -2.0% minimum (matches primary)
+COINBASE_STOP_LOSS_MAX = -0.035  # -3.5% maximum
 
 # Remove the "exit on ANY loss" requirement - this was causing premature exits
 COINBASE_EXIT_ANY_LOSS = False  # Allow positions to breathe, honor stop loss levels
-COINBASE_MAX_HOLD_MINUTES = 60  # Increased from 30 to 60 minutes (allow time for profit)
+COINBASE_MAX_HOLD_MINUTES = 90  # Increased from 60 to 90 minutes (more time for aggressive trades)
 COINBASE_PROFIT_LOCK_ENABLED = True  # Enable aggressive profit-taking on Coinbase
 
 # TIER 2: EMERGENCY STOP (Logic failure prevention)
-# Scaled proportionally with the tightened primary stop.
-STOP_LOSS_MICRO = -0.020  # -2.0% emergency backstop (was -4.0%, scaled with primary stop)
-STOP_LOSS_WARNING = -0.012  # -1.2% warn level (matches primary stop for early alert)
-STOP_LOSS_THRESHOLD = -0.020  # -2.0% primary stop threshold (was -4.0%)
+# Scaled proportionally with widened primary stop for moderate/aggressive mode.
+STOP_LOSS_MICRO = -0.030  # -3.0% emergency backstop (was -2.0%, widened for moderate/aggressive)
+STOP_LOSS_WARNING = -0.015  # -1.5% early-warning level (fires before primary -2.0% stop)
+STOP_LOSS_THRESHOLD = -0.030  # -3.0% primary stop threshold (was -2.0%)
 
 # TIER 3: CATASTROPHIC FAILSAFE
 # Last resort protection - should NEVER be reached in normal operation
-# NORMALIZED FORMAT: -0.03 = -3% (fractional format)
-STOP_LOSS_EMERGENCY = -0.03  # EMERGENCY exit at -3% loss (was -5%, tightened to limit catastrophic losses)
+# NORMALIZED FORMAT: -0.05 = -5% (fractional format)
+STOP_LOSS_EMERGENCY = -0.05  # EMERGENCY exit at -5% loss (was -3%, widened for moderate/aggressive)
 
 # TIER 0: DEEP DRAWDOWN KILLER
 # Portfolio-level circuit-breaker for positions that are already severely underwater.
@@ -2316,14 +2317,13 @@ SAFETY_DEFAULT_ENTRY_MULTIPLIER = 1.0   # Use current price as entry price (neut
 # Hard cap aligned with MAX_TOTAL_POSITIONS = 10 (global limit, tier-scaled).
 # Per-balance sub-limits are enforced at runtime via get_balance_based_max_positions().
 HARD_MAX_POSITIONS = MAX_TOTAL_POSITIONS  # Absolute ceiling = global cap (10)
-# AGGRESSIVE MODE: Default reduced from MAX_TOTAL_POSITIONS (10) → 5 so new quality
-# trades can be opened even when several older positions remain open.  Operators can
-# raise this limit via the MAX_CONCURRENT_POSITIONS environment variable (max 10).
-_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '3')
+# MODERATE/AGGRESSIVE MODE: Default raised to 7 (from 3) so more opportunities can be
+# taken simultaneously.  Operators can tune via MAX_CONCURRENT_POSITIONS env var (max 10).
+_max_positions_env = os.getenv('MAX_CONCURRENT_POSITIONS', '7')
 try:
     MAX_POSITIONS_ALLOWED = int(_max_positions_env)
 except ValueError:
-    MAX_POSITIONS_ALLOWED = 5
+    MAX_POSITIONS_ALLOWED = 7
 # Enforce hard ceiling – never exceed MAX_TOTAL_POSITIONS regardless of env override
 if MAX_POSITIONS_ALLOWED > HARD_MAX_POSITIONS:
     MAX_POSITIONS_ALLOWED = HARD_MAX_POSITIONS
