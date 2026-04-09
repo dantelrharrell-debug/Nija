@@ -60,6 +60,11 @@ if DEEP_RESET:
 # previously stored nonce even after 300+ consecutive retry attempts.
 _RESET_OFFSET_MS = 1_800_000
 
+# Deep reset: 60-minute floor — matches NIJA_DEEP_NONCE_RESET startup floor in
+# global_kraken_nonce._DEEP_STARTUP_FLOOR_MS so the nonce starts well above
+# Kraken's high-water mark even after many consecutive nuclear resets.
+_DEEP_RESET_OFFSET_MS = 3_600_000
+
 # Add bot/ to path so we can import the nonce manager
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "bot"))
 
@@ -276,12 +281,16 @@ def reset_nonce() -> tuple:
     Returns (old_nonce, new_nonce) or (None, None) on import failure.
     """
     _head("4 — Reset Nonce Manager")
-    # Deep reset uses a 60-min floor (DEEP_STARTUP_FLOOR_MS); standard reset uses 30 min.
-    offset_ms = 3_600_000 if DEEP_RESET else _RESET_OFFSET_MS
+    # Deep reset uses a 60-min floor; standard reset uses 30-min nuclear offset.
+    offset_ms = _DEEP_RESET_OFFSET_MS if DEEP_RESET else _RESET_OFFSET_MS
     try:
         import importlib
         import global_kraken_nonce as gnm
-        # Force a fresh singleton (delete the instance so _init() re-runs)
+        # Force a fresh singleton: call force_resync() if already initialised,
+        # then clear instance handles and reload the module so _init() re-runs
+        # with the NIJA_FORCE_NONCE_RESYNC / NIJA_DEEP_NONCE_RESET env vars set.
+        if gnm.KrakenNonceManager._instance is not None:
+            gnm.KrakenNonceManager._instance.force_resync()
         gnm.KrakenNonceManager._instance = None
         gnm.AdaptiveNonceOffsetEngine._instance = None
         importlib.reload(gnm)
@@ -290,18 +299,18 @@ def reset_nonce() -> tuple:
         old_nonce = mgr.get_last_nonce()
 
         if not DRY_RUN:
-            # Jump to at least now + offset_ms ahead of wall-clock.
-            # Deep mode: 60 min; standard mode: 30 min nuclear offset.
+            # Advance to at least now + offset_ms ahead of wall-clock.
             mgr.reset_to_safe_value(offset_ms=offset_ms)
 
         new_nonce = mgr.get_last_nonce()
         lead_ms = new_nonce - int(time.time() * 1000)
+        lead_min = lead_ms // 60_000
 
         if DRY_RUN:
             _info(f"[DRY RUN] Would reset nonce from {old_nonce} to ~{int(time.time()*1000) + offset_ms}")
         else:
-            mode_tag = " [DEEP — 60 min floor]" if DEEP_RESET else " [30 min floor]"
-            _ok(f"Nonce reset{mode_tag}: {old_nonce} → {new_nonce}  (lead = +{lead_ms:,} ms)")
+            mode_tag = f" [DEEP — {offset_ms // 60_000} min floor]" if DEEP_RESET else f" [{offset_ms // 60_000} min floor]"
+            _ok(f"Nonce reset{mode_tag}: {old_nonce} → {new_nonce}  (lead = +{lead_ms:,} ms / {lead_min} min)")
             assert new_nonce > old_nonce or lead_ms > 0, "New nonce is not ahead of old — check reset logic"
         return old_nonce, new_nonce
     except Exception as exc:
