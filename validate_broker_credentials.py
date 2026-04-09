@@ -85,6 +85,27 @@ DIM   = lambda t: _c("2",  t)   # dim
 # Validation helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Comprehensive placeholder pattern that matches any unfilled credential value.
+# Anchored (^...$) so it only fires when the *entire* value looks like a
+# placeholder (e.g. "your_kraken_api_key_here"), not when a real key merely
+# starts with a common word.
+# Bracketed groups use negated char classes (e.g. [^>]+) to prevent backtracking.
+# "none" / "null" only match when the entire credential is that exact word.
+_PLACEHOLDER_RE = re.compile(
+    r"^(your[_\-]?.*|replace[_\-]?.*|change[_\-]?me?|insert[_\-]?.*|fill[_\-]?.*|"
+    r"xxx+|placeholder.*|example.*|sample.*|testkey|test[_\-]api|test[_\-]secret|"
+    r"dummy.*|fake.*|todo.*|none|null|n/?a|"
+    r"<[^>]+>|\[[^\]]+\]|\{[^}]+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
+    r"secret[_\-]?here|\*+)$",
+    re.IGNORECASE,
+)
+
+
+def _is_placeholder(value: str) -> bool:
+    """Return True if *value* looks like an unfilled placeholder."""
+    return bool(_PLACEHOLDER_RE.match(value.strip()))
+
+
 def _get(name: str) -> str:
     """Return stripped env-var value, or empty string if unset."""
     return os.getenv(name, "").strip()
@@ -110,15 +131,9 @@ def _check_pair(key_name: str, secret_name: str, label: str) -> tuple:
         issues.append(f"{secret_name} is missing or empty")
 
     # Detect placeholder values that were never replaced
-    _PLACEHOLDERS = {
-        "your_api_key", "your-api-key", "api_key", "apikey",
-        "your_api_secret", "your-api-secret", "api_secret", "apisecret",
-        "changeme", "replace_me", "placeholder", "xxx", "yyy",
-        "<your-api-key>", "<your-api-secret>",
-    }
-    if key.lower() in _PLACEHOLDERS:
+    if key and _is_placeholder(key):
         issues.append(f"{key_name} looks like a placeholder value: '{key}'")
-    if secret.lower() in _PLACEHOLDERS:
+    if secret and _is_placeholder(secret):
         issues.append(f"{secret_name} looks like a placeholder value")
 
     return len(issues) == 0, issues
@@ -160,26 +175,40 @@ def _validate_kraken_platform() -> dict:
         result["issues"].append("KRAKEN_PLATFORM_API_SECRET is missing or empty")
 
     if key and secret:
-        # Kraken Classic API key is 56 characters (alphanumeric + /+)
-        # Accept a broad range to avoid false positives across key generations
-        if len(key) < 20:
-            result["warnings"].append(
-                f"KRAKEN_PLATFORM_API_KEY looks short ({len(key)} chars); "
-                "Classic API keys are typically 56 characters"
-            )
-
-        # Warn if it looks like an OAuth token (starts with "Bearer " or contains spaces)
-        if " " in key:
+        # Detect placeholder values from .env templates (e.g. "your_kraken_api_key_here")
+        if _is_placeholder(key):
             result["issues"].append(
-                "KRAKEN_PLATFORM_API_KEY contains spaces — must be a Classic API key, not OAuth"
+                f"KRAKEN_PLATFORM_API_KEY looks like a placeholder ('{key}') — "
+                "replace it with your real Kraken Classic API key from "
+                "https://www.kraken.com/u/security/api"
+            )
+        if _is_placeholder(secret):
+            result["issues"].append(
+                "KRAKEN_PLATFORM_API_SECRET looks like a placeholder — "
+                "replace it with your real Kraken API secret (88+ char Base64 string)"
             )
 
-        # Warn if secret is suspiciously short
-        if len(secret) < 40:
-            result["warnings"].append(
-                f"KRAKEN_PLATFORM_API_SECRET looks short ({len(secret)} chars); "
-                "Classic API secrets are typically 88+ characters (Base64)"
-            )
+        if not result["issues"]:
+            # Kraken Classic API key is 56 characters (alphanumeric + /+)
+            # Accept a broad range to avoid false positives across key generations
+            if len(key) < 20:
+                result["warnings"].append(
+                    f"KRAKEN_PLATFORM_API_KEY looks short ({len(key)} chars); "
+                    "Classic API keys are typically 56 characters"
+                )
+
+            # Warn if it looks like an OAuth token (starts with "Bearer " or contains spaces)
+            if " " in key:
+                result["issues"].append(
+                    "KRAKEN_PLATFORM_API_KEY contains spaces — must be a Classic API key, not OAuth"
+                )
+
+            # Warn if secret is suspiciously short
+            if len(secret) < 40:
+                result["warnings"].append(
+                    f"KRAKEN_PLATFORM_API_SECRET looks short ({len(secret)} chars); "
+                    "Classic API secrets are typically 88+ characters (Base64)"
+                )
 
         result["valid"] = len(result["issues"]) == 0
 
