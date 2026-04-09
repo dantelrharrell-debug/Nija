@@ -4760,8 +4760,10 @@ class TradingStrategy:
                 # self.apex was unconditionally created above with broker_client=None;
                 # now that the broker is ready, update the reference so all
                 # downstream API calls route through the real connection.
-                self.apex.broker_client = self.broker
-                logger.critical("✅ APEX V7.1 LIVE — broker_client wired to active broker")
+                # Use update_broker_client() so the broker is also propagated to
+                # the execution engine (self.apex.execution_engine.broker_client).
+                self.apex.update_broker_client(self.broker)
+                logger.critical("✅ APEX V7.1 LIVE — broker_client wired to active broker + execution engine")
 
                 # ── HF Scalping Mode — apply to APEX after construction ────────
                 # Patches confidence, ADX, volume, trend-confirmation thresholds
