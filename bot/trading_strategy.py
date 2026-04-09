@@ -11358,8 +11358,8 @@ class TradingStrategy:
                                         bid_price=bid_price,
                                         ask_price=ask_price,
                                         atr_pct=atr_pct,
-                                        max_spread_pct=0.0015,  # 0.15% max spread
-                                        min_atr_pct=0.005,  # 0.5% minimum ATR
+                                        max_spread_pct=0.004,  # 0.40% max spread (was 0.15%)
+                                        min_atr_pct=0.002,  # 0.20% minimum ATR (was 0.5%)
                                         disabled_pairs=DISABLED_PAIRS
                                     )
 

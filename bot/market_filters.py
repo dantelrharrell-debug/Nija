@@ -103,7 +103,7 @@ except ImportError:
         return float(x)
 
 
-def detect_choppy_market(df, adx_threshold=20, atr_threshold_low=0.001):
+def detect_choppy_market(df, adx_threshold=15, atr_threshold_low=0.0005):
     """
     Detect choppy/ranging market conditions where trend trading is ineffective.
 
@@ -397,7 +397,7 @@ class NewsEventFilter:
         }
 
 
-def apply_all_filters(df, adx_threshold=20, min_volume_multiplier=0.5,
+def apply_all_filters(df, adx_threshold=15, min_volume_multiplier=0.3,
                      seconds_to_avoid=5, news_filter=None):
     """
     Apply all market filters and return comprehensive assessment.
@@ -477,9 +477,9 @@ def apply_all_filters(df, adx_threshold=20, min_volume_multiplier=0.5,
 #
 # Only the intersection of all three lists is eligible for entry.
 
-MOMENTUM_TOP_VOLUME_N: int = 20      # Keep top N symbols by 24 h rolling volume
-MOMENTUM_TOP_VOLATILITY_N: int = 20  # Keep top N symbols by ATR volatility %
-MOMENTUM_TOP_TREND_N: int = 10       # Keep top N symbols by ADX trend strength
+MOMENTUM_TOP_VOLUME_N: int = 30      # Keep top N symbols by 24 h rolling volume (was 20)
+MOMENTUM_TOP_VOLATILITY_N: int = 30  # Keep top N symbols by ATR volatility % (was 20)
+MOMENTUM_TOP_TREND_N: int = 20       # Keep top N symbols by ADX trend strength (was 10)
 
 # 24 h proxy: 24 h × 60 min / 5 min per candle = 288 five-minute candles
 _CANDLES_PER_24H: int = 288
@@ -581,15 +581,21 @@ def get_momentum_universe(
         s for s, _ in heapq.nlargest(top_trend, trend_scores, key=lambda x: x[1])
     }
 
-    # Intersection: symbol must appear in all three shortlists
-    eligible = top_volume_set & top_volatility_set & top_trend_set
+    # 2-of-3 rule: symbol must appear in at least 2 of the 3 shortlists.
+    # Previously required all 3 (intersection), which was too restrictive and
+    # filtered out nearly every symbol during low-ADX / quiet-trend periods.
+    all_candidates = top_volume_set | top_volatility_set | top_trend_set
+    eligible = {
+        s for s in all_candidates
+        if (s in top_volume_set) + (s in top_volatility_set) + (s in top_trend_set) >= 2
+    }
 
     # Return sorted by ADX (strongest momentum first)
     trend_map: Dict[str, float] = dict(trend_scores)
     result = sorted(eligible, key=lambda s: trend_map.get(s, 0.0), reverse=True)
 
     logger.info(
-        "🎯 Momentum universe: %d symbol(s) pass all 3 filters "
+        "🎯 Momentum universe: %d symbol(s) pass 2-of-3 filter "
         "(top-%d volume: %d, top-%d volatility: %d, top-%d ADX: %d)",
         len(result),
         top_volume, len(top_volume_set),
@@ -634,15 +640,15 @@ def is_in_momentum_universe(
     return symbol in universe
 
 def check_pair_quality(symbol, bid_price, ask_price, volume_24h=None, atr_pct=None,
-                       max_spread_pct=0.0020, min_volume_usd=75000, min_atr_pct=0.005,
+                       max_spread_pct=0.0050, min_volume_usd=20000, min_atr_pct=0.002,
                        disabled_pairs=None):
     """
     FIX #4: Check if trading pair meets quality standards.
 
     Quality criteria:
-    - Spread < 0.20% (loosened from 0.15% to increase pass rate)
-    - Volume > $75k daily (lowered from $100k to admit more pairs)
-    - ATR > 0.5% (sufficient price movement)
+    - Spread < 0.50% (loosened from 0.20% to increase pass rate)
+    - Volume > $20k daily (lowered from $75k to admit more pairs)
+    - ATR > 0.20% (lowered from 0.5% to catch lower-vol periods)
     - Not in disabled pairs list
 
     Args:
