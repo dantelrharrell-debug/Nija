@@ -146,11 +146,13 @@ def validate_git_metadata(git_branch: str, git_commit: str) -> StartupValidation
 # credential that merely *starts with* a common word (e.g. "testnet-key-abc")
 # will NOT be flagged.  The word-boundary approach handles variants like
 # "test", "testkey", "test_key", "test123" while leaving longer real keys alone.
+# Bracketed groups use negated char classes (e.g. [^>]+) to prevent backtracking.
+# "none" / "null" only match when the entire credential is that exact word.
 _PLACEHOLDER_PATTERNS = re.compile(
     r"^(your[_\-]?.*|replace[_\-]?.*|change[_\-]?me?|insert[_\-]?.*|fill[_\-]?.*|"
     r"xxx+|placeholder.*|example.*|sample.*|testkey|test[_\-]api|test[_\-]secret|"
     r"dummy.*|fake.*|todo.*|none|null|n/?a|"
-    r"<.+>|\[.+\]|\{.+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
+    r"<[^>]+>|\[[^\]]+\]|\{[^}]+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
     r"secret[_\-]?here|\*+)$",
     re.IGNORECASE,
 )

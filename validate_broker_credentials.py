@@ -89,11 +89,13 @@ DIM   = lambda t: _c("2",  t)   # dim
 # Anchored (^...$) so it only fires when the *entire* value looks like a
 # placeholder (e.g. "your_kraken_api_key_here"), not when a real key merely
 # starts with a common word.
+# Bracketed groups use negated char classes (e.g. [^>]+) to prevent backtracking.
+# "none" / "null" only match when the entire credential is that exact word.
 _PLACEHOLDER_RE = re.compile(
     r"^(your[_\-]?.*|replace[_\-]?.*|change[_\-]?me?|insert[_\-]?.*|fill[_\-]?.*|"
     r"xxx+|placeholder.*|example.*|sample.*|testkey|test[_\-]api|test[_\-]secret|"
     r"dummy.*|fake.*|todo.*|none|null|n/?a|"
-    r"<.+>|\[.+\]|\{.+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
+    r"<[^>]+>|\[[^\]]+\]|\{[^}]+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
     r"secret[_\-]?here|\*+)$",
     re.IGNORECASE,
 )

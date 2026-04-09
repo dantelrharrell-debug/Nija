@@ -461,11 +461,15 @@ PLACEHOLDER_PASSPHRASE_VALUES = [
 # Regex that detects unfilled placeholder values in API credentials (e.g.
 # "your_kraken_api_key_here", "your_kraken_private_key_here", "<your-secret>").
 # Anchored so real keys that happen to start with a common word are NOT flagged.
+# Bracketed groups use negated char classes (e.g. [^>]+) to prevent backtracking
+# and ensure only exact delimited values match (e.g. "<foo>" but not "abc<foo>").
+# "none" / "null" are anchored by ^...$ so they only match when the entire
+# credential value is that word, not when a real key starts with it.
 _KRAKEN_PLACEHOLDER_RE = re.compile(
     r"^(your[_\-]?.*|replace[_\-]?.*|change[_\-]?me?|insert[_\-]?.*|fill[_\-]?.*|"
     r"xxx+|placeholder.*|example.*|sample.*|testkey|test[_\-]api|test[_\-]secret|"
     r"dummy.*|fake.*|todo.*|none|null|n/?a|"
-    r"<.+>|\[.+\]|\{.+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
+    r"<[^>]+>|\[[^\]]+\]|\{[^}]+\}|api[_\-]?key|api[_\-]?secret|key[_\-]?here|"
     r"secret[_\-]?here|\*+)$",
     re.IGNORECASE,
 )
