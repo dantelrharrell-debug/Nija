@@ -951,9 +951,15 @@ class NijaCoreLoop:
         """
         Fetch OHLCV DataFrame from the broker.
 
+        When ``broker`` is None the method falls back to ``apex.broker_client``
+        so per-symbol fetches never silently return None when the caller omits
+        the broker argument.
+
         Returns ``None`` when the broker call fails or returns no data.
         """
         try:
+            if broker is None:
+                broker = getattr(self.apex, "broker_client", None)
             if broker is None:
                 return None
             # Standard broker interface: get_candles(symbol, limit=200)
@@ -1031,11 +1037,71 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     logger.info("🟢 Trading loop alive (INITIAL START)")
 
     cycle = 0
+    _skipped_cycles = 0          # consecutive cycles skipped due to no broker
+    _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
+
     while True:
         try:
             cycle += 1
+
+            # ── Proactive broker liveness check before entering run_cycle ─────
+            # If the strategy's broker is disconnected, attempt reconnect here
+            # so run_cycle doesn't immediately skip and sleep for cycle_secs.
+            # This keeps the bot trading 24/7 even after extended outages.
+            _broker = getattr(strategy, 'broker', None)
+            _broker_ok = _broker is not None and getattr(_broker, 'connected', False)
+            if not _broker_ok:
+                _bm = getattr(strategy, 'broker_manager', None)
+                if _bm is not None:
+                    # Try to find any already-connected broker first
+                    _candidate = _bm.get_primary_broker()
+                    if _candidate is not None and getattr(_candidate, 'connected', False):
+                        strategy.broker = _candidate
+                        _broker_ok = True
+                    else:
+                        # No connected broker — attempt reconnect on all registered brokers
+                        for _bt, _b in list(getattr(_bm, 'brokers', {}).items()):
+                            if _b is None:
+                                continue
+                            try:
+                                _b.connect()
+                                if getattr(_b, 'connected', False):
+                                    strategy.broker = _b
+                                    _bm.active_broker = _b
+                                    if (hasattr(strategy, 'apex') and strategy.apex
+                                            and hasattr(strategy.apex, 'update_broker_client')):
+                                        strategy.apex.update_broker_client(_b)
+                                    logger.info(
+                                        "✅ Loop reconnected broker: %s",
+                                        getattr(_bt, 'value', str(_bt)).upper(),
+                                    )
+                                    _broker_ok = True
+                                    break
+                            except Exception as _lrc_err:
+                                logger.warning(
+                                    "⚠️ Loop reconnect failed for %s: %s",
+                                    getattr(_bt, 'value', str(_bt)).upper(), _lrc_err,
+                                )
+
+            if not _broker_ok:
+                _skipped_cycles += 1
+                if _skipped_cycles == 1 or _skipped_cycles % _MAX_SKIP_LOG_INTERVAL == 0:
+                    logger.warning(
+                        "⏸️  Trading paused — no broker connected "
+                        "(skipped_cycles=%d, downtime≈%ds). "
+                        "Retrying in %ds …",
+                        _skipped_cycles,
+                        _skipped_cycles * cycle_secs,
+                        cycle_secs,
+                    )
+                time.sleep(cycle_secs)
+                continue
+
+            # Broker is alive — run the full trading cycle
+            _skipped_cycles = 0
             strategy.run_cycle()
             time.sleep(cycle_secs)
+
         except Exception as _err:
             logger.error(
                 "❌ Trading loop cycle #%d error: %s — retrying in 15s",

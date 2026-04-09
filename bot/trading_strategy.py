@@ -7198,9 +7198,39 @@ class TradingStrategy:
                 except Exception as _bm_err:
                     logger.warning("Broker recovery attempt failed: %s", _bm_err)
                     active_broker = None
+            # If still disconnected, try to reconnect each broker in the manager
+            # before giving up — this is what keeps the bot trading 24/7.
             if not active_broker or not getattr(active_broker, 'connected', False):
-                logger.warning("No active broker at execution time — skipping cycle")
-                return
+                _reconnected = False
+                if hasattr(self, 'broker_manager') and self.broker_manager:
+                    for _bt, _b in list(getattr(self.broker_manager, 'brokers', {}).items()):
+                        if _b is None:
+                            continue
+                        try:
+                            logger.info(
+                                "🔌 Attempting to reconnect broker %s …",
+                                getattr(_bt, 'value', str(_bt)).upper(),
+                            )
+                            _b.connect()
+                            if getattr(_b, 'connected', False):
+                                active_broker = _b
+                                self.broker_manager.active_broker = _b
+                                if hasattr(self, 'apex') and self.apex and hasattr(self.apex, 'update_broker_client'):
+                                    self.apex.update_broker_client(_b)
+                                logger.info(
+                                    "✅ Broker reconnected: %s",
+                                    getattr(_bt, 'value', str(_bt)).upper(),
+                                )
+                                _reconnected = True
+                                break
+                        except Exception as _rc_err:
+                            logger.warning(
+                                "⚠️ Reconnect failed for %s: %s",
+                                getattr(_bt, 'value', str(_bt)).upper(), _rc_err,
+                            )
+                if not _reconnected:
+                    logger.warning("No active broker at execution time — skipping cycle")
+                    return
 
         # SAFETY: account_balance MUST be defined before any reference — even if
         # entry is skipped early.  All downstream code uses `account_balance is not
