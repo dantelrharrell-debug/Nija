@@ -84,10 +84,10 @@ logger = logging.getLogger("nija.market_regime_strategy_switcher")
 # Constants
 # ---------------------------------------------------------------------------
 
-MIN_BARS_BEFORE_SWITCH: int = 3        # bars a new regime must persist
-COOLDOWN_BARS: int = 5                 # bars to lock after a switch
-CONFIDENCE_THRESHOLD: float = 0.55    # minimum confidence to accept new regime
-MIN_WIN_RATE_VETO: float = 0.30       # veto switch if strategy WR < this value
+MIN_BARS_BEFORE_SWITCH: int = 2        # bars a new regime must persist (was 3)
+COOLDOWN_BARS: int = 3                 # bars to lock after a switch (was 5)
+CONFIDENCE_THRESHOLD: float = 0.30    # minimum confidence to accept new regime (was 0.55)
+MIN_WIN_RATE_VETO: float = 0.25       # veto switch if strategy WR < this value (was 0.30)
 PERF_LOOKBACK: int = 20               # recent trades to check for performance veto
 MIN_TRADES_FOR_VETO: int = 10         # minimum trades in regime before veto activates
 TRANSITION_LOG_MAX: int = 200         # max stored transition events

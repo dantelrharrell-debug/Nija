@@ -66,9 +66,9 @@ MAX_ENTRIES_PER_CYCLE = 3
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
-# Lowered 25.0 → 20.0 → 14.0 → 11.0 → 8.0 → 5.0 (micro-account mode, Apr 2026).
+# Lowered 25.0 → 20.0 → 14.0 → 11.0 → 8.0 → 5.0 → 3.0 (confirmation-trade mode, Apr 2026).
 # Override at runtime with NIJA_CORE_MIN_SCORE env var.
-MIN_SCORE_HARD_FLOOR = float(os.environ.get("NIJA_CORE_MIN_SCORE", "5.0"))
+MIN_SCORE_HARD_FLOOR = float(os.environ.get("NIJA_CORE_MIN_SCORE", "3.0"))
 
 # ── DEAD ZONE detection ──────────────────────────────────────────────────────
 # When zero_signal_streak reaches DEAD_ZONE_STREAK_THRESHOLD the bot is
@@ -95,8 +95,8 @@ _RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.15, 0.25, 0.40)
 
 # After this many consecutive zero-signal cycles, the hard bypass activates:
 # all quality floors are ignored and the top-ranked available candidate is
-# accepted unconditionally.  Lowered 40 → 10 → 8 → 5 → 3.
-HARD_BYPASS_STREAK_THRESHOLD: int = int(os.environ.get("NIJA_HARD_BYPASS_STREAK", "3"))
+# accepted unconditionally.  Lowered 40 → 10 → 8 → 5 → 3 → 2.
+HARD_BYPASS_STREAK_THRESHOLD: int = int(os.environ.get("NIJA_HARD_BYPASS_STREAK", "2"))
 
 # One-shot manual forced-entry flag.
 # Set to True externally to force the top-scored candidate in the very next
