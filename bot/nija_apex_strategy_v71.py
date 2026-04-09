@@ -98,7 +98,7 @@ LEGACY_SIGNAL_THRESHOLD: int = 2
 
 # Borderline ATR multiplier: ATR between (BORDERLINE_ATR_FLOOR × min_atr) and min_atr
 # is treated as borderline volatility — allowed with reduced position size.
-BORDERLINE_ATR_FLOOR: float = 0.5  # 50 % of minimum → borderline zone
+BORDERLINE_ATR_FLOOR: float = 0.35  # 35% of minimum → borderline zone (was 50%)
 
 # NIJA_MICROCAP_RELAX_SIDEWAYS: when True (default), apply a small extra
 # gate_score_reduction in consolidation/ranging/sideways regimes so the bot
@@ -1164,8 +1164,8 @@ class NIJAApexStrategyV71:
         # AGGRESSIVE MODE: widened from 30/70 → 25/75 to allow entries in a broader RSI band
         general_rsi_min = 25
         general_rsi_max = 75
-        general_min_atr_pct = 0.5  # 0.5% minimum volatility
-        general_max_spread_pct = 0.20  # 0.20% maximum spread (loosened from 0.15% to increase pair pass rate)
+        general_min_atr_pct = 0.20  # 0.20% minimum volatility (was 0.5%)
+        general_max_spread_pct = 0.50  # 0.50% maximum spread (was 0.20%)
         
         # 1. RSI Range Check
         # NOTE: We use the same RSI range for both long and short to avoid extreme conditions
