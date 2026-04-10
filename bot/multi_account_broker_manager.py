@@ -30,12 +30,16 @@ try:
         BrokerType, AccountType, BaseBroker,
         CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker,
         KrakenStartupFSM, _KRAKEN_STARTUP_FSM,
+        GLOBAL_PLATFORM_BROKERS, _PLATFORM_BROKER_INSTANCES,
+        _PLATFORM_BROKER_REGISTRY_LOCK,
     )
 except ImportError:
     from broker_manager import (
         BrokerType, AccountType, BaseBroker,
         CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker,
         KrakenStartupFSM, _KRAKEN_STARTUP_FSM,
+        GLOBAL_PLATFORM_BROKERS, _PLATFORM_BROKER_INSTANCES,
+        _PLATFORM_BROKER_REGISTRY_LOCK,
     )
 
 # Import broker registry for platform designation tracking
@@ -2139,6 +2143,154 @@ class MultiAccountBrokerManager:
             logger.info(f"✅ {active_connected_count} active user account(s) connected")
 
         logger.info("=" * 70)
+
+    def initialize_platform_brokers(self) -> Dict[str, dict]:
+        """Create, connect, and register all platform brokers.
+
+        This is the **sole** entry-point for platform broker initialisation.
+        No other layer (e.g. TradingStrategy) should instantiate platform
+        broker objects directly.  Callers receive back a result dict so they
+        can do strategy-specific post-processing (order cleanup, legacy compat
+        wiring, etc.) without touching the broker lifecycle.
+
+        Guard
+        -----
+        For coinbase / kraken / okx the global ``GLOBAL_PLATFORM_BROKERS``
+        registry is checked under ``_PLATFORM_BROKER_REGISTRY_LOCK`` before
+        creating a new object.  If the flag is already ``True`` the existing
+        instance is reused, preventing duplicate initialisation on hot-reload
+        or concurrent startup paths.
+
+        Return value
+        ------------
+        A mapping keyed by broker name (lowercase, matching BrokerType.value)::
+
+            {
+                "kraken":   {"broker": <KrakenBroker>,   "connected": True},
+                "coinbase": {"broker": <CoinbaseBroker>, "connected": False},
+                ...
+            }
+
+        A broker that was skipped (NIJA_DISABLE_COINBASE=true) or that failed
+        to import its SDK will not appear in the dict.  The ``connected`` flag
+        mirrors the return value of ``broker.connect()``.
+        """
+        # Late import to avoid circular dependency (broker_manager → multi_account_broker_manager)
+        try:
+            from bot.broker_manager import BinanceBroker
+        except ImportError:
+            try:
+                from broker_manager import BinanceBroker
+            except ImportError:
+                BinanceBroker = None  # type: ignore[assignment,misc]
+
+        results: Dict[str, dict] = {}
+
+        # ── Helpers ──────────────────────────────────────────────────────────
+
+        def _guarded_create(key: str, factory):
+            """Return existing instance if guard is set, else create+record."""
+            if key in GLOBAL_PLATFORM_BROKERS:
+                with _PLATFORM_BROKER_REGISTRY_LOCK:
+                    if GLOBAL_PLATFORM_BROKERS[key]:
+                        existing = _PLATFORM_BROKER_INSTANCES.get(key)
+                        logger.info(
+                            "🔒 Platform %s already initialised — reusing existing instance",
+                            key.upper(),
+                        )
+                        return existing
+                    broker = factory()
+                    GLOBAL_PLATFORM_BROKERS[key] = True
+                    _PLATFORM_BROKER_INSTANCES[key] = broker
+                    return broker
+            # Broker type not in guard dict (e.g. binance, alpaca) — create freely
+            return factory()
+
+        def _connect_and_register(broker_type: BrokerType, broker, key: str) -> bool:
+            """Run begin→connect→register/fail and return True if connected."""
+            self.begin_platform_connection(broker_type)
+            try:
+                connected = broker.connect()
+            except Exception as exc:
+                logger.error("❌ Platform %s connect() raised: %s", key.upper(), exc)
+                connected = False
+            if connected:
+                self.register_platform_broker_instance(broker_type, broker)
+                logger.info("   ✅ Platform %s connected and registered", key.upper())
+            else:
+                self.mark_platform_failed(broker_type)
+                # Still register so the background reconnect loop can retry.
+                self.register_platform_broker_instance(broker_type, broker)
+                logger.warning(
+                    "   ⚠️  Platform %s connection failed — registered for background retry",
+                    key.upper(),
+                )
+            return connected
+
+        # ── Kraken (PRIMARY) ─────────────────────────────────────────────────
+        logger.info("📊 Attempting to connect Kraken Pro (PLATFORM - PRIMARY)…")
+        try:
+            broker = _guarded_create(
+                "kraken",
+                lambda: KrakenBroker(account_type=AccountType.PLATFORM),
+            )
+            connected = _connect_and_register(BrokerType.KRAKEN, broker, "kraken")
+            results["kraken"] = {"broker": broker, "connected": connected}
+        except Exception as exc:
+            logger.error("❌ Kraken PLATFORM init error: %s", exc)
+            results["kraken"] = {"broker": None, "connected": False, "error": str(exc)}
+
+        time.sleep(2.0)  # Separate Kraken nonce window from next broker
+
+        # ── Coinbase ─────────────────────────────────────────────────────────
+        if os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in ("1", "true", "yes"):
+            logger.info("⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=true)")
+        else:
+            logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)…")
+            try:
+                broker = _guarded_create("coinbase", CoinbaseBroker)
+                connected = _connect_and_register(BrokerType.COINBASE, broker, "coinbase")
+                results["coinbase"] = {"broker": broker, "connected": connected}
+            except Exception as exc:
+                logger.warning("⚠️  Coinbase PLATFORM error: %s", exc)
+                results["coinbase"] = {"broker": None, "connected": False, "error": str(exc)}
+
+        # ── OKX ──────────────────────────────────────────────────────────────
+        logger.info("📊 Attempting to connect OKX (PLATFORM)…")
+        try:
+            broker = _guarded_create("okx", OKXBroker)
+            connected = _connect_and_register(BrokerType.OKX, broker, "okx")
+            results["okx"] = {"broker": broker, "connected": connected}
+        except Exception as exc:
+            logger.warning("⚠️  OKX PLATFORM error: %s", exc)
+            results["okx"] = {"broker": None, "connected": False, "error": str(exc)}
+
+        time.sleep(0.5)
+
+        # ── Binance ───────────────────────────────────────────────────────────
+        if BinanceBroker is not None:
+            logger.info("📊 Attempting to connect Binance (PLATFORM)…")
+            try:
+                broker = _guarded_create("binance", BinanceBroker)
+                connected = _connect_and_register(BrokerType.BINANCE, broker, "binance")
+                results["binance"] = {"broker": broker, "connected": connected}
+            except Exception as exc:
+                logger.warning("⚠️  Binance PLATFORM error: %s", exc)
+                results["binance"] = {"broker": None, "connected": False, "error": str(exc)}
+
+        time.sleep(0.5)
+
+        # ── Alpaca ────────────────────────────────────────────────────────────
+        logger.info("📊 Attempting to connect Alpaca (PLATFORM - Paper Trading)…")
+        try:
+            broker = _guarded_create("alpaca", AlpacaBroker)
+            connected = _connect_and_register(BrokerType.ALPACA, broker, "alpaca")
+            results["alpaca"] = {"broker": broker, "connected": connected}
+        except Exception as exc:
+            logger.warning("⚠️  Alpaca PLATFORM error: %s", exc)
+            results["alpaca"] = {"broker": None, "connected": False, "error": str(exc)}
+
+        return results
 
 
 # Global instance

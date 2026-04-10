@@ -626,6 +626,33 @@ _KRAKEN_STARTUP_FSM: KrakenStartupFSM = KrakenStartupFSM()
 _env_wait = os.environ.get("NIJA_USER_PLATFORM_WAIT", "0")
 _USER_PLATFORM_WAIT_S: Optional[int] = int(_env_wait) if _env_wait.strip().isdigit() and int(_env_wait) > 0 else None
 
+# ── Global platform-broker registry guard ────────────────────────────────────
+# Tracks whether a PLATFORM broker of each type has already been initialised
+# in this process.  The guard prevents a second instantiation from racing with
+# the first one (e.g. when TradingStrategy and a background thread both enter
+# the broker-creation path before the first instance is registered).
+#
+# Usage (in MultiAccountBrokerManager.initialize_platform_brokers):
+#
+#   with _PLATFORM_BROKER_REGISTRY_LOCK:
+#       if GLOBAL_PLATFORM_BROKERS["coinbase"]:
+#           return _PLATFORM_BROKER_INSTANCES.get("coinbase")
+#       GLOBAL_PLATFORM_BROKERS["coinbase"] = True
+#       broker = CoinbaseBroker()
+#       _PLATFORM_BROKER_INSTANCES["coinbase"] = broker
+#
+# Keys must match the lowercase BrokerType.value strings used throughout the
+# codebase ("coinbase", "kraken", "okx").
+GLOBAL_PLATFORM_BROKERS: Dict[str, bool] = {
+    "coinbase": False,
+    "kraken": False,
+    "okx": False,
+}
+# Stores the actual singleton broker instance once created.
+_PLATFORM_BROKER_INSTANCES: Dict[str, "BaseBroker"] = {}
+# Protects both dicts from concurrent reads/writes during startup.
+_PLATFORM_BROKER_REGISTRY_LOCK: threading.Lock = threading.Lock()
+
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
     'your_passphrase', 'YOUR_PASSPHRASE',
