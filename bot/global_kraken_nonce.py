@@ -128,6 +128,14 @@ _DEEP_STARTUP_FLOOR_MS: int = int(os.environ.get("NIJA_NONCE_DEEP_STARTUP_FLOOR_
 # holding the nonce lock, since that process may have advanced the floor further.
 _DUPLICATE_PROC_EXTRA_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_DUPLICATE_PROC_EXTRA_ATTEMPTS", "6"))
 
+# ── Ceiling-jump escalation after standard probes are all exhausted ───────────
+# When every standard probe attempt fails, probe_and_resync() performs one
+# ceiling jump (now + _CEILING_JUMP_MS, default 24 h) and then tries this many
+# additional probes.  If those ALSO fail — and no duplicate process is detected
+# — the API key is declared permanently out-of-window and the broker quarantine
+# fires immediately.  This is the "instant key invalidation detection" step.
+_PROBE_ESCALATION_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_ESCALATION_ATTEMPTS", "4"))
+
 # ── Adaptive Offset Engine constants ─────────────────────────────────────────
 # The Adaptive Offset Engine replaces the fixed _PROBE_STEP_MS with a learned
 # offset computed from two signals:
@@ -701,6 +709,12 @@ class KrakenNonceManager:
         # reaches _AUTO_DEEP_RESET_THRESHOLD, deep-probe mode is automatically
         # activated so probe_and_resync() uses the wider 120-min coverage window.
         self._nuclear_reset_count: int = 0
+        # Set to True when probe_and_resync() determines the API key is
+        # permanently out-of-window (ceiling jump + escalation probes all fail,
+        # and no competing process is detected).  Once True, record_error() is a
+        # no-op (no more nuclear resets) and broker_manager aborts retry loops
+        # immediately so the infinite nonce-reset loop cannot happen.
+        self._key_invalidated: bool = False
         # Process-lifetime lock file descriptor (None on Windows / error).
         # Kept open for the entire bot session so duplicate-process detection
         # is reliable even between nonce operations.
@@ -1133,10 +1147,12 @@ class KrakenNonceManager:
                 except Exception as _re:
                     _logger.debug("KrakenNonceManager.force_resync: Redis reset error (%s)", _re)
 
-            # Reset the in-process error counter, nuclear reset counter, and trading pause.
+            # Reset the in-process error counter, nuclear reset counter, trading pause,
+            # and key-invalidation flag so a freshly-rotated API key gets a clean slate.
             self._error_count = 0
             self._nuclear_reset_count = 0
             self._trading_paused_until = 0.0
+            self._key_invalidated = False
 
             # Advance nonce to now + RESET_OFFSET_MS so the very next call
             # lands safely above Kraken's window.
@@ -1174,6 +1190,30 @@ class KrakenNonceManager:
         """Return the number of nuclear resets that have fired in this session."""
         with _LOCK:
             return self._nuclear_reset_count
+
+    @property
+    def is_key_invalidated(self) -> bool:
+        """
+        Return True when the Kraken API key has been declared permanently
+        out-of-window by ``probe_and_resync()``.
+
+        This is set when:
+          1. All standard probe attempts failed, AND
+          2. A ceiling jump (now + 24 h) was tried, AND
+          3. All post-ceiling escalation probes ALSO failed, AND
+          4. No duplicate competing process was detected (which would indicate a
+             process-conflict rather than a dead key).
+
+        Once True:
+          • ``record_error()`` becomes a no-op — no more nuclear resets.
+          • ``broker_manager`` returns False immediately from ``connect()`` instead
+            of entering the retry loop, breaking the infinite-reset cycle.
+          • Quarantine is active (Kraken is exit-only; Coinbase promoted).
+
+        Reset by ``force_resync()`` after the operator has rotated the API key
+        and confirmed the new key is healthy.
+        """
+        return getattr(self, "_key_invalidated", False)
 
     @property
     def is_deep_reset_active(self) -> bool:
@@ -1230,7 +1270,23 @@ class KrakenNonceManager:
         _TRADING_PAUSE_S seconds so Kraken's nonce window can recover.
 
         Counter resets only on record_success().
+
+        No-op when the API key has been declared permanently invalid by
+        ``probe_and_resync()`` — prevents the infinite nuclear-reset loop
+        that occurs when every nonce is rejected regardless of value.
         """
+        # ── Key-invalidation guard ────────────────────────────────────────────
+        # If probe_and_resync() confirmed the key is permanently out-of-window,
+        # skip ALL escalation.  The broker quarantine is already active; firing
+        # more nuclear resets would only delay the operator notification and keep
+        # the 300 s pause loop spinning for no benefit.
+        if getattr(self, "_key_invalidated", False):
+            _logger.debug(
+                "KrakenNonceManager.record_error: suppressed — API key is "
+                "permanently invalidated; no nuclear reset will fire. "
+                "Rotate the key and call force_resync() to recover."
+            )
+            return
         with _LOCK:
             self._error_count += 1
 
@@ -1432,8 +1488,43 @@ class KrakenNonceManager:
         Returns:
             ``True``  — Kraken accepted the call; nonce is calibrated.
             ``False`` — All attempts exhausted or a non-nonce error occurred.
+                        When ``is_key_invalidated`` is also True, the key is
+                        permanently out-of-window and broker_manager must stop
+                        retrying immediately.
         """
-        # Resolve adaptive step — deep-reset mode overrides with larger step/attempts
+        # ── Step 0: NTP clock-drift guard (deterministic pre-check) ──────────
+        # Kraken's nonce window is anchored to UTC wall-clock time.  Even 200 ms
+        # of backward drift makes every nonce look "too small" to Kraken and
+        # causes ALL probes to fail.  Check drift *before* any probe so the
+        # operator gets an actionable message the moment calibration begins.
+        _ntp = check_ntp_sync()
+        if _ntp.get("error"):
+            _logger.warning(
+                "KrakenNonceManager.probe_and_resync: NTP check unavailable (%s) — "
+                "clock drift may cause probes to fail.  Verify manually: "
+                "sudo ntpdate %s",
+                _ntp["error"], _NTP_SERVER,
+            )
+        elif not _ntp["ok"]:
+            _logger.error(
+                "❌ KrakenNonceManager.probe_and_resync: CLOCK DRIFT DETECTED "
+                "(%+.3f s / %+.0f ms vs NTP).  Kraken requires ±1 s accuracy — "
+                "probes WILL fail until clock is corrected.  "
+                "Fix NOW:  sudo ntpdate %s  (or: timedatectl set-ntp true)",
+                _ntp["offset_s"], _ntp["offset_s"] * 1000, _NTP_SERVER,
+            )
+            # Do NOT abort — probe may still succeed if drift is borderline.
+            # The operator message above is the key deliverable.
+        elif abs(_ntp.get("offset_s", 0.0)) > _NTP_WARN_OFFSET_S:
+            _logger.warning(
+                "⚠️  KrakenNonceManager.probe_and_resync: clock drift %+.3f s "
+                "— within ±1 s tolerance but drifting toward the failure zone.  "
+                "Recommend: sudo ntpdate %s",
+                _ntp["offset_s"], _NTP_SERVER,
+            )
+
+        # ── Step 1: Resolve adaptive step ────────────────────────────────────
+        # Deep-reset mode overrides with larger step/attempts.
         ao = AdaptiveNonceOffsetEngine()
         if step_ms > 0:
             effective_step = step_ms
@@ -1454,9 +1545,13 @@ class KrakenNonceManager:
             self.get_last_nonce(),
         )
 
-        # Duplicate-process check: a competing process advances Kraken's nonce
-        # floor concurrently, so we need more attempts to catch up.
-        if self.detect_other_process_running():
+        # ── Step 2: Duplicate-process check ──────────────────────────────────
+        # A competing process advances Kraken's nonce floor concurrently, so we
+        # need more attempts to catch up.  Track whether a duplicate was seen so
+        # the key-invalidation step below can distinguish "dead key" from
+        # "process conflict".
+        _duplicate_at_start = self.detect_other_process_running()
+        if _duplicate_at_start:
             _logger.warning(
                 "⚠️  KrakenNonceManager.probe_and_resync: another bot process "
                 "appears to be holding the nonce lock — nonce gap may be larger "
@@ -1469,6 +1564,7 @@ class KrakenNonceManager:
                 effective_max_attempts,
             )
 
+        # ── Step 3: Standard probe loop ───────────────────────────────────────
         failed_attempts = 0
         for attempt in range(1, effective_max_attempts + 1):
             try:
@@ -1531,11 +1627,143 @@ class KrakenNonceManager:
                 attempt, effective_max_attempts, error_str, effective_step, self._last_nonce,
             )
 
+        # ── Step 4: Ceiling-jump escalation ───────────────────────────────────
+        # All standard probes exhausted.  Re-check for a duplicate process — if
+        # it appeared after the initial check it would explain the failure.
+        _duplicate_now = self.detect_other_process_running()
+        _total_standard_jump = effective_step * effective_max_attempts
+
         _logger.error(
-            "❌ KrakenNonceManager.probe_and_resync: calibration FAILED after "
-            "%d attempts (total jump: +%d ms). nonce=%d. "
-            "Check for duplicate processes or reset the nonce state file.",
-            effective_max_attempts, effective_step * effective_max_attempts, self.get_last_nonce(),
+            "❌ KrakenNonceManager.probe_and_resync: all %d standard probes "
+            "failed (total jump: +%d ms / %.1f min).  "
+            "Escalating to ceiling jump (now+%.1f h) + %d additional probes.",
+            effective_max_attempts,
+            _total_standard_jump, _total_standard_jump / 60_000,
+            _CEILING_JUMP_MS / 3_600_000,
+            _PROBE_ESCALATION_ATTEMPTS,
+        )
+
+        # Ceiling jump: advance nonce to now + _CEILING_JUMP_MS (default 24 h)
+        # so it lands well above Kraken's stored high-water mark even if many
+        # nuclear resets occurred in previous sessions.
+        self.force_ceiling_jump()
+
+        _esc_failed = 0
+        for esc_attempt in range(1, _PROBE_ESCALATION_ATTEMPTS + 1):
+            try:
+                esc_result = api_call_fn()
+            except Exception as exc:
+                _logger.debug(
+                    "KrakenNonceManager.probe_and_resync: escalation attempt "
+                    "%d/%d — exception (%s); stopping",
+                    esc_attempt, _PROBE_ESCALATION_ATTEMPTS, exc,
+                )
+                return False
+
+            if not isinstance(esc_result, dict):
+                return False
+
+            esc_errors = esc_result.get("error") or []
+            esc_error_str = ", ".join(esc_errors)
+            esc_is_nonce_err = any(
+                kw in esc_error_str.lower()
+                for kw in ("invalid nonce", "eapi:invalid nonce", "nonce window")
+            )
+
+            if not esc_is_nonce_err:
+                # Ceiling jump worked — calibration complete.
+                if not esc_errors:
+                    _logger.warning(
+                        "✅ KrakenNonceManager.probe_and_resync: calibrated after "
+                        "ceiling jump on escalation attempt %d/%d — nonce=%d.  "
+                        "Key required a >%.0f-min forward jump to re-sync.",
+                        esc_attempt, _PROBE_ESCALATION_ATTEMPTS, self.get_last_nonce(),
+                        (_CEILING_JUMP_MS + effective_step * esc_attempt) / 60_000,
+                    )
+                ao.record_calibration(
+                    failed_attempts=failed_attempts + esc_attempt,
+                    step_ms=effective_step,
+                )
+                return True
+
+            # Still rejected — jump by another step.
+            _esc_failed += 1
+            with _LOCK:
+                self._last_nonce += effective_step
+                self._persist()
+            _logger.warning(
+                "KrakenNonceManager.probe_and_resync: escalation attempt %d/%d — "
+                "nonce still rejected (%s), jumped +%d ms → nonce=%d",
+                esc_attempt, _PROBE_ESCALATION_ATTEMPTS,
+                esc_error_str, effective_step, self._last_nonce,
+            )
+
+        # ── Step 5: Key-invalidation detection ────────────────────────────────
+        # Ceiling jump + escalation probes ALL failed.  Determine root cause:
+        #
+        #   • Duplicate process still running → process conflict, not a dead key.
+        #     The key may be valid once the other process is stopped.
+        #
+        #   • No duplicate process → the key is permanently out-of-window
+        #     (e.g. used concurrently across multiple deployments historically,
+        #     or Kraken's nonce floor is now beyond any reachable timestamp).
+        #     Creating a new API key is the only guaranteed fix.
+        _duplicate_after = self.detect_other_process_running()
+
+        if _duplicate_now or _duplicate_after:
+            _logger.critical(
+                "🚨 KrakenNonceManager.probe_and_resync: CEILING JUMP ALSO FAILED "
+                "while a duplicate NIJA process is still running.\n"
+                "ROOT CAUSE: competing writer is continuously advancing Kraken's\n"
+                "nonce floor faster than this process can calibrate.\n\n"
+                "REQUIRED ACTION (do in this order):\n"
+                "  1. Stop ALL other Railway services / deployments using this key.\n"
+                "  2. Wait 60 s for Kraken's nonce window to settle.\n"
+                "  3. Restart this NIJA instance (NIJA_FORCE_NONCE_RESYNC=1).\n"
+                "The API key itself is NOT necessarily invalidated — stop the\n"
+                "competing process first before assuming key replacement is needed."
+            )
+            # Do NOT set _key_invalidated — the key may be recoverable once the
+            # duplicate process is stopped.
+            return False
+
+        # No competing process — key is permanently out-of-window.
+        with _LOCK:
+            self._key_invalidated = True
+
+        # Fire broker quarantine immediately (one-shot, idempotent).
+        global _quarantine_triggered
+        _fire_quarantine = False
+        with _LOCK:
+            if not _quarantine_triggered:
+                _quarantine_triggered = True
+                _fire_quarantine = True
+        if _fire_quarantine:
+            _snapshot_callbacks = list(_quarantine_callbacks)
+            for _cb in _snapshot_callbacks:
+                try:
+                    _cb()
+                except Exception as _exc:
+                    _logger.error(
+                        "KrakenNonceManager: key-invalidation quarantine callback "
+                        "%r raised %s", _cb, _exc,
+                    )
+
+        _logger.critical(
+            "🔴🔴 KrakenNonceManager.probe_and_resync: API KEY IS PERMANENTLY "
+            "INVALIDATED.\n"
+            "Kraken rejected nonces at now+24h AND at every further step.\n"
+            "This key cannot be recovered by nonce manipulation alone.\n\n"
+            "DETERMINISTIC RECOVERY (do in exact order):\n"
+            "  1. Go to https://www.kraken.com/u/security/api\n"
+            "  2. DELETE the compromised key.\n"
+            "  3. CREATE a new API key.  Under 'Advanced':\n"
+            "       ✅  Set Nonce Window = 10000\n"
+            "  4. Update env vars:  KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET\n"
+            "  5. Set  NIJA_DEEP_NONCE_RESET=1  on the first restart.\n"
+            "  6. Deploy ONE instance only — never run two bots with the same key.\n\n"
+            "Kraken is now in EXIT-ONLY mode; all new entries will route to Coinbase.\n"
+            "The bot will NOT loop nuclear resets for this key (record_error suppressed)."
         )
         return False
 
@@ -1761,6 +1989,7 @@ def get_global_nonce_stats() -> dict:
         "last_nonce": _nonce_manager.get_last_nonce(),
         "nuclear_reset_count": _nonce_manager.nuclear_reset_count,
         "deep_reset_active": _nonce_manager.is_deep_reset_active,
+        "key_invalidated": _nonce_manager.is_key_invalidated,
         "trading_paused": _nonce_manager.is_paused(),
         "pause_remaining_s": _nonce_manager.get_pause_remaining(),
         "broker_quarantined": _quarantine_triggered,
@@ -1941,6 +2170,23 @@ def get_nonce_pause_remaining() -> float:
     return _nonce_manager.get_pause_remaining()
 
 
+def is_kraken_key_invalidated() -> bool:
+    """
+    Return ``True`` when ``probe_and_resync()`` has determined that the current
+    Kraken API key is permanently out-of-window and cannot be recovered by nonce
+    manipulation.
+
+    Once True:
+      • ``record_error()`` is a no-op (no more nuclear resets or 300 s pauses).
+      • ``broker_manager.connect()`` returns False immediately without entering
+        the retry loop — breaking the infinite nuclear-reset cycle.
+      • Broker quarantine is active: Kraken is exit-only; Coinbase is primary.
+
+    Reset by calling ``force_resync_kraken_nonce()`` after rotating the key.
+    """
+    return _nonce_manager.is_key_invalidated
+
+
 __all__ = [
     "KrakenNonceManager",
     "NonceManager",
@@ -1963,6 +2209,7 @@ __all__ = [
     "probe_and_resync_nonce",
     "nonce_reset_triggered_recently",
     "is_nonce_trading_paused",
+    "is_kraken_key_invalidated",
     "get_nonce_pause_remaining",
     "cleanup_legacy_nonce_files",
     "check_ntp_sync",

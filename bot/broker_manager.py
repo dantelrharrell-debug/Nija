@@ -81,6 +81,7 @@ try:
         probe_and_resync_nonce,
         register_broker_quarantine_callback,
         is_broker_quarantined,
+        is_kraken_key_invalidated,
     )
 except ImportError:
     try:
@@ -97,6 +98,7 @@ except ImportError:
             probe_and_resync_nonce,
             register_broker_quarantine_callback,
             is_broker_quarantined,
+            is_kraken_key_invalidated,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -112,6 +114,7 @@ except ImportError:
         probe_and_resync_nonce = None
         register_broker_quarantine_callback = None
         is_broker_quarantined = None
+        is_kraken_key_invalidated = None
 
 # ── Broker quarantine state ───────────────────────────────────────────────────
 # Set to True when the nonce manager confirms nonce poisoning (consecutive
@@ -6580,6 +6583,17 @@ class KrakenBroker(BaseBroker):
                 if _probe_ok:
                     logger.info(f"   ✅ Nonce resync handshake complete for {cred_label}")
                 else:
+                    # Check whether probe_and_resync detected a permanently invalid key.
+                    # If so, return False immediately — entering the retry loop would
+                    # only trigger nuclear resets and a 300 s pause cycle before failing
+                    # again with the same result.
+                    if is_kraken_key_invalidated is not None and is_kraken_key_invalidated():
+                        logger.critical(
+                            f"❌ Kraken API key for {cred_label} is PERMANENTLY INVALIDATED "
+                            f"(probe_and_resync: ceiling jump + escalation all failed). "
+                            f"A new API key is required — see logs above for step-by-step recovery."
+                        )
+                        return False
                     logger.warning(
                         f"   ⚠️  Nonce resync handshake did not fully calibrate for {cred_label} "
                         f"— proceeding with connection retry loop"
@@ -6720,6 +6734,16 @@ class KrakenBroker(BaseBroker):
 
                                 if is_nonce_error:
                                     if get_global_nonce_manager is not None:
+                                        # Abort immediately if the key is permanently invalid —
+                                        # calling record_error() when the key is dead does nothing
+                                        # useful and would have caused the nuclear-reset loop.
+                                        if is_kraken_key_invalidated is not None and is_kraken_key_invalidated():
+                                            logger.critical(
+                                                f"❌ Kraken nonce error on {cred_label} but API key is "
+                                                f"already flagged as permanently invalidated — "
+                                                f"aborting retry loop.  Rotate the key and restart."
+                                            )
+                                            return False
                                         get_global_nonce_manager().record_error()
                                     # Apply a probe-step jump on top of record_error()'s small
                                     # escalating jump so we converge to Kraken's nonce window
@@ -7058,6 +7082,15 @@ class KrakenBroker(BaseBroker):
 
                         if is_nonce_error:
                             if get_global_nonce_manager is not None:
+                                # Abort immediately when key is flagged as permanently invalid —
+                                # no nuclear reset loop should fire for a dead key.
+                                if is_kraken_key_invalidated is not None and is_kraken_key_invalidated():
+                                    logger.critical(
+                                        f"❌ Kraken nonce error on {cred_label} but API key is "
+                                        f"permanently invalidated — aborting retry loop.  "
+                                        f"Rotate the key and restart."
+                                    )
+                                    return False
                                 get_global_nonce_manager().record_error()
 
                         # Log retryable errors appropriately:
