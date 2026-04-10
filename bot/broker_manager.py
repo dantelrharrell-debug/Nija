@@ -10045,40 +10045,51 @@ class BrokerManager:
         """
         self.brokers[broker.broker_type] = broker
 
-        # Ensure platform broker is globally registered and never overwritten
-        broker_type = getattr(broker.account_type, 'value', None)
-        if broker_type == "platform":
-            self.platform_broker = broker
-            self.primary_broker = broker  # 🔥 FORCE PRIMARY
+        # ── Platform-slot registration ───────────────────────────────────────
+        # KRAKEN-FIRST RULE (Apr 2026): Kraken is the sole execution authority.
+        # It must own the platform_broker / primary_broker slots.  Coinbase (or
+        # any other non-Kraken broker) must never overwrite a Kraken entry here,
+        # because once `_platform_locked` is set, set_primary_broker() is blocked
+        # and the bot would be stuck on Coinbase for the rest of the session.
+        account_type_val = getattr(broker.account_type, 'value', None)
+        is_kraken = broker.broker_type == BrokerType.KRAKEN
+        if account_type_val == "platform":
+            kraken_already_primary = (
+                self.platform_broker is not None
+                and self.platform_broker.broker_type == BrokerType.KRAKEN
+            )
+            if is_kraken or not kraken_already_primary:
+                # Register this broker as the execution authority only when it
+                # is Kraken, or when no Kraken has been registered yet.
+                self.platform_broker = broker
+                self.primary_broker = broker
+                self._platform_locked = True
+                logger.info("✅ PLATFORM broker registered globally")
+                logger.info(f"✅ {broker.broker_type.value} set as PRIMARY (execution authority)")
+                logger.info("✅ Cross-account orchestration ENABLED")
+            else:
+                # Coinbase (or other non-Kraken) added after Kraken — do NOT
+                # overwrite Kraken's authority in the platform/primary slots.
+                logger.info(
+                    f"✅ {broker.broker_type.value} registered (Kraken remains execution authority)"
+                )
 
-            # Prevent fallback override
-            self._platform_locked = True
-            logger.info("✅ PLATFORM broker registered globally")
-            logger.info("✅ Platform set as PRIMARY (locked)")
-            logger.info("✅ Cross-account orchestration ENABLED")
-
-        # CRITICAL FIX (Jan 10, 2026): Remove automatic primary broker selection
-        # Previously, Coinbase was automatically set as primary, which made it
-        # control trading logic for all other brokers. Each broker should operate
-        # independently without one broker affecting others.
+        # ── active_broker assignment ─────────────────────────────────────────
+        # BUGFIX (Mar 2026): set_primary_broker() returns False when
+        # _platform_locked=True, leaving active_broker=None and the bot showing
+        # "NO TRADING ACTIVE".  We set active_broker directly here instead.
         #
-        # Auto-set first broker as primary ONLY if no primary is set yet
-        # This maintains backward compatibility while removing Coinbase preference
-        #
-        # BUGFIX (Mar 2026): set_primary_broker() returns False when _platform_locked=True
-        # (which is set just above for platform brokers). This left active_broker=None
-        # causing get_primary_broker() to always return None and the bot to show
-        # "NO TRADING ACTIVE". Fix: set active_broker directly here so the first
-        # connected platform broker is always usable as the primary.
-        if self.active_broker is None:
+        # KRAKEN-FIRST RULE (Apr 2026): If Kraken is added and is already
+        # connected (late re-registration after a startup retry), it immediately
+        # takes over as active_broker regardless of what was set before.
+        if is_kraken and getattr(broker, 'connected', False):
+            self.active_broker = broker
+            self.primary_broker_type = BrokerType.KRAKEN
+            logger.info("🎯 Kraken connected — promoted to active_broker (execution authority)")
+        elif self.active_broker is None:
             self.active_broker = broker
             self.primary_broker_type = broker.broker_type
-            logger.info(f"   First broker {broker.broker_type.value} set as primary (for legacy compatibility)")
-
-        # NOTE: Removed automatic Coinbase priority logic
-        # Old logic: "Always prefer Coinbase as primary if available"
-        # This was causing Coinbase to control other brokerages
-        # Each broker now operates independently through IndependentBrokerTrader
+            logger.info(f"   First broker {broker.broker_type.value} set as active (for legacy compatibility)")
 
         logger.info(f"📊 Added {broker.broker_type.value} broker (independent operation)")
 
@@ -10103,9 +10114,11 @@ class BrokerManager:
         Returns:
             bool: True if successfully set as primary
         """
-        # When setting primary broker elsewhere
-        if getattr(self, "_platform_locked", False):
-            return False  # 🔒 NEVER override platform
+        # KRAKEN-FIRST RULE (Apr 2026): Kraken may always claim the primary slot
+        # even when the platform is locked.  All other brokers are blocked so
+        # they cannot silently take over execution authority from Kraken.
+        if getattr(self, "_platform_locked", False) and broker_type != BrokerType.KRAKEN:
+            return False  # 🔒 Only Kraken can override the platform lock
 
         if broker_type in self.brokers:
             self.active_broker = self.brokers[broker_type]
@@ -10193,17 +10206,23 @@ class BrokerManager:
                 if getattr(broker, 'connected', False)
             }
             if connected_brokers:
-                # Use BrokerPerformanceScorer when available; fall back to
-                # first-connected for resilience during initialisation.
+                # KRAKEN-FIRST RULE (Apr 2026): prefer Kraken before any
+                # score-based evaluation so we never drift to Coinbase simply
+                # because active_broker happened to be disconnected at the
+                # moment of the promotion scan.
                 best_broker: Optional[BaseBroker] = None
-                if _BROKER_PERFORMANCE_SCORER_AVAILABLE and _get_broker_performance_scorer is not None:
-                    try:
-                        scorer = _get_broker_performance_scorer()
-                        best_name = scorer.get_best_broker(list(connected_brokers.keys()))
-                        if best_name is not None:
-                            best_broker = connected_brokers.get(best_name)
-                    except Exception:
-                        pass
+                if not _kraken_quarantine_active:
+                    best_broker = connected_brokers.get(BrokerType.KRAKEN.value)
+
+                if best_broker is None:
+                    if _BROKER_PERFORMANCE_SCORER_AVAILABLE and _get_broker_performance_scorer is not None:
+                        try:
+                            scorer = _get_broker_performance_scorer()
+                            best_name = scorer.get_best_broker(list(connected_brokers.keys()))
+                            if best_name is not None:
+                                best_broker = connected_brokers.get(best_name)
+                        except Exception:
+                            pass
 
                 if best_broker is None:
                     best_broker = next(iter(connected_brokers.values()))
@@ -10228,15 +10247,39 @@ class BrokerManager:
         """
         Select the primary master broker with intelligent fallback logic.
 
-        FIX #2: Make Kraken the PRIMARY broker for entries when Coinbase is in exit_only mode.
+        KRAKEN-FIRST RULE (Apr 2026): Kraken is always the execution authority
+        for new entries.  If Kraken is connected and healthy it immediately
+        takes the active_broker slot regardless of what was set before.
 
         Priority rules:
-        1. If Coinbase is in exit_only mode → Kraken becomes PRIMARY for all new entries
-        2. If current primary has insufficient balance → Promote Kraken to PRIMARY
-        3. Coinbase exists ONLY for: Emergency exits, Position closures, Legacy compatibility
+        1. Kraken connected & healthy → always PRIMARY (execution authority)
+        2. If Coinbase is in exit_only mode → Kraken becomes PRIMARY for all new entries
+        3. If current primary has insufficient balance → Promote Kraken to PRIMARY
+        4. Coinbase exists ONLY for: Emergency exits, Position closures, Legacy compatibility
 
         This ensures the platform portfolio uses the correct broker for new entries.
         """
+        if not self.active_broker and BrokerType.KRAKEN not in self.brokers:
+            logger.warning("⚠️ No primary broker set - cannot select primary platform")
+            return
+
+        # ── KRAKEN-FIRST: Restore Kraken as active_broker whenever it is ─────
+        # connected and healthy, even if Coinbase was promoted during a Kraken
+        # outage.  This is the primary guard against the "stuck on Coinbase" bug.
+        kraken_broker = self.brokers.get(BrokerType.KRAKEN)
+        if (kraken_broker is not None
+                and getattr(kraken_broker, 'connected', False)
+                and not getattr(kraken_broker, 'exit_only_mode', False)
+                and not _kraken_quarantine_active):
+            if self.active_broker is None or self.active_broker.broker_type != BrokerType.KRAKEN:
+                logger.info("🎯 Kraken connected — restoring as PRIMARY (execution authority)")
+                self.active_broker = kraken_broker
+                self.primary_broker_type = BrokerType.KRAKEN
+                self.primary_broker = kraken_broker
+            else:
+                logger.debug("✅ Kraken already active_broker — no change needed")
+            return
+
         if not self.active_broker:
             logger.warning("⚠️ No primary broker set - cannot select primary platform")
             return
