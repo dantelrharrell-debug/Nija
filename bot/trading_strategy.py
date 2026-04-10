@@ -3988,6 +3988,9 @@ class TradingStrategy:
             kraken = None  # Initialize to ensure variable exists for exception handler
             try:
                 kraken = KrakenBroker(account_type=AccountType.PLATFORM)
+                # Signal CONNECTING state *before* connect() so any concurrent thread
+                # calling wait_for_platform_ready() waits on the correct Event object.
+                self.multi_account_manager.begin_platform_connection(BrokerType.KRAKEN)
                 connection_successful = kraken.connect()
 
                 # CRITICAL FIX (Jan 17, 2026): Allow Kraken to start even if connection test fails

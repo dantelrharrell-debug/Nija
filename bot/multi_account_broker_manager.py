@@ -78,11 +78,17 @@ logger = logging.getLogger('nija.multi_account')
 
 
 class ConnectionState(Enum):
-    """Explicit connection state for platform brokers."""
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    FAILED = "failed"
+    """Explicit connection state for platform brokers.
+
+    State transitions:
+        NOT_STARTED  →  CONNECTING  →  CONNECTED
+                                   →  FAILED
+    """
+    NOT_STARTED = "not_started"   # No connection attempt has been initiated yet
+    DISCONNECTED = "disconnected"  # Broker object registered; connection not yet started
+    CONNECTING = "connecting"      # connect() in progress
+    CONNECTED = "connected"        # Handshake succeeded
+    FAILED = "failed"              # Handshake permanently failed
 
 
 # Root nija logger for flushing all handlers
@@ -130,8 +136,14 @@ class MultiAccountBrokerManager:
         self._platform_brokers_locked: bool = False
 
         # Connection state machine for platform brokers
-        # Tracks each broker through DISCONNECTED → CONNECTING → CONNECTED / FAILED
+        # Tracks each broker through NOT_STARTED → CONNECTING → CONNECTED / FAILED
         self._platform_state: Dict[str, ConnectionState] = {}
+
+        # Per-broker-type threading.Event — set once the state reaches CONNECTED or FAILED.
+        # Allows wait_for_platform_ready() to block without a polling loop.
+        # Created lazily via _get_or_create_platform_event() and guaranteed to be
+        # the same object for any given broker_type across all threads (setdefault).
+        self._platform_ready_events: Dict[str, threading.Event] = {}
 
         # Broker types that attempted a platform connection but failed.
         # This set is populated by mark_platform_failed() so that the HARD BLOCK in
@@ -267,6 +279,11 @@ class MultiAccountBrokerManager:
         self._platform_brokers[broker_type] = broker
         # Mirror into the string-keyed flag dict so _platform_connected stays in sync
         self._platform_connected[broker_type.value] = True
+        # Pre-create the readiness Event before advancing the state machine.
+        # This guarantees that any thread which calls _get_or_create_platform_event()
+        # (directly or via wait_for_platform_ready()) always gets the same Event
+        # object that _mark_platform_connected() will set below.
+        self._get_or_create_platform_event(broker_type)
         # Advance the state machine to CONNECTED — the caller has already verified the
         # broker is live before passing it here, so wait_for_platform_ready() must not
         # block for 30 s waiting for a state transition that would never happen.
@@ -327,7 +344,10 @@ class MultiAccountBrokerManager:
             # ❌ DO NOT call broker.connect() here
             # ❌ DO NOT trigger reconnect or validate connection
             self._platform_brokers[broker_type] = broker
-            self._platform_state[broker_type.value] = ConnectionState.DISCONNECTED
+            self._platform_state[broker_type.value] = ConnectionState.CONNECTING
+            # Pre-create the readiness event so wait_for_platform_ready() always
+            # blocks on the same object as _mark_platform_connected() will set.
+            self._get_or_create_platform_event(broker_type)
             # Mark in the global broker registry so any module can check is_platform()
             if broker_registry is not None:
                 broker_registry[broker_type.value]["platform"] = True
@@ -645,6 +665,38 @@ class MultiAccountBrokerManager:
         )
         return False
 
+    def _get_or_create_platform_event(self, broker_type: BrokerType) -> threading.Event:
+        """Return the readiness Event for *broker_type*, creating it if absent.
+
+        Uses ``dict.setdefault`` so that two threads racing to create the event
+        for the same broker type always end up sharing the identical object —
+        one write wins and both callers receive that same ``threading.Event``.
+        """
+        key = broker_type.value
+        existing = self._platform_ready_events.get(key)
+        if existing is None:
+            self._platform_ready_events.setdefault(key, threading.Event())
+        return self._platform_ready_events[key]
+
+    def begin_platform_connection(self, broker_type: BrokerType) -> None:
+        """Signal that a platform connection attempt is about to start.
+
+        Advances the state machine to CONNECTING and pre-creates the
+        readiness Event so waiters in :meth:`wait_for_platform_ready`
+        always block on the *same* event object, eliminating the
+        create-then-set race condition.
+
+        Call this immediately before invoking the broker's ``connect()``
+        method (e.g. in ``trading_strategy.py`` before ``kraken.connect()``).
+        """
+        key = broker_type.value
+        self._platform_state[key] = ConnectionState.CONNECTING
+        self._get_or_create_platform_event(broker_type)  # pre-create; NOT set yet
+        logger.info(
+            "🔄 Platform %s connection starting (state → CONNECTING)",
+            broker_type.value.upper(),
+        )
+
     def _mark_platform_connected(self, broker_type: BrokerType) -> None:
         """Advance the state machine to CONNECTED and record the timestamp.
 
@@ -657,6 +709,10 @@ class MultiAccountBrokerManager:
         self._last_platform_connected_time[broker_type] = time.time()
         # Clear any previous failure record now that the platform is live
         self._platform_failed_types.discard(broker_type)
+        # Signal all threads waiting in wait_for_platform_ready() that the
+        # state has reached CONNECTED.  They will wake up immediately and
+        # re-read _platform_state to confirm the CONNECTED status.
+        self._get_or_create_platform_event(broker_type).set()
         # Propagate connected status to the PlatformAccountLayer singleton so
         # display_hierarchy() and external health checks see "CONNECTED".
         try:
@@ -686,6 +742,10 @@ class MultiAccountBrokerManager:
             "platform reconnects.  Fix credentials or network, then restart.",
             broker_type.value.upper(),
         )
+        # Unblock any threads waiting in wait_for_platform_ready() so they
+        # can observe the FAILED state and return False immediately instead
+        # of waiting until an optional timeout expires.
+        self._get_or_create_platform_event(broker_type).set()
 
     @staticmethod
     def _broker_ready_flag(broker) -> bool:
@@ -726,40 +786,71 @@ class MultiAccountBrokerManager:
         broker_name = broker_type.value.upper()
         start = time.time()
 
-        # Fast path: check broker's _platform_ready_flag before entering the loop.
-        # KrakenBroker sets this flag immediately after the handshake completes so
-        # we avoid the full polling window when the broker is already live.
+        # ── Fast-path 1: state machine already at CONNECTED / FAILED ──────────
+        state = self._platform_state.get(broker_type.value)
+        if state == ConnectionState.CONNECTED:
+            logger.info(f"✅ Platform {broker_name} ready (state=CONNECTED, fast-path)")
+            return True
+        if state == ConnectionState.FAILED:
+            logger.error(f"❌ Platform {broker_name} previously FAILED (fast-path)")
+            return False
+
+        # ── Fast-path 2: broker's _platform_ready_flag already set ───────────
         broker = self._platform_brokers.get(broker_type)
         if self._broker_ready_flag(broker):
             logger.info(f"✅ Platform {broker_name} ready (fast-path via _platform_ready_flag)")
             self._mark_platform_connected(broker_type)
             return True
 
-        while True:
-            state = self._platform_state.get(broker_type.value)
-            logger.info(f"⏳ Platform {broker_name} state: {state.value if state else 'unknown'}")
+        # ── Event-based wait ──────────────────────────────────────────────────
+        # _get_or_create_platform_event() uses setdefault so we always operate
+        # on the same threading.Event that _mark_platform_connected() and
+        # mark_platform_failed() will call .set() on.
+        event = self._get_or_create_platform_event(broker_type)
+        logger.info(
+            "⏳ Platform %s not yet ready (state=%s) — waiting event-driven%s …",
+            broker_name,
+            state.value if state else "unknown",
+            f" (max {timeout}s)" if timeout > 0 else " (indefinite)",
+        )
 
-            if state == ConnectionState.CONNECTED:
-                logger.info(f"✅ Platform {broker_name} fully ready")
-                return True
+        if timeout > 0:
+            remaining = max(0.0, timeout - (time.time() - start))
+            event.wait(timeout=remaining)
+        else:
+            event.wait()  # indefinite — unblocked only by _mark_platform_connected / mark_platform_failed
 
-            if state == ConnectionState.FAILED:
-                logger.error(f"❌ Platform {broker_name} failed to connect")
-                return False
+        # ── Post-wait state check ─────────────────────────────────────────────
+        state = self._platform_state.get(broker_type.value)
+        if state == ConnectionState.CONNECTED:
+            logger.info(f"✅ Platform {broker_name} fully ready (unblocked by event)")
+            return True
+        if state == ConnectionState.FAILED:
+            logger.error(f"❌ Platform {broker_name} failed to connect (unblocked by event)")
+            return False
 
-            # Re-check _platform_ready_flag on every iteration in case the broker
-            # completed its handshake after we entered the loop.
-            if self._broker_ready_flag(broker):
-                logger.info(f"✅ Platform {broker_name} ready (_platform_ready_flag set during wait)")
-                self._mark_platform_connected(broker_type)
-                return True
+        # Also re-check _platform_ready_flag in case connect() completed while
+        # we were waiting but before the state machine was updated.
+        if self._broker_ready_flag(broker):
+            logger.info(f"✅ Platform {broker_name} ready (_platform_ready_flag set during wait)")
+            self._mark_platform_connected(broker_type)
+            return True
 
-            # Optional hard ceiling — only enforced when NIJA_PLATFORM_WAIT_TIMEOUT is set.
-            if timeout > 0 and (time.time() - start) >= timeout:
-                logger.error(f"⛔ Timeout waiting for platform {broker_name} to become ready ({timeout}s)")
-                return False
-
-            time.sleep(1)
+        # Reached here only when timeout fired without CONNECTED / FAILED
+        if timeout > 0:
+            logger.error(
+                "⛔ Timeout waiting for platform %s to become ready (%ds). "
+                "Last state: %s",
+                broker_name, timeout,
+                state.value if state else "unknown",
+            )
+        else:
+            logger.warning(
+                "⚠️ Platform %s event fired but state is still %s — possible concurrent reset.",
+                broker_name,
+                state.value if state else "unknown",
+            )
+        return False
 
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
         """
