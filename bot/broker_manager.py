@@ -79,6 +79,8 @@ try:
         is_nonce_trading_paused,
         get_nonce_pause_remaining,
         probe_and_resync_nonce,
+        register_broker_quarantine_callback,
+        is_broker_quarantined,
     )
 except ImportError:
     try:
@@ -93,6 +95,8 @@ except ImportError:
             is_nonce_trading_paused,
             get_nonce_pause_remaining,
             probe_and_resync_nonce,
+            register_broker_quarantine_callback,
+            is_broker_quarantined,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -106,8 +110,43 @@ except ImportError:
         is_nonce_trading_paused = None
         get_nonce_pause_remaining = None
         probe_and_resync_nonce = None
+        register_broker_quarantine_callback = None
+        is_broker_quarantined = None
 
-# Import Balance Models (FIX 1: Three-part balance model)
+# ── Broker quarantine state ───────────────────────────────────────────────────
+# Set to True when the nonce manager confirms nonce poisoning (consecutive
+# nuclear resets >= threshold).  Once active, the KrakenBroker blocks new BUY
+# orders (exit-only) and BrokerManager auto-promotes Coinbase to primary.
+_kraken_quarantine_active: bool = False
+
+
+def _on_kraken_nonce_quarantine() -> None:
+    """Quarantine callback: fired by KrakenNonceManager when nonce poisoning is
+    confirmed.  Marks every connected KrakenBroker instance as exit-only and
+    logs a prominent alert.  BrokerManager.get_primary_broker() will then skip
+    Kraken and promote the next available broker (Coinbase) automatically.
+    """
+    global _kraken_quarantine_active
+    _kraken_quarantine_active = True
+    logging.critical(
+        "\n" + "=" * 70 + "\n"
+        "🚫  KRAKEN BROKER QUARANTINED — NONCE POISONING CONFIRMED\n"
+        "    Consecutive nuclear nonce resets have exceeded the quarantine\n"
+        "    threshold.  Kraken is now in EXIT-ONLY mode; all new entries\n"
+        "    will be routed to the Coinbase fallback broker.\n\n"
+        "    REQUIRED RECOVERY STEPS:\n"
+        "      1. Stop ALL Railway/Heroku deployments using this API key.\n"
+        "      2. Revoke the compromised Kraken key and create a NEW one.\n"
+        "      3. Set Nonce Window = 10000 on the new key.\n"
+        "      4. Update KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET.\n"
+        "      5. Set NIJA_DEEP_NONCE_RESET=1 on the first restart.\n"
+        "      6. Deploy ONE instance only.\n"
+        + "=" * 70
+    )
+
+
+if register_broker_quarantine_callback is not None:
+    register_broker_quarantine_callback(_on_kraken_nonce_quarantine)
 try:
     from bot.balance_models import BalanceSnapshot, UserBrokerState, create_balance_snapshot_from_broker_response
 except ImportError:
@@ -7714,6 +7753,20 @@ class KrakenBroker(BaseBroker):
                     "filled_pct": 0.0
                 }
 
+            # Quarantine check: nonce poisoning confirmed — no new entries until key is rotated
+            if side.lower() == 'buy' and _kraken_quarantine_active and not force_liquidate:
+                logger.critical(
+                    "🚫 BUY order BLOCKED: Kraken broker is QUARANTINED due to confirmed nonce "
+                    "poisoning.  Rotate the API key and restart to re-enable entries."
+                )
+                return {
+                    "status": "unfilled",
+                    "error": "BROKER_QUARANTINED",
+                    "message": "Kraken blocked: nonce poisoning confirmed — rotate API key to recover",
+                    "partial_fill": False,
+                    "filled_pct": 0.0,
+                }
+
             # CRITICAL FIX (Jan 19, 2026): Normalize symbol for Kraken and check support
             # Railway Golden Rule #4: Broker-specific trading pairs
             # This prevents trying to trade Binance-only pairs (BUSD) on Kraken
@@ -9845,6 +9898,37 @@ class BrokerManager:
         # ── 2. Active broker is healthy ─────────────────────────────
         if self.active_broker is not None:
             if getattr(self.active_broker, 'connected', False):
+                # ── 2a. Quarantine check — skip quarantined Kraken ────────
+                # When nonce poisoning is confirmed, force a fallback to the
+                # next available broker (Coinbase) so new entries are never
+                # routed through a poisoned Kraken key.
+                if (
+                    _kraken_quarantine_active
+                    and self.active_broker.broker_type == BrokerType.KRAKEN
+                ):
+                    fallback = next(
+                        (
+                            b for bt, b in self.brokers.items()
+                            if bt != BrokerType.KRAKEN
+                            and getattr(b, 'connected', False)
+                            and not getattr(b, 'exit_only_mode', False)
+                        ),
+                        None,
+                    )
+                    if fallback is not None:
+                        logger.warning(
+                            "🔄 Kraken QUARANTINED (nonce poisoning) — "
+                            "forced fallback to %s broker.",
+                            fallback.broker_type.value,
+                        )
+                        self.active_broker = fallback
+                        self.primary_broker_type = fallback.broker_type
+                        return fallback
+                    # No healthy fallback — allow Kraken to serve SELLs only.
+                    logger.warning(
+                        "⚠️  Kraken quarantined but no fallback broker is available; "
+                        "Kraken will handle exits only."
+                    )
                 return self.active_broker
 
             # ── 3. Score-based auto-promotion ────────────────────────
@@ -9905,8 +9989,14 @@ class BrokerManager:
         # ✅ HARDENING: Short-circuit when the current broker is already healthy.
         # Avoids redundant balance API calls and Kraken promotion churn on every
         # cycle when nothing has changed.
+        # A quarantined Kraken broker is NOT considered healthy for new entries.
+        kraken_is_quarantined = (
+            _kraken_quarantine_active
+            and self.active_broker.broker_type == BrokerType.KRAKEN
+        )
         if (self.active_broker.connected
-                and not getattr(self.active_broker, 'exit_only_mode', False)):
+                and not getattr(self.active_broker, 'exit_only_mode', False)
+                and not kraken_is_quarantined):
             logger.debug("✅ Active broker healthy — skipping promotion scan")
             return
 
