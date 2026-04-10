@@ -82,6 +82,24 @@ _ERROR_RESET_THRESHOLD: int = 3     # errors < threshold: no jump
 # exactly as if NIJA_DEEP_NONCE_RESET=1 had been set at startup.
 _AUTO_DEEP_RESET_THRESHOLD: int = int(os.environ.get("NIJA_AUTO_DEEP_THRESHOLD", "2"))
 
+# ── Broker quarantine on confirmed nonce poisoning ────────────────────────────
+# When the number of nuclear resets in a session reaches this threshold the
+# nonce manager fires all registered quarantine callbacks so that the broker
+# layer can immediately:
+#   1. Mark the Kraken broker as EXIT-ONLY (no new entries)
+#   2. Force-promote the next available broker (Coinbase) to active/primary
+#
+# Threshold matches _AUTO_DEEP_RESET_THRESHOLD by default so quarantine fires
+# at the same moment deep-probe mode is activated.  Can be raised via env var
+# if a looser policy is preferred (e.g. 3 nuclear resets before quarantine).
+_NONCE_POISON_QUARANTINE_THRESHOLD: int = int(
+    os.environ.get("NIJA_NONCE_QUARANTINE_THRESHOLD", str(_AUTO_DEEP_RESET_THRESHOLD))
+)
+
+# Module-level quarantine state — written under _LOCK.
+_quarantine_triggered: bool = False
+_quarantine_callbacks: list = []    # List[Callable[[], None]]
+
 # ── Nonce resync / probe-calibration constants ────────────────────────────────
 # Used by probe_and_resync() to dynamically find Kraken's current nonce floor.
 # Each failed probe call jumps the nonce forward by _PROBE_STEP_MS.
@@ -1285,8 +1303,48 @@ class KrakenNonceManager:
                         "The bot will continue probing with extended coverage (120 min) "
                         "but a new API key is the only guaranteed fix.",
                     )
-                return
 
+                # ── Broker quarantine on confirmed nonce poisoning ────────────
+                # When nuclear resets reach the quarantine threshold, fire all
+                # registered callbacks exactly once per session.  Snapshot the
+                # list inside the lock; fire callbacks AFTER releasing it so
+                # callbacks can safely call back into nonce-state readers.
+                global _quarantine_triggered
+                if (
+                    not _quarantine_triggered
+                    and self._nuclear_reset_count >= _NONCE_POISON_QUARANTINE_THRESHOLD
+                ):
+                    _quarantine_triggered = True
+                    _callbacks_to_fire = list(_quarantine_callbacks)
+                else:
+                    _callbacks_to_fire = []
+
+                # Exit the nuclear-reset path; backoff jump does not apply.
+                # Callbacks are fired below, outside the lock.
+                _skip_backoff_jump = True
+            else:
+                _callbacks_to_fire = []
+                _skip_backoff_jump = False
+
+        # ── Fire quarantine callbacks outside _LOCK to prevent deadlock ──
+        for _cb in _callbacks_to_fire:
+            try:
+                _cb()
+            except Exception as _exc:
+                _logger.error(
+                    "KrakenNonceManager: quarantine callback %r raised %s", _cb, _exc
+                )
+        if _callbacks_to_fire:
+            _logger.error(
+                "🚫 KrakenNonceManager: nonce POISONING CONFIRMED (%d nuclear resets) — "
+                "broker quarantine activated; %d fallback callback(s) fired.",
+                self._nuclear_reset_count, len(_callbacks_to_fire),
+            )
+
+        if _skip_backoff_jump:
+            return
+
+        with _LOCK:
             jump = self._backoff_ms(self._error_count)
             if jump > 0:
                 self._last_nonce += jump
@@ -1705,7 +1763,70 @@ def get_global_nonce_stats() -> dict:
         "deep_reset_active": _nonce_manager.is_deep_reset_active,
         "trading_paused": _nonce_manager.is_paused(),
         "pause_remaining_s": _nonce_manager.get_pause_remaining(),
+        "broker_quarantined": _quarantine_triggered,
     }
+
+
+# ── Broker quarantine public API ──────────────────────────────────────────────
+
+def register_broker_quarantine_callback(fn: "Callable[[], None]") -> None:
+    """Register a zero-argument callable to be invoked when nonce poisoning is
+    confirmed (i.e. nuclear reset count reaches *_NONCE_POISON_QUARANTINE_THRESHOLD*).
+
+    The callback is fired at most once per process lifetime.  Multiple
+    callbacks can be registered; they are invoked in registration order.
+
+    Typical use — broker_manager.py registers a handler that sets Kraken to
+    ``exit_only_mode=True`` and forces a switch to the Coinbase fallback::
+
+        from bot.global_kraken_nonce import register_broker_quarantine_callback
+
+        def _on_kraken_nonce_quarantine():
+            _kraken_quarantine_active_flag.set()
+
+        register_broker_quarantine_callback(_on_kraken_nonce_quarantine)
+    """
+    with _LOCK:
+        _quarantine_callbacks.append(fn)
+        # If quarantine already fired before this callback was registered,
+        # invoke it immediately so late registrants don't miss the event.
+        already_triggered = _quarantine_triggered
+    if already_triggered:
+        try:
+            fn()
+        except Exception as exc:
+            _logger.error(
+                "KrakenNonceManager: late-registered quarantine callback %r raised %s",
+                fn, exc,
+            )
+
+
+def is_broker_quarantined() -> bool:
+    """Return *True* when nonce poisoning has been confirmed this session.
+
+    Once quarantine is triggered it stays active until :func:`clear_broker_quarantine`
+    is called (e.g. after the operator has rotated the Kraken API key).
+    """
+    return _quarantine_triggered
+
+
+def clear_broker_quarantine() -> None:
+    """Reset the quarantine flag so Kraken can be re-enabled after key rotation.
+
+    Call this only after:
+      1. The poisoned Kraken API key has been revoked and a new one issued.
+      2. NIJA_DEEP_NONCE_RESET=1 has been applied for the first restart.
+
+    Does NOT re-enable ``exit_only_mode`` on live broker instances — the
+    broker layer must do that separately.
+    """
+    global _quarantine_triggered
+    with _LOCK:
+        _quarantine_triggered = False
+    _logger.warning(
+        "KrakenNonceManager: broker quarantine CLEARED — "
+        "ensure the Kraken API key has been rotated before resuming entries."
+    )
 
 
 def record_kraken_nonce_error() -> None:
@@ -1846,4 +1967,8 @@ __all__ = [
     "cleanup_legacy_nonce_files",
     "check_ntp_sync",
     "log_ntp_clock_status",
+    # Broker quarantine API
+    "register_broker_quarantine_callback",
+    "is_broker_quarantined",
+    "clear_broker_quarantine",
 ]
