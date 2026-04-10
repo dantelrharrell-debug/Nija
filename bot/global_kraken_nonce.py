@@ -162,7 +162,7 @@ _AO_HISTORY_WINDOW: int = int(os.environ.get("NIJA_AO_HISTORY_WINDOW", "10"))  #
 
 # Corruption guard thresholds — if persisted nonce is this far ahead of
 # wall-clock the state file is likely corrupted.
-_CORRUPTION_WARN_MS: int  = int(os.environ.get("NIJA_NONCE_CORRUPTION_WARN_MS",  "600000"))    # 10 min → warn but keep
+_CORRUPTION_WARN_MS: int = int(os.environ.get("NIJA_NONCE_CORRUPTION_WARN_MS", "600000"))    # 10 min → warn but keep
 # Raised from 24 h → 72 h so that a deliberately large ceiling jump
 # (e.g. NIJA_NONCE_CEILING_JUMP=1 with a 24 h leap) is never mistaken
 # for corruption and discarded on the next container restart.
