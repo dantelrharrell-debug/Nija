@@ -6,7 +6,7 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 
 from enum import Enum
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 import functools
 import json
 import logging
@@ -642,16 +642,40 @@ _USER_PLATFORM_WAIT_S: Optional[int] = int(_env_wait) if _env_wait.strip().isdig
 #       _PLATFORM_BROKER_INSTANCES["coinbase"] = broker
 #
 # Keys must match the lowercase BrokerType.value strings used throughout the
-# codebase ("coinbase", "kraken", "okx").
+# codebase ("coinbase", "kraken", "okx", "binance", "alpaca").
 GLOBAL_PLATFORM_BROKERS: Dict[str, bool] = {
     "coinbase": False,
-    "kraken": False,
-    "okx": False,
+    "kraken":   False,
+    "okx":      False,
+    "binance":  False,
+    "alpaca":   False,
 }
 # Stores the actual singleton broker instance once created.
 _PLATFORM_BROKER_INSTANCES: Dict[str, "BaseBroker"] = {}
-# Protects both dicts from concurrent reads/writes during startup.
+# Tracks whether the initial connect() lifecycle has completed for each broker.
+# Distinct from GLOBAL_PLATFORM_BROKERS (instance exists) so that a second call
+# to initialize_platform_brokers() can skip connect() even when the instance flag
+# was set in a previous run.
+_PLATFORM_BROKER_CONNECTED: Dict[str, bool] = {
+    "coinbase": False,
+    "kraken":   False,
+    "okx":      False,
+    "binance":  False,
+    "alpaca":   False,
+}
+# Protects all three dicts from concurrent reads/writes during startup.
 _PLATFORM_BROKER_REGISTRY_LOCK: threading.Lock = threading.Lock()
+
+
+def get_platform_broker(key: str) -> "Optional[BaseBroker]":
+    """Return the singleton platform broker for *key* (e.g. ``"coinbase"``).
+
+    Returns ``None`` when the broker has not been initialised yet.  Callers
+    must not call ``connect()`` on the returned object — connection lifecycle
+    is owned exclusively by
+    ``MultiAccountBrokerManager.initialize_platform_brokers()``.
+    """
+    return _PLATFORM_BROKER_INSTANCES.get(key)
 
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [

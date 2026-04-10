@@ -21,7 +21,7 @@ import threading
 import time
 from types import MappingProxyType
 import traceback
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from enum import Enum
 
 # Import broker classes
@@ -31,7 +31,8 @@ try:
         CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker,
         KrakenStartupFSM, _KRAKEN_STARTUP_FSM,
         GLOBAL_PLATFORM_BROKERS, _PLATFORM_BROKER_INSTANCES,
-        _PLATFORM_BROKER_REGISTRY_LOCK,
+        _PLATFORM_BROKER_CONNECTED, _PLATFORM_BROKER_REGISTRY_LOCK,
+        get_platform_broker,
     )
 except ImportError:
     from broker_manager import (
@@ -39,7 +40,8 @@ except ImportError:
         CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker,
         KrakenStartupFSM, _KRAKEN_STARTUP_FSM,
         GLOBAL_PLATFORM_BROKERS, _PLATFORM_BROKER_INSTANCES,
-        _PLATFORM_BROKER_REGISTRY_LOCK,
+        _PLATFORM_BROKER_CONNECTED, _PLATFORM_BROKER_REGISTRY_LOCK,
+        get_platform_broker,
     )
 
 # Import broker registry for platform designation tracking
@@ -2153,13 +2155,18 @@ class MultiAccountBrokerManager:
         can do strategy-specific post-processing (order cleanup, legacy compat
         wiring, etc.) without touching the broker lifecycle.
 
-        Guard
-        -----
-        For coinbase / kraken / okx the global ``GLOBAL_PLATFORM_BROKERS``
-        registry is checked under ``_PLATFORM_BROKER_REGISTRY_LOCK`` before
-        creating a new object.  If the flag is already ``True`` the existing
-        instance is reused, preventing duplicate initialisation on hot-reload
-        or concurrent startup paths.
+        Guard (idempotent)
+        ------------------
+        For every broker type the global ``GLOBAL_PLATFORM_BROKERS`` registry
+        is checked under ``_PLATFORM_BROKER_REGISTRY_LOCK`` before creating a
+        new object — if the flag is already ``True`` the existing instance is
+        reused (no second instantiation).
+
+        The ``_PLATFORM_BROKER_CONNECTED`` flag is checked before calling
+        ``broker.connect()`` — if it is already ``True`` the connection step
+        is skipped entirely.  This makes the method safe to call from multiple
+        entry points (trading_strategy, self_healing_startup, tests) without
+        duplicate connects.
 
         Return value
         ------------
@@ -2173,7 +2180,7 @@ class MultiAccountBrokerManager:
 
         A broker that was skipped (NIJA_DISABLE_COINBASE=true) or that failed
         to import its SDK will not appear in the dict.  The ``connected`` flag
-        mirrors the return value of ``broker.connect()``.
+        mirrors the result of ``broker.connect()``.
         """
         # Late import to avoid circular dependency (broker_manager → multi_account_broker_manager)
         try:
@@ -2188,26 +2195,50 @@ class MultiAccountBrokerManager:
 
         # ── Helpers ──────────────────────────────────────────────────────────
 
-        def _guarded_create(key: str, factory):
-            """Return existing instance if guard is set, else create+record."""
-            if key in GLOBAL_PLATFORM_BROKERS:
-                with _PLATFORM_BROKER_REGISTRY_LOCK:
-                    if GLOBAL_PLATFORM_BROKERS[key]:
-                        existing = _PLATFORM_BROKER_INSTANCES.get(key)
+        def _guarded_create(key: str, factory: Callable[[], BaseBroker]) -> Optional[BaseBroker]:
+            """Return existing instance if guard is set, else create + record.
+
+            If the guard is set but the instance was never stored (e.g. a
+            previous creation attempt raised an exception), the guard is
+            cleared and creation is retried.
+            """
+            with _PLATFORM_BROKER_REGISTRY_LOCK:
+                if GLOBAL_PLATFORM_BROKERS.get(key):
+                    existing = _PLATFORM_BROKER_INSTANCES.get(key)
+                    if existing is not None:
                         logger.info(
                             "🔒 Platform %s already initialised — reusing existing instance",
                             key.upper(),
                         )
                         return existing
-                    broker = factory()
-                    GLOBAL_PLATFORM_BROKERS[key] = True
-                    _PLATFORM_BROKER_INSTANCES[key] = broker
-                    return broker
-            # Broker type not in guard dict (e.g. binance, alpaca) — create freely
-            return factory()
+                    # Guard set but instance missing — clear and retry.
+                    logger.warning(
+                        "⚠️  Platform %s guard was set but instance is missing — resetting and retrying",
+                        key.upper(),
+                    )
+                    GLOBAL_PLATFORM_BROKERS[key] = False
+                broker = factory()
+                GLOBAL_PLATFORM_BROKERS[key] = True
+                _PLATFORM_BROKER_INSTANCES[key] = broker
+                return broker
 
-        def _connect_and_register(broker_type: BrokerType, broker, key: str) -> bool:
-            """Run begin→connect→register/fail and return True if connected."""
+        def _connect_and_register(broker_type: BrokerType, broker: BaseBroker, key: str) -> bool:
+            """Run begin → connect → register/fail and return True if connected.
+
+            If ``_PLATFORM_BROKER_CONNECTED[key]`` is already ``True`` the
+            ``connect()`` call is skipped and the existing connected state is
+            returned immediately (idempotency guard — Step 2).
+            """
+            # Idempotency: skip connect() if the lifecycle already ran.
+            with _PLATFORM_BROKER_REGISTRY_LOCK:
+                already_connected = _PLATFORM_BROKER_CONNECTED.get(key, False)
+            if already_connected:
+                logger.info(
+                    "🔒 Platform %s connect() already completed — skipping duplicate",
+                    key.upper(),
+                )
+                return getattr(broker, "connected", True)
+
             self.begin_platform_connection(broker_type)
             try:
                 connected = broker.connect()
@@ -2215,6 +2246,8 @@ class MultiAccountBrokerManager:
                 logger.error("❌ Platform %s connect() raised: %s", key.upper(), exc)
                 connected = False
             if connected:
+                with _PLATFORM_BROKER_REGISTRY_LOCK:
+                    _PLATFORM_BROKER_CONNECTED[key] = True
                 self.register_platform_broker_instance(broker_type, broker)
                 logger.info("   ✅ Platform %s connected and registered", key.upper())
             else:

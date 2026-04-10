@@ -115,16 +115,30 @@ try:
         BrokerType,
         AccountType,
         BaseBroker,
+        get_platform_broker,
     )
     _BROKER_AVAILABLE = True
 except ImportError:
     _BROKER_AVAILABLE = False
-    KrakenBroker    = None  # type: ignore[assignment]
-    CoinbaseBroker  = None  # type: ignore[assignment]
-    BrokerType      = None  # type: ignore[assignment]
-    AccountType     = None  # type: ignore[assignment]
-    BaseBroker      = None  # type: ignore[assignment]
+    KrakenBroker      = None  # type: ignore[assignment]
+    CoinbaseBroker    = None  # type: ignore[assignment]
+    BrokerType        = None  # type: ignore[assignment]
+    AccountType       = None  # type: ignore[assignment]
+    BaseBroker        = None  # type: ignore[assignment]
+    get_platform_broker = None  # type: ignore[assignment]
     logger.warning("⚠️  broker_manager not importable — broker failover skipped")
+
+# Import MABM for delegated initialization (Step 3 — consumer pattern)
+try:
+    from multi_account_broker_manager import multi_account_broker_manager as _mabm
+    _MABM_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm
+        _MABM_AVAILABLE = True
+    except ImportError:
+        _mabm = None  # type: ignore[assignment]
+        _MABM_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +715,35 @@ class BrokerFallbackController:
     # ── Private helpers ────────────────────────────────────────────────────
 
     def _try_connect_kraken(self) -> tuple[Optional[Any], bool]:
-        """Attempt Kraken connection up to primary_max_attempts times."""
+        """Return the singleton Kraken PLATFORM broker from the registry.
+
+        Delegates to ``multi_account_broker_manager.initialize_platform_brokers()``
+        so there is exactly one Kraken instance per process.  Falls back to
+        raw construction only when MABM is not importable (rare bootstrap edge
+        case).
+        """
+        # ── Primary path: delegate to MABM (idempotent, guarded) ─────────────
+        if _MABM_AVAILABLE and _mabm is not None:
+            try:
+                results = _mabm.initialize_platform_brokers()
+                kraken_result = results.get("kraken", {})
+                broker = kraken_result.get("broker")
+                ok = kraken_result.get("connected", False)
+                if broker is not None and ok:
+                    return broker, True
+                # initialize_platform_brokers already logged the failure;
+                # surface it here for BrokerFallbackController's counter.
+                logger.warning(
+                    "BrokerFallbackController: MABM Kraken init returned connected=False",
+                )
+                return broker, False
+            except Exception as exc:
+                logger.warning(
+                    "BrokerFallbackController: MABM Kraken init raised: %s — falling back to direct construction",
+                    exc,
+                )
+
+        # ── Fallback path: direct construction (MABM unavailable) ────────────
         for attempt in range(1, self._cfg.primary_max_attempts + 1):
             try:
                 broker = KrakenBroker(account_type=AccountType.PLATFORM)
@@ -718,13 +760,45 @@ class BrokerFallbackController:
                     attempt, self._cfg.primary_max_attempts, exc,
                 )
             if attempt < self._cfg.primary_max_attempts:
-                delay = min(5.0 * attempt, 30.0)  # cap at 30 s to avoid blocking startup too long
+                delay = min(5.0 * attempt, 30.0)
                 time.sleep(delay)
 
         return None, False
 
     def _try_connect_coinbase(self) -> tuple[Optional[Any], bool]:
-        """Attempt a single Coinbase connection."""
+        """Return the singleton Coinbase PLATFORM broker from the registry.
+
+        Delegates to ``get_platform_broker("coinbase")`` first (instance
+        already created by MABM), then falls back to
+        ``multi_account_broker_manager.initialize_platform_brokers()`` if the
+        instance does not exist yet, and finally to direct construction when
+        MABM is unavailable.
+        """
+        # ── Fast path: instance already in registry ───────────────────────────
+        if get_platform_broker is not None:
+            existing = get_platform_broker("coinbase")
+            if existing is not None and getattr(existing, "connected", False):
+                logger.info("BrokerFallbackController: reusing existing Coinbase singleton from registry")
+                return existing, True
+
+        # ── Delegate path: MABM initialisation (idempotent) ──────────────────
+        if _MABM_AVAILABLE and _mabm is not None:
+            try:
+                results = _mabm.initialize_platform_brokers()
+                cb_result = results.get("coinbase", {})
+                broker = cb_result.get("broker")
+                ok = cb_result.get("connected", False)
+                if broker is not None and ok:
+                    return broker, True
+                logger.warning("BrokerFallbackController: MABM Coinbase init returned connected=False")
+                return broker, False
+            except Exception as exc:
+                logger.warning(
+                    "BrokerFallbackController: MABM Coinbase init raised: %s — falling back to direct construction",
+                    exc,
+                )
+
+        # ── Fallback path: direct construction (MABM unavailable) ────────────
         try:
             broker = CoinbaseBroker()
             ok = broker.connect()

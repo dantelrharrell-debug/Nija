@@ -7266,7 +7266,7 @@ class TradingStrategy:
                 except Exception as _bm_err:
                     logger.warning("Broker recovery attempt failed: %s", _bm_err)
                     active_broker = None
-            # If still disconnected, try to reconnect each broker in the manager
+            # If still disconnected, try to reconnect each broker via MABM state machine
             # before giving up — this is what keeps the bot trading 24/7.
             if not active_broker or not getattr(active_broker, 'connected', False):
                 _reconnected = False
@@ -7279,8 +7279,14 @@ class TradingStrategy:
                                 "🔌 Attempting to reconnect broker %s …",
                                 getattr(_bt, 'value', str(_bt)).upper(),
                             )
-                            _b.connect()
-                            if getattr(_b, 'connected', False):
+                            # Route through MABM to keep _platform_state consistent.
+                            _mabm = getattr(self, 'multi_account_manager', None)
+                            if _mabm is not None and hasattr(_mabm, 'try_reconnect_platform_broker'):
+                                _ok = _mabm.try_reconnect_platform_broker(_bt)
+                            else:
+                                _b.connect()
+                                _ok = getattr(_b, 'connected', False)
+                            if _ok:
                                 active_broker = _b
                                 self.broker_manager.active_broker = _b
                                 if hasattr(self, 'apex') and self.apex and hasattr(self.apex, 'update_broker_client'):
