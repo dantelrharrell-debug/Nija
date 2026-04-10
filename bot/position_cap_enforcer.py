@@ -86,8 +86,8 @@ class PositionCapEnforcer:
         if self.broker is None:
             raise RuntimeError(
                 "PositionCapEnforcer requires a broker instance.  Either pass one "
-                "explicitly or ensure initialize_platform_brokers() has been called "
-                "before constructing PositionCapEnforcer."
+                "explicitly or ensure multi_account_broker_manager.initialize_platform_brokers() "
+                "has been called before constructing PositionCapEnforcer."
             )
 
         # Track positions that cannot be sold (below min size, API errors, etc.)

@@ -3995,8 +3995,8 @@ class TradingStrategy:
             #   2. Set up strategy-specific helpers (order cleanup, etc.).
             #   3. For Kraken failures, register in failed_brokers for retry.
 
-            kraken = (broker_results.get("kraken") or {}).get("broker")
-            coinbase = (broker_results.get("coinbase") or {}).get("broker")
+            kraken = broker_results.get("kraken", {}).get("broker")
+            coinbase = broker_results.get("coinbase", {}).get("broker")
 
             # Kraken post-processing
             kraken_result = broker_results.get("kraken", {})

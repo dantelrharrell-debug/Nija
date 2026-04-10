@@ -677,6 +677,30 @@ def get_platform_broker(key: str) -> "Optional[BaseBroker]":
     """
     return _PLATFORM_BROKER_INSTANCES.get(key)
 
+
+def register_platform_broker(key: str, broker: "BaseBroker", connected: bool = True) -> None:
+    """Register a platform broker instance in the global registry.
+
+    This is the **public** API for writing into the registry.  It is
+    intended for use by the fallback/standalone paths in
+    ``CoinbaseBrokerAdapter`` and similar modules that construct a broker
+    without going through ``MultiAccountBrokerManager.initialize_platform_brokers()``.
+
+    Args:
+        key:       Lowercase broker key matching ``BrokerType.value``
+                   (e.g. ``"coinbase"``).
+        broker:    Fully-constructed broker instance to register.
+        connected: Whether the broker's ``connect()`` lifecycle has already
+                   completed successfully.  Defaults to ``True`` so callers
+                   that call this after a successful ``broker.connect()`` do
+                   not need to pass the flag explicitly.
+    """
+    with _PLATFORM_BROKER_REGISTRY_LOCK:
+        GLOBAL_PLATFORM_BROKERS[key] = True
+        _PLATFORM_BROKER_INSTANCES[key] = broker
+        if connected:
+            _PLATFORM_BROKER_CONNECTED[key] = True
+
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
     'your_passphrase', 'YOUR_PASSPHRASE',

@@ -2201,6 +2201,10 @@ class MultiAccountBrokerManager:
             If the guard is set but the instance was never stored (e.g. a
             previous creation attempt raised an exception), the guard is
             cleared and creation is retried.
+
+            Exceptions raised by *factory* propagate to the caller so the
+            per-broker try/except in ``initialize_platform_brokers`` can
+            record the failure without crashing the whole startup.
             """
             with _PLATFORM_BROKER_REGISTRY_LOCK:
                 if GLOBAL_PLATFORM_BROKERS.get(key):
