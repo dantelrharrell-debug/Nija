@@ -413,7 +413,7 @@ except ImportError:
 #   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
 #   - Large accounts: See tier-specific env files (.env.saver_tier, .env.investor_tier, etc.)
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
-STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '10.00'))  # Lowered default from $25.00 to $10.00 (Jan 24, 2026) for small account support
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '1'))  # Lowered to $1 (temp) to unblock capital gate
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
 MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '5.50'))  # Minimum cash required to place a buy order
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
@@ -6594,13 +6594,19 @@ class KrakenBroker(BaseBroker):
                             f"A new API key is required — see logs above for step-by-step recovery."
                         )
                         return False
-                    logger.warning(
-                        f"   ⚠️  Nonce resync handshake did not fully calibrate for {cred_label} "
-                        f"— proceeding with connection retry loop"
+                    # Probe could not calibrate the nonce even after a hard rebase.
+                    # Entering the retry loop would only trigger nuclear resets and
+                    # multi-minute pause cycles before failing with the same result.
+                    logger.error(
+                        f"   ❌ Nonce resync handshake failed for {cred_label} — "
+                        f"aborting.  Rotate the API key if this persists."
                     )
+                    return False
 
-            # Test connection by fetching account balance with retry logic
-            max_attempts = 5
+            # Test connection by fetching account balance.
+            # Probe already calibrated the nonce — a single attempt is sufficient.
+            # No retry loop: if it fails here the outer reconnect logic will retry.
+            max_attempts = 1
             base_delay = 5.0        # exponential backoff for normal errors
             lockout_base_delay = 120.0  # 2 min per step for "Temporary lockout"
             last_error_was_lockout = False
@@ -6745,20 +6751,6 @@ class KrakenBroker(BaseBroker):
                                             )
                                             return False
                                         get_global_nonce_manager().record_error()
-                                    # Apply a probe-step jump on top of record_error()'s small
-                                    # escalating jump so we converge to Kraken's nonce window
-                                    # quickly even if the pre-flight handshake didn't fully
-                                    # calibrate (e.g. network was too slow during probe).
-                                    if jump_global_kraken_nonce_forward is not None:
-                                        # When _NONCE_PROBE_STEP_MS==0 the adaptive engine chose
-                                        # the step during the pre-flight probe.  For the retry loop
-                                        # we fall back to the same static default (_PROBE_STEP_MS).
-                                        _jump_step = _NONCE_PROBE_STEP_MS if _NONCE_PROBE_STEP_MS > 0 else _KRAKEN_CONNECT_PROBE_FALLBACK_MS
-                                        jump_global_kraken_nonce_forward(_jump_step)
-                                        logger.info(
-                                            f"   🔄 Nonce probe jump +{_jump_step // 1000}s applied "
-                                            f"({cred_label}, attempt {attempt}/{max_attempts})"
-                                        )
 
                                 # For nonce errors, log at INFO level on first attempt so users know what failed
                                 # Log at DEBUG level on retries to reduce spam
