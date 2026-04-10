@@ -145,7 +145,28 @@ _AO_HISTORY_WINDOW: int = 10  # persist up to 10 historical calibration records
 # Corruption guard thresholds — if persisted nonce is this far ahead of
 # wall-clock the state file is likely corrupted.
 _CORRUPTION_WARN_MS: int  =    600_000   # 10 min → warn but keep
-_CORRUPTION_RESET_MS: int = 86_400_000   # 24 h   → discard and restart
+# Raised from 24 h → 72 h so that a deliberately large ceiling jump
+# (e.g. NIJA_NONCE_CEILING_JUMP=1 with a 24 h leap) is never mistaken
+# for corruption and discarded on the next container restart.
+_CORRUPTION_RESET_MS: int = 259_200_000  # 72 h   → discard and restart
+
+# ── Ceiling-jump constants ────────────────────────────────────────────────────
+# A "ceiling jump" advances the nonce to now + _CEILING_JUMP_MS in a single
+# step — much larger than the nuclear-reset (+30 min) or deep-probe startup
+# floor (+60 min).  Use this when Kraken's server-side stored nonce is so far
+# ahead that even deep-probe mode cannot reach it.
+#
+# Activated by setting  NIJA_NONCE_CEILING_JUMP=1  before startup, or by
+# calling  force_ceiling_jump()  at runtime.
+#
+# The jump size defaults to 24 h and is overridable via
+#   NIJA_NONCE_CEILING_JUMP_MS=<milliseconds>   (e.g. 172800000 for 48 h)
+#
+# ⚠️  Risk: you are guessing the required ceiling.  If Kraken has stored an
+# even higher nonce the call will still fail.  probe_and_resync() will resume
+# from the new (higher) floor so it needs fewer steps, but a new API key
+# remains the only guaranteed fix for a badly out-of-sync nonce.
+_CEILING_JUMP_MS: int = int(os.environ.get("NIJA_NONCE_CEILING_JUMP_MS", "86400000"))  # default 24 h
 
 # ── NTP clock-sync constants ──────────────────────────────────────────────────
 # Kraken is EXTREMELY sensitive to clock drift.  Even a few seconds off can
@@ -827,6 +848,27 @@ class KrakenNonceManager:
                         )
                         self._last_nonce = deep_floor
 
+                # Ceiling-jump mode: advance nonce to now + _CEILING_JUMP_MS
+                # (default 24 h) so it lands well above Kraken's stored value.
+                # Applied AFTER deep-reset so the ceiling always wins.
+                if os.environ.get("NIJA_NONCE_CEILING_JUMP", "").strip() == "1":
+                    ceiling_floor = int(time.time() * 1000) + _CEILING_JUMP_MS
+                    if ceiling_floor > self._last_nonce:
+                        _logger.warning(
+                            "🚀 KrakenNonceManager: CEILING JUMP (NIJA_NONCE_CEILING_JUMP=1) — "
+                            "nonce → now+%d ms (%.1f h)  %d → %d",
+                            _CEILING_JUMP_MS, _CEILING_JUMP_MS / 3_600_000,
+                            self._last_nonce, ceiling_floor,
+                        )
+                        self._last_nonce = ceiling_floor
+                    else:
+                        _logger.warning(
+                            "🚀 KrakenNonceManager: CEILING JUMP requested but nonce already "
+                            "ahead (nonce=%d  ceiling=%d  lead=%+d ms) — skipped",
+                            self._last_nonce, ceiling_floor,
+                            self._last_nonce - ceiling_floor,
+                        )
+
                 self._persist()
         lead_ms = self._last_nonce - int(time.time() * 1000)
         _logger.info(
@@ -961,6 +1003,62 @@ class KrakenNonceManager:
                     self._last_nonce, floor,
                     self._last_nonce - int(time.time() * 1000),
                 )
+
+    def force_ceiling_jump(self, ms: int | None = None) -> int:
+        """
+        Jump the nonce to ``now + ms`` in one step and persist immediately.
+
+        This is a brute-force escape hatch for situations where Kraken's
+        server-side stored nonce is so far ahead that even a nuclear reset
+        (+30 min) or deep-probe startup floor (+60 min) cannot reach it.
+
+        The new nonce replaces the current value only when it is *higher*
+        (strictly monotonic).  After a successful ceiling jump the caller
+        should restart ``probe_and_resync()`` — the calibration will start
+        from the new (much higher) floor and need fewer steps.
+
+        ⚠️  Risk: you are guessing the required ceiling.  If Kraken has stored
+        an even higher value the jump will still not be sufficient.  A new API
+        key remains the only *guaranteed* fix.
+
+        Args:
+            ms: Forward-jump offset in milliseconds from *now*.
+                Defaults to ``_CEILING_JUMP_MS`` (env ``NIJA_NONCE_CEILING_JUMP_MS``,
+                default 24 h = 86 400 000 ms).
+
+        Returns:
+            The new persisted nonce value.
+        """
+        with _LOCK:
+            jump_ms = ms if ms is not None else _CEILING_JUMP_MS
+            now_ms = int(time.time() * 1000)
+            ceiling = now_ms + jump_ms
+            prev = self._last_nonce
+            if ceiling > self._last_nonce:
+                self._last_nonce = ceiling
+                if self._redis_backend is not None:
+                    try:
+                        self._redis_backend.advance_to(ceiling)
+                    except Exception as _re:
+                        _logger.debug(
+                            "RedisNonceBackend: failed to advance nonce during ceiling jump (%s)", _re
+                        )
+                elif _NONCE_MODE != "timestamp":
+                    self._persist()
+                _logger.warning(
+                    "🚀 KrakenNonceManager.force_ceiling_jump: nonce → now+%d ms (%.1f h)  "
+                    "%d → %d  (was %+d ms ahead of wall-clock, now %+d ms ahead)",
+                    jump_ms, jump_ms / 3_600_000,
+                    prev, ceiling,
+                    prev - now_ms, ceiling - now_ms,
+                )
+            else:
+                _logger.warning(
+                    "🚀 KrakenNonceManager.force_ceiling_jump: nonce already ahead of "
+                    "requested ceiling (nonce=%d  ceiling=%d  lead=%+d ms) — no change",
+                    self._last_nonce, ceiling, self._last_nonce - now_ms,
+                )
+            return self._last_nonce
 
     def force_resync(self) -> None:
         """
@@ -1611,6 +1709,26 @@ def force_resync_kraken_nonce() -> None:
     _nonce_manager.force_resync()
 
 
+def force_ceiling_jump_kraken_nonce(ms: int | None = None) -> int:
+    """
+    Module-level shortcut for ``KrakenNonceManager.force_ceiling_jump()``.
+
+    Advances the nonce to ``now + ms`` (default ``NIJA_NONCE_CEILING_JUMP_MS``,
+    i.e. 24 h) in a single step and persists immediately.  Use when Kraken's
+    server-side nonce is so far ahead that nuclear resets (+30 min) and deep-
+    probe mode (+60 min startup floor) are insufficient.
+
+    Equivalent to setting ``NIJA_NONCE_CEILING_JUMP=1`` at startup, but can
+    be called at runtime without restarting the bot.
+
+    ⚠️  Risk: you are guessing the required ceiling.  See
+    ``KrakenNonceManager.force_ceiling_jump()`` for full details.
+
+    Returns the new persisted nonce value.
+    """
+    return _nonce_manager.force_ceiling_jump(ms)
+
+
 def jump_global_kraken_nonce_forward(milliseconds: int) -> None:
     _nonce_manager.jump_forward(milliseconds)
 
@@ -1697,6 +1815,7 @@ __all__ = [
     "record_kraken_nonce_success",
     "reset_global_kraken_nonce",
     "force_resync_kraken_nonce",
+    "force_ceiling_jump_kraken_nonce",
     "jump_global_kraken_nonce_forward",
     "probe_and_resync_nonce",
     "nonce_reset_triggered_recently",
