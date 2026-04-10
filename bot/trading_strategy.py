@@ -898,6 +898,55 @@ except ImportError:
         get_nija_ai_engine = None  # type: ignore
         NijaAIEngine = None  # type: ignore
 
+# ── Balance Service — materialized balance state (single source of truth) ────
+# RULE: only the orchestrator (run_cycle) calls BalanceService.refresh().
+#       Every other site calls BalanceService.get().  No module may call the
+#       exchange for balance outside of that single refresh point.
+try:
+    from balance_service import BalanceService
+except ImportError:
+    try:
+        from bot.balance_service import BalanceService
+    except ImportError:
+        # Inline stub keeps the rest of the file importable if the module is missing.
+        class BalanceService:  # type: ignore[no-redef]
+            _cache: dict = {}
+            _ttl: float = 30
+
+            @classmethod
+            def get(cls, key: str) -> float:
+                return cls._cache.get(key, 0.0)
+
+            @classmethod
+            def get_detailed(cls, key: str) -> dict:
+                return {}
+
+            @classmethod
+            def refresh(cls, key: str, fn) -> float:
+                try:
+                    raw = fn()
+                    val = float(raw) if not isinstance(raw, dict) else float(
+                        raw.get("total_funds") or raw.get("trading_balance") or 0.0
+                    )
+                    if val > 0:
+                        cls._cache[key] = val
+                except Exception:
+                    pass
+                return cls._cache.get(key, 0.0)
+
+            @classmethod
+            def invalidate(cls, key: str) -> None:
+                cls._cache.pop(key, None)
+
+
+def _broker_key(broker) -> str:
+    """Return the BalanceService cache key for *broker* (e.g. ``"coinbase"``)."""
+    bt = getattr(broker, "broker_type", None)
+    if bt is not None:
+        return str(getattr(bt, "value", bt)).lower()
+    return "unknown"
+
+
 # ── Nija Core Loop — rebuilt single-pass scan / rank / enter loop ────────────
 try:
     from nija_core_loop import get_nija_core_loop, NijaCoreLoop
@@ -4159,7 +4208,7 @@ class TradingStrategy:
                 for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         try:
-                            balance = broker.get_account_balance()
+                            balance = BalanceService.get(_broker_key(broker))
                             if broker_type == BrokerType.COINBASE:
                                 coinbase_balance = balance
                             elif broker_type == BrokerType.KRAKEN:
@@ -4176,7 +4225,7 @@ class TradingStrategy:
                         for broker_type, broker in user_broker_dict.items():
                             try:
                                 if broker.connected:
-                                    user_balance = broker.get_account_balance()
+                                    user_balance = BalanceService.get(_broker_key(broker))
                                     user_total_balance += user_balance
                             except Exception as e:
                                 logger.debug(f"Could not get balance for {user_id}: {e}")
@@ -4390,7 +4439,7 @@ class TradingStrategy:
                             for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                                 if broker and broker.connected:
                                     try:
-                                        broker_balance = broker.get_account_balance()
+                                        broker_balance = BalanceService.get(_broker_key(broker))
                                         total_platform_cash += broker_balance
                                         platform_broker_balances.append(f"{broker_type.value}: ${broker_balance:.2f}")
                                         logger.info(f"   💰 Platform broker {broker_type.value}: ${broker_balance:.2f}")
@@ -5825,7 +5874,7 @@ class TradingStrategy:
                 for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         try:
-                            balance = broker.get_account_balance()
+                            balance = BalanceService.get(_broker_key(broker))
                             total_capital += balance
                             logger.debug(f"   Platform {broker_type.value}: ${balance:.2f}")
                         except Exception as e:
@@ -5837,7 +5886,7 @@ class TradingStrategy:
                         for broker_type, broker in user_broker_dict.items():
                             if broker and broker.connected:
                                 try:
-                                    balance = broker.get_account_balance()
+                                    balance = BalanceService.get(_broker_key(broker))
                                     total_capital += balance
                                     logger.debug(f"   User {user_id} {broker_type.value}: ${balance:.2f}")
                                 except Exception as e:
@@ -5859,29 +5908,27 @@ class TradingStrategy:
 
     def _launch_core_trading_loop(self) -> None:
         """
-        Start the core trading loop in a background daemon thread.
+        Disabled — bot.py is the single-cycle authority.
 
-        Called immediately after the TRADING ACTIVE banner so the loop is
-        guaranteed to run even if the outer orchestrator (bot.py) hits an
-        unexpected error before spawning its own threads.  A module-level
-        guard in nija_core_loop.run_trading_loop prevents a second loop from
-        starting if bot.py's thread already claimed the slot.
+        This method previously spawned a daemon thread running
+        ``nija_core_loop.run_trading_loop()`` in parallel with bot.py's own
+        orchestration thread, which caused **two concurrent calls** to
+        ``strategy.run_cycle()`` and therefore:
 
-        Uses the module-level ``_nija_core_loop_module`` reference that is
-        resolved once at import time (see the try/except block near the top
-        of this file); this avoids repeated dynamic imports inside methods.
+        * duplicate Coinbase balance fetches
+        * duplicate market scans
+        * duplicate position-cap enforcement
+        * double execution risk
+
+        The ``_loop_running`` guard in ``nija_core_loop`` only prevented a
+        second ``run_trading_loop()`` call — it did **not** prevent bot.py's
+        direct ``strategy.run_cycle()`` thread from running simultaneously.
+
+        Fix: remove the internal loop entirely.  bot.py's orchestrator
+        (``_start_single_broker_thread`` / ``independent_trader``) is the sole
+        scheduling authority.
         """
-        import threading as _threading
-        if _nija_core_loop_module is None:
-            logger.warning("⚠️  nija_core_loop not available — core trading loop not started")
-            return
-        _threading.Thread(
-            target=_nija_core_loop_module.run_trading_loop,
-            args=(self,),
-            daemon=True,
-            name="CoreTradingLoop",
-        ).start()
-        logger.info("✅ Core trading loop thread launched")
+        logger.info("ℹ️  _launch_core_trading_loop: disabled — bot.py is the single-cycle authority")
 
     def _display_user_status_banner(self):
         """
@@ -5927,7 +5974,7 @@ class TradingStrategy:
         if self.broker:
             broker_name = self.broker.broker_type.value.upper()
             try:
-                balance = self.broker.get_account_balance()
+                balance = BalanceService.get(_broker_key(self.broker))
                 logger.info(f"   • Broker: {broker_name}")
                 logger.info(f"   • Balance: ${balance:,.2f}")
                 logger.info(f"   • Status: ✅ CONNECTED")
@@ -5947,7 +5994,7 @@ class TradingStrategy:
                     user_count += 1
                     try:
                         if broker.connected:
-                            balance = broker.get_account_balance()
+                            balance = BalanceService.get(_broker_key(broker))
                             logger.info(f"   • {user_id} ({broker_type.value.upper()}): ${balance:,.2f} - ✅ CONNECTED")
                         else:
                             logger.info(f"   • {user_id} ({broker_type.value.upper()}): ❌ NOT CONNECTED")
@@ -5984,7 +6031,7 @@ class TradingStrategy:
             
             # Get account balance
             try:
-                balance = self.broker.get_account_balance()
+                balance = BalanceService.get(_broker_key(self.broker))
                 logger.info(f"   • Account balance: ${balance:,.2f}")
             except Exception as e:
                 logger.error(f"   ❌ Failed to get balance: {e}")
@@ -6524,159 +6571,36 @@ class TradingStrategy:
             self.last_veto_reason = veto_reason
             return False, veto_reason
 
-        # Check if account balance meets minimum threshold
-        # CRITICAL FIX (Jan 28, 2026): Use timeout to prevent hanging on slow balance fetches
-        # Timeout configured to accommodate Kraken's API timeout (30s)
+        # ── Balance eligibility: read from BalanceService — no exchange call ──────
+        # The orchestrator called BalanceService.refresh() at the top of run_cycle()
+        # so by the time this method runs the cache is always populated.
         try:
-            # Call get_account_balance with timeout to prevent indefinite hanging
-            # Uses BALANCE_FETCH_TIMEOUT (30s = matches KrakenBroker.API_TIMEOUT_SECONDS)
-            # Note: Kraken makes 2 API calls (Balance + TradeBalance) with 1s minimum interval between calls
-            balance_result = call_with_timeout(broker.get_account_balance, timeout_seconds=BALANCE_FETCH_TIMEOUT)
+            balance = BalanceService.get(_broker_key(broker))
+            if balance <= 0.0:
+                # BalanceService not yet populated — fall back to broker's last known value.
+                balance = float(getattr(broker, "_last_known_balance", None) or 0.0)
 
-            # Check if timeout or error occurred
-            # call_with_timeout returns (value, None) on success, (None, error) on failure
-            if balance_result[1] is not None:  # Error from call_with_timeout
-                error_msg = balance_result[1]
-                logger.warning(f"   _is_broker_eligible_for_entry: {broker_name} balance fetch timed out or failed: {error_msg}")
-
-                # CRITICAL FIX (Jan 27, 2026): More permissive cached balance fallback
-                # When API is slow/timing out, we should still try to trade using cached balance
-                # Previously was too conservative - would reject broker if no timestamp
-                if hasattr(broker, '_last_known_balance') and broker._last_known_balance is not None:
-                    cached_balance = broker._last_known_balance
-
-                    # Check if cached balance has a timestamp (for staleness check)
-                    cache_is_fresh = False
-                    if hasattr(broker, '_balance_last_updated') and broker._balance_last_updated is not None:
-                        balance_age_seconds = time.time() - broker._balance_last_updated
-                        cache_is_fresh = balance_age_seconds <= CACHED_BALANCE_MAX_AGE_SECONDS
-                        if not cache_is_fresh:
-                            logger.warning(f"   ⚠️  Cached balance for {broker_name} is stale ({balance_age_seconds:.0f}s old > {CACHED_BALANCE_MAX_AGE_SECONDS}s max)")
-                    else:
-                        # CRITICAL FIX (Jan 27, 2026): Conditional cache usage when no timestamp
-                        # If broker doesn't track timestamp, we can't verify age
-                        # SAFE APPROACH: Only use cache if broker object was created recently (this session)
-                        # This prevents trading with very stale data from previous sessions
-
-                        # Check if broker has a 'connected_at' or similar timestamp
-                        broker_session_age = None
-                        if hasattr(broker, 'connected_at'):
-                            broker_session_age = time.time() - broker.connected_at
-                        elif hasattr(broker, 'created_at'):
-                            broker_session_age = time.time() - broker.created_at
-
-                        # Only use untimestamped cache if broker was connected/created in last 10 minutes
-                        # This ensures cache is from current trading session, not stale from previous run
-                        if broker_session_age is not None and broker_session_age <= 600:  # 10 minutes
-                            cache_is_fresh = True
-                            logger.info(f"   ℹ️  {broker_name} cached balance has no timestamp, but broker connected {broker_session_age:.0f}s ago - using cache")
-                        else:
-                            # No timestamp and no session age - too risky to use
-                            cache_is_fresh = False
-                            logger.warning(f"   ⚠️  {broker_name} cached balance has no timestamp and no session age - rejecting for safety")
-
-                    if cache_is_fresh:
-                        logger.info(f"   ✅ Using cached balance for {broker_name}: ${cached_balance:.2f}")
-                        broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
-                        min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
-
-                        if cached_balance >= min_balance:
-                            return True, f"Eligible (cached ${cached_balance:.2f} >= ${min_balance:.2f} min)"
-                        else:
-                            veto_reason = f"{broker_name.upper()} cached balance ${cached_balance:.2f} < ${min_balance:.2f} minimum"
-                            logger.info(f"🚫 TRADE VETO: {veto_reason}")
-                            self.veto_count_session += 1
-                            self.last_veto_reason = veto_reason
-                            return False, veto_reason
-
-                # Last-resort fallback: use any cached balance (even stale) rather
-                # than hard-blocking the broker when the live fetch failed.
-                _cached_last_resort = getattr(broker, '_last_known_balance', None)
-                if _cached_last_resort is not None:
-                    broker_type_lr = broker.broker_type if hasattr(broker, 'broker_type') else None
-                    min_balance_lr = BROKER_MIN_BALANCE.get(broker_type_lr, MIN_BALANCE_TO_TRADE_USD)
-                    logger.warning(
-                        f"   ⚠️  {broker_name} balance fetch failed — using cached balance for eligibility: "
-                        f"${_cached_last_resort:.2f} (min=${min_balance_lr:.2f})"
-                    )
-                    if _cached_last_resort >= min_balance_lr:
-                        return True, f"Eligible (stale cached ${_cached_last_resort:.2f} >= ${min_balance_lr:.2f} min)"
-                    veto_reason = (
-                        f"{broker_name.upper()} cached balance ${_cached_last_resort:.2f} "
-                        f"< ${min_balance_lr:.2f} minimum"
-                    )
-                    logger.info(f"🚫 TRADE VETO: {veto_reason}")
-                    self.veto_count_session += 1
-                    self.last_veto_reason = veto_reason
-                    return False, veto_reason
-
-                veto_reason = f"{broker_name.upper()} balance fetch failed: timeout or error"
-                logger.info(f"🚫 TRADE VETO: {veto_reason}")
-                self.veto_count_session += 1
-                self.last_veto_reason = veto_reason
-                return False, veto_reason
-
-            balance = balance_result[0] if balance_result[0] is not None else 0.0
-            
-            # 🔒 CAPITAL PROTECTION: If live balance is 0.0, fall back to last known
-            # balance before hard-vetoing.  A balance of 0.0 from a fresh fetch can
-            # mean the API returned incomplete data — never convert a known balance
-            # into $0 just because one refresh returned nothing.
-            if balance == 0.0:
-                _last_bal = getattr(broker, '_last_known_balance', None)
-                if _last_bal is not None and _last_bal > 0:
-                    logger.warning(
-                        f"   ⚠️  {broker_name.upper()} fresh balance is 0.0 — "
-                        f"using last known balance ${_last_bal:.2f} for eligibility check"
-                    )
-                    balance = _last_bal
-                else:
-                    veto_reason = (
-                        f"{broker_name.upper()} balance is 0.0 and no last-known balance available — "
-                        "vetoing entry until a confirmed balance is fetched"
-                    )
-                    logger.warning(
-                        f"   ⚠️  {broker_name.upper()} balance is 0.0 and no last-known balance — "
-                        "blocking entry until live balance is confirmed"
-                    )
-                    self.veto_count_session += 1
-                    self.last_veto_reason = veto_reason
-                    return False, veto_reason
-            
-            broker_type = broker.broker_type if hasattr(broker, 'broker_type') else None
+            broker_type = broker.broker_type if hasattr(broker, "broker_type") else None
             min_balance = BROKER_MIN_BALANCE.get(broker_type, MIN_BALANCE_TO_TRADE_USD)
+            logger.debug(
+                "   _is_broker_eligible_for_entry: %s balance=$%.2f, min=$%.2f",
+                broker_name, balance, min_balance,
+            )
 
-            logger.debug(f"   _is_broker_eligible_for_entry: {broker_name} balance=${balance:.2f}, min=${min_balance:.2f}")
-
-            # ── BALANCE TIMING RACE PROTECTION ──────────────────────────────
-            # On startup and after broker reconnects the balance can take
-            # 21–60 s to settle.  Block entry if the balance hasn't been
-            # refreshed within BALANCE_STABLE_SECONDS to prevent trades being
-            # sized off a stale or uninitialised balance figure.
-            _balance_updated_at = getattr(broker, '_balance_last_updated', None)
-            if _balance_updated_at is None:
+            if balance <= 0.0:
                 veto_reason = (
-                    f"{broker_name.upper()} balance not yet fetched — "
-                    "waiting for first successful balance update before entry"
+                    f"{broker_name.upper()} balance unavailable — "
+                    "waiting for BalanceService refresh"
                 )
-                logger.warning(f"   ⏳ BALANCE TIMING GUARD: {veto_reason}")
-                self.veto_count_session += 1
-                self.last_veto_reason = veto_reason
-                return False, veto_reason
-            _balance_age = time.time() - _balance_updated_at
-            if _balance_age > BALANCE_STABLE_SECONDS:
-                veto_reason = (
-                    f"{broker_name.upper()} balance is stale "
-                    f"({_balance_age:.0f}s > {BALANCE_STABLE_SECONDS}s) — "
-                    "waiting for fresh balance before entry"
-                )
-                logger.warning(f"   ⏳ BALANCE TIMING GUARD: {veto_reason}")
+                logger.warning("   ⏳ BALANCE TIMING GUARD: %s", veto_reason)
                 self.veto_count_session += 1
                 self.last_veto_reason = veto_reason
                 return False, veto_reason
 
             if balance < min_balance:
-                veto_reason = f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+                veto_reason = (
+                    f"{broker_name.upper()} balance ${balance:.2f} < ${min_balance:.2f} minimum"
+                )
                 logger.info(f"🚫 TRADE VETO: {veto_reason}")
                 self.veto_count_session += 1
                 self.last_veto_reason = veto_reason
@@ -7013,7 +6937,7 @@ class TradingStrategy:
         # Display capital information
         try:
             if broker and broker.connected:
-                balance = broker.get_account_balance()
+                balance = BalanceService.get(_broker_key(broker))
                 broker_name = self._get_broker_name(broker)
                 logger.info(f"   💰 {broker_name.upper()} Balance: ${balance:,.2f}")
                 
@@ -7087,7 +7011,7 @@ class TradingStrategy:
         
         try:
             # Get account balance to verify we can trade
-            balance = broker.get_account_balance()
+            balance = BalanceService.get(_broker_key(broker))
             if balance < HEARTBEAT_TRADE_SIZE_USD:
                 logger.warning(f"   ❤️  Heartbeat trade skipped: ${balance:.2f} < ${HEARTBEAT_TRADE_SIZE_USD:.2f} minimum")
                 return False
@@ -7355,13 +7279,8 @@ class TradingStrategy:
                 _tcs = get_true_capital_scaler()
                 # Inline balance fetch (same pattern as recovery controller)
                 _tcs_balance = account_balance
-                if _tcs_balance <= 0 and active_broker and hasattr(active_broker, 'get_balance'):
-                    try:
-                        _tcs_bal_result = active_broker.get_balance()
-                        if _tcs_bal_result and not _tcs_bal_result[1]:
-                            _tcs_balance = float(_tcs_bal_result[0] or 0.0)
-                    except Exception:
-                        pass
+                if _tcs_balance <= 0:
+                    _tcs_balance = BalanceService.get(_broker_key(active_broker))
                 if _tcs_balance > 0:
                     _tcs.get_cycle_params(_tcs_balance)
                     # Log status every 10 cycles to avoid log spam
@@ -7378,21 +7297,19 @@ class TradingStrategy:
                 recovery_controller = get_recovery_controller()
                 
                 # Update capital safety assessment if we have balance info
-                if active_broker and hasattr(active_broker, 'get_balance'):
-                    try:
-                        balance_result = active_broker.get_balance()
-                        if balance_result and not balance_result[1]:  # No error
-                            current_balance = balance_result[0]
-                            # Count current positions
-                            position_count = len(self.execution_engine.positions) if self.execution_engine else 0
-                            
-                            # Update capital safety assessment
-                            recovery_controller.assess_capital_safety(
-                                current_balance=current_balance,
-                                position_count=position_count
-                            )
-                    except Exception as e:
-                        logger.warning(f"Could not update capital safety: {e}")
+                try:
+                    current_balance = BalanceService.get(_broker_key(active_broker))
+                    if current_balance > 0:
+                        # Count current positions
+                        position_count = len(self.execution_engine.positions) if self.execution_engine else 0
+
+                        # Update capital safety assessment
+                        recovery_controller.assess_capital_safety(
+                            current_balance=current_balance,
+                            position_count=position_count
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not update capital safety: {e}")
                 
                 # Check if trading is allowed
                 can_trade_entry, reason = recovery_controller.can_trade("entry")
@@ -7417,14 +7334,7 @@ class TradingStrategy:
         if GLOBAL_RISK_GOVERNOR_AVAILABLE and get_global_risk_governor and not user_mode:
             try:
                 _gov = get_global_risk_governor()
-                _gov_balance = 0.0
-                if active_broker and hasattr(active_broker, 'get_balance'):
-                    try:
-                        _bal_result = active_broker.get_balance()
-                        if _bal_result and not _bal_result[1]:
-                            _gov_balance = float(_bal_result[0])
-                    except Exception:
-                        pass
+                _gov_balance = BalanceService.get(_broker_key(active_broker))
 
                 _gov_pos_count = (
                     len(self.execution_engine.positions)
@@ -7461,14 +7371,7 @@ class TradingStrategy:
         if GLOBAL_DRAWDOWN_CB_AVAILABLE and get_global_drawdown_cb and not user_mode:
             try:
                 _gdcb = get_global_drawdown_cb()
-                _gdcb_balance = 0.0
-                if active_broker and hasattr(active_broker, 'get_balance'):
-                    try:
-                        _gdcb_bal_result = active_broker.get_balance()
-                        if _gdcb_bal_result and not _gdcb_bal_result[1]:
-                            _gdcb_balance = float(_gdcb_bal_result[0])
-                    except Exception:
-                        pass
+                _gdcb_balance = BalanceService.get(_broker_key(active_broker))
                 if _gdcb_balance > 0:
                     _gdcb_decision = _gdcb.update_equity(_gdcb_balance)
                     if not _gdcb_decision.allow_new_entries:
@@ -7499,14 +7402,7 @@ class TradingStrategy:
         # Ensures position sizing and risk parameters scale with balance growth.
         if AUTO_CAPITAL_SCALER_AVAILABLE and hasattr(self, 'auto_capital_scaler') and self.auto_capital_scaler is not None:
             try:
-                _acs_balance = 0.0
-                if active_broker:
-                    try:
-                        _acs_bal_result = active_broker.get_balance()
-                        if _acs_bal_result and not _acs_bal_result[1]:
-                            _acs_balance = float(_acs_bal_result[0] or 0.0)
-                    except Exception:
-                        pass
+                _acs_balance = BalanceService.get(_broker_key(active_broker))
                 if _acs_balance > 0:
                     _acs_params = self.auto_capital_scaler.update(_acs_balance)
                     logger.debug(
@@ -8421,119 +8317,54 @@ class TradingStrategy:
             else:
                 logger.debug("🎯 Using strategy: NIJAApexStrategyV71")
 
-            # ⏱️ Sub-step 1: Balance update
+            # ⏱️ Sub-step 1: Balance update — BalanceService is the single source of truth.
+            # RULE: this is the ONE place per cycle that may call the exchange for balance.
+            # All other read sites in this method use BalanceService.get() instead.
             balance_start_time = time.time()
+            _balance_grace_mode = False
+            _bs_key = _broker_key(active_broker)
 
-            # FIX #1: Update portfolio state from broker data
-            # Get detailed balance including crypto holdings
-            # PRO MODE: Also calculate total capital (free balance + position values)
-            # TIMEOUT FALLBACK: if live fetch fails, fall back to cached balance.
-            # BALANCE FRESHNESS: always use call_with_timeout so a slow/hung API call never
-            # blocks the whole trading cycle; accept any cached balance — stale cache triggers
-            # grace mode (0.5× position-size multiplier) but never a $0 sentinel.
-            _balance_grace_mode = False  # True when using stale/fallback balance
-            try:
-                if hasattr(active_broker, 'get_account_balance_detailed'):
-                    _bal_result = call_with_timeout(
-                        active_broker.get_account_balance_detailed,
-                        timeout_seconds=BALANCE_FETCH_TIMEOUT,
-                    )
-                else:
-                    _bal_result = call_with_timeout(
-                        active_broker.get_account_balance,
-                        timeout_seconds=BALANCE_FETCH_TIMEOUT,
-                    )
-                if _bal_result[1] is not None:
-                    raise Exception(f"Balance fetch timed out or failed: {_bal_result[1]}")
-                if hasattr(active_broker, 'get_account_balance_detailed'):
-                    balance_data = _bal_result[0] or {}
-                else:
-                    balance_data = {'trading_balance': _bal_result[0]}
-            except Exception as _bal_fetch_err:
-                logger.warning(f"⚠️  Balance fetch failed ({_bal_fetch_err}); checking cache")
-                _cached_balance = None
-                if (hasattr(active_broker, '_last_known_balance')
-                        and active_broker._last_known_balance is not None):
-                    if (hasattr(active_broker, '_balance_last_updated')
-                            and active_broker._balance_last_updated is not None):
-                        _cached_age = time.time() - active_broker._balance_last_updated
-                        if _cached_age <= CACHED_BALANCE_MAX_AGE_SECONDS:
-                            _cached_balance = active_broker._last_known_balance
-                            logger.warning(
-                                f"   ⚠️  Using cached balance (age={_cached_age:.0f}s): "
-                                f"${_cached_balance:.2f}"
-                            )
-                        else:
-                            # Stale but still use it — activate grace mode (0.5× sizing)
-                            _cached_balance = active_broker._last_known_balance
-                            _balance_grace_mode = True
-                            logger.warning(
-                                f"   ⚠️  Cached balance is stale ({_cached_age:.0f}s > "
-                                f"{CACHED_BALANCE_MAX_AGE_SECONDS}s) — using stale balance "
-                                f"in grace mode (0.5× position sizing)"
-                            )
-                    else:
-                        # No timestamp available; use cached value but activate grace mode
-                        _cached_balance = active_broker._last_known_balance
-                        _balance_grace_mode = True
-                        logger.warning(
-                            f"   ⚠️  Using cached balance (no timestamp) in grace mode: ${_cached_balance:.2f}"
-                        )
-                if _cached_balance is None:
-                    # BALANCE SYNC FIX: use strategy-level long-lived cache before falling
-                    # back to the $0 sentinel.  The strategy-level cache (_last_known_balance)
-                    # is updated every cycle when a positive balance is confirmed and survives
-                    # broker reconnects, whereas broker._last_known_balance can be None after
-                    # a fresh reconnect.  This prevents cap=1 from killing all trading.
-                    if self._last_known_balance is not None and self._last_known_balance > 0:
-                        logger.warning(
-                            "   ⚠️  Broker cache empty — using strategy-level cached balance as last resort: "
-                            "$%.2f (live fetch failed, activating grace mode)",
-                            self._last_known_balance,
-                        )
-                        balance_data = {'trading_balance': self._last_known_balance}
-                        _balance_grace_mode = True
-                    else:
-                        logger.error("   ❌ No cached balance available — using $0 sentinel (all retries exhausted)")
-                        balance_data = {'trading_balance': 0.0}
-                else:
-                    balance_data = {'trading_balance': _cached_balance}
-            account_balance = balance_data.get('trading_balance', 0.0) or 0.0
-            # Update strategy-level balance cache whenever we have a confirmed positive balance
+            def _orchestrator_fetch():
+                if hasattr(active_broker, "get_account_balance_detailed"):
+                    d = active_broker.get_account_balance_detailed(verbose=True)
+                    if d and not d.get("error"):
+                        return d
+                return active_broker.get_account_balance(verbose=True)
+
+            account_balance = BalanceService.refresh(_bs_key, _orchestrator_fetch)
+
+            # Build balance_data dict for downstream code that reads total_held / total_funds.
+            _detailed = BalanceService.get_detailed(_bs_key)
+            if _detailed:
+                balance_data = _detailed
+                if not balance_data.get("trading_balance"):
+                    balance_data = dict(balance_data)
+                    balance_data["trading_balance"] = account_balance
+            else:
+                balance_data = {
+                    "trading_balance": account_balance,
+                    "total_held": 0.0,
+                    "total_funds": account_balance,
+                }
+
+            # Grace-mode fallback: if BalanceService returned $0, use strategy cache.
+            if account_balance <= 0 and self._last_known_balance:
+                account_balance = self._last_known_balance
+                balance_data["trading_balance"] = account_balance
+                _balance_grace_mode = True
+                logger.warning(
+                    "⚠️  BalanceService returned $0 — strategy cache: $%.2f (grace mode, 0.5× sizing)",
+                    account_balance,
+                )
+            elif account_balance <= 0:
+                logger.error("❌ No balance available — using $0 sentinel (all sources exhausted)")
+
             if account_balance > 0:
-                if self._last_known_balance != account_balance:
-                    logger.debug(
-                        "   💾 Strategy balance cache updated: $%.2f → $%.2f",
-                        self._last_known_balance or 0.0,
-                        account_balance,
-                    )
                 self._last_known_balance = account_balance
-            # Capture the balance at cycle start for end-of-cycle P&L comparison
             _cycle_start_balance = account_balance
 
-            # ── BALANCE TIMING GUARD DIAGNOSTIC ──────────────────────────────
-            # Log balance freshness each cycle so stale-cache vetoes are visible
-            # in the logs instead of silently blocking entries.
-            _btg_broker_name = self._get_broker_name(active_broker) if active_broker else 'unknown'
-            if hasattr(active_broker, '_balance_last_updated') and active_broker._balance_last_updated is not None:
-                _btg_age = time.time() - active_broker._balance_last_updated
-                if _btg_age <= CACHED_BALANCE_MAX_AGE_SECONDS:
-                    logger.info(
-                        f"✅ BALANCE TIMING GUARD: {_btg_broker_name.upper()} balance fresh "
-                        f"(age={_btg_age:.0f}s ≤ {CACHED_BALANCE_MAX_AGE_SECONDS}s) — "
-                        f"${account_balance:.2f}"
-                    )
-                else:
-                    logger.warning(
-                        f"⏳ BALANCE TIMING GUARD: {_btg_broker_name.upper()} balance STALE "
-                        f"(age={_btg_age:.0f}s > {CACHED_BALANCE_MAX_AGE_SECONDS}s) — "
-                        f"grace mode active (0.5× sizing) — nonce errors may delay refresh"
-                    )
-            else:
-                logger.info(
-                    f"ℹ️  BALANCE TIMING GUARD: {_btg_broker_name.upper()} no timestamp — "
-                    f"${account_balance:.2f} (grace mode active if balance was from cache)"
-                )
+            _btg_broker_name = self._get_broker_name(active_broker) if active_broker else "unknown"
+            logger.info("✅ BALANCE: %s $%.2f", _btg_broker_name.upper(), account_balance)
 
             # ── FIRST TRADE GUARANTEE ─────────────────────────────────────────
             # Two paths both result in _first_trade_override = True, which expands
@@ -8739,22 +8570,17 @@ class TradingStrategy:
                         cancelled_count, capital_freed = self.kraken_cleanup.cleanup_stale_orders(dry_run=False)
                         if cancelled_count > 0:
                             logger.info(f"   🧹 Kraken cleanup: Freed ${capital_freed:.2f} by cancelling {cancelled_count} stale order(s)")
-                            # Update balance after freeing capital
+                            # Invalidate BalanceService so next read reflects freed capital
                             try:
                                 old_balance = account_balance
-                                new_balance = active_broker.get_account_balance()
-                                # Always update balance regardless of whether it increased
-                                # SAFETY: guard against None return from get_account_balance()
-                                if new_balance is None:
-                                    logger.warning("   ⚠️ Kraken balance refresh returned None — keeping previous balance")
-                                    new_balance = old_balance
-                                _refreshed = float(new_balance or 0.0)
-                                if _refreshed > 0:
-                                    account_balance = _refreshed
-                                    if account_balance > old_balance:
-                                        logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
-                                else:
-                                    logger.warning("   ⚠️ Kraken balance refresh returned $0 — keeping previous balance $%.2f", old_balance)
+                                _bs_cleanup_key = _broker_key(active_broker)
+                                BalanceService.invalidate(_bs_cleanup_key)
+                                account_balance = BalanceService.refresh(
+                                    _bs_cleanup_key,
+                                    lambda: active_broker.get_account_balance(verbose=False),
+                                ) or old_balance
+                                if account_balance > old_balance:
+                                    logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
                             except Exception as balance_err:
                                 logger.debug(f"   Could not refresh balance: {balance_err}")
                 except Exception as cleanup_err:
@@ -8771,17 +8597,14 @@ class TradingStrategy:
                             logger.info(f"   🧹 Coinbase cleanup: Freed ${capital_freed:.2f} by cancelling {cancelled_count} stale order(s)")
                             try:
                                 old_balance = account_balance
-                                new_balance = active_broker.get_account_balance()
-                                if new_balance is None:
-                                    logger.warning("   ⚠️ Coinbase balance refresh returned None — keeping previous balance")
-                                    new_balance = old_balance
-                                _refreshed = float(new_balance or 0.0)
-                                if _refreshed > 0:
-                                    account_balance = _refreshed
-                                    if account_balance > old_balance:
-                                        logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
-                                else:
-                                    logger.warning("   ⚠️ Coinbase balance refresh returned $0 — keeping previous balance $%.2f", old_balance)
+                                _bs_cb_key = _broker_key(active_broker)
+                                BalanceService.invalidate(_bs_cb_key)
+                                account_balance = BalanceService.refresh(
+                                    _bs_cb_key,
+                                    lambda: active_broker.get_account_balance(verbose=False),
+                                ) or old_balance
+                                if account_balance > old_balance:
+                                    logger.info(f"   💰 Balance increased: ${old_balance:.2f} → ${account_balance:.2f} (+${account_balance - old_balance:.2f})")
                             except Exception as balance_err:
                                 logger.debug(f"   Could not refresh Coinbase balance: {balance_err}")
                 except Exception as cleanup_err:
@@ -10727,78 +10550,21 @@ class TradingStrategy:
                             logger.info(f"   🔄 Updating apex strategy broker to {entry_broker_name.upper()}")
                             self.apex.update_broker_client(active_broker)
 
-                        # CRITICAL FIX (Jan 22, 2026): Update account_balance from selected entry broker
-                        # When switching brokers, we must re-fetch the balance from the NEW broker
-                        # Otherwise position sizing uses the wrong broker's balance (e.g., Coinbase $20 instead of Kraken $28)
-                        # CRITICAL FIX (Jan 26, 2026): Wrap balance fetch in timeout to prevent hanging
-                        # Without timeout, slow Kraken API calls can block indefinitely, preventing market scanning
-                        balance_data = None
-                        balance_fetch_failed = False
-
-                        try:
-                            if hasattr(active_broker, 'get_account_balance_detailed'):
-                                # Use timeout to prevent hanging on slow balance fetches
-                                balance_result = call_with_timeout(
-                                    active_broker.get_account_balance_detailed,
-                                    timeout_seconds=BALANCE_FETCH_TIMEOUT
-                                )
-
-                                if balance_result[1] is not None:  # Timeout or error
-                                    logger.warning(f"   ⚠️  {entry_broker_name.upper()} detailed balance fetch timed out: {balance_result[1]}")
-                                    balance_fetch_failed = True
-                                else:
-                                    balance_data = balance_result[0]
-                            else:
-                                # Fallback to simple balance fetch with timeout
-                                balance_result = call_with_timeout(
-                                    active_broker.get_account_balance,
-                                    timeout_seconds=BALANCE_FETCH_TIMEOUT
-                                )
-
-                                if balance_result[1] is not None:  # Timeout or error
-                                    logger.warning(f"   ⚠️  {entry_broker_name.upper()} balance fetch timed out: {balance_result[1]}")
-                                    balance_fetch_failed = True
-                                else:
-                                    balance_data = {'trading_balance': balance_result[0]}
-                        except Exception as e:
-                            logger.warning(f"   ⚠️  {entry_broker_name.upper()} balance fetch exception: {e}")
-                            balance_fetch_failed = True
-
-                        # Use cached balance if fresh fetch failed
-                        if balance_fetch_failed or balance_data is None:
-                            if hasattr(active_broker, '_last_known_balance') and active_broker._last_known_balance is not None:
-                                cached_balance = active_broker._last_known_balance
-
-                                # Check if cached balance has a timestamp and is fresh
-                                if hasattr(active_broker, '_balance_last_updated') and active_broker._balance_last_updated is not None:
-                                    balance_age_seconds = time.time() - active_broker._balance_last_updated
-                                    if balance_age_seconds <= CACHED_BALANCE_MAX_AGE_SECONDS:
-                                        logger.warning(f"   ⚠️  Using cached balance for {entry_broker_name.upper()}: ${cached_balance:.2f} (age={balance_age_seconds:.0f}s)")
-                                    else:
-                                        # Stale cache — activate grace mode (0.5× sizing) instead of blocking
-                                        _balance_grace_mode = True
-                                        logger.warning(
-                                            f"   ⚠️  Cached balance for {entry_broker_name.upper()} is stale "
-                                            f"({balance_age_seconds:.0f}s > {CACHED_BALANCE_MAX_AGE_SECONDS}s) "
-                                            f"— using stale balance in grace mode (0.5× sizing)"
-                                        )
-                                else:
-                                    # No timestamp - use cache anyway, activate grace mode
-                                    _balance_grace_mode = True
-                                    logger.warning(
-                                        f"   ⚠️  Cached balance for {entry_broker_name.upper()} has no timestamp "
-                                        f"— using in grace mode (0.5× sizing)"
-                                    )
-                                balance_data = {'trading_balance': cached_balance, 'total_held': 0.0, 'total_funds': cached_balance}
-                            else:
-                                # No cache at all — fall back to eligibility-check balance
-                                logger.error(f"   ❌ No cached balance available for {entry_broker_name.upper()}")
-                                logger.warning(f"   ⚠️  Using balance from eligibility check as fallback: ${account_balance:.2f}")
-                                # Always activate grace mode when falling back — source is uncertain
-                                _balance_grace_mode = True
-                                balance_data = {'trading_balance': account_balance, 'total_held': 0.0, 'total_funds': account_balance}
-
-                        account_balance = balance_data.get('trading_balance', 0.0) or 0.0
+                        # Read entry-broker balance from BalanceService — no exchange call.
+                        # The orchestrator refreshed the cache at the top of this cycle so
+                        # the value here is already fresh for the current cycle.
+                        _entry_bs_key = _broker_key(active_broker)
+                        account_balance = BalanceService.get(_entry_bs_key)
+                        if account_balance <= 0.0:
+                            account_balance = float(getattr(active_broker, "_last_known_balance", None) or 0.0)
+                        balance_data = BalanceService.get_detailed(_entry_bs_key) or {
+                            "trading_balance": account_balance,
+                            "total_held": 0.0,
+                            "total_funds": account_balance,
+                        }
+                        if not balance_data.get("trading_balance"):
+                            balance_data = dict(balance_data)
+                            balance_data["trading_balance"] = account_balance
 
                         # ── SELECTED BROKER BALANCE CHECK ──────────────────────
                         # This is the AUTHORITATIVE balance gate.  We now have the
@@ -14684,13 +14450,13 @@ class TradingStrategy:
 
                                                 # Update free balance after rotation
                                                 try:
-                                                    time.sleep(1.0)  # Wait for balances to update
-                                                    # SAFETY: guard against None return from get_account_balance()
-                                                    _rotation_balance = active_broker.get_account_balance()
-                                                    if _rotation_balance is None:
-                                                        logger.warning("   ⚠️ Rotation balance refresh returned None — keeping previous balance")
-                                                        _rotation_balance = account_balance
-                                                    account_balance = float(_rotation_balance or 0.0)
+                                                    time.sleep(1.0)  # Wait for exchange to settle
+                                                    _rot_key = _broker_key(active_broker)
+                                                    BalanceService.invalidate(_rot_key)
+                                                    account_balance = BalanceService.refresh(
+                                                        _rot_key,
+                                                        lambda: active_broker.get_account_balance(verbose=False),
+                                                    ) or account_balance
                                                     logger.info(f"   💰 Updated free balance: ${account_balance:.2f}")
                                                 except Exception:
                                                     pass
@@ -15770,8 +15536,8 @@ class TradingStrategy:
                 try:
                     _broker = getattr(self, 'broker', None)
                     if _broker:
-                        _bal = _broker.get_balance()
-                        if isinstance(_bal, (int, float)) and _bal > 0:
+                        _bal = BalanceService.get(_broker_key(_broker))
+                        if _bal > 0:
                             _new_cap = float(_bal)
                 except Exception:
                     pass
