@@ -413,6 +413,7 @@ except ImportError:
 #   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
 #   - Large accounts: See tier-specific env files (.env.saver_tier, .env.investor_tier, etc.)
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '25.00'))  # Capital gate: $25.00 minimum (restored from $10.00 default)
 STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '1'))  # Lowered to $1 (temp) to unblock capital gate
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
 MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '5.50'))  # Minimum cash required to place a buy order
