@@ -83,12 +83,20 @@ class ConnectionState(Enum):
     State transitions:
         NOT_STARTED  →  CONNECTING  →  CONNECTED
                                    →  FAILED
+
+    NOT_STARTED  : Broker object registered but no connect() call has started.
+                   Set by add_platform_broker() or the initial default.
+    DISCONNECTED : Legacy alias — kept for backward-compat with external callers
+                   that may reference this value; treated identically to NOT_STARTED.
+    CONNECTING   : connect() is in progress (set by begin_platform_connection()).
+    CONNECTED    : Handshake succeeded (set by _mark_platform_connected()).
+    FAILED       : Handshake permanently failed (set by mark_platform_failed()).
     """
-    NOT_STARTED = "not_started"   # No connection attempt has been initiated yet
-    DISCONNECTED = "disconnected"  # Broker object registered; connection not yet started
-    CONNECTING = "connecting"      # connect() in progress
-    CONNECTED = "connected"        # Handshake succeeded
-    FAILED = "failed"              # Handshake permanently failed
+    NOT_STARTED = "not_started"    # Broker registered; no connection attempt yet
+    DISCONNECTED = "disconnected"  # Backward-compat alias for NOT_STARTED
+    CONNECTING = "connecting"      # connect() call in progress
+    CONNECTED = "connected"        # Handshake succeeded; ready for trading
+    FAILED = "failed"              # Handshake failed; user connections blocked
 
 
 # Root nija logger for flushing all handlers
@@ -344,9 +352,9 @@ class MultiAccountBrokerManager:
             # ❌ DO NOT call broker.connect() here
             # ❌ DO NOT trigger reconnect or validate connection
             self._platform_brokers[broker_type] = broker
-            self._platform_state[broker_type.value] = ConnectionState.CONNECTING
+            self._platform_state[broker_type.value] = ConnectionState.NOT_STARTED
             # Pre-create the readiness event so wait_for_platform_ready() always
-            # blocks on the same object as _mark_platform_connected() will set.
+            # blocks on the same object that begin_platform_connection() + connect() will set.
             self._get_or_create_platform_event(broker_type)
             # Mark in the global broker registry so any module can check is_platform()
             if broker_registry is not None:
@@ -668,15 +676,11 @@ class MultiAccountBrokerManager:
     def _get_or_create_platform_event(self, broker_type: BrokerType) -> threading.Event:
         """Return the readiness Event for *broker_type*, creating it if absent.
 
-        Uses ``dict.setdefault`` so that two threads racing to create the event
-        for the same broker type always end up sharing the identical object —
-        one write wins and both callers receive that same ``threading.Event``.
+        Uses ``dict.setdefault`` directly so the operation is atomic under the
+        GIL: only one ``threading.Event`` is ever stored for a given broker type,
+        regardless of how many threads call this method concurrently.
         """
-        key = broker_type.value
-        existing = self._platform_ready_events.get(key)
-        if existing is None:
-            self._platform_ready_events.setdefault(key, threading.Event())
-        return self._platform_ready_events[key]
+        return self._platform_ready_events.setdefault(broker_type.value, threading.Event())
 
     def begin_platform_connection(self, broker_type: BrokerType) -> None:
         """Signal that a platform connection attempt is about to start.
@@ -784,6 +788,9 @@ class MultiAccountBrokerManager:
         if timeout is None:
             timeout = int(env_val) if env_val.strip().isdigit() else 0
         broker_name = broker_type.value.upper()
+        # `start` is captured here so `timeout` is the total function budget,
+        # including fast-path checks.  The few milliseconds they take is
+        # negligible and keeps the accounting simple.
         start = time.time()
 
         # ── Fast-path 1: state machine already at CONNECTED / FAILED ──────────
