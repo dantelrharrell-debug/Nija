@@ -492,7 +492,137 @@ _KRAKEN_CONNECT_PROBE_FALLBACK_MS: int = 300_000   # 5 min
 # Rule: Kraken is extremely sensitive to clock drift and nonce ordering.
 # The platform account MUST connect and stabilise its nonce FIRST.
 # User accounts connecting simultaneously risk nonce-window collisions.
-_PLATFORM_KRAKEN_READY: threading.Event = threading.Event()
+class KrakenStartupFSM:
+    """Single source of truth for the Kraken platform startup sequence.
+
+    States (strictly linear — no backward transitions once CONNECTED):
+
+        IDLE → CONNECTING → CONNECTED   (success path)
+        IDLE → CONNECTING → FAILED      (failure path)
+
+    Principle: **event = truth, state = derived.**
+
+    The two ``threading.Event`` objects are the authoritative primitives.
+    Every boolean helper (``is_connected``, ``is_failed``, …) is a pure read of
+    those events.  This eliminates the three-write race that existed when
+    ``_platform_ready_flag`` (bool) + ``_connection_already_complete`` (bool) +
+    ``_PLATFORM_KRAKEN_READY`` (Event) were set in three separate statements and
+    could be observed in partial state by concurrent USER threads.
+    """
+
+    def __init__(self) -> None:
+        self._connected: threading.Event = threading.Event()
+        self._failed: threading.Event = threading.Event()
+        # Lightweight "in-flight" marker — NOT the authoritative state.
+        self._connecting: bool = False
+        self._lock: threading.Lock = threading.Lock()
+
+    # ── Transitions (all writes go through here) ──────────────────────────────
+
+    def mark_connecting(self) -> None:
+        """Signal that the PLATFORM handshake has started."""
+        with self._lock:
+            if not self._connected.is_set() and not self._failed.is_set():
+                self._connecting = True
+
+    def mark_connected(self) -> None:
+        """Atomically signal CONNECTED — wakes all waiting USER threads instantly.
+
+        This is a single atomic ``Event.set()`` call.  There is no window in
+        which ``is_connected`` can be True while other guards are still False.
+        """
+        with self._lock:
+            self._connecting = False
+        self._connected.set()
+
+    def mark_failed(self) -> None:
+        """Atomically signal FAILED — wakes all waiting USER threads instantly."""
+        with self._lock:
+            self._connecting = False
+        self._failed.set()
+
+    def reset(self) -> None:
+        """Reset to IDLE so a retry can start fresh.
+
+        Safe to call only before CONNECTED is reached; calling after
+        ``mark_connected()`` is a no-op to protect the stable state.
+        """
+        with self._lock:
+            if not self._connected.is_set():
+                self._failed.clear()
+                self._connecting = False
+
+    # ── Queries (read-only, derived from events) ───────────────────────────────
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected.is_set()
+
+    @property
+    def is_failed(self) -> bool:
+        # The FSM invariant ensures _connected and _failed are mutually exclusive
+        # (mark_connected() and mark_failed() each hold _lock while clearing
+        # _connecting, and neither unsets the other event).  The ``not connected``
+        # guard is a defensive belt-and-suspenders check so that if external code
+        # ever calls both in sequence, is_failed() returns False rather than True
+        # while the broker is actually usable.
+        return self._failed.is_set() and not self._connected.is_set()
+
+    @property
+    def is_connecting(self) -> bool:
+        with self._lock:
+            return (
+                self._connecting
+                and not self._connected.is_set()
+                and not self._failed.is_set()
+            )
+
+    # ── Blocking wait (called by USER accounts) ────────────────────────────────
+
+    def wait_connected(self, timeout: Optional[float] = None) -> bool:
+        """Block until CONNECTED or FAILED.
+
+        Returns ``True`` only on CONNECTED; ``False`` on FAILED or timeout.
+
+        ``timeout=None`` (default) means *indefinite* — the call returns only
+        when the FSM transitions to CONNECTED or FAILED, never on a time-limit.
+        ``timeout=0.0`` is a non-blocking probe.
+
+        USER threads stay parked here across all nonce retries that the
+        PLATFORM account may need — they are unblocked only by a single
+        ``mark_connected()`` call, which guarantees deterministic startup
+        regardless of how many retry cycles occur.
+
+        Implementation note: the loop uses a 1-second wake-up ceiling even for
+        the indefinite case so that the ``_failed`` event can be detected promptly.
+        Python's ``threading.Event`` does not support waiting on two events
+        simultaneously, so short-polling is the cleanest cross-version solution.
+        """
+        if self._connected.is_set():
+            return True
+        if self._failed.is_set():
+            return False
+        deadline = (time.monotonic() + timeout) if timeout is not None else None
+        while True:
+            remaining = (
+                max(0.0, deadline - time.monotonic())
+                if deadline is not None
+                else 1.0  # wake every 1 s to check _failed (see note above)
+            )
+            if self._connected.wait(timeout=min(remaining, 1.0)):
+                return True
+            if self._failed.is_set():
+                return False
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+
+
+# Module-level singleton — one FSM per process, shared by all KrakenBroker
+# instances.  USER KrakenBroker instances call ``wait_connected()``; the
+# PLATFORM KrakenBroker instance calls ``mark_connecting()`` /
+# ``mark_connected()`` / ``mark_failed()``.
+_KRAKEN_STARTUP_FSM: KrakenStartupFSM = KrakenStartupFSM()
+
 _env_wait = os.environ.get("NIJA_USER_PLATFORM_WAIT", "0")
 _USER_PLATFORM_WAIT_S: Optional[int] = int(_env_wait) if _env_wait.strip().isdigit() and int(_env_wait) > 0 else None
 
@@ -6055,12 +6185,10 @@ class KrakenBroker(BaseBroker):
         # Guard flag — set to True after the first successful handshake and nonce
         # stabilisation so that subsequent polling / retry calls skip the full
         # connection routine and return immediately.
+        # Note: for PLATFORM accounts the guard is the module-level
+        # ``_KRAKEN_STARTUP_FSM.is_connected``; this flag is used only by USER
+        # accounts which have their own independent connection lifecycles.
         self._connection_already_complete: bool = False
-
-        # Readiness flag — set to True immediately after the handshake completes
-        # so that MultiAccountBrokerManager.wait_for_platform_ready() can detect
-        # a connected broker without waiting for the full polling timeout.
-        self._platform_ready_flag: bool = False
 
     def _initialize_kraken_market_data(self):
         """
@@ -6274,10 +6402,16 @@ class KrakenBroker(BaseBroker):
             bool: True if connected successfully
         """
         # Skip the full connection routine when a prior successful handshake
-        # has already been recorded.  This prevents repeated nonce resets and
-        # log spam during periodic polling / watchdog re-entry.
-        if self._connection_already_complete:
-            _label = "PLATFORM" if self.account_type == AccountType.PLATFORM else f"USER:{self.user_id}"
+        # has already been recorded.  For PLATFORM accounts the authoritative
+        # guard is the FSM (event = truth); for USER accounts the per-instance
+        # bool is sufficient.
+        _label = "PLATFORM" if self.account_type == AccountType.PLATFORM else f"USER:{self.user_id}"
+        _already_done = (
+            _KRAKEN_STARTUP_FSM.is_connected
+            if self.account_type == AccountType.PLATFORM
+            else self._connection_already_complete
+        )
+        if _already_done:
             logger.debug(f"[KrakenBroker:{_label}] Connection already established — skipping reconnect routine")
             return True
 
@@ -6288,7 +6422,7 @@ class KrakenBroker(BaseBroker):
         # windows from multiple API keys are the #1 source of "EAPI:Invalid nonce"
         # errors on multi-account deployments.
         if self.account_type == AccountType.USER:
-            if not _PLATFORM_KRAKEN_READY.is_set():
+            if not _KRAKEN_STARTUP_FSM.is_connected:
                 if _USER_PLATFORM_WAIT_S is None:
                     logger.info(
                         "⏳ USER %s waiting indefinitely for PLATFORM Kraken to connect first …",
@@ -6300,14 +6434,24 @@ class KrakenBroker(BaseBroker):
                         "(up to %d s) …",
                         self.user_id, _USER_PLATFORM_WAIT_S,
                     )
-                ready = _PLATFORM_KRAKEN_READY.wait(timeout=_USER_PLATFORM_WAIT_S)
+                ready = _KRAKEN_STARTUP_FSM.wait_connected(
+                    timeout=float(_USER_PLATFORM_WAIT_S) if _USER_PLATFORM_WAIT_S is not None else None
+                )
                 if not ready:
-                    logger.error(
-                        "⛔ USER %s: PLATFORM Kraken did not connect within %d s. "
-                        "Refusing USER connection to protect nonce integrity. "
-                        "Fix platform credentials/clock, then restart the bot.",
-                        self.user_id, _USER_PLATFORM_WAIT_S,
-                    )
+                    if _KRAKEN_STARTUP_FSM.is_failed:
+                        logger.error(
+                            "⛔ USER %s: PLATFORM Kraken connection failed permanently. "
+                            "Refusing USER connection to protect nonce integrity. "
+                            "Fix platform credentials/clock, then restart the bot.",
+                            self.user_id,
+                        )
+                    else:
+                        logger.error(
+                            "⛔ USER %s: PLATFORM Kraken did not connect within %d s. "
+                            "Refusing USER connection to protect nonce integrity. "
+                            "Fix platform credentials/clock, then restart the bot.",
+                            self.user_id, _USER_PLATFORM_WAIT_S,
+                        )
                     self.connected = False
                     return False
                 logger.info("✅ PLATFORM ready — proceeding with USER %s connection.", self.user_id)
@@ -6926,14 +7070,15 @@ class KrakenBroker(BaseBroker):
                         # Mark handshake as complete so future calls to connect()
                         # return immediately without re-running the full routine.
                         self._connection_already_complete = True
-                        # Signal readiness immediately so MultiAccountBrokerManager
-                        # can detect the connected state without polling for 30 s.
-                        self._platform_ready_flag = True
 
-                        # Signal the module-level Event so USER accounts waiting in
-                        # connect() can proceed now that the platform nonce is stable.
+                        # For PLATFORM: one atomic FSM transition replaces the
+                        # three-write race (_connection_already_complete bool +
+                        # _platform_ready_flag bool + _PLATFORM_KRAKEN_READY event)
+                        # that previously had a partial-state window between writes.
+                        # event = truth: mark_connected() is the single authoritative write;
+                        # all readers derive their answer from the FSM.
                         if self.account_type == AccountType.PLATFORM:
-                            _PLATFORM_KRAKEN_READY.set()
+                            _KRAKEN_STARTUP_FSM.mark_connected()
                             logger.info(
                                 "✅ PLATFORM Kraken connected — USER accounts may now connect."
                             )
