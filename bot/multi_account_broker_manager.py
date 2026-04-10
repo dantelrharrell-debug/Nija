@@ -698,25 +698,31 @@ class MultiAccountBrokerManager:
 
     def wait_for_platform_ready(self, broker_type: BrokerType, timeout: int = None) -> bool:
         """
-        Block until the platform broker is fully connected or the timeout expires.
+        Block until the platform broker is fully connected or a hard failure occurs.
 
         Reads from the explicit ConnectionState machine so it reacts immediately
         when the connection handshake completes, with no guessing or retry counting.
         Also checks the broker's ``_platform_ready_flag`` for an instant fast-path
         return when the KrakenBroker handshake has already completed.
 
+        The wait is indefinite — the loop exits only when the state machine reaches
+        CONNECTED (returns True) or FAILED (returns False).  There is no time-based
+        timeout by default so that slow startups / retries never prematurely unblock
+        user connections.  Set NIJA_PLATFORM_WAIT_TIMEOUT to a positive integer to
+        impose an upper limit (seconds).
+
         Args:
             broker_type: Exchange to wait for.
-            timeout: Maximum seconds to wait before giving up.
-                     Defaults to NIJA_PLATFORM_WAIT_TIMEOUT env var (default 120 s).
-                     Kraken's connect() with exponential backoff can take up to ~75 s,
-                     so the default is deliberately longer than the old 30 s.
+            timeout: Optional maximum seconds to wait.  Defaults to
+                     NIJA_PLATFORM_WAIT_TIMEOUT env var; if unset or 0 the wait
+                     is indefinite.
 
         Returns:
-            bool: True if platform reached CONNECTED state within the timeout.
+            bool: True if platform reached CONNECTED state, False on hard failure.
         """
+        env_val = os.environ.get("NIJA_PLATFORM_WAIT_TIMEOUT", "0")
         if timeout is None:
-            timeout = int(os.environ.get("NIJA_PLATFORM_WAIT_TIMEOUT", "120"))
+            timeout = int(env_val) if env_val.strip().isdigit() else 0
         broker_name = broker_type.value.upper()
         start = time.time()
 
@@ -729,7 +735,7 @@ class MultiAccountBrokerManager:
             self._mark_platform_connected(broker_type)
             return True
 
-        while time.time() - start < timeout:
+        while True:
             state = self._platform_state.get(broker_type.value)
             logger.info(f"⏳ Platform {broker_name} state: {state.value if state else 'unknown'}")
 
@@ -748,10 +754,12 @@ class MultiAccountBrokerManager:
                 self._mark_platform_connected(broker_type)
                 return True
 
-            time.sleep(1)
+            # Optional hard ceiling — only enforced when NIJA_PLATFORM_WAIT_TIMEOUT is set.
+            if timeout > 0 and (time.time() - start) >= timeout:
+                logger.error(f"⛔ Timeout waiting for platform {broker_name} to become ready ({timeout}s)")
+                return False
 
-        logger.error(f"⛔ Timeout waiting for platform {broker_name} to become ready ({timeout}s)")
-        return False
+            time.sleep(1)
 
     def user_has_credentials(self, user_id: str, broker_type: BrokerType) -> bool:
         """

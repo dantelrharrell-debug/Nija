@@ -484,14 +484,17 @@ _KRAKEN_CONNECT_PROBE_FALLBACK_MS: int = 300_000   # 5 min
 
 # ── Platform-first gate ───────────────────────────────────────────────────────
 # When the Kraken PLATFORM account connects successfully, it sets this Event so
-# that USER accounts waiting in connect() can proceed.  USER accounts poll this
-# flag for up to NIJA_USER_PLATFORM_WAIT (default 120 s) before connecting.
+# that USER accounts waiting in connect() can proceed.  USER accounts wait on
+# this flag indefinitely — they proceed only when the platform connects or raises
+# a hard failure.  Set NIJA_USER_PLATFORM_WAIT to a positive integer (seconds)
+# to impose an upper limit.
 #
 # Rule: Kraken is extremely sensitive to clock drift and nonce ordering.
 # The platform account MUST connect and stabilise its nonce FIRST.
 # User accounts connecting simultaneously risk nonce-window collisions.
 _PLATFORM_KRAKEN_READY: threading.Event = threading.Event()
-_USER_PLATFORM_WAIT_S: int = int(os.environ.get("NIJA_USER_PLATFORM_WAIT", "120"))
+_env_wait = os.environ.get("NIJA_USER_PLATFORM_WAIT", "0")
+_USER_PLATFORM_WAIT_S: Optional[int] = int(_env_wait) if _env_wait.strip().isdigit() and int(_env_wait) > 0 else None
 
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
@@ -6286,11 +6289,17 @@ class KrakenBroker(BaseBroker):
         # errors on multi-account deployments.
         if self.account_type == AccountType.USER:
             if not _PLATFORM_KRAKEN_READY.is_set():
-                logger.info(
-                    "⏳ USER %s waiting for PLATFORM Kraken to connect first "
-                    "(up to %d s) …",
-                    self.user_id, _USER_PLATFORM_WAIT_S,
-                )
+                if _USER_PLATFORM_WAIT_S is None:
+                    logger.info(
+                        "⏳ USER %s waiting indefinitely for PLATFORM Kraken to connect first …",
+                        self.user_id,
+                    )
+                else:
+                    logger.info(
+                        "⏳ USER %s waiting for PLATFORM Kraken to connect first "
+                        "(up to %d s) …",
+                        self.user_id, _USER_PLATFORM_WAIT_S,
+                    )
                 ready = _PLATFORM_KRAKEN_READY.wait(timeout=_USER_PLATFORM_WAIT_S)
                 if not ready:
                     logger.error(

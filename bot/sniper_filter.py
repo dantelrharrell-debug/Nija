@@ -107,7 +107,7 @@ class SniperConfig:
     # ── Pillar 4: Confidence ──────────────────────────────────────────────────
     # env: SNIPER_MIN_CONFIDENCE — override default 0.50 (e.g. 0.35 for flip mode)
     min_confidence: float = field(
-        default_factory=lambda: _env_float("SNIPER_MIN_CONFIDENCE", 0.45)
+        default_factory=lambda: _env_float("SNIPER_MIN_CONFIDENCE", 0.35)
     )
 
     # ── Soft-condition thresholds ─────────────────────────────────────────────
