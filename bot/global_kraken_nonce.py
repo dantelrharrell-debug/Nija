@@ -57,8 +57,8 @@ _PERSISTED_PERMISSIONS = 0o600
 _LOCK = threading.Lock()
 
 # ── Nonce tuning constants (milliseconds) ─────────────────────────────────────
-_STARTUP_JUMP_MS: int = 10_000      # added to persisted nonce on hot restart
-_RESET_OFFSET_MS: int = 300_000     # offset used by reset_to_safe_value()
+_STARTUP_JUMP_MS: int = int(os.environ.get("NIJA_NONCE_STARTUP_JUMP_MS", "10000"))    # added to persisted nonce on hot restart
+_RESET_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_RESET_OFFSET_MS", "300000"))  # offset used by reset_to_safe_value()
 
 # ── Nuclear reset / trading-pause constants ───────────────────────────────────
 # When consecutive nonce errors exceed this threshold the manager performs a
@@ -73,9 +73,9 @@ _RESET_OFFSET_MS: int = 300_000     # offset used by reset_to_safe_value()
 # pause so the probe_and_resync handshake (which may need several 10-min steps)
 # can complete before new user-account connections attempt to use the nonce.
 _NUCLEAR_RESET_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_THRESHOLD", "5"))
-_NUCLEAR_RESET_OFFSET_MS: int = 1_800_000   # 30 min — beats any previously stored nonce
+_NUCLEAR_RESET_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_OFFSET_MS", "1800000"))  # 30 min — beats any previously stored nonce
 _TRADING_PAUSE_S: float = float(os.environ.get("NIJA_NONCE_PAUSE_SECONDS", "300"))
-_ERROR_RESET_THRESHOLD: int = 3     # errors < threshold: no jump
+_ERROR_RESET_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_ERROR_RESET_THRESHOLD", "3"))  # errors < threshold: no jump
 
 # After this many consecutive nuclear resets within one session the manager
 # automatically activates deep-probe mode (12 × 10 min = 120 min coverage),
@@ -122,11 +122,11 @@ _PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "
 # that the first probe step starts well above Kraken's recorded high-water mark.
 _DEEP_PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_DEEP_STEP_MS", "600000"))         # 10 min per step
 _DEEP_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_DEEP_MAX_ATTEMPTS", "12"))   # 12 × 10 min = 120 min
-_DEEP_STARTUP_FLOOR_MS: int = 3_600_000   # 60 min lead on startup when deep-reset is active
+_DEEP_STARTUP_FLOOR_MS: int = int(os.environ.get("NIJA_NONCE_DEEP_STARTUP_FLOOR_MS", "3600000"))  # 60 min lead on startup when deep-reset is active
 
 # Extra probe attempts automatically added when a duplicate process is detected
 # holding the nonce lock, since that process may have advanced the floor further.
-_DUPLICATE_PROC_EXTRA_ATTEMPTS: int = 6
+_DUPLICATE_PROC_EXTRA_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_DUPLICATE_PROC_EXTRA_ATTEMPTS", "6"))
 
 # ── Adaptive Offset Engine constants ─────────────────────────────────────────
 # The Adaptive Offset Engine replaces the fixed _PROBE_STEP_MS with a learned
@@ -157,16 +157,16 @@ _AO_RETRY_BUFFER_MS: int  = int(os.environ.get("NIJA_AO_RETRY_BUFFER_MS",  "2500
 _AO_SAFETY_MARGIN_MS: int = int(os.environ.get("NIJA_AO_SAFETY_MARGIN_MS", "60000"))  # 60 s above observed gap
 
 # EMA learning parameters
-_AO_EMA_ALPHA: float = 0.3   # weight for the most recent observation (30%)
-_AO_HISTORY_WINDOW: int = 10  # persist up to 10 historical calibration records
+_AO_EMA_ALPHA: float = float(os.environ.get("NIJA_AO_EMA_ALPHA", "0.3"))  # weight for the most recent observation (30%)
+_AO_HISTORY_WINDOW: int = int(os.environ.get("NIJA_AO_HISTORY_WINDOW", "10"))  # persist up to 10 historical calibration records
 
 # Corruption guard thresholds — if persisted nonce is this far ahead of
 # wall-clock the state file is likely corrupted.
-_CORRUPTION_WARN_MS: int  =    600_000   # 10 min → warn but keep
+_CORRUPTION_WARN_MS: int  = int(os.environ.get("NIJA_NONCE_CORRUPTION_WARN_MS",  "600000"))    # 10 min → warn but keep
 # Raised from 24 h → 72 h so that a deliberately large ceiling jump
 # (e.g. NIJA_NONCE_CEILING_JUMP=1 with a 24 h leap) is never mistaken
 # for corruption and discarded on the next container restart.
-_CORRUPTION_RESET_MS: int = 259_200_000  # 72 h   → discard and restart
+_CORRUPTION_RESET_MS: int = int(os.environ.get("NIJA_NONCE_CORRUPTION_RESET_MS", "259200000"))  # 72 h   → discard and restart
 
 # ── Ceiling-jump constants ────────────────────────────────────────────────────
 # A "ceiling jump" advances the nonce to now + _CEILING_JUMP_MS in a single
