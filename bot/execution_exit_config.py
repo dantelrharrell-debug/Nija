@@ -119,6 +119,8 @@ class StopConfig:
     entry_type: str = ""
     broker: str = ""
     volatile_boost_applied: bool = False
+    atr_pct: float = 0.0          # ATR fraction used for dynamic SL floor (0 = not provided)
+    atr_sl_applied: bool = False  # True when ATR*1.2 exceeded the profile default
 
 
 @dataclass
@@ -171,6 +173,12 @@ _LOW_FEE_SL_REDUCTION = 0.001   # tighten by 0.1% on Kraken/Binance
 
 # Volatile-regime SL boost (add to hard_sl to avoid stop hunts in wide spreads)
 _VOLATILE_SL_BOOST = 0.003   # +0.3%
+
+# ATR-based dynamic stop floor: sl = max(_SL_MIN_PCT, atr_pct * _SL_ATR_MULTIPLIER)
+# Ensures the stop breathes with real market volatility instead of using a
+# fixed percentage that may be too tight in high-ATR conditions.
+_SL_ATR_MULTIPLIER: float = _ef("SL_ATR_MULTIPLIER", 1.2)
+_SL_MIN_PCT: float        = _ef("SL_MIN_PCT", 1.2) / 100   # 1.2% hard floor
 
 # TP ladders: list of (target_pct, exit_fraction)
 # TP UPGRADE (Apr 2026): Raised all ladders to [3.0%, 4.0%, 5.5%, 7.0%] targets
@@ -257,6 +265,7 @@ class ExecutionExitConfig:
         entry_type: str = "swing",
         broker: str = "coinbase",
         trades_per_hour: float = 2.0,
+        atr_pct: float = 0.0,
     ) -> ExitParams:
         """
         Resolve complete exit parameters for one trade.
@@ -266,6 +275,10 @@ class ExecutionExitConfig:
             entry_type:       Entry strategy type ('scalp', 'swing', etc.)
             broker:           Exchange name for fee-aware SL tightening.
             trades_per_hour:  Recent trade rate for cooldown selection.
+            atr_pct:          Current ATR as a fraction of price (e.g. 0.018 = 1.8%).
+                              When provided, the hard stop-loss is set to
+                              ``max(1.2%, atr_pct * 1.2)`` so it always respects
+                              real market volatility.
 
         Returns:
             ``ExitParams`` with stop, TP, cooldown, and profile.
@@ -281,7 +294,7 @@ class ExecutionExitConfig:
         else:
             profile = _REGIME_PROFILE.get(regime_key, StratProfile.SWING)
 
-        stop    = self._build_stop(profile, broker_key, regime_key, is_volatile)
+        stop    = self._build_stop(profile, broker_key, regime_key, is_volatile, atr_pct=atr_pct)
         tp      = self._build_tp(profile, regime_key, is_volatile)
         cooldown = self._build_cooldown(trades_per_hour)
 
@@ -292,9 +305,10 @@ class ExecutionExitConfig:
         regime: object = None,
         entry_type: str = "swing",
         broker: str = "coinbase",
+        atr_pct: float = 0.0,
     ) -> StopConfig:
         """Convenience: return only the stop configuration."""
-        return self.get_exit_params(regime, entry_type, broker).stop
+        return self.get_exit_params(regime, entry_type, broker, atr_pct=atr_pct).stop
 
     def get_tp_config(
         self,
@@ -318,6 +332,7 @@ class ExecutionExitConfig:
         broker_key: str,
         regime_key: str,
         is_volatile: bool,
+        atr_pct: float = 0.0,
     ) -> StopConfig:
         hard_sl, trail_act, trail_buf = _STOP_TABLE[profile]
 
@@ -331,6 +346,25 @@ class ExecutionExitConfig:
             hard_sl += _VOLATILE_SL_BOOST
             volatile_boost = True
 
+        # ATR-adaptive floor: sl = max(1.2%, atr_pct * 1.2)
+        # Prevents stops from being placed inside normal market noise when
+        # ATR-based distance is larger than the fixed profile default.
+        atr_sl_applied = False
+        if atr_pct > 0.0:
+            atr_based_sl = atr_pct * _SL_ATR_MULTIPLIER
+            if atr_based_sl > hard_sl:
+                hard_sl = atr_based_sl
+                atr_sl_applied = True
+        # Always enforce the absolute minimum floor (1.2%)
+        hard_sl = max(hard_sl, _SL_MIN_PCT)
+
+        if atr_sl_applied:
+            logger.debug(
+                "🛡️  ATR SL: %.2f%% ATR×%.1f = %.2f%% (profile floor was %.2f%%) [%s]",
+                atr_pct * 100, _SL_ATR_MULTIPLIER, hard_sl * 100,
+                _STOP_TABLE[profile][0] * 100, profile.value,
+            )
+
         return StopConfig(
             profile=profile,
             hard_sl_pct=round(hard_sl, 4),
@@ -339,6 +373,8 @@ class ExecutionExitConfig:
             regime_name=regime_key,
             broker=broker_key,
             volatile_boost_applied=volatile_boost,
+            atr_pct=round(atr_pct, 6),
+            atr_sl_applied=atr_sl_applied,
         )
 
     @staticmethod
@@ -427,28 +463,29 @@ if __name__ == "__main__":
     cfg = get_execution_exit_config()
 
     scenarios = [
-        ("strong_trend",   "breakout",      "coinbase", 2.0),
-        ("consolidation",  "scalp",         "kraken",   4.5),
-        ("ranging",        "mean_reversion","coinbase",  1.5),
-        ("weak_trend",     "swing",         "binance",  2.0),
-        ("volatility_explosion", "swing",   "coinbase", 0.5),
+        ("strong_trend",   "breakout",      "coinbase", 2.0, 0.000),
+        ("consolidation",  "scalp",         "kraken",   4.5, 0.015),   # ATR 1.5% → sl=max(1.2%,1.8%)=1.8%
+        ("ranging",        "mean_reversion","coinbase",  1.5, 0.008),   # ATR 0.8% → sl=max(1.2%,0.96%)=1.2%
+        ("weak_trend",     "swing",         "binance",  2.0, 0.020),   # ATR 2.0% → sl=max(1.2%,2.4%)=2.4%
+        ("volatility_explosion", "swing",   "coinbase", 0.5, 0.025),   # ATR 2.5% → sl=max(1.2%,3.0%)=3.0%
     ]
 
     print("\n" + "=" * 88)
     print("EXECUTION EXIT CONFIG — STRATEGY PROFILES")
     print("=" * 88)
-    for regime, etype, broker, tph in scenarios:
-        p = cfg.get_exit_params(regime, etype, broker, tph)
+    for regime, etype, broker, tph, atr in scenarios:
+        p = cfg.get_exit_params(regime, etype, broker, tph, atr_pct=atr)
         stop = p.stop
         tp   = p.tp
         cd   = p.cooldown
         print(
             f"\nRegime={regime:<22} type={etype:<16} broker={broker:<10} "
-            f"→ profile={p.profile.value.upper()}"
+            f"atr={atr*100:.1f}%  → profile={p.profile.value.upper()}"
         )
         print(
-            f"  STOP  hard={stop.hard_sl_pct*100:.2f}%  "
-            f"trail_act={stop.trailing_activate_pct*100:.1f}%  "
+            f"  STOP  hard={stop.hard_sl_pct*100:.2f}%"
+            f"{'  [ATR×1.2]' if stop.atr_sl_applied else '  [profile floor]'}"
+            f"  trail_act={stop.trailing_activate_pct*100:.1f}%  "
             f"trail_buf={stop.trailing_buffer_pct*100:.1f}%"
             f"{'  [+volatile boost]' if stop.volatile_boost_applied else ''}"
         )
