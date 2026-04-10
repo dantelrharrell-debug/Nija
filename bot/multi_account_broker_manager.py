@@ -650,11 +650,21 @@ class MultiAccountBrokerManager:
 
         Extracted as a helper to avoid duplicating these two lines in every
         place that needs to confirm the platform broker is ready.
+        Also notifies the PlatformAccountLayer singleton so that its
+        ``platform_connected`` status flag reflects live broker state.
         """
         self._platform_state[broker_type.value] = ConnectionState.CONNECTED
         self._last_platform_connected_time[broker_type] = time.time()
         # Clear any previous failure record now that the platform is live
         self._platform_failed_types.discard(broker_type)
+        # Propagate connected status to the PlatformAccountLayer singleton so
+        # display_hierarchy() and external health checks see "CONNECTED".
+        try:
+            _pal = get_platform_account_layer() if get_platform_account_layer is not None else None
+            if _pal is not None:
+                _pal.mark_platform_connected(True)
+        except Exception:
+            pass  # Never block the connection flow on a status-update failure
 
     def mark_platform_failed(self, broker_type: BrokerType) -> None:
         """
