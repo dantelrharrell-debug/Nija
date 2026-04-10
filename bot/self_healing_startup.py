@@ -1,0 +1,1144 @@
+"""
+NIJA Self-Healing Startup Sequence
+====================================
+
+Resilient connection-layer boot sequence that automatically:
+
+1. **Detects nonce poisoning**          — inspects persisted nonce lead, nuclear-reset
+                                          history, and duplicate-process state
+2. **Auto-escalates ceiling jumps**     — standard probe → deep-probe → ceiling jump
+                                          → emergency alert (new API key required)
+3. **Falls back to secondary broker**   — if Kraken fails after all escalations,
+                                          switches to Coinbase automatically and alerts
+4. **Alerts before trading halts**      — fires CRITICAL alerts with a configurable
+                                          countdown before halting so the operator has
+                                          time to intervene
+
+Architecture
+------------
+SelfHealingStartup          ← top-level orchestrator; call .run()
+  ├── NoncePoisonDetector    ← reads nonce state, returns severity + recommended action
+  ├── CeilingJumpEscalator   ← drives probe → deep-probe → ceiling jump → emergency
+  ├── BrokerFallbackController← Kraken first; Coinbase on failure; alerts on switch
+  └── PreHaltAlertEngine     ← watchdog thread; fires CRITICAL before halting
+
+Quick start
+-----------
+::
+
+    from bot.self_healing_startup import SelfHealingStartup, StartupConfig
+
+    cfg    = StartupConfig()
+    result = SelfHealingStartup(cfg).run()
+
+    if not result.ok:
+        logger.critical("Bot startup failed: %s", result.reason)
+        raise SystemExit(1)
+
+    active_broker      = result.broker
+    active_broker_name = result.broker_name
+    if result.on_fallback:
+        logger.warning("Running on FALLBACK broker (%s)", active_broker_name)
+
+Author: NIJA Trading Systems
+Version: 1.0
+Date: April 2026
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Optional
+
+logger = logging.getLogger("nija.self_healing_startup")
+
+# ---------------------------------------------------------------------------
+# Optional dependency imports (everything is graceful-fallback)
+# ---------------------------------------------------------------------------
+
+try:
+    from global_kraken_nonce import (
+        get_global_nonce_manager,
+        get_global_nonce_stats,
+        KrakenNonceManager,
+    )
+    _NONCE_MGR_AVAILABLE = True
+except ImportError:
+    _NONCE_MGR_AVAILABLE = False
+    get_global_nonce_manager = None  # type: ignore[assignment]
+    get_global_nonce_stats   = None  # type: ignore[assignment]
+    KrakenNonceManager       = None  # type: ignore[assignment]
+    logger.warning("⚠️  global_kraken_nonce not importable — nonce checks skipped")
+
+try:
+    from alert_manager import get_alert_manager, AlertSeverity, AlertCategory
+    _ALERT_MGR_AVAILABLE = True
+except ImportError:
+    _ALERT_MGR_AVAILABLE = False
+    get_alert_manager = None  # type: ignore[assignment]
+    AlertSeverity     = None  # type: ignore[assignment]
+    AlertCategory     = None  # type: ignore[assignment]
+    logger.debug("alert_manager not importable — console-only alerts")
+
+try:
+    from text_alert_system import get_text_alert_system
+    _TEXT_ALERT_AVAILABLE = True
+except ImportError:
+    _TEXT_ALERT_AVAILABLE = False
+    get_text_alert_system = None  # type: ignore[assignment]
+
+try:
+    from trading_state_machine import get_state_machine, TradingState
+    _STATE_MACHINE_AVAILABLE = True
+except ImportError:
+    _STATE_MACHINE_AVAILABLE = False
+    get_state_machine = None  # type: ignore[assignment]
+    TradingState      = None  # type: ignore[assignment]
+    logger.warning("⚠️  trading_state_machine not importable — state-machine checks skipped")
+
+try:
+    from startup_readiness_gate import get_startup_readiness_gate
+    _READINESS_GATE_AVAILABLE = True
+except ImportError:
+    _READINESS_GATE_AVAILABLE = False
+    get_startup_readiness_gate = None  # type: ignore[assignment]
+
+try:
+    from broker_manager import (
+        KrakenBroker,
+        CoinbaseBroker,
+        BrokerType,
+        AccountType,
+        BaseBroker,
+    )
+    _BROKER_AVAILABLE = True
+except ImportError:
+    _BROKER_AVAILABLE = False
+    KrakenBroker    = None  # type: ignore[assignment]
+    CoinbaseBroker  = None  # type: ignore[assignment]
+    BrokerType      = None  # type: ignore[assignment]
+    AccountType     = None  # type: ignore[assignment]
+    BaseBroker      = None  # type: ignore[assignment]
+    logger.warning("⚠️  broker_manager not importable — broker failover skipped")
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StartupConfig:
+    """Tunable parameters for the self-healing startup sequence."""
+
+    # ── Nonce-poison thresholds ────────────────────────────────────────────
+    # Nonce lead (ms ahead of wall clock) above which we consider it potentially
+    # poisoned and start escalation.
+    nonce_warn_lead_ms: int  = int(os.environ.get("NIJA_SHS_NONCE_WARN_MS",   "600_000"))   # 10 min
+    nonce_probe_lead_ms: int = int(os.environ.get("NIJA_SHS_NONCE_PROBE_MS",  "1_800_000"))  # 30 min
+    nonce_deep_lead_ms: int  = int(os.environ.get("NIJA_SHS_NONCE_DEEP_MS",   "3_600_000"))  # 60 min
+    nonce_ceiling_lead_ms: int = int(os.environ.get("NIJA_SHS_NONCE_CEIL_MS", "7_200_000"))  # 2 h
+
+    # ── Escalation settings ────────────────────────────────────────────────
+    # Whether to actually attempt each escalation tier (set False to disable)
+    escalation_standard_probe: bool  = True
+    escalation_deep_probe: bool      = True
+    escalation_ceiling_jump: bool    = True
+
+    # Maximum probe attempts for each tier (0 = use module defaults)
+    standard_probe_max_attempts: int = 0
+    deep_probe_max_attempts: int     = 0
+
+    # Ceiling jump size (ms) — defaults to 24 h
+    ceiling_jump_ms: int = int(os.environ.get("NIJA_NONCE_CEILING_JUMP_MS", "86400000"))
+
+    # ── Broker failover ────────────────────────────────────────────────────
+    # Maximum Kraken connection attempts before declaring primary failed
+    primary_max_attempts: int  = int(os.environ.get("NIJA_SHS_PRIMARY_ATTEMPTS", "3"))
+    fallback_enabled: bool     = True
+
+    # ── Pre-halt alerting ──────────────────────────────────────────────────
+    # How many seconds before a trading halt to fire the pre-halt warning
+    pre_halt_warn_s: float    = float(os.environ.get("NIJA_SHS_PREHALT_WARN_S", "300"))
+    # Watchdog: poll broker health every N seconds
+    watchdog_interval_s: float = float(os.environ.get("NIJA_SHS_WATCHDOG_S", "60"))
+    # How many consecutive watchdog failures before triggering a halt warning
+    watchdog_max_failures: int = int(os.environ.get("NIJA_SHS_WATCHDOG_FAILURES", "3"))
+
+
+# ---------------------------------------------------------------------------
+# Result types
+# ---------------------------------------------------------------------------
+
+class EscalationTier(Enum):
+    NONE            = "none"
+    STANDARD_PROBE  = "standard_probe"
+    DEEP_PROBE      = "deep_probe"
+    CEILING_JUMP    = "ceiling_jump"
+    EMERGENCY       = "emergency"  # human intervention required
+
+
+class NonceSeverity(Enum):
+    CLEAN    = "clean"
+    WARN     = "warn"      # >10 min lead — monitor
+    PROBE    = "probe"     # >30 min lead — run standard probe
+    DEEP     = "deep"      # >60 min lead — run deep probe
+    CEILING  = "ceiling"   # >2 h lead    — force ceiling jump
+    CRITICAL = "critical"  # poisoned AND nuclear resets — alert operator
+
+
+@dataclass
+class NoncePoisonReport:
+    severity: NonceSeverity
+    lead_ms: int
+    nuclear_resets: int
+    deep_reset_active: bool
+    trading_paused: bool
+    duplicate_process: bool
+    recommended_tier: EscalationTier
+    details: list[str] = field(default_factory=list)
+
+
+@dataclass
+class EscalationResult:
+    success: bool
+    tier_used: EscalationTier
+    message: str
+    new_api_key_required: bool = False
+
+
+@dataclass
+class StartupResult:
+    ok: bool
+    broker: Optional[Any]         = None   # BaseBroker-compatible instance
+    broker_name: str               = ""
+    on_fallback: bool              = False
+    escalation_result: Optional[EscalationResult] = None
+    reason: str                    = ""
+
+
+# ---------------------------------------------------------------------------
+# 1. Nonce Poison Detector
+# ---------------------------------------------------------------------------
+
+class NoncePoisonDetector:
+    """
+    Inspect the running KrakenNonceManager singleton (and its persisted state)
+    to determine if the nonce has been "poisoned" — driven so far ahead of
+    wall-clock time that Kraken will reject every connection attempt.
+
+    Call :meth:`detect` at startup *before* attempting to connect.  The
+    returned :class:`NoncePoisonReport` contains:
+
+    * ``severity``           — how bad the situation is
+    * ``recommended_tier``   — which escalation tier CeilingJumpEscalator should start from
+    * ``details``            — human-readable explanation list
+    """
+
+    def __init__(self, config: Optional[StartupConfig] = None) -> None:
+        self._cfg = config or StartupConfig()
+
+    def detect(self) -> NoncePoisonReport:
+        """
+        Analyse nonce health.  Safe to call when broker is not yet connected.
+
+        Returns a :class:`NoncePoisonReport` describing severity and
+        recommended recovery action.
+        """
+        if not _NONCE_MGR_AVAILABLE:
+            return NoncePoisonReport(
+                severity=NonceSeverity.CLEAN,
+                lead_ms=0,
+                nuclear_resets=0,
+                deep_reset_active=False,
+                trading_paused=False,
+                duplicate_process=False,
+                recommended_tier=EscalationTier.NONE,
+                details=["global_kraken_nonce not available — nonce check skipped"],
+            )
+
+        mgr    = get_global_nonce_manager()
+        stats  = get_global_nonce_stats()
+        now_ms = int(time.time() * 1000)
+
+        lead_ms          = stats["last_nonce"] - now_ms
+        nuclear_resets   = stats["nuclear_reset_count"]
+        deep_active      = stats["deep_reset_active"]
+        trading_paused   = stats["trading_paused"]
+        dup_proc         = mgr.detect_other_process_running()
+
+        details: list[str] = []
+        details.append(f"Nonce lead: {lead_ms / 1000:.1f}s ({lead_ms / 60_000:.2f} min)")
+        if nuclear_resets:
+            details.append(f"Nuclear resets this session: {nuclear_resets}")
+        if deep_active:
+            details.append("Deep-reset mode is active (120-min probe coverage)")
+        if trading_paused:
+            details.append(f"Trading paused: {stats['pause_remaining_s']:.0f}s remaining")
+        if dup_proc:
+            details.append("⚠️  Duplicate NIJA process detected — sharing a Kraken key causes nonce poisoning")
+
+        # Determine severity and recommended tier
+        cfg = self._cfg
+
+        if dup_proc and nuclear_resets >= 2:
+            severity = NonceSeverity.CRITICAL
+            tier = EscalationTier.EMERGENCY
+            details.append("CRITICAL: duplicate process + multiple nuclear resets → new API key likely required")
+
+        elif lead_ms >= cfg.nonce_ceiling_lead_ms or nuclear_resets >= 2:
+            severity = NonceSeverity.CEILING
+            tier = EscalationTier.CEILING_JUMP
+            details.append(f"Nonce {lead_ms / 3_600_000:.1f}h ahead — ceiling jump required")
+
+        elif lead_ms >= cfg.nonce_deep_lead_ms or (nuclear_resets >= 1 and lead_ms > cfg.nonce_probe_lead_ms):
+            severity = NonceSeverity.DEEP
+            tier = EscalationTier.DEEP_PROBE
+            details.append(f"Nonce {lead_ms / 60_000:.1f}min ahead — deep probe required")
+
+        elif lead_ms >= cfg.nonce_probe_lead_ms:
+            severity = NonceSeverity.PROBE
+            tier = EscalationTier.STANDARD_PROBE
+            details.append(f"Nonce {lead_ms / 60_000:.1f}min ahead — standard probe recommended")
+
+        elif lead_ms >= cfg.nonce_warn_lead_ms:
+            severity = NonceSeverity.WARN
+            tier = EscalationTier.NONE
+            details.append(f"Nonce {lead_ms / 60_000:.1f}min ahead — monitoring")
+
+        else:
+            severity = NonceSeverity.CLEAN
+            tier = EscalationTier.NONE
+
+        report = NoncePoisonReport(
+            severity=severity,
+            lead_ms=lead_ms,
+            nuclear_resets=nuclear_resets,
+            deep_reset_active=deep_active,
+            trading_paused=trading_paused,
+            duplicate_process=dup_proc,
+            recommended_tier=tier,
+            details=details,
+        )
+
+        if severity != NonceSeverity.CLEAN:
+            logger.warning(
+                "NoncePoisonDetector: %s — %s",
+                severity.value.upper(), "; ".join(details),
+            )
+        else:
+            logger.info("NoncePoisonDetector: nonce is healthy (lead=%d ms)", lead_ms)
+
+        return report
+
+
+# ---------------------------------------------------------------------------
+# 2. Ceiling Jump Escalator
+# ---------------------------------------------------------------------------
+
+class CeilingJumpEscalator:
+    """
+    Drive nonce recovery through a four-tier escalation ladder:
+
+    Tier 0  Standard probe_and_resync   — adaptive step, up to 60 min coverage
+    Tier 1  Deep probe                  — 10-min step, 120 min coverage
+    Tier 2  Ceiling jump                — nonce → now + 24 h in one step
+    Tier 3  Emergency (CRITICAL alert)  — instructs operator to create new API key
+
+    The escalator fires an alert before each tier transition so the operator
+    knows what is happening and can intervene if needed.
+    """
+
+    def __init__(
+        self,
+        api_call_fn: Optional[Callable[[], dict]],
+        config: Optional[StartupConfig] = None,
+    ) -> None:
+        """
+        Args:
+            api_call_fn: ``() → dict`` — must return a Kraken API response with
+                         an ``"error"`` key.  Typically wraps
+                         ``broker._kraken_private_call("Balance", {})``.
+                         May be ``None`` when no broker is yet connected (in
+                         which case STANDARD_PROBE and DEEP_PROBE are skipped).
+            config:      Startup configuration (optional).
+        """
+        self._api_call_fn = api_call_fn
+        self._cfg = config or StartupConfig()
+
+    # ── Public entry point ─────────────────────────────────────────────────
+
+    def run(
+        self,
+        starting_tier: EscalationTier = EscalationTier.STANDARD_PROBE,
+    ) -> EscalationResult:
+        """
+        Execute escalation from *starting_tier* upward until one succeeds.
+
+        Returns an :class:`EscalationResult` describing what happened.
+        """
+        if not _NONCE_MGR_AVAILABLE:
+            return EscalationResult(
+                success=True,
+                tier_used=EscalationTier.NONE,
+                message="Nonce manager not available — escalation skipped",
+            )
+
+        mgr = get_global_nonce_manager()
+        cfg = self._cfg
+
+        tiers_to_try: list[EscalationTier] = []
+
+        tier_order = [
+            EscalationTier.STANDARD_PROBE,
+            EscalationTier.DEEP_PROBE,
+            EscalationTier.CEILING_JUMP,
+            EscalationTier.EMERGENCY,
+        ]
+
+        start_idx = tier_order.index(starting_tier) if starting_tier in tier_order else 0
+        for t in tier_order[start_idx:]:
+            tiers_to_try.append(t)
+
+        for tier in tiers_to_try:
+            logger.info("CeilingJumpEscalator: attempting tier=%s", tier.value)
+
+            if tier == EscalationTier.STANDARD_PROBE:
+                if not cfg.escalation_standard_probe:
+                    continue
+                if self._api_call_fn is None:
+                    logger.info("CeilingJumpEscalator: STANDARD_PROBE skipped — no api_call_fn yet")
+                    continue
+                self._fire_alert(
+                    f"Nonce recovery: attempting standard probe_and_resync (adaptive step)",
+                    severity="WARNING",
+                )
+                kwargs: dict[str, Any] = {}
+                if cfg.standard_probe_max_attempts:
+                    kwargs["max_attempts"] = cfg.standard_probe_max_attempts
+                ok = mgr.probe_and_resync(self._api_call_fn, **kwargs)
+                if ok:
+                    logger.info("✅ CeilingJumpEscalator: STANDARD_PROBE succeeded")
+                    return EscalationResult(
+                        success=True,
+                        tier_used=tier,
+                        message="Standard probe_and_resync calibrated the nonce",
+                    )
+                logger.warning("CeilingJumpEscalator: STANDARD_PROBE exhausted — escalating")
+
+            elif tier == EscalationTier.DEEP_PROBE:
+                if not cfg.escalation_deep_probe:
+                    continue
+                if self._api_call_fn is None:
+                    logger.info("CeilingJumpEscalator: DEEP_PROBE skipped — no api_call_fn yet")
+                    continue
+                self._fire_alert(
+                    "Nonce recovery escalated to deep-probe mode (12×10 min = 120 min coverage)",
+                    severity="WARNING",
+                )
+                # Activate deep-reset mode on the running manager instance
+                mgr._deep_reset_active = True  # type: ignore[attr-defined]
+                kwargs = {}
+                if cfg.deep_probe_max_attempts:
+                    kwargs["max_attempts"] = cfg.deep_probe_max_attempts
+                ok = mgr.probe_and_resync(self._api_call_fn, **kwargs)
+                if ok:
+                    logger.info("✅ CeilingJumpEscalator: DEEP_PROBE succeeded")
+                    return EscalationResult(
+                        success=True,
+                        tier_used=tier,
+                        message="Deep probe_and_resync calibrated the nonce",
+                    )
+                logger.warning("CeilingJumpEscalator: DEEP_PROBE exhausted — escalating")
+
+            elif tier == EscalationTier.CEILING_JUMP:
+                if not cfg.escalation_ceiling_jump:
+                    continue
+                self._fire_alert(
+                    f"Nonce escalated to CEILING JUMP (now+{cfg.ceiling_jump_ms / 3_600_000:.0f}h). "
+                    "Nonce poisoning is severe. Broker will reconnect after this jump.",
+                    severity="CRITICAL",
+                )
+                new_nonce = mgr.force_ceiling_jump(ms=cfg.ceiling_jump_ms)
+                logger.warning(
+                    "CeilingJumpEscalator: ceiling jump applied — nonce=%d "
+                    "(now+%.1f h). Reconnect required.",
+                    new_nonce, cfg.ceiling_jump_ms / 3_600_000,
+                )
+                if self._api_call_fn is not None:
+                    ok = mgr.probe_and_resync(self._api_call_fn)
+                    if ok:
+                        logger.info("✅ CeilingJumpEscalator: CEILING_JUMP + probe succeeded")
+                        return EscalationResult(
+                            success=True,
+                            tier_used=tier,
+                            message=f"Ceiling jump (now+{cfg.ceiling_jump_ms / 3_600_000:.0f}h) + probe succeeded",
+                        )
+                    logger.warning("CeilingJumpEscalator: post-ceiling probe still failing — escalating to EMERGENCY")
+                else:
+                    # No API call fn: ceiling jump applied, reconnect should work
+                    return EscalationResult(
+                        success=True,
+                        tier_used=tier,
+                        message=f"Ceiling jump applied (now+{cfg.ceiling_jump_ms / 3_600_000:.0f}h). Reconnect the broker.",
+                    )
+
+            elif tier == EscalationTier.EMERGENCY:
+                msg = (
+                    "🚨 NONCE ESCALATION FAILED — ALL RECOVERY TIERS EXHAUSTED.\n"
+                    "Only a new Kraken API key will fix this.  Steps:\n"
+                    "  1. Stop ALL NIJA services / deployments using this API key.\n"
+                    "  2. Go to kraken.com → Settings → API → Delete the compromised key.\n"
+                    "  3. Create a NEW Classic API key with Nonce Window = 10000.\n"
+                    "  4. Update KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET in .env.\n"
+                    "  5. Set NIJA_FORCE_NONCE_RESYNC=1, then restart with ONE instance.\n"
+                )
+                logger.critical(msg)
+                self._fire_alert(msg, severity="EMERGENCY")
+                return EscalationResult(
+                    success=False,
+                    tier_used=tier,
+                    message=msg,
+                    new_api_key_required=True,
+                )
+
+        return EscalationResult(
+            success=False,
+            tier_used=EscalationTier.EMERGENCY,
+            message="All escalation tiers exhausted",
+            new_api_key_required=True,
+        )
+
+    # ── Private helpers ────────────────────────────────────────────────────
+
+    def _fire_alert(self, message: str, severity: str = "WARNING") -> None:
+        """Fire an alert through the alert manager (or log it if unavailable)."""
+        log_fn = {
+            "INFO":      logger.info,
+            "WARNING":   logger.warning,
+            "CRITICAL":  logger.critical,
+            "EMERGENCY": logger.critical,
+        }.get(severity, logger.warning)
+        log_fn("CeilingJumpEscalator [%s]: %s", severity, message)
+
+        if _ALERT_MGR_AVAILABLE and get_alert_manager is not None:
+            try:
+                sev = AlertSeverity[severity] if severity in AlertSeverity.__members__ else AlertSeverity.WARNING  # type: ignore[union-attr]
+                cat = AlertCategory.RISK if hasattr(AlertCategory, "RISK") else list(AlertCategory)[0]  # type: ignore[union-attr]
+                get_alert_manager().fire(
+                    category=cat,
+                    severity=sev,
+                    title=f"Nonce escalation: {severity}",
+                    message=message,
+                    source="CeilingJumpEscalator",
+                )
+            except Exception as exc:
+                logger.debug("CeilingJumpEscalator: alert dispatch failed (%s)", exc)
+
+
+# ---------------------------------------------------------------------------
+# 3. Broker Fallback Controller
+# ---------------------------------------------------------------------------
+
+class BrokerFallbackController:
+    """
+    Connect to the primary broker (Kraken) and automatically fall back to the
+    secondary broker (Coinbase) if primary connection fails.
+
+    Fires alerts on broker switch and when falling back to let the operator
+    know the bot is running in degraded mode.
+
+    Usage::
+
+        ctrl   = BrokerFallbackController(config)
+        result = ctrl.connect_with_fallback()
+
+        if result.ok:
+            broker = result.broker
+    """
+
+    PRIMARY_NAME   = "KRAKEN"
+    SECONDARY_NAME = "COINBASE"
+
+    def __init__(self, config: Optional[StartupConfig] = None) -> None:
+        self._cfg           = config or StartupConfig()
+        self._active_broker: Optional[Any] = None
+        self._active_name   = ""
+        self._on_fallback   = False
+        self._lock          = threading.Lock()
+
+    # ── Properties ─────────────────────────────────────────────────────────
+
+    @property
+    def active_broker(self) -> Optional[Any]:
+        with self._lock:
+            return self._active_broker
+
+    @property
+    def active_name(self) -> str:
+        with self._lock:
+            return self._active_name
+
+    @property
+    def on_fallback(self) -> bool:
+        with self._lock:
+            return self._on_fallback
+
+    # ── Public entry point ─────────────────────────────────────────────────
+
+    def connect_with_fallback(self) -> StartupResult:
+        """
+        Attempt primary broker connection; fall back to secondary on failure.
+
+        Returns a :class:`StartupResult` with ``ok=True`` when *any* broker
+        connected successfully.
+        """
+        if not _BROKER_AVAILABLE:
+            logger.warning("BrokerFallbackController: broker_manager not available — skipping broker connection")
+            return StartupResult(
+                ok=True,  # Don't block startup if broker module is missing
+                broker=None,
+                broker_name="NONE",
+                reason="broker_manager not importable",
+            )
+
+        # ── Primary: Kraken ────────────────────────────────────────────────
+        kraken_creds = (
+            os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY")
+        )
+        if kraken_creds:
+            logger.info("BrokerFallbackController: attempting PRIMARY broker (Kraken)…")
+            kraken_broker, kraken_ok = self._try_connect_kraken()
+            if kraken_ok and kraken_broker is not None:
+                with self._lock:
+                    self._active_broker = kraken_broker
+                    self._active_name   = self.PRIMARY_NAME
+                    self._on_fallback   = False
+                logger.info("✅ BrokerFallbackController: PRIMARY (Kraken) connected")
+                return StartupResult(
+                    ok=True,
+                    broker=kraken_broker,
+                    broker_name=self.PRIMARY_NAME,
+                    on_fallback=False,
+                )
+            logger.warning(
+                "BrokerFallbackController: PRIMARY (Kraken) failed after %d attempt(s) — "
+                "evaluating fallback", self._cfg.primary_max_attempts,
+            )
+        else:
+            logger.info("BrokerFallbackController: Kraken credentials not configured — trying secondary")
+
+        # ── Secondary: Coinbase ────────────────────────────────────────────
+        if not self._cfg.fallback_enabled:
+            return StartupResult(
+                ok=False,
+                reason="Primary (Kraken) failed and fallback is disabled",
+            )
+
+        coinbase_creds = os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET")
+        if not coinbase_creds:
+            msg = (
+                "Primary (Kraken) failed and Coinbase credentials are not configured. "
+                "Bot cannot connect to any broker."
+            )
+            logger.error("BrokerFallbackController: %s", msg)
+            self._fire_alert(
+                "🚨 PRIMARY BROKER (Kraken) FAILED — no fallback credentials configured. "
+                "Trading is impossible until Kraken is restored or Coinbase credentials are added.",
+                severity="EMERGENCY",
+            )
+            return StartupResult(ok=False, reason=msg)
+
+        self._fire_alert(
+            "⚠️  PRIMARY BROKER (Kraken) failed — SWITCHING TO SECONDARY (Coinbase). "
+            "Trading continues in fallback mode. Investigate Kraken credentials / nonce.",
+            severity="CRITICAL",
+        )
+        logger.warning("BrokerFallbackController: switching to SECONDARY broker (Coinbase)…")
+
+        coinbase_broker, coinbase_ok = self._try_connect_coinbase()
+        if coinbase_ok and coinbase_broker is not None:
+            with self._lock:
+                self._active_broker = coinbase_broker
+                self._active_name   = self.SECONDARY_NAME
+                self._on_fallback   = True
+            logger.warning(
+                "BrokerFallbackController: running on FALLBACK broker (%s). "
+                "Restore Kraken to return to primary.",
+                self.SECONDARY_NAME,
+            )
+            return StartupResult(
+                ok=True,
+                broker=coinbase_broker,
+                broker_name=self.SECONDARY_NAME,
+                on_fallback=True,
+            )
+
+        msg = "Both primary (Kraken) and secondary (Coinbase) brokers failed to connect"
+        logger.critical("BrokerFallbackController: %s", msg)
+        self._fire_alert(
+            "🚨 ALL BROKERS FAILED — Kraken AND Coinbase could not connect. "
+            "NIJA cannot trade. Check API keys, internet connectivity, and rate limits.",
+            severity="EMERGENCY",
+        )
+        return StartupResult(ok=False, reason=msg)
+
+    # ── Private helpers ────────────────────────────────────────────────────
+
+    def _try_connect_kraken(self) -> tuple[Optional[Any], bool]:
+        """Attempt Kraken connection up to primary_max_attempts times."""
+        for attempt in range(1, self._cfg.primary_max_attempts + 1):
+            try:
+                broker = KrakenBroker(account_type=AccountType.PLATFORM)
+                ok = broker.connect()
+                if ok:
+                    return broker, True
+                logger.warning(
+                    "BrokerFallbackController: Kraken attempt %d/%d — connect() returned False",
+                    attempt, self._cfg.primary_max_attempts,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "BrokerFallbackController: Kraken attempt %d/%d — exception: %s",
+                    attempt, self._cfg.primary_max_attempts, exc,
+                )
+            if attempt < self._cfg.primary_max_attempts:
+                time.sleep(5.0 * attempt)  # brief back-off between retries
+
+        return None, False
+
+    def _try_connect_coinbase(self) -> tuple[Optional[Any], bool]:
+        """Attempt a single Coinbase connection."""
+        try:
+            broker = CoinbaseBroker()
+            ok = broker.connect()
+            if ok:
+                return broker, True
+            logger.warning("BrokerFallbackController: Coinbase connect() returned False")
+        except Exception as exc:
+            logger.warning("BrokerFallbackController: Coinbase exception: %s", exc)
+        return None, False
+
+    def _fire_alert(self, message: str, severity: str = "WARNING") -> None:
+        log_fn = {
+            "WARNING":   logger.warning,
+            "CRITICAL":  logger.critical,
+            "EMERGENCY": logger.critical,
+        }.get(severity, logger.warning)
+        log_fn("BrokerFallbackController [%s]: %s", severity, message)
+
+        if _ALERT_MGR_AVAILABLE and get_alert_manager is not None:
+            try:
+                sev = AlertSeverity[severity] if severity in AlertSeverity.__members__ else AlertSeverity.WARNING  # type: ignore[union-attr]
+                cat = AlertCategory.RISK if hasattr(AlertCategory, "RISK") else list(AlertCategory)[0]  # type: ignore[union-attr]
+                get_alert_manager().fire(
+                    category=cat,
+                    severity=sev,
+                    title=f"Broker failover: {severity}",
+                    message=message,
+                    source="BrokerFallbackController",
+                )
+            except Exception as exc:
+                logger.debug("BrokerFallbackController: alert dispatch failed (%s)", exc)
+
+        if _TEXT_ALERT_AVAILABLE and get_text_alert_system is not None and severity in ("CRITICAL", "EMERGENCY"):
+            try:
+                get_text_alert_system().emergency_mode_triggered(  # type: ignore[union-attr]
+                    level=severity,
+                    message=message,
+                )
+            except Exception as exc:
+                logger.debug("BrokerFallbackController: text alert failed (%s)", exc)
+
+
+# ---------------------------------------------------------------------------
+# 4. Pre-Halt Alert Engine
+# ---------------------------------------------------------------------------
+
+class PreHaltAlertEngine:
+    """
+    Fires warning alerts with a countdown before trading halts so the operator
+    has time to intervene.
+
+    Typical use::
+
+        engine = PreHaltAlertEngine(config)
+
+        # Register a broker-health watchdog
+        engine.register_watchdog(
+            name="kraken_health",
+            fn=lambda: broker.connected,
+            interval_s=60,
+        )
+        engine.start()
+
+        # Elsewhere, when you know a halt is coming:
+        engine.warn_pre_halt("Risk limit breached", countdown_s=300)
+    """
+
+    def __init__(self, config: Optional[StartupConfig] = None) -> None:
+        self._cfg       = config or StartupConfig()
+        self._stop      = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._watchdogs: list[dict] = []
+        self._lock = threading.Lock()
+
+    # ── Watchdog registration ──────────────────────────────────────────────
+
+    def register_watchdog(
+        self,
+        name: str,
+        fn: Callable[[], bool],
+        interval_s: Optional[float] = None,
+        max_failures: Optional[int] = None,
+    ) -> None:
+        """
+        Register a liveness function that the engine will call periodically.
+
+        Args:
+            name:         Human-readable name for log messages.
+            fn:           ``() → bool`` — return True if healthy; False if failing.
+            interval_s:   Poll interval (defaults to ``config.watchdog_interval_s``).
+            max_failures: Consecutive failures before warning (defaults to ``config.watchdog_max_failures``).
+        """
+        with self._lock:
+            self._watchdogs.append({
+                "name":         name,
+                "fn":           fn,
+                "interval_s":   interval_s if interval_s is not None else self._cfg.watchdog_interval_s,
+                "max_failures": max_failures if max_failures is not None else self._cfg.watchdog_max_failures,
+                "fail_count":   0,
+                "last_check":   0.0,
+            })
+        logger.debug("PreHaltAlertEngine: registered watchdog '%s'", name)
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """Start the background watchdog thread."""
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name="nija.pre_halt_watchdog",
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info("PreHaltAlertEngine: watchdog thread started")
+
+    def stop(self) -> None:
+        """Stop the watchdog thread gracefully."""
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    # ── Manual halt warning ────────────────────────────────────────────────
+
+    def warn_pre_halt(self, reason: str, countdown_s: float = 60.0) -> None:
+        """
+        Immediately fire a CRITICAL alert warning that trading will halt in
+        *countdown_s* seconds.
+
+        If *countdown_s* > 0, schedules a second "halting NOW" alert at
+        expiry so the operator can track whether the halt actually fired.
+        """
+        pre_msg = (
+            f"⚠️  TRADING HALT IMMINENT in {countdown_s:.0f}s — {reason}\n"
+            "Intervene now to prevent trading from stopping."
+        )
+        logger.critical("PreHaltAlertEngine: %s", pre_msg)
+        self._fire_alert(pre_msg, severity="CRITICAL", title="Trading halt imminent")
+
+        if countdown_s > 0:
+            def _send_halt_now():
+                time.sleep(countdown_s)
+                if not self._stop.is_set():
+                    now_msg = f"🛑  TRADING HALTED — {reason}"
+                    logger.critical("PreHaltAlertEngine: %s", now_msg)
+                    self._fire_alert(now_msg, severity="EMERGENCY", title="Trading halted")
+
+            t = threading.Thread(target=_send_halt_now, daemon=True)
+            t.start()
+
+    # ── Background loop ────────────────────────────────────────────────────
+
+    def _run_loop(self) -> None:
+        """Watchdog background thread body."""
+        while not self._stop.is_set():
+            now = time.time()
+            with self._lock:
+                watchdogs = list(self._watchdogs)
+
+            for wd in watchdogs:
+                if now - wd["last_check"] < wd["interval_s"]:
+                    continue
+                wd["last_check"] = now
+
+                try:
+                    healthy = bool(wd["fn"]())
+                except Exception as exc:
+                    logger.debug("PreHaltAlertEngine: watchdog '%s' raised %s", wd["name"], exc)
+                    healthy = False
+
+                if healthy:
+                    if wd["fail_count"] > 0:
+                        logger.info(
+                            "PreHaltAlertEngine: watchdog '%s' recovered (was %d failures)",
+                            wd["name"], wd["fail_count"],
+                        )
+                    wd["fail_count"] = 0
+                else:
+                    wd["fail_count"] += 1
+                    logger.warning(
+                        "PreHaltAlertEngine: watchdog '%s' failure #%d/%d",
+                        wd["name"], wd["fail_count"], wd["max_failures"],
+                    )
+                    if wd["fail_count"] >= wd["max_failures"]:
+                        self.warn_pre_halt(
+                            reason=f"Watchdog '{wd['name']}' failed {wd['fail_count']} consecutive times",
+                            countdown_s=self._cfg.pre_halt_warn_s,
+                        )
+                        wd["fail_count"] = 0  # reset so we don't spam
+
+            self._stop.wait(timeout=5.0)
+
+    # ── Alert dispatch ─────────────────────────────────────────────────────
+
+    def _fire_alert(self, message: str, severity: str, title: str = "") -> None:
+        log_fn = {
+            "INFO":      logger.info,
+            "WARNING":   logger.warning,
+            "CRITICAL":  logger.critical,
+            "EMERGENCY": logger.critical,
+        }.get(severity, logger.warning)
+        log_fn("PreHaltAlertEngine [%s]: %s", severity, message)
+
+        if _ALERT_MGR_AVAILABLE and get_alert_manager is not None:
+            try:
+                sev = AlertSeverity[severity] if severity in AlertSeverity.__members__ else AlertSeverity.CRITICAL  # type: ignore[union-attr]
+                cat = AlertCategory.RISK if hasattr(AlertCategory, "RISK") else list(AlertCategory)[0]  # type: ignore[union-attr]
+                get_alert_manager().fire(
+                    category=cat,
+                    severity=sev,
+                    title=title or f"Pre-halt: {severity}",
+                    message=message,
+                    source="PreHaltAlertEngine",
+                )
+            except Exception as exc:
+                logger.debug("PreHaltAlertEngine: alert dispatch failed (%s)", exc)
+
+        if _TEXT_ALERT_AVAILABLE and get_text_alert_system is not None and severity in ("CRITICAL", "EMERGENCY"):
+            try:
+                get_text_alert_system().emergency_mode_triggered(  # type: ignore[union-attr]
+                    level=severity,
+                    message=message,
+                )
+            except Exception as exc:
+                logger.debug("PreHaltAlertEngine: text alert failed (%s)", exc)
+
+
+# ---------------------------------------------------------------------------
+# 5. Self-Healing Startup Orchestrator
+# ---------------------------------------------------------------------------
+
+class SelfHealingStartup:
+    """
+    Orchestrates the full self-healing boot sequence.
+
+    Steps
+    -----
+    1. **State-machine check** — if EMERGENCY_STOP: auto-reset to OFF (then
+       auto-activate to LIVE_ACTIVE when LIVE_CAPITAL_VERIFIED=true).
+    2. **Nonce poison detection** — inspect lead, nuclear-reset count, dup process.
+    3. **Nonce escalation** — run CeilingJumpEscalator from the recommended tier.
+    4. **Broker connection** — connect via BrokerFallbackController.
+    5. **Watchdog registration** — register broker-health watchdog with PreHaltAlertEngine.
+    6. **Readiness gate** — signal startup_readiness_gate (if available).
+
+    Usage::
+
+        result = SelfHealingStartup().run()
+        if result.ok:
+            broker = result.broker
+        else:
+            raise SystemExit("Startup failed: " + result.reason)
+    """
+
+    def __init__(self, config: Optional[StartupConfig] = None) -> None:
+        self._cfg              = config or StartupConfig()
+        self.pre_halt_engine   = PreHaltAlertEngine(self._cfg)
+        self._broker_ctrl      = BrokerFallbackController(self._cfg)
+
+    # ── Public entry point ─────────────────────────────────────────────────
+
+    def run(self) -> StartupResult:
+        """
+        Execute the full self-healing boot sequence.
+
+        Returns a :class:`StartupResult`.  ``ok=True`` means *at least one*
+        broker is connected and trading can begin.
+        """
+        logger.info("=" * 60)
+        logger.info("🚀  NIJA Self-Healing Startup — beginning boot sequence")
+        logger.info("=" * 60)
+
+        # Step 1: State machine
+        self._step_state_machine()
+
+        # Step 2: Nonce poison detection
+        nonce_report = NoncePoisonDetector(self._cfg).detect()
+        self._log_nonce_report(nonce_report)
+
+        # Step 3: Pre-connection nonce escalation (no api_call_fn yet)
+        esc_result: Optional[EscalationResult] = None
+        if nonce_report.recommended_tier not in (EscalationTier.NONE, EscalationTier.STANDARD_PROBE):
+            # For DEEP_PROBE and CEILING_JUMP we don't need an api_call_fn — ceiling jump is
+            # pure local state; deep-probe mode only takes effect when probe_and_resync is called
+            # inside KrakenBroker.connect(), so we just flag it here.
+            escalator = CeilingJumpEscalator(api_call_fn=None, config=self._cfg)
+            if nonce_report.recommended_tier == EscalationTier.CEILING_JUMP:
+                esc_result = escalator.run(starting_tier=EscalationTier.CEILING_JUMP)
+            elif nonce_report.recommended_tier == EscalationTier.DEEP_PROBE:
+                if _NONCE_MGR_AVAILABLE:
+                    mgr = get_global_nonce_manager()
+                    mgr._deep_reset_active = True  # type: ignore[attr-defined]
+                    logger.warning(
+                        "SelfHealingStartup: deep-reset mode activated on nonce manager "
+                        "(probe_and_resync inside KrakenBroker.connect() will use 120-min coverage)"
+                    )
+            elif nonce_report.recommended_tier == EscalationTier.EMERGENCY:
+                esc_result = escalator.run(starting_tier=EscalationTier.EMERGENCY)
+                if esc_result and not esc_result.success:
+                    return StartupResult(
+                        ok=False,
+                        reason=esc_result.message,
+                    )
+
+        # Step 4: Broker connection with fallback
+        startup_result = self._broker_ctrl.connect_with_fallback()
+        if esc_result:
+            startup_result.escalation_result = esc_result
+
+        # Step 5: Watchdog
+        if startup_result.ok and startup_result.broker is not None:
+            broker = startup_result.broker
+            self.pre_halt_engine.register_watchdog(
+                name=f"{startup_result.broker_name}_health",
+                fn=lambda: getattr(broker, "connected", True),
+            )
+            self.pre_halt_engine.start()
+            logger.info("PreHaltAlertEngine: watchdog started for %s", startup_result.broker_name)
+
+        # Step 6: Signal readiness gate
+        if startup_result.ok and _READINESS_GATE_AVAILABLE and get_startup_readiness_gate is not None:
+            try:
+                gate = get_startup_readiness_gate()
+                gate.signal_ready("self_healing_startup")
+            except Exception as exc:
+                logger.debug("SelfHealingStartup: readiness gate signal failed (%s)", exc)
+
+        if startup_result.ok:
+            mode = "FALLBACK" if startup_result.on_fallback else "PRIMARY"
+            logger.info(
+                "✅  SelfHealingStartup: boot sequence complete — broker=%s (%s mode)",
+                startup_result.broker_name, mode,
+            )
+        else:
+            logger.critical(
+                "❌  SelfHealingStartup: boot sequence FAILED — %s",
+                startup_result.reason,
+            )
+            self.pre_halt_engine.warn_pre_halt(
+                reason=f"Startup failed: {startup_result.reason}",
+                countdown_s=0,
+            )
+
+        return startup_result
+
+    # ── Private helpers ────────────────────────────────────────────────────
+
+    def _step_state_machine(self) -> None:
+        """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
+        if not _STATE_MACHINE_AVAILABLE:
+            return
+
+        try:
+            sm      = get_state_machine()
+            current = sm.get_current_state()
+
+            if current == TradingState.EMERGENCY_STOP:
+                lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower()
+                if lcv in ("true", "1", "yes", "enabled"):
+                    logger.warning(
+                        "SelfHealingStartup: state machine is EMERGENCY_STOP + "
+                        "LIVE_CAPITAL_VERIFIED=true — auto-resetting to OFF"
+                    )
+                    sm.transition_to(
+                        TradingState.OFF,
+                        "Auto-reset by SelfHealingStartup: LIVE_CAPITAL_VERIFIED=true, "
+                        "EMERGENCY_STOP was set by a prior test trigger",
+                    )
+                    sm.maybe_auto_activate()
+                else:
+                    logger.warning(
+                        "SelfHealingStartup: state machine is EMERGENCY_STOP but "
+                        "LIVE_CAPITAL_VERIFIED is not true — leaving in EMERGENCY_STOP. "
+                        "Set LIVE_CAPITAL_VERIFIED=true and run scripts/reset_state_machine.py"
+                    )
+            elif current == TradingState.OFF:
+                sm.maybe_auto_activate()
+            else:
+                logger.info(
+                    "SelfHealingStartup: state machine is %s — no reset needed",
+                    current.value,
+                )
+        except Exception as exc:
+            logger.warning("SelfHealingStartup: state machine step failed (%s)", exc)
+
+    def _log_nonce_report(self, report: NoncePoisonReport) -> None:
+        """Log the nonce poison report at an appropriate level."""
+        sev_map = {
+            NonceSeverity.CLEAN:    logger.info,
+            NonceSeverity.WARN:     logger.warning,
+            NonceSeverity.PROBE:    logger.warning,
+            NonceSeverity.DEEP:     logger.error,
+            NonceSeverity.CEILING:  logger.critical,
+            NonceSeverity.CRITICAL: logger.critical,
+        }
+        log_fn = sev_map.get(report.severity, logger.warning)
+        log_fn(
+            "NoncePoisonDetector: severity=%s recommended_tier=%s — %s",
+            report.severity.value,
+            report.recommended_tier.value,
+            "; ".join(report.details),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Module-level convenience
+# ---------------------------------------------------------------------------
+
+def get_self_healing_startup(config: Optional[StartupConfig] = None) -> SelfHealingStartup:
+    """Return a new :class:`SelfHealingStartup` instance with the given config."""
+    return SelfHealingStartup(config)
+
+
+__all__ = [
+    "StartupConfig",
+    "StartupResult",
+    "NoncePoisonDetector",
+    "NoncePoisonReport",
+    "NonceSeverity",
+    "CeilingJumpEscalator",
+    "EscalationResult",
+    "EscalationTier",
+    "BrokerFallbackController",
+    "PreHaltAlertEngine",
+    "SelfHealingStartup",
+    "get_self_healing_startup",
+]

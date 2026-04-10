@@ -1,5 +1,5 @@
 {
-  "current_state": "EMERGENCY_STOP",
+  "current_state": "OFF",
   "history": [
     {
       "from": "EMERGENCY_STOP",
@@ -44,5 +44,5 @@
       "timestamp": "2026-04-08T22:09:50.804837"
     }
   ],
-  "last_updated": "2026-04-08T22:09:50.804845"
+  "last_updated": "2026-04-10T12:21:12.694484"
 }
