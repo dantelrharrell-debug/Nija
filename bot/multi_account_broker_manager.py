@@ -28,12 +28,14 @@ from enum import Enum
 try:
     from bot.broker_manager import (
         BrokerType, AccountType, BaseBroker,
-        CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker
+        CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker,
+        KrakenStartupFSM, _KRAKEN_STARTUP_FSM,
     )
 except ImportError:
     from broker_manager import (
         BrokerType, AccountType, BaseBroker,
-        CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker
+        CoinbaseBroker, KrakenBroker, OKXBroker, AlpacaBroker,
+        KrakenStartupFSM, _KRAKEN_STARTUP_FSM,
     )
 
 # Import broker registry for platform designation tracking
@@ -509,10 +511,12 @@ class MultiAccountBrokerManager:
         """
         Check if a platform account is connected for a given broker type.
 
-        Uses the explicit ConnectionState machine first for a fast, race-condition-free
-        answer.  Falls back to inspecting the live broker object (with the sticky
-        window) when no state entry exists (e.g. broker registered externally before
-        this feature was deployed).
+        For Kraken: the authoritative answer comes from ``_KRAKEN_STARTUP_FSM``
+        (event = truth) before falling through to the ConnectionState machine,
+        ensuring the result is always consistent with what USER threads see.
+
+        For other brokers: uses the ConnectionState machine first, then falls back
+        to inspecting the live broker object (with the sticky window).
 
         Args:
             broker_type: Type of broker to check
@@ -525,6 +529,14 @@ class MultiAccountBrokerManager:
             if broker_type is None:
                 logger.error("❌ is_platform_connected called with broker_type=None")
                 return False
+
+            # ── Kraken fast path: FSM is the single authoritative source ──────
+            if broker_type == BrokerType.KRAKEN:
+                connected = _KRAKEN_STARTUP_FSM.is_connected
+                logger.debug(
+                    f"🔍 Platform broker check for {broker_type.value}: FSM={'CONNECTED' if connected else 'not connected'}"
+                )
+                return connected
 
             # Fast path: use the explicit ConnectionState machine
             state = self._platform_state.get(broker_type.value)
@@ -652,11 +664,17 @@ class MultiAccountBrokerManager:
         place that needs to confirm the platform broker is ready.
         Also notifies the PlatformAccountLayer singleton so that its
         ``platform_connected`` status flag reflects live broker state.
+
+        For Kraken: also ensures the FSM is in CONNECTED state (idempotent —
+        ``mark_connected()`` is a no-op after the first call).
         """
         self._platform_state[broker_type.value] = ConnectionState.CONNECTED
         self._last_platform_connected_time[broker_type] = time.time()
         # Clear any previous failure record now that the platform is live
         self._platform_failed_types.discard(broker_type)
+        # Keep Kraken FSM in sync (idempotent after first mark_connected()).
+        if broker_type == BrokerType.KRAKEN:
+            _KRAKEN_STARTUP_FSM.mark_connected()
         # Propagate connected status to the PlatformAccountLayer singleton so
         # display_hierarchy() and external health checks see "CONNECTED".
         try:
@@ -676,11 +694,19 @@ class MultiAccountBrokerManager:
         though the broker was never added to _platform_brokers (which only
         stores successfully-connected brokers).
 
+        For Kraken: also transitions the FSM to FAILED so USER threads that
+        are blocked in ``wait_connected()`` are unblocked immediately instead
+        of waiting for a timeout.
+
         USER accounts will be blocked from connecting until the platform
         either succeeds (clears this flag) or is explicitly retried.
         """
         self._platform_state[broker_type.value] = ConnectionState.FAILED
         self._platform_failed_types.add(broker_type)
+        # Transition Kraken FSM to FAILED so waiting USER threads wake
+        # immediately rather than sitting out a long timeout.
+        if broker_type == BrokerType.KRAKEN:
+            _KRAKEN_STARTUP_FSM.mark_failed()
         logger.error(
             "⛔ Platform %s connection FAILED — user accounts BLOCKED until "
             "platform reconnects.  Fix credentials or network, then restart.",
@@ -689,27 +715,35 @@ class MultiAccountBrokerManager:
 
     @staticmethod
     def _broker_ready_flag(broker) -> bool:
-        """Return True when the broker has signalled readiness via its flag.
+        """Return True when the broker has signalled readiness.
 
-        Uses ``getattr`` so the check works for any broker type that may not
-        implement the flag (e.g. Coinbase, Alpaca) without raising AttributeError.
+        For Kraken brokers the authoritative source is the module-level
+        ``_KRAKEN_STARTUP_FSM`` (event = truth).  For all other broker types
+        the legacy ``_platform_ready_flag`` attribute is checked so that
+        non-Kraken brokers continue to work without changes.
         """
-        return broker is not None and getattr(broker, "_platform_ready_flag", False)
+        if broker is None:
+            return False
+        if isinstance(broker, KrakenBroker):
+            return _KRAKEN_STARTUP_FSM.is_connected
+        return getattr(broker, "_platform_ready_flag", False)
 
     def wait_for_platform_ready(self, broker_type: BrokerType, timeout: int = None) -> bool:
         """
         Block until the platform broker is fully connected or a hard failure occurs.
 
-        Reads from the explicit ConnectionState machine so it reacts immediately
-        when the connection handshake completes, with no guessing or retry counting.
-        Also checks the broker's ``_platform_ready_flag`` for an instant fast-path
-        return when the KrakenBroker handshake has already completed.
+        For Kraken: delegates directly to ``_KRAKEN_STARTUP_FSM.wait_connected()``
+        (event = truth).  There is no polling loop, no partial-state window, and
+        no dual-representation drift.  USER threads stay parked in the FSM's
+        ``threading.Event.wait()`` until the single ``mark_connected()`` call fires,
+        regardless of how many nonce retry cycles the PLATFORM account needs.
 
-        The wait is indefinite — the loop exits only when the state machine reaches
-        CONNECTED (returns True) or FAILED (returns False).  There is no time-based
-        timeout by default so that slow startups / retries never prematurely unblock
-        user connections.  Set NIJA_PLATFORM_WAIT_TIMEOUT to a positive integer to
-        impose an upper limit (seconds).
+        For other broker types: falls back to the ``ConnectionState`` machine so
+        non-Kraken brokers continue to work unchanged.
+
+        The wait is indefinite by default — exits only on CONNECTED (True) or FAILED
+        (False).  Set NIJA_PLATFORM_WAIT_TIMEOUT to a positive integer (seconds) to
+        impose an upper ceiling.
 
         Args:
             broker_type: Exchange to wait for.
@@ -724,14 +758,43 @@ class MultiAccountBrokerManager:
         if timeout is None:
             timeout = int(env_val) if env_val.strip().isdigit() else 0
         broker_name = broker_type.value.upper()
+        # timeout=0 (default / env unset) means *indefinite* — consistent with
+        # the original behaviour.  Callers that want a finite ceiling must pass
+        # a positive integer or set NIJA_PLATFORM_WAIT_TIMEOUT.
+        fsm_timeout = float(timeout) if timeout > 0 else None
+
+        # ── Kraken: single FSM wait — zero dual-representation drift ──────────
+        if broker_type == BrokerType.KRAKEN:
+            # Fast path: already connected.
+            if _KRAKEN_STARTUP_FSM.is_connected:
+                logger.info(f"✅ Platform {broker_name} ready (FSM fast-path)")
+                self._mark_platform_connected(broker_type)
+                return True
+            # Fast path: already failed.
+            if _KRAKEN_STARTUP_FSM.is_failed:
+                logger.error(f"❌ Platform {broker_name} connection failed (FSM)")
+                return False
+            logger.info(
+                f"⏳ Platform {broker_name} — waiting for FSM CONNECTED signal"
+                + (f" (up to {timeout}s)" if fsm_timeout else " (indefinite)") + " …"
+            )
+            result = _KRAKEN_STARTUP_FSM.wait_connected(timeout=fsm_timeout)
+            if result:
+                logger.info(f"✅ Platform {broker_name} fully ready (FSM)")
+                self._mark_platform_connected(broker_type)
+            else:
+                logger.error(
+                    f"❌ Platform {broker_name} did not reach CONNECTED"
+                    + (" (FSM FAILED)" if _KRAKEN_STARTUP_FSM.is_failed else " (FSM timeout)")
+                )
+            return result
+
+        # ── Non-Kraken: existing ConnectionState-machine path ─────────────────
         start = time.time()
 
-        # Fast path: check broker's _platform_ready_flag before entering the loop.
-        # KrakenBroker sets this flag immediately after the handshake completes so
-        # we avoid the full polling window when the broker is already live.
         broker = self._platform_brokers.get(broker_type)
         if self._broker_ready_flag(broker):
-            logger.info(f"✅ Platform {broker_name} ready (fast-path via _platform_ready_flag)")
+            logger.info(f"✅ Platform {broker_name} ready (fast-path via ready flag)")
             self._mark_platform_connected(broker_type)
             return True
 
@@ -747,14 +810,11 @@ class MultiAccountBrokerManager:
                 logger.error(f"❌ Platform {broker_name} failed to connect")
                 return False
 
-            # Re-check _platform_ready_flag on every iteration in case the broker
-            # completed its handshake after we entered the loop.
             if self._broker_ready_flag(broker):
-                logger.info(f"✅ Platform {broker_name} ready (_platform_ready_flag set during wait)")
+                logger.info(f"✅ Platform {broker_name} ready (ready flag set during wait)")
                 self._mark_platform_connected(broker_type)
                 return True
 
-            # Optional hard ceiling — only enforced when NIJA_PLATFORM_WAIT_TIMEOUT is set.
             if timeout > 0 and (time.time() - start) >= timeout:
                 logger.error(f"⛔ Timeout waiting for platform {broker_name} to become ready ({timeout}s)")
                 return False
