@@ -7221,9 +7221,9 @@ class TradingStrategy:
             if active_broker and getattr(active_broker, 'connected', False):
                 _car_brokers.append(active_broker)
             if hasattr(self, 'broker_manager') and self.broker_manager:
-                for _bt, _b in list(getattr(self.broker_manager, 'brokers', {}).items()):
-                    if _b and getattr(_b, 'connected', False) and _b not in _car_brokers:
-                        _car_brokers.append(_b)
+                for _broker_type, _broker_inst in list(getattr(self.broker_manager, 'brokers', {}).items()):
+                    if _broker_inst and getattr(_broker_inst, 'connected', False) and _broker_inst not in _car_brokers:
+                        _car_brokers.append(_broker_inst)
 
             try:
                 try:
@@ -7236,8 +7236,7 @@ class TradingStrategy:
                 )
             except Exception as _car_err:
                 logger.error("clear_and_restart() raised unexpectedly: %s — forcing sys.exit", _car_err)
-                import sys as _sys
-                _sys.exit(0)
+                sys.exit(0)
             # clear_and_restart() replaces the process; nothing below should run.
             return
         # ══════════════════════════════════════════════════════════════════════

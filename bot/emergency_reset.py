@@ -585,9 +585,13 @@ def restart_process() -> None:
         logger.error("os.execv failed (%s) — sending SIGTERM so platform restarts", exec_err)
         try:
             os.kill(os.getpid(), _signal.SIGTERM)
+            # SIGTERM is asynchronous — give the signal handler time to terminate
+            # the process before falling through to the sys.exit backstop.
+            time.sleep(2.0)
         except Exception:
-            logger.error("SIGTERM failed — calling sys.exit(0)")
-            sys.exit(0)
+            pass
+        logger.error("SIGTERM did not terminate process — calling sys.exit(0)")
+        sys.exit(0)
 
 
 # ============================================================================
