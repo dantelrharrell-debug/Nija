@@ -219,11 +219,11 @@ AGGRESSIVE_PROFILE = ModeProfile(
     mtf_required=False,
     emoji="🔥",
     # Quality filter — flow-mode (AGGRESSIVE + Flow Overrides)
-    quality_filter_win_prob=0.42,         # lowered 0.46 → 0.42 for flow mode
-    quality_filter_model_conf=0.50,       # lowered 0.58 → 0.50 for flow mode
+    quality_filter_win_prob=0.38,         # lowered 0.42 → 0.38 for flow mode
+    quality_filter_model_conf=0.45,       # lowered 0.50 → 0.45 for flow mode
     # Scoring thresholds — flow-mode activation zone for micro-cap scalping
-    score_floor_absolute=15.5,            # lowered 17.0 → 15.5 for flow mode
-    gate_pass_threshold=2.2,
+    score_floor_absolute=13.0,            # lowered 15.5 → 13.0 for flow mode
+    gate_pass_threshold=2.0,
     wmx_signal_threshold=34.0,            # lowered 37.0 → 34.0 for flow mode
 )
 

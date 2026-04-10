@@ -4410,6 +4410,17 @@ class TradingStrategy:
                 logger.info(f"   🏦 TOTAL CAPITAL UNDER MANAGEMENT: ${grand_total:,.2f}")
                 logger.info("=" * 70)
 
+                # BALANCE SYNC FIX: seed CapitalAllocator with live broker balance so
+                # it never starts with _total_capital=0.0.  Must run after live balance
+                # is confirmed and before _init_advanced_features() so all advanced
+                # modules receive a valid initial budget rather than a $0 placeholder.
+                if self._capital_allocator is not None and total_capital >= 1.0:
+                    try:
+                        self._capital_allocator.rebalance(total_capital=total_capital, force=True)
+                        logger.info("✅ CapitalAllocator seeded with live balance: $%.2f", total_capital)
+                    except Exception as _ca_seed_err:
+                        logger.warning("⚠️  CapitalAllocator startup rebalance failed: %s", _ca_seed_err)
+
                 # Initialize advanced trading features AFTER first live balance fetch
                 # This ensures advanced modules have access to real capital data
                 # Gated by LIVE_CAPITAL_VERIFIED environment variable
