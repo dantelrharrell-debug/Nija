@@ -92,6 +92,37 @@ except ImportError:
         WIN_RATE_MAXIMIZER_AVAILABLE = False
         logger.warning("⚠️ Win Rate Maximizer not available - trade filtering/risk caps/profit consistency disabled")
 
+# Win Rate Stabilizer — rolling 20-trade window; adjusts TP/SL/entry threshold
+try:
+    from win_rate_stabilizer import get_win_rate_stabilizer
+    WIN_RATE_STABILIZER_AVAILABLE = True
+    logger.debug("✅ Win Rate Stabilizer import OK")
+except ImportError:
+    try:
+        from bot.win_rate_stabilizer import get_win_rate_stabilizer
+        WIN_RATE_STABILIZER_AVAILABLE = True
+        logger.debug("✅ Win Rate Stabilizer import OK (bot.*)")
+    except ImportError:
+        get_win_rate_stabilizer = None  # type: ignore
+        WIN_RATE_STABILIZER_AVAILABLE = False
+        logger.warning("⚠️ Win Rate Stabilizer not available — TP/SL/entry-threshold auto-adjustment disabled")
+
+# Smart Execution Layer — NORMAL / FORCED / SKIP decision per signal
+try:
+    from smart_execution_layer import get_smart_execution_layer, ExecutionMode
+    SMART_EXECUTION_LAYER_AVAILABLE = True
+    logger.debug("✅ Smart Execution Layer import OK")
+except ImportError:
+    try:
+        from bot.smart_execution_layer import get_smart_execution_layer, ExecutionMode
+        SMART_EXECUTION_LAYER_AVAILABLE = True
+        logger.debug("✅ Smart Execution Layer import OK (bot.*)")
+    except ImportError:
+        get_smart_execution_layer = None  # type: ignore
+        ExecutionMode = None  # type: ignore
+        SMART_EXECUTION_LAYER_AVAILABLE = False
+        logger.warning("⚠️ Smart Execution Layer not available — execution mode selection disabled")
+
 # Import BrokerPerformanceScorer — used for score-based entry broker selection
 try:
     from broker_performance_scorer import get_broker_performance_scorer as _get_broker_performance_scorer
@@ -2903,6 +2934,40 @@ class TradingStrategy:
                 self.win_rate_maximizer = None
         else:
             self.win_rate_maximizer = None
+
+        # ── Win Rate Stabilizer — rolling 20-trade window ──────────────────────
+        # Dynamically adjusts TP distance, SL distance, and the entry confidence
+        # gate based on recent performance so the strategy self-corrects as market
+        # conditions evolve.  HOT streak → extend targets; COLD streak → protect capital.
+        if WIN_RATE_STABILIZER_AVAILABLE and get_win_rate_stabilizer is not None:
+            try:
+                self.win_rate_stabilizer = get_win_rate_stabilizer()
+                logger.info(
+                    "✅ Win Rate Stabilizer initialized — "
+                    "rolling TP/SL/threshold adjustment active (window=20 min_sample=10)"
+                )
+            except Exception as _wrs_init_err:
+                logger.warning("⚠️ Win Rate Stabilizer init failed: %s", _wrs_init_err)
+                self.win_rate_stabilizer = None
+        else:
+            self.win_rate_stabilizer = None
+
+        # ── Smart Execution Layer — NORMAL / FORCED / SKIP per-signal ──────────
+        # Evaluates volatility, spread, and rolling win rate before each entry
+        # and selects the appropriate execution profile so the bot never blindly
+        # trades into poor conditions and never skips a valid opportunity.
+        if SMART_EXECUTION_LAYER_AVAILABLE and get_smart_execution_layer is not None:
+            try:
+                self.smart_execution_layer = get_smart_execution_layer()
+                logger.info(
+                    "✅ Smart Execution Layer initialized — "
+                    "NORMAL/FORCED/SKIP cycle selection active"
+                )
+            except Exception as _sel_init_err:
+                logger.warning("⚠️ Smart Execution Layer init failed: %s", _sel_init_err)
+                self.smart_execution_layer = None
+        else:
+            self.smart_execution_layer = None
 
         # Initialize Capital Concentration Engine — concentration mode, account ranking,
         # kill-weak accounts, live-execution verification, Kelly sizing, dashboard
@@ -12173,6 +12238,42 @@ class TradingStrategy:
                                                     "skipped for %s: %s", symbol, _lct_conf_err,
                                                 )
 
+                                        # ── WIN RATE STABILIZER — entry confidence adjustment ──
+                                        # Shifts the sniper-filter gate based on rolling win rate
+                                        # (last 20 trades).  HOT band loosens slightly; WEAK/COLD
+                                        # bands tighten to protect capital during losing streaks.
+                                        # Inactive until min_sample (10) trades are recorded.
+                                        if (
+                                            WIN_RATE_STABILIZER_AVAILABLE
+                                            and hasattr(self, 'win_rate_stabilizer')
+                                            and self.win_rate_stabilizer is not None
+                                        ):
+                                            try:
+                                                _wrs_adj = self.win_rate_stabilizer.get_adjustments()
+                                                if _wrs_adj.active and _wrs_adj.entry_confidence_delta != 0.0:
+                                                    _sf_conf_pre_wrs = _sf_confidence
+                                                    _sf_confidence = max(
+                                                        0.0,
+                                                        min(1.0, _sf_confidence + _wrs_adj.entry_confidence_delta),
+                                                    )
+                                                    logger.debug(
+                                                        "   📊 WRS [%s][%s]: conf "
+                                                        "%.3f→%.3f (%+.3f) "
+                                                        "[wr=%.0f%% n=%d]",
+                                                        symbol,
+                                                        _wrs_adj.band.value,
+                                                        _sf_conf_pre_wrs,
+                                                        _sf_confidence,
+                                                        _wrs_adj.entry_confidence_delta,
+                                                        _wrs_adj.win_rate * 100,
+                                                        _wrs_adj.sample_size,
+                                                    )
+                                            except Exception as _wrs_conf_err:
+                                                logger.debug(
+                                                    "WinRateStabilizer confidence adjustment "
+                                                    "skipped for %s: %s", symbol, _wrs_conf_err,
+                                                )
+
                                         _sf_close = float(df['close'].iloc[-1]) if len(df) > 0 else 0.0
                                         _sf_spread = float(analysis.get('spread_pct', 0.001) or 0.001)
                                         _sf_bid = _sf_close * (1.0 - _sf_spread / 2.0)
@@ -12574,6 +12675,70 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
+
+                                # ═══════════════════════════════════════════════════════
+                                # SMART EXECUTION LAYER — NORMAL / FORCED / SKIP
+                                # Evaluates volatility (ATR%), spread, and rolling win
+                                # rate to decide execution quality before position sizing
+                                # begins.  A SKIP_CYCLE result protects capital; a
+                                # FORCED_TRADE reduces size and tightens TP immediately.
+                                # ═══════════════════════════════════════════════════════
+                                _sel_decision = None
+                                if (
+                                    SMART_EXECUTION_LAYER_AVAILABLE
+                                    and hasattr(self, 'smart_execution_layer')
+                                    and self.smart_execution_layer is not None
+                                ):
+                                    try:
+                                        _sel_atr_raw  = float(analysis.get('atr', 0.0) or 0.0)
+                                        _sel_close    = float(df['close'].iloc[-1]) if (df is not None and len(df) > 0) else 0.0
+                                        _sel_atr_pct  = (_sel_atr_raw / _sel_close) if _sel_close > 0 and _sel_atr_raw > 0 else 0.015
+                                        _sel_spread   = float(analysis.get('spread_pct', 0.001) or 0.001)
+                                        _sel_wr       = (
+                                            self.win_rate_stabilizer.get_win_rate()
+                                            if (WIN_RATE_STABILIZER_AVAILABLE
+                                                and hasattr(self, 'win_rate_stabilizer')
+                                                and self.win_rate_stabilizer is not None)
+                                            else 0.5
+                                        )
+                                        _sel_decision = self.smart_execution_layer.evaluate(
+                                            atr_pct=_sel_atr_pct,
+                                            spread_pct=_sel_spread,
+                                            win_rate=_sel_wr,
+                                            zero_signal_streak=self._zero_signal_streak,
+                                            position_cap_reached=managing_only,
+                                        )
+
+                                        if _sel_decision.skip:
+                                            logger.info(
+                                                "   ⛔ SEL SKIP [%s]: %s",
+                                                symbol, _sel_decision.reason,
+                                            )
+                                            filter_stats['market_filter'] += 1
+                                            continue
+
+                                        if _sel_decision.forced:
+                                            logger.info(
+                                                "   ⚡ SEL FORCED [%s]: %s "
+                                                "(size×%.2f TP×%.2f)",
+                                                symbol,
+                                                _sel_decision.reason,
+                                                _sel_decision.position_size_multiplier,
+                                                _sel_decision.tp_distance_multiplier,
+                                            )
+                                            if position_size > 0:
+                                                position_size *= _sel_decision.position_size_multiplier
+                                        else:
+                                            logger.info(
+                                                "   ✅ SEL NORMAL [%s]: %s",
+                                                symbol, _sel_decision.reason,
+                                            )
+
+                                    except Exception as _sel_err:
+                                        logger.debug(
+                                            "SmartExecutionLayer skipped for %s: %s",
+                                            symbol, _sel_err,
+                                        )
 
                                 # ── BALANCE GRACE MODE MULTIPLIER ───────────────────────
                                 # When balance was fetched from a stale cache (API failed),
@@ -13139,6 +13304,83 @@ class TradingStrategy:
                                                 )
                                     except Exception as _atp_err:
                                         logger.debug("Adaptive TP Engine skipped for %s: %s", symbol, _atp_err)
+
+                                # ═══════════════════════════════════════════════════════
+                                # WIN RATE STABILIZER — TP / SL distance scaling
+                                # Adjusts take-profit and stop-loss *distances* (not raw
+                                # prices) based on the rolling 20-trade win rate.
+                                #   HOT  band → extend TP 25%, keep SL (ride winners)
+                                #   WEAK band → tighten TP 15%, SL 10% (lock in gains)
+                                #   COLD band → tighten TP 30%, SL 20% (capital protection)
+                                # Applied after AdaptiveTP so WRS is the final TP tuner.
+                                # Also applies SEL forced-trade TP tightening when SEL
+                                # decided FORCED_TRADE earlier in the pipeline.
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    WIN_RATE_STABILIZER_AVAILABLE
+                                    and hasattr(self, 'win_rate_stabilizer')
+                                    and self.win_rate_stabilizer is not None
+                                ):
+                                    try:
+                                        _wrs_adj2     = self.win_rate_stabilizer.get_adjustments()
+                                        _wrs_entry    = float(analysis.get('entry_price', 0.0) or 0.0)
+                                        _wrs_action   = analysis.get('action', '')
+                                        _wrs_is_long  = _wrs_action in ('enter_long', 'buy')
+
+                                        # Combine WRS multiplier with SEL forced TP multiplier
+                                        _wrs_tp_mult = _wrs_adj2.tp_multiplier if _wrs_adj2.active else 1.0
+                                        _wrs_sl_mult = _wrs_adj2.sl_multiplier if _wrs_adj2.active else 1.0
+                                        if _sel_decision is not None and _sel_decision.forced:
+                                            _wrs_tp_mult = min(_wrs_tp_mult, _sel_decision.tp_distance_multiplier)
+
+                                        if _wrs_entry > 0 and (_wrs_tp_mult != 1.0 or _wrs_sl_mult != 1.0):
+                                            _wrs_changed = False
+
+                                            # Scale TP distance
+                                            _wrs_tp_list = analysis.get('take_profit', [])
+                                            if isinstance(_wrs_tp_list, list) and _wrs_tp_list and _wrs_tp_mult != 1.0:
+                                                _wrs_new_tp = []
+                                                for _tp_px in _wrs_tp_list:
+                                                    if _tp_px and _tp_px > 0:
+                                                        _tp_dist = (_tp_px - _wrs_entry) if _wrs_is_long else (_wrs_entry - _tp_px)
+                                                        _new_dist = _tp_dist * _wrs_tp_mult
+                                                        _wrs_new_tp.append(
+                                                            (_wrs_entry + _new_dist) if _wrs_is_long
+                                                            else (_wrs_entry - _new_dist)
+                                                        )
+                                                    else:
+                                                        _wrs_new_tp.append(_tp_px)
+                                                analysis['take_profit'] = _wrs_new_tp
+                                                _wrs_changed = True
+
+                                            # Scale SL distance
+                                            _wrs_sl = float(analysis.get('stop_loss', 0.0) or 0.0)
+                                            if _wrs_sl > 0 and _wrs_sl_mult != 1.0:
+                                                _sl_dist = (_wrs_entry - _wrs_sl) if _wrs_is_long else (_wrs_sl - _wrs_entry)
+                                                _new_sl_dist = _sl_dist * _wrs_sl_mult
+                                                analysis['stop_loss'] = (
+                                                    (_wrs_entry - _new_sl_dist) if _wrs_is_long
+                                                    else (_wrs_entry + _new_sl_dist)
+                                                )
+                                                _wrs_changed = True
+
+                                            if _wrs_changed:
+                                                _wrs_tag = (
+                                                    f'WRS[{_wrs_adj2.band.value} wr={_wrs_adj2.win_rate:.0%} n={_wrs_adj2.sample_size}]'
+                                                    if _wrs_adj2.active else 'WRS[warming]'
+                                                )
+                                                if _sel_decision is not None and _sel_decision.forced:
+                                                    _wrs_tag += ' + SEL[FORCED]'
+                                                logger.info(
+                                                    "   📊 %s: %s TP×%.2f SL×%.2f",
+                                                    symbol, _wrs_tag,
+                                                    _wrs_tp_mult, _wrs_sl_mult,
+                                                )
+                                    except Exception as _wrs_tp_err:
+                                        logger.debug(
+                                            "WinRateStabilizer TP/SL scaling skipped for %s: %s",
+                                            symbol, _wrs_tp_err,
+                                        )
 
                                 # ═══════════════════════════════════════════════════════
                                 # MARKET REGIME ENGINE — bull / chop / crash aggression
@@ -15561,6 +15803,29 @@ class TradingStrategy:
                 self.adaptive_tp_engine.record_trade_result(is_win=is_win)
             except Exception as _atp_rec_err:
                 logger.debug("Adaptive TP Engine record_trade_result skipped for %s: %s", symbol, _atp_rec_err)
+
+        # ── WIN RATE STABILIZER — feed outcome to rolling 20-trade window ───────
+        # Must be called on every closed trade so the window stays current and
+        # all downstream TP/SL/confidence adjustments reflect recent performance.
+        if WIN_RATE_STABILIZER_AVAILABLE and hasattr(self, 'win_rate_stabilizer') and self.win_rate_stabilizer is not None:
+            try:
+                self.win_rate_stabilizer.record(is_win=is_win)
+                _wrs_rpt = self.win_rate_stabilizer.get_report()
+                logger.info(
+                    "📊 WRS update [%s]: %s | band=%s wr=%.0f%% n=%d/%d "
+                    "TP×%.2f SL×%.2f conf_delta=%+.2f",
+                    symbol,
+                    "WIN ✅" if is_win else "LOSS ❌",
+                    _wrs_rpt["band"],
+                    _wrs_rpt["win_rate_pct"],
+                    _wrs_rpt["sample_size"],
+                    _wrs_rpt["window"],
+                    _wrs_rpt["tp_multiplier"],
+                    _wrs_rpt["sl_multiplier"],
+                    _wrs_rpt["entry_confidence_delta"],
+                )
+            except Exception as _wrs_rec_err:
+                logger.debug("WinRateStabilizer record skipped for %s: %s", symbol, _wrs_rec_err)
 
         # ── Phase 2: Auto Broker Capital Shifter — periodic evaluation ──────
         # Evaluate on every closed trade so allocations stay current.
