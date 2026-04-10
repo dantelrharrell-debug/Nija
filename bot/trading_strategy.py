@@ -4105,42 +4105,46 @@ class TradingStrategy:
             time.sleep(2.0)  # Increased from 0.5s to 2.0s
 
             # Try to connect Coinbase - PLATFORM ACCOUNT
-            logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)...")
-            try:
-                coinbase = CoinbaseBroker()
-                if coinbase.connect():
-                    self.broker_manager.add_broker(coinbase)
-                    # Register in multi_account_manager using proper method to enforce invariant
-                    self.multi_account_manager.register_platform_broker_instance(BrokerType.COINBASE, coinbase)
-                    connected_brokers.append("Coinbase")
-                    logger.info("   ✅ Coinbase MASTER connected")
-                    logger.info("   ✅ Coinbase registered as PLATFORM broker in multi-account manager")
+            # Set NIJA_DISABLE_COINBASE=true to skip Coinbase startup (faster boot, cleaner logs)
+            if os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in ("1", "true", "yes"):
+                logger.info("⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=true)")
+            else:
+                logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)...")
+                try:
+                    coinbase = CoinbaseBroker()
+                    if coinbase.connect():
+                        self.broker_manager.add_broker(coinbase)
+                        # Register in multi_account_manager using proper method to enforce invariant
+                        self.multi_account_manager.register_platform_broker_instance(BrokerType.COINBASE, coinbase)
+                        connected_brokers.append("Coinbase")
+                        logger.info("   ✅ Coinbase MASTER connected")
+                        logger.info("   ✅ Coinbase registered as PLATFORM broker in multi-account manager")
 
-                    # COINBASE ORDER CLEANUP: Initialize automatic stale order cleanup
-                    # This frees up capital tied in unfilled orders on Coinbase
-                    try:
-                        from bot.coinbase_order_cleanup import create_coinbase_cleanup
-                        self.coinbase_cleanup = create_coinbase_cleanup(
-                            coinbase, max_order_age_minutes=STALE_ORDER_MAX_AGE_MINUTES
-                        )
-                        if self.coinbase_cleanup:
-                            logger.info(
-                                f"   ✅ Coinbase order cleanup initialized "
-                                f"(max age: {STALE_ORDER_MAX_AGE_MINUTES} minutes)"
+                        # COINBASE ORDER CLEANUP: Initialize automatic stale order cleanup
+                        # This frees up capital tied in unfilled orders on Coinbase
+                        try:
+                            from bot.coinbase_order_cleanup import create_coinbase_cleanup
+                            self.coinbase_cleanup = create_coinbase_cleanup(
+                                coinbase, max_order_age_minutes=STALE_ORDER_MAX_AGE_MINUTES
                             )
-                        else:
-                            logger.warning("   ⚠️  Coinbase order cleanup not available")
+                            if self.coinbase_cleanup:
+                                logger.info(
+                                    f"   ✅ Coinbase order cleanup initialized "
+                                    f"(max age: {STALE_ORDER_MAX_AGE_MINUTES} minutes)"
+                                )
+                            else:
+                                logger.warning("   ⚠️  Coinbase order cleanup not available")
+                                self.coinbase_cleanup = None
+                        except ImportError as import_err:
+                            logger.warning(f"   ⚠️  Coinbase order cleanup module not available: {import_err}")
                             self.coinbase_cleanup = None
-                    except ImportError as import_err:
-                        logger.warning(f"   ⚠️  Coinbase order cleanup module not available: {import_err}")
-                        self.coinbase_cleanup = None
-                    except Exception as cleanup_err:
-                        logger.error(f"   ❌ Coinbase order cleanup setup error: {cleanup_err}")
-                        self.coinbase_cleanup = None
-                else:
-                    logger.warning("   ⚠️  Coinbase MASTER connection failed")
-            except Exception as e:
-                logger.warning(f"   ⚠️  Coinbase PLATFORM error: {e}")
+                        except Exception as cleanup_err:
+                            logger.error(f"   ❌ Coinbase order cleanup setup error: {cleanup_err}")
+                            self.coinbase_cleanup = None
+                    else:
+                        logger.warning("   ⚠️  Coinbase MASTER connection failed")
+                except Exception as e:
+                    logger.warning(f"   ⚠️  Coinbase PLATFORM error: {e}")
 
             # Try to connect OKX - PLATFORM ACCOUNT
             logger.info("📊 Attempting to connect OKX (PLATFORM)...")
