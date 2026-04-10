@@ -133,6 +133,34 @@ except ImportError:
         get_recovery_controller = None
         FailureState = None
 
+# Always Trade Mode — guaranteed minimum trade frequency, idle-capital prevention
+try:
+    from always_trade_mode import get_always_trade_mode
+    ALWAYS_TRADE_MODE_AVAILABLE = True
+    logger.info("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
+except ImportError:
+    try:
+        from bot.always_trade_mode import get_always_trade_mode
+        ALWAYS_TRADE_MODE_AVAILABLE = True
+        logger.info("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
+    except ImportError:
+        ALWAYS_TRADE_MODE_AVAILABLE = False
+        get_always_trade_mode = None  # type: ignore
+
+# True Capital Scaling Engine — $94 → $1,000+ structured compounding
+try:
+    from true_capital_scaler import get_true_capital_scaler
+    TRUE_CAPITAL_SCALER_AVAILABLE = True
+    logger.info("✅ True Capital Scaling Engine loaded — structured compounding active")
+except ImportError:
+    try:
+        from bot.true_capital_scaler import get_true_capital_scaler
+        TRUE_CAPITAL_SCALER_AVAILABLE = True
+        logger.info("✅ True Capital Scaling Engine loaded — structured compounding active")
+    except ImportError:
+        TRUE_CAPITAL_SCALER_AVAILABLE = False
+        get_true_capital_scaler = None  # type: ignore
+
 # Import Market Regime Controller — meta-layer that answers "Should we trade now?"
 try:
     from market_regime_controller import get_regime_controller, MarketRegimeController, RegimeDecision
@@ -7244,6 +7272,60 @@ class TradingStrategy:
         # Remember whether the caller explicitly requested user mode so we can
         # distinguish it from user_mode being forced True by safety checks later.
         explicit_user_mode = user_mode
+
+        # ⚡ ALWAYS TRADE MODE — guarantee minimum trade frequency / prevent idle capital
+        # Runs BEFORE all safety layers so it can force a cycle even when the core loop
+        # has gone quiet.  Only activates when entries are not already blocked.
+        if ALWAYS_TRADE_MODE_AVAILABLE and get_always_trade_mode is not None:
+            try:
+                _atm = get_always_trade_mode()
+                _atm_last_trade = getattr(self, 'heartbeat_last_trade_time', 0) or 0
+                _atm_open = (
+                    len(self.execution_engine.positions)
+                    if self.execution_engine and hasattr(self.execution_engine, 'positions')
+                    else 0
+                )
+                _atm_decision = _atm.run_pre_cycle_check(
+                    user_mode=user_mode,
+                    open_positions=_atm_open,
+                    balance=account_balance,
+                    last_trade_ts=_atm_last_trade if _atm_last_trade > 0 else None,
+                )
+                if _atm_decision.force_entry and not user_mode:
+                    try:
+                        import bot.nija_core_loop as _ncl_atm
+                        _ncl_atm.FORCE_NEXT_CYCLE = True
+                    except ImportError:
+                        pass
+                    logger.warning(
+                        "⚡ ALWAYS TRADE MODE: forcing next cycle — %s",
+                        _atm_decision.reason,
+                    )
+            except Exception as _atm_exc:
+                logger.debug("Always Trade Mode check skipped: %s", _atm_exc)
+
+        # 💰 TRUE CAPITAL SCALER — structured compounding ($94 → $1K+)
+        # Fetches current rung params and logs ladder status every 10 cycles.
+        if TRUE_CAPITAL_SCALER_AVAILABLE and get_true_capital_scaler is not None:
+            try:
+                _tcs = get_true_capital_scaler()
+                # Inline balance fetch (same pattern as recovery controller)
+                _tcs_balance = account_balance
+                if _tcs_balance <= 0 and active_broker and hasattr(active_broker, 'get_balance'):
+                    try:
+                        _tcs_bal_result = active_broker.get_balance()
+                        if _tcs_bal_result and not _tcs_bal_result[1]:
+                            _tcs_balance = float(_tcs_bal_result[0] or 0.0)
+                    except Exception:
+                        pass
+                if _tcs_balance > 0:
+                    _tcs.get_cycle_params(_tcs_balance)
+                    # Log status every 10 cycles to avoid log spam
+                    _tcs_cycle_n = getattr(self, 'cycle_count', 0)
+                    if _tcs_cycle_n % 10 == 0:
+                        _tcs.log_status(_tcs_balance)
+            except Exception as _tcs_exc:
+                logger.debug("True Capital Scaler check skipped: %s", _tcs_exc)
 
         # ✅ LAYER 0: RECOVERY CONTROLLER - Capital-first safety check
         # This is the AUTHORITATIVE control layer that sits above all other safety checks
@@ -15163,6 +15245,24 @@ class TradingStrategy:
                 f"Moving avg ({len(self._cycle_durations)} cycles): {cycle_duration_average:.2f}s  |  "
                 f"balance={balance_duration:.2f}s  positions={positions_duration:.2f}s  entry={entry_duration:.2f}s"
             )
+
+            # ⚡ ATM + TCS — record cycle outcomes so idle timers and ladders stay current
+            if _cycle_closed_pnl != 0.0:
+                try:
+                    if ALWAYS_TRADE_MODE_AVAILABLE and get_always_trade_mode is not None:
+                        get_always_trade_mode().record_trade(
+                            symbol="cycle",
+                            trade_type="exit",
+                            pnl=_cycle_closed_pnl,
+                        )
+                    if TRUE_CAPITAL_SCALER_AVAILABLE and get_true_capital_scaler is not None and account_balance > 0:
+                        get_true_capital_scaler().record_trade(
+                            pnl=_cycle_closed_pnl,
+                            balance=account_balance,
+                            symbol="cycle",
+                        )
+                except Exception as _atm_rec_err:
+                    logger.debug("ATM/TCS end-of-cycle record skipped: %s", _atm_rec_err)
 
             # Increment cycle counter for warmup tracking
             self.cycle_count += 1
