@@ -174,11 +174,11 @@ _LOW_FEE_SL_REDUCTION = 0.001   # tighten by 0.1% on Kraken/Binance
 # Volatile-regime SL boost (add to hard_sl to avoid stop hunts in wide spreads)
 _VOLATILE_SL_BOOST = 0.003   # +0.3%
 
-# ATR-based dynamic stop floor: sl = max(_SL_MIN_PCT, atr_pct * _SL_ATR_MULTIPLIER)
+# ATR-based dynamic stop floor: sl = max(_SL_MIN_FRACTION, atr_pct * _SL_ATR_MULTIPLIER)
 # Ensures the stop breathes with real market volatility instead of using a
 # fixed percentage that may be too tight in high-ATR conditions.
-_SL_ATR_MULTIPLIER: float = _ef("SL_ATR_MULTIPLIER", 1.2)
-_SL_MIN_PCT: float        = _ef("SL_MIN_PCT", 1.2) / 100   # 1.2% hard floor
+_SL_ATR_MULTIPLIER: float  = _ef("SL_ATR_MULTIPLIER", 1.2)
+_SL_MIN_FRACTION: float    = _ef("SL_MIN_PCT", 1.2) / 100   # 1.2% hard floor (stored as decimal)
 
 # TP ladders: list of (target_pct, exit_fraction)
 # TP UPGRADE (Apr 2026): Raised all ladders to [3.0%, 4.0%, 5.5%, 7.0%] targets
@@ -335,6 +335,7 @@ class ExecutionExitConfig:
         atr_pct: float = 0.0,
     ) -> StopConfig:
         hard_sl, trail_act, trail_buf = _STOP_TABLE[profile]
+        profile_default_sl = hard_sl   # capture before any adjustments for logging
 
         # Low-fee brokers: tighten stop slightly (fees cost less → tighter OK)
         if broker_key in ("kraken", "binance", "okx"):
@@ -356,13 +357,13 @@ class ExecutionExitConfig:
                 hard_sl = atr_based_sl
                 atr_sl_applied = True
         # Always enforce the absolute minimum floor (1.2%)
-        hard_sl = max(hard_sl, _SL_MIN_PCT)
+        hard_sl = max(hard_sl, _SL_MIN_FRACTION)
 
         if atr_sl_applied:
             logger.debug(
-                "🛡️  ATR SL: %.2f%% ATR×%.1f = %.2f%% (profile floor was %.2f%%) [%s]",
+                "🛡️  ATR SL: %.2f%% ATR×%.1f = %.2f%% (profile default was %.2f%%) [%s]",
                 atr_pct * 100, _SL_ATR_MULTIPLIER, hard_sl * 100,
-                _STOP_TABLE[profile][0] * 100, profile.value,
+                profile_default_sl * 100, profile.value,
             )
 
         return StopConfig(
