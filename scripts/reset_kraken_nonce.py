@@ -66,6 +66,12 @@ _NTP_SERVER = os.environ.get("NIJA_NTP_SERVER", "pool.ntp.org")
 
 _STATE_FILE       = os.path.join(_DATA_DIR, "kraken_nonce.state")
 _LOCK_FILE        = _STATE_FILE + ".lock"
+# Process-lifetime lock: held open for the entire bot session by
+# KrakenNonceManager._try_acquire_pid_lock().  Checking this file is more
+# reliable than checking _LOCK_FILE (which is only held briefly during each
+# nonce increment) — if the bot is running but not currently issuing a nonce,
+# _LOCK_FILE would appear free even though the bot is alive.
+_PID_LOCK_FILE    = _STATE_FILE + ".pid"
 _TMP_FILE         = _STATE_FILE + ".tmp"
 _OFFSETS_FILE     = os.path.join(_DATA_DIR, "kraken_nonce_offsets.json")
 _OFFSETS_TMP_FILE = _OFFSETS_FILE + ".tmp"
@@ -126,20 +132,29 @@ def _get_ntp_backward_drift_ms() -> int:
 
 
 def _check_duplicate_process() -> bool:
-    """Return True if another NIJA process appears to be running."""
+    """Return True if another NIJA process appears to be running.
+
+    Checks ``_PID_LOCK_FILE`` (the process-lifetime lock held for the ENTIRE
+    bot session) rather than ``_LOCK_FILE`` (only held briefly per nonce op).
+    This gives a reliable answer even when the bot is idle between API calls.
+    Falls back to checking ``_LOCK_FILE`` on platforms without fcntl.
+    """
     try:
         import fcntl
-        # Use 'a' (append) mode so we do not truncate a file that an active
-        # NIJA process may have open, and to avoid creating a zero-byte lock
-        # file when the data directory is empty (it would then be deleted by
-        # _delete_files, which is harmless but confusing).
-        with open(_LOCK_FILE, "a") as fh:
+        # Check the process-lifetime PID lock first — most reliable.
+        for lock_path in (_PID_LOCK_FILE, _LOCK_FILE):
             try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fcntl.flock(fh, fcntl.LOCK_UN)
-                return False   # lock is free — no other process
-            except (BlockingIOError, OSError):
-                return True    # lock is held
+                # Append mode: never truncate a file the bot may have open.
+                with open(lock_path, "a") as fh:
+                    try:
+                        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(fh, fcntl.LOCK_UN)
+                        # This lock is free — try the next one.
+                    except (BlockingIOError, OSError):
+                        return True    # lock is held → bot is running
+            except FileNotFoundError:
+                pass   # file does not exist → definitely not locked
+        return False   # neither lock is held
     except Exception:
         return False
 
@@ -213,6 +228,7 @@ def _delete_files(dry_run: bool) -> None:
     targets = [
         _STATE_FILE,
         _LOCK_FILE,
+        _PID_LOCK_FILE,   # process-lifetime lock from the stopped bot
         _TMP_FILE,
         _OFFSETS_FILE,
         _OFFSETS_TMP_FILE,

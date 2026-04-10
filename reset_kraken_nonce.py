@@ -79,8 +79,16 @@ def _ts():    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ── Data directory ────────────────────────────────────────────────────────────
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+_STATE_FILE    = os.path.join(_DATA_DIR, "kraken_nonce.state")
+# Process-lifetime lock: held open for the ENTIRE bot session by
+# KrakenNonceManager._try_acquire_pid_lock().  More reliable than checking
+# the per-op _LOCK_FILE (which is only held briefly per nonce increment).
+_PID_LOCK_FILE = _STATE_FILE + ".pid"
 _NONCE_PATTERNS = [
-    os.path.join(_DATA_DIR, "kraken_nonce.state"),
+    _STATE_FILE,
+    _STATE_FILE + ".lock",
+    _STATE_FILE + ".pid",
+    _STATE_FILE + ".tmp",
     os.path.join(_DATA_DIR, "kraken_nonce*.json"),
     os.path.join(_DATA_DIR, "kraken_nonce*.txt"),
     os.path.join(_DATA_DIR, "kraken_global_nonce.txt"),
@@ -97,18 +105,48 @@ _BOT_PATTERNS = ["bot.py", "trading_strategy.py", "nija_core_loop.py",
 
 def check_no_bot_running() -> bool:
     """
-    Scan the process list for known bot entry-points.
+    Verify that no NIJA bot process is active before resetting the nonce.
+
+    Uses TWO complementary checks:
+
+    1. **Process-lifetime PID lock** (``_PID_LOCK_FILE``) — the most reliable
+       signal.  The bot holds this lock for its ENTIRE session; the OS releases
+       it automatically on exit/crash.  If this lock is held → a bot is running.
+
+    2. **Process-list scan** (``ps aux``) — catches processes that did not yet
+       acquire the PID lock (e.g. mid-startup) or that run on a filesystem
+       where fcntl locking is unavailable (e.g. NFS / some Docker volumes).
 
     Returns True when no bot processes are detected (safe to proceed).
-    Returns False and prints instructions when bot processes are found.
+    Returns False and prints instructions when a bot is found.
 
     IMPORTANT: Even ONE API call made by a running bot after the nonce reset
     will generate a nonce higher than the reset value, re-introducing the
     very desync this script is trying to fix.
     """
     _head("0 — Running-Process Check  (bot MUST be stopped first)")
-    import subprocess
 
+    # ── Check 1: process-lifetime PID lock ────────────────────────────────
+    pid_lock_held = False
+    try:
+        import fcntl
+        try:
+            with open(_PID_LOCK_FILE, "a") as fh:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+                    _ok(f"PID lock free — no bot holding {_PID_LOCK_FILE}")
+                except (BlockingIOError, OSError):
+                    pid_lock_held = True
+                    _fail(f"PID lock is HELD: {_PID_LOCK_FILE}")
+                    _fail("A bot process is currently running and owns this lock.")
+        except FileNotFoundError:
+            _ok("PID lock file does not exist — no prior bot session.")
+    except ImportError:
+        _info("fcntl not available on this platform — skipping PID lock check")
+
+    # ── Check 2: process-list scan ─────────────────────────────────────────
+    import subprocess
     bot_pids: list = []
     try:
         result = subprocess.run(
@@ -123,18 +161,21 @@ def check_no_bot_running() -> bool:
     except Exception as exc:
         _warn(f"Could not read process list: {exc}")
         _warn("Verify manually: ps aux | grep python")
-        return True  # unknown — don't block
 
     if bot_pids:
-        _fail(f"Detected {len(bot_pids)} running bot process(es):")
+        _fail(f"Detected {len(bot_pids)} running bot process(es) in process list:")
         for p in bot_pids:
             _info(f"  {p[:120]}")
+
+    if pid_lock_held or bot_pids:
         print()
         _fail("A running bot will re-desync the nonce immediately after reset.")
-        _info("Stop the bot FIRST, then re-run this script:")
+        _info("Stop ALL bot instances FIRST, then re-run this script:")
         _info("  pkill -f bot.py")
         _info("  pkill -f trading_strategy.py")
         _info("  pkill -f nija_core_loop.py")
+        _info("  On Railway: stop/delete the active service deployment")
+        _info("  On Docker:  docker ps -a  →  docker stop <container_id>")
         _info("Verify with: ps aux | grep python")
         return False
 

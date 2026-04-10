@@ -156,12 +156,58 @@ _NTP_STRICT_OFFSET_S: float = 1.0  # Kraken rejects nonces when |offset| > ~1 s
 _NTP_WARN_OFFSET_S: float = 0.5   # warn early so operators act before it breaks
 
 # ── API serialisation lock ────────────────────────────────────────────────────
+# Serialises ALL Kraken private API calls within a single process so that no
+# two threads can issue concurrent requests (and thus concurrent nonces).
+# For cross-process serialisation see _PID_LOCK_FILE below.
 _KRAKEN_API_LOCK = threading.RLock()
 
-# ── Cross-process lock file ───────────────────────────────────────────────────
-# Used by _CrossProcessLock to serialise nonce reads/writes across concurrently
-# running bot processes (e.g. container restart overlap, duplicate start).
-_LOCK_FILE = _STATE_FILE + ".lock"
+# ── Cross-process lock files ──────────────────────────────────────────────────
+# _LOCK_FILE    — brief per-nonce-operation exclusive lock held only during
+#                 the read → increment → write critical section inside
+#                 next_nonce().  Guards against two processes issuing the same
+#                 nonce if they are both running simultaneously.
+#
+# _PID_LOCK_FILE — process-LIFETIME exclusive lock acquired once in _init()
+#                  and held until the process exits (file-descriptor stays open).
+#                  Provides reliable duplicate-process detection:
+#                    • Another process starting up checks this file first.
+#                    • If it can't acquire LOCK_EX|LOCK_NB → another bot is
+#                      running with the same API key → logs CRITICAL.
+#                    • External tools (reset_kraken_nonce.py) also check this
+#                      file to confirm the bot is truly stopped before resetting.
+#                  The OS automatically releases the lock when the process dies
+#                  (even via SIGKILL), so there is no risk of a permanently-stuck
+#                  lock file after a crash.
+_LOCK_FILE     = _STATE_FILE + ".lock"
+_PID_LOCK_FILE = _STATE_FILE + ".pid"
+
+# ── Nonce backend / mode selection ───────────────────────────────────────────
+# NIJA_NONCE_BACKEND — storage backend for the monotonic nonce counter.
+#
+#   "file"  (default) — atomic file-locked counter persisted to
+#                        data/kraken_nonce.state.  Works on any filesystem.
+#
+#   "redis"           — atomic Redis INCR via a Lua script; best for
+#                        multi-host / multi-container deployments where the
+#                        same Kraken API key is shared across nodes.
+#                        Requires NIJA_REDIS_URL (default: redis://localhost:6379/0).
+#                        Falls back to "file" mode when Redis is unavailable.
+#
+# NIJA_NONCE_MODE — controls what the initial nonce value is based on.
+#
+#   "file"      (default) — reads the persisted state file on startup and
+#                            advances to max(persisted + jump, now + jump).
+#                            Survives container restarts with no cooldown.
+#
+#   "timestamp" — always starts from int(time.time() * 1000) + startup jump;
+#                 no state-file dependency.  Removes local-filesystem coupling
+#                 entirely.  Requires a brief cooldown (≥ startup_jump ms) on
+#                 hot restart so nonces don't replay a previous session's range.
+#                 probe_and_resync() handles the cooldown automatically.
+_NONCE_BACKEND   = os.environ.get("NIJA_NONCE_BACKEND",   "file").strip().lower()
+_REDIS_URL       = os.environ.get("NIJA_REDIS_URL",        "redis://localhost:6379/0")
+_REDIS_NONCE_KEY = os.environ.get("NIJA_REDIS_NONCE_KEY",  "nija:kraken:nonce")
+_NONCE_MODE      = os.environ.get("NIJA_NONCE_MODE",       "file").strip().lower()
 
 
 def get_kraken_api_lock() -> threading.RLock:
@@ -189,9 +235,10 @@ class _CrossProcessLock:
     def __enter__(self) -> "_CrossProcessLock":
         if _FCNTL_AVAILABLE:
             try:
-                # Open in write mode — the file is used purely as a lock target
-                # and stores no data; truncation on each open is intentional.
-                self._fh = open(self._path, "w")
+                # Open in append mode so we never truncate the file while
+                # another process may have it open.  The file stores no data
+                # and is used purely as a lock target.
+                self._fh = open(self._path, "a")
                 _fcntl.flock(self._fh, _fcntl.LOCK_EX)
             except Exception as exc:
                 _logger.debug(
@@ -380,6 +427,96 @@ class AdaptiveNonceOffsetEngine:
         return max(timing_floor, _PROBE_STEP_MS)
 
 
+# ── Optional: Redis-backed atomic nonce (NIJA_NONCE_BACKEND=redis) ────────────
+
+class _RedisNonceBackend:
+    """
+    Redis-backed atomic monotonic nonce generator.
+
+    Uses a Lua script to atomically advance the nonce to
+    ``max(current + 1, floor_ms)`` in a single round-trip.  Because Lua
+    scripts run atomically on the Redis server, two concurrently-running bot
+    processes (or separate containers) can NEVER receive the same nonce value.
+
+    This is the recommended backend for multi-host or multi-container
+    deployments where the same Kraken API key is shared.
+
+    Enable via env var:
+        NIJA_NONCE_BACKEND=redis
+        NIJA_REDIS_URL=redis://localhost:6379/0      (optional)
+        NIJA_REDIS_NONCE_KEY=nija:kraken:nonce       (optional)
+
+    Falls back to file mode transparently when Redis is unavailable.
+    """
+
+    # Lua script: atomically advance to max(current+1, floor) and return result.
+    # KEYS[1] = nonce key, ARGV[1] = floor (int ms timestamp).
+    _LUA_SCRIPT = """
+        local current = tonumber(redis.call('GET', KEYS[1])) or 0
+        local floor   = tonumber(ARGV[1])
+        local next    = math.max(current + 1, floor)
+        redis.call('SET', KEYS[1], tostring(next))
+        return next
+    """
+
+    def __init__(self, url: str, key: str) -> None:
+        import redis as _redis_lib  # type: ignore[import]
+        self._key = key
+        self._client = _redis_lib.from_url(
+            url, decode_responses=True, socket_timeout=2.0, socket_connect_timeout=2.0
+        )
+        self._script = self._client.register_script(self._LUA_SCRIPT)
+        # Verify connectivity at construction time.
+        self._client.ping()
+        _logger.info(
+            "🗄️  RedisNonceBackend: connected  url=%s  key=%s", url, key
+        )
+
+    def next_nonce(self) -> int:
+        """Atomically return the next nonce (≥ now_ms, strictly increasing)."""
+        floor = int(time.time() * 1000) + _STARTUP_JUMP_MS
+        result = self._script(keys=[self._key], args=[floor])
+        return int(result)
+
+    def get_last(self) -> int:
+        """Return the last issued nonce without advancing it."""
+        val = self._client.get(self._key)
+        return int(val) if val else 0
+
+    def advance_to(self, floor_ms: int) -> None:
+        """Advance the Redis nonce to at least *floor_ms* (atomic max operation)."""
+        self._script(keys=[self._key], args=[floor_ms])
+
+    def reset(self) -> None:
+        """Delete the Redis nonce key (fresh start — use with caution)."""
+        self._client.delete(self._key)
+        _logger.warning("RedisNonceBackend: nonce key '%s' deleted for reset", self._key)
+
+
+def _build_redis_backend() -> "_RedisNonceBackend | None":
+    """
+    Attempt to construct a :class:`_RedisNonceBackend`.
+
+    Returns ``None`` (and logs a warning) if the ``redis`` package is not
+    installed, the URL is invalid, or the Redis server is unreachable.
+    """
+    try:
+        backend = _RedisNonceBackend(_REDIS_URL, _REDIS_NONCE_KEY)
+        return backend
+    except ImportError:
+        _logger.error(
+            "RedisNonceBackend: 'redis' package not installed — "
+            "falling back to file mode.  Install with: pip install redis>=5.0"
+        )
+    except Exception as exc:
+        _logger.error(
+            "RedisNonceBackend: could not connect to %s (%s) — "
+            "falling back to file mode",
+            _REDIS_URL, exc,
+        )
+    return None
+
+
 # ── NTP helpers (module-level so validate_all_env_vars.py can import them) ────
 
 def check_ntp_sync() -> dict:
@@ -525,8 +662,36 @@ class KrakenNonceManager:
         # reaches _AUTO_DEEP_RESET_THRESHOLD, deep-probe mode is automatically
         # activated so probe_and_resync() uses the wider 120-min coverage window.
         self._nuclear_reset_count: int = 0
+        # Process-lifetime lock file descriptor (None on Windows / error).
+        # Kept open for the entire bot session so duplicate-process detection
+        # is reliable even between nonce operations.
+        self._pid_lock_fh: object = None
+        # Optional Redis nonce backend (None = use file / timestamp mode).
+        self._redis_backend: object = None
         os.makedirs(os.path.dirname(os.path.abspath(_STATE_FILE)), exist_ok=True)
         cleanup_legacy_nonce_files()
+
+        # ── Process-lifetime PID lock (duplicate-bot detection) ────────────
+        # Acquired FIRST — before any other state I/O — so that a duplicate
+        # process is detected as early as possible during startup.
+        # If acquisition fails (another process holds it) we log CRITICAL and
+        # continue rather than abort, since the cross-process nonce lock still
+        # prevents duplicate nonces at the increment level.
+        self._pid_lock_fh = self._try_acquire_pid_lock()
+
+        # ── Optional Redis nonce backend ───────────────────────────────────
+        if _NONCE_BACKEND == "redis":
+            self._redis_backend = _build_redis_backend()
+            if self._redis_backend is not None:
+                _logger.info(
+                    "KrakenNonceManager: using Redis nonce backend "
+                    "(key=%s, url=%s)", _REDIS_NONCE_KEY, _REDIS_URL
+                )
+        if _NONCE_MODE == "timestamp":
+            _logger.info(
+                "KrakenNonceManager: NIJA_NONCE_MODE=timestamp — "
+                "nonce derived from wall-clock ms; no state-file dependency"
+            )
 
         # ── Detect deep-reset mode ─────────────────────────────────────────
         # NIJA_DEEP_NONCE_RESET=1 applies a 60-min NTP-corrected startup floor
@@ -556,6 +721,8 @@ class KrakenNonceManager:
                 _STATE_FILE + ".tmp",
                 _AO_STATE_FILE,
                 _AO_STATE_FILE + ".tmp",
+                # NOTE: _PID_LOCK_FILE is intentionally excluded — we hold it
+                # open for the process lifetime and must not delete it here.
             ):
                 try:
                     os.remove(_path)
@@ -569,6 +736,12 @@ class KrakenNonceManager:
             _engine = AdaptiveNonceOffsetEngine._instance
             if _engine is not None:
                 _engine.reset_state()
+            # Also reset the Redis backend nonce key if Redis is active.
+            if self._redis_backend is not None:
+                try:
+                    self._redis_backend.reset()
+                except Exception as _re:
+                    _logger.debug("KrakenNonceManager: Redis reset error (%s)", _re)
 
         # NTP check first — clock drift is the #1 cause of Kraken nonce errors.
         # Kraken is extremely sensitive: even a few seconds off triggers
@@ -577,15 +750,61 @@ class KrakenNonceManager:
 
         # Warn loudly if another bot process is still running.  A competing
         # process will keep issuing nonces after our reset, making it ineffective.
-        if KrakenNonceManager.detect_other_process_running():
+        # Note: _try_acquire_pid_lock() already logged CRITICAL if the PID lock
+        # was held; this secondary check uses the brief per-op lock as a fallback
+        # on platforms where _try_acquire_pid_lock() returned None.
+        if self._pid_lock_fh is None and KrakenNonceManager.detect_other_process_running():
             _logger.error(
-                "🚨 KrakenNonceManager: another bot process is holding the nonce "
-                "lock.  Stop ALL duplicate NIJA processes before this reset takes "
-                "effect, otherwise the competing process will continue advancing "
-                "Kraken's expected nonce and the reset will be ineffective.  "
+                "🚨 KrakenNonceManager: another bot process appears to be holding "
+                "the nonce lock.  Stop ALL duplicate NIJA processes before this "
+                "reset takes effect, otherwise the competing process will continue "
+                "advancing Kraken's expected nonce and the reset will be ineffective.  "
                 "Run: pkill -f bot.py  (or stop the active deployment)."
             )
 
+        # In timestamp mode the nonce is derived from the wall-clock at each
+        # call; no state file is read at startup.  Use now + startup jump as the
+        # initial in-memory floor so the very first next_nonce() is safe.
+        if _NONCE_MODE == "timestamp":
+            now_ms = int(time.time() * 1000)
+            self._last_nonce = now_ms + _STARTUP_JUMP_MS
+            lead_ms = self._last_nonce - now_ms
+            _logger.info(
+                "KrakenNonceManager: ready (timestamp mode) — nonce=%d  lead=%+d ms",
+                self._last_nonce, lead_ms,
+            )
+            return
+
+        # In Redis mode the initial in-memory floor comes from Redis.
+        if self._redis_backend is not None:
+            try:
+                self._last_nonce = self._redis_backend.get_last()
+                if _deep_reset:
+                    ntp_corr_ms = _get_ntp_backward_drift_ms()
+                    deep_floor = int(time.time() * 1000) + _DEEP_STARTUP_FLOOR_MS + ntp_corr_ms
+                    if deep_floor > self._last_nonce:
+                        _logger.warning(
+                            "KrakenNonceManager: DEEP RESET (Redis) — floor "
+                            "now+%d ms + NTP correction +%d ms → %d  (was %d)",
+                            _DEEP_STARTUP_FLOOR_MS, ntp_corr_ms,
+                            deep_floor, self._last_nonce,
+                        )
+                        self._redis_backend.advance_to(deep_floor)
+                        self._last_nonce = deep_floor
+                lead_ms = self._last_nonce - int(time.time() * 1000)
+                _logger.info(
+                    "KrakenNonceManager: ready (Redis mode) — nonce=%d  lead=%+d ms",
+                    self._last_nonce, lead_ms,
+                )
+                return
+            except Exception as exc:
+                _logger.error(
+                    "KrakenNonceManager: Redis init error (%s) — falling back to file mode",
+                    exc,
+                )
+                self._redis_backend = None
+
+        # ── File mode (default) ────────────────────────────────────────────
         # Startup is the most likely moment for two processes to race.  Hold the
         # cross-process lock for the entire read → compute → write sequence so a
         # second process starting at the same time cannot claim the same nonce.
@@ -620,16 +839,39 @@ class KrakenNonceManager:
     def next_nonce(self) -> int:
         """Return the next strictly-increasing nonce and persist it.
 
-        Cross-process safe: acquires an exclusive advisory ``fcntl`` lock on
-        *_LOCK_FILE* so two concurrently-running bot processes (e.g. a duplicate
-        container start or a crash-loop restart overlap) never issue the same
-        nonce to Kraken.
+        Supports three backends, selected by env vars at startup:
 
-        Also auto-advances the nonce when it has fallen behind wall-clock time.
-        This handles the scenario where a nuclear-reset nonce (+30 min) was set
-        over 30 minutes ago and the bot remained in an error loop — Kraken
-        rejects nonces whose ms-timestamp is significantly in the past.
+        * **file** (default) — atomic file-locked counter; cross-process safe
+          via ``_CrossProcessLock``.
+        * **redis** — atomic Lua-script INCR in Redis; safe across hosts.
+        * **timestamp** — wall-clock ms + monotonic in-process counter; no
+          file dependency; requires a brief startup cooldown on hot restart.
         """
+        # ── Redis backend ──────────────────────────────────────────────────
+        if self._redis_backend is not None:
+            try:
+                nonce = self._redis_backend.next_nonce()
+                with _LOCK:
+                    self._last_nonce = nonce
+                return nonce
+            except Exception as exc:
+                _logger.error(
+                    "RedisNonceBackend: next_nonce() failed (%s) — "
+                    "falling back to file mode for this call",
+                    exc,
+                )
+                # Fall through to file/timestamp mode for this call only.
+
+        # ── Timestamp mode ─────────────────────────────────────────────────
+        if _NONCE_MODE == "timestamp":
+            with _LOCK:
+                now_ms = int(time.time() * 1000)
+                # Always advance: take whichever is larger so the series is
+                # strictly monotonic even within a burst of rapid calls.
+                self._last_nonce = max(now_ms, self._last_nonce + 1)
+                return self._last_nonce
+
+        # ── File mode (default) ────────────────────────────────────────────
         with _LOCK:
             with _CrossProcessLock(_LOCK_FILE):
                 # ── Cross-process sync ──────────────────────────────────────
@@ -705,7 +947,13 @@ class KrakenNonceManager:
                     floor, self._last_nonce, offset_ms,
                 )
                 self._last_nonce = floor
-                self._persist()
+                if self._redis_backend is not None:
+                    try:
+                        self._redis_backend.advance_to(floor)
+                    except Exception as _re:
+                        _logger.debug("RedisNonceBackend: advance_to error (%s)", _re)
+                elif _NONCE_MODE != "timestamp":
+                    self._persist()
             else:
                 _logger.debug(
                     "KrakenNonceManager: reset_to_safe_value skipped — "
@@ -723,6 +971,8 @@ class KrakenNonceManager:
         ``probe_and_resync()`` starts from the conservative timing floor rather
         than a potentially-stale small EMA.
 
+        When Redis mode is active the Redis nonce key is also deleted.
+
         Call this from a maintenance script or a one-off Railway shell command
         when NIJA is stopped and you need to guarantee a clean sync on the
         next restart.  The same effect is achieved at boot time by setting the
@@ -730,6 +980,10 @@ class KrakenNonceManager:
 
         Safe to call while the process is running (acquires ``_LOCK``), but for
         best results stop NIJA first so no new nonces are issued after the wipe.
+
+        Note: ``_PID_LOCK_FILE`` is intentionally excluded from the wipe list —
+        the file descriptor is held open for the process lifetime and must not
+        be deleted while the process is running.
         """
         with _LOCK:
             for _path in (
@@ -738,6 +992,7 @@ class KrakenNonceManager:
                 _STATE_FILE + ".tmp",
                 _AO_STATE_FILE,
                 _AO_STATE_FILE + ".tmp",
+                # _PID_LOCK_FILE excluded — held open for process lifetime
             ):
                 try:
                     os.remove(_path)
@@ -755,6 +1010,13 @@ class KrakenNonceManager:
             if _engine is not None:
                 _engine.reset_state()
 
+            # Reset the Redis nonce key if active.
+            if self._redis_backend is not None:
+                try:
+                    self._redis_backend.reset()
+                except Exception as _re:
+                    _logger.debug("KrakenNonceManager.force_resync: Redis reset error (%s)", _re)
+
             # Reset the in-process error counter, nuclear reset counter, and trading pause.
             self._error_count = 0
             self._nuclear_reset_count = 0
@@ -763,7 +1025,8 @@ class KrakenNonceManager:
             # Advance nonce to now + RESET_OFFSET_MS so the very next call
             # lands safely above Kraken's window.
             self._last_nonce = int(time.time() * 1000) + _RESET_OFFSET_MS
-            self._persist()
+            if _NONCE_MODE != "timestamp" and self._redis_backend is None:
+                self._persist()
 
             _logger.warning(
                 "KrakenNonceManager.force_resync: state wiped — nonce set to "
@@ -835,29 +1098,46 @@ class KrakenNonceManager:
 
             # Nuclear reset after too many consecutive failures
             if self._error_count >= _NUCLEAR_RESET_THRESHOLD:
-                with _CrossProcessLock(_LOCK_FILE):
-                    # Read the file so the nuclear nonce beats the highest value
-                    # written by any other concurrently-running process.
-                    # If the read fails (returns 0) fall back safely to the
-                    # in-memory value via the max() below.
-                    file_nonce = self._read_state_file_raw()
-                    if file_nonce == 0 and self._last_nonce > 0:
-                        _logger.warning(
-                            "KrakenNonceManager: nuclear reset — state file unreadable; "
-                            "using in-memory high-water mark (%d)",
-                            self._last_nonce,
-                        )
-                    high_water = max(file_nonce, self._last_nonce)
-                    floor = int(time.time() * 1000) + _NUCLEAR_RESET_OFFSET_MS
-                    # Always increase — never decrease a runaway nonce
-                    new_nonce = max(floor, high_water + 1)
-                    _logger.error(
-                        "🚨 KrakenNonceManager: NUCLEAR RESET after %d consecutive errors — "
-                        "nonce → +30 min floor (%d → %d) and pausing trading for %.0f s",
-                        self._error_count, self._last_nonce, new_nonce, _TRADING_PAUSE_S,
-                    )
+                floor = int(time.time() * 1000) + _NUCLEAR_RESET_OFFSET_MS
+
+                if self._redis_backend is not None:
+                    # Redis: advance atomically to floor (Redis Lua max semantics).
+                    try:
+                        self._redis_backend.advance_to(floor)
+                        new_nonce = self._redis_backend.get_last()
+                    except Exception as _re:
+                        _logger.debug("RedisNonceBackend: nuclear advance error (%s)", _re)
+                        new_nonce = floor
                     self._last_nonce = new_nonce
-                    self._persist()
+                elif _NONCE_MODE == "timestamp":
+                    # Timestamp mode: just advance in-memory; no file write needed.
+                    new_nonce = max(floor, self._last_nonce + 1)
+                    self._last_nonce = new_nonce
+                else:
+                    with _CrossProcessLock(_LOCK_FILE):
+                        # Read the file so the nuclear nonce beats the highest value
+                        # written by any other concurrently-running process.
+                        # If the read fails (returns 0) fall back safely to the
+                        # in-memory value via the max() below.
+                        file_nonce = self._read_state_file_raw()
+                        if file_nonce == 0 and self._last_nonce > 0:
+                            _logger.warning(
+                                "KrakenNonceManager: nuclear reset — state file unreadable; "
+                                "using in-memory high-water mark (%d)",
+                                self._last_nonce,
+                            )
+                        high_water = max(file_nonce, self._last_nonce)
+                        # Always increase — never decrease a runaway nonce
+                        new_nonce = max(floor, high_water + 1)
+                        self._last_nonce = new_nonce
+                        self._persist()
+
+                _logger.error(
+                    "🚨 KrakenNonceManager: NUCLEAR RESET after %d consecutive errors — "
+                    "nonce → +30 min floor (%d → %d) and pausing trading for %.0f s",
+                    self._error_count, self._last_nonce - _NUCLEAR_RESET_OFFSET_MS,
+                    new_nonce, _TRADING_PAUSE_S,
+                )
                 self._trading_paused_until = time.time() + _TRADING_PAUSE_S
                 self._error_count = 0   # reset so escalation can start fresh
 
@@ -890,7 +1170,13 @@ class KrakenNonceManager:
             jump = self._backoff_ms(self._error_count)
             if jump > 0:
                 self._last_nonce += jump
-                self._persist()
+                if self._redis_backend is not None:
+                    try:
+                        self._redis_backend.advance_to(self._last_nonce)
+                    except Exception as _re:
+                        _logger.debug("RedisNonceBackend: backoff advance error (%s)", _re)
+                elif _NONCE_MODE != "timestamp":
+                    self._persist()
                 _logger.warning(
                     "KrakenNonceManager: nonce error #%d — jumped +%d ms  nonce=%d",
                     self._error_count, jump, self._last_nonce,
@@ -1081,22 +1367,89 @@ class KrakenNonceManager:
         Non-blocking check: return ``True`` if another bot process appears to
         hold the cross-process nonce lock right now.
 
-        Uses ``fcntl.LOCK_NB`` (non-blocking) to try acquiring the exclusive
-        lock.  If the attempt fails with ``BlockingIOError`` another process
-        is holding it.  Always returns ``False`` on platforms without fcntl.
+        Checks ``_LOCK_FILE`` (the brief per-nonce-operation lock) using
+        ``fcntl.LOCK_NB``.  For a more reliable check that is not limited to
+        the instant a nonce is being issued, see ``_try_acquire_pid_lock()``
+        which checks ``_PID_LOCK_FILE`` (the process-lifetime lock).
+        Always returns ``False`` on platforms without fcntl.
         """
         if not _FCNTL_AVAILABLE:
             return False
         try:
-            with open(_LOCK_FILE, "w") as fh:
+            # Use append mode — never truncate a file that an active process
+            # may have open as a lock target.
+            with open(_LOCK_FILE, "a") as fh:
                 try:
                     _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
                     _fcntl.flock(fh, _fcntl.LOCK_UN)
-                    return False   # lock was free — no other process
+                    return False   # lock was free — no other process doing a nonce op
                 except (BlockingIOError, OSError):
-                    return True    # lock is held by another process
+                    return True    # lock is held by another process right now
         except Exception:
             return False
+
+    def _try_acquire_pid_lock(self) -> object:
+        """
+        Acquire an exclusive process-lifetime lock on ``_PID_LOCK_FILE``.
+
+        The returned file handle is kept open on ``self._pid_lock_fh`` for the
+        ENTIRE bot session.  The OS automatically releases the lock when the
+        process exits (even via SIGKILL / OOM-kill), so there is no risk of a
+        permanently-stuck lock file after a crash.
+
+        If another process already holds the lock:
+          • Logs a **CRITICAL** message with actionable instructions.
+          • Returns ``None`` (startup continues with degraded duplicate-process
+            detection — the per-operation ``_CrossProcessLock`` still prevents
+            duplicate nonces at the increment level).
+
+        Returns ``None`` on platforms without ``fcntl`` (e.g. Windows) or when
+        the lock file cannot be opened (permission error, missing directory).
+        """
+        if not _FCNTL_AVAILABLE:
+            return None
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(_PID_LOCK_FILE)), exist_ok=True)
+            # Append mode: does not truncate an existing PID file from a dead
+            # process, and does not interfere with another process's open fd.
+            fh = open(_PID_LOCK_FILE, "a")
+            try:
+                _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except (BlockingIOError, OSError):
+                # Another process holds the lock.
+                fh.close()
+                _logger.critical(
+                    "🚨🚨 DUPLICATE BOT PROCESS DETECTED — another NIJA instance "
+                    "already holds the process-lifetime nonce lock (%s). "
+                    "TWO processes sharing the same Kraken API key WILL cause "
+                    "persistent 'EAPI:Invalid nonce' errors on ALL accounts. "
+                    "STOP the other process immediately:\n"
+                    "  • Railway: stop/delete the duplicate service or deployment\n"
+                    "  • Docker:  docker ps -a  →  docker stop <container_id>\n"
+                    "  • systemd: systemctl stop nija  (check for multiple units)\n"
+                    "  • Manual:  ps aux | grep bot.py  →  kill <pid>\n"
+                    "After stopping the duplicate, restart this instance.",
+                    _PID_LOCK_FILE,
+                )
+                return None
+            # Write PID for diagnostics (truncate after acquiring the lock so
+            # there is no race between open and write).
+            fh.truncate(0)
+            fh.seek(0)
+            fh.write(f"{os.getpid()}\n")
+            fh.flush()
+            _logger.debug(
+                "KrakenNonceManager: process-lifetime PID lock acquired "
+                "(pid=%d, file=%s)", os.getpid(), _PID_LOCK_FILE,
+            )
+            return fh
+        except Exception as exc:
+            _logger.debug(
+                "KrakenNonceManager: PID lock unavailable (%s) — "
+                "duplicate-process detection degraded to per-op lock check",
+                exc,
+            )
+            return None
 
     # ── Private helpers ───────────────────────────────────────────────────
 
@@ -1163,10 +1516,16 @@ class KrakenNonceManager:
     def _persist(self) -> None:
         """Atomically write nonce to disk (write-then-rename, mode 0600).
 
+        No-op in Redis mode (Redis is the authoritative store) or in timestamp
+        mode (no state-file dependency).
+
         Uses an exclusive advisory lock (fcntl.LOCK_EX) on the .tmp file so
         that two processes can never interleave their writes — even if the
         process lock in bot.py is bypassed.
         """
+        # Skip file I/O when an alternative backend owns the nonce state.
+        if self._redis_backend is not None or _NONCE_MODE == "timestamp":
+            return
         try:
             tmp = _STATE_FILE + ".tmp"
             with open(tmp, "w") as fh:
@@ -1284,6 +1643,38 @@ def is_nonce_trading_paused() -> bool:
     return _nonce_manager.is_paused()
 
 
+def get_nonce_backend_info() -> dict:
+    """
+    Return a diagnostics dict describing the active nonce backend and mode.
+
+    Useful for health-check endpoints and operator dashboards::
+
+        {
+            "backend":          "file" | "redis" | "timestamp",
+            "pid_lock_held":    True | False,
+            "pid_lock_file":    "/…/kraken_nonce.state.pid",
+            "state_file":       "/…/kraken_nonce.state",
+            "redis_url":        "redis://…" | None,
+            "redis_key":        "nija:kraken:nonce" | None,
+        }
+    """
+    mgr = _nonce_manager
+    if mgr._redis_backend is not None:
+        backend = "redis"
+    elif _NONCE_MODE == "timestamp":
+        backend = "timestamp"
+    else:
+        backend = "file"
+    return {
+        "backend":        backend,
+        "pid_lock_held":  mgr._pid_lock_fh is not None,
+        "pid_lock_file":  _PID_LOCK_FILE,
+        "state_file":     _STATE_FILE,
+        "redis_url":      _REDIS_URL if backend == "redis" else None,
+        "redis_key":      _REDIS_NONCE_KEY if backend == "redis" else None,
+    }
+
+
 def get_nonce_pause_remaining() -> float:
     """Return seconds remaining in the nonce-triggered trading pause (0.0 when clear)."""
     return _nonce_manager.get_pause_remaining()
@@ -1294,11 +1685,13 @@ __all__ = [
     "NonceManager",
     "GlobalKrakenNonceManager",
     "AdaptiveNonceOffsetEngine",
+    "_RedisNonceBackend",
     "get_kraken_api_lock",
     "get_kraken_nonce",
     "get_global_kraken_nonce",
     "get_global_nonce_manager",
     "get_global_nonce_stats",
+    "get_nonce_backend_info",
     "get_adaptive_offset_engine",
     "record_kraken_nonce_error",
     "record_kraken_nonce_success",
