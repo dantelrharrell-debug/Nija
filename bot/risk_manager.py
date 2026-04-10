@@ -1413,26 +1413,26 @@ class AdaptiveRiskManager:
                 tp1_floor = entry_price * (1 + atr_floor_pct)
                 tp2_floor = entry_price * (1 + atr_floor_pct * 1.5)
                 tp3_floor = entry_price * (1 + atr_floor_pct * 2.0)
-                if tp1 < tp1_floor:
-                    logger.debug(
-                        "🎯 ATR TP floor applied: TP1 %.6f → %.6f (atr_pct=%.4f × %.1f)",
-                        tp1, tp1_floor, atr_pct, TP_ATR_MULTIPLIER,
-                    )
-                    tp1 = max(tp1, tp1_floor)
-                tp2 = max(tp2, tp2_floor)
-                tp3 = max(tp3, tp3_floor)
+                tp1_new = max(tp1, tp1_floor)
+                tp2_new = max(tp2, tp2_floor)
+                tp3_new = max(tp3, tp3_floor)
             else:  # short
                 tp1_floor = entry_price * (1 - atr_floor_pct)
                 tp2_floor = entry_price * (1 - atr_floor_pct * 1.5)
                 tp3_floor = entry_price * (1 - atr_floor_pct * 2.0)
-                if tp1 > tp1_floor:
-                    logger.debug(
-                        "🎯 ATR TP floor applied (short): TP1 %.6f → %.6f (atr_pct=%.4f × %.1f)",
-                        tp1, tp1_floor, atr_pct, TP_ATR_MULTIPLIER,
-                    )
-                    tp1 = min(tp1, tp1_floor)
-                tp2 = min(tp2, tp2_floor)
-                tp3 = min(tp3, tp3_floor)
+                tp1_new = min(tp1, tp1_floor)
+                tp2_new = min(tp2, tp2_floor)
+                tp3_new = min(tp3, tp3_floor)
+
+            floor_applied = (tp1_new != tp1 or tp2_new != tp2 or tp3_new != tp3)
+            if floor_applied:
+                logger.debug(
+                    "🎯 ATR TP floor (%s): atr_pct=%.4f × %.1f"
+                    " TP1 %.6f→%.6f  TP2 %.6f→%.6f  TP3 %.6f→%.6f",
+                    side, atr_pct, TP_ATR_MULTIPLIER,
+                    tp1, tp1_new, tp2, tp2_new, tp3, tp3_new,
+                )
+            tp1, tp2, tp3 = tp1_new, tp2_new, tp3_new
 
         return {
             'tp1': tp1,
