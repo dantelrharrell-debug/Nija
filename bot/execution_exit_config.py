@@ -227,12 +227,13 @@ _REGIME_PROFILE: Dict[str, StratProfile] = {
     "volatile":             StratProfile.SWING,
 }
 
-# Cooldown seconds per activity band
-# "normal" raised 45→60s to match ENTRY_COOLDOWN_SECONDS=60 target (TUNE 5, Apr 2026)
+# Cooldown seconds per activity band.
+# Reduced normal/low from 60s→30s: small accounts need faster compounding cycles.
+# High-activity (>3 trades/hr) stays at 20s to prevent over-trading.
 _COOLDOWN_TABLE: Dict[str, int] = {
     "high":   20,   # >3 trades/hr
-    "normal": 60,   # 1–3 trades/hr  (was 45)
-    "low":    60,   # <1 trade/hr
+    "normal": 30,   # 1–3 trades/hr  (was 60)
+    "low":    30,   # <1 trade/hr    (was 60)
 }
 
 

@@ -84,7 +84,7 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
 # THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
 # Platform was stuck waiting while users traded on lower-confidence signals.
-MIN_CONFIDENCE = 0.35  # Raised from 0.30 to filter lower-quality signals (Option C — Apr 2026)
+MIN_CONFIDENCE = 0.30  # Reverted from 0.35 (over-tightened Apr 2026) — 0.30 balances quality vs frequency for small-account growth
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Volume gate for entry confirmation in check_long/short_entry.
@@ -1419,9 +1419,10 @@ class NIJAApexStrategyV71:
 
         conditions = {}
 
-        # 1. Pullback to EMA21 or VWAP (TUNED: 1.5% tolerance — more entries than 1.0%, less than emergency 2.0%)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.015
-        near_vwap = abs(current_price - vwap) / vwap < 0.015
+        # 1. Pullback to EMA21 or VWAP (TUNED: 2.5% tolerance — small-cap alts
+        #    routinely move 2-3% away from EMA21; 1.5% missed too many valid setups)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.025
+        near_vwap = abs(current_price - vwap) / vwap < 0.025
         conditions['pullback'] = near_ema21 or near_vwap
 
         # 2. RSI bullish pullback (ADAPTIVE MAX ALPHA UPGRADE)
@@ -1551,9 +1552,10 @@ class NIJAApexStrategyV71:
 
         conditions = {}
 
-        # 1. Pullback to EMA21 or VWAP (TUNED: 1.5% tolerance — more entries than 1.0%, less than emergency 2.0%)
-        near_ema21 = abs(current_price - ema21) / ema21 < 0.015
-        near_vwap = abs(current_price - vwap) / vwap < 0.015
+        # 1. Pullback to EMA21 or VWAP (TUNED: 2.5% tolerance — small-cap alts
+        #    routinely move 2-3% away from EMA21; 1.5% missed too many valid setups)
+        near_ema21 = abs(current_price - ema21) / ema21 < 0.025
+        near_vwap = abs(current_price - vwap) / vwap < 0.025
         conditions['pullback'] = near_ema21 or near_vwap
 
         # 2. RSI bearish pullback (ADAPTIVE MAX ALPHA UPGRADE)

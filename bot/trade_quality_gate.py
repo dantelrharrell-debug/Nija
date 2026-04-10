@@ -38,7 +38,10 @@ def measure_momentum_strength(price_data: pd.DataFrame) -> Dict[str, Any]:
     avg_range = (price_data['high'].iloc[-20:] - price_data['low'].iloc[-20:]).mean()
     range_ratio = recent_range / avg_range if avg_range > 0 else 0
     
-    is_strong = vol_ratio >= 1.25 or range_ratio >= 1.15
+    # Lowered from 1.25/1.15 — requiring a 25% volume surge or 15% range expansion
+    # blocked 50-70% of valid candles in sideways crypto markets.  0.80 still
+    # filters truly dead candles while keeping normal-activity entries live.
+    is_strong = vol_ratio >= 0.80 or range_ratio >= 0.80
     
     return {
         'strong': is_strong,

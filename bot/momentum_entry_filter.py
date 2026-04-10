@@ -52,8 +52,8 @@ def _ef(name: str, default: float) -> float:
         return default
 
 
-_RSI_BULL_THRESHOLD: float    = _ef("MOMENTUM_RSI_BULL", 55.0)
-_RSI_BEAR_THRESHOLD: float    = _ef("MOMENTUM_RSI_BEAR", 45.0)
+_RSI_BULL_THRESHOLD: float    = _ef("MOMENTUM_RSI_BULL", 52.0)
+_RSI_BEAR_THRESHOLD: float    = _ef("MOMENTUM_RSI_BEAR", 48.0)
 _VOL_WINDOW: int              = int(_ef("MOMENTUM_VOLUME_WINDOW", 10))
 _STRUCT_WINDOW: int           = int(_ef("MOMENTUM_STRUCT_WINDOW", 10))
 _BREAKOUT_WINDOW: int         = int(_ef("BREAKOUT_WINDOW", 20))
