@@ -1173,6 +1173,28 @@ class KrakenNonceManager:
         """
         return getattr(self, "_deep_reset_active", False)
 
+    def activate_deep_reset(self) -> None:
+        """
+        Enable deep-probe mode at runtime without a restart.
+
+        This is the public equivalent of setting ``NIJA_DEEP_NONCE_RESET=1``
+        at startup.  Once activated:
+
+          * ``probe_and_resync()`` uses a 10-min step and up to 12 attempts
+            (120-min total coverage) rather than the default 5-min / 60-min.
+
+        Typically called by the self-healing startup sequence when nonce
+        poison detection indicates the nonce is 30–120 min ahead of wall-clock.
+        Calling this more than once is harmless (idempotent).
+        """
+        if not getattr(self, "_deep_reset_active", False):
+            self._deep_reset_active = True
+            _logger.warning(
+                "KrakenNonceManager.activate_deep_reset: deep-probe mode activated "
+                "(12×10 min = 120 min probe coverage). "
+                "probe_and_resync() will use extended steps on the next connect()."
+            )
+
     # ── Error / success tracking ──────────────────────────────────────────
 
     def record_error(self) -> None:
