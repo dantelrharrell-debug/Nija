@@ -87,12 +87,12 @@ class TradeQualityGate:
     Quality gate for filtering trades based on profitability potential.
     
     Unlike standard validators, this uses a scoring approach:
-    - Minimum reward/risk ratio: 1.5 (configurable to 2.0)
+    - Minimum reward/risk ratio: 1.2 (configurable to 2.0)
     - Momentum strength check
     - Stop placement quality score
     """
     
-    def __init__(self, min_reward_risk: float = 1.5, require_momentum: bool = True):
+    def __init__(self, min_reward_risk: float = 1.2, require_momentum: bool = True):
         self.min_reward_risk = min_reward_risk
         self.require_momentum = require_momentum
         logger.info(f"✅ Trade Quality Gate active (min R:R = {min_reward_risk})")

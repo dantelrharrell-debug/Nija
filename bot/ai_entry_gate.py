@@ -120,19 +120,20 @@ class GateResult:
 # Lowered ~20% across all regimes (Apr 2026) to increase trade frequency.
 # Further relaxed ranging/mean_reversion/volatile/weak_trend (Apr 2026) to
 # allow more entries during sideways and moderate-volatility market conditions.
+# Slightly reduced again (Option A, Apr 2026) to increase signal sensitivity.
 _SCORE_THRESHOLDS: Dict[str, float] = {
-    "strong_trend":         14.0,   # trend gives edge → relax (was 38 → 32 → 25 → 22 → 14)
-    "weak_trend":           14.0,   # default (was 40 → 34 → 27 → 22 → 14)
-    "ranging":              15.0,   # direction hard to call → require better setup (was 45 → 38 → 30 → 24 → 15)
-    "consolidation":        12.0,   # scalp mode → need high frequency (was 35 → 30 → 24 → 20 → 12)
-    "expansion":            14.0,   # breakout → normal bar (was 40 → 34 → 27 → 22 → 14)
-    "mean_reversion":       15.0,   # counter-trend → extra conviction (was 45 → 38 → 30 → 24 → 15)
+    "strong_trend":         12.0,   # trend gives edge → relax (was 38 → 32 → 25 → 22 → 14 → 12)
+    "weak_trend":           12.0,   # default (was 40 → 34 → 27 → 22 → 14 → 12)
+    "ranging":              13.0,   # direction hard to call → require better setup (was 45 → 38 → 30 → 24 → 15 → 13)
+    "consolidation":        10.0,   # scalp mode → need high frequency (was 35 → 30 → 24 → 20 → 12 → 10)
+    "expansion":            12.0,   # breakout → normal bar (was 40 → 34 → 27 → 22 → 14 → 12)
+    "mean_reversion":       13.0,   # counter-trend → extra conviction (was 45 → 38 → 30 → 24 → 15 → 13)
     "volatility_explosion": 65.0,   # crisis → near-perfect setups only (unchanged — crisis protection preserved)
     # Legacy 3-regime fallbacks
-    "trending":             14.0,   # was 38 → 32 → 25 → 22 → 14
-    "volatile":             22.0,   # was 55 → 47 → 38 → 32 → 22
+    "trending":             12.0,   # was 38 → 32 → 25 → 22 → 14 → 12
+    "volatile":             20.0,   # was 55 → 47 → 38 → 32 → 22 → 20
 }
-_DEFAULT_SCORE_THRESHOLD = 14.0   # was 40.0 → 34.0 → 27.0 → 22.0 → 14.0
+_DEFAULT_SCORE_THRESHOLD = 12.0   # was 40.0 → 34.0 → 27.0 → 22.0 → 14.0 → 12.0
 
 # ── Gate 2: Volume multiplier ────────────────────────────────────────────────
 # Current volume must be >= this × 20-bar average.
@@ -191,12 +192,12 @@ _GATE_WEIGHTS: Dict[str, int] = {
 }
 _GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 9
 
-# Mutable base threshold — lowered to 2.0 to maximize confirmation trades in
-# current market conditions.  Any gate combination scoring ≥ 2.0 pts passes
+# Mutable base threshold — lowered to 1.6 to maximize confirmation trades in
+# current market conditions.  Any gate combination scoring ≥ 1.6 pts passes
 # (Gate 2+3 = 2+1 = 3 pts → PASS; Gate 1 alone = 3 pts → PASS; Gate 3+4 = 2 pts → PASS).
 # Restored to 5.0 once the account balance reaches TARGET_BALANCE ($100)
 # via ``set_gate_pass_threshold`` / ``TradeFrequencyController.check_balance_and_adjust_threshold``.
-BASE_ENTRY_SCORE_THRESHOLD: float = 2.0  # out of 9 — lowered 2.6 → 2.0 for confirmation-trade mode
+BASE_ENTRY_SCORE_THRESHOLD: float = 1.6  # out of 9 — lowered 2.6 → 2.0 → 1.6 for confirmation-trade mode
 
 # ── ATR-based volatility dampening constants ─────────────────────────────────
 # When the market is actively moving the gate pass-threshold is relaxed
