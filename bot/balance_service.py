@@ -22,6 +22,7 @@ All other code::
 """
 
 import logging
+import os
 import time
 from typing import Any, Callable, Dict
 
@@ -40,7 +41,7 @@ class BalanceService:
     _cache_detailed: Dict[str, dict] = {}   # full detail dict per broker key
     _last_update: Dict[str, float] = {}     # unix timestamp of last successful refresh
     _refreshing: Dict[str, bool] = {}       # in-flight guard per broker key
-    _ttl: float = 30                        # seconds — ignore refresh requests inside TTL
+    _ttl: float = float(os.environ.get("NIJA_BALANCE_TTL_S", "30"))  # override via env
 
     # ------------------------------------------------------------------
     # Read API — never calls the exchange
@@ -115,8 +116,11 @@ class BalanceService:
                 cls._last_update[broker_key] = now
                 logger.info("[BalanceService] %s → $%.2f", broker_key, scalar)
             else:
+                # Still update the timestamp so the TTL gate prevents immediate retry
+                # storms when the exchange legitimately returns $0 (e.g. unfunded account).
+                cls._last_update[broker_key] = now
                 logger.warning(
-                    "[BalanceService] %s: fetch returned $0 — retaining cached $%.2f",
+                    "[BalanceService] %s: fetch returned $0 — retaining cached $%.2f (TTL reset)",
                     broker_key, cls._cache.get(broker_key, 0.0),
                 )
 

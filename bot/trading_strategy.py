@@ -6576,8 +6576,8 @@ class TradingStrategy:
         # so by the time this method runs the cache is always populated.
         try:
             balance = BalanceService.get(_broker_key(broker))
+            # Fall back to broker's own last-known value if BalanceService not yet populated.
             if balance <= 0.0:
-                # BalanceService not yet populated — fall back to broker's last known value.
                 balance = float(getattr(broker, "_last_known_balance", None) or 0.0)
 
             broker_type = broker.broker_type if hasattr(broker, "broker_type") else None
@@ -8329,6 +8329,12 @@ class TradingStrategy:
                     d = active_broker.get_account_balance_detailed(verbose=True)
                     if d and not d.get("error"):
                         return d
+                    if d and d.get("error"):
+                        logger.warning(
+                            "⚠️  get_account_balance_detailed returned error (%s) — "
+                            "falling back to get_account_balance()",
+                            d.get("error"),
+                        )
                 return active_broker.get_account_balance(verbose=True)
 
             account_balance = BalanceService.refresh(_bs_key, _orchestrator_fetch)
