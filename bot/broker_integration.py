@@ -445,17 +445,55 @@ class CoinbaseBrokerAdapter(BrokerInterface):
     # ------------------------------------------------------------------
 
     def connect(self) -> bool:
-        """Connect to Coinbase Advanced Trade API via CoinbaseBroker."""
+        """Connect to Coinbase Advanced Trade API via CoinbaseBroker.
+
+        Uses the singleton from the global platform-broker registry when
+        available so that no second CoinbaseBroker instance is created.  Falls
+        back to constructing a new instance (and writing it into the registry
+        via ``register_platform_broker()``) for standalone processes such as
+        the webhook server that start without the main TradingStrategy startup
+        path.
+        """
         try:
             try:
-                from bot.broker_manager import CoinbaseBroker
+                from bot.broker_manager import CoinbaseBroker, get_platform_broker, register_platform_broker
             except ImportError:
-                from broker_manager import CoinbaseBroker
+                from broker_manager import CoinbaseBroker, get_platform_broker, register_platform_broker
 
-            logger.info("Connecting to Coinbase Advanced Trade API...")
+            # ── Fast path: reuse existing connected singleton ─────────────────
+            existing = get_platform_broker("coinbase")
+            if existing is not None and getattr(existing, "connected", False):
+                self._broker = existing
+                logger.info("✅ CoinbaseBrokerAdapter: reusing existing Coinbase singleton from registry")
+                return True
+
+            # ── Delegate to MABM when available ──────────────────────────────
+            try:
+                try:
+                    from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm
+                except ImportError:
+                    from multi_account_broker_manager import multi_account_broker_manager as _mabm
+                results = _mabm.initialize_platform_brokers()
+                cb_result = results.get("coinbase", {})
+                broker = cb_result.get("broker")
+                if broker is not None and cb_result.get("connected"):
+                    self._broker = broker
+                    logger.info("✅ CoinbaseBrokerAdapter connected via MABM")
+                    return True
+                if broker is not None:
+                    # MABM registered but connection failed — surface the failure.
+                    logger.error("❌ CoinbaseBroker.connect() returned False (via MABM)")
+                    return False
+            except Exception as mabm_exc:
+                logger.debug("CoinbaseBrokerAdapter: MABM delegation failed (%s) — using direct path", mabm_exc)
+
+            # ── Fallback: construct + connect + register via public API ───────
+            logger.info("Connecting to Coinbase Advanced Trade API (direct path)…")
             broker = CoinbaseBroker()
             if broker.connect():
                 self._broker = broker
+                # Register in global registry so other modules can reuse this instance.
+                register_platform_broker("coinbase", broker, connected=True)
                 logger.info("✅ CoinbaseBrokerAdapter connected successfully")
                 return True
             else:

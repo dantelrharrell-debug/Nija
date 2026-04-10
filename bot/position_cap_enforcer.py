@@ -30,10 +30,11 @@ UNSELLABLE_DECAY_HOURS = 12.0
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 try:
-    from broker_manager import CoinbaseBroker
+    from broker_manager import CoinbaseBroker, get_platform_broker
 except ImportError:
     logger.error("Failed to import broker_manager")
     CoinbaseBroker = None
+    get_platform_broker = None
 
 try:
     from dust_blacklist import get_dust_blacklist, DUST_THRESHOLD_USD as BLACKLIST_THRESHOLD
@@ -71,7 +72,23 @@ class PositionCapEnforcer:
             broker: CoinbaseBroker instance (created if None)
         """
         self.max_positions = max_positions
-        self.broker = broker or CoinbaseBroker()
+
+        # Resolve broker: prefer injected instance → registry singleton → error.
+        # Never silently construct a new CoinbaseBroker; that would bypass the
+        # global platform-broker registry and create a duplicate connection.
+        if broker is not None:
+            self.broker = broker
+        elif get_platform_broker is not None:
+            self.broker = get_platform_broker("coinbase")
+        else:
+            self.broker = None
+
+        if self.broker is None:
+            raise RuntimeError(
+                "PositionCapEnforcer requires a broker instance.  Either pass one "
+                "explicitly or ensure multi_account_broker_manager.initialize_platform_brokers() "
+                "has been called before constructing PositionCapEnforcer."
+            )
 
         # Track positions that cannot be sold (below min size, API errors, etc.)
         # Maps symbol -> Unix timestamp when it was first marked unsellable.
@@ -155,8 +172,8 @@ class PositionCapEnforcer:
             logger.info(f"🔄 {sym}: unsellable retry window expired — will attempt sell again")
 
         try:
-            if not self.broker.connect():
-                logger.error("Failed to connect to broker")
+            if not getattr(self.broker, "connected", False):
+                logger.warning("PositionCapEnforcer: broker not connected — skipping position fetch")
                 return []
 
             # Use broker's get_positions() method which works for all brokers

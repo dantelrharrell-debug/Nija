@@ -1059,13 +1059,21 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         strategy.broker = _candidate
                         _broker_ok = True
                     else:
-                        # No connected broker — attempt reconnect on all registered brokers
+                        # No connected broker — attempt reconnect via MABM state machine
+                        # (routes through try_reconnect_platform_broker to keep _platform_state
+                        # consistent and avoid bypassing the broker graph model).
+                        _mabm = getattr(strategy, 'multi_account_manager', None)
                         for _bt, _b in list(getattr(_bm, 'brokers', {}).items()):
                             if _b is None:
                                 continue
                             try:
-                                _b.connect()
-                                if getattr(_b, 'connected', False):
+                                # Prefer MABM reconnect path for platform brokers
+                                if _mabm is not None and hasattr(_mabm, 'try_reconnect_platform_broker'):
+                                    _ok = _mabm.try_reconnect_platform_broker(_bt)
+                                else:
+                                    _b.connect()
+                                    _ok = getattr(_b, 'connected', False)
+                                if _ok:
                                     strategy.broker = _b
                                     _bm.active_broker = _b
                                     if (hasattr(strategy, 'apex') and strategy.apex

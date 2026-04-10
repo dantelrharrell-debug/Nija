@@ -418,30 +418,27 @@ def main():
     # Initialize broker manager
     broker_manager = BrokerManager()
 
-    # Add Coinbase (primary for crypto)
-    coinbase = CoinbaseBroker()
-    if coinbase.connect():
-        broker_manager.add_broker(coinbase)
+    # ── Broker initialisation: delegate to MABM (broker graph model) ─────────
+    # All platform broker instances are owned by MultiAccountBrokerManager.
+    # This standalone script uses initialize_platform_brokers() so it reuses
+    # the singleton and respects the global registry guard.
+    try:
+        try:
+            from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm
+        except ImportError:
+            from multi_account_broker_manager import multi_account_broker_manager as _mabm
 
-    # Optional: Add Binance for crypto
-    # binance = BinanceBroker()
-    # if binance.connect():
-    #     broker_manager.add_broker(binance)
-
-    # Optional: Add Kraken Pro for crypto
-    # kraken = KrakenBroker()
-    # if kraken.connect():
-    #     broker_manager.add_broker(kraken)
-
-    # Optional: Add OKX for crypto
-    # okx = OKXBroker()
-    # if okx.connect():
-    #     broker_manager.add_broker(okx)
-
-    # Optional: Add Alpaca for stocks
-    # alpaca = AlpacaBroker()
-    # if alpaca.connect():
-    #     broker_manager.add_broker(alpaca)
+        broker_results = _mabm.initialize_platform_brokers()
+        for key, info in broker_results.items():
+            if info.get("connected") and info.get("broker"):
+                broker_manager.add_broker(info["broker"])
+    except Exception as _init_err:
+        print(f"⚠️  Could not initialise platform brokers via MABM: {_init_err}")
+        print("   Falling back to direct Coinbase connection…")
+        # Fallback: direct connect (standalone use only — not on the main trading path)
+        _cb = CoinbaseBroker()
+        if _cb.connect():
+            broker_manager.add_broker(_cb)
 
     # Check if we have any connected brokers
     connected = broker_manager.get_connected_brokers()

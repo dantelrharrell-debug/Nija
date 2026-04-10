@@ -3983,61 +3983,48 @@ class TradingStrategy:
             time.sleep(startup_delay)
             logger.info("✅ Startup delay complete, beginning broker connections...")
 
-            # Try to connect Kraken Pro (PRIMARY BROKER) - PLATFORM ACCOUNT
-            logger.info("📊 Attempting to connect Kraken Pro (PLATFORM - PRIMARY)...")
-            kraken = None  # Initialize to ensure variable exists for exception handler
-            try:
-                kraken = KrakenBroker(account_type=AccountType.PLATFORM)
-                # Signal CONNECTING state *before* connect() so any concurrent thread
-                # calling wait_for_platform_ready() waits on the correct Event object.
-                self.multi_account_manager.begin_platform_connection(BrokerType.KRAKEN)
-                connection_successful = kraken.connect()
+            # ── Platform broker initialisation ───────────────────────────────
+            # multi_account_manager is the SOLE initializer: it owns create +
+            # connect + register for every platform broker.  TradingStrategy
+            # is a consumer that does strategy-level post-processing only.
+            broker_results = self.multi_account_manager.initialize_platform_brokers()
 
-                # CRITICAL FIX (Jan 17, 2026): Allow Kraken to start even if connection test fails
-                # This prevents a single connection failure from permanently disabling Kraken trading
-                # The trading loop will retry connections in the background and self-heal
-                # This is similar to how other brokers handle transient connection issues
-                if connection_successful:
+            # ── Post-processing: strategy-level wiring ────────────────────────
+            # For each broker returned by initialize_platform_brokers() we:
+            #   1. Wire the legacy BrokerManager (backward compat).
+            #   2. Set up strategy-specific helpers (order cleanup, etc.).
+            #   3. For Kraken failures, register in failed_brokers for retry.
+
+            kraken = broker_results.get("kraken", {}).get("broker")
+            coinbase = broker_results.get("coinbase", {}).get("broker")
+
+            # Kraken post-processing
+            kraken_result = broker_results.get("kraken", {})
+            if kraken is not None:
+                if kraken_result.get("connected"):
                     self.broker_manager.add_broker(kraken)
-                    # Register in multi_account_manager using proper method to enforce invariant
-                    self.multi_account_manager.register_platform_broker_instance(BrokerType.KRAKEN, kraken)
                     connected_brokers.append("Kraken")
-                    logger.info("   ✅ Kraken PLATFORM connected")
-                    logger.info("   ✅ Kraken registered as PLATFORM broker in multi-account manager")
-                    logger.debug(f"   🔍 Kraken broker object: connected={kraken.connected}, account_type={kraken.account_type}")
-                    logger.debug(f"   🔍 BrokerType.KRAKEN enum value: {BrokerType.KRAKEN}, type: {type(BrokerType.KRAKEN)}")
-                    logger.debug(f"   🔍 platform_brokers dict keys: {list(self.multi_account_manager.platform_brokers.keys())}")
-                    logger.debug(f"   🔍 BrokerType.KRAKEN in platform_brokers: {BrokerType.KRAKEN in self.multi_account_manager.platform_brokers}")
 
                     # LEGACY COPY TRADING CHECK (DEPRECATED - Feb 3, 2026)
-                    # NOTE: Copy trading is deprecated. NIJA now uses independent trading.
-                    # All accounts (platform + users) trade independently using the same strategy.
-                    # This check is kept for backward compatibility but is expected to fail.
                     try:
                         from bot.kraken_copy_trading import (
                             initialize_copy_trading_system,
                             wrap_kraken_broker_for_copy_trading
                         )
-
-                        # Initialize copy trading system (master + users)
                         if initialize_copy_trading_system():
-                            # Wrap the broker to enable automatic copy trading
                             wrap_kraken_broker_for_copy_trading(kraken)
                             logger.info("   ✅ Kraken copy trading system activated")
-                            # Notify multi_account_manager that Kraken users are handled by copy trading
                             self.multi_account_manager.kraken_copy_trading_active = True
                         else:
                             logger.info("   ℹ️  Copy trading not initialized - using independent trading mode")
                     except ImportError:
-                        # Expected: Copy trading is deprecated, using independent trading
                         logger.info("   ℹ️  Copy trading not available - all accounts use independent trading")
                     except Exception as copy_err:
                         logger.error(f"   ❌ Unexpected error in copy trading check: {copy_err}")
-                        import traceback
-                        logger.error(traceback.format_exc())
+                        import traceback as _tb
+                        logger.error(_tb.format_exc())
 
-                    # KRAKEN ORDER CLEANUP: Initialize automatic stale order cleanup
-                    # This frees up capital tied in unfilled limit orders
+                    # KRAKEN ORDER CLEANUP
                     try:
                         from bot.kraken_order_cleanup import create_kraken_cleanup
                         self.kraken_cleanup = create_kraken_cleanup(
@@ -4058,150 +4045,64 @@ class TradingStrategy:
                         logger.error(f"   ❌ Kraken order cleanup setup error: {cleanup_err}")
                         self.kraken_cleanup = None
                 else:
-                    # Connection test failed, but still register broker for background retry
-                    # The trading loop will handle the disconnected state and retry automatically
+                    # Connection failed — register for retry via legacy helper.
+                    # MABM already registered the broker for the reconnect loop;
+                    # the helper only adds to failed_brokers + broker_manager.
                     logger.warning("   ⚠️  Kraken PLATFORM connection test failed, will retry in background")
                     logger.warning("   📌 Kraken broker initialized - trading loop will attempt reconnection")
                     self._log_broker_independence_message()
-
-                    # Use helper method to register for retry
                     self._register_kraken_for_retry(kraken)
-
-                    # PLATFORM-FIRST RULE: signal that platform failed so
-                    # connect_users_from_config() will block user accounts.
-                    try:
-                        self.multi_account_manager.mark_platform_failed(BrokerType.KRAKEN)
-                    except Exception:
-                        pass
-
-            except Exception as e:
-                # CRITICAL FIX (Jan 17, 2026): Handle exceptions consistently with connection failures
-                # Even if broker initialization throws an exception, register it for retry if possible
-                # This maintains consistent self-healing behavior across all failure types
-                if kraken is not None:
-                    logger.warning(f"   ⚠️  Kraken PLATFORM initialization error: {e}")
-                    logger.warning("   📌 Kraken broker will be registered for background retry")
-                    self._log_broker_independence_message()
-
-                    # Use helper method to register for retry
-                    self._register_kraken_for_retry(kraken)
-
-                    # PLATFORM-FIRST RULE: signal that platform failed so
-                    # connect_users_from_config() will block user accounts.
-                    try:
-                        self.multi_account_manager.mark_platform_failed(BrokerType.KRAKEN)
-                    except Exception:
-                        pass
-                else:
-                    # Broker object was never created - can't retry
-                    logger.error(f"   ❌ Kraken PLATFORM initialization failed: {e}")
-                    logger.error("   ❌ Kraken will not be available for trading")
-                    self._log_broker_independence_message()
-
-                    # PLATFORM-FIRST RULE: even with no broker object, record the failure
-                    try:
-                        self.multi_account_manager.mark_platform_failed(BrokerType.KRAKEN)
-                    except Exception:
-                        pass
-
-            # Add delay between broker connections
-            time.sleep(2.0)  # Increased from 0.5s to 2.0s
-
-            # Try to connect Coinbase - PLATFORM ACCOUNT
-            # Set NIJA_DISABLE_COINBASE=true to skip Coinbase startup (faster boot, cleaner logs)
-            if os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in ("1", "true", "yes"):
-                logger.info("⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=true)")
             else:
-                logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)...")
+                logger.error("   ❌ Kraken PLATFORM initialization failed: broker object not created")
+                self._log_broker_independence_message()
+
+            # Coinbase post-processing
+            coinbase_result = broker_results.get("coinbase", {})
+            if coinbase is not None and coinbase_result.get("connected"):
+                self.broker_manager.add_broker(coinbase)
+                connected_brokers.append("Coinbase")
+
+                # COINBASE ORDER CLEANUP
                 try:
-                    coinbase = CoinbaseBroker()
-                    if coinbase.connect():
-                        self.broker_manager.add_broker(coinbase)
-                        # Register in multi_account_manager using proper method to enforce invariant
-                        self.multi_account_manager.register_platform_broker_instance(BrokerType.COINBASE, coinbase)
-                        connected_brokers.append("Coinbase")
-                        logger.info("   ✅ Coinbase MASTER connected")
-                        logger.info("   ✅ Coinbase registered as PLATFORM broker in multi-account manager")
-
-                        # COINBASE ORDER CLEANUP: Initialize automatic stale order cleanup
-                        # This frees up capital tied in unfilled orders on Coinbase
-                        try:
-                            from bot.coinbase_order_cleanup import create_coinbase_cleanup
-                            self.coinbase_cleanup = create_coinbase_cleanup(
-                                coinbase, max_order_age_minutes=STALE_ORDER_MAX_AGE_MINUTES
-                            )
-                            if self.coinbase_cleanup:
-                                logger.info(
-                                    f"   ✅ Coinbase order cleanup initialized "
-                                    f"(max age: {STALE_ORDER_MAX_AGE_MINUTES} minutes)"
-                                )
-                            else:
-                                logger.warning("   ⚠️  Coinbase order cleanup not available")
-                                self.coinbase_cleanup = None
-                        except ImportError as import_err:
-                            logger.warning(f"   ⚠️  Coinbase order cleanup module not available: {import_err}")
-                            self.coinbase_cleanup = None
-                        except Exception as cleanup_err:
-                            logger.error(f"   ❌ Coinbase order cleanup setup error: {cleanup_err}")
-                            self.coinbase_cleanup = None
+                    from bot.coinbase_order_cleanup import create_coinbase_cleanup
+                    self.coinbase_cleanup = create_coinbase_cleanup(
+                        coinbase, max_order_age_minutes=STALE_ORDER_MAX_AGE_MINUTES
+                    )
+                    if self.coinbase_cleanup:
+                        logger.info(
+                            f"   ✅ Coinbase order cleanup initialized "
+                            f"(max age: {STALE_ORDER_MAX_AGE_MINUTES} minutes)"
+                        )
                     else:
-                        logger.warning("   ⚠️  Coinbase MASTER connection failed")
-                except Exception as e:
-                    logger.warning(f"   ⚠️  Coinbase PLATFORM error: {e}")
+                        logger.warning("   ⚠️  Coinbase order cleanup not available")
+                        self.coinbase_cleanup = None
+                except ImportError as import_err:
+                    logger.warning(f"   ⚠️  Coinbase order cleanup module not available: {import_err}")
+                    self.coinbase_cleanup = None
+                except Exception as cleanup_err:
+                    logger.error(f"   ❌ Coinbase order cleanup setup error: {cleanup_err}")
+                    self.coinbase_cleanup = None
 
-            # Try to connect OKX - PLATFORM ACCOUNT
-            logger.info("📊 Attempting to connect OKX (PLATFORM)...")
-            try:
-                okx = OKXBroker()
-                if okx.connect():
-                    self.broker_manager.add_broker(okx)
-                    # Register in multi_account_manager using proper method to enforce invariant
-                    self.multi_account_manager.register_platform_broker_instance(BrokerType.OKX, okx)
-                    connected_brokers.append("OKX")
-                    logger.info("   ✅ OKX PLATFORM connected")
-                    logger.info("   ✅ OKX registered as PLATFORM broker in multi-account manager")
-                else:
-                    logger.warning("   ⚠️  OKX PLATFORM connection failed")
-            except Exception as e:
-                logger.warning(f"   ⚠️  OKX PLATFORM error: {e}")
+            # OKX post-processing
+            okx_result = broker_results.get("okx", {})
+            if okx_result.get("connected") and okx_result.get("broker"):
+                self.broker_manager.add_broker(okx_result["broker"])
+                connected_brokers.append("OKX")
 
-            # Add delay between broker connections
-            time.sleep(0.5)
+            # Binance post-processing
+            binance_result = broker_results.get("binance", {})
+            if binance_result.get("connected") and binance_result.get("broker"):
+                self.broker_manager.add_broker(binance_result["broker"])
+                connected_brokers.append("Binance")
 
-            # Try to connect Binance - PLATFORM ACCOUNT
-            logger.info("📊 Attempting to connect Binance (PLATFORM)...")
-            try:
-                binance = BinanceBroker()
-                if binance.connect():
-                    self.broker_manager.add_broker(binance)
-                    # Register in multi_account_manager using proper method to enforce invariant
-                    self.multi_account_manager.register_platform_broker_instance(BrokerType.BINANCE, binance)
-                    connected_brokers.append("Binance")
-                    logger.info("   ✅ Binance PLATFORM connected")
-                    logger.info("   ✅ Binance registered as PLATFORM broker in multi-account manager")
-                else:
-                    logger.warning("   ⚠️  Binance PLATFORM connection failed")
-            except Exception as e:
-                logger.warning(f"   ⚠️  Binance PLATFORM error: {e}")
+            # Alpaca post-processing
+            alpaca_result = broker_results.get("alpaca", {})
+            if alpaca_result.get("connected") and alpaca_result.get("broker"):
+                self.broker_manager.add_broker(alpaca_result["broker"])
+                connected_brokers.append("Alpaca")
 
-            # Add delay between broker connections
-            time.sleep(0.5)
-
-            # Try to connect Alpaca (for stocks) - PLATFORM ACCOUNT
-            logger.info("📊 Attempting to connect Alpaca (PLATFORM - Paper Trading)...")
-            try:
-                alpaca = AlpacaBroker()
-                if alpaca.connect():
-                    self.broker_manager.add_broker(alpaca)
-                    # Register in multi_account_manager using proper method to enforce invariant
-                    self.multi_account_manager.register_platform_broker_instance(BrokerType.ALPACA, alpaca)
-                    connected_brokers.append("Alpaca")
-                    logger.info("   ✅ Alpaca PLATFORM connected")
-                    logger.info("   ✅ Alpaca registered as PLATFORM broker in multi-account manager")
-                else:
-                    logger.warning("   ⚠️  Alpaca PLATFORM connection failed")
-            except Exception as e:
-                logger.warning(f"   ⚠️  Alpaca PLATFORM error: {e}")
+            logger.info("=" * 70)
+            logger.info("✅ Broker connection phase complete (platform init delegated to multi_account_manager)")
 
             # Add delay before user account connections to ensure platform account
             # connection has completed and nonce ranges are separated
@@ -7365,7 +7266,7 @@ class TradingStrategy:
                 except Exception as _bm_err:
                     logger.warning("Broker recovery attempt failed: %s", _bm_err)
                     active_broker = None
-            # If still disconnected, try to reconnect each broker in the manager
+            # If still disconnected, try to reconnect each broker via MABM state machine
             # before giving up — this is what keeps the bot trading 24/7.
             if not active_broker or not getattr(active_broker, 'connected', False):
                 _reconnected = False
@@ -7378,8 +7279,14 @@ class TradingStrategy:
                                 "🔌 Attempting to reconnect broker %s …",
                                 getattr(_bt, 'value', str(_bt)).upper(),
                             )
-                            _b.connect()
-                            if getattr(_b, 'connected', False):
+                            # Route through MABM to keep _platform_state consistent.
+                            _mabm = getattr(self, 'multi_account_manager', None)
+                            if _mabm is not None and hasattr(_mabm, 'try_reconnect_platform_broker'):
+                                _ok = _mabm.try_reconnect_platform_broker(_bt)
+                            else:
+                                _b.connect()
+                                _ok = getattr(_b, 'connected', False)
+                            if _ok:
                                 active_broker = _b
                                 self.broker_manager.active_broker = _b
                                 if hasattr(self, 'apex') and self.apex and hasattr(self.apex, 'update_broker_client'):

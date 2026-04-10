@@ -6,7 +6,7 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 
 from enum import Enum
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 import functools
 import json
 import logging
@@ -625,6 +625,81 @@ _KRAKEN_STARTUP_FSM: KrakenStartupFSM = KrakenStartupFSM()
 
 _env_wait = os.environ.get("NIJA_USER_PLATFORM_WAIT", "0")
 _USER_PLATFORM_WAIT_S: Optional[int] = int(_env_wait) if _env_wait.strip().isdigit() and int(_env_wait) > 0 else None
+
+# ── Global platform-broker registry guard ────────────────────────────────────
+# Tracks whether a PLATFORM broker of each type has already been initialised
+# in this process.  The guard prevents a second instantiation from racing with
+# the first one (e.g. when TradingStrategy and a background thread both enter
+# the broker-creation path before the first instance is registered).
+#
+# Usage (in MultiAccountBrokerManager.initialize_platform_brokers):
+#
+#   with _PLATFORM_BROKER_REGISTRY_LOCK:
+#       if GLOBAL_PLATFORM_BROKERS["coinbase"]:
+#           return _PLATFORM_BROKER_INSTANCES.get("coinbase")
+#       GLOBAL_PLATFORM_BROKERS["coinbase"] = True
+#       broker = CoinbaseBroker()
+#       _PLATFORM_BROKER_INSTANCES["coinbase"] = broker
+#
+# Keys must match the lowercase BrokerType.value strings used throughout the
+# codebase ("coinbase", "kraken", "okx", "binance", "alpaca").
+GLOBAL_PLATFORM_BROKERS: Dict[str, bool] = {
+    "coinbase": False,
+    "kraken":   False,
+    "okx":      False,
+    "binance":  False,
+    "alpaca":   False,
+}
+# Stores the actual singleton broker instance once created.
+_PLATFORM_BROKER_INSTANCES: Dict[str, "BaseBroker"] = {}
+# Tracks whether the initial connect() lifecycle has completed for each broker.
+# Distinct from GLOBAL_PLATFORM_BROKERS (instance exists) so that a second call
+# to initialize_platform_brokers() can skip connect() even when the instance flag
+# was set in a previous run.
+_PLATFORM_BROKER_CONNECTED: Dict[str, bool] = {
+    "coinbase": False,
+    "kraken":   False,
+    "okx":      False,
+    "binance":  False,
+    "alpaca":   False,
+}
+# Protects all three dicts from concurrent reads/writes during startup.
+_PLATFORM_BROKER_REGISTRY_LOCK: threading.Lock = threading.Lock()
+
+
+def get_platform_broker(key: str) -> "Optional[BaseBroker]":
+    """Return the singleton platform broker for *key* (e.g. ``"coinbase"``).
+
+    Returns ``None`` when the broker has not been initialised yet.  Callers
+    must not call ``connect()`` on the returned object — connection lifecycle
+    is owned exclusively by
+    ``MultiAccountBrokerManager.initialize_platform_brokers()``.
+    """
+    return _PLATFORM_BROKER_INSTANCES.get(key)
+
+
+def register_platform_broker(key: str, broker: "BaseBroker", connected: bool = True) -> None:
+    """Register a platform broker instance in the global registry.
+
+    This is the **public** API for writing into the registry.  It is
+    intended for use by the fallback/standalone paths in
+    ``CoinbaseBrokerAdapter`` and similar modules that construct a broker
+    without going through ``MultiAccountBrokerManager.initialize_platform_brokers()``.
+
+    Args:
+        key:       Lowercase broker key matching ``BrokerType.value``
+                   (e.g. ``"coinbase"``).
+        broker:    Fully-constructed broker instance to register.
+        connected: Whether the broker's ``connect()`` lifecycle has already
+                   completed successfully.  Defaults to ``True`` so callers
+                   that call this after a successful ``broker.connect()`` do
+                   not need to pass the flag explicitly.
+    """
+    with _PLATFORM_BROKER_REGISTRY_LOCK:
+        GLOBAL_PLATFORM_BROKERS[key] = True
+        _PLATFORM_BROKER_INSTANCES[key] = broker
+        if connected:
+            _PLATFORM_BROKER_CONNECTED[key] = True
 
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
