@@ -108,6 +108,30 @@ SAFETY_CLAMP_PCT = 0.50          # Hard ceiling: position_size ≤ 50% of accoun
                                   # Raised from 25% → 50% to allow micro accounts to deploy
                                   # meaningful capital per trade (env: SAFETY_CLAMP_PCT to override)
 
+# ==============================================================================
+# ATR-BASED STOP LOSS / TAKE PROFIT CONSTANTS
+# ==============================================================================
+# Hard ceiling: stop distance (as % of entry price) never exceeds this value.
+# Prevents over-widened stops destroying R/R and inflating drawdowns.
+SL_MAX_CAP = 0.03               # 3% max stop distance from entry
+
+# Minimum TP distance as a multiple of ATR percentage.
+# Ensures take-profits always clear at least N× the current volatility.
+TP_ATR_MULTIPLIER = 2.0         # TP ≥ atr_pct × 2.0
+
+# ATR threshold above which trades are skipped entirely ("Volatility Kill Switch").
+# If the 14-period ATR exceeds 4% of price the market is too noisy to trade safely.
+EXTREME_VOLATILITY_ATR_PCT = 0.04   # 4% ATR → skip trade
+
+# Regime-specific ATR multipliers for stop placement
+_ATR_MULT_TRENDING  = 1.4   # Let winners breathe in trending markets
+_ATR_MULT_VOLATILE  = 1.6   # Wider stops to survive noise in volatile markets
+_ATR_MULT_RANGING   = 1.1   # Tighter, quicker exits in ranging markets
+_ATR_MULT_DEFAULT   = 1.2   # Neutral / unknown regime
+
+# Reference ATR % used to normalise position sizing (≈ average crypto volatility)
+_ATR_POSITION_SIZE_REFERENCE = 0.02  # 2% reference ATR
+
 # Safety guard: absolute maximum daily loss across all accounts
 MAX_DAILY_LOSS = 0.05            # 5% of portfolio — hard ceiling, triggers full trading halt
 
@@ -1187,13 +1211,15 @@ class AdaptiveRiskManager:
         return True, "Within volatility cap"
 
     def calculate_stop_loss(self, entry_price: float, side: str,
-                            swing_level: float, atr: float, bb_width: float = None) -> float:
+                            swing_level: float, atr: float, bb_width: float = None,
+                            regime: object = None) -> float:
         """
-        Calculate ADAPTIVE stop loss with volatility coupling
+        Calculate ADAPTIVE stop loss with volatility coupling and regime awareness.
 
-        Formula: SL = max(base_SL, ATR × 1.3, BB_width × k)
-        - Expands in trends (high volatility)
-        - Tightens in chop (low volatility)
+        Formula: SL = max(base_SL, ATR × atr_mult, BB_width × k)
+        - Expands in trends (high volatility) and volatile regimes
+        - Tightens in ranging / choppy regimes for quicker exits
+        - Hard ceiling: stop distance never exceeds SL_MAX_CAP (3%) of entry price
 
         Args:
             entry_price: Entry price
@@ -1201,20 +1227,35 @@ class AdaptiveRiskManager:
             swing_level: Swing low (for long) or swing high (for short)
             atr: Current ATR(14) value
             bb_width: Bollinger Band width (optional, normalized volatility measure)
+            regime: Current market regime (MarketRegime enum or string, optional)
 
         Returns:
-            Adaptive stop loss price
+            Adaptive stop loss price (capped at SL_MAX_CAP from entry)
         """
-        # Base stop loss (swing level + ATR buffer)
-        atr_buffer = atr * 1.5  # 1.5x ATR buffer (upgraded from 0.5x - reduces stop-hunts)
+        # ── Regime-aware ATR multiplier ────────────────────────────────────────
+        regime_str = ""
+        if regime is not None:
+            regime_str = str(getattr(regime, 'value', regime)).upper()
+
+        if regime_str == "TRENDING":
+            atr_mult = _ATR_MULT_TRENDING   # 1.4 — let winners breathe
+        elif regime_str == "VOLATILE":
+            atr_mult = _ATR_MULT_VOLATILE   # 1.6 — avoid noise stop-outs
+        elif regime_str == "RANGING":
+            atr_mult = _ATR_MULT_RANGING    # 1.1 — tighter, quicker exits
+        else:
+            atr_mult = _ATR_MULT_DEFAULT    # 1.2 — neutral / unknown
+
+        # Base stop loss (swing level + ATR buffer using regime-aware multiplier)
+        atr_buffer = atr * atr_mult
 
         if side == 'long':
             base_stop = swing_level - atr_buffer
         else:  # short
             base_stop = swing_level + atr_buffer
 
-        # ATR-based stop distance (1.3x ATR for institutional grade)
-        atr_stop_distance = atr * 1.3
+        # ATR-based minimum stop distance (regime-aware floor)
+        atr_stop_distance = atr * atr_mult
 
         # Bollinger Band width-based stop (if provided)
         bb_stop_distance = None
@@ -1234,18 +1275,33 @@ class AdaptiveRiskManager:
         else:
             adaptive_distance = max(base_distance, atr_stop_distance)
 
+        # ── Hard SL ceiling: cap stop distance at SL_MAX_CAP (3%) ─────────────
+        max_distance = entry_price * SL_MAX_CAP
+        atr_sl_applied = adaptive_distance > max_distance
+        if atr_sl_applied:
+            adaptive_distance = max_distance
+
         # Apply adaptive distance
         if side == 'long':
             stop_loss = entry_price - adaptive_distance
         else:  # short
             stop_loss = entry_price + adaptive_distance
 
+        # ── ATR SL logging ─────────────────────────────────────────────────────
+        atr_pct = atr / entry_price if entry_price > 0 else 0.0
+        logger.info(
+            "📏 ATR SL: regime=%s mult=%.1f atr_pct=%.4f → SL=%.6f%s",
+            regime_str or "UNKNOWN", atr_mult, atr_pct, stop_loss,
+            " [capped at SL_MAX_CAP=3%%]" if atr_sl_applied else "",
+        )
+
         return stop_loss
 
     def calculate_take_profit_levels(self, entry_price: float, stop_loss: float,
                                      side: str, broker_fee_pct: float = None,
                                      use_limit_order: bool = True, atr: float = None,
-                                     volatility_bandwidth: float = None) -> Dict[str, float]:
+                                     volatility_bandwidth: float = None,
+                                     atr_pct: float = None) -> Dict[str, float]:
         """
         Calculate take profit levels based on R-multiples with FEE-AWARE PROFITABILITY
 
@@ -1284,6 +1340,8 @@ class AdaptiveRiskManager:
             use_limit_order: True for maker fees, False for taker fees (only used if broker_fee_pct provided)
             atr: Optional ATR(14) value for adaptive profit targeting
             volatility_bandwidth: Optional Bollinger Bands bandwidth for volatility-based adjustments
+            atr_pct: Optional ATR as a fraction of price (e.g., 0.02 = 2%). When provided, TP levels
+                     are floored at atr_pct × TP_ATR_MULTIPLIER to ensure meaningful profit targets.
 
         Returns:
             Dictionary with TP1, TP2, TP3 levels and risk
@@ -1345,6 +1403,36 @@ class AdaptiveRiskManager:
                 tp1 = entry_price - (risk * 2.0)  # 2R - minimum for profitable fee coverage
                 tp2 = entry_price - (risk * 3.0)  # 3R - solid profit
                 tp3 = entry_price - (risk * 4.0)  # 4R - excellent trade
+
+        # ── ATR-based TP floor: tp ≥ atr_pct × TP_ATR_MULTIPLIER ─────────────
+        # Ensures take-profit levels always clear at least N× the current
+        # volatility noise so the bot isn't hunting micro-profits in high-ATR markets.
+        if atr_pct is not None and atr_pct > 0 and entry_price > 0:
+            atr_floor_pct = atr_pct * TP_ATR_MULTIPLIER
+            if side == 'long':
+                tp1_floor = entry_price * (1 + atr_floor_pct)
+                tp2_floor = entry_price * (1 + atr_floor_pct * 1.5)
+                tp3_floor = entry_price * (1 + atr_floor_pct * 2.0)
+                if tp1 < tp1_floor:
+                    logger.debug(
+                        "🎯 ATR TP floor applied: TP1 %.6f → %.6f (atr_pct=%.4f × %.1f)",
+                        tp1, tp1_floor, atr_pct, TP_ATR_MULTIPLIER,
+                    )
+                    tp1 = max(tp1, tp1_floor)
+                tp2 = max(tp2, tp2_floor)
+                tp3 = max(tp3, tp3_floor)
+            else:  # short
+                tp1_floor = entry_price * (1 - atr_floor_pct)
+                tp2_floor = entry_price * (1 - atr_floor_pct * 1.5)
+                tp3_floor = entry_price * (1 - atr_floor_pct * 2.0)
+                if tp1 > tp1_floor:
+                    logger.debug(
+                        "🎯 ATR TP floor applied (short): TP1 %.6f → %.6f (atr_pct=%.4f × %.1f)",
+                        tp1, tp1_floor, atr_pct, TP_ATR_MULTIPLIER,
+                    )
+                    tp1 = min(tp1, tp1_floor)
+                tp2 = min(tp2, tp2_floor)
+                tp3 = min(tp3, tp3_floor)
 
         return {
             'tp1': tp1,
