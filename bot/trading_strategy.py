@@ -8994,6 +8994,9 @@ class TradingStrategy:
                 )
                 
                 # STATE TRANSITION LOGGING: Log state changes explicitly
+                # Capture previous state before any transition so _state_changed can be
+                # determined after the block (handles valid transitions and blocked ones).
+                _prev_mgmt_state = self.position_mgmt_state
                 if new_state != self.position_mgmt_state:
                     old_state_name = self.position_mgmt_state.value.upper()
                     new_state_name = new_state.value.upper()
@@ -9016,6 +9019,8 @@ class TradingStrategy:
                         logger.error(f"INVALID STATE TRANSITION BLOCKED: {old_state_name} → {new_state_name}")
                         # Keep current state if transition is invalid
                         new_state = self.position_mgmt_state
+                # True only when a valid state change actually occurred this cycle.
+                _state_changed = self.position_mgmt_state != _prev_mgmt_state
                 
                 # CRITICAL FIX: Identify ALL positions that need to exit first
                 # Then sell them ALL concurrently, not one at a time
@@ -9039,16 +9044,24 @@ class TradingStrategy:
 
                 # FORCED UNWIND MODE: Close all positions immediately
                 if new_state == PositionManagementState.FORCED_UNWIND:
-                    logger.error("=" * 80)
-                    logger.error("🚨 FORCED UNWIND MODE ACTIVE")
-                    logger.error("=" * 80)
-                    if hasattr(self, 'continuous_exit_enforcer') and self.continuous_exit_enforcer:
-                        user_id = getattr(active_broker, 'user_id', 'platform')
-                        logger.error(f"   User: {user_id}")
-                    logger.error(f"   Positions: {len(current_positions)}")
-                    logger.error("   ALL positions will be closed immediately")
-                    logger.error("   Bypassing all normal trading filters")
-                    logger.error("=" * 80)
+                    if _state_changed:
+                        # Verbose banner only on state entry — prevents per-cycle log spam.
+                        logger.error("=" * 80)
+                        logger.error("🚨 FORCED UNWIND MODE ACTIVE")
+                        logger.error("=" * 80)
+                        if hasattr(self, 'continuous_exit_enforcer') and self.continuous_exit_enforcer:
+                            user_id = getattr(active_broker, 'user_id', 'platform')
+                            logger.error(f"   User: {user_id}")
+                        logger.error(f"   Positions: {len(current_positions)}")
+                        logger.error("   ALL positions will be closed immediately")
+                        logger.error("   Bypassing all normal trading filters")
+                        logger.error("=" * 80)
+                    else:
+                        # Concise per-cycle line while unwind is ongoing.
+                        logger.warning(
+                            "🚨 FORCED UNWIND ongoing — %d position(s) remaining",
+                            len(current_positions),
+                        )
                     
                     logger.warning("🚨 FORCED UNWIND: Adding all positions to exit queue")
                     for position in current_positions:
@@ -9075,21 +9088,31 @@ class TradingStrategy:
                 # NORMAL MODE: Under position cap, managing positions normally
                 # Both modes analyze positions for potential exits
                 if new_state == PositionManagementState.DRAIN:
-                    logger.info("=" * 70)
-                    logger.info("🔥 DRAIN MODE ACTIVE")
-                    logger.info("=" * 70)
-                    logger.info(f"   📊 Excess positions: {positions_over_cap}")
-                    logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
-                    logger.info(f"   🔄 Drain rate: 1-{min(positions_over_cap, 3)} positions per cycle")
-                    logger.info(f"   🚫 New entries: BLOCKED until under {effective_max_positions} positions")
-                    logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
-                    logger.info("=" * 70)
+                    if _state_changed:
+                        # Verbose banner only on state entry — prevents per-cycle log spam.
+                        logger.info("=" * 70)
+                        logger.info("🔥 DRAIN MODE ACTIVE")
+                        logger.info("=" * 70)
+                        logger.info(f"   📊 Excess positions: {positions_over_cap}")
+                        logger.info(f"   🎯 Strategy: Rank by PnL, age, and size")
+                        logger.info(f"   🔄 Drain rate: 1-{min(positions_over_cap, 3)} positions per cycle")
+                        logger.info(f"   🚫 New entries: BLOCKED until under {effective_max_positions} positions")
+                        logger.info(f"   💡 Goal: Gradually free capital and reduce risk")
+                        logger.info("=" * 70)
+                    else:
+                        # Concise per-cycle line while draining is ongoing.
+                        logger.info(
+                            "🔥 DRAIN MODE: %d excess position(s) — draining …",
+                            positions_over_cap,
+                        )
                 elif new_state == PositionManagementState.NORMAL:
-                    logger.info("=" * 70)
-                    logger.info("✅ NORMAL MODE - Position Management")
-                    logger.info("=" * 70)
-                    logger.info(f"   📊 Positions: {len(current_positions)}/{effective_max_positions}")
-                    logger.info("=" * 70)
+                    if _state_changed:
+                        # Verbose banner only on state entry — prevents per-cycle log spam.
+                        logger.info("=" * 70)
+                        logger.info("✅ NORMAL MODE - Position Management")
+                        logger.info("=" * 70)
+                        logger.info(f"   📊 Positions: {len(current_positions)}/{effective_max_positions}")
+                        logger.info("=" * 70)
                 
                 # Position analysis loop (runs for both DRAIN and NORMAL modes)
                 if new_state in (PositionManagementState.DRAIN, PositionManagementState.NORMAL):
