@@ -20,6 +20,8 @@ Date: March 2026
 
 import logging
 import os
+import signal as _signal
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
@@ -549,3 +551,128 @@ def run_emergency_reset(
     logger.warning("=" * 70)
 
     return summary
+
+
+# ============================================================================
+# STEP 7: Restart the bot process
+# ============================================================================
+
+def restart_process() -> None:
+    """
+    Restart the current Python process in-place.
+
+    Uses ``os.execv`` to replace the running process with a fresh copy of the
+    same Python interpreter and command-line arguments.  All in-memory state
+    (kill switch, position cache, balance cache) is discarded because the new
+    process starts from scratch.
+
+    If ``os.execv`` is unavailable or raises, falls back to sending ``SIGTERM``
+    to the current process so the deployment platform (Railway / Docker) restarts
+    the container automatically.  If that also fails, calls ``sys.exit(0)``.
+    """
+    logger.warning("=" * 70)
+    logger.warning("🔄 NIJA BOT RESTART INITIATED")
+    logger.warning("   Replacing process: %s %s", sys.executable, " ".join(sys.argv))
+    logger.warning("=" * 70)
+
+    # Give log handlers a moment to flush before exec replaces the process.
+    time.sleep(0.5)
+
+    try:
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+        # If execv succeeds the line below is never reached.
+    except Exception as exec_err:
+        logger.error("os.execv failed (%s) — sending SIGTERM so platform restarts", exec_err)
+        try:
+            os.kill(os.getpid(), _signal.SIGTERM)
+        except Exception:
+            logger.error("SIGTERM failed — calling sys.exit(0)")
+            sys.exit(0)
+
+
+# ============================================================================
+# ORCHESTRATOR: clear-and-restart
+# ============================================================================
+
+def clear_and_restart(
+    brokers: Optional[List] = None,
+    dust_threshold_usd: float = 1.00,
+    extra_position_files: Optional[List[str]] = None,
+    verify_clear: bool = True,
+    max_verify_attempts: int = 3,
+    verify_wait_s: float = 5.0,
+    stop_reason: str = "Clear-and-restart",
+) -> None:
+    """
+    Close ALL positions, wipe state files, then restart the bot process.
+
+    Sequence
+    --------
+    A. Run the full emergency reset (cancel orders → liquidate → sweep dust →
+       delete state files → clear balance caches).
+    B. Optionally poll the exchange to confirm every position is gone.
+    C. Replace the current process via :func:`restart_process`.
+
+    Args:
+        brokers:               Connected broker instances.  When ``None`` only
+                               state-file deletion and cache-clearing run
+                               (liquidation steps are skipped).
+        dust_threshold_usd:    USD value floor for the dust-sweep step.
+        extra_position_files:  Additional state-file paths to delete.
+        verify_clear:          When ``True``, poll the broker after liquidation
+                               to confirm all positions are gone before restarting.
+        max_verify_attempts:   Number of polling attempts before giving up.
+        verify_wait_s:         Seconds to wait between verification attempts.
+        stop_reason:           Human-readable reason recorded in the kill-switch log.
+    """
+    logger.warning("=" * 70)
+    logger.warning("🚨 CLEAR-AND-RESTART SEQUENCE INITIATED")
+    logger.warning("=" * 70)
+
+    # ── Step A: Full emergency reset ─────────────────────────────────────────
+    run_emergency_reset(
+        brokers=brokers,
+        dust_threshold_usd=dust_threshold_usd,
+        extra_position_files=extra_position_files,
+        stop_reason=stop_reason,
+    )
+
+    # ── Step B: Verify positions are cleared ─────────────────────────────────
+    if verify_clear and brokers:
+        logger.warning("🔍 Verifying all positions are cleared from exchange…")
+        cleared = False
+        for attempt in range(1, max_verify_attempts + 1):
+            try:
+                remaining: List = []
+                for broker in brokers:
+                    try:
+                        remaining.extend(broker.get_positions() or [])
+                    except Exception as _b_err:
+                        logger.debug("Position fetch failed for %s: %s", broker, _b_err)
+                if not remaining:
+                    logger.warning("✅ All positions confirmed cleared (attempt %d/%d)",
+                                   attempt, max_verify_attempts)
+                    cleared = True
+                    break
+                logger.warning(
+                    "   ⚠️  %d position(s) still present (attempt %d/%d) — "
+                    "waiting %.0fs before re-check…",
+                    len(remaining), attempt, max_verify_attempts, verify_wait_s,
+                )
+                time.sleep(verify_wait_s)
+            except Exception as verify_err:
+                logger.warning("   Verification attempt %d error: %s", attempt, verify_err)
+                time.sleep(verify_wait_s)
+
+        if not cleared:
+            logger.error(
+                "❌ Could not confirm all positions cleared after %d attempts — "
+                "restarting anyway to avoid ghost-position accumulation",
+                max_verify_attempts,
+            )
+    elif verify_clear and not brokers:
+        logger.info("   No brokers provided — skipping position verification")
+
+    # ── Step C: Restart the process ──────────────────────────────────────────
+    logger.warning("🔄 Restarting NIJA bot process after clearing positions…")
+    restart_process()

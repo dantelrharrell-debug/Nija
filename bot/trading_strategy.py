@@ -7187,6 +7187,61 @@ class TradingStrategy:
         # Use provided broker or fall back to self.broker (thread-safe approach)
         active_broker = broker if broker is not None else self.broker
 
+        # ══════════════════════════════════════════════════════════════════════
+        # CLEAR-AND-RESTART TRIGGER
+        # Drop a file called CLEAR_AND_RESTART.trigger next to this script (or
+        # in the repo root) to request a clean restart:
+        #   • All open positions are liquidated on every connected broker.
+        #   • All state / position-tracking files are deleted.
+        #   • The bot process is replaced via os.execv (SIGTERM fallback).
+        # The file is removed before liquidation starts so a crash mid-sequence
+        # does not cause an infinite restart loop.
+        # ══════════════════════════════════════════════════════════════════════
+        _car_trigger_paths = [
+            os.path.join(os.path.dirname(__file__), 'CLEAR_AND_RESTART.trigger'),
+            os.path.join(os.path.dirname(__file__), '..', 'CLEAR_AND_RESTART.trigger'),
+        ]
+        _car_trigger_file = next(
+            (p for p in _car_trigger_paths if os.path.exists(p)), None
+        )
+        if _car_trigger_file:
+            logger.warning("=" * 70)
+            logger.warning("🚨 CLEAR_AND_RESTART.trigger detected — initiating clean restart")
+            logger.warning("   Trigger file: %s", _car_trigger_file)
+            logger.warning("=" * 70)
+            # Remove the trigger first so a mid-sequence crash won't loop.
+            try:
+                os.remove(_car_trigger_file)
+                logger.warning("   Trigger file removed — proceeding with liquidation + restart")
+            except Exception as _car_rm_err:
+                logger.warning("   Could not remove trigger file (%s) — proceeding anyway", _car_rm_err)
+
+            # Collect all live brokers for liquidation.
+            _car_brokers = []
+            if active_broker and getattr(active_broker, 'connected', False):
+                _car_brokers.append(active_broker)
+            if hasattr(self, 'broker_manager') and self.broker_manager:
+                for _bt, _b in list(getattr(self.broker_manager, 'brokers', {}).items()):
+                    if _b and getattr(_b, 'connected', False) and _b not in _car_brokers:
+                        _car_brokers.append(_b)
+
+            try:
+                try:
+                    from emergency_reset import clear_and_restart as _clear_and_restart
+                except ImportError:
+                    from bot.emergency_reset import clear_and_restart as _clear_and_restart
+                _clear_and_restart(
+                    brokers=_car_brokers or None,
+                    stop_reason="CLEAR_AND_RESTART.trigger file detected",
+                )
+            except Exception as _car_err:
+                logger.error("clear_and_restart() raised unexpectedly: %s — forcing sys.exit", _car_err)
+                import sys as _sys
+                _sys.exit(0)
+            # clear_and_restart() replaces the process; nothing below should run.
+            return
+        # ══════════════════════════════════════════════════════════════════════
+
         logger.info("🧠 Trading loop tick — scanning markets...")
 
         # ✅ HARDENING: Validate broker liveness at execution time to prevent
