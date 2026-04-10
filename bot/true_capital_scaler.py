@@ -2,7 +2,7 @@
 NIJA True Capital Scaling Engine
 =================================
 
-$94 → $1,000+ with structured compounding.
+$94 → $1,000+ with structured compounding logic.
 
 Built on top of CapitalLadder, this engine adds:
   1. Session targeting   — rung's ``trades_per_session`` sets the daily entry goal
@@ -41,7 +41,7 @@ Capital Ladder rungs (from capital_ladder.py)
   SAPLING ($100–$249) : 70% pos · 2.0% TP · 1.0% SL  · 2 max pos
   TREE    ($250–$499) : 55% pos · 1.8% TP · 0.9% SL  · 3 max pos
   GROVE   ($500–$999) : 45% pos · 1.5% TP · 0.75% SL · 4 max pos
-  FOREST  ($1 000+)   : 35% pos · 1.2% TP · 0.6% SL  · 6 max pos   ← target
+  FOREST  ($1,000+)   : 35% pos · 1.2% TP · 0.6% SL  · 6 max pos   ← target
 
 Author: NIJA Trading Systems
 Version: 1.0
@@ -360,9 +360,9 @@ class TrueCapitalScaler:
                         elapsed_days = (
                             datetime.utcnow()
                             - datetime.fromisoformat(self._state.start_timestamp)
-                        ).days
+                        ).total_seconds() / 86400.0
                     except Exception:
-                        elapsed_days = 0
+                        elapsed_days = 0.0
                     record = _MilestoneRecord(
                         milestone=m,
                         balance_at_hit=balance,
