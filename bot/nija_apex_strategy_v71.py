@@ -23,7 +23,7 @@ from indicators import (
     calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
     calculate_atr, calculate_adx, calculate_bollinger_bands, scalar
 )
-from risk_manager import RiskManager
+from risk_manager import RiskManager, EXTREME_VOLATILITY_ATR_PCT, _ATR_POSITION_SIZE_REFERENCE
 from execution_engine import ExecutionEngine
 
 # Import profitability assertion for configuration validation
@@ -1196,6 +1196,20 @@ class NIJAApexStrategyV71:
         atr_valid = atr_pct >= min_atr_pct
         borderline_volatility = (not atr_valid) and (atr_pct >= borderline_min_atr_pct)
         allow_with_reduced_size = borderline_volatility
+
+        # ── Volatility Kill Switch: skip trade when ATR is extreme ────────────
+        # atr_pct is in % (e.g. 4.5 means 4.5%), EXTREME_VOLATILITY_ATR_PCT is a
+        # fraction (0.04 = 4%), so convert for comparison.
+        extreme_volatility_pct = EXTREME_VOLATILITY_ATR_PCT * 100  # → 4.0 (%)
+        if atr_pct > extreme_volatility_pct:
+            logger.info(
+                "⚡ VOLATILITY KILL SWITCH: ATR %.2f%% > %.2f%% — skipping %s %s",
+                atr_pct, extreme_volatility_pct, side.upper(), symbol,
+            )
+            failures.append(
+                f'Extreme volatility: ATR {atr_pct:.2f}% > {extreme_volatility_pct:.2f}% kill-switch threshold'
+            )
+
         checks['volatility'] = {
             'atr_pct': atr_pct,
             'min_required': min_atr_pct,
@@ -2501,6 +2515,27 @@ class NIJAApexStrategyV71:
                             _pre_env, _env_mult, position_size,
                         )
 
+                    # ── ATR-Based Dynamic Position Sizing (LONG) ──────────────
+                    # Scale position size inversely with ATR: high volatility → smaller
+                    # positions to preserve R/R and limit drawdown exposure.
+                    # Reference: 2% ATR = 1.0× (no adjustment); 4% ATR = 0.5× etc.
+                    _atr_val_for_size = float(indicators.get('atr', pd.Series([0])).iloc[-1])
+                    _price_for_size   = float(df['close'].iloc[-1])
+                    if _atr_val_for_size > 0 and _price_for_size > 0:
+                        _atr_pct_for_size = _atr_val_for_size / _price_for_size
+                        _atr_size_mult = min(
+                            max(_ATR_POSITION_SIZE_REFERENCE / _atr_pct_for_size, 0.25),
+                            1.5,
+                        )
+                        if abs(_atr_size_mult - 1.0) > 0.05:  # only log when adjustment is meaningful
+                            _pre_atr_size = position_size
+                            position_size = scalar(position_size * _atr_size_mult)
+                            logger.debug(
+                                "   📐 ATR size LONG: atr=%.2f%% mult=%.2f → $%.2f→$%.2f",
+                                _atr_pct_for_size * 100, _atr_size_mult,
+                                _pre_atr_size, position_size,
+                            )
+
                     # Adjust position size based on regime and score
                     if self.use_enhanced_scoring and self.current_regime:
                         position_size = self.adjust_position_size_for_regime(
@@ -2617,8 +2652,10 @@ class NIJAApexStrategyV71:
                         # Calculate stop loss and take profit
                         swing_low = self.risk_manager.find_swing_low(df, lookback=10)
                         atr = scalar(indicators['atr'].iloc[-1])
+                        _atr_pct_long = atr / current_price if current_price > 0 else 0.0
                         stop_loss = self.risk_manager.calculate_stop_loss(
-                            current_price, 'long', swing_low, atr
+                            current_price, 'long', swing_low, atr,
+                            regime=self.current_regime,
                         )
 
                         # ── Execution Exit Config: hard SL cap (LONG) ────────────
@@ -2655,7 +2692,8 @@ class NIJAApexStrategyV71:
                             broker_fee_pct=broker_fee,
                             use_limit_order=True,
                             atr=atr,
-                            volatility_bandwidth=volatility_bandwidth
+                            volatility_bandwidth=volatility_bandwidth,
+                            atr_pct=_atr_pct_long,
                         )
 
                         # ── Execution Exit Config: TP level override (LONG) ───────
@@ -2939,6 +2977,25 @@ class NIJAApexStrategyV71:
                             _pre_env_s, _env_mult_s, position_size,
                         )
 
+                    # ── ATR-Based Dynamic Position Sizing (SHORT) ─────────────
+                    # Mirror of LONG block: scale position inversely with ATR.
+                    _atr_val_for_size_s = float(indicators.get('atr', pd.Series([0])).iloc[-1])
+                    _price_for_size_s   = float(df['close'].iloc[-1])
+                    if _atr_val_for_size_s > 0 and _price_for_size_s > 0:
+                        _atr_pct_for_size_s = _atr_val_for_size_s / _price_for_size_s
+                        _atr_size_mult_s = min(
+                            max(_ATR_POSITION_SIZE_REFERENCE / _atr_pct_for_size_s, 0.25),
+                            1.5,
+                        )
+                        if abs(_atr_size_mult_s - 1.0) > 0.05:
+                            _pre_atr_size_s = position_size
+                            position_size = scalar(position_size * _atr_size_mult_s)
+                            logger.debug(
+                                "   📐 ATR size SHORT: atr=%.2f%% mult=%.2f → $%.2f→$%.2f",
+                                _atr_pct_for_size_s * 100, _atr_size_mult_s,
+                                _pre_atr_size_s, position_size,
+                            )
+
                     # Adjust position size based on regime and score
                     if self.use_enhanced_scoring and self.current_regime:
                         position_size = self.adjust_position_size_for_regime(
@@ -3055,8 +3112,10 @@ class NIJAApexStrategyV71:
                         # Calculate stop loss and take profit
                         swing_high = self.risk_manager.find_swing_high(df, lookback=10)
                         atr = scalar(indicators['atr'].iloc[-1])
+                        _atr_pct_short = atr / current_price if current_price > 0 else 0.0
                         stop_loss = self.risk_manager.calculate_stop_loss(
-                            current_price, 'short', swing_high, atr
+                            current_price, 'short', swing_high, atr,
+                            regime=self.current_regime,
                         )
 
                         # ── Execution Exit Config: hard SL cap (SHORT) ───────────
@@ -3091,7 +3150,8 @@ class NIJAApexStrategyV71:
                             broker_fee_pct=broker_fee,
                             use_limit_order=True,
                             atr=atr,
-                            volatility_bandwidth=volatility_bandwidth
+                            volatility_bandwidth=volatility_bandwidth,
+                            atr_pct=_atr_pct_short,
                         )
 
                         # ── Execution Exit Config: TP level override (SHORT) ──────
