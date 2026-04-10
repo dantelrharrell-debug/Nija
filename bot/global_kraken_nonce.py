@@ -1299,10 +1299,10 @@ class KrakenNonceManager:
 
                 # Exit the nuclear-reset path; backoff jump does not apply.
                 # Callbacks are fired below, outside the lock.
-                _nonce_quarantine_path = True
+                _skip_backoff_jump = True
             else:
                 _callbacks_to_fire = []
-                _nonce_quarantine_path = False
+                _skip_backoff_jump = False
 
         # ── Fire quarantine callbacks outside _LOCK to prevent deadlock ──
         for _cb in _callbacks_to_fire:
@@ -1319,7 +1319,7 @@ class KrakenNonceManager:
                 self._nuclear_reset_count, len(_callbacks_to_fire),
             )
 
-        if _nonce_quarantine_path:
+        if _skip_backoff_jump:
             return
 
         with _LOCK:
@@ -1747,7 +1747,7 @@ def get_global_nonce_stats() -> dict:
 
 # ── Broker quarantine public API ──────────────────────────────────────────────
 
-def register_broker_quarantine_callback(fn) -> None:
+def register_broker_quarantine_callback(fn: "Callable[[], None]") -> None:
     """Register a zero-argument callable to be invoked when nonce poisoning is
     confirmed (i.e. nuclear reset count reaches *_NONCE_POISON_QUARANTINE_THRESHOLD*).
 
