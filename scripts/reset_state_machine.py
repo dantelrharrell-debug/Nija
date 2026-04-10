@@ -162,11 +162,12 @@ def main(argv: list[str] | None = None) -> int:
 
         # The SM's _load_state() auto-clears EMERGENCY_STOP → OFF in memory on
         # every instantiation, but does NOT persist that change back to disk.
-        # So if the raw JSON showed EMERGENCY_STOP but the SM in-memory is already
-        # OFF, we must explicitly write the OFF state to disk.
+        # Detect this case (disk=EMERGENCY_STOP, memory=OFF) and write the
+        # corrected OFF state to disk using the JSON fallback path, which is
+        # public and does not touch SM internals.
         if current == "EMERGENCY_STOP" and current_enum == TradingState.OFF:
-            # Auto-clear already happened in memory — persist it to disk
-            sm._persist_state()  # type: ignore[attr-defined]
+            # Auto-clear already happened in memory — persist it to disk via JSON patch
+            _raw_json_reset(raw, args)
             print(_col(_GREEN, "✅  EMERGENCY_STOP → OFF  (auto-cleared on SM load; persisted to disk)"))
 
         elif current_enum == TradingState.EMERGENCY_STOP:

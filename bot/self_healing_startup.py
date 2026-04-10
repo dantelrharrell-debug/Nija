@@ -138,10 +138,10 @@ class StartupConfig:
     # ── Nonce-poison thresholds ────────────────────────────────────────────
     # Nonce lead (ms ahead of wall clock) above which we consider it potentially
     # poisoned and start escalation.
-    nonce_warn_lead_ms: int  = int(os.environ.get("NIJA_SHS_NONCE_WARN_MS",   "600_000"))   # 10 min
-    nonce_probe_lead_ms: int = int(os.environ.get("NIJA_SHS_NONCE_PROBE_MS",  "1_800_000"))  # 30 min
-    nonce_deep_lead_ms: int  = int(os.environ.get("NIJA_SHS_NONCE_DEEP_MS",   "3_600_000"))  # 60 min
-    nonce_ceiling_lead_ms: int = int(os.environ.get("NIJA_SHS_NONCE_CEIL_MS", "7_200_000"))  # 2 h
+    nonce_warn_lead_ms: int  = int(os.environ.get("NIJA_SHS_NONCE_WARN_MS",   "600000"))    # 10 min
+    nonce_probe_lead_ms: int = int(os.environ.get("NIJA_SHS_NONCE_PROBE_MS",  "1800000"))   # 30 min
+    nonce_deep_lead_ms: int  = int(os.environ.get("NIJA_SHS_NONCE_DEEP_MS",   "3600000"))   # 60 min
+    nonce_ceiling_lead_ms: int = int(os.environ.get("NIJA_SHS_NONCE_CEIL_MS", "7200000"))   # 2 h
 
     # ── Escalation settings ────────────────────────────────────────────────
     # Whether to actually attempt each escalation tier (set False to disable)
@@ -440,8 +440,9 @@ class CeilingJumpEscalator:
                     "Nonce recovery escalated to deep-probe mode (12×10 min = 120 min coverage)",
                     severity="WARNING",
                 )
-                # Activate deep-reset mode on the running manager instance
-                mgr._deep_reset_active = True  # type: ignore[attr-defined]
+                # Activate deep-reset mode on the running manager instance via public API
+                if _NONCE_MGR_AVAILABLE:
+                    get_global_nonce_manager().activate_deep_reset()
                 kwargs = {}
                 if cfg.deep_probe_max_attempts:
                     kwargs["max_attempts"] = cfg.deep_probe_max_attempts
@@ -707,7 +708,8 @@ class BrokerFallbackController:
                     attempt, self._cfg.primary_max_attempts, exc,
                 )
             if attempt < self._cfg.primary_max_attempts:
-                time.sleep(5.0 * attempt)  # brief back-off between retries
+                delay = min(5.0 * attempt, 30.0)  # cap at 30 s to avoid blocking startup too long
+                time.sleep(delay)
 
         return None, False
 
@@ -1005,8 +1007,7 @@ class SelfHealingStartup:
                 esc_result = escalator.run(starting_tier=EscalationTier.CEILING_JUMP)
             elif nonce_report.recommended_tier == EscalationTier.DEEP_PROBE:
                 if _NONCE_MGR_AVAILABLE:
-                    mgr = get_global_nonce_manager()
-                    mgr._deep_reset_active = True  # type: ignore[attr-defined]
+                    get_global_nonce_manager().activate_deep_reset()
                     logger.warning(
                         "SelfHealingStartup: deep-reset mode activated on nonce manager "
                         "(probe_and_resync inside KrakenBroker.connect() will use 120-min coverage)"

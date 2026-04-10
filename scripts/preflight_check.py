@@ -276,8 +276,7 @@ def check_state_machine() -> list[CheckResult]:
         return results
 
     try:
-        import json
-        data = json.loads(state_path.read_text())
+        data = _json.loads(state_path.read_text())
         current = data.get("current_state", "UNKNOWN")
         last = data.get("last_updated", "?")
 
@@ -552,7 +551,7 @@ def _print_summary(results: list[CheckResult]) -> tuple[int, int, int]:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, _depth: int = 0) -> int:
     parser = argparse.ArgumentParser(
         description="NIJA pre-flight validation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -601,10 +600,10 @@ def main(argv: list[str] | None = None) -> int:
         actions = apply_auto_fixes(all_results)
         for a in actions:
             print(f"  {_c(_GREEN, '🔧')}  {a}")
-        if actions:
+        if actions and _depth == 0:
             print()
             print(_c(_YELLOW, "  Re-running checks after fixes …\n"))
-            return main(["--quick"] if args.quick else [])
+            return main(["--quick"] if args.quick else [], _depth=1)
         print()
 
     # ── Summary ────────────────────────────────────────────────────────────
@@ -627,8 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     print("══════════════════════════════════════════\n")
 
     if args.json:
-        import json
-        print(json.dumps([r.to_dict() for r in all_results], indent=2))
+        print(_json.dumps([r.to_dict() for r in all_results], indent=2))
 
     if n_failures > 0:
         return 1
