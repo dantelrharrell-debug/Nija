@@ -50,7 +50,7 @@ TRADING_MODE = "independent"  # Independent trading mode (no copy trading)
 # BALANCE AND TRADE SIZE REQUIREMENTS
 # ============================================================================
 
-MIN_BALANCE_TO_TRADE = 15.00  # Minimum account balance to start trading
+MIN_BALANCE_TO_TRADE = 25.00  # Minimum account balance to start trading (capital gate)
 MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
 
 # ============================================================================

@@ -25,7 +25,7 @@ Date: January 20, 2026
 # ============================================================================
 
 ACCOUNT_SIZE = {
-    'min_balance': 20.00,  # Minimum $20 to start
+    'min_balance': 25.00,  # Minimum $25 to start (capital gate)
     'max_balance': 100.00,  # Optimized for up to $100
     'recommended_starting': 50.00,  # $50 sweet spot
     'emergency_stop_balance': 15.00,  # Stop trading below $15
