@@ -708,7 +708,7 @@ class MultiAccountBrokerManager:
         Args:
             broker_type: Exchange to wait for.
             timeout: Maximum seconds to wait before giving up.
-                     Defaults to NIJA_PLATFORM_WAIT_TIMEOUT env var (default 120 s).
+                     Defaults to NIJA_PLATFORM_WAIT_TIMEOUT env var (default 300 s).
                      Kraken's connect() with exponential backoff can take up to ~75 s,
                      so the default is deliberately longer than the old 30 s.
 
@@ -716,7 +716,7 @@ class MultiAccountBrokerManager:
             bool: True if platform reached CONNECTED state within the timeout.
         """
         if timeout is None:
-            timeout = int(os.environ.get("NIJA_PLATFORM_WAIT_TIMEOUT", "120"))
+            timeout = int(os.environ.get("NIJA_PLATFORM_WAIT_TIMEOUT", "300"))
         broker_name = broker_type.value.upper()
         start = time.time()
 

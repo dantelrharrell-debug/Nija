@@ -485,13 +485,13 @@ _KRAKEN_CONNECT_PROBE_FALLBACK_MS: int = 300_000   # 5 min
 # ── Platform-first gate ───────────────────────────────────────────────────────
 # When the Kraken PLATFORM account connects successfully, it sets this Event so
 # that USER accounts waiting in connect() can proceed.  USER accounts poll this
-# flag for up to NIJA_USER_PLATFORM_WAIT (default 120 s) before connecting.
+# flag for up to NIJA_USER_PLATFORM_WAIT (default 300 s) before connecting.
 #
 # Rule: Kraken is extremely sensitive to clock drift and nonce ordering.
 # The platform account MUST connect and stabilise its nonce FIRST.
 # User accounts connecting simultaneously risk nonce-window collisions.
 _PLATFORM_KRAKEN_READY: threading.Event = threading.Event()
-_USER_PLATFORM_WAIT_S: int = int(os.environ.get("NIJA_USER_PLATFORM_WAIT", "120"))
+_USER_PLATFORM_WAIT_S: int = int(os.environ.get("NIJA_USER_PLATFORM_WAIT", "300"))
 
 # Credential validation constants
 PLACEHOLDER_PASSPHRASE_VALUES = [
