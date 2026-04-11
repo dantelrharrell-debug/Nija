@@ -75,6 +75,7 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -82,6 +83,27 @@ from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.global_drawdown_cb")
+
+# ---------------------------------------------------------------------------
+# Optional KillSwitch integration
+# ---------------------------------------------------------------------------
+#: Set to False via ``NIJA_DRAWDOWN_KILL_SWITCH=0`` to disable the automatic
+#: KillSwitch activation when the HALT level is reached.
+_DRAWDOWN_KS_ENABLED: bool = (
+    os.environ.get("NIJA_DRAWDOWN_KILL_SWITCH", "1").strip() not in ("0", "false", "no")
+)
+
+try:
+    from kill_switch import KillSwitch as _KillSwitch
+    _KS_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.kill_switch import KillSwitch as _KillSwitch
+        _KS_AVAILABLE = True
+    except ImportError:
+        _KS_AVAILABLE = False
+        _KillSwitch = None  # type: ignore[assignment]
+        logger.debug("KillSwitch not importable — drawdown HALT will block entries only")
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +258,9 @@ class GlobalDrawdownCircuitBreaker:
                     new_level.value, drawdown_pct,
                     equity_usd, self._peak_equity,
                 )
+                # ── Fire global KillSwitch when HALT level is reached ──────────────
+                if new_level == ProtectionLevel.HALT and _DRAWDOWN_KS_ENABLED:
+                    self._fire_kill_switch(drawdown_pct, equity_usd)
 
             # Track new low
             if equity_usd < self._low_equity:
@@ -360,6 +385,25 @@ class GlobalDrawdownCircuitBreaker:
         if drawdown_pct >= cfg.caution_pct:
             return ProtectionLevel.CAUTION
         return ProtectionLevel.CLEAR
+
+    @staticmethod
+    def _fire_kill_switch(drawdown_pct: float, equity_usd: float) -> None:
+        """Activate the global KillSwitch when drawdown reaches HALT level."""
+        reason = (
+            f"GlobalDrawdownCircuitBreaker: HALT level reached "
+            f"(drawdown={drawdown_pct:.2f}%, equity=${equity_usd:.2f})"
+        )
+        if not _KS_AVAILABLE or _KillSwitch is None:
+            logger.critical("🛑 Drawdown HALT — KillSwitch unavailable: %s", reason)
+            return
+        try:
+            ks = _KillSwitch()
+            ks.activate(reason=reason, source="GlobalDrawdownCircuitBreaker")
+            logger.critical("🛑 Drawdown HALT: KillSwitch ACTIVATED — %s", reason)
+        except Exception as _e:
+            logger.critical(
+                "🛑 Drawdown HALT — KillSwitch fire failed (%s): %s", _e, reason
+            )
 
     _LEVEL_ORDER = {
         ProtectionLevel.CLEAR:   0,
