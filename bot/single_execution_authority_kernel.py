@@ -135,6 +135,9 @@ class RejectionReason(str, Enum):
     SLOT_BUSY = "SLOT_BUSY"
     SLOT_TIMEOUT = "SLOT_TIMEOUT"
     INVALID_REQUEST = "INVALID_REQUEST"
+    # Guard 6: fires only when a named CRITICAL broker is dead.
+    # OPTIONAL broker failures NEVER trigger this code.
+    BROKER_CRITICALITY_VIOLATION = "BROKER_CRITICALITY_VIOLATION"
 
 
 class AuditOutcome(str, Enum):
@@ -292,6 +295,10 @@ class SingleExecutionAuthorityKernel:
         self._dedup_guard_loaded: bool = False
         self._hardening: Any = None
         self._hardening_loaded: bool = False
+        # Guard 6: BrokerFailureManager for criticality checks.
+        # OPTIONAL broker failures never trigger a rejection.
+        self._bfm: Any = None
+        self._bfm_loaded: bool = False
 
         # Background reaper for stale fingerprints and timed-out slots.
         self._reaper_thread = threading.Thread(
@@ -492,6 +499,20 @@ class SingleExecutionAuthorityKernel:
         if hardening_reject:
             slot.lock.release()
             return _reject(hardening_reject, RejectionReason.HARDENING_VIOLATION)
+
+        # ── Guard 6: Broker criticality ──────────────────────────────────
+        # Blocks BUY orders only when the explicitly named broker in
+        # request.extra["broker"] is CRITICAL and currently dead.
+        # Rules:
+        #   • SELL / exit orders → always pass (positions must be closeable).
+        #   • OPTIONAL broker failure → always pass (non-blocking by design).
+        #   • CRITICAL broker dead → reject BUY until broker recovers.
+        #   • No broker named in request → fail open (skip check).
+        if request.side == "buy":
+            crit_reject = self._check_broker_criticality(request)
+            if crit_reject:
+                slot.lock.release()
+                return _reject(crit_reject, RejectionReason.BROKER_CRITICALITY_VIOLATION)
 
         slot.holder_request_id = request.request_id
         slot.acquired_at = now
@@ -707,6 +728,7 @@ class SingleExecutionAuthorityKernel:
                 "health_monitor": self._health_loaded,
                 "dedup_guard": self._dedup_guard_loaded,
                 "hardening": self._hardening_loaded,
+                "broker_criticality": self._bfm_loaded,
             },
         }
 
@@ -777,6 +799,48 @@ class SingleExecutionAuthorityKernel:
                 return f"ExecutionLayerHardening: {reason}"
         except Exception as exc:
             logger.warning("SEAK: hardening check failed: %s", exc)
+        return None
+
+    def _check_broker_criticality(self, request: ExecutionRequest) -> Optional[str]:
+        """Return a rejection reason when a named CRITICAL broker is dead.
+
+        Guard 6 rules (strictly enforced):
+        * Only BUY orders are checked — SELL / exits always pass.
+        * OPTIONAL brokers (OKX, Binance, Alpaca) are never blocking.
+        * CRITICAL broker (Kraken, Coinbase) that is dead blocks the BUY.
+        * No ``broker`` key in ``request.extra`` → fail open (skip check).
+        * Any import or runtime error → fail open (skip check).
+        """
+        broker_name = (request.extra.get("broker") or "").lower().strip()
+        if not broker_name:
+            return None  # Caller did not name a broker — skip check.
+
+        try:
+            from bot.broker_registry import get_broker_criticality, BrokerCriticality
+        except ImportError:
+            try:
+                from broker_registry import get_broker_criticality, BrokerCriticality  # type: ignore
+            except ImportError:
+                return None  # Registry unavailable — fail open.
+
+        crit = get_broker_criticality(broker_name)
+        if crit != BrokerCriticality.CRITICAL:
+            return None  # OPTIONAL broker — non-blocking by design.
+
+        bfm = self._load_bfm()
+        if bfm is None:
+            return None  # Failure manager unavailable — fail open.
+
+        try:
+            if bfm.is_dead(broker_name):
+                delay = bfm.get_retry_delay(broker_name)
+                return (
+                    f"CRITICAL broker '{broker_name}' is dead "
+                    f"(retry in {delay:.0f}s) — BUY blocked until recovery"
+                )
+        except Exception as exc:
+            logger.debug("SEAK: broker criticality check error: %s", exc)
+
         return None
 
     # ------------------------------------------------------------------
@@ -972,6 +1036,22 @@ class SingleExecutionAuthorityKernel:
             except ImportError:
                 logger.info("SEAK: ExecutionLayerHardening not available — hardening gate disabled")
         return self._hardening
+
+    def _load_bfm(self) -> Any:
+        """Lazily load BrokerFailureManager for Guard 6 (criticality check)."""
+        if self._bfm_loaded:
+            return self._bfm
+        self._bfm_loaded = True
+        try:
+            from bot.broker_failure_manager import get_broker_failure_manager  # type: ignore
+            self._bfm = get_broker_failure_manager()
+        except ImportError:
+            try:
+                from broker_failure_manager import get_broker_failure_manager  # type: ignore
+                self._bfm = get_broker_failure_manager()
+            except ImportError:
+                logger.info("SEAK: BrokerFailureManager not available — broker criticality gate disabled")
+        return self._bfm
 
 
 # ---------------------------------------------------------------------------

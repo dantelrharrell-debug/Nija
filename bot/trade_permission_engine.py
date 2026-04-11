@@ -166,6 +166,14 @@ class TradeDecision:
     # ── Layer 5: Execution mode ──────────────────────────────────────────────
     execution_mode: str       # one of the MODE_* constants
 
+    # ── Layer 6: Broker Criticality ──────────────────────────────────────────
+    # Minimum viable execution set: ≥1 CRITICAL broker connected.
+    # OPTIONAL broker (OKX, Binance, Alpaca) failure → always pass.
+    # CRITICAL broker (Kraken, Coinbase) dead → block BUY only.
+    broker: str = ""
+    broker_criticality: str = "UNKNOWN"   # "CRITICAL" | "OPTIONAL" | "UNKNOWN"
+    broker_health: str = "UNKNOWN"        # "HEALTHY" | "DEAD" | "UNKNOWN"
+
     # ── Final verdict ────────────────────────────────────────────────────────
     final_decision: str       # "EXECUTE" | "BLOCKED"
     block_reason: str         # human-readable reason; empty when EXECUTE
@@ -190,6 +198,9 @@ class TradeDecision:
             "liquidity": self.liquidity,
             "liquidity_detail": self.liquidity_detail,
             "execution_mode": self.execution_mode,
+            "broker": self.broker,
+            "broker_criticality": self.broker_criticality,
+            "broker_health": self.broker_health,
             "final_decision": self.final_decision,
             "block_reason": self.block_reason,
             "timestamp": self.timestamp,
@@ -330,9 +341,19 @@ class TradePermissionEngine:
             md=md,
         )
 
+        # ── Layer 6: Broker Criticality (hard block — BUY only) ──────────────
+        # Minimum viable execution set: at least 1 CRITICAL broker connected.
+        # OPTIONAL broker (OKX, Binance, Alpaca) failure → always pass.
+        # CRITICAL broker (Kraken, Coinbase) dead → block BUY until recovery.
+        # SELL / exit orders always pass so positions can always be closed.
+        broker_crit_label, broker_health_ok, broker_health_detail = (
+            self._check_broker_criticality(broker, side)
+        )
+        broker_health_label = "HEALTHY" if broker_health_ok else "DEAD"
+
         # ── Final verdict ────────────────────────────────────────────────────
         # Layers 1 & 2 can be bypassed by streak / force logic.
-        # Layers 3 & 4 are absolute hard blocks — no bypass is permitted.
+        # Layers 3, 4, 6 are absolute hard blocks — no bypass is permitted.
         if not signal_ok:
             final = "BLOCKED"
             block_reason = (
@@ -351,6 +372,9 @@ class TradePermissionEngine:
         elif not liquidity_ok:
             final = "BLOCKED"
             block_reason = f"liquidity filter ({liquidity_detail})"
+        elif not broker_health_ok:
+            final = "BLOCKED"
+            block_reason = f"broker criticality gate ({broker_health_detail})"
         else:
             final = "EXECUTE"
             block_reason = ""
@@ -371,6 +395,9 @@ class TradePermissionEngine:
             liquidity=liquidity_label,
             liquidity_detail=liquidity_detail,
             execution_mode=execution_mode,
+            broker=broker,
+            broker_criticality=broker_crit_label,
+            broker_health=broker_health_label,
             final_decision=final,
             block_reason=block_reason,
         )
@@ -526,6 +553,62 @@ class TradePermissionEngine:
         return MODE_NORMAL
 
     # ------------------------------------------------------------------
+    # Layer checks
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_broker_criticality(
+        broker: str,
+        side: str,
+    ) -> "tuple[str, bool, str]":
+        """Return ``(criticality_label, health_passes, detail)`` for *broker*.
+
+        Layer 6 rules (strictly enforced):
+        * SELL / exit orders always pass — positions must be closeable.
+        * OPTIONAL brokers (OKX, Binance, Alpaca) always pass — non-blocking.
+        * CRITICAL brokers (Kraken, Coinbase) block BUY when dead.
+        * Any import / runtime error → fail open (skip check).
+        """
+        if side.lower() not in ("long", "buy"):
+            return "N/A", True, "sell/exit — criticality not checked"
+
+        try:
+            from bot.broker_registry import get_broker_criticality, BrokerCriticality
+        except ImportError:
+            try:
+                from broker_registry import get_broker_criticality, BrokerCriticality  # type: ignore
+            except ImportError:
+                return "UNKNOWN", True, "broker_registry unavailable (skipped)"
+
+        crit = get_broker_criticality(broker)
+        crit_label = crit.value if hasattr(crit, "value") else str(crit)
+
+        if crit != BrokerCriticality.CRITICAL:
+            return crit_label, True, f"{broker} is OPTIONAL — non-blocking"
+
+        # CRITICAL broker: verify liveness via BrokerFailureManager.
+        try:
+            from bot.broker_failure_manager import get_broker_failure_manager
+        except ImportError:
+            try:
+                from broker_failure_manager import get_broker_failure_manager  # type: ignore
+            except ImportError:
+                return crit_label, True, "BrokerFailureManager unavailable (skipped)"
+
+        try:
+            bfm = get_broker_failure_manager()
+            if bfm.is_dead(broker.lower()):
+                delay = bfm.get_retry_delay(broker.lower())
+                return (
+                    crit_label,
+                    False,
+                    f"CRITICAL broker '{broker}' is dead (retry in {delay:.0f}s)",
+                )
+            return crit_label, True, f"CRITICAL broker '{broker}' is healthy"
+        except Exception as exc:
+            return crit_label, True, f"broker health check error: {exc} (skipped)"
+
+    # ------------------------------------------------------------------
     # Trace emission
     # ------------------------------------------------------------------
 
@@ -566,6 +649,18 @@ class TradePermissionEngine:
                 f"(${d.capital_balance:.2f} < ${d.capital_threshold:.2f} threshold)"
             )
 
+        # ── Broker criticality line ──────────────────────────────────────────
+        if d.broker_criticality == "N/A":
+            broker_crit_line = "N/A  (sell/exit — not checked)"
+        elif d.broker_health == "DEAD":
+            broker_crit_line = (
+                f"BLOCKED  ({d.broker} is DEAD — CRITICAL broker cannot trade)"
+            )
+        elif d.broker_criticality in ("OPTIONAL", "UNKNOWN"):
+            broker_crit_line = f"{d.broker_criticality}  ({d.broker} — non-blocking)"
+        else:
+            broker_crit_line = f"{d.broker_criticality}  ({d.broker} healthy)"
+
         # ── Final decision lines ─────────────────────────────────────────────
         if d.final_decision == "EXECUTE":
             verdict = "  final decision : EXECUTE"
@@ -582,6 +677,7 @@ class TradePermissionEngine:
             f"  capital        : {capital_line}\n"
             f"  liquidity      : {d.liquidity}  ({d.liquidity_detail})\n"
             f"  execution mode : {d.execution_mode}\n"
+            f"  broker crit    : {broker_crit_line}\n"
             f"  {'─' * 50}\n"
             f"{verdict}"
         )
