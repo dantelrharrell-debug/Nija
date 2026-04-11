@@ -4357,6 +4357,51 @@ class TradingStrategy:
                     logger.info(f"   Active exchanges: {', '.join(active_exchanges)}")
                     logger.info("=" * 70)
 
+                # ── Execution-layer balance sync bridge ───────────────────────
+                # Inject the live per-broker balances that were just fetched into
+                # AdvancedTradingManager so its capital allocator starts with real
+                # figures rather than the $0 placeholders it was constructed with.
+                # Must run AFTER BalanceService is seeded (above) and AFTER the
+                # LIVE CAPITAL SYNC COMPLETE confirmation so the log sequence is
+                # unambiguous.
+                if self.advanced_manager is not None and total_capital > 0:
+                    try:
+                        from exchange_risk_profiles import ExchangeType as _ExchangeType
+                        _synced: list = []
+                        for _bt, _broker in self.multi_account_manager.platform_brokers.items():
+                            if not (_broker and _broker.connected):
+                                continue
+                            _live_bal = BalanceService.get(_broker_key(_broker))
+                            if _live_bal <= 0.0:
+                                continue
+                            try:
+                                _ex_type = _ExchangeType(_bt.value)
+                                self.advanced_manager.update_exchange_balance(
+                                    _ex_type, _live_bal, 0.0
+                                )
+                                _synced.append(f"{_bt.value}: ${_live_bal:.2f}")
+                            except ValueError:
+                                # BrokerType has no matching ExchangeType — skip silently
+                                logger.debug(
+                                    "No ExchangeType mapping for broker %s — skipping sync",
+                                    _bt.value,
+                                )
+                        if _synced:
+                            logger.info(
+                                "✅ Advanced Trading Manager balances synced: %s",
+                                ", ".join(_synced),
+                            )
+                        else:
+                            logger.warning(
+                                "⚠️  Advanced Trading Manager sync: no per-broker balances "
+                                "injected (allocator may use initialisation defaults)"
+                            )
+                    except Exception as _sync_err:
+                        logger.warning(
+                            "⚠️  Could not sync balances into Advanced Trading Manager: %s",
+                            _sync_err,
+                        )
+
                 # USER BALANCE SNAPSHOT - Visual certainty of all account balances
                 # Added per Jan 2026 requirement for absolute visual confirmation
                 logger.info("")
