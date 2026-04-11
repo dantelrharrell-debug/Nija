@@ -9357,8 +9357,10 @@ class OKXBroker(BaseBroker):
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
 
-        # Initialize position tracker for profit-based exits
-        # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
+        # Initialize position tracker for profit-based exits.
+        # OKX is a degraded optional broker — a position-tracker failure puts the
+        # instance into degraded mode rather than crashing startup entirely.
+        self.position_tracker = None
         try:
             from position_tracker import PositionTracker
             # Resolve an absolute path for the data directory so the tracker works
@@ -9372,9 +9374,10 @@ class OKXBroker(BaseBroker):
             self.position_tracker = PositionTracker(storage_file=_okx_positions_file)
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
-            logger.error(f"❌ CAPITAL PROTECTION: Position tracker initialization FAILED: {e}")
-            logger.error("❌ Position tracker is MANDATORY for capital protection - cannot proceed")
-            raise RuntimeError(f"MANDATORY position_tracker initialization failed: {e}")
+            logger.warning(
+                "⚠️ OKX position tracker unavailable (degraded optional broker): %s", e
+            )
+            self._is_available = False
 
     def connect(self) -> bool:
         """

@@ -84,6 +84,11 @@ except ImportError:
 
 logger = logging.getLogger('nija.multi_account')
 
+# Broker types that are treated as degraded / optional.
+# Their platform connection failures do NOT block user initialisation; the
+# system continues in degraded mode (without that broker) instead of hard-stopping.
+_OPTIONAL_BROKER_TYPES: frozenset = frozenset({BrokerType.OKX})
+
 
 class ConnectionState(Enum):
     """Explicit connection state for platform brokers.
@@ -1605,7 +1610,16 @@ class MultiAccountBrokerManager:
         # Kraken is extremely sensitive to clock drift and nonce ordering.
         # Even a few seconds of clock skew triggers continuous "EAPI:Invalid nonce"
         # errors that block ALL accounts.  Platform must stabilise first.
+        #
+        # Brokers in _OPTIONAL_BROKER_TYPES (e.g. OKX) are exempted: their
+        # failure degrades the system but must NOT block user initialisation.
         for broker_type in list(self._platform_brokers.keys()):
+            if broker_type in _OPTIONAL_BROKER_TYPES:
+                logger.warning(
+                    "⚠️ Platform %s is an optional/degraded broker — skipping hard-block check.",
+                    broker_type.value.upper(),
+                )
+                continue
             if not self.wait_for_platform_ready(broker_type):
                 logger.error(
                     "⛔ PLATFORM-FIRST RULE: platform %s not ready — "
@@ -1615,6 +1629,13 @@ class MultiAccountBrokerManager:
                 return {}
 
         for broker_type in list(self._platform_failed_types):
+            if broker_type in _OPTIONAL_BROKER_TYPES:
+                logger.warning(
+                    "⚠️ Platform %s (optional/degraded) previously FAILED — "
+                    "continuing user initialisation without it.",
+                    broker_type.value.upper(),
+                )
+                continue
             logger.error(
                 "⛔ PLATFORM-FIRST RULE: platform %s connection previously FAILED — "
                 "refusing to connect user accounts.  Fix platform credentials/network "
@@ -1668,6 +1689,8 @@ class MultiAccountBrokerManager:
                     broker_type = BrokerType.ALPACA
                 elif user.broker_type.upper() == 'COINBASE':
                     broker_type = BrokerType.COINBASE
+                elif user.broker_type.upper() == 'OKX':
+                    broker_type = BrokerType.OKX
                 else:
                     logger.warning(f"⚠️  Unsupported broker type '{user.broker_type}' for {user.name}")
                     continue
