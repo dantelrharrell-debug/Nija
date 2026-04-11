@@ -4,6 +4,52 @@
 version: '3.8'
 
 services:
+  # ──────────────────────────────────────────────────────────────────────────
+  # NIJA Trading Bot — auto-restart watchdog via Docker restart policy
+  # Equivalent to systemd "Restart=on-failure".  The healthcheck drives
+  # Docker's built-in restart decision so a crashed or unhealthy container
+  # is always brought back up without manual intervention.
+  # ──────────────────────────────────────────────────────────────────────────
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nija-bot
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      PORT: ${PORT:-5000}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
+      COINBASE_API_KEY: ${COINBASE_API_KEY:-}
+      COINBASE_API_SECRET: ${COINBASE_API_SECRET:-}
+      COINBASE_PEM_CONTENT: ${COINBASE_PEM_CONTENT:-}
+      KRAKEN_MASTER_API_KEY: ${KRAKEN_MASTER_API_KEY:-}
+      KRAKEN_MASTER_API_SECRET: ${KRAKEN_MASTER_API_SECRET:-}
+      # Silent-mode throttles verbose scan logs (set to 1 to enable)
+      NIJA_SILENT_MODE: ${NIJA_SILENT_MODE:-0}
+      # Drawdown kill-switch (disable with NIJA_DRAWDOWN_KILL_SWITCH=0)
+      NIJA_DRAWDOWN_KILL_SWITCH: ${NIJA_DRAWDOWN_KILL_SWITCH:-1}
+    volumes:
+      - bot_data:/app/data
+      - bot_logs:/app/logs
+      - bot_cache:/app/cache
+    ports:
+      - "${PORT:-5000}:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import requests; requests.get('http://localhost:5000/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
@@ -157,6 +203,12 @@ volumes:
   api_cache:
     driver: local
   api_logs:
+    driver: local
+  bot_data:
+    driver: local
+  bot_logs:
+    driver: local
+  bot_cache:
     driver: local
 
 networks:
