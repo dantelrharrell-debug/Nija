@@ -363,6 +363,9 @@ class PortfolioStateManager:
         """Initialize the portfolio state manager."""
         self.platform_portfolio: Optional[PortfolioState] = None
         self.user_portfolios: Dict[str, UserPortfolioState] = {}
+        # Per-broker balance store — the single source of truth for balance reads.
+        # Keyed by lower-case broker name (e.g. "coinbase", "kraken").
+        self._broker_balances: Dict[str, float] = {}
         logger.info("PortfolioStateManager initialized")
 
     def initialize_platform_portfolio(self, available_cash: float) -> PortfolioState:
@@ -427,6 +430,56 @@ class PortfolioStateManager:
     def get_platform_portfolio(self) -> Optional[PortfolioState]:
         """Get master portfolio state."""
         return self.platform_portfolio
+
+    # ------------------------------------------------------------------
+    # Per-broker balance store — single source of truth
+    # ------------------------------------------------------------------
+
+    def update_broker_balance(self, broker_name: str, balance: float) -> None:
+        """
+        Store the authoritative balance for *broker_name*.
+
+        All startup seeding and run-cycle refresh calls write here so that
+        every downstream read site can use ``get_balance()`` instead of
+        reaching back to the broker or a secondary cache.
+
+        A zero / negative balance is silently ignored to guard against
+        transient API errors overwriting a valid previous value.
+
+        Args:
+            broker_name: Lower-case broker identifier, e.g. ``"coinbase"``.
+            balance:     Live USD balance returned by the broker.
+        """
+        if balance <= 0.0:
+            logger.debug(
+                "[PortfolioStateManager] update_broker_balance: ignoring "
+                "non-positive value %.2f for '%s'",
+                balance, broker_name,
+            )
+            return
+        self._broker_balances[broker_name.lower()] = balance
+        logger.debug(
+            "[PortfolioStateManager] %s balance stored: $%.2f",
+            broker_name, balance,
+        )
+
+    def get_balance(self, broker_name: str) -> float:
+        """
+        Return the stored balance for *broker_name*.
+
+        Returns ``0.0`` when no balance has been recorded yet (cache miss).
+
+        Args:
+            broker_name: Lower-case broker identifier, e.g. ``"coinbase"``.
+
+        Returns:
+            float: Last stored balance, or 0.0 if not yet populated.
+        """
+        return self._broker_balances.get(broker_name.lower(), 0.0)
+
+    def get_all_broker_balances(self) -> Dict[str, float]:
+        """Return a snapshot of all stored per-broker balances."""
+        return dict(self._broker_balances)
 
     def get_user_portfolio(self, user_id: str, broker_type: str) -> Optional[UserPortfolioState]:
         """

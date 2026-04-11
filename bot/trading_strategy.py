@@ -4233,21 +4233,28 @@ class TradingStrategy:
                 # Get master balance from broker_manager (sums all connected master brokers)
                 platform_balance = self.broker_manager.get_total_balance()
 
-                # ── Startup BalanceService seed ───────────────────────────────
-                # get_total_balance() calls broker.get_account_balance() internally
-                # but does NOT populate the BalanceService cache.  Seed it now so
-                # all downstream BalanceService.get() calls (breakdown log, portfolio
-                # init) return live values instead of the default $0.00.
+                # ── Startup balance seed ─────────────────────────────────────
+                # get_total_balance() calls broker.get_account_balance() but does
+                # NOT populate BalanceService or PortfolioStateManager.  Fetch once
+                # per broker here and write into BOTH stores so every downstream
+                # read site (breakdown log, portfolio init, advanced-manager sync)
+                # uses portfolio_manager.get_balance() as primary source of truth
+                # with BalanceService.get() as secondary fallback.
                 for _seed_bt, _seed_broker in self.multi_account_manager.platform_brokers.items():
                     if _seed_broker and _seed_broker.connected:
                         try:
-                            BalanceService.refresh(
-                                _broker_key(_seed_broker),
+                            _seed_key = _broker_key(_seed_broker)
+                            _seed_bal = BalanceService.refresh(
+                                _seed_key,
                                 lambda b=_seed_broker: b.get_account_balance(),
                             )
+                            if self.portfolio_manager and _seed_bal > 0:
+                                self.portfolio_manager.update_broker_balance(
+                                    _seed_key, _seed_bal
+                                )
                         except Exception as _seed_err:
                             logger.debug(
-                                "Could not seed BalanceService for %s: %s",
+                                "Could not seed balances for %s: %s",
                                 _seed_bt.value, _seed_err,
                             )
 
@@ -4259,7 +4266,11 @@ class TradingStrategy:
                 for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         try:
-                            balance = BalanceService.get(_broker_key(broker))
+                            _bk = _broker_key(broker)
+                            balance = (
+                                self.portfolio_manager.get_balance(_bk)
+                                if self.portfolio_manager else 0.0
+                            ) or BalanceService.get(_bk)
                             if broker_type == BrokerType.COINBASE:
                                 coinbase_balance = balance
                             elif broker_type == BrokerType.KRAKEN:
