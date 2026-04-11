@@ -4052,6 +4052,7 @@ class TradingStrategy:
             self.broker_manager = BrokerManager()  # Keep for backward compatibility
             connected_brokers = []
             user_brokers = []
+            total_capital = 0.0  # initialised here so it is always in scope at the TRADING ACTIVE gate
 
             # Add startup delay to avoid immediate rate limiting on restart
             # CRITICAL (Jan 2026): Increased to 45s to ensure API rate limits fully reset
@@ -4609,7 +4610,18 @@ class TradingStrategy:
             total_active = active_platform_count + active_user_count
             platform_account_connected = _broker_connected
             logger.info(f"DEBUG: active_platform_count={active_platform_count}, active_user_count={active_user_count}, total_active={total_active}")
-            if platform_account_connected or total_active > 0:
+            # Priority 1 — Ensure PortfolioStateManager has the live balance BEFORE the
+            # trading loop starts.  The initialise_platform_portfolio() calls earlier in this
+            # method are conditional on total_capital > 0.  This final sync is unconditional
+            # so the loop always receives a non-stale cash figure.
+            if self.portfolio_manager and total_capital > 0:
+                try:
+                    self.portfolio_manager.initialize_platform_portfolio(total_capital)
+                    logger.info("✅ PortfolioStateManager pre-loop balance sync: $%.2f", total_capital)
+                except Exception as _psm_sync_err:
+                    logger.warning("⚠️  Pre-loop portfolio balance sync failed: %s", _psm_sync_err)
+
+            if (platform_account_connected or total_active > 0) and total_capital >= MINIMUM_TRADING_BALANCE:
                 logger.info(f"🚀 TRADING ACTIVE: {total_active} account(s) ready")
                 if platform_account_connected:
                     logger.info("🚀 STARTING CORE TRADING LOOP (platform ready)")
@@ -4650,6 +4662,19 @@ class TradingStrategy:
                 if active_user_count == 0:
                     logger.info("💡 Tip: Add user accounts to enable multi-user trading")
                     logger.info("   See config/users/ for user configuration")
+            elif (platform_account_connected or total_active > 0) and total_capital < MINIMUM_TRADING_BALANCE:
+                # Broker is connected but capital is below the trading floor — do NOT
+                # show "TRADING ACTIVE" because no orders can be placed.
+                logger.error("=" * 70)
+                logger.error("⚠️  BROKER CONNECTED — INSUFFICIENT CAPITAL TO TRADE")
+                logger.error("=" * 70)
+                logger.error(f"   Current capital : ${total_capital:.2f}")
+                logger.error(f"   Minimum required: ${MINIMUM_TRADING_BALANCE:.2f}")
+                logger.error(f"   Shortfall       : ${MINIMUM_TRADING_BALANCE - total_capital:.2f}")
+                logger.error("")
+                logger.error("   🛑 Trading loop will NOT start until capital is above minimum")
+                logger.error("   💵 Fund your account and restart the bot")
+                logger.error("=" * 70)
             else:
                 logger.error("❌ NO TRADING ACTIVE - All connection attempts failed")
                 logger.error("")
@@ -8430,6 +8455,8 @@ class TradingStrategy:
                 return active_broker.get_account_balance(verbose=True)
 
             account_balance = BalanceService.refresh(_bs_key, _orchestrator_fetch)
+            # Priority 2 — hard diagnostic: if this prints 0.00 the balance fetch is the blocker
+            logger.info(f"EXECUTION BALANCE CHECK: {account_balance}")
 
             # Build balance_data dict for downstream code that reads total_held / total_funds.
             _detailed = BalanceService.get_detailed(_bs_key)
