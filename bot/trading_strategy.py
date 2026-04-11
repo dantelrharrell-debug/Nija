@@ -4382,7 +4382,11 @@ class TradingStrategy:
                         for _bt, _broker in self.multi_account_manager.platform_brokers.items():
                             if not (_broker and _broker.connected):
                                 continue
-                            _live_bal = BalanceService.get(_broker_key(_broker))
+                            _bk3 = _broker_key(_broker)
+                            _live_bal = (
+                                self.portfolio_manager.get_balance(_bk3)
+                                if self.portfolio_manager else 0.0
+                            ) or BalanceService.get(_bk3)
                             if _live_bal <= 0.0:
                                 continue
                             try:
@@ -4546,13 +4550,11 @@ class TradingStrategy:
                             for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                                 if broker and broker.connected:
                                     try:
-                                        broker_balance = BalanceService.get(_broker_key(broker))
-                                        # Fallback: seed was skipped or failed — fetch directly
-                                        if broker_balance == 0.0:
-                                            broker_balance = BalanceService.refresh(
-                                                _broker_key(broker),
-                                                lambda b=broker: b.get_account_balance(),
-                                            )
+                                        _bk2 = _broker_key(broker)
+                                        # Single source of truth: portfolio_manager, BalanceService as fallback
+                                        broker_balance = (
+                                            self.portfolio_manager.get_balance(_bk2)
+                                        ) or BalanceService.get(_bk2)
                                         total_platform_cash += broker_balance
                                         platform_broker_balances.append(f"{broker_type.value}: ${broker_balance:.2f}")
                                         logger.info(f"   💰 Platform broker {broker_type.value}: ${broker_balance:.2f}")
@@ -8567,6 +8569,27 @@ class TradingStrategy:
             if account_balance > 0:
                 self._last_known_balance = account_balance
             _cycle_start_balance = account_balance
+
+            # ── PortfolioStateManager → AdvancedTradingManager sync ───────────
+            # Every cycle: push the freshly-fetched balance into portfolio_manager
+            # (single source of truth) then forward it to advanced_manager so the
+            # capital allocator and position-sizing logic always use the live figure.
+            if account_balance > 0 and self.portfolio_manager is not None:
+                self.portfolio_manager.update_broker_balance(_bs_key, account_balance)
+                if self.advanced_manager is not None:
+                    try:
+                        from exchange_risk_profiles import ExchangeType as _ExchangeType
+                        _ex_cycle = _ExchangeType(_bs_key)
+                        _in_pos_cycle = (
+                            self.platform_portfolio.total_position_value
+                            if getattr(self, 'platform_portfolio', None) is not None
+                            else 0.0
+                        )
+                        self.advanced_manager.update_exchange_balance(
+                            _ex_cycle, account_balance, _in_pos_cycle
+                        )
+                    except (ValueError, Exception):
+                        pass  # Unknown ExchangeType or unavailable — safe to skip
 
             _btg_broker_name = self._get_broker_name(active_broker) if active_broker else "unknown"
             logger.info("✅ BALANCE: %s $%.2f", _btg_broker_name.upper(), account_balance)
