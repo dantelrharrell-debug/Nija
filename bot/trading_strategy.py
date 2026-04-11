@@ -12927,9 +12927,13 @@ class TradingStrategy:
                                 # The regime controller evaluates the GLOBAL market
                                 # environment after the scan loop.  Its decision from
                                 # the PREVIOUS cycle is used here to gate entries.
-                                # Exception: bypass regime block for first-trade force,
-                                # BUT only when the regime is not CRISIS — CRISIS always
-                                # wins, even for the first trade, to protect capital.
+                                # Exceptions (CRISIS always wins — protects capital):
+                                #   1. First-trade force: bypass UNFAVORABLE to guarantee
+                                #      the bot makes at least one trade on startup.
+                                #   2. B-grade fallback (zero_signal_streak ≥
+                                #      FORCED_ENTRY_FALLBACK_CYCLES): bypass UNFAVORABLE
+                                #      so extended dry streaks don't permanently silence
+                                #      the bot.  CRISIS is never bypassed.
                                 if not _regime_entries_allowed:
                                     _is_crisis = (
                                         _regime_result is not None
@@ -12941,9 +12945,18 @@ class TradingStrategy:
                                         and self._first_trade_force_active
                                         and not _is_crisis
                                     )
+                                    _bgrade_regime_bypass = (
+                                        _hard_bypass_triggered
+                                        and not _is_crisis
+                                    )
                                     if _first_trade_regime_bypass:
                                         logger.info(
                                             f"   ⚡ {symbol}: REGIME BLOCK overridden by first-trade force trigger"
+                                        )
+                                    elif _bgrade_regime_bypass:
+                                        logger.info(
+                                            f"   ⚡ {symbol}: REGIME BLOCK overridden by b-grade fallback "
+                                            f"(zero_signal_streak={self._zero_signal_streak})"
                                         )
                                     else:
                                         logger.info(
@@ -14169,23 +14182,23 @@ class TradingStrategy:
                                     continue
 
                                 # ── NOTIONAL-AWARE ENTRY GATE ───────────────────────────────────
-                                # Skip trade if position_size < min_notional * 1.5 (50% safety
+                                # Skip trade if position_size < min_notional * 1.2 (20% safety
                                 # buffer above the broker's exchange minimum).  Prevents micro
-                                # entries permanently — better to skip than to open a position
-                                # that cannot survive a normal adverse move or be sold cleanly.
-                                # Buffer raised from 1.2× to 1.5× for stronger protection.
+                                # entries — better to skip than to open a position that cannot
+                                # survive a normal adverse move or be sold cleanly.
+                                # Buffer lowered from 1.5× to 1.2× to allow small accounts to trade.
                                 if MINIMUM_NOTIONAL_GATE_AVAILABLE and get_minimum_notional_gate:
                                     try:
                                         _notional_gate = get_minimum_notional_gate()
                                         _min_notional = _notional_gate.get_minimum_for_symbol(symbol, broker_name)
-                                        _notional_threshold = _min_notional * 1.5
+                                        _notional_threshold = _min_notional * 1.2
                                         if position_size < _notional_threshold:
                                             filter_stats['position_too_small'] += 1
                                             logger.info(f"   🚫 NOTIONAL GATE: Micro entry rejected for {symbol}")
                                             logger.info(
                                                 f"      Position ${position_size:.2f} < "
                                                 f"${_notional_threshold:.2f} "
-                                                f"(min_notional=${_min_notional:.2f} × 1.5 safety buffer)"
+                                                f"(min_notional=${_min_notional:.2f} × 1.2 safety buffer)"
                                             )
                                             logger.info(f"      Micro entry prevention: raise balance or wait for larger signal")
                                             continue
