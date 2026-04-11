@@ -166,6 +166,10 @@ class TradeDecision:
     # ── Layer 5: Execution mode ──────────────────────────────────────────────
     execution_mode: str       # one of the MODE_* constants
 
+    # ── Final verdict ────────────────────────────────────────────────────────
+    final_decision: str       # "EXECUTE" | "BLOCKED"
+    block_reason: str         # human-readable reason; empty when EXECUTE
+
     # ── Layer 6: Broker Criticality ──────────────────────────────────────────
     # Minimum viable execution set: ≥1 CRITICAL broker connected.
     # OPTIONAL broker (OKX, Binance, Alpaca) failure → always pass.
@@ -173,10 +177,6 @@ class TradeDecision:
     broker: str = ""
     broker_criticality: str = "UNKNOWN"   # "CRITICAL" | "OPTIONAL" | "UNKNOWN"
     broker_health: str = "UNKNOWN"        # "HEALTHY" | "DEAD" | "UNKNOWN"
-
-    # ── Final verdict ────────────────────────────────────────────────────────
-    final_decision: str       # "EXECUTE" | "BLOCKED"
-    block_reason: str         # human-readable reason; empty when EXECUTE
 
     timestamp: float = field(default_factory=time.time)
 
