@@ -4233,6 +4233,24 @@ class TradingStrategy:
                 # Get master balance from broker_manager (sums all connected master brokers)
                 platform_balance = self.broker_manager.get_total_balance()
 
+                # ── Startup BalanceService seed ───────────────────────────────
+                # get_total_balance() calls broker.get_account_balance() internally
+                # but does NOT populate the BalanceService cache.  Seed it now so
+                # all downstream BalanceService.get() calls (breakdown log, portfolio
+                # init) return live values instead of the default $0.00.
+                for _seed_bt, _seed_broker in self.multi_account_manager.platform_brokers.items():
+                    if _seed_broker and _seed_broker.connected:
+                        try:
+                            BalanceService.refresh(
+                                _broker_key(_seed_broker),
+                                lambda b=_seed_broker: b.get_account_balance(),
+                            )
+                        except Exception as _seed_err:
+                            logger.debug(
+                                "Could not seed BalanceService for %s: %s",
+                                _seed_bt.value, _seed_err,
+                            )
+
                 # Break down master balance by broker for transparency
                 coinbase_balance = 0.0
                 kraken_balance = 0.0
@@ -4473,6 +4491,12 @@ class TradingStrategy:
                                 if broker and broker.connected:
                                     try:
                                         broker_balance = BalanceService.get(_broker_key(broker))
+                                        # Fallback: seed was skipped or failed — fetch directly
+                                        if broker_balance == 0.0:
+                                            broker_balance = BalanceService.refresh(
+                                                _broker_key(broker),
+                                                lambda b=broker: b.get_account_balance(),
+                                            )
                                         total_platform_cash += broker_balance
                                         platform_broker_balances.append(f"{broker_type.value}: ${broker_balance:.2f}")
                                         logger.info(f"   💰 Platform broker {broker_type.value}: ${broker_balance:.2f}")
