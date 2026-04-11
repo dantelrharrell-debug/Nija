@@ -104,6 +104,18 @@ except ImportError:
         get_liquidity_detection_engine = None  # type: ignore
         logger.warning("LiquidityDetectionEngine not available")
 
+try:
+    from execution_integrity_layer import get_execution_integrity_layer
+    _EIL_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.execution_integrity_layer import get_execution_integrity_layer
+        _EIL_AVAILABLE = True
+    except ImportError:
+        _EIL_AVAILABLE = False
+        get_execution_integrity_layer = None  # type: ignore
+        logger.warning("ExecutionIntegrityLayer not available — fill integrity checks disabled")
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -335,6 +347,35 @@ class ExecutionRouter:
                 "❌ Order failed: %s %s $%.2f — %s",
                 request.side, request.symbol, request.size_usd, result.error,
             )
+
+        # ── Fill Integrity check ──────────────────────────────────────
+        # Register the fill with the Execution Integrity Layer and override
+        # result.success to False if the actual fill is an underfill.
+        if _EIL_AVAILABLE and result.success:
+            try:
+                eil = get_execution_integrity_layer()
+                cycle_id = result.metadata.get("cycle_id", "default")
+                verdict = eil.register_fill(
+                    cycle_id=cycle_id,
+                    intended_size_usd=request.size_usd,
+                    actual_fill_usd=result.filled_size_usd,
+                    order_id=result.metadata.get("order_id"),
+                    symbol=request.symbol,
+                    side=request.side,
+                )
+                result.metadata["fill_integrity"] = verdict.to_dict()
+                if not verdict.is_acceptable:
+                    logger.error(
+                        "🔒 FILL INTEGRITY: overriding success=True→False for %s %s — %s",
+                        request.side, request.symbol, verdict.reason,
+                    )
+                    result.success = False
+                    result.error = (
+                        f"fill_integrity: {verdict.reason} "
+                        f"(filled={verdict.fill_ratio:.1%})"
+                    )
+            except Exception as _eil_exc:
+                logger.debug("ExecutionIntegrityLayer check skipped: %s", _eil_exc)
 
         return result
 
