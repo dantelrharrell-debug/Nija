@@ -1557,6 +1557,21 @@ except ImportError:
         get_log_rate_limiter = None  # type: ignore
         logger.warning("⚠️ Log Rate Limiter not available - log throttling disabled")
 
+# Import First-Trade Observer — end-to-end signal → execution chain observability
+try:
+    from first_trade_observer import get_first_trade_observer as _get_first_trade_observer
+    FIRST_TRADE_OBSERVER_AVAILABLE = True
+    logger.info("✅ FirstTradeObserver loaded — signal→fill chain observability active")
+except ImportError:
+    try:
+        from bot.first_trade_observer import get_first_trade_observer as _get_first_trade_observer
+        FIRST_TRADE_OBSERVER_AVAILABLE = True
+        logger.info("✅ FirstTradeObserver loaded — signal→fill chain observability active")
+    except ImportError:
+        FIRST_TRADE_OBSERVER_AVAILABLE = False
+        _get_first_trade_observer = None  # type: ignore
+        logger.debug("FirstTradeObserver not available — first-trade chain observability disabled")
+
 # Import Capital Scaling Engine — automatically increases deposits into winning accounts
 try:
     from capital_scaling_engine import get_capital_engine
@@ -2603,7 +2618,16 @@ except ValueError:
 # ⚠️  Positions under $10 face significant fee pressure (~1.4% round-trip on Coinbase).
 # Raise this value (e.g. to 10.0) on well-funded accounts for better fee efficiency.
 BASE_MIN_POSITION_SIZE_USD = 1.0  # Floor minimum ($1 - allows tiny positions when required)
-DYNAMIC_POSITION_SIZE_PCT = 0.35  # 35% of balance per position (moderate/aggressive: 0.25→0.35)
+DYNAMIC_POSITION_SIZE_PCT = 0.35  # 35% of balance per position (normal accounts ≥ $500)
+# Tiered floor percentages — lower for micro accounts so WAIT-signal 50%-sized
+# positions (and other scaled-down entries) can clear the dynamic minimum check.
+#   < $200 → 15 %  (e.g. $94.63 → floor = $14.19; WAIT half-size ≈ $16 passes)
+#   $200–$499 → 25 %
+#   ≥ $500   → DYNAMIC_POSITION_SIZE_PCT (35 %)
+DYNAMIC_PCT_MICRO: float = 0.15   # accounts < $200
+DYNAMIC_PCT_SMALL: float = 0.25   # accounts $200–$499
+DYNAMIC_THRESHOLD_MICRO: float = 200.0
+DYNAMIC_THRESHOLD_SMALL: float = 500.0
 POSITION_SIZE_WARNING_THRESHOLD_USD = 10.0  # Warn when position is under this amount (near recommended minimum)
 
 # OPTION B: Brokerage-specific minimum trade sizes
@@ -2650,9 +2674,20 @@ def get_dynamic_min_position_size(balance: float, broker_name: str = '') -> floa
         BASE_MIN_POSITION_SIZE_USD,
     )
 
+    # Tiered floor percentage: micro accounts use a much lower floor so that
+    # WAIT-halved positions (50% starter sizing) and other scaled-down entries
+    # are not silently rejected.  E.g. for a $94.63 account, 15% = $14.19
+    # which lets a $16 WAIT-sized position pass through cleanly.
+    if balance < DYNAMIC_THRESHOLD_MICRO:
+        dynamic_floor_pct = DYNAMIC_PCT_MICRO
+    elif balance < DYNAMIC_THRESHOLD_SMALL:
+        dynamic_floor_pct = DYNAMIC_PCT_SMALL
+    else:
+        dynamic_floor_pct = DYNAMIC_POSITION_SIZE_PCT
+
     # Enforce: max(MIN_POSITION_USD floor, base floor, balance-based dynamic, brokerage minimum)
     # MIN_POSITION_USD is the absolute hard floor (prevents any sub-$5 entry regardless of config)
-    return max(MIN_POSITION_USD, BASE_MIN_POSITION_SIZE_USD, balance * DYNAMIC_POSITION_SIZE_PCT, brokerage_min)
+    return max(MIN_POSITION_USD, BASE_MIN_POSITION_SIZE_USD, balance * dynamic_floor_pct, brokerage_min)
 
 
 def get_tradable_min_size(broker_name: str = '') -> float:
@@ -12895,6 +12930,19 @@ class TradingStrategy:
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
 
+                                # ── First-Trade Observer: SIGNAL_GENERATED checkpoint ──────
+                                if FIRST_TRADE_OBSERVER_AVAILABLE and _get_first_trade_observer and not self._first_trade_executed:
+                                    try:
+                                        _fto = _get_first_trade_observer()
+                                        if not _fto.is_complete:
+                                            _fto.record(
+                                                _fto.SIGNAL_GENERATED,
+                                                symbol=symbol,
+                                                detail=f"action={action} score={entry_score:.1f}",
+                                            )
+                                    except Exception as _fto_err:
+                                        logger.debug("FirstTradeObserver SIGNAL_GENERATED skipped: %s", _fto_err)
+
                                 # ═══════════════════════════════════════════════════════
                                 # SMART EXECUTION LAYER — NORMAL / FORCED / SKIP
                                 # Evaluates volatility (ATR%), spread, and rolling win
@@ -14610,6 +14658,9 @@ class TradingStrategy:
                                 # Calculate dynamic minimum based on account balance and
                                 # brokerage-specific minimums (Option B – prevent dust at creation)
                                 broker_name = self._get_broker_name(active_broker)
+                                # Define micro-account flag early so it is guaranteed to be
+                                # in scope for all subsequent gates (notional, optimizer, etc.)
+                                _is_micro_account = account_balance < 150.0
                                 min_position_size_dynamic = get_dynamic_min_position_size(
                                     account_balance, broker_name
                                 )
@@ -14683,14 +14734,18 @@ class TradingStrategy:
                                     try:
                                         _notional_gate = get_minimum_notional_gate()
                                         _min_notional = _notional_gate.get_minimum_for_symbol(symbol, broker_name)
-                                        _notional_threshold = _min_notional * 1.2
+                                        # Micro accounts use a tighter 1.05× buffer (was 1.2×) so
+                                        # WAIT-halved positions on sub-$200 balances can clear this
+                                        # gate without needing to be > 120% of the exchange minimum.
+                                        _notional_buffer = 1.05 if _is_micro_account else 1.2
+                                        _notional_threshold = _min_notional * _notional_buffer
                                         if position_size < _notional_threshold:
                                             filter_stats['position_too_small'] += 1
                                             logger.info(f"   🚫 NOTIONAL GATE: Micro entry rejected for {symbol}")
                                             logger.info(
                                                 f"      Position ${position_size:.2f} < "
                                                 f"${_notional_threshold:.2f} "
-                                                f"(min_notional=${_min_notional:.2f} × 1.2 safety buffer)"
+                                                f"(min_notional=${_min_notional:.2f} × {_notional_buffer} safety buffer)"
                                             )
                                             logger.info(f"      Micro entry prevention: raise balance or wait for larger signal")
                                             continue
@@ -15469,6 +15524,24 @@ class TradingStrategy:
                             _ps_position_size = _sig_data['position_size']
                             _ps_action = _sig_data['action']
 
+                            # ── First-Trade Observer: GATES_PASSED + SIZE_COMPUTED ──
+                            if FIRST_TRADE_OBSERVER_AVAILABLE and _get_first_trade_observer and not self._first_trade_executed:
+                                try:
+                                    _fto = _get_first_trade_observer()
+                                    if not _fto.is_complete:
+                                        _fto.record(
+                                            _fto.GATES_PASSED,
+                                            symbol=_ps_symbol,
+                                            detail=f"action={_ps_action}",
+                                        )
+                                        _fto.record(
+                                            _fto.SIZE_COMPUTED,
+                                            symbol=_ps_symbol,
+                                            size_usd=_ps_position_size,
+                                        )
+                                except Exception as _fto_gates_err:
+                                    logger.debug("FirstTradeObserver GATES_PASSED skipped: %s", _fto_gates_err)
+
                             # Leak #2 — verify price hasn't drifted since signal was stamped
                             if hasattr(self, 'latency_drift_guard') and self.latency_drift_guard is not None:
                                 _drift_token = _ps_analysis.get('_drift_token')
@@ -15500,6 +15573,15 @@ class TradingStrategy:
                                 f"(score={_sig_data['entry_score']:.1f})"
                             )
 
+                            # ── First-Trade Observer: ORDER_SUBMITTED checkpoint ───
+                            if FIRST_TRADE_OBSERVER_AVAILABLE and _get_first_trade_observer and not self._first_trade_executed:
+                                try:
+                                    _fto = _get_first_trade_observer()
+                                    if not _fto.is_complete:
+                                        _fto.record(_fto.ORDER_SUBMITTED, symbol=_ps_symbol)
+                                except Exception as _fto_sub_err:
+                                    logger.debug("FirstTradeObserver ORDER_SUBMITTED skipped: %s", _fto_sub_err)
+
                             _ps_success = self.apex.execute_action(_ps_analysis, _ps_symbol)
                             if _ps_success:
                                 # Store entry reason for PatternWinTracker lookup on close
@@ -15519,6 +15601,21 @@ class TradingStrategy:
                                     self._first_trade_executed = True
                                     self._first_trade_force_active = False  # force trigger no longer needed
                                     logger.info("🚀 FIRST TRADE GUARANTEE: initial deployment confirmed ✅")
+
+                                # ── First-Trade Observer: ORDER_FILLED + POSITION_CONFIRMED ──
+                                if FIRST_TRADE_OBSERVER_AVAILABLE and _get_first_trade_observer:
+                                    try:
+                                        _fto = _get_first_trade_observer()
+                                        if not _fto.is_complete:
+                                            _fto.record(
+                                                _fto.ORDER_FILLED,
+                                                symbol=_ps_symbol,
+                                                fill_price=_fill_entry,
+                                                size_usd=_ps_position_size,
+                                            )
+                                            _fto.record(_fto.POSITION_CONFIRMED, symbol=_ps_symbol)
+                                    except Exception as _fto_fill_err:
+                                        logger.debug("FirstTradeObserver ORDER_FILLED skipped: %s", _fto_fill_err)
 
                                 # ── Execution Risk Firewall: record fill for anomaly detection ──
                                 if (
