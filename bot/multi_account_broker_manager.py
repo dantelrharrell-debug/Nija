@@ -112,8 +112,9 @@ except ImportError:
         _ERF_AVAILABLE = False
 
 # Broker types that are treated as degraded / optional.
-# Their platform connection failures do NOT block user initialisation; the
-# system continues in degraded mode (without that broker) instead of hard-stopping.
+# DEPRECATED: use broker_registry.get_criticality() instead.  Retained for
+# any external callers that still reference this symbol; the logic inside
+# connect_users_from_config() now uses the registry-based criticality check.
 _OPTIONAL_BROKER_TYPES: frozenset = frozenset({BrokerType.OKX})
 
 
@@ -842,11 +843,25 @@ class MultiAccountBrokerManager:
         # immediately rather than sitting out a long timeout.
         if broker_type == BrokerType.KRAKEN:
             _KRAKEN_STARTUP_FSM.mark_failed()
-        logger.error(
-            "⛔ Platform %s connection FAILED — user accounts BLOCKED until "
-            "platform reconnects.  Fix credentials or network, then restart.",
-            broker_type.value.upper(),
+        # Log at ERROR for CRITICAL brokers (they block trading) and WARNING
+        # for non-CRITICAL brokers (system degrades but continues without them).
+        _is_critical = (
+            broker_registry is not None
+            and BrokerCriticality is not None
+            and broker_registry.get_criticality(broker_type.value) == BrokerCriticality.CRITICAL
         )
+        if _is_critical:
+            logger.error(
+                "⛔ Platform %s (CRITICAL) connection FAILED — user accounts BLOCKED until "
+                "platform reconnects.  Fix credentials or network, then restart.",
+                broker_type.value.upper(),
+            )
+        else:
+            logger.warning(
+                "⚠️ Platform %s (non-CRITICAL) connection FAILED — system continues "
+                "without this broker.  Fix credentials or network when possible.",
+                broker_type.value.upper(),
+            )
         # Unblock any threads waiting in wait_for_platform_ready() so they
         # can observe the FAILED state and return False immediately instead
         # of waiting until an optional timeout expires.
@@ -1691,44 +1706,55 @@ class MultiAccountBrokerManager:
             dict: Summary of connected users by brokerage
                   Format: {brokerage: [user_ids]}
         """
-        # HARD BLOCK — Platform must connect FIRST.
+        # HARD BLOCK — Platform must connect FIRST (for CRITICAL brokers only).
         # Two cases to guard:
         #   A) Platform broker registered (normal path): wait until CONNECTED.
         #   B) Platform connection ATTEMPTED but failed before registration:
         #      mark_platform_failed() populates _platform_failed_types so we
         #      can catch this even though the broker is not in _platform_brokers.
         #
-        # Kraken is extremely sensitive to clock drift and nonce ordering.
-        # Even a few seconds of clock skew triggers continuous "EAPI:Invalid nonce"
-        # errors that block ALL accounts.  Platform must stabilise first.
+        # Broker roles (from broker_registry.get_criticality()):
+        #   CRITICAL (e.g. Kraken)  — nonce-sensitive; failure BLOCKS all user
+        #                             connections until the platform reconnects.
+        #   PRIMARY  (e.g. Coinbase) — first-choice execution venue; failure is
+        #                             tolerated — system continues without it.
+        #   OPTIONAL / DEFERRED     — supplementary; skipped on failure entirely.
         #
-        # Brokers in _OPTIONAL_BROKER_TYPES (e.g. OKX) are exempted: their
-        # failure degrades the system but must NOT block user initialisation.
+        # Only CRITICAL brokers trigger a hard stop.  Every other tier is logged
+        # and skipped so that a Coinbase outage never blocks Kraken-connected users.
+
+        def _is_critical_broker(bt: BrokerType) -> bool:
+            """Return True only when this broker has CRITICAL criticality."""
+            if broker_registry is not None and BrokerCriticality is not None:
+                return broker_registry.get_criticality(bt.value) == BrokerCriticality.CRITICAL
+            # Safe fallback when registry is unavailable: only Kraken is critical.
+            return bt == BrokerType.KRAKEN
+
         for broker_type in list(self._platform_brokers.keys()):
-            if broker_type in _OPTIONAL_BROKER_TYPES:
-                logger.warning(
-                    "⚠️ Platform %s is an optional/degraded broker — skipping hard-block check.",
+            if not _is_critical_broker(broker_type):
+                logger.info(
+                    "ℹ️  Platform %s is non-CRITICAL — skipping platform-first hard-block check.",
                     broker_type.value.upper(),
                 )
                 continue
             if not self.wait_for_platform_ready(broker_type):
                 logger.error(
-                    "⛔ PLATFORM-FIRST RULE: platform %s not ready — "
+                    "⛔ PLATFORM-FIRST RULE: platform %s (CRITICAL) not ready — "
                     "skipping ALL user connections to protect nonce integrity.",
                     broker_type.value.upper(),
                 )
                 return {}
 
         for broker_type in list(self._platform_failed_types):
-            if broker_type in _OPTIONAL_BROKER_TYPES:
+            if not _is_critical_broker(broker_type):
                 logger.warning(
-                    "⚠️ Platform %s (optional/degraded) previously FAILED — "
+                    "⚠️ Platform %s (non-CRITICAL) previously FAILED — "
                     "continuing user initialisation without it.",
                     broker_type.value.upper(),
                 )
                 continue
             logger.error(
-                "⛔ PLATFORM-FIRST RULE: platform %s connection previously FAILED — "
+                "⛔ PLATFORM-FIRST RULE: platform %s (CRITICAL) connection previously FAILED — "
                 "refusing to connect user accounts.  Fix platform credentials/network "
                 "and restart the bot.",
                 broker_type.value.upper(),
