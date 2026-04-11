@@ -259,6 +259,33 @@ class PortfolioState:
         self._last_known_cash = new_cash
         self.available_cash = new_cash
 
+    def get_pnl_adjusted_capital(self, unrealized_confidence: float = 0.8) -> float:
+        """Return cash adjusted for unrealized P&L with a conservative confidence factor.
+
+        Unrealized **gains** are discounted by ``unrealized_confidence`` because
+        they may reverse before a position closes.  Unrealized **losses** are
+        applied in full (factor = 1.0) because they represent committed
+        capital draw-down.
+
+        Formula::
+
+            adjusted = available_cash
+                     + max(unrealized_pnl, 0) * unrealized_confidence
+                     + min(unrealized_pnl, 0)          # losses applied fully
+
+        Args:
+            unrealized_confidence: Fraction of unrealized gains to count as
+                deployable capital.  Must be in [0, 1].  Default is 0.8.
+
+        Returns:
+            PnL-adjusted deployable capital in USD (never below 0).
+        """
+        unrealized_confidence = max(0.0, min(1.0, unrealized_confidence))
+        pnl = self.unrealized_pnl
+        gains = max(pnl, 0.0) * unrealized_confidence
+        losses = min(pnl, 0.0)  # negative, applied at full weight
+        return max(0.0, self.available_cash + gains + losses)
+
     def get_summary(self) -> Dict:
         """Get a summary of the portfolio state."""
         return {
@@ -522,6 +549,70 @@ class PortfolioStateManager:
         if self.platform_portfolio is None:
             return 0.0
         return self.platform_portfolio.total_position_value
+
+    def get_pnl_adjusted_total(self, unrealized_confidence: float = 0.8) -> float:
+        """Return the PnL-adjusted total capital available for trade sizing.
+
+        Combines the effective cash balance from all active brokers with a
+        conservatively discounted view of unrealized P&L from the platform
+        portfolio.  This is the figure that should feed position-sizing models
+        so they grow with realised profits but do not over-size on paper gains.
+
+        Args:
+            unrealized_confidence: Fraction of unrealized gains to treat as
+                deployable.  Losses are always applied at full weight.
+                Default is 0.8.
+
+        Returns:
+            PnL-adjusted total capital in USD (floored at 0).
+        """
+        cash_total = self.get_total_balance()
+        if self.platform_portfolio is None:
+            return cash_total
+
+        # Apply PnL adjustment on top of the cash total.
+        pnl = self.platform_portfolio.unrealized_pnl
+        confidence = max(0.0, min(1.0, unrealized_confidence))
+        gains_contribution = max(pnl, 0.0) * confidence
+        losses_contribution = min(pnl, 0.0)  # always full weight
+        adjusted = cash_total + gains_contribution + losses_contribution
+        return max(0.0, adjusted)
+
+    def get_deployable_capital_with_reservations(
+        self, unrealized_confidence: float = 0.8
+    ) -> float:
+        """Return free deployable capital after subtracting in-flight reservations.
+
+        Uses the PnL-adjusted total as the starting point and then deducts
+        capital that has already been reserved (granted) by
+        ``CapitalOrchestrationEngine.request_allocation()`` but not yet
+        released.  This prevents concurrent trade-sizing calls from
+        over-promising the same dollars.
+
+        Args:
+            unrealized_confidence: Passed through to ``get_pnl_adjusted_total``.
+
+        Returns:
+            Free deployable capital in USD (floored at 0).
+        """
+        total = self.get_pnl_adjusted_total(unrealized_confidence)
+
+        # Deduct reservations tracked by the orchestration engine.
+        try:
+            from capital_orchestration_engine import get_capital_orchestration_engine  # type: ignore[import]
+        except ImportError:
+            try:
+                from bot.capital_orchestration_engine import get_capital_orchestration_engine  # type: ignore[import]
+            except ImportError:
+                return max(0.0, total)
+
+        try:
+            report = get_capital_orchestration_engine().get_report()
+            in_use = report.get("total_in_use_usd", 0.0)
+        except Exception:
+            in_use = 0.0
+
+        return max(0.0, total - in_use)
 
     def initialize_platform_portfolio(self, available_cash: float) -> PortfolioState:
         """
