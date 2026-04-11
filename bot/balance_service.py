@@ -53,6 +53,7 @@ class BalanceService:
     _last_update: Dict[str, float] = {}     # unix timestamp of last successful refresh
     _refreshing: Dict[str, bool] = {}       # in-flight guard per broker key
     _ttl: float = float(os.environ.get("NIJA_BALANCE_TTL_S", "30"))  # override via env
+    _last_logged: Dict[str, float] = {}     # last balance value that was INFO-logged per broker key
 
     # Latency tracking — updated on every successful refresh call
     _last_latency: Dict[str, float] = {}    # raw fetch duration (seconds) per broker key
@@ -174,7 +175,13 @@ class BalanceService:
                 if detailed:
                     cls._cache_detailed[broker_key] = detailed
                 cls._last_update[broker_key] = now
-                logger.info("[BalanceService] %s → $%.2f", broker_key, scalar)
+                # Throttle: only emit INFO when balance moves by $1 or more
+                _prev_logged = cls._last_logged.get(broker_key, -1.0)
+                if abs(scalar - _prev_logged) >= 1.0:
+                    logger.info("[BalanceService] %s → $%.2f", broker_key, scalar)
+                    cls._last_logged[broker_key] = scalar
+                else:
+                    logger.debug("[BalanceService] %s → $%.2f (no significant change)", broker_key, scalar)
             else:
                 # Still update the timestamp so the TTL gate prevents immediate retry
                 # storms when the exchange legitimately returns $0 (e.g. unfunded account).

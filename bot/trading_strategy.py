@@ -2758,6 +2758,10 @@ def get_balance_based_max_positions(balance: float) -> int:
 MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_dynamic_min_position_size() instead)
 MIN_BALANCE_TO_TRADE_USD = 1.0  # Minimum account balance to allow trading ($1 allows tiny-position accounts)
 
+# Minimum balance required to actively deploy new capital (open new positions).
+# Brokers below this threshold are marked PASSIVE (track-only) for the cycle.
+MIN_DEPLOYABLE_BALANCE = float(os.getenv("NIJA_MIN_DEPLOYABLE_BALANCE", "25.0"))
+
 # ── FIRST TRADE FORCE TRIGGER ──────────────────────────────────────────────
 # After this many consecutive zero-signal cycles while the first trade has not
 # yet been confirmed, the force trigger activates and bypasses soft gates
@@ -6870,6 +6874,30 @@ class TradingStrategy:
                 self.veto_count_session += 1
                 self.last_veto_reason = veto_reason
                 return False, veto_reason
+
+            # ── Deployable capital filter ──────────────────────────────────────
+            # Brokers below MIN_DEPLOYABLE_BALANCE cannot open new positions.
+            # They are marked PASSIVE (track-only) for this cycle so they do not
+            # waste scan time or consume margin on marginal accounts.
+            if balance < MIN_DEPLOYABLE_BALANCE:
+                if hasattr(broker, 'mode'):
+                    broker.mode = "PASSIVE"
+                veto_reason = (
+                    f"{broker_name.upper()} balance ${balance:.2f} < "
+                    f"${MIN_DEPLOYABLE_BALANCE:.2f} deployable minimum — marked PASSIVE"
+                )
+                logger.info(f"🚫 TRADE VETO: {veto_reason}")
+                self.veto_count_session += 1
+                self.last_veto_reason = veto_reason
+                return False, veto_reason
+            else:
+                # Restore ACTIVE when balance recovers above the deployable threshold
+                if hasattr(broker, 'mode') and broker.mode == "PASSIVE":
+                    broker.mode = "ACTIVE"
+                    logger.info(
+                        "   ✅ %s balance recovered to $%.2f — mode restored to ACTIVE",
+                        broker_name.upper(), balance,
+                    )
 
             # 🔒 CAPITAL PROTECTION: Final check - ensure broker has position_tracker
             if not hasattr(broker, 'position_tracker') or broker.position_tracker is None:
