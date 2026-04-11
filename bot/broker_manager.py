@@ -6424,11 +6424,14 @@ class KrakenBroker(BaseBroker):
                 # Also update global last call time
                 self._last_api_call_time = time.time()
 
-            # Stamp the nonce from the ONE global singleton — no fallback, no per-account source.
+            # Nonce is generated inside krakenex's query_private() via our
+            # _nonce_monotonic override (self.api._nonce = _nonce_monotonic).
+            # Do NOT pre-stamp params["nonce"] here — query_private always
+            # overwrites data['nonce'] = self._nonce() before signing, so any
+            # value set here would be discarded and would only waste a nonce
+            # counter increment.
             if params is None:
                 params = {}
-            params["nonce"] = get_kraken_nonce()
-            self.nonce_manager.begin_request()
 
             # Jitter delay: 50–150 ms per call — prevents burst calls that cause
             # nonce-ordering issues on Kraken's servers.
@@ -6437,10 +6440,7 @@ class KrakenBroker(BaseBroker):
             try:
                 # Suppress pykrakenapi's print() statements that flood the console
                 with suppress_pykrakenapi_prints():
-                    if params is None:
-                        result = self.api.query_private(method)
-                    else:
-                        result = self.api.query_private(method, params)
+                    result = self.api.query_private(method, params)
             finally:
                 self.nonce_manager.end_request()
 
@@ -6640,8 +6640,6 @@ class KrakenBroker(BaseBroker):
                 api_key = api_key_raw.strip()
                 api_secret = api_secret_raw.strip()
                 cred_label = f"USER:{self.user_id}"
-                _env_check_val = os.environ.get('KRAKEN_USER_TANIA_GILBERT_API_KEY')
-                logger.info(f"ENV CHECK: KRAKEN_USER_TANIA_GILBERT_API_KEY={'SET' if _env_check_val else 'None'} (len={len(_env_check_val) if _env_check_val else 0})")
 
             # Enhanced validation: detect if variables are set but contain only whitespace
             key_is_set = api_key_raw != ""
