@@ -353,7 +353,12 @@ class MultiAccountBrokerManager:
             broker_registry[broker_type.value]["platform"] = True
             logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
             if BrokerCriticality is not None:
-                broker_registry.set_criticality(broker_type.value, BrokerCriticality.CRITICAL)
+                # Preserve the broker's natural criticality tier — do NOT promote
+                # every platform broker to CRITICAL.  OKX/Binance/Alpaca are OPTIONAL
+                # by default and their failure must never block user-account connections.
+                # Kraken (nonce-sensitive) is already CRITICAL via BROKER_DEFAULT_CRITICALITY.
+                natural_crit = broker_registry.get_criticality(broker_type.value)
+                broker_registry.set_criticality(broker_type.value, natural_crit)
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
@@ -416,7 +421,12 @@ class MultiAccountBrokerManager:
                 broker_registry[broker_type.value]["platform"] = True
                 logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
                 if BrokerCriticality is not None:
-                    broker_registry.set_criticality(broker_type.value, BrokerCriticality.CRITICAL)
+                    # Preserve the broker's natural criticality tier — do NOT promote
+                    # every platform broker to CRITICAL.  OKX/Binance/Alpaca are OPTIONAL
+                    # by default and their failure must never block user-account connections.
+                    # Kraken (nonce-sensitive) is already CRITICAL via BROKER_DEFAULT_CRITICALITY.
+                    natural_crit = broker_registry.get_criticality(broker_type.value)
+                    broker_registry.set_criticality(broker_type.value, natural_crit)
             # Register with broker failure manager for per-broker circuit-breaking.
             if self._broker_failure_mgr is not None:
                 try:
@@ -2444,14 +2454,17 @@ class MultiAccountBrokerManager:
                 results["coinbase"] = {"broker": None, "connected": False, "error": str(exc)}
 
         # ── OKX ──────────────────────────────────────────────────────────────
-        logger.info("📊 Attempting to connect OKX (PLATFORM)…")
-        try:
-            broker = _guarded_create("okx", OKXBroker)
-            connected = _connect_and_register(BrokerType.OKX, broker, "okx")
-            results["okx"] = {"broker": broker, "connected": connected}
-        except Exception as exc:
-            logger.warning("⚠️  OKX PLATFORM error: %s", exc)
-            results["okx"] = {"broker": None, "connected": False, "error": str(exc)}
+        if os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes"):
+            logger.info("⏭️  OKX PLATFORM skipped (NIJA_DISABLE_OKX=true)")
+        else:
+            logger.info("📊 Attempting to connect OKX (PLATFORM — NON-CRITICAL)…")
+            try:
+                broker = _guarded_create("okx", OKXBroker)
+                connected = _connect_and_register(BrokerType.OKX, broker, "okx")
+                results["okx"] = {"broker": broker, "connected": connected}
+            except Exception as exc:
+                logger.warning("⚠️  OKX PLATFORM error: %s", exc)
+                results["okx"] = {"broker": None, "connected": False, "error": str(exc)}
 
         time.sleep(0.5)
 
