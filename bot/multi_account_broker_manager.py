@@ -235,7 +235,7 @@ class MultiAccountBrokerManager:
         # the broker as connected even if the live check briefly flips False (avoids
         # transient disconnects blocking a full trading cycle).
         self._last_platform_connected_time: Dict[BrokerType, float] = {}
-        self.STICKY_CONNECTION_WINDOW: float = 60.0  # seconds
+        self.STICKY_CONNECTION_WINDOW: float = 120.0  # seconds (raised from 60s to absorb transient API blips)
 
         # Connection flag dict — keyed by broker name string (e.g. 'kraken').
         # Set to True immediately after a platform broker registers successfully.
@@ -631,7 +631,18 @@ class MultiAccountBrokerManager:
             state = self._platform_state.get(broker_type.value)
             if state is not None:
                 logger.debug(f"🔍 Platform broker check for {broker_type.value}: state={state.value}")
-                return state == ConnectionState.CONNECTED
+                if state == ConnectionState.CONNECTED:
+                    return True
+                if state == ConnectionState.FAILED:
+                    return False
+                # State is NOT_STARTED or CONNECTING — the FSM may lag behind the
+                # actual broker object (e.g. startup race condition or reconnect).
+                # Fall through to the live-broker check below so a broker that is
+                # already authenticated is not incorrectly reported as disconnected.
+                logger.debug(
+                    f"🔍 Platform broker {broker_type.value}: FSM state={state.value} "
+                    f"— falling through to live broker check"
+                )
 
             # Fallback: no state entry yet — check the live broker object
             broker_in_dict = broker_type in self.platform_brokers
