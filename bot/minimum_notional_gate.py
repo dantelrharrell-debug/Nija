@@ -32,7 +32,7 @@ class NotionalGateConfig:
         """Initialize mutable defaults"""
         if self.broker_specific_limits is None:
             self.broker_specific_limits = {
-                'coinbase': 15.0,   # $15 minimum (lowered from $50 — Coinbase actual min is ~$1)
+                'coinbase': 15.0,   # $15 minimum — dust-prevention floor (Coinbase exchange min ~$1, but small positions face ~1.4% fee impact)
                 'kraken': 15.0,     # $15 minimum (lowered from $25)
                 'binance': 10.0,    # $10 minimum (lowered from $25)
                 'okx': 10.0,        # $10 minimum (lowered from $25)
