@@ -845,12 +845,12 @@ class MultiAccountBrokerManager:
             _KRAKEN_STARTUP_FSM.mark_failed()
         # Log at ERROR for CRITICAL brokers (they block trading) and WARNING
         # for non-CRITICAL brokers (system degrades but continues without them).
-        _is_critical = (
+        is_critical = (
             broker_registry is not None
             and BrokerCriticality is not None
             and broker_registry.get_criticality(broker_type.value) == BrokerCriticality.CRITICAL
         )
-        if _is_critical:
+        if is_critical:
             logger.error(
                 "⛔ Platform %s (CRITICAL) connection FAILED — user accounts BLOCKED until "
                 "platform reconnects.  Fix credentials or network, then restart.",
