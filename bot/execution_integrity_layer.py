@@ -115,7 +115,9 @@ class FillRecord:
         if self.intended_size_usd > 0:
             self.fill_ratio = self.actual_fill_usd / self.intended_size_usd
         else:
-            self.fill_ratio = 1.0 if self.actual_fill_usd == 0 else 0.0
+            # No intended size — fill ratio is undefined; use 0.0 to avoid
+            # masking unintended fills with a spurious 100% value.
+            self.fill_ratio = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -311,7 +313,7 @@ class ExecutionIntegrityLayer:
         self._total_partials: int = 0
 
         logger.info(
-            "ExecutionIntegrityLayer initialised — "
+            "ExecutionIntegrityLayer initialized — "
             "min_fill=%.0f%%  underfill_threshold=%.0f%%",
             min_fill_ratio * 100,
             underfill_ratio * 100,
@@ -554,7 +556,7 @@ class ExecutionIntegrityLayer:
                 "open_cycles": len(self._open_ledgers),
                 "closed_cycles": len(self._closed_reports),
                 "underfill_rate_pct": (
-                    round(self._total_underfills / self._total_orders * 100, 2)
+                    round(self._total_underfills * 100.0 / self._total_orders, 2)
                     if self._total_orders > 0 else 0.0
                 ),
                 "min_fill_ratio": self.min_fill_ratio,

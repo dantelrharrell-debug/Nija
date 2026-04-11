@@ -351,7 +351,7 @@ class ExecutionRouter:
         # ── Fill Integrity check ──────────────────────────────────────
         # Register the fill with the Execution Integrity Layer and override
         # result.success to False if the actual fill is an underfill.
-        if _EIL_AVAILABLE and get_execution_integrity_layer is not None and result.success:
+        if _EIL_AVAILABLE and result.success:
             try:
                 eil = get_execution_integrity_layer()
                 cycle_id = result.metadata.get("cycle_id", "default")
