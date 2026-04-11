@@ -14319,10 +14319,10 @@ class TradingStrategy:
                                         # For accounts below $150, lower the effective
                                         # thresholds so small accounts see enough trade
                                         # opportunities to compound capital:
-                                        #   MIN_AI_CONFIDENCE = 0.55  (score ≥ 55 → allow)
-                                        #   MIN_SIGNAL_SCORE  = 50    (scaling floor)
-                                        _micro_ai_threshold = 55.0   # 0.55 × 100
-                                        _micro_signal_floor = 50.0   # MIN_SIGNAL_SCORE
+                                        #   MIN_AI_CONFIDENCE = 0.45  (score ≥ 45 → allow; was 55)
+                                        #   MIN_SIGNAL_SCORE  = 42    (scaling floor; was 50)
+                                        _micro_ai_threshold = 45.0   # 0.45 × 100 (lowered 55→45)
+                                        _micro_signal_floor = 42.0   # MIN_SIGNAL_SCORE (lowered 50→42)
                                         _is_micro_account = account_balance < 150.0
                                         if (
                                             _is_micro_account
@@ -14349,8 +14349,24 @@ class TradingStrategy:
                                             )
                                             continue
 
+                                        # ── Starter Trade cap for WAIT signals ────────────
+                                        # When the confidence engine says WAIT (marginal
+                                        # setup), execute as a small "starter" position
+                                        # (50% of normal size) to validate the signal before
+                                        # scaling up on the next cycle.  This keeps capital
+                                        # exposure minimal while still capturing early moves.
+                                        _is_starter_trade = _conf_action == "WAIT"
+                                        if _is_starter_trade:
+                                            _pre_starter = position_size
+                                            position_size *= 0.50
+                                            logger.info(
+                                                f"   🌱 {symbol}: Starter Trade (WAIT signal, "
+                                                f"score={_conf_score:.1f}/100) — "
+                                                f"50% starter size ${_pre_starter:.2f} → ${position_size:.2f}"
+                                            )
+
                                         # Scale position size by confidence.
-                                        # Micro accounts use a lower score floor (50) so
+                                        # Micro accounts use a lower score floor (42) so
                                         # the scaling range starts at MIN_SIGNAL_SCORE.
                                         # Standard accounts use 65 as the floor.
                                         _conf_min_score = _micro_signal_floor if _is_micro_account else 65.0
