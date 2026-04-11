@@ -46,12 +46,13 @@ except ImportError:
 
 # Import broker registry for platform designation tracking
 try:
-    from bot.broker_registry import broker_registry
+    from bot.broker_registry import broker_registry, BrokerCriticality
 except ImportError:
     try:
-        from broker_registry import broker_registry
+        from broker_registry import broker_registry, BrokerCriticality  # type: ignore[import]
     except ImportError:
         broker_registry = None
+        BrokerCriticality = None  # type: ignore[assignment,misc]
 
 # Import account isolation manager for failure isolation
 try:
@@ -310,9 +311,12 @@ class MultiAccountBrokerManager:
         # block for 30 s waiting for a state transition that would never happen.
         self._mark_platform_connected(broker_type)
         # Mark in the global broker registry so any module can check is_platform()
+        # and get_criticality() — single source of truth across all layers.
         if broker_registry is not None:
             broker_registry[broker_type.value]["platform"] = True
             logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
+            if BrokerCriticality is not None:
+                broker_registry.set_criticality(broker_type.value, BrokerCriticality.CRITICAL)
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
@@ -370,9 +374,12 @@ class MultiAccountBrokerManager:
             # blocks on the same object that begin_platform_connection() + connect() will set.
             self._get_or_create_platform_event(broker_type)
             # Mark in the global broker registry so any module can check is_platform()
+            # and get_criticality() — single source of truth across all layers.
             if broker_registry is not None:
                 broker_registry[broker_type.value]["platform"] = True
                 logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
+                if BrokerCriticality is not None:
+                    broker_registry.set_criticality(broker_type.value, BrokerCriticality.CRITICAL)
             logger.info(f"✅ Platform broker registered (passive): {broker_type.value}")
             logger.info(f"   Platform broker registered once, globally")
             return broker

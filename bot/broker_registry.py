@@ -6,7 +6,7 @@ A thread-safe, nested-dictionary registry for tracking per-broker runtime state.
 
 Usage
 -----
-    from bot.broker_registry import broker_registry
+    from bot.broker_registry import broker_registry, BrokerCriticality
 
     # Mark a broker as the platform (Nija-owned) account
     broker_registry["kraken"]["platform"] = True
@@ -17,6 +17,11 @@ Usage
     # Store any arbitrary broker-level state
     broker_registry["coinbase"]["connected"] = True
     broker_registry["kraken"]["last_error"] = "nonce invalid"
+
+    # Read / write standardized criticality (single source of truth)
+    broker_registry.set_criticality("kraken", BrokerCriticality.CRITICAL)
+    level = broker_registry.get_criticality("coinbase")   # → BrokerCriticality.PRIMARY
+    critical_brokers = broker_registry.brokers_at_criticality(BrokerCriticality.CRITICAL)
 
 Design
 ------
@@ -29,6 +34,11 @@ Design
   an unknown broker key auto-creates an empty :class:`BrokerStateDict` instead
   of raising ``KeyError``.
 - All mutations are protected by a ``threading.Lock`` for safe concurrent use.
+- :class:`BrokerCriticality` is the **single source of truth** for how
+  important each broker is across all system layers.  Every module that needs
+  to gate on broker priority should read from
+  ``broker_registry.get_criticality()`` rather than maintaining its own notion
+  of "primary" or "platform".
 """
 
 import logging
@@ -36,6 +46,7 @@ import threading
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 logger = logging.getLogger("nija.broker_registry")
 
@@ -69,6 +80,51 @@ _DEFAULT_CRITICALITY: Dict[str, BrokerCriticality] = {
     "okx": BrokerCriticality.OPTIONAL,
     "binance": BrokerCriticality.OPTIONAL,
     "alpaca": BrokerCriticality.OPTIONAL,
+}
+
+
+# ---------------------------------------------------------------------------
+# Broker criticality levels — single authoritative enum for the whole system
+# ---------------------------------------------------------------------------
+
+class BrokerCriticality(Enum):
+    """
+    Standardized broker criticality levels for NIJA's multi-broker stack.
+
+    Levels (highest → lowest priority):
+
+    - **CRITICAL** – Must be connected before any user broker or trading begins.
+      A failure blocks the entire system (e.g. platform Kraken whose nonce
+      ordering affects every account).
+    - **PRIMARY** – First-choice execution broker.  The system degrades but
+      continues if PRIMARY fails (e.g. Coinbase acting as a live fallback).
+    - **OPTIONAL** – Supplemental broker.  Skipped on failure without affecting
+      the core trading flow.
+    - **DEFERRED** – Low-priority; only connected after CRITICAL + PRIMARY
+      brokers are stable.
+
+    Using this enum as the single source of truth prevents hidden cross-layer
+    gating bugs where one module treats a broker as "primary" while another
+    treats it as "optional".
+    """
+
+    CRITICAL = "critical"
+    PRIMARY  = "primary"
+    OPTIONAL = "optional"
+    DEFERRED = "deferred"
+
+
+#: Default criticality for each well-known broker.
+#:
+#: These defaults are used by :meth:`BrokerRegistry.get_criticality` when no
+#: runtime override has been stored.  Callers can promote or demote a broker at
+#: runtime via :meth:`BrokerRegistry.set_criticality`.
+BROKER_DEFAULT_CRITICALITY: Dict[str, BrokerCriticality] = {
+    "kraken":   BrokerCriticality.CRITICAL,  # platform engine; nonce-sensitive
+    "coinbase": BrokerCriticality.PRIMARY,   # primary fallback / user broker
+    "binance":  BrokerCriticality.OPTIONAL,
+    "okx":      BrokerCriticality.OPTIONAL,
+    "alpaca":   BrokerCriticality.OPTIONAL,
 }
 
 
@@ -250,6 +306,65 @@ class BrokerRegistry(dict):
         """
         return bool(self.get_state(broker_name, "platform", False))
 
+    # ------------------------------------------------------------------
+    # Criticality helpers — single source of truth across all layers
+    # ------------------------------------------------------------------
+
+    def set_criticality(self, broker_name: str, level: BrokerCriticality) -> None:
+        """
+        Store the criticality level for a broker in the registry.
+
+        This is the **authoritative** write path.  All system layers (startup,
+        connection manager, verifier, fallback controller) should call this
+        method instead of maintaining their own private notion of broker
+        priority.
+
+        Args:
+            broker_name: Broker identifier, e.g. ``"kraken"``.
+            level: One of the :class:`BrokerCriticality` enum members.
+        """
+        self[broker_name]["criticality"] = level
+        logger.debug(
+            "broker_registry[%r]['criticality'] = %r", broker_name, level.value
+        )
+
+    def get_criticality(self, broker_name: str) -> BrokerCriticality:
+        """
+        Return the criticality level for a broker.
+
+        Resolution order:
+        1. Runtime value stored via :meth:`set_criticality` (highest priority).
+        2. Static default from :data:`BROKER_DEFAULT_CRITICALITY`.
+        3. :attr:`BrokerCriticality.OPTIONAL` (safe fallback for unknown brokers).
+
+        Args:
+            broker_name: Broker identifier, e.g. ``"kraken"``.
+
+        Returns:
+            :class:`BrokerCriticality` level.
+        """
+        stored = self.get_state(broker_name, "criticality")
+        if isinstance(stored, BrokerCriticality):
+            return stored
+        return BROKER_DEFAULT_CRITICALITY.get(broker_name, BrokerCriticality.OPTIONAL)
+
+    def brokers_at_criticality(self, level: BrokerCriticality) -> List[str]:
+        """
+        Return all broker names whose criticality equals *level*.
+
+        Considers both brokers already present in the registry **and** those
+        listed in :data:`BROKER_DEFAULT_CRITICALITY` that haven't been touched
+        at runtime yet.
+
+        Args:
+            level: :class:`BrokerCriticality` level to filter by.
+
+        Returns:
+            Sorted list of broker names at the given level.
+        """
+        all_names: set = set(self.keys()) | set(BROKER_DEFAULT_CRITICALITY.keys())
+        return sorted(name for name in all_names if self.get_criticality(name) == level)
+
     def summary(self) -> str:
         """
         Return a human-readable one-line summary of all broker states.
@@ -292,8 +407,9 @@ class BrokerRegistry(dict):
 #:
 #: Access or mutate broker state anywhere in the codebase::
 #:
-#:     from bot.broker_registry import broker_registry
+#:     from bot.broker_registry import broker_registry, BrokerCriticality
 #:     broker_registry["kraken"]["platform"] = True
+#:     broker_registry.set_criticality("kraken", BrokerCriticality.CRITICAL)
 broker_registry: BrokerRegistry = BrokerRegistry()
 
 
