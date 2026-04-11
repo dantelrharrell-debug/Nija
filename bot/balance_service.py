@@ -28,6 +28,17 @@ from typing import Any, Callable, Dict
 
 logger = logging.getLogger("nija.balance_service")
 
+# ---------------------------------------------------------------------------
+# Latency-aware caching constants
+# ---------------------------------------------------------------------------
+
+# Exponential-moving-average smoothing factor for fetch latency.
+# Higher → faster to react to sudden latency spikes; lower → smoother.
+_LATENCY_EMA_ALPHA: float = 0.30
+
+# Never let the effective TTL fall below this floor, regardless of latency.
+_TTL_MIN_FLOOR_S: float = 5.0
+
 
 class BalanceService:
     """
@@ -43,6 +54,10 @@ class BalanceService:
     _refreshing: Dict[str, bool] = {}       # in-flight guard per broker key
     _ttl: float = float(os.environ.get("NIJA_BALANCE_TTL_S", "30"))  # override via env
 
+    # Latency tracking — updated on every successful refresh call
+    _last_latency: Dict[str, float] = {}    # raw fetch duration (seconds) per broker key
+    _latency_ema: Dict[str, float] = {}     # EMA-smoothed latency per broker key
+
     # ------------------------------------------------------------------
     # Read API — never calls the exchange
     # ------------------------------------------------------------------
@@ -56,6 +71,29 @@ class BalanceService:
     def get_detailed(cls, broker_key: str) -> dict:
         """Return cached detailed balance dict.  Returns ``{}`` when not yet populated."""
         return dict(cls._cache_detailed.get(broker_key, {}))
+
+    @classmethod
+    def get_latency(cls, broker_key: str) -> float:
+        """Return the EMA-smoothed fetch latency (seconds) for *broker_key*.
+
+        Returns 0.0 when no refresh has been completed yet for this key.
+        """
+        return cls._latency_ema.get(broker_key, 0.0)
+
+    @classmethod
+    def get_effective_ttl(cls, broker_key: str) -> float:
+        """Return the effective cache TTL for *broker_key*.
+
+        The effective TTL shrinks by the EMA fetch latency so that slow API
+        calls do not let the cache appear fresher than it really is.  It is
+        floored at ``_TTL_MIN_FLOOR_S`` to prevent thrashing.
+
+        For example, with a base TTL of 30 s and a 4 s EMA latency the
+        effective TTL becomes 26 s — the cache expires 4 seconds sooner to
+        compensate for the staleness introduced by the slow fetch.
+        """
+        effective = cls._ttl - cls._latency_ema.get(broker_key, 0.0)
+        return max(effective, _TTL_MIN_FLOOR_S)
 
     # ------------------------------------------------------------------
     # Write API — orchestrator only
@@ -91,10 +129,15 @@ class BalanceService:
         """
         now = time.time()
 
-        # ── TTL gate ──────────────────────────────────────────────────────────
-        if now - cls._last_update.get(broker_key, 0.0) < cls._ttl:
+        # ── Latency-aware TTL gate ─────────────────────────────────────────────
+        # The effective TTL is shortened by the EMA fetch latency so that slow
+        # API calls do not create the illusion of a "fresh" balance when the
+        # data was already seconds old by the time it arrived.
+        effective_ttl = cls.get_effective_ttl(broker_key)
+        if now - cls._last_update.get(broker_key, 0.0) < effective_ttl:
             cached = cls._cache.get(broker_key, 0.0)
-            logger.debug("[BalanceService] %s: TTL hit — $%.2f", broker_key, cached)
+            logger.debug("[BalanceService] %s: TTL hit (eff=%.1fs) — $%.2f",
+                         broker_key, effective_ttl, cached)
             return cached
 
         # ── In-flight guard ───────────────────────────────────────────────────
@@ -106,7 +149,24 @@ class BalanceService:
 
         cls._refreshing[broker_key] = True
         try:
+            fetch_start = time.time()
             raw = fetch_fn()
+            fetch_elapsed = time.time() - fetch_start
+
+            # ── Update latency EMA ────────────────────────────────────────────
+            prior_ema = cls._latency_ema.get(broker_key, fetch_elapsed)
+            cls._last_latency[broker_key] = fetch_elapsed
+            cls._latency_ema[broker_key] = (
+                _LATENCY_EMA_ALPHA * fetch_elapsed
+                + (1.0 - _LATENCY_EMA_ALPHA) * prior_ema
+            )
+            logger.debug(
+                "[BalanceService] %s: fetch %.3fs (EMA=%.3fs, eff_ttl=%.1fs)",
+                broker_key, fetch_elapsed,
+                cls._latency_ema[broker_key],
+                cls.get_effective_ttl(broker_key),
+            )
+
             scalar, detailed = cls._parse(raw)
 
             if scalar > 0:

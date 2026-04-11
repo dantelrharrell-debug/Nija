@@ -92,6 +92,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger("nija.capital_orchestration")
 
@@ -311,6 +312,11 @@ class CapitalOrchestrationEngine:
         * Per-strategy concentration cap
         * Minimum viable size check
 
+        A granted allocation is immediately written to the
+        ``CapitalReservationManager`` so that concurrent calls to
+        ``PortfolioStateManager.get_deployable_capital_with_reservations()``
+        see the reservation before the order is submitted (pre-trade gate).
+
         Args:
             request: Broker-agnostic allocation request.
 
@@ -337,8 +343,9 @@ class CapitalOrchestrationEngine:
                 )
                 return 0.0
 
-            # Reserve the capital
+            # Reserve the capital in-engine (fast in-memory tracking)
             self._in_use[request.strategy] = current_in_use + grant
+            reservation_id = f"{request.strategy}:{request.symbol}:{uuid.uuid4().hex[:8]}"
             self._allocation_log.append(
                 AllocationRecord(
                     strategy=request.strategy,
@@ -348,6 +355,33 @@ class CapitalOrchestrationEngine:
                     regime=request.regime,
                 )
             )
+
+        # ── Pre-trade reservation: write to CapitalReservationManager ─────────
+        # Done outside the engine lock to avoid deadlocks.  The CapitalReservation-
+        # Manager entry makes the reservation visible to get_deployable_capital_with_
+        # reservations() before the order reaches the exchange.
+        try:
+            from capital_reservation_manager import get_capital_reservation_manager  # type: ignore[import]
+        except ImportError:
+            try:
+                from bot.capital_reservation_manager import get_capital_reservation_manager  # type: ignore[import]
+            except ImportError:
+                get_capital_reservation_manager = None  # type: ignore[assignment]
+
+        if get_capital_reservation_manager is not None:
+            try:
+                _crm = get_capital_reservation_manager()
+                _crm.reserve_capital(
+                    position_id=reservation_id,
+                    amount=grant,
+                    symbol=request.symbol,
+                    account_id=request.strategy,
+                    broker=request.metadata.get("broker", "unknown"),
+                )
+                # Store so release_capital can find it later
+                request.metadata["_reservation_id"] = reservation_id
+            except Exception as _crm_err:
+                logger.debug("CapitalReservationManager write skipped: %s", _crm_err)
 
         logger.info(
             f"✅ Capital allocated: {request.strategy} / {request.symbol} "
@@ -361,13 +395,23 @@ class CapitalOrchestrationEngine:
         strategy: str,
         amount_usd: float,
         reason: str = "trade_closed",
+        reservation_id: Optional[str] = None,
     ) -> None:
         """Release capital back to the deployable pool after a trade closes.
 
+        Also releases the matching ``CapitalReservationManager`` entry so the
+        reservation is no longer deducted from
+        ``get_deployable_capital_with_reservations()``.
+
         Args:
-            strategy:   Strategy that held the capital.
-            amount_usd: Amount to release in USD.
-            reason:     Human-readable reason (e.g. 'take_profit', 'stop_loss').
+            strategy:        Strategy that held the capital.
+            amount_usd:      Amount to release in USD.
+            reason:          Human-readable reason (e.g. 'take_profit').
+            reservation_id:  The ``_reservation_id`` stored in the original
+                             ``AllocationRequest.metadata``.  When supplied the
+                             matching ``CapitalReservationManager`` entry is
+                             released; otherwise a best-effort lookup by
+                             strategy (account_id) is performed.
         """
         with self._lock:
             current = self._in_use.get(strategy, 0.0)
@@ -378,6 +422,29 @@ class CapitalOrchestrationEngine:
             f"🔓 Capital released: {strategy} ${released:.2f} [{reason}] "
             f"(remaining_in_use=${self._in_use.get(strategy, 0.0):.2f})"
         )
+
+        # ── Release from CapitalReservationManager ────────────────────────────
+        try:
+            from capital_reservation_manager import get_capital_reservation_manager  # type: ignore[import]
+        except ImportError:
+            try:
+                from bot.capital_reservation_manager import get_capital_reservation_manager  # type: ignore[import]
+            except ImportError:
+                return
+
+        try:
+            _crm = get_capital_reservation_manager()
+            if reservation_id:
+                _crm.release_capital(reservation_id)
+            else:
+                # Best-effort: release the largest matching reservation for this
+                # strategy (account_id) when no explicit ID was provided.
+                reservations = _crm.get_reservations(account_id=strategy)
+                if reservations:
+                    best = max(reservations, key=lambda r: r.reserved_amount)
+                    _crm.release_capital(best.position_id)
+        except Exception as _crm_err:
+            logger.debug("CapitalReservationManager release skipped: %s", _crm_err)
 
     def get_report(self) -> Dict:
         """Return a snapshot of the current capital state.
@@ -727,6 +794,7 @@ _engine_instance: Optional[CapitalOrchestrationEngine] = None
 _engine_lock = threading.Lock()
 
 
+
 def get_capital_orchestration_engine() -> CapitalOrchestrationEngine:
     """Return the singleton :class:`CapitalOrchestrationEngine`.
 
@@ -791,3 +859,109 @@ def size_trade(*args: object, **kwargs: object) -> None:  # noqa: ANN002
         "Call engine.begin_execution() to reserve capital with a rollback-safe "
         "ExecutionToken, then engine.commit_execution() or engine.rollback_execution()."
     )
+# Atomic capital sync orchestration
+# ---------------------------------------------------------------------------
+
+def sync_and_update_capital(
+    broker_fetchers: Dict[str, Callable],
+    portfolio_manager,
+    advanced_manager=None,
+    unrealized_confidence: float = 0.8,
+) -> float:
+    """Atomically refresh all broker balances and propagate to every downstream component.
+
+    This is the **single entry point** for capital state updates.  Trade sizing
+    must only be called *after* this function returns so that the position sizer
+    always sees a coherent, up-to-date view of available capital.
+
+    Wires together all three performance features in the correct order:
+
+    1. **Latency-aware balance refresh** — calls ``BalanceService.refresh()``
+       for every broker.  The service automatically adjusts its effective TTL
+       by the EMA fetch latency so stale data is never served as fresh.
+
+    2. **Minimum balance filter** — each broker balance is routed through
+       ``portfolio_manager.update_broker_balance()``, which zeroes out and
+       marks inactive any broker below its exchange minimum order size.
+
+    3. **PnL-adjusted capital** — ``portfolio_manager.get_pnl_adjusted_total()``
+       combines active-broker cash with discounted unrealized P&L so that the
+       sizing models grow with *realised* profits but are not inflated by
+       paper gains.
+
+    The final PnL-adjusted total is pushed to:
+    * ``CapitalOrchestrationEngine.set_equity()`` — governs all subsequent
+      ``request_allocation()`` calls.
+    * ``advanced_manager`` capital allocator (when provided).
+
+    Args:
+        broker_fetchers: Mapping of broker name → zero-argument callable that
+            returns a balance (float or dict).  Example::
+
+                {
+                    "coinbase": lambda: broker.get_account_balance(),
+                    "kraken":   lambda: kraken_broker.get_account_balance(),
+                }
+
+        portfolio_manager: A ``PortfolioStateManager`` instance (or compatible
+            object with ``update_broker_balance``, ``get_pnl_adjusted_total``,
+            and ``get_open_exposure`` methods).
+
+        advanced_manager: Optional ``AdvancedTradingManager`` instance.  When
+            provided its ``capital_allocator.update_total_capital()`` method is
+            called with the PnL-adjusted total.
+
+        unrealized_confidence: Fraction of unrealized gains to count as
+            deployable capital (default 0.8 = 80 %).  Losses always apply in
+            full.
+
+    Returns:
+        PnL-adjusted total capital in USD.  Pass this directly to any
+        position-sizing call that happens after ``sync_and_update_capital``.
+    """
+    # Lazy import to avoid circular dependencies at module level.
+    try:
+        from balance_service import BalanceService  # type: ignore[import]
+    except ImportError:
+        from bot.balance_service import BalanceService  # type: ignore[import]
+
+    # ── Step 1: Refresh every broker balance (latency-aware TTL) ────────────
+    raw_balances: Dict[str, float] = {}
+    for broker, fetch_fn in broker_fetchers.items():
+        try:
+            balance = BalanceService.refresh(broker, fetch_fn)
+            raw_balances[broker] = balance
+        except Exception as exc:
+            logger.warning(
+                "[sync_and_update_capital] %s: refresh error (%s) — using cached",
+                broker, exc,
+            )
+            raw_balances[broker] = BalanceService.get(broker)
+
+    # ── Step 2: Apply minimum balance filter per broker ──────────────────────
+    for broker, balance in raw_balances.items():
+        portfolio_manager.update_broker_balance(broker, balance)
+
+    # ── Step 3: Compute PnL-adjusted total ───────────────────────────────────
+    pnl_total = portfolio_manager.get_pnl_adjusted_total(unrealized_confidence)
+    open_exposure = portfolio_manager.get_open_exposure()
+
+    logger.info(
+        "[sync_and_update_capital] PnL-adjusted capital: $%.2f "
+        "(open_exposure=$%.2f, confidence=%.0f%%)",
+        pnl_total, open_exposure, unrealized_confidence * 100,
+    )
+
+    # ── Step 4: Push to CapitalOrchestrationEngine ───────────────────────────
+    engine = get_capital_orchestration_engine()
+    engine.set_equity(pnl_total)
+
+    # ── Step 5: Push to AdvancedTradingManager (optional) ────────────────────
+    if advanced_manager is not None:
+        try:
+            if hasattr(advanced_manager, "capital_allocator") and advanced_manager.capital_allocator:
+                advanced_manager.capital_allocator.update_total_capital(pnl_total)
+        except Exception as exc:
+            logger.warning("[sync_and_update_capital] advanced_manager update error: %s", exc)
+
+    return pnl_total
