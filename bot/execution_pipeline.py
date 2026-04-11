@@ -145,6 +145,9 @@ get_profit_splitter             = getattr(_ps_mod,   "get_profit_splitter",     
 get_regime_specific_strategy_evolution = getattr(_evo_mod, "get_regime_specific_strategy_evolution", None)
 get_ai_capital_allocator        = getattr(_aic_mod,  "get_ai_capital_allocator",        None)
 
+_eil_mod = _try_import("execution_integrity_layer", "bot.execution_integrity_layer")
+get_execution_integrity_layer = getattr(_eil_mod, "get_execution_integrity_layer", None)
+
 
 # ---------------------------------------------------------------------------
 # ExecutionPipeline
@@ -532,6 +535,26 @@ class ExecutionPipeline:
                 get_ai_capital_allocator().update()
             except Exception as exc:
                 logger.debug("[Pipeline] AI allocator update skipped: %s", exc)
+
+        # ── Step 8: Fill reconciliation per cycle ─────────────────────────────
+        # Reconcile all fills registered against this cycle so underfills that
+        # slipped through broker-level checks are surfaced and logged.
+        cycle_id = signal.get("cycle_id") or f"pipeline-{self._run_count}"
+        if get_execution_integrity_layer is not None:
+            try:
+                eil = get_execution_integrity_layer()
+                reconciliation = eil.reconcile_cycle(cycle_id)
+                result["fill_reconciliation"] = reconciliation.to_dict()
+                if reconciliation.has_integrity_failures:
+                    logger.warning(
+                        "[Pipeline] 🔒 FILL RECONCILIATION FAILURE cycle=%s — "
+                        "%d underfill(s) out of %d order(s)",
+                        cycle_id,
+                        reconciliation.underfill_count,
+                        reconciliation.total_orders,
+                    )
+            except Exception as exc:
+                logger.debug("[Pipeline] fill reconciliation skipped: %s", exc)
 
         with self._lock:
             self._last_run = result["timestamp"]
