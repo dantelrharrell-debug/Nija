@@ -1480,32 +1480,79 @@ class KrakenNonceManager:
         self,
         api_call_fn,
         *,
-        step_ms: int = 0,        # retained for API compatibility — no longer used
-        max_attempts: int = 0,   # retained for API compatibility — no longer used
+        step_ms: int = 0,
+        max_attempts: int = 0,
     ) -> bool:
         """
-        Minimal deterministic Kraken bootstrap: try once, rebase on failure,
-        retry once.  100% success or clean fail — no loops.
+        Deterministic Kraken bootstrap with forward-probe fallback.
 
-        Replaces the former 12-step probe loop + escalation tiers + nuclear
-        reset cycles.  Those mechanisms caused runaway forward drift and
-        infinite retry loops.  The new model is:
+        Recovery sequence
+        -----------------
+        1. **Attempt 1** — try ``api_call_fn()`` with the current nonce.
+           Success → return True.
 
-          1. Try ``api_call_fn()`` with the current nonce.
-          2. If Kraken returns a nonce error → ``hard_nonce_rebase()``
-             (drops all drift, sets nonce to now - 1000 ms) → retry once.
-          3. Return ``True`` on any accepted call, ``False`` on clean failure.
+        2. **Attempt 2** — nonce rejected → ``hard_nonce_rebase()``
+           (drops all forward drift, sets nonce to now − 1 000 ms) → retry.
+           Success → return True.
 
-        ``step_ms`` and ``max_attempts`` are accepted for backward compatibility
-        but are ignored.
+           This two-step path handles the common case where the persisted
+           nonce is only a few seconds or minutes ahead of wall-clock.
+
+        3. **Forward probe** — if Kraken's floor is still ahead of
+           ``now − 500 ms`` (e.g. after multiple nuclear resets on a Railway
+           ephemeral-filesystem deployment where the state file was lost on
+           restart), probe forward from ``now`` in adaptive steps until an API
+           call is accepted.
+
+           Step size:
+             • deep-reset mode active → ``_DEEP_PROBE_STEP_MS`` (10 min)
+             • otherwise → ``AdaptiveNonceOffsetEngine.get_optimal_step()``
+               (≥ 5 min; learns from past calibration outcomes)
+             • ``step_ms > 0`` overrides the adaptive choice
+
+           Max steps: ``_DEEP_PROBE_MAX_ATTEMPTS`` (deep) or
+           ``_PROBE_MAX_ATTEMPTS`` (standard), plus
+           ``_DUPLICATE_PROC_EXTRA_ATTEMPTS`` when a competing process is
+           detected.
+
+        4. **Ceiling jump + escalation** — all standard probe steps failed.
+           Jump to ``now + _CEILING_JUMP_MS`` (default 24 h) and attempt
+           ``_PROBE_ESCALATION_ATTEMPTS`` additional probes.
+
+        5. **Permanent failure** — escalation also failed and no competing
+           process is detected.  ``_key_invalidated`` is set to True, broker
+           quarantine fires (Coinbase auto-promoted), and ``False`` is
+           returned.  If a duplicate process IS detected the flag is NOT set
+           (the competing process is the cause, not a dead key).
+
+        Why the forward probe was removed and why it is restored here
+        ─────────────────────────────────────────────────────────────
+        The original 12-step probe loop caused "runaway forward drift"
+        because it started from an already-large nonce (e.g. ``now + 30 min``
+        after a nuclear reset) and incremented further from there.  The fix
+        was to simplify to hard-rebase-then-retry.
+
+        However, on ephemeral-filesystem deployments (Railway) the state file
+        is lost on every restart.  The bot starts fresh at ``now + startup_jump``
+        while Kraken's server-side stored nonce may be ``now + 30–120 min``
+        (accumulated from nuclear resets in the previous session).  The hard
+        rebase produces ``now − 500 ms``, which is still rejected.
+
+        The forward probe is safe here because it starts from ``now`` (not
+        from the pre-rebase large value), bounding the maximum nonce to
+        ``now + max_steps × step_ms``.  This prevents runaway drift while
+        allowing the bot to re-synchronise with Kraken's floor after an
+        ephemeral-FS restart.
 
         Args:
-            api_call_fn: ``callable() → dict`` — must return a Kraken API
-                response dict (with an ``"error"`` key list).
+            api_call_fn:  ``callable() → dict`` — must return a Kraken API
+                          response dict containing an ``"error"`` list.
+            step_ms:      Override the adaptive step size (ms).  0 = auto.
+            max_attempts: Override the maximum probe count.  0 = auto.
 
         Returns:
             ``True``  — Kraken accepted a call; nonce is calibrated.
-            ``False`` — Network/auth error or still rejected after rebase.
+            ``False`` — Network/auth error or all recovery paths exhausted.
         """
         # ── NTP pre-check (diagnostic only) ──────────────────────────────────
         _ntp = check_ntp_sync()
@@ -1522,12 +1569,19 @@ class KrakenNonceManager:
                 _ntp["offset_s"], _NTP_SERVER,
             )
 
+        # ── Shared nonce-error detector ───────────────────────────────────────
+        def _is_nonce_error(response: dict) -> bool:
+            errs = ", ".join(response.get("error") or [])
+            return any(
+                kw in errs.lower()
+                for kw in ("invalid nonce", "eapi:invalid nonce", "nonce window")
+            )
+
+        # ── Attempt 1: current nonce ──────────────────────────────────────────
         _logger.info(
             "KrakenNonceManager.probe_and_resync: attempt 1 (nonce=%d)",
             self.get_last_nonce(),
         )
-
-        # ── Attempt 1 ────────────────────────────────────────────────────────
         try:
             result = api_call_fn()
         except Exception as exc:
@@ -1545,15 +1599,8 @@ class KrakenNonceManager:
             )
             return False
 
-        errors = result.get("error") or []
-        error_str = ", ".join(errors)
-        is_nonce_err = any(
-            kw in error_str.lower()
-            for kw in ("invalid nonce", "eapi:invalid nonce", "nonce window")
-        )
-
-        if not is_nonce_err:
-            if not errors:
+        if not _is_nonce_error(result):
+            if not (result.get("error") or []):
                 _logger.info(
                     "✅ KrakenNonceManager.probe_and_resync: accepted on first "
                     "attempt — nonce=%d", self.get_last_nonce(),
@@ -1561,23 +1608,21 @@ class KrakenNonceManager:
             else:
                 _logger.debug(
                     "KrakenNonceManager.probe_and_resync: non-nonce error (%s) — "
-                    "nonce is fine", error_str,
+                    "nonce is fine", ", ".join(result.get("error") or []),
                 )
             return True
 
-        # ── Nonce rejected → hard rebase + single retry ───────────────────────
+        # ── Attempt 2: hard_nonce_rebase() + retry ────────────────────────────
         _logger.warning(
             "KrakenNonceManager.probe_and_resync: nonce rejected (%s) — "
             "hard_nonce_rebase() + single retry",
-            error_str,
+            ", ".join(result.get("error") or []),
         )
         self.hard_nonce_rebase()
-
         _logger.info(
             "KrakenNonceManager.probe_and_resync: retry after rebase (nonce=%d)",
             self.get_last_nonce(),
         )
-
         try:
             retry_result = api_call_fn()
         except Exception as exc:
@@ -1589,27 +1634,171 @@ class KrakenNonceManager:
         if not isinstance(retry_result, dict):
             return False
 
-        retry_errors = retry_result.get("error") or []
-        retry_error_str = ", ".join(retry_errors)
-        retry_is_nonce_err = any(
-            kw in retry_error_str.lower()
-            for kw in ("invalid nonce", "eapi:invalid nonce", "nonce window")
+        if not _is_nonce_error(retry_result):
+            if not (retry_result.get("error") or []):
+                _logger.info(
+                    "✅ KrakenNonceManager.probe_and_resync: accepted after "
+                    "hard_nonce_rebase() — nonce=%d", self.get_last_nonce(),
+                )
+            return True
+
+        # ── Attempts 3+: forward probe from now ──────────────────────────────
+        # Kraken's stored nonce is AHEAD of wall-clock.  This happens on
+        # ephemeral-FS restarts (Railway) when the state file is gone but
+        # Kraken's floor was advanced by previous nuclear resets.  Start from
+        # the rebased baseline (now − 1 000 ms) and jump forward in steps until
+        # Kraken accepts.
+        _ao = AdaptiveNonceOffsetEngine()
+        if step_ms > 0:
+            _step = step_ms
+        elif self._deep_reset_active:
+            _step = _DEEP_PROBE_STEP_MS
+        else:
+            _step = max(_ao.get_optimal_step(), _PROBE_STEP_MS)
+
+        if max_attempts > 0:
+            _max_p = max_attempts
+        elif self._deep_reset_active:
+            _max_p = _DEEP_PROBE_MAX_ATTEMPTS
+        else:
+            _max_p = _PROBE_MAX_ATTEMPTS
+
+        # Extra steps when a competing process is running — it may have advanced
+        # Kraken's floor further than our estimate.
+        if self.detect_other_process_running():
+            _logger.warning(
+                "KrakenNonceManager.probe_and_resync: duplicate process detected — "
+                "adding %d extra probe steps",
+                _DUPLICATE_PROC_EXTRA_ATTEMPTS,
+            )
+            _max_p += _DUPLICATE_PROC_EXTRA_ATTEMPTS
+
+        _logger.warning(
+            "KrakenNonceManager.probe_and_resync: rebase insufficient — "
+            "Kraken floor is ahead of wall-clock; probing forward: "
+            "%d steps × %d ms (%.0f min max coverage)…",
+            _max_p, _step, (_max_p * _step) / 60_000,
         )
 
-        if retry_is_nonce_err:
-            _logger.error(
-                "❌ KrakenNonceManager.probe_and_resync: nonce still rejected "
-                "after hard_nonce_rebase() (%s) — clean fail",
-                retry_error_str,
-            )
-            return False
-
-        if not retry_errors:
+        for _probe_num in range(1, _max_p + 1):
+            self.jump_forward(_step)
             _logger.info(
-                "✅ KrakenNonceManager.probe_and_resync: accepted after "
-                "hard_nonce_rebase() — nonce=%d", self.get_last_nonce(),
+                "KrakenNonceManager.probe_and_resync: forward probe %d/%d (nonce=%d)",
+                _probe_num, _max_p, self.get_last_nonce(),
             )
-        return True
+            try:
+                probe_result = api_call_fn()
+            except Exception as exc:
+                _logger.debug(
+                    "KrakenNonceManager.probe_and_resync: probe %d raised (%s) — abort",
+                    _probe_num, exc,
+                )
+                return False
+
+            if not isinstance(probe_result, dict):
+                return False
+
+            if not _is_nonce_error(probe_result):
+                probe_errs = probe_result.get("error") or []
+                if not probe_errs:
+                    _ao.record_calibration(failed_attempts=_probe_num, step_ms=_step)
+                    _logger.info(
+                        "✅ KrakenNonceManager.probe_and_resync: calibrated at "
+                        "forward probe %d/%d (total jump: +%d ms / +%.0f min) "
+                        "— nonce=%d",
+                        _probe_num, _max_p,
+                        _probe_num * _step, _probe_num * _step / 60_000,
+                        self.get_last_nonce(),
+                    )
+                else:
+                    _logger.debug(
+                        "KrakenNonceManager.probe_and_resync: non-nonce error at "
+                        "probe %d (%s) — nonce accepted",
+                        _probe_num, ", ".join(probe_errs),
+                    )
+                return True
+
+        # ── All standard probes exhausted: ceiling jump + escalation ─────────
+        _ceiling = self.force_ceiling_jump()
+        _logger.error(
+            "❌ KrakenNonceManager.probe_and_resync: all %d forward probe steps "
+            "rejected — ceiling jump: nonce → now+%d ms / +%.1f h (%d); "
+            "attempting %d escalation probe(s)…",
+            _max_p, _CEILING_JUMP_MS, _CEILING_JUMP_MS / 3_600_000,
+            _ceiling, _PROBE_ESCALATION_ATTEMPTS,
+        )
+
+        for _esc in range(1, _PROBE_ESCALATION_ATTEMPTS + 1):
+            try:
+                esc_result = api_call_fn()
+            except Exception as exc:
+                _logger.debug(
+                    "KrakenNonceManager.probe_and_resync: escalation probe %d "
+                    "raised (%s)",
+                    _esc, exc,
+                )
+                return False
+
+            if not isinstance(esc_result, dict):
+                return False
+
+            if not _is_nonce_error(esc_result):
+                esc_errs = esc_result.get("error") or []
+                if not esc_errs:
+                    _logger.info(
+                        "✅ KrakenNonceManager.probe_and_resync: accepted at "
+                        "escalation probe %d — nonce=%d",
+                        _esc, self.get_last_nonce(),
+                    )
+                return True
+
+        # ── Permanent failure ─────────────────────────────────────────────────
+        # Ceiling jump + all escalation probes rejected.  If no competing process
+        # is detected the API key is permanently out-of-window.  Set the
+        # key-invalidated flag so broker_manager exits the retry loop immediately
+        # (prevents the infinite nuclear-reset-then-pause cycle).
+        _competing = self.detect_other_process_running()
+        if not _competing:
+            with _LOCK:
+                self._key_invalidated = True
+            # Fire quarantine callbacks exactly once (snapshots list under lock,
+            # fires outside lock to prevent deadlock).
+            global _quarantine_triggered, _quarantine_callbacks
+            with _LOCK:
+                _already_q = _quarantine_triggered
+                if not _already_q:
+                    _quarantine_triggered = True
+                    _cbs_to_fire = list(_quarantine_callbacks)
+                else:
+                    _cbs_to_fire = []
+            for _cb in _cbs_to_fire:
+                try:
+                    _cb()
+                except Exception as _exc:
+                    _logger.error(
+                        "KrakenNonceManager.probe_and_resync: quarantine callback "
+                        "%r raised %s", _cb, _exc,
+                    )
+            _logger.critical(
+                "❌ KrakenNonceManager.probe_and_resync: ceiling jump + %d "
+                "escalation probes ALL REJECTED.  Kraken API key is permanently "
+                "out-of-window.  REQUIRED ACTIONS:\n"
+                "  1. Go to kraken.com → Settings → API → delete this key.\n"
+                "  2. Create a new API key (set Nonce Window = 10 000).\n"
+                "  3. Update KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET.\n"
+                "  4. Set NIJA_DEEP_NONCE_RESET=1 for the first restart.\n"
+                "  5. Deploy exactly ONE instance.\n"
+                "  Bot is switching to Coinbase (fallback) until key is rotated.",
+                _PROBE_ESCALATION_ATTEMPTS,
+            )
+        else:
+            _logger.critical(
+                "❌ KrakenNonceManager.probe_and_resync: all probes failed AND "
+                "a duplicate NIJA process is still holding the lock.  "
+                "Stop ALL duplicate instances, then restart this one."
+            )
+
+        return False
 
     @staticmethod
     def detect_other_process_running() -> bool:
