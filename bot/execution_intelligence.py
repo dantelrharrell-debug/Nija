@@ -713,34 +713,51 @@ class ExecutionIntelligence:
         market_condition: MarketCondition
     ) -> OrderType:
         """
-        Select optimal order type based on conditions.
+        Select optimal order type based on liquidity and volatility conditions.
+
+        Decision logic (evaluated in priority order):
+
+        1. High urgency (> 0.8) → MARKET: certainty of fill outweighs price
+        2. Volatile market → MARKET: fast-moving prices make limit fills unreliable
+        3. Illiquid market (wide spread / thin depth) → LIMIT: avoids paying the
+           full bid-ask spread as a taker; a patient limit order near the mid-price
+           captures meaningful savings.
+        4. Poor liquidity score in a calm market → LIMIT: calm conditions give the
+           limit order time to fill at a better price.
+        5. Spread predicted to tighten + patient urgency → LIMIT: wait for
+           a tighter spread to reduce execution cost.
+        6. Default → MARKET: simpler, guaranteed fill.
 
         Args:
-            urgency: Execution urgency (0-1)
-            liquidity_score: Market liquidity score (0-1)
-            spread_analysis: Spread prediction results
-            market_condition: Current market condition
+            urgency: Execution urgency (0-1); 0 = patient, 1 = immediate
+            liquidity_score: Market liquidity score (0-1); 1 = deep book
+            spread_analysis: Spread prediction results dict from SpreadPredictor
+            market_condition: Current market condition classification
 
         Returns:
             Recommended order type
         """
-        # High urgency = market order
+        # 1. High urgency = market order (fill certainty beats price)
         if urgency > 0.8:
             return OrderType.MARKET
 
-        # Poor liquidity in calm market = limit order to get better price
-        if liquidity_score < 0.5 and market_condition == MarketCondition.CALM:
-            return OrderType.LIMIT
-
-        # Spread likely to tighten = wait with limit order
-        if spread_analysis['recommendation'] == 'wait' and urgency < 0.5:
-            return OrderType.LIMIT
-
-        # Volatile markets = market order for certainty
+        # 2. Volatile markets = market order (price moves too fast for limit fills)
         if market_condition == MarketCondition.VOLATILE:
             return OrderType.MARKET
 
-        # Default to market order for simplicity
+        # 3. Illiquid market = limit order (wide spread → avoid paying full taker spread)
+        if market_condition == MarketCondition.ILLIQUID:
+            return OrderType.LIMIT
+
+        # 4. Poor liquidity in calm market = limit order for better price
+        if liquidity_score < 0.5 and market_condition == MarketCondition.CALM:
+            return OrderType.LIMIT
+
+        # 5. Spread likely to tighten + patient entry = wait with limit order
+        if spread_analysis['recommendation'] == 'wait' and urgency < 0.5:
+            return OrderType.LIMIT
+
+        # 6. Default to market order
         return OrderType.MARKET
 
     def _calculate_optimal_limit_price(
