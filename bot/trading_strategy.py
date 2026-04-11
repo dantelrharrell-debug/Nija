@@ -1272,6 +1272,52 @@ except ImportError:
         get_profit_compounding_engine = None  # type: ignore
         logger.warning("⚠️ Profit Compounding Engine not available — static position sizing in use")
 
+# ── Adaptive Compounding Engine — tier-based capital compounding with milestone locking ─
+try:
+    from compounding_engine import get_compounding_engine, TradeResult as CompoundingTradeResult
+    ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE = True
+    logger.info("✅ Adaptive Compounding Engine loaded — tier-based compounding with milestone locking active")
+except ImportError:
+    try:
+        from bot.compounding_engine import get_compounding_engine, TradeResult as CompoundingTradeResult
+        ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE = True
+        logger.info("✅ Adaptive Compounding Engine loaded — tier-based compounding with milestone locking active")
+    except ImportError:
+        ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE = False
+        get_compounding_engine = None  # type: ignore
+        CompoundingTradeResult = None  # type: ignore
+        logger.warning("⚠️ Adaptive Compounding Engine not available — milestone compounding disabled")
+
+# ── Correlation Risk Engine — portfolio-wide correlation gating ───────────────
+try:
+    from correlation_risk_engine import get_correlation_risk_engine
+    CORRELATION_RISK_ENGINE_AVAILABLE = True
+    logger.info("✅ Correlation Risk Engine loaded — portfolio correlation gating active")
+except ImportError:
+    try:
+        from bot.correlation_risk_engine import get_correlation_risk_engine
+        CORRELATION_RISK_ENGINE_AVAILABLE = True
+        logger.info("✅ Correlation Risk Engine loaded — portfolio correlation gating active")
+    except ImportError:
+        CORRELATION_RISK_ENGINE_AVAILABLE = False
+        get_correlation_risk_engine = None  # type: ignore
+        logger.warning("⚠️ Correlation Risk Engine not available — portfolio correlation gating disabled")
+
+# ── Strategy Robustness Layer — regime-specific edge survival gating ──────────
+try:
+    from strategy_robustness_layer import get_strategy_robustness_layer
+    STRATEGY_ROBUSTNESS_AVAILABLE = True
+    logger.info("✅ Strategy Robustness Layer loaded — regime edge survival gating active")
+except ImportError:
+    try:
+        from bot.strategy_robustness_layer import get_strategy_robustness_layer
+        STRATEGY_ROBUSTNESS_AVAILABLE = True
+        logger.info("✅ Strategy Robustness Layer loaded — regime edge survival gating active")
+    except ImportError:
+        STRATEGY_ROBUSTNESS_AVAILABLE = False
+        get_strategy_robustness_layer = None  # type: ignore
+        logger.warning("⚠️ Strategy Robustness Layer not available — regime edge gating disabled")
+
 # ── Profit Optimizer — confidence sizing + trade ranking + acceleration ────────
 try:
     from profit_optimizer import get_profit_optimizer
@@ -3997,6 +4043,50 @@ class TradingStrategy:
         self.pro_mode_enabled = False
         self.ai_capital_rotator = None  # AI Capital Rotation Engine (4-step + meta allocation)
         self.true_profit_tracker = None  # True Profit Tracker — net profit after fees
+
+        # ── Adaptive Compounding Engine — tier-based capital compounding ──────
+        if ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE and get_compounding_engine is not None:
+            try:
+                _ace_base = float(os.environ.get("BASE_CAPITAL", str(_DEFAULT_BASE_CAPITAL)))
+                self.compounding_engine = get_compounding_engine(base_capital=_ace_base)
+                logger.info(
+                    "✅ Adaptive Compounding Engine initialized — "
+                    "tier-based compounding + milestone locking active (base=$%.2f)",
+                    _ace_base,
+                )
+            except Exception as _ace_err:
+                logger.warning("⚠️ Adaptive Compounding Engine init failed: %s", _ace_err)
+                self.compounding_engine = None
+        else:
+            self.compounding_engine = None
+
+        # ── Correlation Risk Engine — portfolio-wide correlation gating ───────
+        if CORRELATION_RISK_ENGINE_AVAILABLE and get_correlation_risk_engine is not None:
+            try:
+                self.correlation_risk_engine = get_correlation_risk_engine()
+                logger.info(
+                    "✅ Correlation Risk Engine initialized — "
+                    "portfolio correlation gating active"
+                )
+            except Exception as _cre_err:
+                logger.warning("⚠️ Correlation Risk Engine init failed: %s", _cre_err)
+                self.correlation_risk_engine = None
+        else:
+            self.correlation_risk_engine = None
+
+        # ── Strategy Robustness Layer — regime edge survival gating ───────────
+        if STRATEGY_ROBUSTNESS_AVAILABLE and get_strategy_robustness_layer is not None:
+            try:
+                self.strategy_robustness = get_strategy_robustness_layer()
+                logger.info(
+                    "✅ Strategy Robustness Layer initialized — "
+                    "regime edge survival gating active"
+                )
+            except Exception as _srl_err:
+                logger.warning("⚠️ Strategy Robustness Layer init failed: %s", _srl_err)
+                self.strategy_robustness = None
+        else:
+            self.strategy_robustness = None
 
         logger.critical("STEP 6: Capital and scaling engines initialized")
 
@@ -13830,6 +13920,53 @@ class TradingStrategy:
                                         )
 
                                 # ═══════════════════════════════════════════════════════
+                                # ADAPTIVE COMPOUNDING ENGINE — tier-based capital scaling
+                                # Uses GrowthTier thresholds ($0→SEED, $1k→STARTER, etc.)
+                                # with milestone locking, drawdown protection, and a
+                                # capital-growth throttle so sizing scales down during
+                                # unusually fast equity growth (overfit prevention).
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE
+                                    and hasattr(self, 'compounding_engine')
+                                    and self.compounding_engine is not None
+                                ):
+                                    try:
+                                        _ace = self.compounding_engine
+                                        _ace_bal = float(
+                                            account_balance
+                                            if account_balance and account_balance > 0
+                                            else (getattr(self, '_last_known_balance', None) or 0)
+                                        )
+                                        if _ace_bal > 0:
+                                            # Keep the engine's growth-throttle in sync
+                                            try:
+                                                from capital_growth_throttle import get_capital_growth_throttle
+                                                get_capital_growth_throttle(
+                                                    initial_capital=_ace.get_state().base_capital
+                                                ).update_capital(_ace_bal)
+                                            except Exception:
+                                                pass
+                                        _ace_base_pct = position_size / max(_ace_bal, 1.0) if _ace_bal > 0 else 0.05
+                                        _ace_sized = _ace.get_optimal_position_size(_ace_base_pct)
+                                        if _ace_sized > 0 and abs(_ace_sized - position_size) > 0.01:
+                                            logger.info(
+                                                "   💎 %s: Adaptive Compounding Engine "
+                                                "size $%.2f→$%.2f (tier=%s tradeable=$%.2f)",
+                                                symbol,
+                                                position_size,
+                                                _ace_sized,
+                                                _ace.get_state().tier,
+                                                _ace.get_tradeable_capital(),
+                                            )
+                                            position_size = _ace_sized
+                                    except Exception as _ace_err:
+                                        logger.debug(
+                                            "Adaptive Compounding Engine sizing skipped for %s: %s",
+                                            symbol, _ace_err,
+                                        )
+
+                                # ═══════════════════════════════════════════════════════
                                 # PROFIT OPTIMIZER — confidence sizing + acceleration
                                 # Layer A: scale position by signal confidence (0.5×–2.0×)
                                 # Layer B: apply tier-based acceleration multiplier that
@@ -14866,6 +15003,127 @@ class TradingStrategy:
                                         )
                                         # Non-fatal: allow trade if guardrails fail unexpectedly
 
+                                # ═══════════════════════════════════════════════════════
+                                # STRATEGY ROBUSTNESS LAYER — regime edge survival gate
+                                # Blocks entries when the dual-RSI strategy has lost its
+                                # statistical edge in the current market regime.
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    STRATEGY_ROBUSTNESS_AVAILABLE
+                                    and getattr(self, 'strategy_robustness', None) is not None
+                                ):
+                                    try:
+                                        _srl_regime = getattr(self, '_regime_snapshot', None)
+                                        if _srl_regime is None:
+                                            _srl_regime = analysis.get('regime', 'unknown')
+                                        if hasattr(_srl_regime, 'value'):
+                                            _srl_regime = _srl_regime.value
+                                        _srl_regime = str(_srl_regime or 'unknown')
+                                        _srl_conf = float(
+                                            analysis.get('confidence', 0.6) or 0.6
+                                        )
+                                        _srl_decision = self.strategy_robustness.approve_entry(
+                                            regime=_srl_regime,
+                                            confidence=_srl_conf,
+                                        )
+                                        if not _srl_decision.allowed:
+                                            if _hard_bypass_triggered:
+                                                logger.warning(
+                                                    "   ⚡ ROBUSTNESS GATE bypassed (hard bypass) "
+                                                    "%s regime=%s: %s",
+                                                    symbol, _srl_regime, _srl_decision.reason,
+                                                )
+                                            else:
+                                                logger.info(
+                                                    "   🛡️  ROBUSTNESS GATE blocked %s "
+                                                    "regime=%s wr=%.1f%% pf=%.2f: %s",
+                                                    symbol, _srl_regime,
+                                                    _srl_decision.win_rate * 100,
+                                                    _srl_decision.profit_factor,
+                                                    _srl_decision.reason,
+                                                )
+                                                filter_stats['robustness_gate'] = (
+                                                    filter_stats.get('robustness_gate', 0) + 1
+                                                )
+                                                continue
+                                        # Store the active regime for later trade recording
+                                        self._last_entry_regime = getattr(
+                                            self, '_last_entry_regime', {}
+                                        )
+                                        self._last_entry_regime[symbol] = _srl_regime
+                                    except Exception as _srl_err:
+                                        logger.debug(
+                                            "Strategy Robustness gate error for %s: %s",
+                                            symbol, _srl_err,
+                                        )
+                                        # Non-fatal — allow trade if gate errors
+
+                                # ═══════════════════════════════════════════════════════
+                                # CORRELATION RISK ENGINE — portfolio correlation gate
+                                # Richer than the basic entry-guardrail correlation check:
+                                # computes rolling pairwise correlations, cluster weights,
+                                # and adjusts position size when correlation is elevated
+                                # (without necessarily blocking the trade).
+                                # ═══════════════════════════════════════════════════════
+                                if (
+                                    CORRELATION_RISK_ENGINE_AVAILABLE
+                                    and getattr(self, 'correlation_risk_engine', None) is not None
+                                ):
+                                    try:
+                                        _cre = self.correlation_risk_engine
+                                        _cre_close = float(df['close'].iloc[-1])
+                                        _cre.update_price(symbol, _cre_close)
+
+                                        _cre_positions = {
+                                            p.get('symbol', ''): float(
+                                                p.get('position_value', p.get('size_usd', position_size))
+                                            )
+                                            for p in current_positions
+                                            if p.get('symbol')
+                                        }
+                                        _cre_portfolio_val = float(
+                                            getattr(self, '_last_known_balance', None) or position_size * 10
+                                        )
+                                        _cre_decision = _cre.approve_entry(
+                                            symbol=symbol,
+                                            proposed_size_usd=position_size,
+                                            active_positions=_cre_positions,
+                                            portfolio_value=_cre_portfolio_val,
+                                        )
+                                        if not _cre_decision.allowed:
+                                            if _hard_bypass_triggered:
+                                                logger.warning(
+                                                    "   ⚡ CORRELATION RISK ENGINE bypassed "
+                                                    "(hard bypass) %s: %s",
+                                                    symbol, _cre_decision.reason,
+                                                )
+                                            else:
+                                                logger.info(
+                                                    "   🛡️  CORRELATION RISK ENGINE blocked %s: %s",
+                                                    symbol, _cre_decision.reason,
+                                                )
+                                                filter_stats['correlation_risk'] = (
+                                                    filter_stats.get('correlation_risk', 0) + 1
+                                                )
+                                                continue
+                                        elif _cre_decision.adjusted_size_usd < position_size:
+                                            # Size was reduced due to elevated (but acceptable) correlation
+                                            logger.info(
+                                                "   🔗 %s: CRE size reduced $%.2f→$%.2f "
+                                                "(pair_corr=%.2f)",
+                                                symbol,
+                                                position_size,
+                                                _cre_decision.adjusted_size_usd,
+                                                _cre_decision.max_pair_corr,
+                                            )
+                                            position_size = _cre_decision.adjusted_size_usd
+                                    except Exception as _cre_err:
+                                        logger.debug(
+                                            "Correlation Risk Engine check error for %s: %s",
+                                            symbol, _cre_err,
+                                        )
+                                        # Non-fatal — allow trade if engine errors
+
                                 logger.info(f"   🎯 BUY SIGNAL: {symbol} - size=${position_size:.2f} - {analysis.get('reason', '')}")
 
                                 # ═══════════════════════════════════════════════════════
@@ -15296,6 +15554,21 @@ class TradingStrategy:
                                 # PHASE 3 — DYNAMIC STOP TIGHTENER + PARTIAL TP LADDER
                                 # Register new position with Phase 3 position managers.
                                 # ═══════════════════════════════════════════════════════
+                                # 🔗 CORRELATION RISK ENGINE — register confirmed new position
+                                if (
+                                    CORRELATION_RISK_ENGINE_AVAILABLE
+                                    and getattr(self, 'correlation_risk_engine', None) is not None
+                                ):
+                                    try:
+                                        self.correlation_risk_engine.add_position(
+                                            symbol=_ps_symbol,
+                                            size_usd=float(_ps_position_size),
+                                        )
+                                    except Exception as _cre_add_err:
+                                        logger.debug(
+                                            "Correlation Risk Engine add_position skipped for %s: %s",
+                                            _ps_symbol, _cre_add_err,
+                                        )
                                 _p3_entry_price = float(
                                     _ps_analysis.get('entry_price')
                                     or _ps_analysis.get('price')
@@ -15467,6 +15740,10 @@ class TradingStrategy:
                         logger.info(f"      🏷️  Sector cap (40%): {filter_stats['sector_cap']}")
                     if filter_stats.get('entry_guardrails', 0) > 0:
                         logger.info(f"      🛡️  Entry guardrails: {filter_stats['entry_guardrails']}")
+                    if filter_stats.get('robustness_gate', 0) > 0:
+                        logger.info(f"      🧪 Robustness gate (regime edge): {filter_stats['robustness_gate']}")
+                    if filter_stats.get('correlation_risk', 0) > 0:
+                        logger.info(f"      🔗 Correlation risk engine: {filter_stats['correlation_risk']}")
                     if filter_stats.get('sniper_filter', 0) > 0:
                         logger.info(f"      🎯 Sniper filter: {filter_stats['sniper_filter']}")
 
@@ -16207,6 +16484,60 @@ class TradingStrategy:
                 )
             except Exception as _pce_rec_err:
                 logger.debug("Profit Compounding Engine record_trade skipped for %s: %s", symbol, _pce_rec_err)
+
+        # 💎 ADAPTIVE COMPOUNDING ENGINE — record trade outcome for tier/milestone management
+        if (ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE
+                and hasattr(self, 'compounding_engine')
+                and self.compounding_engine is not None
+                and CompoundingTradeResult is not None):
+            try:
+                _ace_fees = abs(profit_usd) * _TRADING_FEE_PCT
+                _ace_result = CompoundingTradeResult(
+                    trade_id=f"{symbol}_{int(time.time())}",
+                    gross_profit=profit_usd,
+                    fees=_ace_fees,
+                    symbol=symbol,
+                )
+                _ace_detail = self.compounding_engine.record_trade(_ace_result)
+                if _ace_detail.get("milestones_hit"):
+                    logger.info(
+                        "   🏆 %s: Compounding Engine — milestone(s) hit: %s | "
+                        "total=$%.2f tier=%s",
+                        symbol,
+                        _ace_detail["milestones_hit"],
+                        self.compounding_engine.get_state().total_capital,
+                        self.compounding_engine.get_state().tier,
+                    )
+            except Exception as _ace_rec_err:
+                logger.debug("Adaptive Compounding Engine record_trade skipped for %s: %s", symbol, _ace_rec_err)
+
+        # 🔗 CORRELATION RISK ENGINE — remove closed position from tracker
+        if (CORRELATION_RISK_ENGINE_AVAILABLE
+                and getattr(self, 'correlation_risk_engine', None) is not None):
+            try:
+                self.correlation_risk_engine.remove_position(symbol)
+            except Exception as _cre_rem_err:
+                logger.debug("Correlation Risk Engine remove_position skipped for %s: %s", symbol, _cre_rem_err)
+
+        # 🛡️  STRATEGY ROBUSTNESS LAYER — record trade outcome per regime
+        if (STRATEGY_ROBUSTNESS_AVAILABLE
+                and getattr(self, 'strategy_robustness', None) is not None):
+            try:
+                _srl_regime = getattr(self, '_last_entry_regime', {}).get(symbol, 'unknown')
+                self.strategy_robustness.record_trade(
+                    regime=_srl_regime,
+                    is_win=is_win,
+                    pnl_usd=profit_usd,
+                )
+                # Log a periodic edge health summary every 25 trades
+                _srl_total = sum(
+                    s.get("total_trades", 0)
+                    for s in self.strategy_robustness.get_regime_report()
+                )
+                if _srl_total > 0 and _srl_total % 25 == 0:
+                    self.strategy_robustness.log_report()
+            except Exception as _srl_rec_err:
+                logger.debug("Strategy Robustness Layer record_trade skipped for %s: %s", symbol, _srl_rec_err)
 
         # 🚀 PROFIT OPTIMIZER — feed outcome to accelerator for tier tracking
         if (PROFIT_OPTIMIZER_AVAILABLE
