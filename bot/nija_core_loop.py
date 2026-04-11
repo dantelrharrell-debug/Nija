@@ -214,6 +214,25 @@ except ImportError:
     except ImportError:
         pass
 
+# ---------------------------------------------------------------------------
+# Trade Permission Engine — authoritative single-source decision layer
+# ---------------------------------------------------------------------------
+_TPE_AVAILABLE = False
+_get_tpe = None  # type: ignore
+try:
+    from trade_permission_engine import (  # type: ignore
+        get_trade_permission_engine as _get_tpe,
+    )
+    _TPE_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.trade_permission_engine import (  # type: ignore
+            get_trade_permission_engine as _get_tpe,
+        )
+        _TPE_AVAILABLE = True
+    except ImportError:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -879,6 +898,46 @@ class NijaCoreLoop:
                 df = self._fetch_df(broker, sig.symbol)
                 if df is None or len(df) < 100:
                     continue
+
+                # ── Trade Permission Engine ───────────────────────────────
+                # Single authoritative decision check: emits DECISION TRACE
+                # and returns EXECUTE or BLOCKED before the expensive
+                # apex.analyze_market() call.
+                if _TPE_AVAILABLE and _get_tpe is not None:
+                    try:
+                        _perm = _get_tpe().evaluate(
+                            symbol=sig.symbol,
+                            side=sig.side,
+                            ai_score=sig.composite_score,
+                            ai_threshold=sig.threshold_used,
+                            balance=balance,
+                            regime=getattr(self.apex, "current_regime", None),
+                            zero_signal_streak=zero_signal_streak,
+                            df=df,
+                            entry_type=getattr(sig, "entry_type", "swing"),
+                            broker=(
+                                self.apex._get_broker_name()
+                                if hasattr(self.apex, "_get_broker_name")
+                                else "coinbase"
+                            ),
+                            force_next_cycle=_force_this_cycle,
+                            dead_zone=_dead_zone,
+                            hard_bypass=(
+                                zero_signal_streak >= _effective_bypass_threshold
+                            ),
+                            volume_fallback=bool(
+                                sig.metadata.get("volume_fallback")
+                            ),
+                            metadata=sig.metadata,
+                        )
+                        if _perm.final_decision != "EXECUTE":
+                            blocked += 1
+                            continue
+                    except Exception as _tpe_err:
+                        logger.debug(
+                            "TradePermissionEngine error for %s (non-fatal): %s",
+                            sig.symbol, _tpe_err,
+                        )
 
                 # Re-run full apex.analyze_market (handles SL/TP/sizing etc.)
                 analysis = self.apex.analyze_market(df, sig.symbol, balance)
