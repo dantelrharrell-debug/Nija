@@ -352,13 +352,10 @@ class MultiAccountBrokerManager:
         if broker_registry is not None:
             broker_registry[broker_type.value]["platform"] = True
             logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
-            if BrokerCriticality is not None:
-                # Preserve the broker's natural criticality tier — do NOT promote
-                # every platform broker to CRITICAL.  OKX/Binance/Alpaca are OPTIONAL
-                # by default and their failure must never block user-account connections.
-                # Kraken (nonce-sensitive) is already CRITICAL via BROKER_DEFAULT_CRITICALITY.
-                natural_crit = broker_registry.get_criticality(broker_type.value)
-                broker_registry.set_criticality(broker_type.value, natural_crit)
+            # Criticality is NOT overridden here — each broker's tier is governed
+            # by BROKER_DEFAULT_CRITICALITY (OKX/Binance/Alpaca = OPTIONAL, Kraken = CRITICAL).
+            # Forcing CRITICAL on every platform broker caused OKX failures to trigger
+            # the HARD BLOCK and block Kraken/Coinbase user connections.
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
@@ -420,13 +417,10 @@ class MultiAccountBrokerManager:
             if broker_registry is not None:
                 broker_registry[broker_type.value]["platform"] = True
                 logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
-                if BrokerCriticality is not None:
-                    # Preserve the broker's natural criticality tier — do NOT promote
-                    # every platform broker to CRITICAL.  OKX/Binance/Alpaca are OPTIONAL
-                    # by default and their failure must never block user-account connections.
-                    # Kraken (nonce-sensitive) is already CRITICAL via BROKER_DEFAULT_CRITICALITY.
-                    natural_crit = broker_registry.get_criticality(broker_type.value)
-                    broker_registry.set_criticality(broker_type.value, natural_crit)
+                # Criticality is NOT overridden here — each broker's tier is governed
+                # by BROKER_DEFAULT_CRITICALITY (OKX/Binance/Alpaca = OPTIONAL, Kraken = CRITICAL).
+                # Forcing CRITICAL on every platform broker caused OKX failures to trigger
+                # the HARD BLOCK and block Kraken/Coinbase user connections.
             # Register with broker failure manager for per-broker circuit-breaking.
             if self._broker_failure_mgr is not None:
                 try:
