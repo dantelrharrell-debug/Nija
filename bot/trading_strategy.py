@@ -6655,6 +6655,10 @@ class TradingStrategy:
 
         # Collect all eligible brokers (in priority order for tie-breaking)
         eligible_brokers: list = []  # list of (broker_instance, broker_name, broker_type)
+        # Brokers that are balance-eligible but skipped only by micro-cap routing (floor too high).
+        # Used as a last-resort fallback so a conneted Kraken is never silently abandoned in
+        # favour of a Coinbase with $0.01 balance when no lower-floor broker is available.
+        _microcap_fallback_brokers: list = []
         # Phase 1: collect all eligible brokers (preserving ENTRY_BROKER_PRIORITY order)
         for broker_type in ENTRY_BROKER_PRIORITY:
             broker = all_brokers.get(broker_type)
@@ -6684,13 +6688,30 @@ class TradingStrategy:
                             f"(estimated size ${size_hint:.2f} < exchange floor ${_floor:.2f}) "
                             f"— routing to lower-floor broker"
                         )
+                        # Keep as fallback: balance-eligible but floor-skipped broker
+                        _microcap_fallback_brokers.append((broker, broker_name, broker_type))
                         continue
                 eligible_brokers.append((broker, broker_name, broker_type))
 
         if not eligible_brokers:
-            # No eligible broker found
-            logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
-            return None, None, eligibility_status
+            # ── MICRO-CAP FALLBACK: use balance-eligible brokers that were floor-skipped ──
+            # This prevents the case where Kraken is active with sufficient balance but gets
+            # bypassed by micro-cap routing when the size_hint is just below its floor,
+            # while Coinbase (the fallback) has only $0.01 — resulting in zero eligible brokers.
+            # Instead of returning None, route back to the balance-eligible broker (e.g. Kraken).
+            if _microcap_fallback_brokers:
+                _fallback_b, _fallback_bn, _fallback_bt = _microcap_fallback_brokers[0]
+                logger.warning(
+                    f"   🔄 MICRO-CAP FALLBACK: no lower-floor broker available — "
+                    f"routing to {_fallback_bn.upper()} despite size_hint=${size_hint:.2f} "
+                    f"< floor=${BROKERAGE_MIN_TRADE_USD.get(_fallback_bn.lower(), BASE_MIN_POSITION_SIZE_USD):.2f} "
+                    f"(Kraken-first enforcement: broker has sufficient balance)"
+                )
+                eligible_brokers = [(_fallback_b, _fallback_bn, _fallback_bt)]
+            else:
+                # No eligible broker found
+                logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
+                return None, None, eligibility_status
 
         # ── BrokerPerformanceScorer: rank eligible brokers by composite score ──
         # When multiple brokers are eligible, prefer the one with the best historical
@@ -12512,12 +12533,24 @@ class TradingStrategy:
                                         )
 
                                         if _sel_decision.skip:
-                                            logger.info(
-                                                "   ⛔ SEL SKIP [%s]: %s",
-                                                symbol, _sel_decision.reason,
-                                            )
-                                            filter_stats['market_filter'] += 1
-                                            continue
+                                            if _hard_bypass_triggered:
+                                                # Hard bypass is active — override SKIP and treat as FORCED
+                                                # (reduced position size) so capital exposure is contained
+                                                # while still allowing the trade to proceed.
+                                                logger.warning(
+                                                    "   ⚡ SEL SKIP overridden by hard bypass [%s]: %s "
+                                                    "— converting to FORCED (size×0.65)",
+                                                    symbol, _sel_decision.reason,
+                                                )
+                                                if position_size > 0:
+                                                    position_size *= 0.65
+                                            else:
+                                                logger.info(
+                                                    "   ⛔ SEL SKIP [%s]: %s",
+                                                    symbol, _sel_decision.reason,
+                                                )
+                                                filter_stats['market_filter'] += 1
+                                                continue
 
                                         if _sel_decision.forced:
                                             logger.info(
@@ -14531,13 +14564,21 @@ class TradingStrategy:
                                         )
 
                                         if not _guard_passed:
-                                            logger.info(
-                                                f"   🛡️  ENTRY GUARDRAILS blocked {symbol}: {_guard_reason}"
-                                            )
-                                            filter_stats['entry_guardrails'] = (
-                                                filter_stats.get('entry_guardrails', 0) + 1
-                                            )
-                                            continue
+                                            if _hard_bypass_triggered:
+                                                # Hard bypass active — log warning but allow the trade
+                                                # through so a prolonged drought can still execute.
+                                                logger.warning(
+                                                    f"   ⚡ ENTRY GUARDRAILS bypassed (hard bypass active) "
+                                                    f"{symbol}: {_guard_reason}"
+                                                )
+                                            else:
+                                                logger.info(
+                                                    f"   🛡️  ENTRY GUARDRAILS blocked {symbol}: {_guard_reason}"
+                                                )
+                                                filter_stats['entry_guardrails'] = (
+                                                    filter_stats.get('entry_guardrails', 0) + 1
+                                                )
+                                                continue
                                     except Exception as _guard_err:
                                         logger.debug(
                                             f"   ⚠️ Entry guardrail check error for {symbol}: {_guard_err}"
@@ -15131,7 +15172,34 @@ class TradingStrategy:
                             )
 
                     # EXPLICIT: Log waiting status when no signals found
-                    if filter_stats['signals_found'] == 0:
+                    # Track zero-signal streak by whether signals were QUEUED FOR EXECUTION
+                    # (not merely found by APEX).  This ensures downstream veto layers (SEL
+                    # SKIP, entry guardrails, etc.) that block all signals after signals_found
+                    # is incremented also advance the streak, enabling bypass mechanisms to
+                    # trigger correctly.
+                    _signals_queued = len(pending_signals)  # how many made it past all filters
+                    _no_actionable_signal = (
+                        filter_stats['signals_found'] == 0
+                        or _signals_queued == 0
+                    )
+                    if _no_actionable_signal:
+                        # Log a more detailed reason when APEX found signals but all were vetoed
+                        if filter_stats['signals_found'] > 0 and _signals_queued == 0:
+                            _dominant_veto = max(
+                                (
+                                    (k, v) for k, v in filter_stats.items()
+                                    if k not in ('total', 'signals_found', 'cache_hits')
+                                    and isinstance(v, (int, float)) and v > 0
+                                ),
+                                key=lambda x: x[1],
+                                default=("unknown", 0),
+                            )
+                            logger.info(
+                                "   ⚠️  %d signal(s) found but ALL vetoed "
+                                "(dominant filter: '%s'=%d) — treating as zero-signal cycle",
+                                filter_stats['signals_found'],
+                                _dominant_veto[0], _dominant_veto[1],
+                            )
                         self._zero_signal_streak += 1
                         # CEM: record idle cycle
                         if (
@@ -15198,11 +15266,13 @@ class TradingStrategy:
                                 dominant_filter[1],
                             )
                     else:
-                        # Signals found — reset the streak
+                        # Signals were queued for execution — reset the streak
                         if self._zero_signal_streak > 0:
                             logger.info(
-                                "   ✅ Zero-signal streak reset (was %d cycles)",
+                                "   ✅ Zero-signal streak reset (was %d cycles) — "
+                                "%d signal(s) queued for execution",
                                 self._zero_signal_streak,
+                                _signals_queued,
                             )
                         self._zero_signal_streak = 0
                         # CEM idle counter is managed at execution time (not here),
