@@ -975,7 +975,7 @@ class BaseBroker(ABC):
         self.credentials_configured = False  # Track if credentials were provided
         self.last_connection_error = None  # Track last connection error for troubleshooting
         self.exit_only_mode = False  # Default: not in exit-only mode (can be overridden by subclasses)
-        self.mode = "ACTIVE"  # Broker deployment mode: "ACTIVE" = tradable, "PASSIVE" = track-only (dust)
+        self.mode = "ACTIVE"  # Broker deployment mode: "ACTIVE" = tradable, "PASSIVE" = track-only (balance below deployable threshold)
         
         # Initialize circuit breaker for this broker
         if CIRCUIT_BREAKER_AVAILABLE:

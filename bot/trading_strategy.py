@@ -6880,7 +6880,12 @@ class TradingStrategy:
             # They are marked PASSIVE (track-only) for this cycle so they do not
             # waste scan time or consume margin on marginal accounts.
             if balance < MIN_DEPLOYABLE_BALANCE:
-                if hasattr(broker, 'mode'):
+                if not hasattr(broker, 'mode'):
+                    logger.warning(
+                        "   ⚠️ %s missing 'mode' attribute — BaseBroker init may not have run",
+                        broker_name.upper(),
+                    )
+                else:
                     broker.mode = "PASSIVE"
                 veto_reason = (
                     f"{broker_name.upper()} balance ${balance:.2f} < "
@@ -6892,7 +6897,12 @@ class TradingStrategy:
                 return False, veto_reason
             else:
                 # Restore ACTIVE when balance recovers above the deployable threshold
-                if hasattr(broker, 'mode') and broker.mode == "PASSIVE":
+                if not hasattr(broker, 'mode'):
+                    logger.warning(
+                        "   ⚠️ %s missing 'mode' attribute — BaseBroker init may not have run",
+                        broker_name.upper(),
+                    )
+                elif broker.mode == "PASSIVE":
                     broker.mode = "ACTIVE"
                     logger.info(
                         "   ✅ %s balance recovered to $%.2f — mode restored to ACTIVE",
