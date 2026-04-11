@@ -91,6 +91,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
 from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger("nija.capital_orchestration")
@@ -104,6 +105,9 @@ DEFAULT_RESERVE_PCT: float = 0.20  # 20 %
 
 # Maximum allocation to a single strategy (% of deployable capital).
 DEFAULT_MAX_SINGLE_STRATEGY_PCT: float = 0.40  # 40 %
+
+# Maximum ExecutionToken history records kept in memory (per bucket).
+_MAX_TOKEN_HISTORY: int = 200
 
 # Regime-specific capital multipliers – scale the deployable pool up/down.
 REGIME_MULTIPLIERS: Dict[str, float] = {
@@ -160,6 +164,72 @@ class AllocationRecord:
     regime: str
 
 
+@dataclass
+class ExecutionToken:
+    """Opaque handle returned by :meth:`CapitalOrchestrationEngine.begin_execution`.
+
+    Carries the complete lifecycle audit trail for one trade reservation —
+    from the moment capital is reserved through to either a confirmed fill
+    (COMMITTED) or a failed/cancelled execution (ROLLED_BACK).
+
+    Status transitions
+    ------------------
+    ::
+
+        PENDING  ──commit_execution()──►  COMMITTED
+                 ──rollback_execution()─►  ROLLED_BACK
+
+    Attributes
+    ----------
+    token_id:            UUID assigned at reservation time.
+    strategy:            Requesting strategy name.
+    symbol:              Trading pair.
+    regime:              Market regime at reservation time.
+    reserved_usd:        Capital locked by ``request_allocation()``.
+    pre_trade_equity:    PnL-adjusted account equity captured at reservation.
+    created_at:          ISO-8601 timestamp of reservation.
+    status:              ``"PENDING"`` | ``"COMMITTED"`` | ``"ROLLED_BACK"``.
+    actual_fill_usd:     Broker-confirmed filled amount (set on commit).
+    committed_at:        ISO-8601 timestamp of commit (None until committed).
+    rolled_back_at:      ISO-8601 timestamp of rollback (None unless rolled back).
+    post_trade_equity:   PnL-adjusted equity captured after broker confirmation.
+    capital_drift_usd:   ``actual_fill_usd − reserved_usd`` (post-commit reconciliation).
+                         Positive = over-fill, negative = under-fill.
+    """
+
+    token_id: str
+    strategy: str
+    symbol: str
+    regime: str
+    reserved_usd: float
+    pre_trade_equity: float
+    created_at: str
+    status: str = "PENDING"
+    actual_fill_usd: float = 0.0
+    committed_at: Optional[str] = None
+    rolled_back_at: Optional[str] = None
+    post_trade_equity: float = 0.0
+    capital_drift_usd: float = 0.0
+
+    def to_dict(self) -> Dict:
+        """Return a JSON-serialisable representation for audit logging."""
+        return {
+            "token_id":          self.token_id,
+            "strategy":          self.strategy,
+            "symbol":            self.symbol,
+            "regime":            self.regime,
+            "reserved_usd":      round(self.reserved_usd, 4),
+            "actual_fill_usd":   round(self.actual_fill_usd, 4),
+            "capital_drift_usd": round(self.capital_drift_usd, 4),
+            "pre_trade_equity":  round(self.pre_trade_equity, 4),
+            "post_trade_equity": round(self.post_trade_equity, 4),
+            "status":            self.status,
+            "created_at":        self.created_at,
+            "committed_at":      self.committed_at,
+            "rolled_back_at":    self.rolled_back_at,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -191,6 +261,14 @@ class CapitalOrchestrationEngine:
 
         # Audit trail
         self._allocation_log: List[AllocationRecord] = []
+
+        # Execution token stores (Execution Integrity Layer)
+        # _active_tokens:    currently PENDING reservations (token_id → token)
+        # _committed_tokens: recent COMMITTED executions (capped at _MAX_TOKEN_HISTORY)
+        # _rolled_back_tokens: recent ROLLED_BACK executions (capped at _MAX_TOKEN_HISTORY)
+        self._active_tokens: Dict[str, ExecutionToken] = {}
+        self._committed_tokens: List[ExecutionToken] = []
+        self._rolled_back_tokens: List[ExecutionToken] = []
 
         logger.info(
             "✅ CapitalOrchestrationEngine initialized "
@@ -387,6 +465,9 @@ class CapitalOrchestrationEngine:
                 "deployable_usd": deployable,
                 "per_strategy_in_use": dict(self._in_use),
                 "allocation_count": len(self._allocation_log),
+                "active_tokens": len(self._active_tokens),
+                "committed_tokens": len(self._committed_tokens),
+                "rolled_back_tokens": len(self._rolled_back_tokens),
             }
 
     def get_allocation_log(self, last_n: int = 50) -> List[AllocationRecord]:
@@ -400,6 +481,293 @@ class CapitalOrchestrationEngine:
         """
         with self._lock:
             return list(self._allocation_log[-last_n:])
+
+    def sync_and_update_capital(
+        self,
+        raw_balance_usd: float,
+        unrealized_pnl_usd: float,
+        request: AllocationRequest,
+        *,
+        latency_ms: float = 0.0,
+    ) -> float:
+        """Canonical entry point for ALL trade sizing decisions.
+
+        Enforces the mandatory, immutable pipeline ordering::
+
+            1. latency            — observe API/network round-trip (logging)
+            2. balance            — accept raw account cash balance
+            3. pnl-adjusted equity — balance + unrealized_pnl
+            4. reservation        — update engine equity baseline AFTER PnL adjustment
+            5. sizing             — request_allocation() against the adjusted equity
+
+        ⚠️  The ordering is load-bearing.  If reservation (step 4) were to
+        happen before PnL adjustment (step 3) the engine would price new
+        trades against stale capital, silently under- or over-allocating.
+        Never reorder these steps — integrity breaks the moment you do.
+
+        Args:
+            raw_balance_usd:     Raw account cash balance in USD.
+            unrealized_pnl_usd:  Sum of open-position mark-to-market PnL in
+                                 USD.  May be negative when positions are
+                                 underwater.
+            request:             Broker-agnostic :class:`AllocationRequest`.
+            latency_ms:          Optional API/network round-trip latency in
+                                 milliseconds.  Recorded for observability and
+                                 reserved for future adaptive latency guards.
+
+        Returns:
+            Granted USD amount (≥ ``request.min_usd``), or ``0.0`` when the
+            trade should be skipped.
+        """
+        # ── Step 1: latency observation ───────────────────────────────────────
+        # Logged now; reserved for future adaptive guards (e.g. widen reserve
+        # during high-latency windows when stale data risk is elevated).
+        if latency_ms > 0:
+            logger.debug(
+                "sync_and_update_capital: API latency %.1f ms [%s / %s]",
+                latency_ms, request.strategy, request.symbol,
+            )
+
+        # ── Steps 2 + 3: balance → pnl-adjusted equity ───────────────────────
+        # RESERVATION MUST USE THIS ADJUSTED FIGURE.  Using raw_balance_usd
+        # would ignore the mark-to-market exposure of existing open positions
+        # and allow over-allocation when those positions are in a drawdown.
+        pnl_adjusted_equity = raw_balance_usd + unrealized_pnl_usd
+        if pnl_adjusted_equity <= 0:
+            logger.warning(
+                "sync_and_update_capital: pnl-adjusted equity $%.2f ≤ 0 "
+                "(balance=$%.2f, unrealized=$%.2f) — allocation blocked "
+                "[%s / %s]",
+                pnl_adjusted_equity, raw_balance_usd, unrealized_pnl_usd,
+                request.strategy, request.symbol,
+            )
+            return 0.0
+
+        logger.debug(
+            "sync_and_update_capital: balance=$%.2f + unrealized=$%.2f "
+            "→ adjusted_equity=$%.2f [%s / %s]",
+            raw_balance_usd, unrealized_pnl_usd, pnl_adjusted_equity,
+            request.strategy, request.symbol,
+        )
+
+        # ── Step 4: reservation baseline — MUST follow PnL adjustment ────────
+        # set_equity() establishes the capital pool that request_allocation()
+        # will draw from.  Calling it here, after the PnL-adjusted figure is
+        # computed, guarantees reservation is never priced against stale data.
+        self.set_equity(pnl_adjusted_equity)
+
+        # ── Step 5: sizing — draws from the freshly-updated reservation pool ──
+        return self.request_allocation(request)
+
+    # ------------------------------------------------------------------
+    # Execution Integrity Layer  (begin / commit / rollback)
+    # ------------------------------------------------------------------
+
+    def begin_execution(
+        self,
+        raw_balance_usd: float,
+        unrealized_pnl_usd: float,
+        request: AllocationRequest,
+        *,
+        latency_ms: float = 0.0,
+    ) -> Optional["ExecutionToken"]:
+        """Reserve capital and return an :class:`ExecutionToken`.
+
+        This is the **mandatory entry point** for all trade executions.
+        It combines the PnL-safe capital sync (see :meth:`sync_and_update_capital`)
+        with the creation of an immutable audit token that must be closed by
+        either :meth:`commit_execution` (fill confirmed) or
+        :meth:`rollback_execution` (execution failed or was rejected).
+
+        Pattern::
+
+            token = engine.begin_execution(balance, unrealized_pnl, request)
+            if token is None:
+                return  # insufficient capital — skip trade
+            try:
+                fill_usd = broker.place_order(token.symbol, token.reserved_usd)
+                engine.commit_execution(token, fill_usd, post_balance, post_unrealized)
+            except Exception:
+                engine.rollback_execution(token)
+                raise
+
+        Args:
+            raw_balance_usd:     Raw account cash balance in USD.
+            unrealized_pnl_usd:  Open-position mark-to-market PnL in USD.
+            request:             Broker-agnostic :class:`AllocationRequest`.
+            latency_ms:          Optional API round-trip latency for logging.
+
+        Returns:
+            :class:`ExecutionToken` if capital was granted, ``None`` if the
+            trade should be skipped (insufficient deployable capital).
+        """
+        granted = self.sync_and_update_capital(
+            raw_balance_usd,
+            unrealized_pnl_usd,
+            request,
+            latency_ms=latency_ms,
+        )
+
+        if granted < request.min_usd:
+            # sync_and_update_capital already logged the skip reason
+            return None
+
+        pnl_adjusted_equity = raw_balance_usd + unrealized_pnl_usd
+        token = ExecutionToken(
+            token_id=str(uuid.uuid4()),
+            strategy=request.strategy,
+            symbol=request.symbol,
+            regime=request.regime,
+            reserved_usd=granted,
+            pre_trade_equity=pnl_adjusted_equity,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        with self._lock:
+            self._active_tokens[token.token_id] = token
+
+        logger.info(
+            "🔒 Execution token created: %s  %s/%s  reserved=$%.2f  "
+            "equity_snapshot=$%.2f  [token=%s]",
+            token.status, token.strategy, token.symbol,
+            token.reserved_usd, token.pre_trade_equity, token.token_id,
+        )
+        return token
+
+    def commit_execution(
+        self,
+        token: "ExecutionToken",
+        actual_fill_usd: float,
+        post_trade_balance_usd: float,
+        post_trade_unrealized_usd: float = 0.0,
+    ) -> None:
+        """Finalise a trade execution and reconcile reserved vs actual capital.
+
+        Must be called **after** the broker confirms the fill.  Releases the
+        original reservation, re-records the actual fill amount, and computes
+        the capital drift for audit purposes.
+
+        Capital reconciliation
+        ----------------------
+        * ``reserved_usd`` is released from ``_in_use``.
+        * ``actual_fill_usd`` is re-added to ``_in_use`` (so the engine
+          accurately tracks what is truly deployed post-fill).
+        * ``capital_drift_usd = actual_fill_usd − reserved_usd``.
+          Drift > 0 means the broker filled more than reserved (rare but
+          possible with market orders).  Drift < 0 means an underfill.
+
+        Args:
+            token:                    Token returned by :meth:`begin_execution`.
+            actual_fill_usd:          Broker-confirmed filled amount in USD.
+            post_trade_balance_usd:   Account cash balance after the fill.
+            post_trade_unrealized_usd: Open-position PnL after the fill.
+        """
+        post_equity = post_trade_balance_usd + post_trade_unrealized_usd
+        drift = actual_fill_usd - token.reserved_usd
+
+        # Mutate the token record before moving it to the history bucket
+        token.status = "COMMITTED"
+        token.actual_fill_usd = actual_fill_usd
+        token.committed_at = datetime.now(timezone.utc).isoformat()
+        token.post_trade_equity = post_equity
+        token.capital_drift_usd = drift
+
+        # Release the original reservation; re-record the actual usage
+        self.release_capital(token.strategy, token.reserved_usd, "commit_reconcile")
+        if actual_fill_usd > 0.0:
+            with self._lock:
+                self._in_use[token.strategy] = (
+                    self._in_use.get(token.strategy, 0.0) + actual_fill_usd
+                )
+
+        # Move token from active → committed history (capped)
+        with self._lock:
+            self._active_tokens.pop(token.token_id, None)
+            self._committed_tokens.append(token)
+            if len(self._committed_tokens) > _MAX_TOKEN_HISTORY:
+                self._committed_tokens.pop(0)
+
+        if abs(drift) >= 0.01:
+            logger.warning(
+                "⚠️  Capital drift on commit: reserved=$%.2f  actual=$%.2f  "
+                "drift=%+.2f  [%s/%s  token=%s]",
+                token.reserved_usd, actual_fill_usd, drift,
+                token.strategy, token.symbol, token.token_id,
+            )
+        else:
+            logger.info(
+                "✅ Execution committed: %s/%s  reserved=$%.2f  filled=$%.2f  "
+                "post_equity=$%.2f  [token=%s]",
+                token.strategy, token.symbol,
+                token.reserved_usd, actual_fill_usd,
+                post_equity, token.token_id,
+            )
+
+    def rollback_execution(self, token: "ExecutionToken") -> None:
+        """Release all reserved capital for a failed or cancelled execution.
+
+        Must be called whenever execution fails after :meth:`begin_execution`
+        has already reserved capital — including broker rejections, network
+        errors, risk-gate vetoes discovered post-reservation, and any
+        unexpected exceptions in the execution path.
+
+        Calling this method is always safe, even if the token has already
+        been committed or rolled back (idempotent guard prevents double-release).
+
+        Args:
+            token: Token returned by :meth:`begin_execution`.
+        """
+        if token.status != "PENDING":
+            logger.warning(
+                "rollback_execution: token %s already in status=%s — skipped",
+                token.token_id, token.status,
+            )
+            return
+
+        token.status = "ROLLED_BACK"
+        token.rolled_back_at = datetime.now(timezone.utc).isoformat()
+
+        # Unconditionally release the full reservation
+        self.release_capital(token.strategy, token.reserved_usd, "rollback")
+
+        # Move token from active → rollback history (capped)
+        with self._lock:
+            self._active_tokens.pop(token.token_id, None)
+            self._rolled_back_tokens.append(token)
+            if len(self._rolled_back_tokens) > _MAX_TOKEN_HISTORY:
+                self._rolled_back_tokens.pop(0)
+
+        logger.info(
+            "🔄 Execution rolled back: %s/%s  released=$%.2f  [token=%s]",
+            token.strategy, token.symbol, token.reserved_usd, token.token_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Audit trail
+    # ------------------------------------------------------------------
+
+    def get_audit_trail(
+        self,
+        last_n: int = 50,
+    ) -> Dict[str, List[Dict]]:
+        """Return the most-recent committed and rolled-back token records.
+
+        Args:
+            last_n: Maximum number of records to return from each bucket.
+
+        Returns:
+            Dict with keys ``"committed"`` and ``"rolled_back"``, each a
+            list of token dicts (newest last) suitable for JSON serialisation.
+        """
+        with self._lock:
+            committed = [t.to_dict() for t in self._committed_tokens[-last_n:]]
+            rolled_back = [t.to_dict() for t in self._rolled_back_tokens[-last_n:]]
+            active = [t.to_dict() for t in self._active_tokens.values()]
+        return {
+            "active":       active,
+            "committed":    committed,
+            "rolled_back":  rolled_back,
+        }
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -428,7 +796,7 @@ _engine_lock = threading.Lock()
 
 
 def get_capital_orchestration_engine() -> CapitalOrchestrationEngine:
-    """Return the singleton CapitalOrchestrationEngine.
+    """Return the singleton :class:`CapitalOrchestrationEngine`.
 
     Creates the instance on first call with default parameters.
     """
@@ -441,6 +809,56 @@ def get_capital_orchestration_engine() -> CapitalOrchestrationEngine:
 
 
 # ---------------------------------------------------------------------------
+# Enforcement stub — hard gate against direct sizing bypass
+# ---------------------------------------------------------------------------
+
+
+def size_trade(*args: object, **kwargs: object) -> None:  # noqa: ANN002
+    """Enforcement stub — direct sizing is **disabled**.
+
+    Any code that calls ``size_trade()`` directly is bypassing the
+    :class:`CapitalOrchestrationEngine` and all associated capital
+    protections:
+
+    * PnL-adjusted equity enforcement
+    * Cash-reserve guard
+    * Per-strategy concentration cap
+    * Regime-specific multiplier
+    * Rollback-safe execution token lifecycle
+    * Audit trail
+
+    Use the canonical entry point instead::
+
+        engine = get_capital_orchestration_engine()
+
+        token = engine.begin_execution(
+            raw_balance_usd    = balance,
+            unrealized_pnl_usd = open_pnl,
+            request            = AllocationRequest(
+                strategy = "ApexTrend",
+                symbol   = "BTC-USD",
+                regime   = "BULL_TRENDING",
+                max_usd  = 250.0,
+                min_usd  = 10.0,
+            ),
+        )
+        if token is None:
+            return  # capital gate blocked the trade
+        try:
+            fill = broker.place_order(token.symbol, token.reserved_usd)
+            engine.commit_execution(token, fill, post_balance, post_unrealized)
+        except Exception:
+            engine.rollback_execution(token)
+            raise
+
+    Raises:
+        RuntimeError: Always — this function is intentionally non-functional.
+    """
+    raise RuntimeError(
+        "Direct sizing disabled — use CapitalOrchestrationEngine. "
+        "Call engine.begin_execution() to reserve capital with a rollback-safe "
+        "ExecutionToken, then engine.commit_execution() or engine.rollback_execution()."
+    )
 # Atomic capital sync orchestration
 # ---------------------------------------------------------------------------
 
