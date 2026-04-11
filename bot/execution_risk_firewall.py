@@ -495,6 +495,73 @@ class ExecutionRiskFirewall:
         }
 
     # ------------------------------------------------------------------
+    # Routing helpers — venue selection and capital weighting
+    # ------------------------------------------------------------------
+
+    def get_best_venue(self, venue_names: List[str]) -> Optional[str]:
+        """Return the venue with the highest composite health score.
+
+        Args:
+            venue_names: Candidate venue identifiers (``broker_type.value``
+                         strings, e.g. ``["kraken", "coinbase"]``).
+
+        Returns:
+            The venue name whose score is highest, or ``None`` when the list
+            is empty.  Venues that have never been observed (no events yet)
+            are assigned a score of 100.0 so a freshly-started venue is
+            always preferred over a known-degraded one.
+        """
+        if not venue_names:
+            return None
+        return max(venue_names, key=lambda v: self._venue_tracker.get_score(v))
+
+    def get_capital_weights(self, venue_names: List[str]) -> Dict[str, float]:
+        """Return score-normalised capital weights for a set of venues.
+
+        Weights sum to 1.0.  A venue with score 80 receives twice the capital
+        of a venue with score 40.  Disabled venues (score < min_healthy_score)
+        receive a weight of 0.0 so no capital is routed to a degraded venue.
+
+        If *all* venues are disabled, falls back to equal weights so that
+        capital is never stranded.
+
+        Args:
+            venue_names: Ordered list of venue identifiers.
+
+        Returns:
+            ``{venue: weight}`` mapping where weights sum to 1.0.
+        """
+        if not venue_names:
+            return {}
+        scores = {
+            v: (self._venue_tracker.get_score(v) if self._venue_tracker.is_healthy(v) else 0.0)
+            for v in venue_names
+        }
+        total = sum(scores.values())
+        if total <= 0.0:
+            # All venues disabled — equal weights so capital is never stranded.
+            # Adjust last entry to absorb floating-point rounding so sum == 1.0.
+            weights: Dict[str, float] = {}
+            running = 0.0
+            venues = list(venue_names)
+            for v in venues[:-1]:
+                w = round(1.0 / len(venues), 6)
+                weights[v] = w
+                running += w
+            weights[venues[-1]] = round(1.0 - running, 6)
+            return weights
+        # Score-normalised weights; last entry absorbs rounding residual.
+        weights = {}
+        running = 0.0
+        items = list(scores.items())
+        for v, s in items[:-1]:
+            w = round(s / total, 6)
+            weights[v] = w
+            running += w
+        weights[items[-1][0]] = round(1.0 - running, 6)
+        return weights
+
+    # ------------------------------------------------------------------
     # Internal — mode escalation / step-down
     # ------------------------------------------------------------------
 

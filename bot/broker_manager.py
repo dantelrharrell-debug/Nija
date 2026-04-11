@@ -283,6 +283,18 @@ except ImportError:
         _ENTRY_PRICE_STORE_AVAILABLE = False
         _get_eps = None
 
+# ── Execution Risk Firewall — venue health-score routing ────────────────────
+try:
+    from bot.execution_risk_firewall import get_execution_risk_firewall as _get_erf_bm
+    _ERF_BM_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_risk_firewall import get_execution_risk_firewall as _get_erf_bm
+        _ERF_BM_AVAILABLE = True
+    except ImportError:
+        _ERF_BM_AVAILABLE = False
+        _get_erf_bm = None  # type: ignore
+
 # Import Execution Layer Hardening (Feb 16, 2026) - CRITICAL ENFORCEMENT
 # This module enforces ALL hardening requirements at the execution layer:
 # 1. Position cap enforcement
@@ -10220,45 +10232,85 @@ class BrokerManager:
                         "⚠️  Kraken quarantined but no fallback broker is available; "
                         "Kraken will handle exits only."
                     )
-                return self.active_broker
+                    return self.active_broker
 
-            # ── 3. Score-based auto-promotion ────────────────────────
-            connected_brokers = {
-                broker.broker_type.value: broker
-                for broker in self.brokers.values()
-                if getattr(broker, 'connected', False)
-            }
-            if connected_brokers:
-                # KRAKEN-FIRST RULE (Apr 2026): prefer Kraken before any
-                # score-based evaluation so we never drift to Coinbase simply
-                # because active_broker happened to be disconnected at the
-                # moment of the promotion scan.
-                best_broker: Optional[BaseBroker] = None
-                if not _kraken_quarantine_active:
-                    best_broker = connected_brokers.get(BrokerType.KRAKEN.value)
-
-                if best_broker is None:
-                    if _BROKER_PERFORMANCE_SCORER_AVAILABLE and _get_broker_performance_scorer is not None:
-                        try:
-                            scorer = _get_broker_performance_scorer()
-                            best_name = scorer.get_best_broker(list(connected_brokers.keys()))
-                            if best_name is not None:
-                                best_broker = connected_brokers.get(best_name)
-                        except Exception:
-                            pass
-
-                if best_broker is None:
-                    best_broker = next(iter(connected_brokers.values()))
-
-                logger.info(
-                    f"🔄 active_broker ({self.active_broker.broker_type.value}) disconnected — "
-                    f"score-based promotion → {best_broker.broker_type.value}"
+                # ── 2b. Venue health check — route to highest-score venue ─────
+                # When active_broker is connected but its venue health score has
+                # degraded below the firewall threshold, bypass it and let the
+                # promotion scan (step 3) pick the healthiest available venue.
+                _venue_ok = True
+                if _ERF_BM_AVAILABLE and _get_erf_bm is not None:
+                    try:
+                        _venue_ok = _get_erf_bm().is_venue_healthy(
+                            self.active_broker.broker_type.value
+                        )
+                    except Exception:
+                        pass
+                if _venue_ok:
+                    return self.active_broker
+                logger.warning(
+                    "⚠️ BrokerRouter: venue '%s' health degraded — "
+                    "bypassing for promotion scan.",
+                    self.active_broker.broker_type.value,
                 )
-                self.active_broker = best_broker
-                self.primary_broker_type = best_broker.broker_type
-                return best_broker
+                # Fall through to step 3 to pick the highest-score venue
 
-            # No connected broker found — return the disconnected one for legacy compatibility
+        # ── 3. Health-score-based promotion ──────────────────────────────
+        # Build the eligible candidate pool using consistent criteria:
+        # connected, non-exit-only, non-quarantined.
+        connected_brokers = {
+            broker.broker_type.value: broker
+            for broker in self.brokers.values()
+            if (getattr(broker, 'connected', False)
+                and not getattr(broker, 'exit_only_mode', False)
+                and not (
+                    _kraken_quarantine_active
+                    and broker.broker_type == BrokerType.KRAKEN
+                ))
+        }
+
+        if connected_brokers:
+            # ── Health-score-first selection ──────────────────────────────
+            # Pick the venue with the highest composite health score.  When the
+            # firewall is unavailable fall back to the legacy KRAKEN-FIRST rule.
+            best_broker: Optional[BaseBroker] = None
+            if _ERF_BM_AVAILABLE and _get_erf_bm is not None:
+                try:
+                    best_venue = _get_erf_bm().get_best_venue(list(connected_brokers.keys()))
+                    if best_venue is not None:
+                        best_broker = connected_brokers.get(best_venue)
+                except Exception:
+                    pass
+
+            # Legacy fallback: KRAKEN-FIRST when ERF is unavailable
+            if best_broker is None and not _kraken_quarantine_active:
+                best_broker = connected_brokers.get(BrokerType.KRAKEN.value)
+
+            # Final fallback: BrokerPerformanceScorer composite score
+            if best_broker is None:
+                if _BROKER_PERFORMANCE_SCORER_AVAILABLE and _get_broker_performance_scorer is not None:
+                    try:
+                        scorer = _get_broker_performance_scorer()
+                        best_name = scorer.get_best_broker(list(connected_brokers.keys()))
+                        if best_name is not None:
+                            best_broker = connected_brokers.get(best_name)
+                    except Exception:
+                        pass
+
+            if best_broker is None:
+                best_broker = next(iter(connected_brokers.values()))
+
+            prev = self.active_broker.broker_type.value if self.active_broker else "none"
+            logger.info(
+                "🔄 BrokerRouter: health-score promotion %s → %s",
+                prev, best_broker.broker_type.value,
+            )
+            self.active_broker = best_broker
+            self.primary_broker_type = best_broker.broker_type
+            return best_broker
+
+        # No connected broker found — return the disconnected one for legacy compatibility
+        if self.active_broker is not None:
             return self.active_broker
 
         # ── 4. Fallback ──────────────────────────────────────────────
@@ -10311,13 +10363,24 @@ class BrokerManager:
         # Avoids redundant balance API calls and Kraken promotion churn on every
         # cycle when nothing has changed.
         # A quarantined Kraken broker is NOT considered healthy for new entries.
+        # A venue whose health score has fallen below the firewall threshold is
+        # also NOT considered healthy — fall through to the promotion scan.
         kraken_is_quarantined = (
             _kraken_quarantine_active
             and self.active_broker.broker_type == BrokerType.KRAKEN
         )
+        _venue_is_healthy = True
+        if _ERF_BM_AVAILABLE and _get_erf_bm is not None:
+            try:
+                _venue_is_healthy = _get_erf_bm().is_venue_healthy(
+                    self.active_broker.broker_type.value
+                )
+            except Exception:
+                pass
         if (self.active_broker.connected
                 and not getattr(self.active_broker, 'exit_only_mode', False)
-                and not kraken_is_quarantined):
+                and not kraken_is_quarantined
+                and _venue_is_healthy):
             logger.debug("✅ Active broker healthy — skipping promotion scan")
             return
 
@@ -10421,7 +10484,7 @@ class BrokerManager:
             broker.connect()
 
     def get_broker_for_symbol(self, symbol: str) -> Optional[BaseBroker]:
-        """Get appropriate broker for a symbol"""
+        """Get appropriate broker for a symbol, preferring the healthiest venue."""
         from market_adapter import market_adapter
 
         # Detect market type
@@ -10437,12 +10500,87 @@ class BrokerManager:
 
         asset_class = asset_class_map.get(market_type.value, "stocks")
 
-        # Find broker that supports this asset class
-        for broker in self.brokers.values():
-            if broker.connected and broker.supports_asset_class(asset_class):
-                return broker
+        # Build the eligible candidates — connected + supports asset class
+        candidates = {
+            broker.broker_type.value: broker
+            for broker in self.brokers.values()
+            if broker.connected and broker.supports_asset_class(asset_class)
+        }
 
-        return None
+        if not candidates:
+            return None
+
+        # Route to the venue with the highest health score
+        if _ERF_BM_AVAILABLE and _get_erf_bm is not None:
+            try:
+                best_venue = _get_erf_bm().get_best_venue(list(candidates.keys()))
+                if best_venue is not None and best_venue in candidates:
+                    return candidates[best_venue]
+            except Exception:
+                pass
+
+        # Fallback: first eligible broker
+        return next(iter(candidates.values()))
+
+    def get_health_weighted_capital_split(
+        self, total_capital: float
+    ) -> Dict[str, float]:
+        """Allocate *total_capital* across connected brokers weighted by venue health.
+
+        A broker whose venue health score is twice that of another receives
+        twice the capital.  Disabled venues (score below the firewall
+        threshold) receive $0.  If all venues are disabled, capital is split
+        equally so it is never stranded.
+
+        Args:
+            total_capital: USD amount to be distributed.
+
+        Returns:
+            ``{broker_type_value: usd_amount}`` mapping that sums to
+            *total_capital*.  Returns ``{}`` when no brokers are connected.
+
+        Example::
+
+            split = manager.get_health_weighted_capital_split(1000.0)
+            # → {"kraken": 666.67, "coinbase": 333.33}  when kraken score=80, coinbase=40
+        """
+        connected_venues = [
+            b.broker_type.value
+            for b in self.brokers.values()
+            if getattr(b, 'connected', False)
+        ]
+        if not connected_venues:
+            return {}
+
+        def _equal_split() -> Dict[str, float]:
+            # Adjust last entry so amounts sum exactly to total_capital.
+            result: Dict[str, float] = {}
+            running = 0.0
+            for v in connected_venues[:-1]:
+                amt = round(total_capital / len(connected_venues), 6)
+                result[v] = amt
+                running += amt
+            result[connected_venues[-1]] = round(total_capital - running, 6)
+            return result
+
+        if not (_ERF_BM_AVAILABLE and _get_erf_bm is not None):
+            return _equal_split()
+
+        try:
+            weights = _get_erf_bm().get_capital_weights(connected_venues)
+        except Exception:
+            return _equal_split()
+
+        # Multiply weights × total_capital; last entry absorbs rounding residual.
+        result: Dict[str, float] = {}
+        running = 0.0
+        items = list(weights.items())
+        for v, w in items[:-1]:
+            amt = round(w * total_capital, 6)
+            result[v] = amt
+            running += amt
+        result[items[-1][0]] = round(total_capital - running, 6)
+        return result
 
     def place_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Route order to appropriate broker"""
