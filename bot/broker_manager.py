@@ -1548,7 +1548,7 @@ class CoinbaseBroker(BaseBroker):
                 }
             )
             logger.info("✅ Rate limiter initialized (12 req/min default)")
-            logger.info("   - get_candles: 8 req/min, get_all_products: 5 req/min, get_fills: 12 req/min")
+            logger.debug("   - get_candles: 8 req/min, get_all_products: 5 req/min, get_fills: 12 req/min")
         else:
             self._rate_limiter = None
             logger.warning("⚠️ RateLimiter not available - using manual delays only")
@@ -1617,20 +1617,27 @@ class CoinbaseBroker(BaseBroker):
         self._install_logging_filter()
 
     def _install_logging_filter(self):
-        """Install logging filter to suppress Coinbase SDK invalid ProductID errors"""
+        """Suppress noisy third-party loggers used by the Coinbase SDK."""
         # NOTE: Unlike handlers, filters are NOT inherited by child loggers.
         # We must add the filter to both the parent and child loggers explicitly.
         # See: https://docs.python.org/3/library/logging.html#filter-objects
 
-        # Apply filter to parent 'coinbase' logger
+        # Apply invalid-product filter to parent 'coinbase' logger
         coinbase_logger = logging.getLogger('coinbase')
         coinbase_logger.addFilter(_CoinbaseInvalidProductFilter())
+        # Silence SDK info/debug chatter — only warnings and above pass through
+        coinbase_logger.setLevel(logging.WARNING)
 
         # Apply filter to 'coinbase.RESTClient' child logger (not inherited from parent)
         rest_logger = logging.getLogger('coinbase.RESTClient')
         rest_logger.addFilter(_CoinbaseInvalidProductFilter())
+        rest_logger.setLevel(logging.WARNING)
 
-        logging.debug("✅ Coinbase SDK logging filter installed (suppresses invalid ProductID errors)")
+        # Silence urllib3 and http.client — they log every HTTP request at DEBUG/INFO
+        for _noisy in ('urllib3', 'urllib3.connectionpool', 'http.client'):
+            logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+        logging.debug("✅ Coinbase SDK logging filter installed (SDK + urllib3 silenced to WARNING)")
 
     def _is_cache_valid(self, cache_time) -> bool:
         """
@@ -1969,13 +1976,13 @@ class CoinbaseBroker(BaseBroker):
             # Consumer wallets (even if they show up in accounts list) CANNOT be used for trading
             # The SDK's market_order_buy() always routes to the default portfolio
 
-            logging.info("=" * 70)
-            logging.info("🎯 PORTFOLIO ROUTING: DEFAULT ADVANCED TRADE")
-            logging.info("=" * 70)
-            logging.info("   Using default Advanced Trade portfolio (SDK default)")
-            logging.info("   Consumer wallets are NOT accessible for trading")
-            logging.info("   Transfer funds via: https://www.coinbase.com/advanced-portfolio")
-            logging.info("=" * 70)
+            logging.debug("=" * 70)
+            logging.debug("🎯 PORTFOLIO ROUTING: DEFAULT ADVANCED TRADE")
+            logging.debug("=" * 70)
+            logging.debug("   Using default Advanced Trade portfolio (SDK default)")
+            logging.debug("   Consumer wallets are NOT accessible for trading")
+            logging.debug("   Transfer funds via: https://www.coinbase.com/advanced-portfolio")
+            logging.debug("=" * 70)
 
             # Do NOT set portfolio_uuid - let SDK use default
             self.portfolio_uuid = None
@@ -1994,8 +2001,8 @@ class CoinbaseBroker(BaseBroker):
 
                 accounts = getattr(accounts_resp, 'accounts', [])
 
-                logging.info("📊 ACCOUNT BALANCES (for information only):")
-                logging.info("-" * 70)
+                logging.debug("📊 ACCOUNT BALANCES (for information only):")
+                logging.debug("-" * 70)
 
                 for account in accounts:
                     currency = getattr(account, 'currency', None)
@@ -2006,9 +2013,9 @@ class CoinbaseBroker(BaseBroker):
 
                     if currency in ['USD', 'USDC'] and available > 0:
                         tradeable = "✅ TRADEABLE" if account_type == "ACCOUNT_TYPE_CRYPTO" else "❌ NOT TRADEABLE (Consumer)"
-                        logging.info(f"   {currency}: ${available:.2f} | {account_name} | {tradeable}")
+                        logging.debug(f"   {currency}: ${available:.2f} | {account_name} | {tradeable}")
 
-                logging.info("=" * 70)
+                logging.debug("=" * 70)
 
             except Exception as e:
                 logging.warning(f"⚠️  Portfolio detection failed: {e}")
@@ -2065,7 +2072,7 @@ class CoinbaseBroker(BaseBroker):
             List of product IDs (e.g., ['BTC-USD', 'ETH-USD', ...])
         """
         try:
-            logging.info("📡 Fetching all products from Coinbase API (700+ markets)...")
+            logging.debug("📡 Fetching all products from Coinbase API (700+ markets)...")
             all_products = []
 
             # Get products with pagination
@@ -2131,15 +2138,15 @@ class CoinbaseBroker(BaseBroker):
                     return FALLBACK_MARKETS
 
                 # Log response type and structure
-                logging.info(f"   Response type: {type(products_resp).__name__}")
+                logging.debug(f"   Response type: {type(products_resp).__name__}")
 
                 # Handle both object and dict responses
                 if hasattr(products_resp, 'products'):
                     products = products_resp.products
-                    logging.info(f"   Extracted {len(products) if products else 0} products from .products attribute")
+                    logging.debug(f"   Extracted {len(products) if products else 0} products from .products attribute")
                 elif isinstance(products_resp, dict):
                     products = products_resp.get('products', [])
-                    logging.info(f"   Extracted {len(products)} products from dict['products']")
+                    logging.debug(f"   Extracted {len(products)} products from dict['products']")
                 else:
                     products = []
                     logging.warning(f"⚠️  Unexpected response type: {type(products_resp).__name__}")
@@ -2170,9 +2177,9 @@ class CoinbaseBroker(BaseBroker):
                     if i == 0:
                         if hasattr(product, '__dict__'):
                             attrs = [k for k in dir(product) if not k.startswith('_')][:10]
-                            logging.info(f"   First product attributes: {attrs}")
+                            logging.debug(f"   First product attributes: {attrs}")
                         elif isinstance(product, dict):
-                            logging.info(f"   First product keys: {list(product.keys())[:10]}")
+                            logging.debug(f"   First product keys: {list(product.keys())[:10]}")
 
                     # Try object attribute access (Coinbase uses 'product_id', not 'id')
                     if hasattr(product, 'product_id'):
@@ -2226,27 +2233,26 @@ class CoinbaseBroker(BaseBroker):
                     all_products.append(product_id)
 
                 if filtered_products_count > 0:
-                    logging.info(f"   Filtered out {filtered_products_count} products (offline/delisted/disabled/invalid format)")
+                    logging.debug(f"   Filtered out {filtered_products_count} products (offline/delisted/disabled/invalid format)")
 
-                logging.info(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
+                logging.debug(f"   Fetched {len(products)} total products, {len(all_products)} USD/USDC pairs after filtering")
 
                 # Remove duplicates and sort
                 all_products = sorted(list(set(all_products)))
 
-                logging.info(f"✅ Successfully fetched {len(all_products)} USD/USDC trading pairs from Coinbase API")
-                if all_products:
-                    logging.info(f"   Sample markets: {', '.join(all_products[:10])}")
+                logging.info(f"✅ Coinbase: {len(all_products)} markets ready")
+                logging.debug(f"   Sample markets: {', '.join(all_products[:10])}")
 
                 # CRITICAL FIX (Jan 10, 2026): Add cooldown after get_all_products to prevent burst
                 # This gives the API time to reset before we start scanning markets
-                logging.info("   💤 Cooling down for 10s after bulk product fetch to prevent rate limiting...")
+                logging.debug("   💤 Cooling down for 10s after bulk product fetch to prevent rate limiting...")
                 time.sleep(10.0)
 
                 return all_products
 
             # Fallback: Use curated list of popular crypto markets
             logging.warning("⚠️  Could not fetch products from API, using fallback list of popular markets")
-            logging.info(f"   Using {len(FALLBACK_MARKETS)} fallback markets")
+            logging.debug(f"   Using {len(FALLBACK_MARKETS)} fallback markets")
             return FALLBACK_MARKETS
 
         except Exception as e:
@@ -3274,6 +3280,51 @@ class CoinbaseBroker(BaseBroker):
         self._product_cache[symbol] = meta
         return meta
 
+    def _fetch_actual_fill_price(self, order_dict: dict, symbol: str) -> Optional[float]:
+        """
+        Resolve the actual average fill price for a completed Coinbase order.
+
+        Checks (in priority order):
+          1. ``success_response.average_filled_price`` — present in some immediate responses
+          2. ``get_order(order_id)``                   — follow-up API call for the real fill data
+          3. ``get_current_price(symbol)``             — live market price as last resort
+
+        Returns float or None.
+        """
+        # 1. Immediate response field
+        success_response = order_dict.get('success_response', {}) if isinstance(order_dict, dict) else {}
+        price_str = (success_response or {}).get('average_filled_price')
+        if price_str:
+            try:
+                p = float(price_str)
+                if p > 0:
+                    return p
+            except (TypeError, ValueError):
+                pass
+
+        # 2. Follow-up get_order() call to fetch actual fill details
+        order_id = (
+            (success_response or {}).get('order_id')
+            or (order_dict.get('order_id') if isinstance(order_dict, dict) else None)
+        )
+        if order_id and self.client and hasattr(self.client, 'get_order'):
+            try:
+                resp = self.client.get_order(order_id=order_id)
+                resp_dict = _serialize_object_to_dict(resp)
+                if isinstance(resp_dict, dict):
+                    order_info = resp_dict.get('order', resp_dict)
+                    avg_price = order_info.get('average_filled_price')
+                    if avg_price:
+                        p = float(avg_price)
+                        if p > 0:
+                            logger.debug(f"[FillVerify] {symbol}: confirmed fill @ ${p:.4g} (get_order)")
+                            return p
+            except Exception as _e:
+                logger.debug(f"[FillVerify] {symbol}: get_order() unavailable: {_e}")
+
+        # 3. Live market price as last resort
+        return self.get_current_price(symbol)
+
     def place_market_order(
         self,
         symbol: str,
@@ -4192,7 +4243,7 @@ class CoinbaseBroker(BaseBroker):
                     "order": order_dict
                 }
 
-            # Enhanced trade confirmation logging with account identification
+            # Account label used in confirmation logs
             account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "PLATFORM"
 
             # FIRST LIVE TRADE BANNER (for legal/operational protection)
@@ -4200,38 +4251,12 @@ class CoinbaseBroker(BaseBroker):
             with _FIRST_TRADE_LOCK:
                 if not _FIRST_TRADE_EXECUTED:
                     _FIRST_TRADE_EXECUTED = True
-                    logger.info("")
                     logger.info(LOG_SEPARATOR)
                     logger.info("🚨 FIRST LIVE TRADE EXECUTED 🚨")
                     logger.info(LOG_SEPARATOR)
-                    logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
-                    logger.info(f"   Symbol: {symbol}")
-                    logger.info(f"   Size: {quantity} ({size_type})")
-                    logger.info(f"   Account: {account_label}")
-                    logger.info(f"   Side: {side.upper()}")
-                    logger.info(f"   Exchange: Coinbase")
-                    logger.info("")
-                    logger.info("   This confirms live trading is operational.")
-                    logger.info("   All subsequent trades will be logged normally.")
+                    logger.info(f"   {side.upper()} {symbol}  account={account_label}  exchange=Coinbase  "
+                                f"ts={time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
                     logger.info(LOG_SEPARATOR)
-                    logger.info("")
-
-            logger.info(LOG_SEPARATOR)
-            logger.info(f"✅ TRADE CONFIRMATION - {account_label}")
-            logger.info(LOG_SEPARATOR)
-            logger.info(f"   Exchange: Coinbase")
-            logger.info(f"   Order Type: {side.upper()}")
-            logger.info(f"   Symbol: {symbol}")
-            logger.info(f"   Quantity: {quantity}")
-            logger.info(f"   Size Type: {size_type}")
-            logger.info(f"   Account: {account_label}")
-            logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
-            logger.info(LOG_SEPARATOR)
-
-            # Flush logs immediately to ensure confirmation is visible
-            if _root_logger.handlers:
-                for handler in _root_logger.handlers:
-                    handler.flush()
 
             # Extract or estimate filled size
             # Coinbase API v3 doesn't return filled_size in the response,
@@ -4271,29 +4296,34 @@ class CoinbaseBroker(BaseBroker):
                     # For sell orders or unknown, use quantity as estimate
                     filled_size = quantity
 
-            if filled_size:
-                logger.info(f"   Filled crypto amount: {filled_size:.6f}")
+            logger.debug(f"   Filled crypto amount: {filled_size:.6f}" if filled_size else "   Filled amount: unknown")
+
+            # Resolve actual fill price: immediate response → get_order() → current price
+            fill_price = self._fetch_actual_fill_price(order_dict, symbol)
+
+            # ── ENTRY CONFIRMED (BUY only — single-line end-to-end verification) ────
+            if side.lower() == 'buy':
+                size_usd = quantity if size_type == 'quote' else (
+                    (filled_size * fill_price) if (filled_size and fill_price) else 0)
+                logger.info(
+                    f"▶ ENTRY CONFIRMED [{symbol}]: "
+                    f"filled @ ${fill_price:.4g} | "
+                    f"qty: {filled_size:.6g} | "
+                    f"size: ${size_usd:.2f} | "
+                    f"acct: {account_label}"
+                )
+
+            # Flush logs immediately to ensure confirmation is visible
+            if _root_logger.handlers:
+                for handler in _root_logger.handlers:
+                    handler.flush()
 
             # CRITICAL: Track position for profit-based exits (ONLY after P0 guard passes)
             if self.position_tracker:
                 try:
                     if side.lower() == 'buy':
                         # Track entry for profit calculation
-                        # Try to get actual fill price from order response first
-                        fill_price = None
-
-                        # Try to extract actual fill price from success_response
-                        if success_response and 'average_filled_price' in success_response:
-                            try:
-                                fill_price = float(success_response['average_filled_price'])
-                            except Exception:
-                                pass
-
-                        # Fallback to current market price if fill price not available
-                        if not fill_price or fill_price == 0:
-                            fill_price = self.get_current_price(symbol)
-
-                        if fill_price > 0:
+                        if fill_price and fill_price > 0:
                             size_usd = quantity if size_type == 'quote' else (filled_size * fill_price if filled_size else 0)
                             self.position_tracker.track_entry(
                                 symbol=symbol,
@@ -4302,7 +4332,7 @@ class CoinbaseBroker(BaseBroker):
                                 size_usd=size_usd,
                                 strategy="APEX_v7.1"
                             )
-                            logger.info(f"   📊 Position tracked: entry=${fill_price:.2f}, size=${size_usd:.2f}")
+                            logger.debug(f"   Position tracked: entry=${fill_price:.4g}, size=${size_usd:.2f}")
 
                             # Log BUY trade to journal
                             self._log_trade_to_journal(
@@ -4313,29 +4343,34 @@ class CoinbaseBroker(BaseBroker):
                                 quantity=filled_size if filled_size else 0
                             )
                     else:
-                        # Get P&L before tracking exit
-                        fill_price = None
-                        if success_response and 'average_filled_price' in success_response:
-                            try:
-                                fill_price = float(success_response['average_filled_price'])
-                            except Exception:
-                                pass
-                        if not fill_price or fill_price == 0:
-                            fill_price = self.get_current_price(symbol)
-
                         # Calculate P&L for this exit
                         pnl_data = None
                         if fill_price and fill_price > 0:
                             pnl_data = self.position_tracker.calculate_pnl(symbol, fill_price)
-                            if pnl_data:
-                                logger.info(f"   💰 Exit P&L: ${pnl_data['pnl_dollars']:+.2f} ({pnl_data['pnl_percent']:+.2f}%)")
+
+                        # ── EXIT CONFIRMED (single-line, includes P&L when available) ──
+                        if pnl_data:
+                            logger.info(
+                                f"◀ EXIT CONFIRMED [{symbol}]: "
+                                f"fill @ ${fill_price:.4g} | "
+                                f"qty: {filled_size:.6g} | "
+                                f"P&L: ${pnl_data['pnl_dollars']:+.2f} "
+                                f"({pnl_data['pnl_percent']:+.2f}%)"
+                            )
+                        else:
+                            logger.info(
+                                f"◀ EXIT CONFIRMED [{symbol}]: "
+                                f"fill @ ${fill_price:.4g} | "
+                                f"qty: {filled_size:.6g} | "
+                                f"acct: {account_label}"
+                            )
 
                         # Track exit (partial or full sell)
                         self.position_tracker.track_exit(
                             symbol=symbol,
                             exit_quantity=filled_size if filled_size else None
                         )
-                        logger.info(f"   📊 Position exit tracked")
+                        logger.debug(f"   Position exit recorded")
 
                         # Log SELL trade to journal with P&L
                         self._log_trade_to_journal(
@@ -4372,18 +4407,10 @@ class CoinbaseBroker(BaseBroker):
                     # Determine broker name
                     broker_name = self.broker_type.value.lower() if hasattr(self, 'broker_type') else 'coinbase'
 
-                    # ✅ FIX 5: VERIFY COPY ENGINE SIGNAL EMISSION
-                    logger.info("=" * 70)
-                    logger.info("📡 EMITTING TRADE SIGNAL TO COPY ENGINE")
-                    logger.info("=" * 70)
-                    logger.info(f"   Platform Account: {self.account_identifier}")
-                    logger.info(f"   Broker: {broker_name.upper()}")
-                    logger.info(f"   Symbol: {symbol}")
-                    logger.info(f"   Side: {side.upper()}")
-                    logger.info(f"   Size: {quantity} ({size_type})")
-                    logger.info(f"   Price: ${exec_price:.2f}" if exec_price else "   Price: N/A")
-                    logger.info(f"   Platform Balance: ${platform_balance:.2f}")
-                    logger.info("=" * 70)
+                    logger.debug(
+                        f"📡 Emitting copy signal: {side.upper()} {symbol} @ "
+                        f"${exec_price:.4g} size={quantity} ({size_type})"
+                    )
 
                     # Emit signal
                     # CRITICAL FIX (Jan 23, 2026): Add order_status parameter
@@ -4408,19 +4435,12 @@ class CoinbaseBroker(BaseBroker):
                         order_status=signal_status  # Use actual order status
                     )
 
-                    # ✅ FIX 5: CONFIRM SIGNAL EMISSION STATUS
                     if signal_emitted:
-                        logger.info("✅ Trade signal emitted successfully")
-                        logger.info(f"   🔔 Users will now receive this trade")
-                        logger.info(f"   📊 Check copy_trade_engine logs for user execution results")
+                        logger.info(f"✅ Copy signal emitted: {side.upper()} {symbol}")
                     else:
-                        logger.error("=" * 70)
                         logger.error("❌ CRITICAL: TRADE SIGNAL EMISSION FAILED")
-                        logger.error("=" * 70)
-                        logger.error(f"   Symbol: {symbol}, Side: {side}")
-                        logger.error("   ⚠️  User accounts will NOT copy this trade!")
+                        logger.error(f"   Symbol: {symbol}, Side: {side} — user accounts will NOT copy this trade!")
                         logger.error("   🔧 Check trade_signal_emitter.py logs for error details")
-                        logger.error("=" * 70)
             except Exception as signal_err:
                 # Don't fail the trade if signal emission fails
                 logger.warning(f"   ⚠️ Trade signal emission failed: {signal_err}")
