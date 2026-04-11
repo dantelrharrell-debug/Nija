@@ -140,6 +140,18 @@ except ImportError:
         _mabm = None  # type: ignore[assignment]
         _MABM_AVAILABLE = False
 
+# Import broker criticality registry for role annotation in fallback paths
+try:
+    try:
+        from bot.broker_registry import broker_registry as _broker_registry, BrokerCriticality as _BC
+    except ImportError:
+        from broker_registry import broker_registry as _broker_registry, BrokerCriticality as _BC  # type: ignore[import]
+    _BROKER_REGISTRY_AVAILABLE = True
+except Exception:
+    _broker_registry = None  # type: ignore[assignment]
+    _BC = None  # type: ignore[assignment]
+    _BROKER_REGISTRY_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -749,6 +761,10 @@ class BrokerFallbackController:
                 broker = KrakenBroker(account_type=AccountType.PLATFORM)
                 ok = broker.connect()
                 if ok:
+                    # Record CRITICAL criticality in the global registry so all
+                    # layers see the correct role even in this bootstrap path.
+                    if _BROKER_REGISTRY_AVAILABLE and _broker_registry is not None and _BC is not None:
+                        _broker_registry.set_criticality("kraken", _BC.CRITICAL)
                     return broker, True
                 logger.warning(
                     "BrokerFallbackController: Kraken attempt %d/%d — connect() returned False",
@@ -803,6 +819,11 @@ class BrokerFallbackController:
             broker = CoinbaseBroker()
             ok = broker.connect()
             if ok:
+                # When Coinbase is acting as the live fallback (Kraken failed),
+                # elevate its registry criticality to PRIMARY so all layers know
+                # it is the active execution broker for this session.
+                if _BROKER_REGISTRY_AVAILABLE and _broker_registry is not None and _BC is not None:
+                    _broker_registry.set_criticality("coinbase", _BC.PRIMARY)
                 return broker, True
             logger.warning("BrokerFallbackController: Coinbase connect() returned False")
         except Exception as exc:

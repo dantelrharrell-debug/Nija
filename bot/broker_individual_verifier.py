@@ -31,11 +31,26 @@ from typing import Dict, List, Optional
 logger = logging.getLogger("nija.broker_verifier")
 
 # ---------------------------------------------------------------------------
+# Broker criticality registry — single source of truth
+# ---------------------------------------------------------------------------
+
+try:
+    try:
+        from bot.broker_registry import BrokerCriticality, BROKER_DEFAULT_CRITICALITY
+    except ImportError:
+        from broker_registry import BrokerCriticality, BROKER_DEFAULT_CRITICALITY  # type: ignore[import]
+    _CRITICALITY_AVAILABLE = True
+except Exception:
+    BrokerCriticality = None  # type: ignore[assignment,misc]
+    BROKER_DEFAULT_CRITICALITY = {}  # type: ignore[assignment]
+    _CRITICALITY_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
 # Broker credential requirements
 # ---------------------------------------------------------------------------
 
 #: Map of broker name → required environment variables.
-#: Kraken (PRIMARY) is listed first so it appears first in reports.
+#: Kraken (CRITICAL) is listed first so it appears first in reports.
 BROKER_CREDENTIALS: Dict[str, List[str]] = {
     "kraken": [
         "KRAKEN_PLATFORM_API_KEY",
@@ -60,8 +75,33 @@ BROKER_CREDENTIALS: Dict[str, List[str]] = {
     ],
 }
 
-# Broker that must be designated as the platform (PRIMARY) account.
-PRIMARY_BROKER = "kraken"
+# ---------------------------------------------------------------------------
+# Helper: derive broker role label from the criticality registry
+# ---------------------------------------------------------------------------
+
+def _broker_criticality_label(broker_name: str) -> str:
+    """Return a human-readable role label for *broker_name* from the registry.
+
+    Falls back gracefully when the registry is unavailable.
+    """
+    if not _CRITICALITY_AVAILABLE or BrokerCriticality is None:
+        return "unknown"
+    level = BROKER_DEFAULT_CRITICALITY.get(broker_name)
+    if level is None:
+        return "optional"
+    return level.value  # e.g. "critical", "primary", "optional", "deferred"
+
+
+def _is_critical_broker(broker_name: str) -> bool:
+    """Return True if *broker_name* has CRITICAL criticality.
+
+    Uses :data:`BROKER_DEFAULT_CRITICALITY` so the answer is consistent
+    even before the registry has been populated at runtime.
+    """
+    if not _CRITICALITY_AVAILABLE or BrokerCriticality is None:
+        # Legacy fallback: treat kraken as the only critical broker
+        return broker_name == "kraken"
+    return BROKER_DEFAULT_CRITICALITY.get(broker_name) == BrokerCriticality.CRITICAL
 
 
 # ---------------------------------------------------------------------------
@@ -73,14 +113,17 @@ class BrokerVerifyResult:
     """Outcome of verifying a single broker."""
 
     broker_name: str
-    is_primary: bool = False
+    #: True when the broker has CRITICAL criticality (must connect before users).
+    is_critical: bool = False
+    #: Criticality label string, e.g. "critical", "primary", "optional".
+    criticality_label: str = "unknown"
 
     # Credential checks
     credentials_configured: bool = False
     missing_credentials: List[str] = field(default_factory=list)
 
-    # Registry / primary check
-    registry_primary_set: bool = False
+    # Registry / criticality check (formerly "registry_primary_set")
+    registry_criticality_set: bool = False
 
     # OKX-specific filesystem check
     data_dir_ok: Optional[bool] = None   # None if not applicable
@@ -88,6 +131,21 @@ class BrokerVerifyResult:
     # Overall
     passed: bool = False
     messages: List[str] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    # Backward-compatibility shim — callers that still read is_primary
+    # or registry_primary_set will get a sensible value automatically.
+    # ------------------------------------------------------------------
+
+    @property
+    def is_primary(self) -> bool:
+        """Alias for :attr:`is_critical` (backward-compatible)."""
+        return self.is_critical
+
+    @property
+    def registry_primary_set(self) -> bool:
+        """Alias for :attr:`registry_criticality_set` (backward-compatible)."""
+        return self.registry_criticality_set
 
 
 # ---------------------------------------------------------------------------
@@ -141,14 +199,21 @@ def _check_okx_data_dir() -> tuple[bool, str]:
     return True, f"OKX data directory OK: {data_dir!r}"
 
 
-def _check_registry_primary(broker_name: str) -> bool:
-    """Return True if the broker_registry marks *broker_name* as platform."""
+def _check_registry_criticality(broker_name: str) -> bool:
+    """Return True if the broker_registry has stored a criticality level for *broker_name*.
+
+    A stored value (even the default CRITICAL) is treated as "set" — it means
+    the registry is the authoritative source for this broker's role.
+    """
     try:
         try:
-            from bot.broker_registry import broker_registry
+            from bot.broker_registry import broker_registry, BrokerCriticality as _BC
         except ImportError:
-            from broker_registry import broker_registry  # type: ignore[import]
-        return broker_registry.is_platform(broker_name)
+            from broker_registry import broker_registry, BrokerCriticality as _BC  # type: ignore[import]
+        stored = broker_registry.get_state(broker_name, "criticality")
+        # A runtime-stored BrokerCriticality value means the system has
+        # explicitly confirmed the broker's role (e.g. after connecting).
+        return isinstance(stored, _BC)
     except Exception:
         return False
 
@@ -169,8 +234,13 @@ def verify_broker(broker_name: str) -> BrokerVerifyResult:
         :class:`BrokerVerifyResult` with detailed status.
     """
     broker_name = broker_name.lower()
-    is_primary = broker_name == PRIMARY_BROKER
-    result = BrokerVerifyResult(broker_name=broker_name, is_primary=is_primary)
+    is_critical = _is_critical_broker(broker_name)
+    criticality_label = _broker_criticality_label(broker_name)
+    result = BrokerVerifyResult(
+        broker_name=broker_name,
+        is_critical=is_critical,
+        criticality_label=criticality_label,
+    )
 
     # 1. Credential check
     creds_ok, missing = _check_credentials(broker_name)
@@ -183,20 +253,23 @@ def verify_broker(broker_name: str) -> BrokerVerifyResult:
         for var in missing:
             result.messages.append(f"❌ Missing credential: {var}")
 
-    # 2. Primary / registry check (Kraken only)
-    if is_primary:
-        result.registry_primary_set = _check_registry_primary(broker_name)
-        if result.registry_primary_set:
-            result.messages.append(f"✅ Marked as PRIMARY in broker registry")
+    # 2. Criticality / registry check (CRITICAL brokers only)
+    if is_critical:
+        result.registry_criticality_set = _check_registry_criticality(broker_name)
+        if result.registry_criticality_set:
+            result.messages.append(
+                f"✅ Criticality confirmed as CRITICAL in broker registry"
+            )
         elif creds_ok:
             result.messages.append(
-                "⚠️  Kraken credentials present but not yet marked PRIMARY in "
-                "broker_registry — will be set when the platform broker connects"
+                f"⚠️  {broker_name.capitalize()} credentials present but criticality "
+                "not yet stored in broker_registry — will be set when the platform "
+                "broker connects"
             )
         else:
             result.messages.append(
-                "❌ Kraken not marked PRIMARY in broker registry "
-                "(configure KRAKEN_PLATFORM_API_KEY / SECRET first)"
+                f"❌ {broker_name.capitalize()} not confirmed as CRITICAL in broker "
+                "registry (configure credentials first)"
             )
 
     # 3. OKX filesystem check
@@ -206,9 +279,11 @@ def verify_broker(broker_name: str) -> BrokerVerifyResult:
         result.messages.append(("✅ " if dir_ok else "❌ ") + dir_msg)
 
     # Compute overall pass/fail
+    # CRITICAL brokers are allowed to pass even when the registry criticality
+    # hasn't been set yet — the registry is only populated after a live
+    # connection, so a pre-flight check must not block on it.
     result.passed = (
         result.credentials_configured
-        and (not result.is_primary or result.registry_primary_set)
         and (result.data_dir_ok is None or result.data_dir_ok)
     )
 
@@ -246,7 +321,7 @@ def print_verification_report(results: Optional[Dict[str, BrokerVerifyResult]] =
 
     all_passed = True
     for broker_name, result in results.items():
-        role = " [PRIMARY]" if result.is_primary else " [secondary]"
+        role = f" [{result.criticality_label.upper()}]"
         status = "✅ PASS" if result.passed else "❌ FAIL"
         print(f"\n{status}  {broker_name.upper()}{role}")
         for msg in result.messages:
