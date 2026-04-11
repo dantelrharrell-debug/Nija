@@ -4233,6 +4233,31 @@ class TradingStrategy:
                 # Get master balance from broker_manager (sums all connected master brokers)
                 platform_balance = self.broker_manager.get_total_balance()
 
+                # ── Startup balance seed ─────────────────────────────────────
+                # get_total_balance() calls broker.get_account_balance() but does
+                # NOT populate BalanceService or PortfolioStateManager.  Fetch once
+                # per broker here and write into BOTH stores so every downstream
+                # read site (breakdown log, portfolio init, advanced-manager sync)
+                # uses portfolio_manager.get_balance() as primary source of truth
+                # with BalanceService.get() as secondary fallback.
+                for _seed_bt, _seed_broker in self.multi_account_manager.platform_brokers.items():
+                    if _seed_broker and _seed_broker.connected:
+                        try:
+                            _seed_key = _broker_key(_seed_broker)
+                            _seed_bal = BalanceService.refresh(
+                                _seed_key,
+                                lambda b=_seed_broker: b.get_account_balance(),
+                            )
+                            if self.portfolio_manager and _seed_bal > 0:
+                                self.portfolio_manager.update_broker_balance(
+                                    _seed_key, _seed_bal
+                                )
+                        except Exception as _seed_err:
+                            logger.debug(
+                                "Could not seed balances for %s: %s",
+                                _seed_bt.value, _seed_err,
+                            )
+
                 # Break down master balance by broker for transparency
                 coinbase_balance = 0.0
                 kraken_balance = 0.0
@@ -4241,7 +4266,11 @@ class TradingStrategy:
                 for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         try:
-                            balance = BalanceService.get(_broker_key(broker))
+                            _bk = _broker_key(broker)
+                            balance = (
+                                self.portfolio_manager.get_balance(_bk)
+                                if self.portfolio_manager else 0.0
+                            ) or BalanceService.get(_bk)
                             if broker_type == BrokerType.COINBASE:
                                 coinbase_balance = balance
                             elif broker_type == BrokerType.KRAKEN:
@@ -4338,6 +4367,55 @@ class TradingStrategy:
                     logger.info(f"💰 LIVE CAPITAL SYNC COMPLETE: ${total_capital:.2f}")
                     logger.info(f"   Active exchanges: {', '.join(active_exchanges)}")
                     logger.info("=" * 70)
+
+                # ── Execution-layer balance sync bridge ───────────────────────
+                # Inject the live per-broker balances that were just fetched into
+                # AdvancedTradingManager so its capital allocator starts with real
+                # figures rather than the $0 placeholders it was constructed with.
+                # Must run AFTER BalanceService is seeded (above) and AFTER the
+                # LIVE CAPITAL SYNC COMPLETE confirmation so the log sequence is
+                # unambiguous.
+                if self.advanced_manager is not None and total_capital > 0:
+                    try:
+                        from exchange_risk_profiles import ExchangeType as _ExchangeType
+                        _synced: list = []
+                        for _bt, _broker in self.multi_account_manager.platform_brokers.items():
+                            if not (_broker and _broker.connected):
+                                continue
+                            _bk3 = _broker_key(_broker)
+                            _live_bal = (
+                                self.portfolio_manager.get_balance(_bk3)
+                                if self.portfolio_manager else 0.0
+                            ) or BalanceService.get(_bk3)
+                            if _live_bal <= 0.0:
+                                continue
+                            try:
+                                _ex_type = _ExchangeType(_bt.value)
+                                self.advanced_manager.update_exchange_balance(
+                                    _ex_type, _live_bal, 0.0
+                                )
+                                _synced.append(f"{_bt.value}: ${_live_bal:.2f}")
+                            except ValueError:
+                                # BrokerType has no matching ExchangeType — skip silently
+                                logger.debug(
+                                    "No ExchangeType mapping for broker %s — skipping sync",
+                                    _bt.value,
+                                )
+                        if _synced:
+                            logger.info(
+                                "✅ Advanced Trading Manager balances synced: %s",
+                                ", ".join(_synced),
+                            )
+                        else:
+                            logger.warning(
+                                "⚠️  Advanced Trading Manager sync: no per-broker balances "
+                                "injected (allocator may use initialisation defaults)"
+                            )
+                    except Exception as _sync_err:
+                        logger.warning(
+                            "⚠️  Could not sync balances into Advanced Trading Manager: %s",
+                            _sync_err,
+                        )
 
                 # USER BALANCE SNAPSHOT - Visual certainty of all account balances
                 # Added per Jan 2026 requirement for absolute visual confirmation
@@ -4472,7 +4550,11 @@ class TradingStrategy:
                             for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                                 if broker and broker.connected:
                                     try:
-                                        broker_balance = BalanceService.get(_broker_key(broker))
+                                        _bk2 = _broker_key(broker)
+                                        # Single source of truth: portfolio_manager, BalanceService as fallback
+                                        broker_balance = (
+                                            self.portfolio_manager.get_balance(_bk2)
+                                        ) or BalanceService.get(_bk2)
                                         total_platform_cash += broker_balance
                                         platform_broker_balances.append(f"{broker_type.value}: ${broker_balance:.2f}")
                                         logger.info(f"   💰 Platform broker {broker_type.value}: ${broker_balance:.2f}")
@@ -8487,6 +8569,27 @@ class TradingStrategy:
             if account_balance > 0:
                 self._last_known_balance = account_balance
             _cycle_start_balance = account_balance
+
+            # ── PortfolioStateManager → AdvancedTradingManager sync ───────────
+            # Every cycle: push the freshly-fetched balance into portfolio_manager
+            # (single source of truth) then forward it to advanced_manager so the
+            # capital allocator and position-sizing logic always use the live figure.
+            if account_balance > 0 and self.portfolio_manager is not None:
+                self.portfolio_manager.update_broker_balance(_bs_key, account_balance)
+                if self.advanced_manager is not None:
+                    try:
+                        from exchange_risk_profiles import ExchangeType as _ExchangeType
+                        _ex_cycle = _ExchangeType(_bs_key)
+                        _in_pos_cycle = (
+                            self.platform_portfolio.total_position_value
+                            if getattr(self, 'platform_portfolio', None) is not None
+                            else 0.0
+                        )
+                        self.advanced_manager.update_exchange_balance(
+                            _ex_cycle, account_balance, _in_pos_cycle
+                        )
+                    except (ValueError, Exception):
+                        pass  # Unknown ExchangeType or unavailable — safe to skip
 
             _btg_broker_name = self._get_broker_name(active_broker) if active_broker else "unknown"
             logger.info("✅ BALANCE: %s $%.2f", _btg_broker_name.upper(), account_balance)
