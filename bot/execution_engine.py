@@ -755,7 +755,7 @@ class ExecutionEngine:
                 urgency=0.7  # Default to moderate urgency for entries
             )
 
-            # Place market order via broker client
+            # Place order via broker client (order type determined by execution plan)
             if self.broker_client:
                 order_side = 'buy' if side == 'long' else 'sell'
 
@@ -764,11 +764,75 @@ class ExecutionEngine:
                 broker_name_str = broker_name.value if hasattr(broker_name, 'value') else str(broker_name)
                 logger.info(f"   Using broker: {broker_name_str.upper()}")
 
-                result = self.broker_client.place_market_order(
-                    symbol=symbol,
-                    side=order_side,
-                    quantity=position_size
+                # Dynamic order type: use limit when the execution plan recommends it
+                # and the broker supports place_limit_order.  Falls back to market on
+                # any failure so entries are never silently skipped.
+                _use_limit = (
+                    execution_plan is not None
+                    and EXECUTION_INTELLIGENCE_AVAILABLE
+                    and execution_plan.order_type == EIOrderType.LIMIT
+                    and execution_plan.limit_price is not None
+                    and execution_plan.limit_price > 0
+                    and hasattr(self.broker_client, 'place_limit_order')
                 )
+
+                if _use_limit:
+                    _limit_price = execution_plan.limit_price
+                    # Guard against pathologically small prices that would produce
+                    # an astronomically large base quantity.
+                    if _limit_price < 1e-8:
+                        logger.warning(
+                            f"   ⚠️ Limit price ${_limit_price} too small for {symbol}, "
+                            f"falling back to market order"
+                        )
+                        _use_limit = False
+
+                if _use_limit:
+                    _limit_price = execution_plan.limit_price
+                    # Limit orders require base-asset quantity (crypto units), not USD
+                    _base_qty = position_size / _limit_price
+                    logger.info(
+                        f"   📊 Dynamic order type: LIMIT @ ${_limit_price:.6f} "
+                        f"(liquidity/volatility-driven, qty={_base_qty:.8f})"
+                    )
+                    try:
+                        result = self.broker_client.place_limit_order(
+                            symbol=symbol,
+                            side=order_side,
+                            size=_base_qty,
+                            price=_limit_price
+                        )
+                    except Exception as _limit_exc:
+                        logger.warning(
+                            f"   ⚠️ Limit order raised exception for {symbol}: {_limit_exc}, "
+                            f"falling back to market order"
+                        )
+                        result = None
+                    # If the limit order fails or errors, fall back to a market order
+                    if result is None or result.get('status') == 'error':
+                        logger.warning(
+                            f"   ⚠️ Limit order failed for {symbol}, "
+                            f"falling back to market order"
+                        )
+                        result = self.broker_client.place_market_order(
+                            symbol=symbol,
+                            side=order_side,
+                            quantity=position_size
+                        )
+                else:
+                    # Determine why market order is being used for the log message
+                    if execution_plan is None:
+                        _order_reason = "no execution plan available"
+                    elif execution_plan.order_type != EIOrderType.LIMIT:
+                        _order_reason = f"plan recommends {execution_plan.order_type.value}"
+                    else:
+                        _order_reason = "broker does not support limit orders"
+                    logger.info(f"   📊 Dynamic order type: MARKET ({_order_reason})")
+                    result = self.broker_client.place_market_order(
+                        symbol=symbol,
+                        side=order_side,
+                        quantity=position_size
+                    )
 
                 # Log the raw result for debugging
                 logger.debug(f"   Order result status: {result.get('status', 'N/A')}")
