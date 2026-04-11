@@ -133,7 +133,8 @@ class FirewallConfig:
     #: Rolling window of fill residuals used for z-score per symbol.
     fill_residual_window: int = int(os.environ.get("NIJA_FILL_RESIDUAL_WINDOW", "20"))
     #: Sigma threshold beyond which a fill is flagged as anomalous.
-    anomaly_sigma_threshold: float = float(os.environ.get("NIJA_ANOMALY_SIGMA", "3.0"))
+    #: Raised 3.0→3.5 to reduce SAFE_MODE sensitivity (fills must deviate more to register).
+    anomaly_sigma_threshold: float = float(os.environ.get("NIJA_ANOMALY_SIGMA", "3.5"))
 
     # Gate 4: auto-degrade
     #: Fraction of known venues disabled before mode escalation.
@@ -141,8 +142,9 @@ class FirewallConfig:
         os.environ.get("NIJA_DEGRADED_VENUE_FRACTION", "0.5")
     )
     #: Consecutive flagged fills → SAFE_MODE.
+    #: Raised 3→5 to delay SAFE_MODE activation (requires more sustained anomalies).
     safe_mode_anomaly_threshold: int = int(
-        os.environ.get("NIJA_SAFE_MODE_ANOMALY_THRESHOLD", "3")
+        os.environ.get("NIJA_SAFE_MODE_ANOMALY_THRESHOLD", "5")
     )
     #: Consecutive flagged fills → HALT.
     halt_anomaly_threshold: int = int(
