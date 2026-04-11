@@ -1847,6 +1847,38 @@ except ImportError:
         # Also need MINIMUM_TRADING_BALANCE fallback
         MINIMUM_TRADING_BALANCE = GLOBAL_MIN_TRADE  # Aligned to GLOBAL_MIN_TRADE (was 10.0)
 
+# ---------------------------------------------------------------------------
+# Broker Criticality helpers (execution eligibility enforcement)
+# Minimum viable execution set: at least 1 CRITICAL broker connected
+# AND SEAK not halted AND TradePermissionEngine == EXECUTE.
+# OPTIONAL broker failures MUST NEVER block execution.
+# ---------------------------------------------------------------------------
+try:
+    from broker_registry import get_broker_criticality as _get_broker_criticality, BrokerCriticality as _BrokerCriticality
+except ImportError:
+    try:
+        from bot.broker_registry import get_broker_criticality as _get_broker_criticality, BrokerCriticality as _BrokerCriticality
+    except ImportError:
+        _get_broker_criticality = None
+        _BrokerCriticality = None
+
+
+def _broker_type_is_critical(broker_type: "BrokerType") -> bool:  # noqa: F821
+    """Return True when *broker_type* is a CRITICAL execution venue.
+
+    Falls back to a hard-coded set (Kraken, Coinbase) when broker_registry
+    is unavailable so the protection works even during early startup.
+    """
+    if _get_broker_criticality is not None:
+        try:
+            crit = _get_broker_criticality(broker_type.value)
+            return getattr(crit, "value", str(crit)) == "CRITICAL"
+        except Exception:
+            pass
+    # Hard-coded fallback
+    return broker_type.value.lower() in ("coinbase", "kraken")
+
+
 # NIJA State Machine for Position Management (Feb 15, 2026)
 # Formal state tracking to ensure deterministic behavior and proper invariants
 class PositionManagementState(Enum):
@@ -5690,14 +5722,25 @@ class TradingStrategy:
             )
 
         # --- Live broker connection check (post-connection phase) ---
+        # Only CRITICAL brokers (Kraken, Coinbase) count toward the active-broker
+        # threshold.  OPTIONAL broker (OKX, Binance, Alpaca) disconnection MUST
+        # NEVER reduce this count to zero or prevent the trading loop from starting.
         platform_connected_count = 0
         if self.multi_account_manager:
             for broker_type, broker in self.multi_account_manager.platform_brokers.items():
+                if not _broker_type_is_critical(broker_type):
+                    # OPTIONAL broker — log at debug; never counts against the minimum
+                    if broker and not broker.connected:
+                        logger.debug(
+                            "   ℹ️  Platform %s — not connected (OPTIONAL broker, non-blocking)",
+                            broker_type.value.upper(),
+                        )
+                    continue
                 if broker and broker.connected:
                     platform_connected_count += 1
-                    logger.info(f"   ✅ Platform {broker_type.value.upper()} — connected")
+                    logger.info(f"   ✅ Platform {broker_type.value.upper()} — connected (CRITICAL)")
                 else:
-                    logger.warning(f"   ⚠️  Platform {broker_type.value.upper()} — NOT connected")
+                    logger.warning(f"   ⚠️  Platform {broker_type.value.upper()} — NOT connected (CRITICAL)")
 
         if platform_connected_count > 0:
             logger.info(
@@ -6668,6 +6711,22 @@ class TradingStrategy:
                 logger.debug(f"   {broker_type.value}: Not in all_brokers dict")
                 continue
 
+            # ── Criticality gate ──────────────────────────────────────────────
+            # Only CRITICAL brokers (Kraken, Coinbase) may originate new entries.
+            # OPTIONAL brokers (OKX, Binance, Alpaca) are excluded silently so
+            # that their failure NEVER blocks the cycle or reduces eligible_brokers
+            # to zero.  Minimum viable set: ≥1 CRITICAL broker connected.
+            if not _broker_type_is_critical(broker_type):
+                eligibility_status[broker_type.value] = (
+                    f"SKIPPED — {broker_type.value.upper()} is an OPTIONAL broker "
+                    f"(OPTIONAL failures are non-blocking)"
+                )
+                logger.debug(
+                    "   %s: excluded from entry selection (OPTIONAL criticality)",
+                    broker_type.value,
+                )
+                continue
+
             is_eligible, reason = self._is_broker_eligible_for_entry(broker)
             eligibility_status[broker_type.value] = reason
             logger.debug(f"   {broker_type.value}: is_eligible={is_eligible}, reason={reason}")
@@ -6709,8 +6768,20 @@ class TradingStrategy:
                 )
                 eligible_brokers = [(_fallback_b, _fallback_bn, _fallback_bt)]
             else:
-                # No eligible broker found
-                logger.debug(f"_select_entry_broker: No eligible broker found. Status: {eligibility_status}")
+                # No CRITICAL broker eligible for entry → skip this cycle gracefully.
+                # This is an explicit SKIP_CYCLE, NOT a halt or a system error.
+                # OPTIONAL broker failures are intentionally ignored here; only
+                # CRITICAL broker (Kraken/Coinbase) health matters.
+                _critical_status = {
+                    k: v for k, v in eligibility_status.items()
+                    if "OPTIONAL" not in v
+                }
+                logger.warning(
+                    "⏭️  SKIP_CYCLE — no CRITICAL broker eligible for entry. "
+                    "OPTIONAL broker failures are non-blocking. "
+                    "CRITICAL broker status: %s",
+                    _critical_status,
+                )
                 return None, None, eligibility_status
 
         # ── BrokerPerformanceScorer: rank eligible brokers by composite score ──
@@ -10561,9 +10632,14 @@ class TradingStrategy:
 
                     if not entry_broker:
                         can_enter = False
-                        skip_reasons.append("No eligible broker for entry (all in EXIT_ONLY or below minimum balance)")
-                        logger.warning(f"   ❌ CONDITION FAILED: No eligible broker for entry")
-                        logger.warning(f"      💡 All brokers are either in EXIT-ONLY mode or below minimum balance")
+                        skip_reasons.append(
+                            "No CRITICAL broker eligible for entry — skipping cycle "
+                            "(OPTIONAL broker failures are non-blocking; "
+                            "check Kraken/Coinbase connectivity)"
+                        )
+                        logger.warning("   ⏭️  SKIP_CYCLE — no CRITICAL broker eligible for entry")
+                        logger.warning("      💡 OPTIONAL broker failures (OKX/Binance/Alpaca) are non-blocking")
+                        logger.warning("      💡 Check CRITICAL broker (Kraken/Coinbase) connection status")
                     else:
                         logger.info(f"   ✅ CONDITION PASSED: {entry_broker_name.upper()} available for entry")
                         # Update active_broker to use the selected entry broker
