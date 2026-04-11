@@ -351,22 +351,83 @@ class CapitalOrchestrationEngine:
         return free_usd * multiplier
 
 
-# ---------------------------------------------------------------------------
-# Singleton
-# ---------------------------------------------------------------------------
+    def sync_and_update_capital(
+        self,
+        raw_balance_usd: float,
+        unrealized_pnl_usd: float,
+        request: AllocationRequest,
+        *,
+        latency_ms: float = 0.0,
+    ) -> float:
+        """Canonical entry point for ALL trade sizing decisions.
 
-_engine_instance: Optional[CapitalOrchestrationEngine] = None
-_engine_lock = threading.Lock()
+        Enforces the mandatory, immutable pipeline ordering::
 
+            1. latency            — observe API/network round-trip (logging)
+            2. balance            — accept raw account cash balance
+            3. pnl-adjusted equity — balance + unrealized_pnl
+            4. reservation        — update engine equity baseline AFTER PnL adjustment
+            5. sizing             — request_allocation() against the adjusted equity
 
-def get_capital_orchestration_engine() -> CapitalOrchestrationEngine:
-    """Return the singleton CapitalOrchestrationEngine.
+        ⚠️  The ordering is load-bearing.  If reservation (step 4) were to
+        happen before PnL adjustment (step 3) the engine would price new
+        trades against stale capital, silently under- or over-allocating.
+        Never reorder these steps — integrity breaks the moment you do.
 
-    Creates the instance on first call with default parameters.
-    """
-    global _engine_instance
-    if _engine_instance is None:
-        with _engine_lock:
-            if _engine_instance is None:
-                _engine_instance = CapitalOrchestrationEngine()
-    return _engine_instance
+        Args:
+            raw_balance_usd:     Raw account cash balance in USD.
+            unrealized_pnl_usd:  Sum of open-position mark-to-market PnL in
+                                 USD.  May be negative when positions are
+                                 underwater.
+            request:             Broker-agnostic :class:`AllocationRequest`.
+            latency_ms:          Optional API/network round-trip latency in
+                                 milliseconds.  Recorded for observability and
+                                 reserved for future adaptive latency guards.
+
+        Returns:
+            Granted USD amount (≥ ``request.min_usd``), or ``0.0`` when the
+            trade should be skipped.
+        """
+        # ── Step 1: latency observation ───────────────────────────────────────
+        # Logged now; reserved for future adaptive guards (e.g. widen reserve
+        # during high-latency windows when stale data risk is elevated).
+        if latency_ms > 0:
+            logger.debug(
+                "sync_and_update_capital: API latency %.1f ms [%s / %s]",
+                latency_ms, request.strategy, request.symbol,
+            )
+
+        # ── Steps 2 + 3: balance → pnl-adjusted equity ───────────────────────
+        # RESERVATION MUST USE THIS ADJUSTED FIGURE.  Using raw_balance_usd
+        # would ignore the mark-to-market exposure of existing open positions
+        # and allow over-allocation when those positions are in a drawdown.
+        pnl_adjusted_equity = raw_balance_usd + unrealized_pnl_usd
+        if pnl_adjusted_equity <= 0:
+            logger.warning(
+                "sync_and_update_capital: pnl-adjusted equity $%.2f ≤ 0 "
+                "(balance=$%.2f, unrealized=$%.2f) — allocation blocked "
+                "[%s / %s]",
+                pnl_adjusted_equity, raw_balance_usd, unrealized_pnl_usd,
+                request.strategy, request.symbol,
+            )
+            return 0.0
+
+        logger.debug(
+            "sync_and_update_capital: balance=$%.2f + unrealized=$%.2f "
+            "→ adjusted_equity=$%.2f [%s / %s]",
+            raw_balance_usd, unrealized_pnl_usd, pnl_adjusted_equity,
+            request.strategy, request.symbol,
+        )
+
+        # ── Step 4: reservation baseline — MUST follow PnL adjustment ────────
+        # set_equity() establishes the capital pool that request_allocation()
+        # will draw from.  Calling it here, after the PnL-adjusted figure is
+        # computed, guarantees reservation is never priced against stale data.
+        self.set_equity(pnl_adjusted_equity)
+
+        # ── Step 5: sizing — draws from the freshly-updated reservation pool ──
+        return self.request_allocation(request)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
