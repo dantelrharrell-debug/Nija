@@ -847,6 +847,22 @@ except ImportError:
         get_abnormal_market_ks = None  # type: ignore
         logger.warning("⚠️ Phase 3: Abnormal Market Kill Switch not available")
 
+# ── Execution Risk Firewall — slippage guard, venue health, fill anomaly, auto-degrade ──
+try:
+    from execution_risk_firewall import get_execution_risk_firewall, ExecutionMode
+    EXEC_FIREWALL_AVAILABLE = True
+    logger.info("✅ Execution Risk Firewall loaded — slippage/health/anomaly/safe-mode active")
+except ImportError:
+    try:
+        from bot.execution_risk_firewall import get_execution_risk_firewall, ExecutionMode
+        EXEC_FIREWALL_AVAILABLE = True
+        logger.info("✅ Execution Risk Firewall loaded — slippage/health/anomaly/safe-mode active")
+    except ImportError:
+        EXEC_FIREWALL_AVAILABLE = False
+        get_execution_risk_firewall = None  # type: ignore
+        ExecutionMode = None  # type: ignore
+        logger.warning("⚠️ Execution Risk Firewall not available")
+
 # ── Sniper Filter — final pre-execution quality gate ─────────────────────────
 try:
     from sniper_filter import get_sniper_filter, SNIPER_BORDERLINE_POSITION_MULTIPLIER
@@ -3410,7 +3426,16 @@ class TradingStrategy:
         else:
             self.abnormal_market_ks = None
 
-        # ── Sniper Filter ──────────────────────────────────────────────────────
+        # ── Execution Risk Firewall ────────────────────────────────────────────
+        if EXEC_FIREWALL_AVAILABLE and get_execution_risk_firewall is not None:
+            try:
+                self._exec_firewall = get_execution_risk_firewall()
+                logger.info("✅ Execution Risk Firewall initialized")
+            except Exception as _erf_init_err:
+                logger.warning("⚠️ Execution Risk Firewall init failed: %s", _erf_init_err)
+                self._exec_firewall = None
+        else:
+            self._exec_firewall = None
         if SNIPER_FILTER_AVAILABLE and get_sniper_filter is not None:
             try:
                 self.sniper_filter = get_sniper_filter()
@@ -7716,6 +7741,43 @@ class TradingStrategy:
                     user_mode = True  # Block new entries until operator resets
             except Exception as _aks_exc:
                 logger.debug("Abnormal Market Kill Switch check skipped: %s", _aks_exc)
+
+        # ✅ LAYER 0e: EXECUTION RISK FIREWALL — slippage, venue health, fill anomaly, auto-degrade
+        # Blocks new entries when execution quality has degraded below safe thresholds
+        # (SAFE_MODE or HALT) and forces 25 % / 0 % sizing accordingly.
+        if (
+            EXEC_FIREWALL_AVAILABLE
+            and hasattr(self, '_exec_firewall')
+            and self._exec_firewall is not None
+            and not user_mode
+        ):
+            try:
+                _erf_mode = self._exec_firewall.get_execution_mode()
+                if ExecutionMode is not None and _erf_mode not in (
+                    ExecutionMode.LIVE, ExecutionMode.WATCHFUL
+                ):
+                    _rl_erf = getattr(self, '_log_rl', None)
+                    if _rl_erf is None or _rl_erf.allow("exec_firewall_block", window_seconds=300):
+                        logger.warning("=" * 80)
+                        logger.warning("🛡️ EXECUTION RISK FIREWALL: NEW ENTRIES BLOCKED")
+                        logger.warning("=" * 80)
+                        logger.warning("   Mode  : %s", _erf_mode.value)
+                        _erf_report = self._exec_firewall.get_report()
+                        logger.warning(
+                            "   Consecutive anomalies : %d | Degraded venues : %s",
+                            _erf_report.get("consecutive_anomalies", 0),
+                            _erf_report.get("disabled_venues", []),
+                        )
+                        logger.warning("   Mode: Position management only (exits/stops)")
+                        logger.warning("=" * 80)
+                    user_mode = True
+                elif ExecutionMode is not None and _erf_mode == ExecutionMode.WATCHFUL:
+                    logger.debug(
+                        "⚠️ ExecFirewall WATCHFUL: execution quality degraded, "
+                        "monitor closely (mode=%s)", _erf_mode.value,
+                    )
+            except Exception as _erf_exc:
+                logger.debug("Execution Risk Firewall check skipped: %s", _erf_exc)
 
         # ✅ LAYER 0e: STABLE PROFIT MODE — daily range lock + overtrading guard
         # Blocks new entries when the day's profit ceiling is reached or the daily
@@ -15403,6 +15465,37 @@ class TradingStrategy:
                                     self._first_trade_executed = True
                                     self._first_trade_force_active = False  # force trigger no longer needed
                                     logger.info("🚀 FIRST TRADE GUARANTEE: initial deployment confirmed ✅")
+
+                                # ── Execution Risk Firewall: record fill for anomaly detection ──
+                                if (
+                                    EXEC_FIREWALL_AVAILABLE
+                                    and hasattr(self, '_exec_firewall')
+                                    and self._exec_firewall is not None
+                                    and _fill_entry > 0
+                                ):
+                                    try:
+                                        _erf_expected = float(
+                                            _ps_analysis.get('_drift_signal_price')
+                                            or _ps_analysis.get('entry_price')
+                                            or _ps_analysis.get('price')
+                                            or _fill_entry
+                                        )
+                                        _erf_venue = getattr(
+                                            active_broker, 'broker_name',
+                                            getattr(active_broker, '_broker_name', 'unknown')
+                                        )
+                                        self._exec_firewall.record_fill(
+                                            venue=str(_erf_venue).lower(),
+                                            symbol=_ps_symbol,
+                                            expected_price=_erf_expected,
+                                            fill_price=_fill_entry,
+                                            side='buy',
+                                        )
+                                    except Exception as _erf_fill_err:
+                                        logger.debug(
+                                            "ExecFirewall fill record skipped for %s: %s",
+                                            _ps_symbol, _erf_fill_err,
+                                        )
 
                                 # ── HF Scalping: record entry for rate limiter ────────
                                 if hasattr(self, 'hf_scalping_mode') and self.hf_scalping_mode is not None:

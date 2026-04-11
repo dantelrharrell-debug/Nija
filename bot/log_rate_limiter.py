@@ -44,12 +44,50 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger("nija.log_rate_limiter")
+
+# ---------------------------------------------------------------------------
+# Silent-mode globals
+# ---------------------------------------------------------------------------
+
+#: When True, all window_seconds values are multiplied by
+#: ``SILENT_MODE_MULTIPLIER`` so only very slow-changing summaries get through.
+#: Activate via the ``NIJA_SILENT_MODE=1`` environment variable or by calling
+#: :func:`enable_silent_mode` at runtime.
+_silent_mode: bool = os.environ.get("NIJA_SILENT_MODE", "0").strip() in ("1", "true", "yes")
+
+#: How much to stretch every throttle window when silent mode is active.
+#: Override via ``NIJA_SILENT_MODE_MULTIPLIER`` (default 10×).
+SILENT_MODE_MULTIPLIER: float = float(
+    os.environ.get("NIJA_SILENT_MODE_MULTIPLIER", "10.0")
+)
+
+_silent_lock = threading.Lock()
+
+
+def enable_silent_mode() -> None:
+    """Activate silent mode: all throttle windows are stretched by SILENT_MODE_MULTIPLIER."""
+    global _silent_mode
+    with _silent_lock:
+        _silent_mode = True
+    logger.info(
+        "🔇 LogRateLimiter: silent mode ENABLED (window multiplier=%.0f×)",
+        SILENT_MODE_MULTIPLIER,
+    )
+
+
+def disable_silent_mode() -> None:
+    """Deactivate silent mode: throttle windows revert to their caller-specified values."""
+    global _silent_mode
+    with _silent_lock:
+        _silent_mode = False
+    logger.info("🔊 LogRateLimiter: silent mode DISABLED")
 
 # ---------------------------------------------------------------------------
 # Per-key state
@@ -137,6 +175,11 @@ class LogRateLimiter:
             ``(False, 0)`` → suppressed; suppression count not yet flushed.
         """
         window = window_seconds if window_seconds is not None else self._default_window
+        # In silent mode stretch every window by the global multiplier so only
+        # slow-changing summary lines get through and verbose scan noise is muted.
+        with _silent_lock:
+            if _silent_mode:
+                window = window * SILENT_MODE_MULTIPLIER
         composite_key = f"{category}:{key}" if key else category
         now = time.monotonic()
 

@@ -64,6 +64,20 @@ except ImportError:
         get_isolation_manager = None
         FailureType = None
 
+# Import broker failure manager for per-broker circuit-breaker isolation
+# (prevents OKX/Binance errors from cascading to and blocking Kraken)
+try:
+    from bot.broker_failure_manager import get_broker_failure_manager
+    _BFM_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_failure_manager import get_broker_failure_manager
+        _BFM_AVAILABLE = True
+    except ImportError:
+        get_broker_failure_manager = None
+        _BFM_AVAILABLE = False
+        logger.debug("broker_failure_manager not importable — per-broker circuit breaker disabled")
+
 # Import account mode manager for hierarchy-driven mode enforcement
 try:
     from bot.account_mode_manager import get_account_mode_manager, AccountMode
@@ -84,6 +98,18 @@ except ImportError:
         get_platform_account_layer = None
 
 logger = logging.getLogger('nija.multi_account')
+
+# Import Execution Risk Firewall for per-venue API-call health scoring
+try:
+    from bot.execution_risk_firewall import get_execution_risk_firewall as _get_erf
+    _ERF_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_risk_firewall import get_execution_risk_firewall as _get_erf
+        _ERF_AVAILABLE = True
+    except ImportError:
+        _get_erf = None
+        _ERF_AVAILABLE = False
 
 # Broker types that are treated as degraded / optional.
 # Their platform connection failures do NOT block user initialisation; the
@@ -244,6 +270,16 @@ class MultiAccountBrokerManager:
             except Exception as e:
                 logger.warning(f"⚠️ Could not initialize isolation manager: {e}")
 
+        # BROKER FAILURE MANAGER: per-broker circuit breaker so OKX/Binance
+        # failures are isolated and never cascade to Kraken or other venues.
+        self._broker_failure_mgr = None
+        if _BFM_AVAILABLE and get_broker_failure_manager is not None:
+            try:
+                self._broker_failure_mgr = get_broker_failure_manager()
+                logger.info("✅ Broker failure manager initialized - cross-broker isolation active")
+            except Exception as _bfm_init_err:
+                logger.warning("⚠️ Could not initialize broker failure manager: %s", _bfm_init_err)
+
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
@@ -380,6 +416,12 @@ class MultiAccountBrokerManager:
                 logger.debug("broker_registry[%r]['platform'] = True", broker_type.value)
                 if BrokerCriticality is not None:
                     broker_registry.set_criticality(broker_type.value, BrokerCriticality.CRITICAL)
+            # Register with broker failure manager for per-broker circuit-breaking.
+            if self._broker_failure_mgr is not None:
+                try:
+                    self._broker_failure_mgr.register_broker(broker_type.value)
+                except Exception:
+                    pass
             logger.info(f"✅ Platform broker registered (passive): {broker_type.value}")
             logger.info(f"   Platform broker registered once, globally")
             return broker
@@ -761,6 +803,21 @@ class MultiAccountBrokerManager:
                 _pal.mark_platform_connected(True)
         except Exception:
             pass  # Never block the connection flow on a status-update failure
+        # Record connection success with broker failure manager so the
+        # per-broker circuit breaker stays in sync.
+        if self._broker_failure_mgr is not None:
+            try:
+                self._broker_failure_mgr.record_success(broker_type.value)
+            except Exception:
+                pass
+        # Record API success with the execution risk firewall venue scorer.
+        if _ERF_AVAILABLE and _get_erf is not None:
+            try:
+                _get_erf().record_api_call(
+                    venue=broker_type.value, latency_ms=0.0, success=True
+                )
+            except Exception:
+                pass
 
     def mark_platform_failed(self, broker_type: BrokerType) -> None:
         """
@@ -794,6 +851,33 @@ class MultiAccountBrokerManager:
         # can observe the FAILED state and return False immediately instead
         # of waiting until an optional timeout expires.
         self._get_or_create_platform_event(broker_type).set()
+        # Record failure with broker failure manager — this increments the
+        # per-broker error counter so the circuit breaker can disable only this
+        # broker without affecting Kraken or other healthy venues.
+        if self._broker_failure_mgr is not None:
+            try:
+                self._broker_failure_mgr.record_error(
+                    broker_type.value,
+                    reason=f"platform connect failed for {broker_type.value}",
+                )
+                if self._broker_failure_mgr.is_dead(broker_type.value):
+                    logger.warning(
+                        "🔌 Broker failure manager: '%s' quarantined — "
+                        "other venues remain unaffected",
+                        broker_type.value,
+                    )
+            except Exception:
+                pass
+        # Record API failure with the execution risk firewall venue scorer so
+        # a repeated series of connection failures degrades the venue's health
+        # score and eventually disables it automatically.
+        if _ERF_AVAILABLE and _get_erf is not None:
+            try:
+                _get_erf().record_api_call(
+                    venue=broker_type.value, latency_ms=0.0, success=False
+                )
+            except Exception:
+                pass
 
     @staticmethod
     def _broker_ready_flag(broker) -> bool:
