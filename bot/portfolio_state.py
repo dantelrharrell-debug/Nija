@@ -14,9 +14,17 @@ already deployed in open positions.
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 from datetime import datetime
+
+# Absolute minimum balance a broker must carry before being treated as
+# effective.  Any broker reporting a balance below this threshold is zeroed
+# out and flagged inactive so it cannot contribute to trade sizing.
+# Individual exchange floors are looked up dynamically via
+# ``get_exchange_min_trade_size()`` from position_sizer; this constant is the
+# hard fallback when that lookup is unavailable.
+_BALANCE_FLOOR_DEFAULT: float = 5.0
 
 logger = logging.getLogger("nija.portfolio")
 
@@ -251,6 +259,33 @@ class PortfolioState:
         self._last_known_cash = new_cash
         self.available_cash = new_cash
 
+    def get_pnl_adjusted_capital(self, unrealized_confidence: float = 0.8) -> float:
+        """Return cash adjusted for unrealized P&L with a conservative confidence factor.
+
+        Unrealized **gains** are discounted by ``unrealized_confidence`` because
+        they may reverse before a position closes.  Unrealized **losses** are
+        applied in full (factor = 1.0) because they represent committed
+        capital draw-down.
+
+        Formula::
+
+            adjusted = available_cash
+                     + max(unrealized_pnl, 0) * unrealized_confidence
+                     + min(unrealized_pnl, 0)          # losses applied fully
+
+        Args:
+            unrealized_confidence: Fraction of unrealized gains to count as
+                deployable capital.  Must be in [0, 1].  Default is 0.8.
+
+        Returns:
+            PnL-adjusted deployable capital in USD (never below 0).
+        """
+        unrealized_confidence = max(0.0, min(1.0, unrealized_confidence))
+        pnl = self.unrealized_pnl
+        gains = max(pnl, 0.0) * unrealized_confidence
+        losses = min(pnl, 0.0)  # negative, applied at full weight
+        return max(0.0, self.available_cash + gains + losses)
+
     def get_summary(self) -> Dict:
         """Get a summary of the portfolio state."""
         return {
@@ -363,10 +398,224 @@ class PortfolioStateManager:
         """Initialize the portfolio state manager."""
         self.platform_portfolio: Optional[PortfolioState] = None
         self.user_portfolios: Dict[str, UserPortfolioState] = {}
+
+        # Per-broker balance registry: broker_key → effective USD balance.
+        # Only brokers that pass the minimum balance filter are stored here.
+        self._broker_balances: Dict[str, float] = {}
+
+        # Brokers whose last reported balance fell below their exchange minimum
+        # and have therefore been marked inactive.  Inactive brokers contribute
+        # $0 to get_total_balance() and are skipped by trade-sizing logic.
+        self._inactive_brokers: Set[str] = set()
+
         # Per-broker balance store — the single source of truth for balance reads.
         # Keyed by lower-case broker name (e.g. "coinbase", "kraken").
         self._broker_balances: Dict[str, float] = {}
         logger.info("PortfolioStateManager initialized")
+
+    # ------------------------------------------------------------------
+    # Broker balance management
+    # ------------------------------------------------------------------
+
+    def _get_exchange_floor(self, broker: str) -> float:
+        """Return the minimum effective balance for *broker*.
+
+        Looks up the per-exchange minimum from ``position_sizer`` (which
+        includes a fee buffer).  Falls back to ``_BALANCE_FLOOR_DEFAULT``
+        ($5.00) if the import fails or the broker is unrecognised.
+
+        Args:
+            broker: Lowercase broker/exchange name (e.g. ``"coinbase"``).
+
+        Returns:
+            Minimum USD balance required for the broker to be considered active.
+        """
+        try:
+            from position_sizer import get_exchange_min_trade_size  # type: ignore[import]
+        except ImportError:
+            try:
+                from bot.position_sizer import get_exchange_min_trade_size  # type: ignore[import]
+            except ImportError:
+                return _BALANCE_FLOOR_DEFAULT
+        try:
+            return get_exchange_min_trade_size(broker)
+        except Exception:
+            return _BALANCE_FLOOR_DEFAULT
+
+    def update_broker_balance(self, broker: str, balance: float) -> float:
+        """Update the effective balance for *broker*, applying a minimum balance filter.
+
+        This is the **only** method that should write per-broker balance data.
+        It enforces two layers of protection against sub-threshold balances
+        polluting trade-sizing calculations:
+
+        1. **Hard floor** – if ``balance < exchange_min_trade_size`` the balance
+           is zeroed out and ``mark_as_inactive()`` is called so downstream
+           logic skips this broker entirely.
+        2. **Active restore** – if a previously inactive broker comes back above
+           the floor it is automatically re-activated.
+
+        Args:
+            broker:  Lowercase broker/exchange key (e.g. ``"coinbase"``).
+            balance: Raw USD balance reported by the broker.
+
+        Returns:
+            The effective balance that was stored (0.0 when below the floor).
+        """
+        broker = broker.lower()
+        exchange_min = self._get_exchange_floor(broker)
+
+        if balance < exchange_min:
+            effective = 0.0
+            self.mark_as_inactive(broker)
+            logger.warning(
+                "[PortfolioStateManager] %s: balance $%.2f < exchange floor $%.2f "
+                "— zeroed and marked INACTIVE",
+                broker, balance, exchange_min,
+            )
+        else:
+            effective = balance
+            if broker in self._inactive_brokers:
+                self._inactive_brokers.discard(broker)
+                logger.info(
+                    "[PortfolioStateManager] %s: balance $%.2f ≥ floor $%.2f "
+                    "— restored to ACTIVE",
+                    broker, balance, exchange_min,
+                )
+            else:
+                logger.debug(
+                    "[PortfolioStateManager] %s: balance updated $%.2f",
+                    broker, effective,
+                )
+
+        self._broker_balances[broker] = effective
+
+        # Propagate the total across all active brokers to the platform portfolio
+        # so that any code reading platform_portfolio.available_cash stays current.
+        total = self.get_total_balance()
+        if self.platform_portfolio is not None and total > 0:
+            self.platform_portfolio.update_cash(total)
+
+        return effective
+
+    def mark_as_inactive(self, broker: str) -> None:
+        """Flag *broker* as inactive (balance below exchange minimum).
+
+        An inactive broker contributes $0 to :meth:`get_total_balance` and
+        is excluded from trade-sizing.  The broker's stored balance is also
+        zeroed so stale values cannot leak into calculations.
+
+        Args:
+            broker: Lowercase broker/exchange key.
+        """
+        broker = broker.lower()
+        self._inactive_brokers.add(broker)
+        self._broker_balances[broker] = 0.0
+        logger.info("[PortfolioStateManager] %s marked INACTIVE", broker)
+
+    def is_broker_active(self, broker: str) -> bool:
+        """Return ``True`` if *broker* is active (balance above exchange minimum).
+
+        Args:
+            broker: Lowercase broker/exchange key.
+
+        Returns:
+            ``True`` when the broker has not been marked inactive.
+        """
+        return broker.lower() not in self._inactive_brokers
+
+    def get_total_balance(self) -> float:
+        """Return the sum of effective balances across all **active** brokers.
+
+        Inactive brokers (balance below their exchange minimum) are excluded.
+        This value is the correct input for ``advanced_manager.update_exchange_balance``
+        inside ``sync_and_update_capital()``.
+
+        Returns:
+            Total effective USD balance across active brokers.
+        """
+        return sum(
+            bal
+            for broker, bal in self._broker_balances.items()
+            if broker not in self._inactive_brokers
+        )
+
+    def get_open_exposure(self) -> float:
+        """Return the total USD value currently deployed in open positions.
+
+        Reads directly from the platform portfolio's position registry.
+        Returns 0.0 when no platform portfolio has been initialised yet.
+
+        Returns:
+            Sum of open position market values in USD.
+        """
+        if self.platform_portfolio is None:
+            return 0.0
+        return self.platform_portfolio.total_position_value
+
+    def get_pnl_adjusted_total(self, unrealized_confidence: float = 0.8) -> float:
+        """Return the PnL-adjusted total capital available for trade sizing.
+
+        Combines the effective cash balance from all active brokers with a
+        conservatively discounted view of unrealized P&L from the platform
+        portfolio.  This is the figure that should feed position-sizing models
+        so they grow with realised profits but do not over-size on paper gains.
+
+        Args:
+            unrealized_confidence: Fraction of unrealized gains to treat as
+                deployable.  Losses are always applied at full weight.
+                Default is 0.8.
+
+        Returns:
+            PnL-adjusted total capital in USD (floored at 0).
+        """
+        cash_total = self.get_total_balance()
+        if self.platform_portfolio is None:
+            return cash_total
+
+        # Apply PnL adjustment on top of the cash total.
+        pnl = self.platform_portfolio.unrealized_pnl
+        confidence = max(0.0, min(1.0, unrealized_confidence))
+        gains_contribution = max(pnl, 0.0) * confidence
+        losses_contribution = min(pnl, 0.0)  # always full weight
+        adjusted = cash_total + gains_contribution + losses_contribution
+        return max(0.0, adjusted)
+
+    def get_deployable_capital_with_reservations(
+        self, unrealized_confidence: float = 0.8
+    ) -> float:
+        """Return free deployable capital after subtracting in-flight reservations.
+
+        Uses the PnL-adjusted total as the starting point and then deducts
+        capital that has already been reserved (granted) by
+        ``CapitalOrchestrationEngine.request_allocation()`` but not yet
+        released.  This prevents concurrent trade-sizing calls from
+        over-promising the same dollars.
+
+        Args:
+            unrealized_confidence: Passed through to ``get_pnl_adjusted_total``.
+
+        Returns:
+            Free deployable capital in USD (floored at 0).
+        """
+        total = self.get_pnl_adjusted_total(unrealized_confidence)
+
+        # Deduct reservations tracked by the orchestration engine.
+        try:
+            from capital_orchestration_engine import get_capital_orchestration_engine  # type: ignore[import]
+        except ImportError:
+            try:
+                from bot.capital_orchestration_engine import get_capital_orchestration_engine  # type: ignore[import]
+            except ImportError:
+                return max(0.0, total)
+
+        try:
+            report = get_capital_orchestration_engine().get_report()
+            in_use = report.get("total_in_use_usd", 0.0)
+        except Exception:
+            in_use = 0.0
+
+        return max(0.0, total - in_use)
 
     def initialize_platform_portfolio(self, available_cash: float) -> PortfolioState:
         """
