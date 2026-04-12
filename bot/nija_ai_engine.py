@@ -143,6 +143,10 @@ _W_GATE      = 0.12   # gate quality (positive contribution, not penalty)
 # Override at runtime with NIJA_MIN_SCORE_ABSOLUTE.
 MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "4.0"))
 
+# Default gate_max to fall back to when gate_result.gate_max is falsy.
+# Must match _GATE_MAX_SCORE defined in ai_entry_gate (sum of _GATE_WEIGHTS = 9).
+_DEFAULT_GATE_MAX: float = 9.0
+
 # Default number of top signals to select per cycle
 TOP_N_DEFAULT = 3
 
@@ -740,7 +744,9 @@ class NijaAIEngine:
         # Gate quality is a *positive* contribution (0-100) not a penalty.
         # gate_score / gate_max = fraction of weighted gate points earned.
         # All gates pass → 100 pts; all gates fail → 0 pts.
-        gate_quality = 50.0  # neutral fallback when gate is unavailable
+        # Conservative default: 0.0 — no gate bonus when the module is
+        # unavailable or raises, so signals aren't artificially boosted.
+        gate_quality = 0.0
         gate_results: Dict[str, bool] = {}
         gate = self._get_gate()
         if gate is not None:
@@ -757,7 +763,7 @@ class NijaAIEngine:
                 breakdown["gate_passed"] = gate_result.passed
                 breakdown["gate_reason"] = gate_result.reason
                 # Normalise to 0-100
-                _gate_max = float(gate_result.gate_max) if gate_result.gate_max else 9.0
+                _gate_max = float(gate_result.gate_max) if gate_result.gate_max else _DEFAULT_GATE_MAX
                 gate_quality = float(np.clip(gate_result.gate_score / _gate_max * 100.0, 0.0, 100.0))
                 # Capture per-gate pass/fail for weight-tuner learning
                 for gname, gobj in (gate_result.gates or {}).items():
@@ -814,7 +820,7 @@ class NijaAIEngine:
                 pass
         breakdown["wrss_factor"] = wrss_factor
         breakdown["composite_score"] = composite
-        breakdown["gate_penalty"] = 0.0   # kept for backward-compat; gate is now positive quality
+        breakdown["gate_penalty"] = 0.0   # deprecated — kept for backward compat; use 'gate_quality' instead
 
         return composite, breakdown
 
