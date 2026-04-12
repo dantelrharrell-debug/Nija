@@ -8652,6 +8652,18 @@ class KrakenBroker(BaseBroker):
             logger.error("❌ Kraken order failed: No result data")
             return {"status": "error", "error": "No result data"}
 
+        except NoncePauseActive as _npa:
+            # Nonce trading pause is active — fail fast instead of sleeping.
+            # The nonce recovery runs asynchronously; this cycle is skipped and
+            # the next scan will retry automatically.
+            logger.warning("⚠️  NONCE PAUSE: %s", _npa)
+            logger.warning("   Skipping cycle — will retry next scan")
+            return {
+                "status": "nonce_skip",
+                "error": "NONCE_PAUSE",
+                "message": str(_npa),
+            }
+
         except Exception as e:
             logger.error(f"Kraken order error: {e}")
             return {"status": "error", "error": str(e)}

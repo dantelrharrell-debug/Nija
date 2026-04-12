@@ -3525,6 +3525,12 @@ class NIJAApexStrategyV71:
                         except Exception as _reg_err:
                             logger.debug(f"Harvest layer register error (long): {_reg_err}")
                     return True
+                else:
+                    logger.warning(
+                        f"⚠️  EXECUTION BLOCKED: {symbol} long entry returned no position "
+                        f"(broker rejected or nonce pause) — skipping, next cycle will retry"
+                    )
+                    return False
 
             elif action == 'enter_short':
                 # EXCHANGE CAPABILITY CHECK: Verify broker supports shorting for this symbol
@@ -3566,6 +3572,12 @@ class NIJAApexStrategyV71:
                         except Exception as _reg_err:
                             logger.debug(f"Harvest layer register error (short): {_reg_err}")
                     return True
+                else:
+                    logger.warning(
+                        f"⚠️  EXECUTION BLOCKED: {symbol} short entry returned no position "
+                        f"(broker rejected or nonce pause) — skipping, next cycle will retry"
+                    )
+                    return False
 
             elif action == 'exit':
                 pos_data = action_data.get('position', {})
