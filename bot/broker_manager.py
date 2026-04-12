@@ -123,6 +123,14 @@ except ImportError:
 _kraken_quarantine_active: bool = False
 
 
+class NoncePauseActive(Exception):
+    """Raised when a Kraken nonce trading pause is active.
+
+    Signals the trade execution path to fail fast and retry on the next
+    scan cycle instead of sleeping inside the execution thread.
+    """
+
+
 def _on_kraken_nonce_quarantine() -> None:
     """Quarantine callback: fired by KrakenNonceManager when nonce poisoning is
     confirmed.  Marks every connected KrakenBroker instance as exit-only and
@@ -953,14 +961,6 @@ def _serialize_object_to_dict(obj) -> Dict:
     except Exception:
         # Last resort: convert to string
         return {"_object": str(obj), "_type": type(obj).__name__}
-
-class NoncePauseActive(Exception):
-    """Raised when a Kraken nonce trading pause is active.
-
-    Signals the trade execution path to fail fast and retry on the next
-    scan cycle instead of sleeping inside the execution thread.
-    """
-
 
 class BrokerType(Enum):
     COINBASE = "coinbase"
