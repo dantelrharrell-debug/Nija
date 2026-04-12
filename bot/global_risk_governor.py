@@ -246,7 +246,7 @@ class GlobalRiskGovernor:
         self,
         symbol: str,
         proposed_risk_usd: float,
-        current_portfolio_value: float,
+        current_portfolio_value: float = 0.0,
         current_volatility_ratio: float = 1.0,
     ) -> GovernorDecision:
         """
@@ -259,7 +259,8 @@ class GlobalRiskGovernor:
         proposed_risk_usd:
             Maximum capital at risk for this trade (e.g. position_size × stop_distance).
         current_portfolio_value:
-            Current total portfolio equity in USD.
+            Current total portfolio equity in USD.  Pass 0.0 to have the
+            Capital Authority supply the live figure automatically.
         current_volatility_ratio:
             Current ATR (or similar) divided by its 30-day average.  >1 means
             elevated volatility.
@@ -269,6 +270,15 @@ class GlobalRiskGovernor:
         GovernorDecision
             ``.allowed`` is False if any RED gate fires.
         """
+        # ── Capital Authority fallback ────────────────────────────────────────
+        if current_portfolio_value <= 0.0:
+            try:
+                from capital_authority import get_capital_authority as _get_ca_gov
+                _ca_gov = _get_ca_gov()
+                if not _ca_gov.is_stale(ttl_s=float("inf")):
+                    current_portfolio_value = _ca_gov.get_usable_capital()
+            except Exception:
+                pass
         with self._lock:
             self._maybe_reset_daily(current_portfolio_value)
             self._recent_volatility_ratio = current_volatility_ratio

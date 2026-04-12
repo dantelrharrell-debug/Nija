@@ -267,7 +267,7 @@ class AIIntelligenceHub:
         df: pd.DataFrame,
         indicators: Dict,
         base_size_pct: float,
-        portfolio_value: float,
+        portfolio_value: float = 0.0,
     ) -> TradeEvaluation:
         """
         Run the full AI evaluation pipeline for a proposed trade.
@@ -279,12 +279,31 @@ class AIIntelligenceHub:
         df            : OHLCV DataFrame (at least 50 bars recommended)
         indicators    : Pre-calculated indicator dict (adx, atr, macd, rsi, …)
         base_size_pct : Desired position size as fraction of portfolio (e.g. 0.05 = 5 %)
-        portfolio_value: Total portfolio value in USD
+        portfolio_value: Total portfolio value in USD.  Pass 0.0 to have the
+                         Capital Authority supply the live figure automatically.
 
         Returns
         -------
         TradeEvaluation with ai_approved flag and adjusted size.
         """
+        # ── Capital Authority fallback ─────────────────────────────────────────
+        # Callers that already pass a real balance are unaffected.
+        # Any path that omits the argument (or passes 0) uses the live observed
+        # equity from the single source of truth instead of a synthetic baseline.
+        if portfolio_value <= 0.0:
+            try:
+                from capital_authority import get_capital_authority as _get_ca_hub
+                _ca_hub = _get_ca_hub()
+                if not _ca_hub.is_stale(ttl_s=float("inf")):
+                    portfolio_value = _ca_hub.get_usable_capital()
+            except Exception:
+                pass
+            if portfolio_value <= 0.0:
+                logger.warning(
+                    "[AI Hub] portfolio_value=0 for %s — Capital Authority not yet seeded; "
+                    "position sizing will be zero until authority is refreshed.",
+                    symbol,
+                )
         self._evaluations += 1
         result = TradeEvaluation(symbol=symbol, side=side)
 
