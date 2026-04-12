@@ -123,6 +123,14 @@ except ImportError:
 _kraken_quarantine_active: bool = False
 
 
+class NoncePauseActive(Exception):
+    """Raised when a Kraken nonce trading pause is active.
+
+    Signals the trade execution path to fail fast and retry on the next
+    scan cycle instead of sleeping inside the execution thread.
+    """
+
+
 def _on_kraken_nonce_quarantine() -> None:
     """Quarantine callback: fired by KrakenNonceManager when nonce poisoning is
     confirmed.  Marks every connected KrakenBroker instance as exit-only and
@@ -6391,14 +6399,10 @@ class KrakenBroker(BaseBroker):
         # acquires the global lock once it is safe to proceed.
         if is_nonce_trading_paused is not None and is_nonce_trading_paused():
             remaining = get_nonce_pause_remaining() if get_nonce_pause_remaining is not None else 0.0
-            logger.warning(
-                "⏸️  Kraken API call BLOCKED — nonce trading pause active "
-                "(%.0f s remaining). Waiting before proceeding.",
-                remaining,
+            raise NoncePauseActive(
+                f"Nonce trading pause active ({remaining:.0f}s remaining) — "
+                "skipping cycle, will retry next scan"
             )
-            # Wait out the remainder of the pause (max 60 s guard)
-            wait = min(remaining + 0.5, 65.0)
-            time.sleep(wait)
 
         # Serialize API calls - only one call at a time across ALL accounts
         with global_lock:
@@ -8633,6 +8637,18 @@ class KrakenBroker(BaseBroker):
 
             logger.error("❌ Kraken order failed: No result data")
             return {"status": "error", "error": "No result data"}
+
+        except NoncePauseActive as _npa:
+            # Nonce trading pause is active — fail fast instead of sleeping.
+            # The nonce recovery runs asynchronously; this cycle is skipped and
+            # the next scan will retry automatically.
+            logger.warning("⚠️  NONCE PAUSE: %s", _npa)
+            logger.warning("   Skipping cycle — will retry next scan")
+            return {
+                "status": "nonce_skip",
+                "error": "NONCE_PAUSE",
+                "message": str(_npa),
+            }
 
         except Exception as e:
             logger.error(f"Kraken order error: {e}")

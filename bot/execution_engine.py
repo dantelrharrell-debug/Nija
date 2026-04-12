@@ -839,6 +839,11 @@ class ExecutionEngine:
 
                 # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
                 # DO NOT record trade if order failed or was rejected
+                if result.get('status') == 'nonce_skip':
+                    logger.warning("⚠️  Nonce pause active — skipping cycle, will retry next scan")
+                    logger.warning(f"   Symbol: {symbol}, Size: ${position_size:.2f}")
+                    return None
+
                 if result.get('status') == 'error':
                     error_msg = result.get('error', 'Unknown error')
                     logger.error(f"❌ Order rejected: {error_msg}")

@@ -15604,6 +15604,10 @@ class TradingStrategy:
                                 f"#{_trades_executed_this_cycle + 1}: {_ps_symbol} "
                                 f"(score={_sig_data['entry_score']:.1f})"
                             )
+                            logger.info(
+                                f"   📡 EXECUTION TELEMETRY | symbol={_ps_symbol} "
+                                f"size=${_ps_position_size:.2f} action={_ps_action}"
+                            )
 
                             # ── First-Trade Observer: ORDER_SUBMITTED checkpoint ───
                             if FIRST_TRADE_OBSERVER_AVAILABLE and _get_first_trade_observer and not self._first_trade_executed:
@@ -15869,7 +15873,12 @@ class TradingStrategy:
                                         f"({MICRO_CAP_TRADE_COOLDOWN}s)"
                                     )
                             else:
-                                logger.error(f"   ❌ Failed to open position: {_ps_symbol}")
+                                logger.warning(
+                                    f"   ⚠️  EXECUTION TELEMETRY | {_ps_symbol} — "
+                                    f"execute_action returned False "
+                                    f"(broker rejection, nonce pause, or filter block) "
+                                    f"→ skipping, next scan will retry"
+                                )
 
                         logger.info(
                             f"   📊 Priority execution complete: "
