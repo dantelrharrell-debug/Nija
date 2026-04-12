@@ -954,6 +954,14 @@ def _serialize_object_to_dict(obj) -> Dict:
         # Last resort: convert to string
         return {"_object": str(obj), "_type": type(obj).__name__}
 
+class NoncePauseActive(Exception):
+    """Raised when a Kraken nonce trading pause is active.
+
+    Signals the trade execution path to fail fast and retry on the next
+    scan cycle instead of sleeping inside the execution thread.
+    """
+
+
 class BrokerType(Enum):
     COINBASE = "coinbase"
     BINANCE = "binance"
@@ -6376,14 +6384,10 @@ class KrakenBroker(BaseBroker):
         # acquires the global lock once it is safe to proceed.
         if is_nonce_trading_paused is not None and is_nonce_trading_paused():
             remaining = get_nonce_pause_remaining() if get_nonce_pause_remaining is not None else 0.0
-            logger.warning(
-                "⏸️  Kraken API call BLOCKED — nonce trading pause active "
-                "(%.0f s remaining). Waiting before proceeding.",
-                remaining,
+            raise NoncePauseActive(
+                f"Nonce trading pause active ({remaining:.0f}s remaining) — "
+                "skipping cycle, will retry next scan"
             )
-            # Wait out the remainder of the pause (max 60 s guard)
-            wait = min(remaining + 0.5, 65.0)
-            time.sleep(wait)
 
         # Serialize API calls - only one call at a time across ALL accounts
         with global_lock:
