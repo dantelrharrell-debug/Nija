@@ -1344,6 +1344,29 @@ class ExecutionEngine:
                                 symbol, _atc_err,
                             )
 
+                    # ── WEIGHT TUNER + MAB: record outcome for self-learning ──────
+                    # Drives: signal-weight gradient update, bandit arm reward,
+                    # LR model training, rollback check, batch optimiser.
+                    try:
+                        from self_learning_weight_tuner import get_weight_tuner as _gwt
+                    except ImportError:
+                        try:
+                            from bot.self_learning_weight_tuner import get_weight_tuner as _gwt
+                        except ImportError:
+                            _gwt = None  # type: ignore
+                    if _gwt is not None:
+                        try:
+                            _gwt().record_trade_outcome(
+                                symbol=symbol,
+                                is_win=net_pnl_pct > 0,
+                                pnl_pct=float(net_pnl_pct),
+                            )
+                        except Exception as _wt_err:
+                            logger.debug(
+                                "WeightTuner record skipped for %s: %s",
+                                symbol, _wt_err,
+                            )
+
                     # FIX #1: Unlock after final settlement (position fully closed)
                     with self._closing_lock:
                         self.closing_positions.discard(symbol)

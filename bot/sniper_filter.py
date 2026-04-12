@@ -249,6 +249,7 @@ def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
         bid: float = 0.0,
         ask: float = 0.0,
         depth_usd: float = 0.0,
+        regime: Optional[str] = None,
     ) -> SniperResult:
         """
         Evaluate trade quality using the Tiered Pass System.
@@ -277,6 +278,37 @@ def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
             "side": signal_side,
             "confidence": confidence,
         }
+
+        # ── LR-based confidence override (replaces static confidence) ──────
+        # LogisticRegressionConfidence has predicted P(win) for this symbol.
+        # Use it as a live replacement for the raw confidence score.
+        try:
+            from self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+        except ImportError:
+            try:
+                from bot.self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+            except ImportError:
+                _gwt = None  # type: ignore
+        if _gwt is not None:
+            try:
+                _lr_conf = _gwt().get_lr_confidence(symbol)
+                if _lr_conf is not None:
+                    confidence = _lr_conf
+                    details["lr_win_probability"] = round(_lr_conf, 4)
+                    details["confidence_source"] = "logistic_regression"
+            except Exception:
+                pass
+
+        # ── Adaptive weak_threshold per regime ──────────────────────────────
+        _weak_floor = cfg.weak_threshold
+        if _gwt is not None:
+            try:
+                _weak_floor = _gwt().get_sniper_confidence_floor(
+                    getattr(regime, "value", regime) if regime else "default"
+                )
+            except Exception:
+                pass
+        details["weak_floor_used"] = round(_weak_floor, 4)
 
         # ── 0. Minimum data guard (hard block — can't score without data) ──────
         if not isinstance(df, pd.DataFrame) or len(df) < cfg.min_bars:
@@ -367,10 +399,10 @@ def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
         # REJECTED: confidence below the floor → no trade.
 
         # ── Hard floor: confidence below minimum → always reject ─────────────
-        if confidence < cfg.weak_threshold:
+        if confidence < _weak_floor:
             reason = (
                 f"REJECTED: confidence {confidence:.2f} < "
-                f"weak_threshold {cfg.weak_threshold:.2f}"
+                f"weak_threshold {_weak_floor:.2f}"
             )
             details["block_reason"] = "confidence_below_floor"
             logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)

@@ -71,6 +71,10 @@ DEFAULT_SCORE_THRESHOLD: float = 75.0
 # Maximum possible score (each of the 4 components is worth 25 points)
 MAX_SCORE: float = 100.0
 
+# Max points per scoring component — used to normalise components to [0, 1]
+# for the load_dynamic_weights() formula.
+COMPONENT_MAX_SCORE: float = 25.0
+
 
 # ---------------------------------------------------------------------------
 # Data containers
@@ -155,6 +159,7 @@ class AITradeRanker:
         indicators: Dict,
         side: str = "long",
         symbol: str = "UNKNOWN",
+        regime: str = "default",
     ) -> Tuple[float, TradeScoreBreakdown]:
         """
         Score a potential trade using the four-factor formula.
@@ -173,6 +178,9 @@ class AITradeRanker:
             ``"long"`` or ``"short"``.
         symbol : str
             Trading pair symbol (used only for logging).
+        regime : str
+            Market regime string — used to load adaptive weights from the
+            self-learning weight tuner.  Defaults to ``"default"``.
 
         Returns
         -------
@@ -180,15 +188,89 @@ class AITradeRanker:
             ``(total_score, breakdown)``
         """
         side = side.lower()
-        w = self.weights
 
-        ts_score  = self._score_trend_strength(df, indicators, side, w["trend_strength"])
-        vol_score = self._score_volatility(df, indicators, w["volatility"])
-        vm_score  = self._score_volume(df, w["volume"])
-        mom_score = self._score_momentum(df, indicators, side, w["momentum"])
+        # ── Dynamic weight scoring via self-learning tuner ─────────────────
+        # Exact user-specified formula:
+        #   weights = load_dynamic_weights(regime)
+        #   score  += weights["trend"]  * trend_strength
+        #   score  += weights["volume"] * volume_ratio
+        #   score  += weights["rsi"]    * rsi_signal
+        #   score  += weights["regime"] * regime_score
+        _dw: Optional[Dict] = None
+        try:
+            from self_learning_weight_tuner import load_dynamic_weights as _ldw  # type: ignore
+            _dw = _ldw(regime)
+        except Exception:
+            try:
+                from bot.self_learning_weight_tuner import load_dynamic_weights as _ldw  # type: ignore
+                _dw = _ldw(regime)
+            except Exception:
+                pass
 
-        total = ts_score + vol_score + vm_score + mom_score
-        total = min(total, MAX_SCORE)     # cap at 100 in case of rounding
+        if _dw is not None:
+            # Normalise each component to [0, 1] using COMPONENT_MAX_SCORE scale
+            trend_strength = self._score_trend_strength(df, indicators, side, COMPONENT_MAX_SCORE) / COMPONENT_MAX_SCORE
+            volume_ratio   = self._score_volume(df, COMPONENT_MAX_SCORE) / COMPONENT_MAX_SCORE
+            rsi_signal     = self._score_momentum(df, indicators, side, COMPONENT_MAX_SCORE) / COMPONENT_MAX_SCORE
+            regime_score   = self._score_regime_quality(regime)
+
+            raw = (
+                _dw["trend"]  * trend_strength +
+                _dw["volume"] * volume_ratio   +
+                _dw["rsi"]    * rsi_signal     +
+                _dw["regime"] * regime_score
+            )
+            # Scale by L1 norm of current weights so a perfect-signal setup
+            # always scores near 100, regardless of weight magnitudes.
+            # MAX_WEIGHT (3.0) per key means L1 norm can reach 12.0.
+            _l1_scale = max(sum(abs(v) for v in _dw.values()), 1.0)
+            total = float(max(0.0, min(100.0, (raw / _l1_scale) * 100.0)))
+
+            # Record signal components for weight-tuner learning
+            try:
+                from self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+            except ImportError:
+                try:
+                    from bot.self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+                except ImportError:
+                    _gwt = None  # type: ignore
+            if _gwt is not None:
+                try:
+                    _gwt().record_signal_entry(
+                        symbol=symbol,
+                        regime=regime,
+                        trade_context={
+                            "symbol": symbol,
+                            "side": side,
+                            "score": round(total, 2),
+                            "confidence": round(max(trend_strength, rsi_signal), 4),
+                            "features": {
+                                "trend_strength": round(trend_strength, 4),
+                                "volume_ratio":   round(volume_ratio, 4),
+                                "rsi":            round(rsi_signal, 4),
+                                "adx":            round(regime_score, 4),
+                                "mtf_alignment":  round(regime_score, 4),
+                                "regime_match":   round(regime_score, 4),
+                            },
+                            "weights": {k: round(v, 4) for k, v in _dw.items()},
+                        },
+                    )
+                except Exception:
+                    pass
+
+            # Back-compute component scores for breakdown (informational)
+            ts_score  = trend_strength * COMPONENT_MAX_SCORE
+            vol_score = self._score_volatility(df, indicators, COMPONENT_MAX_SCORE)
+            vm_score  = volume_ratio   * COMPONENT_MAX_SCORE
+            mom_score = rsi_signal     * COMPONENT_MAX_SCORE
+        else:
+            # Fallback: static weights
+            w = self.weights
+            ts_score  = self._score_trend_strength(df, indicators, side, w["trend_strength"])
+            vol_score = self._score_volatility(df, indicators, w["volatility"])
+            vm_score  = self._score_volume(df, w["volume"])
+            mom_score = self._score_momentum(df, indicators, side, w["momentum"])
+            total = min(ts_score + vol_score + vm_score + mom_score, MAX_SCORE)
 
         quality = self._classify(total)
         execute = total > self.score_threshold
@@ -418,6 +500,37 @@ class AITradeRanker:
                 score += half * 0.2
 
         return min(score, max_pts)
+
+    # ------------------------------------------------------------------
+    # Regime quality scorer (used by load_dynamic_weights formula)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _score_regime_quality(regime: str) -> float:
+        """
+        Map regime string to a quality score [0, 1].
+
+        High quality = clearly-defined, high-edge regime.
+        Low quality  = noisy, low-edge regime.
+        Used as the ``regime_score`` signal value in the load_dynamic_weights
+        formula: ``score += weights["regime"] * regime_score``.
+        """
+        _QUALITY: Dict[str, float] = {
+            "strong_trend":         0.90,
+            "weak_trend":           0.65,
+            "expansion":            0.85,
+            "trending":             0.78,
+            "ranging":              0.55,
+            "consolidation":        0.45,
+            "mean_reversion":       0.60,
+            "volatile":             0.35,
+            "volatility_explosion": 0.10,
+        }
+        if not regime or regime == "default":
+            # Regime unknown — no penalty; give full credit so good signals
+            # are not penalised when regime detection is unavailable.
+            return 1.0
+        return _QUALITY.get(str(regime).lower().replace(" ", "_"), 0.75)
 
     # ------------------------------------------------------------------
     # Helpers

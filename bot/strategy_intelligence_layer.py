@@ -347,9 +347,13 @@ class StrategyIntelligenceLayer:
             # ── Step 3: AI Trade Ranker ──────────────────────────────────
             if self._ranker is not None:
                 try:
+                    _regime_str = str(regime.value) if hasattr(regime, "value") else str(regime or "default")
                     score_breakdown = self._ranker.score_trade(
                         df=df,
-                        signal=raw_side,
+                        indicators=indicators or {},
+                        side=raw_side,
+                        symbol=symbol,
+                        regime=_regime_str,
                     )
                     ai_score = score_breakdown.total_score
                     if not self._ranker.should_execute(ai_score):

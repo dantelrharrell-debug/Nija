@@ -356,10 +356,27 @@ class AIEntryGate:
         gates["gate5_regime"] = g5
 
         # ── Tally weighted score (partial credit and penalties supported) ──────
+        # Load regime-specific gate weights from self-learning tuner when available.
+        _active_gate_weights: Optional[Dict[str, float]] = None
+        try:
+            from self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+        except ImportError:
+            try:
+                from bot.self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+            except ImportError:
+                _gwt = None  # type: ignore
+        if _gwt is not None:
+            try:
+                _active_gate_weights = _gwt().get_gate_weights(str(regime_key or "default"))
+            except Exception:
+                pass
+
         total_score: float = 0.0
         failed_gates = []
         for key, check in gates.items():
-            w = _GATE_WEIGHTS.get(key, 0)
+            w = float(
+                (_active_gate_weights or _GATE_WEIGHTS).get(key, 0)
+            )
             if check.passed:
                 total_score += w
             elif check.partial_credit != 0.0:
