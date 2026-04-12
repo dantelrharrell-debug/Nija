@@ -1061,6 +1061,69 @@ def get_nija_core_loop(apex_strategy: Any, max_positions: int = 5) -> NijaCoreLo
 #                    one continuous cycle ever runs.
 _loop_guard = threading.Lock()
 _loop_running = False
+# Set to True after _exec_test_probe() fires so the probe only runs once
+# per process lifetime, even if NIJA_EXEC_TEST_MODE stays "true" externally.
+_exec_test_fired = False
+
+
+# ---------------------------------------------------------------------------
+# Execution test probe
+# ---------------------------------------------------------------------------
+
+def _exec_test_probe(strategy: Any) -> Dict:
+    """
+    Fire a single minimal market buy to validate broker connectivity and
+    order routing end-to-end.
+
+    Auth, nonce, and exchange connection are intentionally *not* bypassed.
+    Strategy scoring filters and the AI entry gate are bypassed via the
+    ``reason="EXEC_TEST_PROBE"`` flag that flows through the call stack.
+
+    Returns
+    -------
+    Dict with the broker response (or an error dict when no broker is found).
+    """
+    symbol = os.getenv("NIJA_EXEC_TEST_SYMBOL", "BTC/USDT")
+    size = float(os.getenv("NIJA_EXEC_TEST_SIZE_USD", "5"))
+
+    broker = getattr(strategy, "broker", None)
+    if broker is None:
+        bm = getattr(strategy, "broker_manager", None)
+        if bm is not None:
+            broker = bm.get_primary_broker()
+
+    if broker is None:
+        logger.error("🧪 EXEC TEST PROBE: no broker available — cannot execute")
+        return {"status": "error", "error": "NO_BROKER"}
+
+    logger.info(
+        "🧪 EXEC TEST PROBE → symbol=%s size=$%.2f broker=%s",
+        symbol,
+        size,
+        getattr(getattr(broker, "broker_type", None), "value", type(broker).__name__),
+    )
+
+    try:
+        result = broker.execute_order(
+            symbol=symbol,
+            side="buy",
+            quantity=size,
+            size_type="quote",
+            ignore_min_trade=True,
+            metadata={"reason": "EXEC_TEST_PROBE"},
+        )
+    except TypeError:
+        # Broker implementation does not accept the metadata kwarg yet —
+        # fall back to call without it (still honours ignore_min_trade).
+        result = broker.execute_order(
+            symbol=symbol,
+            side="buy",
+            quantity=size,
+            size_type="quote",
+            ignore_min_trade=True,
+        )
+
+    return result
 
 
 def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
@@ -1166,6 +1229,25 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
             # Broker is alive — run the full trading cycle
             _skipped_cycles = 0
+
+            # ── EXEC TEST MODE ────────────────────────────────────────────────
+            # If NIJA_EXEC_TEST_MODE is enabled, fire a single probe order to
+            # validate the complete execution stack, then disable itself so the
+            # bot continues normal operation on the next cycle.
+            # Uses a module-level flag (_exec_test_fired) so the probe only
+            # runs once per process lifetime regardless of whether the env var
+            # is still set to "true" after the first probe.
+            global _exec_test_fired
+            if (not _exec_test_fired
+                    and os.getenv("NIJA_EXEC_TEST_MODE", "false").lower() == "true"):
+                _on_startup_only = os.getenv("NIJA_EXEC_TEST_ON_STARTUP", "true").lower() == "true"
+                if not _on_startup_only or cycle == 1:
+                    logger.info("🧪 EXEC TEST MODE ACTIVE — forcing single execution probe")
+                    _probe_result = _exec_test_probe(strategy)
+                    logger.info("🧪 EXEC TEST RESULT → %s", _probe_result)
+                    _exec_test_fired = True
+                    continue
+
             strategy.run_cycle()
             time.sleep(cycle_secs)
 
