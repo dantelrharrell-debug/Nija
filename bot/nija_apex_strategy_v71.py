@@ -2781,6 +2781,7 @@ class NIJAApexStrategyV71:
                         'stop_loss': stop_loss,
                         'take_profit': tp_levels,
                         'score': score,
+                        'confidence': validation.get('confidence', 0.0),
                         'adx': adx
                     }
 
@@ -3236,6 +3237,7 @@ class NIJAApexStrategyV71:
                         'stop_loss': stop_loss,
                         'take_profit': tp_levels,
                         'score': score,
+                        'confidence': validation.get('confidence', 0.0),
                         'adx': adx
                     }
 
