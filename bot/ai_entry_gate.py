@@ -138,28 +138,28 @@ class GateResult:
 # allow more entries during sideways and moderate-volatility market conditions.
 # Slightly reduced again (Option A, Apr 2026) to increase signal sensitivity.
 _SCORE_THRESHOLDS: Dict[str, float] = {
-    "strong_trend":         12.0,   # trend gives edge → relax (was 38 → 32 → 25 → 22 → 14 → 12)
-    "weak_trend":           12.0,   # default (was 40 → 34 → 27 → 22 → 14 → 12)
-    "ranging":              13.0,   # direction hard to call → require better setup (was 45 → 38 → 30 → 24 → 15 → 13)
-    "consolidation":        10.0,   # scalp mode → need high frequency (was 35 → 30 → 24 → 20 → 12 → 10)
-    "expansion":            12.0,   # breakout → normal bar (was 40 → 34 → 27 → 22 → 14 → 12)
-    "mean_reversion":       13.0,   # counter-trend → extra conviction (was 45 → 38 → 30 → 24 → 15 → 13)
+    "strong_trend":         9.0,    # trend gives edge → relax (was 38 → 32 → 25 → 22 → 14 → 12 → 9)
+    "weak_trend":           9.0,    # default (was 40 → 34 → 27 → 22 → 14 → 12 → 9)
+    "ranging":              10.0,   # direction hard to call → require better setup (was 45 → 38 → 30 → 24 → 15 → 13 → 10)
+    "consolidation":        8.0,    # scalp mode → need high frequency (was 35 → 30 → 24 → 20 → 12 → 10 → 8)
+    "expansion":            9.0,    # breakout → normal bar (was 40 → 34 → 27 → 22 → 14 → 12 → 9)
+    "mean_reversion":       10.0,   # counter-trend → extra conviction (was 45 → 38 → 30 → 24 → 15 → 13 → 10)
     "volatility_explosion": 65.0,   # crisis → near-perfect setups only (unchanged — crisis protection preserved)
     # Legacy 3-regime fallbacks
-    "trending":             12.0,   # was 38 → 32 → 25 → 22 → 14 → 12
-    "volatile":             20.0,   # was 55 → 47 → 38 → 32 → 22 → 20
+    "trending":             9.0,    # was 38 → 32 → 25 → 22 → 14 → 12 → 9
+    "volatile":             15.0,   # was 55 → 47 → 38 → 32 → 22 → 20 → 15
 }
-_DEFAULT_SCORE_THRESHOLD = 12.0   # was 40.0 → 34.0 → 27.0 → 22.0 → 14.0 → 12.0
+_DEFAULT_SCORE_THRESHOLD = 9.0    # was 40.0 → 34.0 → 27.0 → 22.0 → 14.0 → 12.0 → 9.0
 
 # ── Gate 2: Volume multiplier ────────────────────────────────────────────────
 # Current volume must be >= this × 20-bar average.
 _VOL_MULTIPLIER_DEFAULT  = 0.60   # 60% of average (standard)
-_VOL_MULTIPLIER_SCALP    = 0.80   # scalp needs tighter liquidity floor
+_VOL_MULTIPLIER_SCALP    = 0.60   # lowered from 0.80 → 0.60 (Apr 2026): scalp allowed on same floor as swing so quiet markets aren't blocked
 
 # ── Gate 3: ATR % range per entry type ──────────────────────────────────────
 # (min_atr_pct, max_atr_pct)
 _ATR_RANGES: Dict[str, tuple] = {
-    "scalp":          (0.20, 4.00),   # scalp needs tight vol
+    "scalp":          (0.10, 6.00),   # widened (was 0.20–4.00): allow quieter AND more volatile markets for scalp
     "swing":          (0.40, 9.00),   # swing tolerates wider moves
     "breakout":       (0.80, 15.00),  # breakout needs meaningful move
     "mean_reversion": (0.30, 8.00),   # reversal fine with moderate vol
@@ -681,10 +681,10 @@ class AIEntryGate:
             return GateCheck(
                 passed=False,
                 name="Regime",
-                partial_credit=-1.0,  # penalty: −2 pts — discourages the mismatch
+                partial_credit=-0.5,  # reduced penalty: −1 pt (was −2 pts) — discourages mismatch without hard-blocking
                 detail=(
                     f"regime={regime_key.upper()} conflicts with {entry_type} {side} "
-                    f"(−{w} pts penalty; strong signals still pass)"
+                    f"(−{w * 0.5:.0f} pts penalty; strong signals still pass)"
                 ),
             )
 

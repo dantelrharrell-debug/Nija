@@ -340,7 +340,7 @@ class AdaptiveThresholdController:
     _TARGET_CEIL:   float = 0.65   # lower threshold above this win rate
     _WINDOW:        int   = 20     # rolling outcome window
     _STEP:          float = 0.5    # composite-score pts nudged per recompute
-    _MAX_ADJ:       float = 8.0    # maximum |composite adjustment| in pts
+    _MAX_ADJ:       float = 5.0    # reduced from 8.0 → 5.0 (Apr 2026): max effective floor drops from 12→9 so WRSS-dampened scores still pass
     _MIN_SAMPLES:   int   = 5      # outcomes needed before any adjustment
 
     # Gate-domain adjustment — operates in the same units as
@@ -365,7 +365,7 @@ class AdaptiveThresholdController:
     def get_effective_floor(self, base_floor: float) -> float:
         """Return base_floor adjusted by the current auto-tune delta."""
         with self._lock:
-            return max(5.0, base_floor + self._adjustment)
+            return max(3.0, base_floor + self._adjustment)
 
     def get_threshold(self, base_threshold: float) -> float:
         """Return ``base_threshold`` nudged by the gate-domain win-rate adjustment.

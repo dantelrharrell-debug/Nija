@@ -2195,11 +2195,13 @@ class NIJAApexStrategyV71:
                     return {'action': 'hold', 'reason': f'No trend + RSI={_cons_rsi:.1f} neutral ({_SCALP_RSI_SHORT:.0f}-{_SCALP_RSI_LONG:.0f})'}
 
                 # ── Multi-factor reinforcement: RSI alone is a weak signal ────
-                # Volume: current bar vs 20-bar average (>= 0.6x = market is active)
+                # Volume: current bar vs 20-bar average (>= 0.4x = market is active;
+                # lowered from 0.6x → 0.4x Apr 2026 to match ENTRY_VOLUME_MIN_MULTIPLIER
+                # and allow quiet-but-directional consolidation scalps through)
                 # Structure: HH+HL (long) or LH+LL (short) on the last two bars.
                 _avg_vol_20 = (df['volume'].iloc[-21:-1].mean()
                                if len(df) >= 21 else df['volume'].mean())
-                _vol_ok = (float(df['volume'].iloc[-1]) / _avg_vol_20 >= 0.60
+                _vol_ok = (float(df['volume'].iloc[-1]) / _avg_vol_20 >= 0.40
                            if _avg_vol_20 > 0 else False)
                 _h_now, _h_prev = float(df['high'].iloc[-1]), float(df['high'].iloc[-2])
                 _l_now, _l_prev = float(df['low'].iloc[-1]),  float(df['low'].iloc[-2])
