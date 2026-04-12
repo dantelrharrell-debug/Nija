@@ -112,6 +112,21 @@ _MICROCAP_SIDEWAYS_GATE_REDUCTION: float = float(
     _os_apex.getenv("NIJA_MICROCAP_SIDEWAYS_GATE_REDUCTION", "0.08")
 )
 
+# ── DIAGNOSTIC / TESTING BYPASS FLAGS ────────────────────────────────────────
+# NIJA_DISABLE_MARKET_FILTER=true  → skip check_market_filter entirely and allow
+#   entries based purely on RSI direction.  Use ONLY for pipeline diagnostics;
+#   remove or set to "false" once you confirm the signal path is working.
+_DISABLE_MARKET_FILTER: bool = (
+    _os_apex.getenv("NIJA_DISABLE_MARKET_FILTER", "false").lower() in ("1", "true", "yes")
+)
+
+# NIJA_CONSOLIDATION_SCALP=true  (default) — when check_market_filter returns
+#   'none' (no clear trend), use RSI to pick a direction and attempt a scalp entry
+#   instead of immediately returning 'hold'.  RSI > 52 → try long; RSI < 48 → try short.
+_CONSOLIDATION_SCALP: bool = (
+    _os_apex.getenv("NIJA_CONSOLIDATION_SCALP", "true").lower() not in ("0", "false", "no")
+)
+
 # Import adaptive minimum sizing engine (Mar 2026)
 try:
     from adaptive_minimum_sizing import get_adaptive_minimum_sizer, AdaptiveMinimumSizer
@@ -536,7 +551,7 @@ class NIJAApexStrategyV71:
         self.min_adx = self.config.get('min_adx', 5)  # TUNED: 5 — further relaxed from 7 to allow Platform to enter trades
         self.volume_threshold = self.config.get('volume_threshold', 0.02)  # TUNED: 2% — further relaxed from 5% to match user account behaviour
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
-        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 2)  # TUNED: Lowered from 3 to 2 to allow entries on partial trend confirmation
+        self.min_trend_confirmation = self.config.get('min_trend_confirmation', 1)  # TUNED: Lowered from 2 → 1 (Apr 2026) so a single confirmed condition (e.g. VWAP or MACD) is enough to attempt an entry; the AI scoring layers downstream still gate quality
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)
 
@@ -2128,12 +2143,65 @@ class NIJAApexStrategyV71:
 
             # Check market filter
             allow_trade, trend, market_reason = self.check_market_filter(df, indicators)
+
+            # ── NIJA_DISABLE_MARKET_FILTER diagnostic bypass ──────────────────
+            # When enabled, skip the market filter gate entirely and assign trend
+            # direction from RSI so the entry logic always gets a chance to run.
+            # Set NIJA_DISABLE_MARKET_FILTER=true to activate (testing only).
+            if _DISABLE_MARKET_FILTER:
+                _bypass_rsi = scalar(indicators['rsi'].iloc[-1])
+                if _bypass_rsi >= 52:
+                    allow_trade, trend = True, 'uptrend'
+                    market_reason = f'[BYPASS] market filter disabled — RSI={_bypass_rsi:.1f} → uptrend'
+                elif _bypass_rsi <= 48:
+                    allow_trade, trend = True, 'downtrend'
+                    market_reason = f'[BYPASS] market filter disabled — RSI={_bypass_rsi:.1f} → downtrend'
+                else:
+                    allow_trade, trend = False, 'none'
+                    market_reason = f'[BYPASS] market filter disabled — RSI={_bypass_rsi:.1f} too neutral'
+                logger.info("   🔓 %s: %s", symbol, market_reason)
+
             if not allow_trade:
                 logger.debug(f"   {symbol}: Market filter blocked - {market_reason}")
                 return {
                     'action': 'hold',
                     'reason': market_reason
                 }
+
+            # ── CONSOLIDATION SCALP: assign direction from RSI when no clear trend ──
+            # When check_market_filter returns trend='none' (neither uptrend nor
+            # downtrend cleared min_trend_confirmation), use RSI momentum as a
+            # lightweight tie-breaker so the entry logic still runs on the most
+            # promising direction.  The AI scoring layers + sniper filter downstream
+            # still gate quality — this just prevents silent 'hold' on every bar
+            # in ranging/consolidating markets.
+            # Disable by setting NIJA_CONSOLIDATION_SCALP=false.
+            if trend == 'none' and _CONSOLIDATION_SCALP:
+                _cons_rsi = scalar(indicators['rsi'].iloc[-1])
+                if _cons_rsi >= 52:
+                    trend = 'uptrend'
+                    market_reason = (
+                        f'Consolidation scalp-long (no trend, RSI={_cons_rsi:.1f}≥52)'
+                    )
+                    logger.info("   ⚡ %s: %s", symbol, market_reason)
+                elif _cons_rsi <= 48:
+                    trend = 'downtrend'
+                    market_reason = (
+                        f'Consolidation scalp-short (no trend, RSI={_cons_rsi:.1f}≤48)'
+                    )
+                    logger.info("   ⚡ %s: %s", symbol, market_reason)
+                else:
+                    # RSI is in the neutral 48-52 band — nothing actionable
+                    logger.debug(
+                        "   %s: Consolidation scalp skipped — RSI=%.1f in neutral band",
+                        symbol, _cons_rsi,
+                    )
+                    return {'action': 'hold', 'reason': f'No trend + RSI={_cons_rsi:.1f} neutral (48–52)'}
+
+            # If trend is still 'none' after consolidation scalp (NIJA_CONSOLIDATION_SCALP=false)
+            if trend == 'none':
+                logger.debug(f"   {symbol}: Market filter blocked - {market_reason}")
+                return {'action': 'hold', 'reason': market_reason}
 
             # ── 4-Layer Drawdown Risk Controller (pre-entry authority) ────────
             # Runs BEFORE any position or signal checks to avoid wasted computation.
