@@ -449,6 +449,52 @@ KRAKEN_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Kraken is PRIMARY for small
 # At $10 balance, can make smaller trades; at $25+ can make multiple concurrent trades
 COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', STANDARD_MINIMUM_BALANCE))  # Respects env override or uses STANDARD_MINIMUM_BALANCE
 
+# ── Exchange-scoped capital rules (Steps 2, 5, 6) ──────────────────────────
+# Coinbase uses its own floors, independent of Kraken conservatism.
+COINBASE_MIN_CAPITAL: float = float(os.getenv('COINBASE_MIN_CAPITAL', '1.0'))
+COINBASE_MIN_ORDER: float = float(os.getenv('COINBASE_MIN_ORDER_USD', os.getenv('COINBASE_MIN_ORDER', '1.0')))
+COINBASE_MICRO_CAP_MODE: bool = os.getenv('COINBASE_MICRO_CAP_MODE', 'true').strip().lower() in ('1', 'true', 'yes')
+COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR: bool = os.getenv('COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR', 'false').strip().lower() in ('1', 'true', 'yes')
+KRAKEN_EXECUTION_DISABLED: bool = os.getenv('KRAKEN_EXECUTION_DISABLED', 'false').strip().lower() in ('1', 'true', 'yes')
+
+# When micro-cap mode is active, Coinbase minimum balance matches COINBASE_MIN_CAPITAL ($1)
+if COINBASE_MICRO_CAP_MODE:
+    COINBASE_MINIMUM_BALANCE = COINBASE_MIN_CAPITAL
+
+# ── Isolation skip sentinel (Step 6) ───────────────────────────────────────
+_BROKER_ISOLATION_SKIP: Dict = {
+    'status': 'broker_isolated_skip',
+    'partial_fill': False,
+    'filled_pct': 0.0,
+}
+
+
+def _check_broker_isolation(broker_type: 'BrokerType', side: str) -> Optional[Dict]:
+    """Check isolation registry; return skip-result if execution should be blocked.
+
+    This is the LAYER 1 guard inserted at the top of every broker's
+    ``place_market_order``.  It replaces the pattern::
+
+        raise RuntimeError("Capital below minimum")
+
+    with::
+
+        logger.warning("Broker isolated mode: non-execution broker")
+        return SKIP_BROKER
+    """
+    try:
+        try:
+            from bot.broker_isolation_registry import get_broker_isolation_registry
+        except ImportError:
+            from broker_isolation_registry import get_broker_isolation_registry  # type: ignore
+        registry = get_broker_isolation_registry()
+        skip = registry.check_execution(broker_type.value, side)
+        if skip is not None:
+            return _BROKER_ISOLATION_SKIP
+    except Exception:
+        pass
+    return None
+
 # Broker health monitoring constants
 # Maximum consecutive errors before marking broker unavailable
 # This prevents trading when API is persistently failing
@@ -3431,6 +3477,11 @@ class CoinbaseBroker(BaseBroker):
                 }
 
             # Validate symbol format (should be like "BTC-USD", "ETH-USD", etc.)
+            # 🔒 LAYER 1: BROKER ISOLATION CHECK (Steps 2-6)
+            _iso = _check_broker_isolation(self.broker_type, side)
+            if _iso is not None:
+                return _iso
+
             if '-' not in symbol or len(symbol) < 5:
                 logger.error(f"❌ INVALID SYMBOL: Invalid format '{symbol}'")
                 logger.error(f"   Expected format: BASE-QUOTE (e.g., 'BTC-USD')")
@@ -5388,6 +5439,11 @@ class AlpacaBroker(BaseBroker):
             pass
         
         try:
+            # 🔒 LAYER 1: BROKER ISOLATION CHECK
+            _iso = _check_broker_isolation(self.broker_type, side)
+            if _iso is not None:
+                return _iso
+
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
 
@@ -5855,6 +5911,11 @@ class BinanceBroker(BaseBroker):
             dict: Order result with status, order_id, etc.
         """
         try:
+            # 🔒 LAYER 1: BROKER ISOLATION CHECK
+            _iso = _check_broker_isolation(self.broker_type, side)
+            if _iso is not None:
+                return _iso
+
             if not self.client:
                 return {"status": "error", "error": "Not connected to Binance"}
 
@@ -7988,7 +8049,15 @@ class KrakenBroker(BaseBroker):
                 )
         except ImportError:
             pass
-        
+
+        # 🔒 LAYER 1: BROKER ISOLATION CHECK (Step 6)
+        # Replaces raise RuntimeError("Capital below minimum")
+        # With: logger.warning("Kraken isolated mode: non-execution broker")
+        _iso = _check_broker_isolation(self.broker_type, side)
+        if _iso is not None:
+            logger.warning("Kraken isolated mode: non-execution broker — %s skipped", side.upper())
+            return _iso
+
         try:
             if not self.api:
                 return {"status": "error", "error": "Not connected to Kraken"}
@@ -9726,6 +9795,11 @@ class OKXBroker(BaseBroker):
             dict: Order result with status, order_id, etc.
         """
         try:
+            # 🔒 LAYER 1: BROKER ISOLATION CHECK
+            _iso = _check_broker_isolation(self.broker_type, side)
+            if _iso is not None:
+                return _iso
+
             if not self.trade_api:
                 return {"status": "error", "error": "Not connected to OKX"}
 

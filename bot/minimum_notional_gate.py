@@ -39,21 +39,36 @@ class NotionalGateConfig:
                 'alpaca': 5.0,      # $5 minimum
             }
     
-    def get_min_notional_for_broker(self, broker_name: str) -> float:
-        """
-        Get minimum notional for specific broker
-        
+    def get_min_notional_for_broker(self, broker_name: str, balance: float = 0.0) -> float:
+        """Get minimum notional for specific broker.
+
+        When micro-cap execution mode is active (balance < MICRO_CAP_THRESHOLD
+        and COINBASE_MICRO_CAP_MODE=true), the Coinbase floor is lowered to
+        COINBASE_MIN_ORDER_USD ($1) instead of blocking with $15.
+
         Args:
             broker_name: Name of the broker (e.g., 'coinbase', 'kraken')
-        
+            balance:     Current account balance in USD (0 = skip mode check)
+
         Returns:
             Minimum notional value in USD
         """
+        # Micro-cap mode conversion: lower Coinbase floor instead of blocking
+        if balance > 0:
+            try:
+                from bot.micro_cap_execution_mode import get_micro_cap_notional_floor
+                legacy = (self.broker_specific_limits or {}).get(
+                    broker_name.lower(), self.min_entry_notional_usd
+                )
+                return get_micro_cap_notional_floor(broker_name, balance, legacy)
+            except ImportError:
+                pass
+
         if not self.broker_specific_limits:
             return self.min_entry_notional_usd
-        
+
         return self.broker_specific_limits.get(
-            broker_name.lower(), 
+            broker_name.lower(),
             self.min_entry_notional_usd
         )
 
