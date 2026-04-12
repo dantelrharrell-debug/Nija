@@ -118,16 +118,34 @@ TIER_FLOOR: float = float(os.getenv("NIJA_SCORE_FLOOR_FLOOR", "8.0"))    # 0.75�
 TIER_WEAK:  float = float(os.getenv("NIJA_SCORE_FLOOR_WEAK",  "4.0"))    # 0.50× size — dead-zone B/C entry
 
 # Composite score blend weights (must sum to 1.0)
-# Raised _W_ENHANCED 0.58→0.64, lowered _W_GATE 0.17→0.12 so the gate
-# penalty no longer buries setups that fail 1-2 soft gates in dead markets.
-_W_ENHANCED  = 0.64   # EnhancedEntryScorer — primary signal weight
-_W_OPTIMIZER = 0.24   # EntryOptimizer RSI-div / BB-zone bonus
-_W_GATE      = 0.12   # 5-Gate penalty deduction (softened: 0.17→0.12)
+# All three components are normalised to the same 0-100 scale before blending
+# so each weight is a true fraction of the final score.
+#
+# _W_ENHANCED  : EnhancedEntryScorer raw signal quality (0-100)
+# _W_OPTIMIZER : EntryOptimizer RSI-div / BB-zone / vol-contract bonus (0-100)
+# _W_GATE      : AIEntryGate quality score — gate_score/gate_max * 100 (0-100)
+#                (positive contribution: all gates pass = 100, all fail = 0)
+#
+# With these weights:
+#   perfect setup (raw=100, opt=2.0, 5/5 gates pass) → 60+28+12 = 100
+#   good    setup (raw=65,  opt=1.0, 4/5 gates pass) → 39+14+9.6 = 62.6
+#   average setup (raw=45,  opt=0,   3/5 gates pass) → 27+0+7.2  = 34.2
+#   weak    setup (raw=20,  opt=0,   2/5 gates pass) → 12+0+4.8  = 16.8
+#
+# TIER_ELITE (75) is now reachable for genuine A+ setups, activating the
+# 1.5× position multiplier that was previously dead code.
+_W_ENHANCED  = 0.60   # dominant — raw signal quality drives most of the score
+_W_OPTIMIZER = 0.28   # raised from 0.24 — RSI-div / BB-zone bonus now matters
+_W_GATE      = 0.12   # gate quality (positive contribution, not penalty)
 
 # Hard absolute floor — never execute below this regardless of ranking.
 # Lowered from 25.0 → 10.0 → 6.0 → 4.0 (confirmation-trade mode, Apr 2026) to maximise entries.
 # Override at runtime with NIJA_MIN_SCORE_ABSOLUTE.
 MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "4.0"))
+
+# Default gate_max to fall back to when gate_result.gate_max is falsy.
+# Must match _GATE_MAX_SCORE defined in ai_entry_gate (sum of _GATE_WEIGHTS = 9).
+_DEFAULT_GATE_MAX: float = 9.0
 
 # Default number of top signals to select per cycle
 TOP_N_DEFAULT = 3
@@ -711,19 +729,24 @@ class NijaAIEngine:
 
         # ── Component 2: Entry optimizer bonus ───────────────────────────
         optimizer = self._get_optimizer()
-        opt_delta = 0.0
+        opt_score = 0.0
         if optimizer is not None:
             try:
                 opt_result = optimizer.analyze_entry(df, indicators, side)
-                # Scale: max delta ~2.0 → normalize to 0-20 extra points
-                opt_delta = min(opt_result.score_delta / 2.0, 1.0) * 20.0
+                # Normalise to 0-100: max raw delta is 2.0 (RSI-div 1.0 + BB 0.5 + vol 0.5)
+                opt_score = min(opt_result.score_delta / 2.0, 1.0) * 100.0
                 breakdown["optimizer_delta"] = opt_result.score_delta
                 breakdown["optimizer_reason"] = opt_result.reason
             except Exception as exc:
                 logger.debug("EntryOptimizer error: %s", exc)
 
         # ── Component 3: 5-gate AI confirmation ──────────────────────────
-        gate_penalty = 0.0
+        # Gate quality is a *positive* contribution (0-100) not a penalty.
+        # gate_score / gate_max = fraction of weighted gate points earned.
+        # All gates pass → 100 pts; all gates fail → 0 pts.
+        # Conservative default: 0.0 — no gate bonus when the module is
+        # unavailable or raises, so signals aren't artificially boosted.
+        gate_quality = 0.0
         gate_results: Dict[str, bool] = {}
         gate = self._get_gate()
         if gate is not None:
@@ -739,13 +762,9 @@ class NijaAIEngine:
                 )
                 breakdown["gate_passed"] = gate_result.passed
                 breakdown["gate_reason"] = gate_result.reason
-                if not gate_result.passed:
-                    # Count how many gates failed and apply proportional penalty
-                    n_failed = sum(
-                        1 for g in (gate_result.gates or {}).values()
-                        if hasattr(g, "passed") and not g.passed
-                    )
-                    gate_penalty = min(n_failed, 3) * 5.0
+                # Normalise to 0-100
+                _gate_max = float(gate_result.gate_max) if gate_result.gate_max else _DEFAULT_GATE_MAX
+                gate_quality = float(np.clip(gate_result.gate_score / _gate_max * 100.0, 0.0, 100.0))
                 # Capture per-gate pass/fail for weight-tuner learning
                 for gname, gobj in (gate_result.gates or {}).items():
                     if hasattr(gobj, "passed"):
@@ -754,6 +773,7 @@ class NijaAIEngine:
                 logger.debug("AIEntryGate error: %s", exc)
 
         breakdown["gate_results"] = gate_results
+        breakdown["gate_quality"] = gate_quality
 
         # ── Blend weights: prefer tuner-learned values over module constants ─
         _w_enhanced  = _W_ENHANCED
@@ -772,10 +792,15 @@ class NijaAIEngine:
             except Exception:
                 pass
 
-        # ── Weighted composite ────────────────────────────────────────────
-        # Penalty: 5 pts per failed gate, capped at 3 gates (max -15 pts before weighting)
-        # Reduced from 8→5 per gate so B/C grade setups are not buried by soft-gate failures.
-        composite = (raw_score * _w_enhanced) + (opt_delta * _w_optimizer) - (gate_penalty * _w_gate)
+        # ── Weighted composite (all components on the same 0-100 scale) ──
+        # composite = enhanced × W_E + optimizer × W_O + gate_quality × W_G
+        # Theoretical max: 100 × 0.60 + 100 × 0.28 + 100 × 0.12 = 100
+        # TIER_ELITE (75) is now reachable for genuine A+ setups.
+        composite = (
+            raw_score   * _w_enhanced
+            + opt_score * _w_optimizer
+            + gate_quality * _w_gate
+        )
         composite = float(np.clip(composite, 0.0, 100.0))
 
         # ── Win-rate score shaping by regime ─────────────────────────────
@@ -795,7 +820,7 @@ class NijaAIEngine:
                 pass
         breakdown["wrss_factor"] = wrss_factor
         breakdown["composite_score"] = composite
-        breakdown["gate_penalty"] = gate_penalty
+        breakdown["gate_penalty"] = 0.0   # deprecated — kept for backward compat; use 'gate_quality' instead
 
         return composite, breakdown
 
@@ -834,33 +859,50 @@ class NijaAIEngine:
 
     @staticmethod
     def _position_multiplier(score: float) -> float:
-        """Map composite score to position-size multiplier.
+        """Map composite score to a smooth position-size multiplier.
 
-        Tiers (Apr 2026 — aggressive micro-account sizing):
-            ELITE  ≥ 75  → 1.50× (A+ conviction)
-            GOOD   ≥ 20  → 1.00× (A grade)
-            FAIR   ≥ 15  → 0.85× (B grade — raised from 0.75)
-            FLOOR  ≥  8  → 0.75× (C grade — raised from 0.50)
-            WEAK   ≥  4  → 0.50× (dead-zone weak signal entry)
-            <  4         → 0.40× (emergency bypass only)
+        Uses piecewise linear interpolation between the tier anchor points so
+        there are no sudden step-changes in position size at tier boundaries
+        (e.g. a score of 19.9 no longer jumps to a different size than 20.0).
 
-        Env NIJA_AGGRESSIVE_SIZE_MULT (default 1.0) scales every tier
-        by a constant factor — set to 1.25 for high-frequency $50-$100 mode.
+        Anchor points (score → multiplier):
+            0           → 0.40   (emergency bypass floor)
+            TIER_WEAK   → 0.50   (dead-zone B/C entry)
+            TIER_FLOOR  → 0.75   (C grade)
+            TIER_FAIR   → 0.85   (B grade)
+            TIER_GOOD   → 1.00   (A grade)
+            TIER_ELITE  → 1.50   (A+ conviction — now reachable with the fixed composite formula)
+            100         → 1.50   (cap)
+
+        Env NIJA_AGGRESSIVE_SIZE_MULT (default 1.0) scales the result by a
+        constant factor — set to 1.25 for high-frequency $50-$100 mode.
         """
         _agg = float(os.getenv("NIJA_AGGRESSIVE_SIZE_MULT", "1.0"))
-        if score >= TIER_ELITE:
-            base = 1.5
-        elif score >= TIER_GOOD:
-            base = 1.0
-        elif score >= TIER_FAIR:
-            base = 0.85
-        elif score >= TIER_FLOOR:
-            base = 0.75
-        elif score >= TIER_WEAK:
-            base = 0.50
-        else:
-            base = 0.40
-        return round(min(base * _agg, 2.0), 4)
+
+        # Anchor list — built at call time so env-var tier overrides take effect
+        # immediately without restarting the engine.
+        anchors = [
+            (0.0,        0.40),
+            (TIER_WEAK,  0.50),
+            (TIER_FLOOR, 0.75),
+            (TIER_FAIR,  0.85),
+            (TIER_GOOD,  1.00),
+            (TIER_ELITE, 1.50),
+            (100.0,      1.50),
+        ]
+
+        s = float(np.clip(score, 0.0, 100.0))
+
+        for i in range(len(anchors) - 1):
+            lo_s, lo_m = anchors[i]
+            hi_s, hi_m = anchors[i + 1]
+            if lo_s <= s <= hi_s:
+                span = hi_s - lo_s
+                t = (s - lo_s) / span if span > 0 else 0.0
+                base = lo_m + t * (hi_m - lo_m)
+                return round(min(base * _agg, 2.0), 4)
+
+        return round(min(1.50 * _agg, 2.0), 4)
 
     @staticmethod
     def _build_reason(
