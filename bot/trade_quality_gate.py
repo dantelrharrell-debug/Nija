@@ -95,7 +95,7 @@ class TradeQualityGate:
     - Stop placement quality score
     """
     
-    def __init__(self, min_reward_risk: float = 1.2, require_momentum: bool = True):
+    def __init__(self, min_reward_risk: float = 1.5, require_momentum: bool = True):
         self.min_reward_risk = min_reward_risk
         self.require_momentum = require_momentum
         logger.info(f"✅ Trade Quality Gate active (min R:R = {min_reward_risk})")
@@ -149,7 +149,7 @@ class TradeQualityGate:
         stop_eval = score_stop_quality(market_data, entry_price, stop_price, trade_direction)
         assessment['stop_quality'] = stop_eval
         
-        if stop_eval['score'] < 40:
+        if stop_eval['score'] < 50:
             assessment['approved'] = False
             assessment['rejection_reason'] = f"Poor stop: {stop_eval['reason']}"
             return assessment
