@@ -621,19 +621,19 @@ class NIJAApexStrategyV71:
             if not PROFIT_STACK_AVAILABLE:
                 logger.warning("⚠️  Profit optimization stack not available")
 
-        # SAFE PROFIT MODE: Daily gate that blocks new entries once enough profit is locked.
-        # Activates when either (a) daily profit reaches the configured target, or
-        # (b) ≥ 50% of today's accumulated profit is ratchet-locked by ProfitHarvestLayer.
-        # Configured via 'daily_profit_target_pct' (default 1% of account) and
-        # 'safe_profit_lock_fraction_threshold' (default 0.50).
+        # SAFE PROFIT MODE: Protects ratchet-locked profits by blocking new entries
+        # once ≥ 80% of today's accumulated P&L is already secured in the harvest layer.
+        # NOTE: Dollar-target-based activation is DISABLED.  The system follows EDGE only
+        # and never stops trading because it "hit a number".  The only valid activation
+        # path is the locked-profit fraction guard (lock_fraction_threshold).
         enable_safe_profit_mode = self.config.get('enable_safe_profit_mode', True)
         if SAFE_PROFIT_MODE_AVAILABLE and enable_safe_profit_mode:
             try:
                 self.safe_profit_mode = get_safe_profit_mode(
                     target_pct_threshold=self.config.get('safe_profit_target_pct_threshold', 1.0),
-                    lock_fraction_threshold=self.config.get('safe_profit_lock_fraction_threshold', 0.50),
+                    lock_fraction_threshold=self.config.get('safe_profit_lock_fraction_threshold', 0.80),
                 )
-                logger.info("✅ Safe Profit Mode: ENABLED (blocks new entries once daily target locked)")
+                logger.info("✅ Safe Profit Mode: ENABLED (locked-profit guard only — no dollar target)")
             except Exception as _spm_err:
                 logger.warning(f"⚠️  Safe Profit Mode init failed – degrading gracefully: {_spm_err}")
                 self.safe_profit_mode = None
@@ -642,14 +642,11 @@ class NIJAApexStrategyV71:
             if not SAFE_PROFIT_MODE_AVAILABLE:
                 logger.warning("⚠️  Safe Profit Mode not available")
 
-        # Running daily P&L tracker (USD) used to feed the safe profit mode gate.
-        # Resets automatically when SafeProfitModeManager detects a new trading day.
+        # Running daily P&L tracker — used only for locked-profit computation.
+        # _last_daily_target_usd is permanently 0: target-ratio activation is disabled
+        # so SafeProfitModeManager's Condition 1 (target-based block) never fires.
         self._daily_pnl_usd: float = 0.0
-        # Daily profit target as a fraction of account balance (default 1 %).
-        # Actual USD target is computed per-call in analyze_market using live balance.
-        self._daily_profit_target_pct: float = self.config.get('daily_profit_target_pct', 0.01)
-        # Last computed daily target in USD (updated in analyze_market).
-        self._last_daily_target_usd: float = 0.0
+        self._last_daily_target_usd: float = 0.0   # always 0 — edge-driven, not target-driven
 
         # True Profit Tracker — realized net P&L, account growth, win rate.
         if TRUE_PROFIT_TRACKER_AVAILABLE and _get_true_profit_tracker is not None:
@@ -1308,27 +1305,24 @@ class NIJAApexStrategyV71:
             'allow_with_reduced_size': allow_with_reduced_size,
         }
 
-    def check_market_filter(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, str, str]:
+    def check_market_filter(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, str, str, float]:
         """
-        Market Filter: Only allow trades if uptrend or downtrend conditions are met
+        Market Filter: Determine trade direction and signal strength from trend conditions.
 
         Required conditions:
         - VWAP alignment (price above for uptrend, below for downtrend)
         - EMA sequence (9 > 21 > 50 for uptrend, 9 < 21 < 50 for downtrend)
         - MACD histogram alignment (positive for uptrend, negative for downtrend)
-        - ADX > min_adx (configurable, default 6 - FOURTH emergency relaxation for signal generation)
-        - Volume (market filter) > volume_threshold of 5-candle average (configurable, default 5%)
-        - Volume (smart filter) > volume_min_threshold of 20-candle average (configurable, default 0.1%)
-
-        Args:
-            df: Price DataFrame
-            indicators: Dictionary of calculated indicators
+        - ADX > min_adx (configurable, default 6)
+        - Volume (market filter) > volume_threshold of 5-candle average
+        - Volume (smart filter) > volume_min_threshold of 20-candle average
 
         Returns:
-            Tuple of (allow_trade, direction, reason)
-            - allow_trade: True if market conditions permit trading
+            Tuple of (allow_trade, direction, reason, market_strength)
+            - allow_trade: True when at least one directional condition is met
             - direction: 'uptrend', 'downtrend', or 'none'
             - reason: Explanation string
+            - market_strength: 0.0–1.0 (score/5); flows to gate_score_reduction downstream
         """
         # Get current values
         current_price = df['close'].iloc[-1]
@@ -1386,9 +1380,10 @@ class NIJAApexStrategyV71:
             'volume_ok': volume_ratio >= _eff_vol
         }
 
-        # QUALITY FIX: Check trend conditions - configurable threshold via min_trend_confirmation
-        # Lowered from 4/5 to 2/5 (Jan 26, 2026) to allow more trading opportunities
-        # This filters out marginal setups (0-1/5) while still allowing quality trades (2+/5)
+        # Score-based direction selection — no binary minimum threshold.
+        # market_strength (0.0–1.0 = score/5) flows downstream to modulate gate
+        # thresholds rather than hard-blocking the signal.
+        # Only a true "zero signal" (score=0 on BOTH sides) results in hold.
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
 
@@ -1398,16 +1393,23 @@ class NIJAApexStrategyV71:
         logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
         logger.debug(f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, Vol ratio: {volume_ratio:.2f}")
 
-        # RELAXED FILTERS (Jan 26, 2026): Lower to 2/5 conditions to allow more trading opportunities
-        # Previous: 3/5 required was too strict for low-capital accounts in current market conditions
-        # 2/5 allows quality setups while still filtering out complete junk (0-1/5)
-        if uptrend_score >= self.min_trend_confirmation:
-            return True, 'uptrend', f'Uptrend confirmed ({uptrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
-        elif downtrend_score >= self.min_trend_confirmation:
-            return True, 'downtrend', f'Downtrend confirmed ({downtrend_score}/5 - ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)'
+        if uptrend_score >= downtrend_score and uptrend_score > 0:
+            _mkt_strength = uptrend_score / 5.0
+            return (True, 'uptrend',
+                    f'Uptrend ({uptrend_score}/5 — strength={_mkt_strength:.1f}, '
+                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)',
+                    _mkt_strength)
+        elif downtrend_score > 0:
+            _mkt_strength = downtrend_score / 5.0
+            return (True, 'downtrend',
+                    f'Downtrend ({downtrend_score}/5 — strength={_mkt_strength:.1f}, '
+                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)',
+                    _mkt_strength)
         else:
-            logger.debug(f"  → Rejected: Insufficient confirmation")
-            return False, 'none', f'Insufficient trend confirmation (Up:{uptrend_score}/5, Down:{downtrend_score}/5 - need {self.min_trend_confirmation}/5)'
+            logger.debug(f"  → Market filter: zero conditions met in either direction")
+            return (False, 'none',
+                    f'No trend signal (Up:{uptrend_score}/5, Down:{downtrend_score}/5)',
+                    0.0)
 
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
         """
@@ -2123,9 +2125,7 @@ class NIJAApexStrategyV71:
                     'reason': f'Insufficient data ({len(df)} candles, need 100+)'
                 }
 
-            # Refresh daily profit target whenever account balance is known.
-            # Used by _update_safe_profit_mode() after trade closes.
-            self._last_daily_target_usd = account_balance * self._daily_profit_target_pct
+            # _last_daily_target_usd stays 0: edge-driven mode, no dollar target blocking.
 
             # Set starting balance once (first non-zero account balance seen).
             if self._true_profit_tracker is not None and account_balance > 0:
@@ -2147,8 +2147,8 @@ class NIJAApexStrategyV71:
                     'reason': filter_reason
                 }
 
-            # Check market filter
-            allow_trade, trend, market_reason = self.check_market_filter(df, indicators)
+            # Check market filter — returns 4-tuple including market_strength
+            allow_trade, trend, market_reason, _market_strength = self.check_market_filter(df, indicators)
 
             # ── NIJA_DISABLE_MARKET_FILTER diagnostic bypass ──────────────────
             # When enabled, skip the market filter gate entirely and assign trend
@@ -2165,6 +2165,7 @@ class NIJAApexStrategyV71:
                 else:
                     allow_trade, trend = False, 'none'
                     market_reason = f'[BYPASS] market filter disabled — RSI={_bypass_rsi:.1f} too neutral'
+                _market_strength = 1.0   # bypass assumes full signal strength
                 logger.info("   🔓 %s: %s", symbol, market_reason)
 
             if not allow_trade:
@@ -2174,28 +2175,17 @@ class NIJAApexStrategyV71:
                     'reason': market_reason
                 }
 
-            # ── CONSOLIDATION SCALP: assign direction from RSI when no clear trend ──
-            # When check_market_filter returns trend='none' (neither uptrend nor
-            # downtrend cleared min_trend_confirmation), use RSI momentum as a
-            # lightweight tie-breaker so the entry logic still runs on the most
-            # promising direction.  The AI scoring layers + sniper filter downstream
-            # still gate quality — this just prevents silent 'hold' on every bar
-            # in ranging/consolidating markets.
-            # Disable by setting NIJA_CONSOLIDATION_SCALP=false.
+            # ── CONSOLIDATION SCALP: RSI + volume/structure reinforcement ─────
+            # When check_market_filter returns trend='none' (score=0 on both sides),
+            # attempt a consolidation scalp using RSI for direction.  RSI alone is a
+            # weak signal — at least one of (volume active, market structure aligned)
+            # must also confirm before the trade is allowed.
             if trend == 'none' and _CONSOLIDATION_SCALP:
                 _cons_rsi = scalar(indicators['rsi'].iloc[-1])
                 if _cons_rsi >= _SCALP_RSI_LONG:
-                    allow_trade, trend = True, 'uptrend'
-                    market_reason = (
-                        f'Consolidation scalp-long (no trend, RSI={_cons_rsi:.1f}>={_SCALP_RSI_LONG:.0f})'
-                    )
-                    logger.info("   ⚡ %s: %s", symbol, market_reason)
+                    _scalp_dir = 'uptrend'
                 elif _cons_rsi <= _SCALP_RSI_SHORT:
-                    allow_trade, trend = True, 'downtrend'
-                    market_reason = (
-                        f'Consolidation scalp-short (no trend, RSI={_cons_rsi:.1f}<={_SCALP_RSI_SHORT:.0f})'
-                    )
-                    logger.info("   ⚡ %s: %s", symbol, market_reason)
+                    _scalp_dir = 'downtrend'
                 else:
                     # RSI is in the neutral band — nothing actionable
                     logger.debug(
@@ -2204,7 +2194,48 @@ class NIJAApexStrategyV71:
                     )
                     return {'action': 'hold', 'reason': f'No trend + RSI={_cons_rsi:.1f} neutral ({_SCALP_RSI_SHORT:.0f}-{_SCALP_RSI_LONG:.0f})'}
 
-            # If trend is still 'none' after consolidation scalp (NIJA_CONSOLIDATION_SCALP=false)
+                # ── Multi-factor reinforcement: RSI alone is a weak signal ────
+                # Volume: current bar vs 20-bar average (>= 0.6x = market is active)
+                # Structure: HH+HL (long) or LH+LL (short) on the last two bars.
+                _avg_vol_20 = (df['volume'].iloc[-21:-1].mean()
+                               if len(df) >= 21 else df['volume'].mean())
+                _vol_ok = (float(df['volume'].iloc[-1]) / _avg_vol_20 >= 0.60
+                           if _avg_vol_20 > 0 else False)
+                _h_now, _h_prev = float(df['high'].iloc[-1]), float(df['high'].iloc[-2])
+                _l_now, _l_prev = float(df['low'].iloc[-1]),  float(df['low'].iloc[-2])
+                if _scalp_dir == 'uptrend':
+                    _struct_ok = _h_now > _h_prev and _l_now > _l_prev   # HH + HL
+                else:
+                    _struct_ok = _h_now < _h_prev and _l_now < _l_prev   # LH + LL
+
+                _confirmations = int(_vol_ok) + int(_struct_ok)
+                if _confirmations == 0:
+                    logger.debug(
+                        "   %s: Consolidation scalp skipped — RSI=%.1f unconfirmed "
+                        "(vol_ok=%s, struct_ok=%s)",
+                        symbol, _cons_rsi, _vol_ok, _struct_ok,
+                    )
+                    return {
+                        'action': 'hold',
+                        'reason': (
+                            f'RSI scalp signal unconfirmed — no volume/structure '
+                            f'reinforcement (RSI={_cons_rsi:.1f})'
+                        ),
+                    }
+
+                # market_strength: base 0.3 + 0.2 per confirmation (max 0.7)
+                _market_strength = 0.3 + 0.2 * _confirmations
+                allow_trade, trend = True, _scalp_dir
+                market_reason = (
+                    f'Consolidation scalp-{_scalp_dir.replace("trend", "")} '
+                    f'(RSI={_cons_rsi:.1f}, '
+                    f'vol={"✓" if _vol_ok else "✗"}, '
+                    f'struct={"✓" if _struct_ok else "✗"}, '
+                    f'strength={_market_strength:.1f})'
+                )
+                logger.info("   ⚡ %s: %s", symbol, market_reason)
+
+            # If trend is still 'none' (NIJA_CONSOLIDATION_SCALP=false or disabled path)
             if trend == 'none':
                 logger.debug(f"   {symbol}: Market filter blocked - {market_reason}")
                 return {'action': 'hold', 'reason': market_reason}
@@ -2472,6 +2503,11 @@ class NIJAApexStrategyV71:
                         if any(r in _regime_str_l for r in
                                ("consolidation", "ranging", "sideways", "chop")):
                             _gate_reduction_l = min(0.20, _gate_reduction_l + _MICROCAP_SIDEWAYS_GATE_REDUCTION)
+                    # Market-strength gate bonus: weak market conditions relax the threshold.
+                    # Equivalent to "+score when trend is confirmed" — strength 1.0 → 0%,
+                    # strength 0.6 → 4%, strength 0.2 → 12%, strength 0.0 → 16% bonus.
+                    _market_gate_bonus = max(0.0, (0.8 - _market_strength) * 0.20)
+                    _gate_reduction_l = min(0.35, _gate_reduction_l + _market_gate_bonus)
                     if self.ai_entry_gate is not None:
                         try:
                             _gate_vol_mult_l: Optional[float] = None
@@ -2506,13 +2542,7 @@ class NIJAApexStrategyV71:
                                     "❌ ENTRY REJECTED: %s LONG | "
                                     "score=%.1f (gate1=%s) | "
                                     "liquidity=%s | spread=%s | "
-                                    "gate_score=%d/%d | %s",
-                                    symbol,
-                                    float(score),
-                                    _score_detail,
-                                    ("pass" if _gate_volume and _gate_volume.passed else "fail"),
-                                    ("pass" if _gate_spread and _gate_spread.passed else "fail"),
-                                    _gate_result_l.gate_score,
+                                    "gate_score=%.1f/%d | %s",
                                     _gate_result_l.gate_max,
                                     _gate_result_l.reason,
                                 )
@@ -2937,6 +2967,9 @@ class NIJAApexStrategyV71:
                         if any(r in _regime_str_s for r in
                                ("consolidation", "ranging", "sideways", "chop")):
                             _gate_reduction_s = min(0.20, _gate_reduction_s + _MICROCAP_SIDEWAYS_GATE_REDUCTION)
+                    # Market-strength gate bonus (mirrors long-side logic).
+                    _market_gate_bonus_s = max(0.0, (0.8 - _market_strength) * 0.20)
+                    _gate_reduction_s = min(0.35, _gate_reduction_s + _market_gate_bonus_s)
                     if self.ai_entry_gate is not None:
                         try:
                             _gate_vol_mult_s: Optional[float] = None
@@ -2971,13 +3004,7 @@ class NIJAApexStrategyV71:
                                     "❌ ENTRY REJECTED: %s SHORT | "
                                     "score=%.1f (gate1=%s) | "
                                     "liquidity=%s | spread=%s | "
-                                    "gate_score=%d/%d | %s",
-                                    symbol,
-                                    float(score),
-                                    _score_detail_short,
-                                    ("pass" if _gate_volume_short and _gate_volume_short.passed else "fail"),
-                                    ("pass" if _gate_spread_short and _gate_spread_short.passed else "fail"),
-                                    _gate_result_s.gate_score,
+                                    "gate_score=%.1f/%d | %s",
                                     _gate_result_s.gate_max,
                                     _gate_result_s.reason,
                                 )

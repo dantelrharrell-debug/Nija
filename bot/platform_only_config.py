@@ -58,31 +58,73 @@ MAX_TOTAL_EXPOSURE_PCT = 35.0  # Maximum total exposure (35%)
 # ASSET WHITELIST - A+ SETUPS ONLY
 # ============================================================================
 
-# Only trade these top-tier cryptocurrencies
-# These assets have:
-# - High liquidity
-# - Reliable price action
-# - Proven track record
-# - Strong market structure
-WHITELISTED_ASSETS = [
-    "BTC-USD",   # Bitcoin - King of crypto
-    "ETH-USD",   # Ethereum - Smart contract platform leader
-    "SOL-USD",   # Solana - High-performance blockchain
-]
+# NIJA_SCAN_SYMBOLS — comma-separated override for the symbol whitelist.
+# When set, ALL three static lists below are replaced at runtime with the
+# provided symbols (Coinbase dash-format expected, e.g. "BTC-USD,ETH-USD").
+# Example:  NIJA_SCAN_SYMBOLS=BTC-USD,ETH-USD,SOL-USD,DOGE-USD
+_NIJA_SCAN_SYMBOLS_ENV: str = os.getenv("NIJA_SCAN_SYMBOLS", "").strip()
+_NIJA_SCAN_SYMBOLS_OVERRIDE: List[str] = (
+    [s.strip().upper() for s in _NIJA_SCAN_SYMBOLS_ENV.split(",") if s.strip()]
+    if _NIJA_SCAN_SYMBOLS_ENV
+    else []
+)
+
+# Kraken symbol normalisation map: dash-format → Kraken native
+_COINBASE_TO_KRAKEN: dict = {
+    "BTC-USD":  "XXBTZUSD",
+    "ETH-USD":  "XETHZUSD",
+    "SOL-USD":  "SOLUSD",
+    "DOGE-USD": "XDGUSD",
+    "XRP-USD":  "XXRPZUSD",
+    "ADA-USD":  "ADAUSD",
+    "AVAX-USD": "AVAXUSD",
+    "LINK-USD": "LINKUSD",
+    "DOT-USD":  "DOTUSD",
+    "MATIC-USD":"MATICUSD",
+    "LTC-USD":  "XLTCZUSD",
+}
+
+def _to_kraken_symbol(cb_symbol: str) -> str:
+    """Convert a Coinbase dash-format symbol to its Kraken native format."""
+    return _COINBASE_TO_KRAKEN.get(cb_symbol, cb_symbol.replace("-", ""))
+
+
+# Only trade these top-tier cryptocurrencies (default list).
+# If NIJA_SCAN_SYMBOLS is set, these lists are REPLACED at runtime.
+WHITELISTED_ASSETS = (
+    _NIJA_SCAN_SYMBOLS_OVERRIDE
+    if _NIJA_SCAN_SYMBOLS_OVERRIDE
+    else [
+        "BTC-USD",   # Bitcoin - King of crypto
+        "ETH-USD",   # Ethereum - Smart contract platform leader
+        "SOL-USD",   # Solana - High-performance blockchain
+        "DOGE-USD",  # Dogecoin - high retail volume, tight spreads
+    ]
+)
 
 # Kraken format variants (if using Kraken)
-WHITELISTED_ASSETS_KRAKEN = [
-    "XXBTZUSD",  # BTC on Kraken
-    "XETHZUSD",  # ETH on Kraken
-    "SOLUSD",    # SOL on Kraken
-]
+WHITELISTED_ASSETS_KRAKEN = (
+    [_to_kraken_symbol(s) for s in _NIJA_SCAN_SYMBOLS_OVERRIDE]
+    if _NIJA_SCAN_SYMBOLS_OVERRIDE
+    else [
+        "XXBTZUSD",  # BTC on Kraken
+        "XETHZUSD",  # ETH on Kraken
+        "SOLUSD",    # SOL on Kraken
+        "XDGUSD",    # DOGE on Kraken
+    ]
+)
 
 # Coinbase format (standard)
-WHITELISTED_ASSETS_COINBASE = [
-    "BTC-USD",
-    "ETH-USD",
-    "SOL-USD",
-]
+WHITELISTED_ASSETS_COINBASE = (
+    _NIJA_SCAN_SYMBOLS_OVERRIDE
+    if _NIJA_SCAN_SYMBOLS_OVERRIDE
+    else [
+        "BTC-USD",
+        "ETH-USD",
+        "SOL-USD",
+        "DOGE-USD",
+    ]
+)
 
 def get_whitelisted_symbols(broker: str = "coinbase") -> List[str]:
     """

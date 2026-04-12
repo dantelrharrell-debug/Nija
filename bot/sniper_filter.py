@@ -153,6 +153,18 @@ SNIPER_SCORE_THRESHOLD: int = 5       # score >= 5 → full size; score < 5 → 
 # the caller should multiply position size by this factor.
 SNIPER_BORDERLINE_POSITION_MULTIPLIER: float = 0.5
 
+# Minimum total weighted score to allow any entry.
+# Below this floor the trade is always rejected, regardless of tier.
+_SNIPER_PASS_FLOOR: float = 3.0
+
+# Graduated size multipliers keyed on score bracket.
+_SNIPER_SIZE_MULT: Dict[str, float] = {
+    "full":   1.00,   # score >= 6.0
+    "high":   0.85,   # score >= 5.0
+    "medium": 0.70,   # score >= 4.0
+    "low":    0.55,   # score >= _SNIPER_PASS_FLOOR (3.0)
+}
+
 # SCALP mode — micro-cap friendly settings
 # Accept thin markets when spreads are within limits; do not hard-block on volume.
 ALLOW_LOW_LIQUIDITY: bool = True
@@ -172,16 +184,31 @@ class SniperResult:
     passed: bool
     reason: str
     details: Dict = field(default_factory=dict)
-    # True when the tier gate passed but the weighted score < SNIPER_SCORE_THRESHOLD.
-    # The caller should multiply position size by SNIPER_BORDERLINE_POSITION_MULTIPLIER.
+    # True when score < SNIPER_SCORE_THRESHOLD — caller should scale position size.
     reduced_size: bool = False
+    # Exact size multiplier: 1.0 = full, 0.85/0.70/0.55 = graduated reduction, 0.0 = blocked.
+    size_multiplier: float = 1.0
 
 
 # ---------------------------------------------------------------------------
 # Filter implementation
 # ---------------------------------------------------------------------------
 
-class SniperFilter:
+def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
+    """Map AI confidence to a proportional score in [0.0, 2.0].
+
+    Below the weak_threshold hard floor → 0.0 (trade rejected by floor check).
+    At or above strong_threshold → 2.0 (maximum conviction).
+    Linear interpolation in between, starting at 0.5 at the floor.
+    """
+    if confidence < cfg.weak_threshold:
+        return 0.0
+    if confidence >= cfg.strong_threshold:
+        return 2.0
+    span = cfg.strong_threshold - cfg.weak_threshold
+    if span <= 0:
+        return 2.0
+    return 0.5 + 1.5 * (confidence - cfg.weak_threshold) / span
     """
     All-in-one pre-execution quality gate.
 
@@ -271,11 +298,14 @@ class SniperFilter:
         # Score == 4 is borderline: approved with reduced_size = True.
         score = 0
 
-        # ── ai_score_pass (+2): confidence vs threshold ───────────────────────
+        # ── Confidence score (0.0–2.0 proportional) ──────────────────────────
+        # Replaces the old binary +2/0 — confidence now scales smoothly from
+        # the floor (0.5 pts at weak_threshold) up to 2.0 at strong_threshold.
         details["min_confidence"] = cfg.min_confidence
-        ai_score_pass = confidence >= cfg.min_confidence
-        if ai_score_pass:
-            score += 2
+        conf_pts = _confidence_score(confidence, cfg)
+        score += conf_pts
+        ai_score_pass = conf_pts > 0
+        details["conf_pts"] = round(conf_pts, 2)
         details["ai_score_pass"] = ai_score_pass
 
         # ── volume_pass (+1): current volume vs rolling average ───────────────
@@ -308,15 +338,15 @@ class SniperFilter:
             score += 1
         details["spread_ok"] = spread_ok
 
-        # ── regime_match (+2): MTF trend alignment ────────────────────────────
-        mtf_pass, mtf_reason, mtf_details = self._check_mtf_trend(df, is_long)
+        # ── MTF trend score (0/1/2 pts proportional) ─────────────────────────
+        mtf_pts, mtf_reason, mtf_details = self._check_mtf_trend(df, is_long)
         details["mtf"] = mtf_details
-        regime_match = mtf_pass
-        if regime_match:
-            score += 2
+        score += mtf_pts
+        regime_match = mtf_pts > 0
         details["regime_match"] = regime_match
+        details["mtf_pts"] = round(mtf_pts, 1)
 
-        details["weighted_score"] = score
+        details["weighted_score"] = round(score, 2)
 
         # ── Momentum check (informational — logged but not scored separately) ──
         mom_pass, mom_reason, mom_details = self._check_momentum(df, is_long, vol_ratio)
@@ -336,73 +366,58 @@ class SniperFilter:
         #
         # REJECTED: confidence below the floor → no trade.
 
-        if confidence >= cfg.strong_threshold:
-            tier = "ELITE"
-            tier_pass = spread_ok and regime_match
-            tier_reason = (
-                f"ELITE tier (conf={confidence:.2f} >= {cfg.strong_threshold:.2f}): "
-                f"spread={'✓' if spread_ok else '✗'} regime={'✓' if regime_match else '✗'}"
-            )
-        elif confidence >= cfg.medium_threshold:
-            tier = "STANDARD"
-            tier_pass = volume_pass and volatility_pass and spread_ok
-            tier_reason = (
-                f"STANDARD tier (conf={confidence:.2f} >= {cfg.medium_threshold:.2f}): "
-                f"volume={'✓' if volume_pass else '✗'} "
-                f"volatility={'✓' if volatility_pass else '✗'} "
-                f"spread={'✓' if spread_ok else '✗'}"
-            )
-        elif confidence >= cfg.weak_threshold:
-            tier = "SCALP"
-            # When ALLOW_LOW_LIQUIDITY is enabled, thin markets are accepted as long
-            # as the spread is within tolerance — volume is not a hard requirement.
-            if ALLOW_LOW_LIQUIDITY:
-                tier_pass = spread_ok
-            else:
-                tier_pass = spread_ok and volatility_pass
-            tier_reason = (
-                f"SCALP tier (conf={confidence:.2f} >= {cfg.weak_threshold:.2f}): "
-                f"spread={'✓' if spread_ok else '✗'} "
-                f"volatility={'✓' if volatility_pass else '✗'}"
-                + (" [low-liq allowed]" if ALLOW_LOW_LIQUIDITY else "")
-            )
-        else:
-            tier = "REJECTED"
-            tier_pass = False
-            tier_reason = (
+        # ── Hard floor: confidence below minimum → always reject ─────────────
+        if confidence < cfg.weak_threshold:
+            reason = (
                 f"REJECTED: confidence {confidence:.2f} < "
                 f"weak_threshold {cfg.weak_threshold:.2f}"
             )
+            details["block_reason"] = "confidence_below_floor"
+            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
+            return SniperResult(passed=False, reason=reason, details=details,
+                                size_multiplier=0.0)
 
-        details["tier"] = tier
-        details["tier_pass"] = tier_pass
-        details["tier_reason"] = tier_reason
+        # ── Score-based pass/fail — no tier AND chains ────────────────────────
+        # The total weighted score (0–7) decides everything.
+        # _SNIPER_PASS_FLOOR is the minimum quality bar below which the trade is
+        # always rejected, regardless of confidence tier.
+        if score < _SNIPER_PASS_FLOOR:
+            reason = (
+                f"Score {score:.1f}/7 < {_SNIPER_PASS_FLOOR:.1f} floor "
+                f"(conf={confidence:.2f}, vol={vol_ratio:.2f}x, "
+                f"spread={'✓' if spread_ok else '✗'}, "
+                f"mtf={details.get('mtf_pts', 0):.1f}pts)"
+            )
+            details["block_reason"] = "score_below_floor"
+            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
+            return SniperResult(passed=False, reason=reason, details=details,
+                                size_multiplier=0.0)
 
-        if not tier_pass:
-            details["block_reason"] = f"tier_{tier.lower()}_failed"
-            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, tier_reason)
-            return SniperResult(passed=False, reason=tier_reason, details=details)
+        # ── Graduated position sizing based on score ──────────────────────────
+        if score >= 6.0:
+            size_mult, size_label = _SNIPER_SIZE_MULT["full"],   "full"
+        elif score >= 5.0:
+            size_mult, size_label = _SNIPER_SIZE_MULT["high"],   "high (×0.85)"
+        elif score >= 4.0:
+            size_mult, size_label = _SNIPER_SIZE_MULT["medium"], "medium (×0.70)"
+        else:
+            size_mult, size_label = _SNIPER_SIZE_MULT["low"],    "low (×0.55)"
 
-        # ── Position sizing via weighted score ────────────────────────────────
-        # Tier gate passed.  Use the weighted score to decide whether the
-        # position should be full-size or reduced.
-        reduce = score < SNIPER_SCORE_THRESHOLD  # score < 5 → borderline size
-        size_note = (
-            "full size"
-            if not reduce
-            else f"reduced size x{SNIPER_BORDERLINE_POSITION_MULTIPLIER}"
-        )
-
+        reduce = size_mult < 1.0
         logger.info(
             "   🎯✅ SNIPER FILTER approved %s "
-            "(tier=%s, score=%d/7, conf=%.2f, vol=%.1fx, %s)",
-            symbol, tier, score, confidence, vol_ratio, size_note,
+            "(score=%.1f/7, conf=%.2f, vol=%.1fx, size=%s)",
+            symbol, score, confidence, vol_ratio, size_label,
         )
         return SniperResult(
             passed=True,
-            reason=f"{tier_reason} | weighted={score}/7 | {size_note}",
+            reason=(
+                f"score={score:.1f}/7 ≥ {_SNIPER_PASS_FLOOR:.1f} | "
+                f"conf={confidence:.2f} | vol={vol_ratio:.2f}x | size={size_label}"
+            ),
             details=details,
             reduced_size=reduce,
+            size_multiplier=size_mult,
         )
 
     # ------------------------------------------------------------------
@@ -411,17 +426,21 @@ class SniperFilter:
 
     def _check_mtf_trend(
         self, df: pd.DataFrame, is_long: bool
-    ) -> Tuple[bool, str, Dict]:
+    ) -> Tuple[float, str, Dict]:
         """
-        Verify trend alignment on fast (5-min) and slow (15-min) timeframes.
+        Verify trend alignment: base-TF structure + fast/slow MTF EMA direction.
 
-        Returns (passed, reason, details).
+        Returns (mtf_pts, reason, details) where mtf_pts is:
+          2.0 — all 3 checks pass  (fully aligned)
+          1.0 — 2/3 checks pass    (partially aligned — partial credit)
+          0.0 — ≤1/3 check passes  (misaligned or insufficient data)
         """
         cfg = self._cfg
         details: Dict = {}
-        failures: List[str] = []
+        pass_count = 0
+        notes: List[str] = []
 
-        # ── Base-TF market structure: HH+HL (long) or LH+LL (short) ─────────
+        # ── Check 1: Base-TF market structure ────────────────────────────────
         high_now  = float(df["high"].iloc[-1])
         high_prev = float(df["high"].iloc[-2])
         low_now   = float(df["low"].iloc[-1])
@@ -440,10 +459,7 @@ class SniperFilter:
                 "passed": structure_ok,
             }
             if not structure_ok:
-                failures.append(
-                    f"Base-TF structure not bullish "
-                    f"(HH={higher_high}, HL={higher_low})"
-                )
+                notes.append(f"structure not bullish (HH={higher_high}, HL={higher_low})")
         else:
             structure_ok = lower_high and lower_low
             details["structure_short"] = {
@@ -452,20 +468,22 @@ class SniperFilter:
                 "passed": structure_ok,
             }
             if not structure_ok:
-                failures.append(
-                    f"Base-TF structure not bearish "
-                    f"(LH={lower_high}, LL={lower_low})"
-                )
+                notes.append(f"structure not bearish (LH={lower_high}, LL={lower_low})")
 
-        # ── Resampled MTF EMA trend checks ───────────────────────────────────
+        if structure_ok:
+            pass_count += 1
+
+        # ── Checks 2+3: Resampled MTF EMA trend ──────────────────────────────
         for tf_label, tf_rule in [
             (cfg.mtf_fast, cfg.mtf_fast),
             (cfg.mtf_slow, cfg.mtf_slow),
         ]:
             tf_df = _resample(df, tf_rule)
             if tf_df is None or len(tf_df) < cfg.ema_slow + 2:
-                # Not enough resampled bars — treat as a soft pass (don't block)
+                # Insufficient resampled bars — treat as soft pass to avoid
+                # penalising legitimate signals due to data gaps.
                 details[f"mtf_{tf_label}"] = {"status": "insufficient_bars", "passed": True}
+                pass_count += 1
                 continue
 
             close_tf = tf_df["close"]
@@ -476,29 +494,38 @@ class SniperFilter:
 
             tf_bullish = ema_fast_val > ema_slow_val
             tf_bearish = ema_fast_val < ema_slow_val
-
-            if is_long and not tf_bullish:
-                failures.append(
-                    f"{tf_label} EMA not bullish "
-                    f"(fast={ema_fast_val:.4f} ≤ slow={ema_slow_val:.4f})"
-                )
-            elif not is_long and not tf_bearish:
-                failures.append(
-                    f"{tf_label} EMA not bearish "
-                    f"(fast={ema_fast_val:.4f} ≥ slow={ema_slow_val:.4f})"
-                )
+            tf_ok = tf_bullish if is_long else tf_bearish
 
             details[f"mtf_{tf_label}"] = {
                 "ema_fast": ema_fast_val,
                 "ema_slow": ema_slow_val,
                 "bullish": tf_bullish,
-                "passed": tf_bullish if is_long else tf_bearish,
+                "passed": tf_ok,
             }
 
-        if failures:
-            return False, " | ".join(failures), details
+            if tf_ok:
+                pass_count += 1
+            else:
+                direction = "bullish" if is_long else "bearish"
+                notes.append(
+                    f"{tf_label} EMA not {direction} "
+                    f"(fast={ema_fast_val:.4f} "
+                    f"{'≤' if is_long else '≥'} slow={ema_slow_val:.4f})"
+                )
 
-        return True, "MTF trend aligned", details
+        # ── Map pass count → score ─────────────────────────────────────────────
+        # 3/3 → 2.0 pts, 2/3 → 1.0 pt (partial), ≤1/3 → 0.0 pts
+        mtf_pts = 2.0 if pass_count >= 3 else (1.0 if pass_count == 2 else 0.0)
+        if pass_count >= 3:
+            reason = "MTF trend aligned"
+        elif pass_count == 2:
+            reason = f"MTF partial ({pass_count}/3): {', '.join(notes)}"
+        else:
+            reason = f"MTF misaligned ({pass_count}/3): {', '.join(notes)}"
+
+        details["pass_count"] = pass_count
+        details["mtf_pts"]    = mtf_pts
+        return mtf_pts, reason, details
 
     # ------------------------------------------------------------------
     # Pillar 2: Momentum
