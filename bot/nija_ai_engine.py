@@ -564,6 +564,28 @@ class NijaAIEngine:
             reason = self._build_reason(side, composite, breakdown, regime)
             mult = self._position_multiplier(composite)
 
+            # ── Weight tuner: record signal entry + apply portfolio multiplier ─
+            _regime_str = str(regime.value) if hasattr(regime, "value") else str(regime or "default")
+            try:
+                from self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+            except ImportError:
+                try:
+                    from bot.self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+                except ImportError:
+                    _gwt = None  # type: ignore
+            if _gwt is not None:
+                try:
+                    _tuner = _gwt()
+                    _tuner.record_signal_entry(
+                        symbol=symbol,
+                        regime=_regime_str,
+                        breakdown=breakdown,
+                    )
+                    mult *= _tuner.get_portfolio_size_multiplier(symbol, _regime_str)
+                    mult = max(0.20, min(2.00, mult))
+                except Exception:
+                    pass
+
             return AIEngineSignal(
                 symbol=symbol,
                 side=side,
@@ -702,6 +724,7 @@ class NijaAIEngine:
 
         # ── Component 3: 5-gate AI confirmation ──────────────────────────
         gate_penalty = 0.0
+        gate_results: Dict[str, bool] = {}
         gate = self._get_gate()
         if gate is not None:
             try:
@@ -723,13 +746,36 @@ class NijaAIEngine:
                         if hasattr(g, "passed") and not g.passed
                     )
                     gate_penalty = min(n_failed, 3) * 5.0
+                # Capture per-gate pass/fail for weight-tuner learning
+                for gname, gobj in (gate_result.gates or {}).items():
+                    if hasattr(gobj, "passed"):
+                        gate_results[gname] = bool(gobj.passed)
             except Exception as exc:
                 logger.debug("AIEntryGate error: %s", exc)
+
+        breakdown["gate_results"] = gate_results
+
+        # ── Blend weights: prefer tuner-learned values over module constants ─
+        _w_enhanced  = _W_ENHANCED
+        _w_optimizer = _W_OPTIMIZER
+        _w_gate      = _W_GATE
+        try:
+            from self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+        except ImportError:
+            try:
+                from bot.self_learning_weight_tuner import get_weight_tuner as _gwt  # type: ignore
+            except ImportError:
+                _gwt = None  # type: ignore
+        if _gwt is not None:
+            try:
+                _w_enhanced, _w_optimizer, _w_gate = _gwt().get_blend_weights(str(regime))
+            except Exception:
+                pass
 
         # ── Weighted composite ────────────────────────────────────────────
         # Penalty: 5 pts per failed gate, capped at 3 gates (max -15 pts before weighting)
         # Reduced from 8→5 per gate so B/C grade setups are not buried by soft-gate failures.
-        composite = (raw_score * _W_ENHANCED) + (opt_delta * _W_OPTIMIZER) - (gate_penalty * _W_GATE)
+        composite = (raw_score * _w_enhanced) + (opt_delta * _w_optimizer) - (gate_penalty * _w_gate)
         composite = float(np.clip(composite, 0.0, 100.0))
 
         # ── Win-rate score shaping by regime ─────────────────────────────
