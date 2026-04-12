@@ -433,14 +433,13 @@ except ImportError:
 #   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
 #   - Large accounts: See tier-specific env files (.env.saver_tier, .env.investor_tier, etc.)
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
-STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '25.00'))  # Capital gate: $25.00 minimum (restored from $10.00 default)
-STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '1'))  # Lowered to $1 (temp) to unblock capital gate
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '1'))  # Capital gate: $1.00 minimum (unlocked for all account sizes)
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
 MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '5.50'))  # Minimum cash required to place a buy order
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Broker-specific minimum balance requirements
-# Both require the same amount (default $25, configurable via MINIMUM_TRADING_BALANCE env var) but with different priority and strategy rules:
+# Both require the same amount (default $1, configurable via MINIMUM_TRADING_BALANCE env var) but with different priority and strategy rules:
 # - Kraken: PRIMARY engine for small accounts ($10-$75 range with low-capital mode)
 # - Coinbase: SECONDARY/selective (uses Coinbase-specific strategy, higher fees)
 KRAKEN_MINIMUM_BALANCE = STANDARD_MINIMUM_BALANCE  # Kraken is PRIMARY for small accounts
