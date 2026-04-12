@@ -10042,7 +10042,7 @@ class OKXBroker(BaseBroker):
 # Execution Eligibility Layer
 # ---------------------------------------------------------------------------
 
-class BrokerEligibilityStatus(str, Enum):
+class BrokerEligibilityStatus(Enum):
     """Precise reason a broker is or is not eligible for execution routing.
 
     The three ineligibility states map directly to the three independent
@@ -10208,7 +10208,7 @@ class BrokerManager:
     # (e.g. for price feeds or SELL execution) but must not receive new entries
     # or capital weight.
 
-    def get_broker_eligibility(self, broker: 'BaseBroker') -> 'BrokerEligibilityStatus':
+    def get_broker_eligibility(self, broker: BaseBroker) -> BrokerEligibilityStatus:
         """Return the precise eligibility status for *broker*.
 
         This is the authoritative eligibility check.  Callers that need a
@@ -10244,7 +10244,7 @@ class BrokerManager:
 
         return BrokerEligibilityStatus.ELIGIBLE
 
-    def is_execution_eligible(self, broker: 'BaseBroker') -> bool:
+    def is_execution_eligible(self, broker: BaseBroker) -> bool:
         """Return ``True`` only when *broker* may receive new entries and capital.
 
         Convenience wrapper around :meth:`get_broker_eligibility` for use in
@@ -10255,7 +10255,7 @@ class BrokerManager:
         """
         return self.get_broker_eligibility(broker).is_eligible()
 
-    def get_eligible_brokers(self) -> Dict[str, 'BaseBroker']:
+    def get_eligible_brokers(self) -> Dict[str, BaseBroker]:
         """Return ``{broker_type_value: broker}`` for every execution-eligible broker.
 
         Eligible means CONNECTED + HEALTHY + NOT QUARANTINED + NOT EXIT_ONLY.
