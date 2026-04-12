@@ -206,6 +206,40 @@ class CapitalScalingEngine:
         if self.milestones:
             self.milestones.update_capital(new_capital)
 
+    def reset_base_capital(self, new_base_capital: float) -> None:
+        """
+        Re-anchor the engine to the verified live broker balance.
+
+        Must be called once after real capital has been confirmed from the
+        broker so that drawdown thresholds and capital-floor checks are
+        relative to the actual account balance rather than the
+        initialisation placeholder (BASE_CAPITAL env var / default).
+
+        Args:
+            new_base_capital: Verified live balance from the broker.
+        """
+        if new_base_capital <= 0:
+            logger.warning(
+                "CapitalScalingEngine.reset_base_capital: ignoring non-positive value %.2f",
+                new_base_capital,
+            )
+            return
+        old_base = self.base_capital
+        self.base_capital = new_base_capital
+        self.current_capital = new_base_capital
+        # Propagate to drawdown protection so capital-floor calculation
+        # uses the real balance, not the stale initialisation placeholder.
+        if self.protection:
+            self.protection.reset_base_capital(new_base_capital)
+        # Re-seed compounding engine with the live balance
+        self.compounding.update_balance(new_base_capital)
+        if self.milestones:
+            self.milestones.update_capital(new_base_capital)
+        logger.info(
+            "✅ CapitalScalingEngine base_capital reset: $%.2f → $%.2f",
+            old_base, new_base_capital,
+        )
+
     def get_optimal_position_size(self, available_balance: float) -> float:
         """
         Calculate optimal position size considering all factors

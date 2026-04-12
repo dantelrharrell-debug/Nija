@@ -18,6 +18,7 @@ Date: January 30, 2026
 """
 
 import logging
+import os
 from typing import Dict, Optional, Tuple
 from dataclasses import dataclass
 
@@ -100,7 +101,7 @@ class CapitalOptimizationConfig:
     reinvest_pct: float = 0.75  # 75% reinvestment
     
     # Best Practice Production Settings
-    min_balance_required: float = 75.00  # Minimum account balance
+    min_balance_required: float = float(os.environ.get("MINIMUM_TRADING_BALANCE", "1.0"))  # Minimum account balance (matches broker_manager gate)
     min_trade_size: float = 10.00  # Minimum trade size
     position_risk: float = 0.20  # 20% base position risk
     max_positions: int = 8  # Maximum concurrent positions
