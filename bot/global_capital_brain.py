@@ -146,6 +146,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 from collections import deque
 from dataclasses import dataclass, field
@@ -195,7 +196,8 @@ SHARPE_CAP: float = 3.0
 # Hard global position-size cap: final position can never exceed this fraction
 # of account balance, regardless of how snowball / volatility / regime multipliers
 # stack on top of each other.
-MAX_POSITION_PCT: float = 0.25
+# Override via MAX_POSITION_PCT env var (e.g. 0.25 for Phase 1 / single-position mode).
+MAX_POSITION_PCT: float = float(os.getenv("MAX_POSITION_PCT", "0.25"))
 
 
 # ---------------------------------------------------------------------------

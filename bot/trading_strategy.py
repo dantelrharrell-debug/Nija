@@ -3126,7 +3126,7 @@ class TradingStrategy:
         # Initialize Trade Quality Gate (Layer 2: Better Math Per Trade)
         if TradeQualityGate is not None:
             try:
-                self.quality_gate = TradeQualityGate(min_reward_risk=1.5, require_momentum=True)
+                self.quality_gate = TradeQualityGate(require_momentum=True)
                 logger.info("✅ Trade Quality Gate initialized - R:R filtering active")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize Trade Quality Gate: {e}")
