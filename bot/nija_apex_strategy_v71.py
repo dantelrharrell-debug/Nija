@@ -1049,21 +1049,13 @@ class NIJAApexStrategyV71:
                 }
 
         # ── Confidence threshold gate ────────────────────────────────────────
-        # HF scalping mode lowers the bar to 0.55 via _hf_min_confidence.
+        # Logged as advisory — no longer a hard block.
         _effective_min_confidence = getattr(self, '_hf_min_confidence', MIN_CONFIDENCE)
         if confidence < _effective_min_confidence:
             logger.info(
-                f"   ⏭️  Skipping trade: Confidence {confidence:.2f} below "
-                f"minimum {_effective_min_confidence:.2f}"
+                f"   ⚠️  Low confidence advisory: {confidence:.2f} < "
+                f"{_effective_min_confidence:.2f} (proceeding with reduced size)"
             )
-            return {
-                "valid": False,
-                "reason": (
-                    f"Confidence too low: {confidence:.2f} < {_effective_min_confidence:.2f} "
-                    f"(weak entry signal)"
-                ),
-                "confidence": confidence,
-            }
 
         logger.info(
             f"   ✅ Trade approved: Size=${position_size:.2f}, "
@@ -1089,11 +1081,10 @@ class NIJAApexStrategyV71:
         if broker_name == 'kraken':
             confidence = validation.get('confidence', 0.0)
             if confidence < self.kraken_min_confidence:
-                logger.info(f"   ⏭️  Kraken safety: Confidence {confidence:.2f} below minimum {self.kraken_min_confidence:.2f}")
-                return {
-                    'action': 'hold',
-                    'reason': f'Kraken safety check: Confidence {confidence:.2f} < {self.kraken_min_confidence:.2f} minimum'
-                }
+                logger.info(
+                    f"   ⚠️  Kraken advisory: Confidence {confidence:.2f} < "
+                    f"{self.kraken_min_confidence:.2f} — proceeding (no hard block)"
+                )
         return None
 
     def _log_first_trade_sanity_check(self, symbol: str, direction: str, current_price: float,
@@ -2540,15 +2531,27 @@ class NIJAApexStrategyV71:
                                     "%.1f < %.1f" % (_gate_score.value, _gate_score.threshold)
                                     if _gate_score else "n/a"
                                 )
+                                # VOLATILITY_EXPLOSION is the only hard block (capital protection)
+                                if _gate_result_l.regime_name == "volatility_explosion":
+                                    logger.warning(
+                                        "🛑 VOLATILITY_EXPLOSION: LONG entry hard-blocked (%s)",
+                                        symbol,
+                                    )
+                                    return {'action': 'hold', 'reason': _gate_result_l.reason}
+                                # All other gate failures: log advisory, proceed (score-based arch)
                                 logger.warning(
-                                    "❌ ENTRY REJECTED: %s LONG | "
-                                    "score=%.1f (gate1=%s) | "
-                                    "liquidity=%s | spread=%s | "
-                                    "gate_score=%.1f/%d | %s",
+                                    "⚠️ AIEntryGate LONG soft-fail %s (proceeding): "
+                                    "gate_score=%.1f/%d gate1=%s | %s",
+                                    symbol,
+                                    _gate_result_l.gate_score,
                                     _gate_result_l.gate_max,
+                                    _score_detail,
                                     _gate_result_l.reason,
                                 )
-                                return {'action': 'hold', 'reason': _gate_result_l.reason}
+                                logger.info(
+                                    f"TRADE REJECTED → reason={_gate_result_l.reason}"
+                                    f" score={_gate_result_l.gate_score} conf={score}"
+                                )
                         except Exception as _gate_l_err:
                             logger.debug("AI Entry Gate error (long): %s", _gate_l_err)
 
@@ -2684,13 +2687,13 @@ class NIJAApexStrategyV71:
                         )
                         if not ai_eval.ai_approved:
                             logger.info(
-                                "   \U0001f916 AI Hub rejected LONG %s: %s",
+                                "   ⚠️ AI Hub LONG advisory %s (proceeding): %s",
                                 symbol, ai_eval.ai_reason
                             )
-                            return {
-                                'action': 'hold',
-                                'reason': f'AI Hub: {ai_eval.ai_reason}',
-                            }
+                            logger.info(
+                                f"TRADE REJECTED → reason=AI Hub: {ai_eval.ai_reason}"
+                                f" score={score} conf={score}"
+                            )
                         # Use AI-adjusted position size (correlation + regime)
                         ai_adjusted_size = ai_eval.correlation_adjusted_size_pct * account_balance
                         if ai_adjusted_size > 0 and ai_adjusted_size != position_size:
@@ -2710,27 +2713,27 @@ class NIJAApexStrategyV71:
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
 
-                    # Validate trade quality (position size and confidence)
+                    # Validate trade quality (position size minimum — physical limit)
                     validation = self._validate_trade_quality(position_size, risk_score,
                                                              account_balance=account_balance)
                     if not validation['valid']:
-                        return {
-                            'action': 'hold',
-                            'reason': validation['reason']
-                        }
-                    
-                    # ✅ COMPREHENSIVE TRADE ELIGIBILITY CHECK (Jan 30, 2026)
-                    # Verify RSI, volatility (ATR), and spread conditions before entering trade
-                    # This unified check prevents marginal trades and enforces quality standards
-                    eligibility = self.verify_trade_eligibility(
-                        symbol, df, indicators, 'long', position_size
-                    )
+                        logger.info(
+                            f"   ⚠️  Trade validation advisory LONG {symbol}"
+                            f" (proceeding): {validation['reason']}"
+                        )
+                        logger.info(
+                            f"TRADE REJECTED → reason={validation['reason']}"
+                            f" score={score} conf={score}"
+                        )
                     if not eligibility['eligible']:
-                        logger.info(f"   ⏭️  Trade eligibility check failed: {eligibility['reason']}")
-                        return {
-                            'action': 'hold',
-                            'reason': eligibility['reason']
-                        }
+                        logger.info(
+                            f"   ⚠️  Trade eligibility advisory LONG {symbol}"
+                            f" (proceeding): {eligibility['reason']}"
+                        )
+                        logger.info(
+                            f"TRADE REJECTED → reason={eligibility['reason']}"
+                            f" score={score} conf={score}"
+                        )
                     
                     # Apply Kraken-specific confidence threshold if on Kraken
                     kraken_check = self._check_kraken_confidence(broker_name, validation)
@@ -2840,31 +2843,32 @@ class NIJAApexStrategyV71:
                         # Calculate ratio (reward / risk)
                         trade_ratio = reward_dollars / risk_dollars if risk_dollars > 0 else 0
 
-                        # Gate: Minimum acceptable ratio is 1.5
-                        MIN_ACCEPTABLE_RATIO = 1.5
+                        # Advisory: minimum acceptable ratio is 1.0 (aligned with MIN_REWARD_RISK)
+                        MIN_ACCEPTABLE_RATIO = 1.0
                         if trade_ratio < MIN_ACCEPTABLE_RATIO:
-                            logger.info(f"   ⏭️  Trade math rejected: ratio {trade_ratio:.2f} below {MIN_ACCEPTABLE_RATIO}")
-                            return {
-                                'action': 'hold',
-                                'reason': f'Poor trade math: {trade_ratio:.2f}:1 ratio (need {MIN_ACCEPTABLE_RATIO}:1)'
-                            }
+                            logger.info(
+                                f"   ⚠️  Trade math advisory LONG {symbol}: ratio {trade_ratio:.2f}"
+                                f" below {MIN_ACCEPTABLE_RATIO} (proceeding)"
+                            )
+                            logger.info(
+                                f"TRADE REJECTED → reason=Poor trade math: {trade_ratio:.2f}:1"
+                                f" score={score} conf={score}"
+                            )
 
-                        # Verify stop placement relative to noise
+                        # Stop placement advisory (no hard block)
                         if 'atr' in indicators:
                             atr_value = scalar(indicators['atr'].iloc[-1])
                             stop_distance = abs(current_price - stop_loss)
-
-                            # Stop should be at least 1.0x ATR (outside immediate noise)
                             min_stop_distance = atr_value * 1.0
                             if stop_distance < min_stop_distance:
-                                logger.info(f"   ⏭️  Stop too tight: {stop_distance:.4f} < {min_stop_distance:.4f} (ATR)")
-                                return {
-                                    'action': 'hold',
-                                    'reason': f'Stop inside noise zone (ATR {atr_value:.4f})'
-                                }
+                                logger.info(
+                                    f"   ⚠️  Stop tight advisory LONG {symbol}:"
+                                    f" {stop_distance:.4f} < {min_stop_distance:.4f} ATR"
+                                    f" (proceeding)"
+                                )
 
-                        # Log approval
-                        logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
+                        # Log trade math
+                        logger.info(f"   ✅ Trade math LONG: {trade_ratio:.2f}:1 ratio")
 
                     # ── Smart Reinvest Cycles (LONG) ───────────────────────
                     # Re-deploy recycled locked profits only when all 7 conditions
@@ -3002,15 +3006,27 @@ class NIJAApexStrategyV71:
                                     "%.1f < %.1f" % (_gate_score_short.value, _gate_score_short.threshold)
                                     if _gate_score_short else "n/a"
                                 )
+                                # VOLATILITY_EXPLOSION is the only hard block (capital protection)
+                                if _gate_result_s.regime_name == "volatility_explosion":
+                                    logger.warning(
+                                        "🛑 VOLATILITY_EXPLOSION: SHORT entry hard-blocked (%s)",
+                                        symbol,
+                                    )
+                                    return {'action': 'hold', 'reason': _gate_result_s.reason}
+                                # All other gate failures: log advisory, proceed (score-based arch)
                                 logger.warning(
-                                    "❌ ENTRY REJECTED: %s SHORT | "
-                                    "score=%.1f (gate1=%s) | "
-                                    "liquidity=%s | spread=%s | "
-                                    "gate_score=%.1f/%d | %s",
+                                    "⚠️ AIEntryGate SHORT soft-fail %s (proceeding): "
+                                    "gate_score=%.1f/%d gate1=%s | %s",
+                                    symbol,
+                                    _gate_result_s.gate_score,
                                     _gate_result_s.gate_max,
+                                    _score_detail_short,
                                     _gate_result_s.reason,
                                 )
-                                return {'action': 'hold', 'reason': _gate_result_s.reason}
+                                logger.info(
+                                    f"TRADE REJECTED → reason={_gate_result_s.reason}"
+                                    f" score={_gate_result_s.gate_score} conf={score}"
+                                )
                         except Exception as _gate_s_err:
                             logger.debug("AI Entry Gate error (short): %s", _gate_s_err)
 
@@ -3142,13 +3158,13 @@ class NIJAApexStrategyV71:
                         )
                         if not ai_eval.ai_approved:
                             logger.info(
-                                "   \U0001f916 AI Hub rejected SHORT %s: %s",
+                                "   ⚠️ AI Hub SHORT advisory %s (proceeding): %s",
                                 symbol, ai_eval.ai_reason
                             )
-                            return {
-                                'action': 'hold',
-                                'reason': f'AI Hub: {ai_eval.ai_reason}',
-                            }
+                            logger.info(
+                                f"TRADE REJECTED → reason=AI Hub: {ai_eval.ai_reason}"
+                                f" score={score} conf={score}"
+                            )
                         # Use AI-adjusted position size (correlation + regime)
                         ai_adjusted_size = ai_eval.correlation_adjusted_size_pct * account_balance
                         if ai_adjusted_size > 0 and ai_adjusted_size != position_size:
@@ -3168,15 +3184,19 @@ class NIJAApexStrategyV71:
                             'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
                         }
 
-                    # Validate trade quality (position size and confidence)
+                    # Validate trade quality (position size minimum — physical limit)
                     validation = self._validate_trade_quality(position_size, risk_score,
                                                              account_balance=account_balance)
                     if not validation['valid']:
-                        return {
-                            'action': 'hold',
-                            'reason': validation['reason']
-                        }
-                    
+                        logger.info(
+                            f"   ⚠️  Trade validation advisory SHORT {symbol}"
+                            f" (proceeding): {validation['reason']}"
+                        )
+                        logger.info(
+                            f"TRADE REJECTED → reason={validation['reason']}"
+                            f" score={score} conf={score}"
+                        )
+
                     # ✅ COMPREHENSIVE TRADE ELIGIBILITY CHECK (Jan 30, 2026)
                     # Verify RSI, volatility (ATR), and spread conditions before entering trade
                     # This unified check prevents marginal trades and enforces quality standards
@@ -3184,11 +3204,14 @@ class NIJAApexStrategyV71:
                         symbol, df, indicators, 'short', position_size
                     )
                     if not eligibility['eligible']:
-                        logger.info(f"   ⏭️  Trade eligibility check failed: {eligibility['reason']}")
-                        return {
-                            'action': 'hold',
-                            'reason': eligibility['reason']
-                        }
+                        logger.info(
+                            f"   ⚠️  Trade eligibility advisory SHORT {symbol}"
+                            f" (proceeding): {eligibility['reason']}"
+                        )
+                        logger.info(
+                            f"TRADE REJECTED → reason={eligibility['reason']}"
+                            f" score={score} conf={score}"
+                        )
                     
                     # Apply Kraken-specific confidence threshold if on Kraken
                     kraken_check = self._check_kraken_confidence(broker_name, validation)
@@ -3293,31 +3316,32 @@ class NIJAApexStrategyV71:
                         # Calculate ratio (reward / risk)
                         trade_ratio = reward_dollars / risk_dollars if risk_dollars > 0 else 0
 
-                        # Gate: Minimum acceptable ratio is 1.5
-                        MIN_ACCEPTABLE_RATIO = 1.5
+                        # Advisory: minimum acceptable ratio is 1.0 (aligned with MIN_REWARD_RISK)
+                        MIN_ACCEPTABLE_RATIO = 1.0
                         if trade_ratio < MIN_ACCEPTABLE_RATIO:
-                            logger.info(f"   ⏭️  Trade math rejected: ratio {trade_ratio:.2f} below {MIN_ACCEPTABLE_RATIO}")
-                            return {
-                                'action': 'hold',
-                                'reason': f'Poor trade math: {trade_ratio:.2f}:1 ratio (need {MIN_ACCEPTABLE_RATIO}:1)'
-                            }
+                            logger.info(
+                                f"   ⚠️  Trade math advisory SHORT {symbol}: ratio {trade_ratio:.2f}"
+                                f" below {MIN_ACCEPTABLE_RATIO} (proceeding)"
+                            )
+                            logger.info(
+                                f"TRADE REJECTED → reason=Poor trade math: {trade_ratio:.2f}:1"
+                                f" score={score} conf={score}"
+                            )
 
-                        # Verify stop placement relative to noise
+                        # Stop placement advisory (no hard block)
                         if 'atr' in indicators:
                             atr_value = scalar(indicators['atr'].iloc[-1])
                             stop_distance = abs(stop_loss - current_price)
-
-                            # Stop should be at least 1.0x ATR (outside immediate noise)
                             min_stop_distance = atr_value * 1.0
                             if stop_distance < min_stop_distance:
-                                logger.info(f"   ⏭️  Stop too tight: {stop_distance:.4f} < {min_stop_distance:.4f} (ATR)")
-                                return {
-                                    'action': 'hold',
-                                    'reason': f'Stop inside noise zone (ATR {atr_value:.4f})'
-                                }
+                                logger.info(
+                                    f"   ⚠️  Stop tight advisory SHORT {symbol}:"
+                                    f" {stop_distance:.4f} < {min_stop_distance:.4f} ATR"
+                                    f" (proceeding)"
+                                )
 
-                        # Log approval
-                        logger.info(f"   ✅ Trade math approved: {trade_ratio:.2f}:1 ratio")
+                        # Log trade math
+                        logger.info(f"   ✅ Trade math SHORT: {trade_ratio:.2f}:1 ratio")
 
                     # ── Smart Reinvest Cycles (SHORT) ──────────────────────
                     # Re-deploy recycled locked profits only when all 7 conditions
