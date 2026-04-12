@@ -498,6 +498,38 @@ class DrawdownProtectionSystem:
 
         logger.info("✅ Drawdown state reset to current capital as new peak")
 
+    def reset_base_capital(self, new_base_capital: float) -> None:
+        """
+        Re-anchor the protection system to a new base capital.
+
+        Call this once real broker balance is confirmed so the capital
+        floor and drawdown thresholds are relative to actual funds rather
+        than the initialisation placeholder (BASE_CAPITAL env var / default).
+
+        Args:
+            new_base_capital: Verified live balance from the broker.
+        """
+        if new_base_capital <= 0:
+            logger.warning(
+                "reset_base_capital: ignoring non-positive value %.2f", new_base_capital
+            )
+            return
+        old_base = self.base_capital
+        self.base_capital = new_base_capital
+        # Align peak and current capital so drawdown starts clean at 0 %
+        self.state.peak_capital = new_base_capital
+        self.state.current_capital = new_base_capital
+        self.state.drawdown_amount = 0.0
+        self.state.drawdown_pct = 0.0
+        self.state.trades_since_peak = 0
+        self.drawdown_start_time = None
+        self._update_protection_level()
+        self._save_state()
+        logger.info(
+            "✅ DrawdownProtection base_capital reset: $%.2f → $%.2f",
+            old_base, new_base_capital,
+        )
+
 
 def get_drawdown_protection(base_capital: float,
                             halt_threshold: float = 20.0) -> DrawdownProtectionSystem:
