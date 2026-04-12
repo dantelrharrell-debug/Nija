@@ -10038,6 +10038,35 @@ class OKXBroker(BaseBroker):
         return fallback_pairs
 
 
+# ---------------------------------------------------------------------------
+# Execution Eligibility Layer
+# ---------------------------------------------------------------------------
+
+class BrokerEligibilityStatus(str, Enum):
+    """Precise reason a broker is or is not eligible for execution routing.
+
+    The three ineligibility states map directly to the three independent
+    checks that constitute full eligibility:
+
+        CONNECTED  ──┐
+        HEALTHY    ──┤  ALL three required  →  ELIGIBLE
+        NOT_QUARANTINED ──┘
+
+    Having CONNECTED alone is not sufficient.  A quarantined broker may
+    remain CONNECTED (for price feeds and exit orders) but must never
+    receive new capital or new BUY routing.
+    """
+
+    ELIGIBLE                 = "ELIGIBLE"
+    INELIGIBLE_DISCONNECTED  = "INELIGIBLE_DISCONNECTED"
+    INELIGIBLE_UNHEALTHY     = "INELIGIBLE_UNHEALTHY"
+    INELIGIBLE_QUARANTINED   = "INELIGIBLE_QUARANTINED"
+    INELIGIBLE_EXIT_ONLY     = "INELIGIBLE_EXIT_ONLY"
+
+    def is_eligible(self) -> bool:
+        return self == BrokerEligibilityStatus.ELIGIBLE
+
+
 class BrokerManager:
     """
     Manages multiple broker connections with independent operation.
@@ -10166,6 +10195,82 @@ class BrokerManager:
         else:
             logging.warning(f"⚠️  Cannot set {broker_type.value} as primary - not connected")
             return False
+
+    # ── Execution Eligibility Layer ──────────────────────────────────────────
+    # Single source of truth for "can this broker receive new BUY orders / capital".
+    # All routing and capital-allocation paths MUST gate on this — never on
+    # `connected` alone.  The three independent guards are:
+    #   1. CONNECTED           — broker TCP connection is live
+    #   2. HEALTHY             — venue health score ≥ firewall threshold
+    #   3. NOT QUARANTINED     — nonce-poisoning quarantine is NOT active
+    #   4. NOT EXIT_ONLY       — broker is not restricted to sell-side only
+    # A broker that passes only subset of these guards is partially usable
+    # (e.g. for price feeds or SELL execution) but must not receive new entries
+    # or capital weight.
+
+    def get_broker_eligibility(self, broker: 'BaseBroker') -> 'BrokerEligibilityStatus':
+        """Return the precise eligibility status for *broker*.
+
+        This is the authoritative eligibility check.  Callers that need a
+        simple boolean should use :meth:`is_execution_eligible` instead.
+
+        Checks are evaluated in priority order so the most actionable reason
+        is returned first:
+
+        1. Disconnected  → ``INELIGIBLE_DISCONNECTED``
+        2. Quarantined   → ``INELIGIBLE_QUARANTINED``  (still connected — SELLs OK)
+        3. Exit-only     → ``INELIGIBLE_EXIT_ONLY``    (still connected — SELLs OK)
+        4. Unhealthy     → ``INELIGIBLE_UNHEALTHY``    (venue score below threshold)
+        5. All clear     → ``ELIGIBLE``
+        """
+        if not getattr(broker, 'connected', False):
+            return BrokerEligibilityStatus.INELIGIBLE_DISCONNECTED
+
+        if (
+            _kraken_quarantine_active
+            and broker.broker_type == BrokerType.KRAKEN
+        ):
+            return BrokerEligibilityStatus.INELIGIBLE_QUARANTINED
+
+        if getattr(broker, 'exit_only_mode', False):
+            return BrokerEligibilityStatus.INELIGIBLE_EXIT_ONLY
+
+        if _ERF_BM_AVAILABLE and _get_erf_bm is not None:
+            try:
+                if not _get_erf_bm().is_venue_healthy(broker.broker_type.value):
+                    return BrokerEligibilityStatus.INELIGIBLE_UNHEALTHY
+            except Exception:
+                pass  # health check unavailable — treat as healthy
+
+        return BrokerEligibilityStatus.ELIGIBLE
+
+    def is_execution_eligible(self, broker: 'BaseBroker') -> bool:
+        """Return ``True`` only when *broker* may receive new entries and capital.
+
+        Convenience wrapper around :meth:`get_broker_eligibility` for use in
+        filter expressions::
+
+            eligible = [b for b in self.brokers.values()
+                        if self.is_execution_eligible(b)]
+        """
+        return self.get_broker_eligibility(broker).is_eligible()
+
+    def get_eligible_brokers(self) -> Dict[str, 'BaseBroker']:
+        """Return ``{broker_type_value: broker}`` for every execution-eligible broker.
+
+        Eligible means CONNECTED + HEALTHY + NOT QUARANTINED + NOT EXIT_ONLY.
+        Use this for any routing or capital-allocation decision that involves
+        new BUY orders.
+
+        Returns:
+            Ordered dict (insertion order) of eligible brokers.  Empty dict
+            when no broker is currently eligible.
+        """
+        return {
+            b.broker_type.value: b
+            for b in self.brokers.values()
+            if self.is_execution_eligible(b)
+        }
 
     def get_primary_broker(self, prefer_platform: bool = False) -> Optional[BaseBroker]:
         """
@@ -10503,11 +10608,13 @@ class BrokerManager:
 
         asset_class = asset_class_map.get(market_type.value, "stocks")
 
-        # Build the eligible candidates — connected + supports asset class
+        # Build the eligible candidates — execution-eligible + supports asset class.
+        # Execution eligibility enforces CONNECTED + HEALTHY + NOT QUARANTINED +
+        # NOT EXIT_ONLY so that quarantined/degraded venues never receive new orders.
         candidates = {
             broker.broker_type.value: broker
             for broker in self.brokers.values()
-            if broker.connected and broker.supports_asset_class(asset_class)
+            if self.is_execution_eligible(broker) and broker.supports_asset_class(asset_class)
         }
 
         if not candidates:
@@ -10528,7 +10635,12 @@ class BrokerManager:
     def get_health_weighted_capital_split(
         self, total_capital: float
     ) -> Dict[str, float]:
-        """Allocate *total_capital* across connected brokers weighted by venue health.
+        """Allocate *total_capital* across execution-eligible brokers weighted by venue health.
+
+        Only execution-eligible brokers (CONNECTED + HEALTHY + NOT QUARANTINED +
+        NOT EXIT_ONLY) participate in capital allocation.  A quarantined broker
+        such as Kraken during nonce poisoning is excluded from the pool entirely
+        so no phantom capital is routed to it.
 
         A broker whose venue health score is twice that of another receives
         twice the capital.  Disabled venues (score below the firewall
@@ -10540,37 +10652,38 @@ class BrokerManager:
 
         Returns:
             ``{broker_type_value: usd_amount}`` mapping that sums to
-            *total_capital*.  Returns ``{}`` when no brokers are connected.
+            *total_capital*.  Returns ``{}`` when no eligible brokers exist.
 
         Example::
 
             split = manager.get_health_weighted_capital_split(1000.0)
-            # → {"kraken": 666.67, "coinbase": 333.33}  when kraken score=80, coinbase=40
+            # → {"coinbase": 1000.0}  when kraken is quarantined
+            # → {"kraken": 666.67, "coinbase": 333.33}  when both healthy (scores 80/40)
         """
-        connected_venues = [
+        eligible_venues = [
             b.broker_type.value
             for b in self.brokers.values()
-            if getattr(b, 'connected', False)
+            if self.is_execution_eligible(b)
         ]
-        if not connected_venues:
+        if not eligible_venues:
             return {}
 
         def _equal_split() -> Dict[str, float]:
             # Adjust last entry so amounts sum exactly to total_capital.
             result: Dict[str, float] = {}
             running = 0.0
-            for v in connected_venues[:-1]:
-                amt = round(total_capital / len(connected_venues), 6)
+            for v in eligible_venues[:-1]:
+                amt = round(total_capital / len(eligible_venues), 6)
                 result[v] = amt
                 running += amt
-            result[connected_venues[-1]] = round(total_capital - running, 6)
+            result[eligible_venues[-1]] = round(total_capital - running, 6)
             return result
 
         if not (_ERF_BM_AVAILABLE and _get_erf_bm is not None):
             return _equal_split()
 
         try:
-            weights = _get_erf_bm().get_capital_weights(connected_venues)
+            weights = _get_erf_bm().get_capital_weights(eligible_venues)
         except Exception:
             return _equal_split()
 
