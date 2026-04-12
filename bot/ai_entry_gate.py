@@ -457,6 +457,14 @@ class AIEntryGate:
                 f"failed: {', '.join(failed_gates)}"
             )
 
+        logger.info(
+            f"FINAL DECISION → score={total_score:.2f} threshold={effective_threshold:.2f}"
+            f" execute={passed}"
+        )
+        if not passed:
+            logger.info(
+                f"TRADE REJECTED → reason={reason} score={total_score} conf={enhanced_score}"
+            )
         logger.debug("AIEntryGate: %s", reason)
         return GateResult(
             passed=passed,

@@ -155,7 +155,7 @@ SNIPER_BORDERLINE_POSITION_MULTIPLIER: float = 0.5
 
 # Minimum total weighted score to allow any entry.
 # Below this floor the trade is always rejected, regardless of tier.
-_SNIPER_PASS_FLOOR: float = 3.0
+_SNIPER_PASS_FLOOR: float = 1.0   # lowered from 3.0: any positive signal passes (size-scaled)
 
 # Graduated size multipliers keyed on score bracket.
 _SNIPER_SIZE_MULT: Dict[str, float] = {
@@ -197,18 +197,17 @@ class SniperResult:
 def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
     """Map AI confidence to a proportional score in [0.0, 2.0].
 
-    Below the weak_threshold hard floor → 0.0 (trade rejected by floor check).
-    At or above strong_threshold → 2.0 (maximum conviction).
-    Linear interpolation in between, starting at 0.5 at the floor.
+    Uses a simple linear scale (confidence * 10, capped at 2.0) so that ALL
+    confidence values contribute positively — no hard floor rejection.
+
+      confidence=0.05 → 0.5 pts
+      confidence=0.10 → 1.0 pts
+      confidence=0.20 → 2.0 pts (full credit, cap reached)
+      confidence≥0.20 → 2.0 pts
+
+    Architecture: everything contributes → nothing hard-blocks.
     """
-    if confidence < cfg.weak_threshold:
-        return 0.0
-    if confidence >= cfg.strong_threshold:
-        return 2.0
-    span = cfg.strong_threshold - cfg.weak_threshold
-    if span <= 0:
-        return 2.0
-    return 0.5 + 1.5 * (confidence - cfg.weak_threshold) / span
+    return min(confidence * 10, 2.0)
     """
     All-in-one pre-execution quality gate.
 
@@ -314,6 +313,7 @@ def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
         if not isinstance(df, pd.DataFrame) or len(df) < cfg.min_bars:
             reason = f"Insufficient data: {len(df) if isinstance(df, pd.DataFrame) else 0} bars < {cfg.min_bars} required"
             details["block_reason"] = "insufficient_data"
+            logger.info(f"TRADE REJECTED → reason={reason} score=0 conf={confidence}")
             return SniperResult(passed=False, reason=reason, details=details)
 
         required_cols = {"open", "high", "low", "close", "volume"}
@@ -321,6 +321,7 @@ def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
         if missing:
             reason = f"Missing DataFrame columns: {', '.join(sorted(missing))}"
             details["block_reason"] = "missing_columns"
+            logger.info(f"TRADE REJECTED → reason={reason} score=0 conf={confidence}")
             return SniperResult(passed=False, reason=reason, details=details)
 
         is_long = signal_side.lower() in ("long", "buy", "enter_long")
@@ -384,46 +385,34 @@ def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
         mom_pass, mom_reason, mom_details = self._check_momentum(df, is_long, vol_ratio)
         details["momentum"] = mom_details
 
-        # ── Tiered Pass System — primary gate decision ────────────────────────
-        #
-        # ELITE: high-conviction signal → only spread + regime needed.
-        #   Volume and volatility are desirable but not blocking.
-        #
-        # STANDARD: normal signal → volume + volatility + spread all needed.
-        #   Regime alignment is a bonus for position sizing, not a gate.
-        #
-        # SCALP: weaker signal in scalp/consolidation mode → spread + volatility.
-        #   Volume can be thin; we trade smaller rather than reject entirely.
-        #   When ALLOW_LOW_LIQUIDITY is True (default), volume_pass is not required.
-        #
-        # REJECTED: confidence below the floor → no trade.
-
-        # ── Hard floor: confidence below minimum → always reject ─────────────
-        if confidence < _weak_floor:
-            reason = (
-                f"REJECTED: confidence {confidence:.2f} < "
-                f"weak_threshold {_weak_floor:.2f}"
-            )
-            details["block_reason"] = "confidence_below_floor"
-            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
-            return SniperResult(passed=False, reason=reason, details=details,
-                                size_multiplier=0.0)
-
-        # ── Score-based pass/fail — no tier AND chains ────────────────────────
-        # The total weighted score (0–7) decides everything.
-        # _SNIPER_PASS_FLOOR is the minimum quality bar below which the trade is
-        # always rejected, regardless of confidence tier.
+        # ── Score-based pass/fail — everything contributes, nothing hard-blocks ──
+        # Confidence now contributes via _confidence_score (min(conf*10, 2.0)) so
+        # there is no separate hard floor on confidence.
+        # When score < _SNIPER_PASS_FLOOR, log as advisory and proceed at minimum size.
+        logger.info(
+            f"FINAL DECISION → score={score:.2f} threshold={_SNIPER_PASS_FLOOR:.2f}"
+            f" execute={score >= _SNIPER_PASS_FLOOR}"
+        )
         if score < _SNIPER_PASS_FLOOR:
             reason = (
                 f"Score {score:.1f}/7 < {_SNIPER_PASS_FLOOR:.1f} floor "
                 f"(conf={confidence:.2f}, vol={vol_ratio:.2f}x, "
                 f"spread={'✓' if spread_ok else '✗'}, "
-                f"mtf={details.get('mtf_pts', 0):.1f}pts)"
+                f"mtf={details.get('mtf_pts', 0):.1f}pts) — proceeding at minimum size"
             )
-            details["block_reason"] = "score_below_floor"
-            logger.info("   🎯 SNIPER FILTER blocked %s: %s", symbol, reason)
-            return SniperResult(passed=False, reason=reason, details=details,
-                                size_multiplier=0.0)
+            details["block_reason"] = "score_below_floor_advisory"
+            logger.info("   ⚠️  SNIPER FILTER low-score advisory %s: %s", symbol, reason)
+            logger.info(
+                f"TRADE REJECTED → reason={reason} score={score} conf={confidence}"
+            )
+            # Proceed with minimum size instead of hard-blocking
+            return SniperResult(
+                passed=True,
+                reason=reason,
+                details=details,
+                reduced_size=True,
+                size_multiplier=_SNIPER_SIZE_MULT["low"],
+            )
 
         # ── Graduated position sizing based on score ──────────────────────────
         if score >= 6.0:

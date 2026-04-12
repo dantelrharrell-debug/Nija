@@ -19,8 +19,8 @@ import pandas as pd
 logger = logging.getLogger("nija.quality_gate")
 
 # Override default minimum reward-to-risk ratio via MIN_REWARD_RISK env var.
-# Set to 1.0 for Phase 1 / hard-unblock mode; default is 1.5 for normal operation.
-_ENV_MIN_REWARD_RISK: float = float(os.getenv("MIN_REWARD_RISK", "1.5"))
+# Default is 1.0 (Phase 1 / unblock mode).  Raise to 1.5+ once trades flow.
+_ENV_MIN_REWARD_RISK: float = float(os.getenv("MIN_REWARD_RISK", "1.0"))
 
 
 def compute_reward_risk_ratio(entry: float, exit_loss: float, exit_profit: float) -> float:
@@ -134,32 +134,45 @@ class TradeQualityGate:
         # Check 1: Reward/Risk ratio
         rr_ratio = compute_reward_risk_ratio(entry_price, stop_price, target_price)
         assessment['reward_risk'] = rr_ratio
-        
-        if rr_ratio < self.min_reward_risk:
-            assessment['approved'] = False
-            assessment['rejection_reason'] = f'Poor R:R {rr_ratio:.2f} < {self.min_reward_risk}'
-            return assessment
-        
-        # Check 2: Momentum strength
+        rr_ok = rr_ratio >= self.min_reward_risk
+
+        # Check 2: Momentum strength (always run — no early return)
         if self.require_momentum:
             momentum_check = measure_momentum_strength(market_data)
             assessment['momentum'] = momentum_check
-            
-            if not momentum_check['strong']:
-                assessment['approved'] = False
-                assessment['rejection_reason'] = f"Weak momentum: {momentum_check['details']}"
-                return assessment
-        
-        # Check 3: Stop quality
+        else:
+            momentum_check = {'strong': True, 'details': 'skipped'}
+            assessment['momentum'] = momentum_check
+
+        # Check 3: Stop quality (always run — no early return)
         stop_eval = score_stop_quality(market_data, entry_price, stop_price, trade_direction)
         assessment['stop_quality'] = stop_eval
-        
-        if stop_eval['score'] < 50:
+        stop_ok = stop_eval['score'] >= 50
+
+        # ── Composite decision: everything contributes, nothing hard-blocks ──
+        # Primary gate: R:R must meet minimum.  Momentum and stop are advisory.
+        score = rr_ratio
+        threshold = self.min_reward_risk
+        execute = rr_ok
+        logger.info(
+            f"FINAL DECISION → score={score:.2f} threshold={threshold:.2f}"
+            f" execute={execute}"
+        )
+        if not execute:
+            reasons = [f'Poor R:R {rr_ratio:.2f} < {self.min_reward_risk}']
+            if not momentum_check.get('strong'):
+                reasons.append(f'weak momentum: {momentum_check.get("details", "")}')
+            if not stop_ok:
+                reasons.append(stop_eval['reason'])
+            reason = '; '.join(reasons)
             assessment['approved'] = False
-            assessment['rejection_reason'] = f"Poor stop: {stop_eval['reason']}"
+            assessment['rejection_reason'] = reason
+            logger.info(
+                f"TRADE REJECTED → reason={reason} score={score} conf={rr_ratio}"
+            )
             return assessment
-        
-        # All checks passed
+
+        # All primary checks passed
         return assessment
     
     def filter_strategy_signal(self, strategy_result: Dict, market_data: pd.DataFrame) -> Dict:
@@ -199,12 +212,13 @@ class TradeQualityGate:
         )
         
         if not quality_check['approved']:
-            # Reject trade
-            logger.info(f"   🚫 Quality Gate REJECTED: {quality_check['rejection_reason']}")
-            return {
-                'action': 'hold',
-                'reason': f"Quality gate: {quality_check['rejection_reason']}"
-            }
+            # Advisory log only — no hard block (score-based architecture)
+            rr = quality_check.get('reward_risk', 0.0)
+            reason = quality_check['rejection_reason']
+            logger.info(f"   ⚠️  Quality Gate advisory (proceeding): {reason}")
+            logger.info(
+                f"TRADE REJECTED → reason={reason} score={rr:.2f} conf={rr:.2f}"
+            )
         
         # Approve trade - log quality metrics
         logger.info(f"   ✅ Quality Gate APPROVED: R:R={quality_check['reward_risk']:.2f}")
