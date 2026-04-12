@@ -1061,6 +1061,9 @@ def get_nija_core_loop(apex_strategy: Any, max_positions: int = 5) -> NijaCoreLo
 #                    one continuous cycle ever runs.
 _loop_guard = threading.Lock()
 _loop_running = False
+# Set to True after _exec_test_probe() fires so the probe only runs once
+# per process lifetime, even if NIJA_EXEC_TEST_MODE stays "true" externally.
+_exec_test_fired = False
 
 
 # ---------------------------------------------------------------------------
@@ -1231,13 +1234,18 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             # If NIJA_EXEC_TEST_MODE is enabled, fire a single probe order to
             # validate the complete execution stack, then disable itself so the
             # bot continues normal operation on the next cycle.
-            if os.getenv("NIJA_EXEC_TEST_MODE", "false").lower() == "true":
+            # Uses a module-level flag (_exec_test_fired) so the probe only
+            # runs once per process lifetime regardless of whether the env var
+            # is still set to "true" after the first probe.
+            global _exec_test_fired
+            if (not _exec_test_fired
+                    and os.getenv("NIJA_EXEC_TEST_MODE", "false").lower() == "true"):
                 _on_startup_only = os.getenv("NIJA_EXEC_TEST_ON_STARTUP", "true").lower() == "true"
                 if not _on_startup_only or cycle == 1:
                     logger.info("🧪 EXEC TEST MODE ACTIVE — forcing single execution probe")
                     _probe_result = _exec_test_probe(strategy)
                     logger.info("🧪 EXEC TEST RESULT → %s", _probe_result)
-                    os.environ["NIJA_EXEC_TEST_MODE"] = "false"
+                    _exec_test_fired = True
                     continue
 
             strategy.run_cycle()
