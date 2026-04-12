@@ -34,9 +34,13 @@ logger = logging.getLogger("nija.coinbase_controller")
 # Import capital constants from the central profile registry
 # ---------------------------------------------------------------------------
 try:
-    from bot.broker_profiles import COINBASE_MIN_CAPITAL, COINBASE_MIN_ORDER
+    from bot.broker_profiles import (
+        COINBASE_MIN_CAPITAL, COINBASE_MIN_ORDER, COINBASE_MICRO_CAP_MODE,
+    )
 except ImportError:
-    from broker_profiles import COINBASE_MIN_CAPITAL, COINBASE_MIN_ORDER  # type: ignore[no-redef]
+    from broker_profiles import (  # type: ignore[no-redef]
+        COINBASE_MIN_CAPITAL, COINBASE_MIN_ORDER, COINBASE_MICRO_CAP_MODE,
+    )
 
 # ---------------------------------------------------------------------------
 # Default micro-cap symbol universe
