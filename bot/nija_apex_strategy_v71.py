@@ -122,10 +122,16 @@ _DISABLE_MARKET_FILTER: bool = (
 
 # NIJA_CONSOLIDATION_SCALP=true  (default) — when check_market_filter returns
 #   'none' (no clear trend), use RSI to pick a direction and attempt a scalp entry
-#   instead of immediately returning 'hold'.  RSI > 52 → try long; RSI < 48 → try short.
+#   instead of immediately returning 'hold'.  RSI > _SCALP_RSI_LONG → try long;
+#   RSI < _SCALP_RSI_SHORT → try short.
 _CONSOLIDATION_SCALP: bool = (
     _os_apex.getenv("NIJA_CONSOLIDATION_SCALP", "true").lower() not in ("0", "false", "no")
 )
+
+# RSI thresholds used by the bypass and consolidation scalp paths.
+# Kept as named constants so both code sites stay in sync.
+_SCALP_RSI_LONG: float = float(_os_apex.getenv("NIJA_SCALP_RSI_LONG", "52"))   # RSI above this → long scalp
+_SCALP_RSI_SHORT: float = float(_os_apex.getenv("NIJA_SCALP_RSI_SHORT", "48")) # RSI below this → short scalp
 
 # Import adaptive minimum sizing engine (Mar 2026)
 try:
@@ -2150,10 +2156,10 @@ class NIJAApexStrategyV71:
             # Set NIJA_DISABLE_MARKET_FILTER=true to activate (testing only).
             if _DISABLE_MARKET_FILTER:
                 _bypass_rsi = scalar(indicators['rsi'].iloc[-1])
-                if _bypass_rsi >= 52:
+                if _bypass_rsi >= _SCALP_RSI_LONG:
                     allow_trade, trend = True, 'uptrend'
                     market_reason = f'[BYPASS] market filter disabled — RSI={_bypass_rsi:.1f} → uptrend'
-                elif _bypass_rsi <= 48:
+                elif _bypass_rsi <= _SCALP_RSI_SHORT:
                     allow_trade, trend = True, 'downtrend'
                     market_reason = f'[BYPASS] market filter disabled — RSI={_bypass_rsi:.1f} → downtrend'
                 else:
@@ -2178,25 +2184,25 @@ class NIJAApexStrategyV71:
             # Disable by setting NIJA_CONSOLIDATION_SCALP=false.
             if trend == 'none' and _CONSOLIDATION_SCALP:
                 _cons_rsi = scalar(indicators['rsi'].iloc[-1])
-                if _cons_rsi >= 52:
-                    trend = 'uptrend'
+                if _cons_rsi >= _SCALP_RSI_LONG:
+                    allow_trade, trend = True, 'uptrend'
                     market_reason = (
-                        f'Consolidation scalp-long (no trend, RSI={_cons_rsi:.1f}≥52)'
+                        f'Consolidation scalp-long (no trend, RSI={_cons_rsi:.1f}>={_SCALP_RSI_LONG:.0f})'
                     )
                     logger.info("   ⚡ %s: %s", symbol, market_reason)
-                elif _cons_rsi <= 48:
-                    trend = 'downtrend'
+                elif _cons_rsi <= _SCALP_RSI_SHORT:
+                    allow_trade, trend = True, 'downtrend'
                     market_reason = (
-                        f'Consolidation scalp-short (no trend, RSI={_cons_rsi:.1f}≤48)'
+                        f'Consolidation scalp-short (no trend, RSI={_cons_rsi:.1f}<={_SCALP_RSI_SHORT:.0f})'
                     )
                     logger.info("   ⚡ %s: %s", symbol, market_reason)
                 else:
-                    # RSI is in the neutral 48-52 band — nothing actionable
+                    # RSI is in the neutral band — nothing actionable
                     logger.debug(
                         "   %s: Consolidation scalp skipped — RSI=%.1f in neutral band",
                         symbol, _cons_rsi,
                     )
-                    return {'action': 'hold', 'reason': f'No trend + RSI={_cons_rsi:.1f} neutral (48–52)'}
+                    return {'action': 'hold', 'reason': f'No trend + RSI={_cons_rsi:.1f} neutral ({_SCALP_RSI_SHORT:.0f}-{_SCALP_RSI_LONG:.0f})'}
 
             # If trend is still 'none' after consolidation scalp (NIJA_CONSOLIDATION_SCALP=false)
             if trend == 'none':
