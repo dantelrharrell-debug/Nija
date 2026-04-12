@@ -294,6 +294,7 @@ class AIEntryGate:
         entry_type: str = "swing",
         gate_score_reduction: float = 0.0,
         volume_gate_multiplier: Optional[float] = None,
+        reason: str = "",
     ) -> GateResult:
         """
         Run all 5 gates and return a score-based pass/fail decision.
@@ -319,6 +320,24 @@ class AIEntryGate:
         regime_key = self._regime_key(regime)
         broker_key = self._broker_key(broker)
         gates: Dict[str, GateCheck] = {}
+
+        # ── EXEC TEST MODE bypass ─────────────────────────────────────
+        # When the caller is a test probe, skip all scoring gates so the
+        # full execution stack can be validated without needing a live
+        # market signal.  Auth, nonce, and exchange connection are
+        # intentionally NOT bypassed — only strategy filters / scoring gates.
+        if reason == "EXEC_TEST_PROBE":
+            logger.info("🧪 AIEntryGate: TEST_MODE_BYPASS — skipping all scoring gates")
+            return GateResult(
+                passed=True,
+                reason="TEST_MODE_BYPASS",
+                first_failure="",
+                gates=gates,
+                entry_type=entry_type,
+                regime_name=self._regime_key(regime),
+                gate_score=100,
+                gate_max=_GATE_MAX_SCORE,
+            )
 
         with self._lock:
             self._total_checked += 1

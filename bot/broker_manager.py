@@ -1361,7 +1361,8 @@ class BaseBroker(ABC):
         size_type: str = 'quote',
         ignore_balance: bool = False,
         ignore_min_trade: bool = False,
-        force_liquidate: bool = False
+        force_liquidate: bool = False,
+        metadata: Optional[Dict] = None,
     ) -> Dict:
         """
         Execute order with broker-specific pre-flight validation.
@@ -1390,6 +1391,20 @@ class BaseBroker(ABC):
         """
         broker_name = self.broker_type.value.lower()
         broker_title = broker_name.title()
+
+        # ── EXEC TEST MODE detection ──────────────────────────────────────
+        # When the caller passes reason="EXEC_TEST_PROBE" via metadata, log
+        # the test intent and force ignore_min_trade so a tiny probe order
+        # is not silently rejected by size guards.
+        # Auth, nonce, and exchange connection are intentionally NOT bypassed.
+        _metadata = metadata or {}
+        if _metadata.get("reason") == "EXEC_TEST_PROBE":
+            logger.info(
+                "🧪 TEST ORDER — bypassing non-critical validations "
+                "(strategy filters / scoring gates) for %s",
+                symbol,
+            )
+            ignore_min_trade = True
 
         # PRE-FLIGHT CHECK 1: Symbol support validation
         # Skip if symbol not supported by this broker
