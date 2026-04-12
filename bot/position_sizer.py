@@ -24,6 +24,8 @@ logger = logging.getLogger('nija.position_sizer')
 # These prevent creating dust positions that can't be sold
 # Updated Apr 2026: Unified to GLOBAL_MIN_TRADE from trading_strategy.py
 
+import os as _os  # needed for COINBASE_MIN_ORDER_USD env override below
+
 # Import the single source-of-truth minimum from trading_strategy.
 # Fall back to 5.0 if the import is unavailable (e.g. standalone test runs).
 try:
@@ -42,8 +44,11 @@ except ImportError:
 _KRAKEN_EXCHANGE_FLOOR = 10.50   # Kraken hard minimum: $10 + ~$0.50 fee buffer
 KRAKEN_MIN_TRADE_USD = max(_KRAKEN_EXCHANGE_FLOOR, _GLOBAL_MIN_TRADE)  # never below exchange floor
 
-# COINBASE / default: aligned to GLOBAL_MIN_TRADE
-COINBASE_MIN_TRADE_USD = _GLOBAL_MIN_TRADE
+# COINBASE / default: env-overridable for micro-cap mode.
+# COINBASE_MIN_ORDER_USD=1 (Step 5) lowers the floor to $1 when set.
+COINBASE_MIN_TRADE_USD: float = float(
+    _os.getenv('COINBASE_MIN_ORDER_USD', _os.getenv('COINBASE_MIN_ORDER', str(_GLOBAL_MIN_TRADE)))
+)
 
 # Default minimum for other exchanges
 MIN_POSITION_USD = _GLOBAL_MIN_TRADE  # Minimum USD value for any position (avoids dust + rejections)

@@ -116,6 +116,90 @@ BROKER_PROFILES: dict = {
         # Step 6: flag consumed by KrakenBroker.place_market_order guard
         "execution_disabled": KRAKEN_EXECUTION_DISABLED,
     },
+
+    # ------------------------------------------------------------------
+    # Alpaca — active, $1 floor, fee-free crypto
+    # ------------------------------------------------------------------
+    "alpaca": {
+        "min_capital_usd": float(os.getenv("ALPACA_MIN_CAPITAL", "1.0")),
+        "min_order_usd": float(os.getenv("ALPACA_MIN_ORDER", "1.0")),
+        "micro_cap_enabled": False,
+        "execution_mode": "active",
+        "risk_mode": "active",
+        "include_in_execution_capital": True,
+        "base_execution_weight": float(os.getenv("ALPACA_EXECUTION_WEIGHT", "0.8")),
+        "ignore_global_capital_floor": False,
+    },
+
+    # ------------------------------------------------------------------
+    # Binance — active, $5 floor
+    # ------------------------------------------------------------------
+    "binance": {
+        "min_capital_usd": float(os.getenv("BINANCE_MIN_CAPITAL", "5.0")),
+        "min_order_usd": float(os.getenv("BINANCE_MIN_ORDER", "5.0")),
+        "micro_cap_enabled": False,
+        "execution_mode": "active",
+        "risk_mode": "active",
+        "include_in_execution_capital": True,
+        "base_execution_weight": float(os.getenv("BINANCE_EXECUTION_WEIGHT", "0.8")),
+        "ignore_global_capital_floor": False,
+    },
+
+    # ------------------------------------------------------------------
+    # OKX — active, $5 floor
+    # ------------------------------------------------------------------
+    "okx": {
+        "min_capital_usd": float(os.getenv("OKX_MIN_CAPITAL", "5.0")),
+        "min_order_usd": float(os.getenv("OKX_MIN_ORDER", "5.0")),
+        "micro_cap_enabled": False,
+        "execution_mode": "active",
+        "risk_mode": "active",
+        "include_in_execution_capital": True,
+        "base_execution_weight": float(os.getenv("OKX_EXECUTION_WEIGHT", "0.8")),
+        "ignore_global_capital_floor": False,
+    },
+
+    # ------------------------------------------------------------------
+    # Interactive Brokers — passive (not yet implemented)
+    # ------------------------------------------------------------------
+    "interactive_brokers": {
+        "min_capital_usd": 0.0,
+        "min_order_usd": 0.0,
+        "micro_cap_enabled": False,
+        "execution_mode": "passive",
+        "risk_mode": "isolated",
+        "include_in_execution_capital": False,
+        "base_execution_weight": 0.0,
+        "ignore_global_capital_floor": True,
+    },
+
+    # ------------------------------------------------------------------
+    # TD Ameritrade — passive (not yet implemented)
+    # ------------------------------------------------------------------
+    "td_ameritrade": {
+        "min_capital_usd": 0.0,
+        "min_order_usd": 0.0,
+        "micro_cap_enabled": False,
+        "execution_mode": "passive",
+        "risk_mode": "isolated",
+        "include_in_execution_capital": False,
+        "base_execution_weight": 0.0,
+        "ignore_global_capital_floor": True,
+    },
+
+    # ------------------------------------------------------------------
+    # Tradier — passive (not yet implemented)
+    # ------------------------------------------------------------------
+    "tradier": {
+        "min_capital_usd": 0.0,
+        "min_order_usd": 0.0,
+        "micro_cap_enabled": False,
+        "execution_mode": "passive",
+        "risk_mode": "isolated",
+        "include_in_execution_capital": False,
+        "base_execution_weight": 0.0,
+        "ignore_global_capital_floor": True,
+    },
 }
 
 
