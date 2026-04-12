@@ -12,10 +12,15 @@ Key Innovations:
 """
 
 import logging
+import os
 from typing import Dict, Any, Optional
 import pandas as pd
 
 logger = logging.getLogger("nija.quality_gate")
+
+# Override default minimum reward-to-risk ratio via MIN_REWARD_RISK env var.
+# Set to 1.0 for Phase 1 / hard-unblock mode; default is 1.5 for normal operation.
+_ENV_MIN_REWARD_RISK: float = float(os.getenv("MIN_REWARD_RISK", "1.5"))
 
 
 def compute_reward_risk_ratio(entry: float, exit_loss: float, exit_profit: float) -> float:
@@ -95,7 +100,7 @@ class TradeQualityGate:
     - Stop placement quality score
     """
     
-    def __init__(self, min_reward_risk: float = 1.5, require_momentum: bool = True):
+    def __init__(self, min_reward_risk: float = _ENV_MIN_REWARD_RISK, require_momentum: bool = True):
         self.min_reward_risk = min_reward_risk
         self.require_momentum = require_momentum
         logger.info(f"✅ Trade Quality Gate active (min R:R = {min_reward_risk})")
