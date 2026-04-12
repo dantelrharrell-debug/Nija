@@ -94,9 +94,15 @@ class GateCheck:
     """Result for a single gate."""
     passed: bool
     name: str
-    value: float = 0.0       # measured value
-    threshold: float = 0.0   # required threshold
+    value: float = 0.0        # measured value
+    threshold: float = 0.0    # required threshold
     detail: str = ""
+    # Fraction of the gate's weight to award when passed=False.
+    #  0.5  → partial credit (+1 of 2 pts for a weight-2 gate)
+    #  0.0  → no credit (normal failure)
+    # -1.0  → full penalty (−2 pts for a weight-2 gate — discourages mismatch
+    #          without hard-blocking; strong signals still clear the threshold)
+    partial_credit: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +123,7 @@ class GateResult:
     gates: Dict[str, GateCheck] = field(default_factory=dict)
     entry_type: str = "swing"
     regime_name: str = "unknown"
-    gate_score: int = 0       # points earned across all gates
+    gate_score: float = 0.0     # points earned across all gates (float: partial/penalty supported)
     gate_max: int = 9         # maximum possible points
 
 
@@ -190,6 +196,20 @@ _REGIME_ALLOWED_ENTRIES: Dict[str, set] = {
     "volatile":             {"swing"},   # allow swing but with caution
 }
 _REGIME_ALLOWED_DEFAULT = {"swing", "scalp", "mean_reversion", "breakout"}
+
+# Maps regime → entry types that earn PARTIAL credit (half the gate weight).
+# These types aren't the primary fit but retain positive edge in the regime.
+# Any type not in allowed OR adjacent earns a PENALTY (−full weight).
+_REGIME_ADJACENT_ENTRIES: Dict[str, set] = {
+    "strong_trend":   {"scalp"},                    # scalp can ride a strong trend
+    "weak_trend":     {"breakout"},                 # breakout still has edge in weak trend
+    "ranging":        {"swing"},                    # swing can work in ranging, just not ideal
+    "consolidation":  {"swing"},                    # swing viable pre-breakout
+    "expansion":      {"scalp", "mean_reversion"},  # both have edge in expansion
+    "mean_reversion": {"scalp"},                    # scalp on bounce is partial MR
+    "trending":       {"scalp"},
+    "volatile":       {"scalp", "breakout"},
+}
 
 # ── Score-based OR logic ─────────────────────────────────────────────────────
 # Gate weights — must sum to _GATE_MAX_SCORE
@@ -335,13 +355,20 @@ class AIEntryGate:
         g5 = self._gate_regime(regime_key, entry_type, side)
         gates["gate5_regime"] = g5
 
-        # ── Tally weighted score ──────────────────────────────────────
-        total_score = 0
+        # ── Tally weighted score (partial credit and penalties supported) ──────
+        total_score: float = 0.0
         failed_gates = []
         for key, check in gates.items():
             w = _GATE_WEIGHTS.get(key, 0)
             if check.passed:
                 total_score += w
+            elif check.partial_credit != 0.0:
+                # Positive partial_credit → partial score; negative → penalty.
+                total_score += w * check.partial_credit
+                if check.partial_credit < 0:
+                    failed_gates.append(key)   # penalties appear in failure report
+                with self._lock:
+                    self._gate_failures[key] = self._gate_failures.get(key, 0) + 1
             else:
                 failed_gates.append(key)
                 with self._lock:
@@ -400,7 +427,7 @@ class AIEntryGate:
             with self._lock:
                 self._total_passed += 1
             reason = (
-                f"✅ Gate score {total_score}/{_GATE_MAX_SCORE} "
+                f"✅ Gate score {total_score:.1f}/{_GATE_MAX_SCORE} "
                 f"≥ {effective_threshold} threshold | "
                 f"{side.upper()} {entry_type} | regime={regime_key.upper()}"
             )
@@ -408,7 +435,7 @@ class AIEntryGate:
         else:
             first_failure = failed_gates[0] if failed_gates else ""
             reason = (
-                f"❌ Gate score {total_score}/{_GATE_MAX_SCORE} "
+                f"❌ Gate score {total_score:.1f}/{_GATE_MAX_SCORE} "
                 f"< {effective_threshold} threshold | "
                 f"failed: {', '.join(failed_gates)}"
             )
@@ -593,8 +620,14 @@ class AIEntryGate:
 
     @staticmethod
     def _gate_regime(regime_key: str, entry_type: str, side: str) -> GateCheck:
-        """Gate 5: Regime must permit the requested entry type."""
-        # NIJA_DISABLE_REGIME_GATE bypass: force pass for pipeline diagnostics.
+        """Gate 5: Regime compatibility with graded scoring.
+
+        Full match  (+2 pts): entry_type is in the primary allowed set for this regime.
+        Partial     (+1 pt) : entry_type is in the adjacent set — positive edge but weaker.
+        Mismatch    (−2 pts): entry_type conflicts — applies a score penalty so the signal
+                              must be stronger elsewhere to pass.  Does NOT hard-block
+                              (a high-scoring signal still clears the threshold).
+        """
         if _DISABLE_REGIME_GATE:
             return GateCheck(
                 passed=True,
@@ -604,18 +637,39 @@ class AIEntryGate:
                     f"regime gate skipped for {regime_key.upper()} {entry_type} {side}"
                 ),
             )
-        allowed = _REGIME_ALLOWED_ENTRIES.get(regime_key, _REGIME_ALLOWED_DEFAULT)
-        passed = entry_type in allowed
-        return GateCheck(
-            passed=passed,
-            name="Regime",
-            detail=(
-                f"regime={regime_key.upper()} "
-                f"{'permits' if passed else 'discourages'} "
-                f"{entry_type} {side} entry "
-                f"(allowed types: {sorted(allowed)})"
-            ),
-        )
+        allowed  = _REGIME_ALLOWED_ENTRIES.get(regime_key, _REGIME_ALLOWED_DEFAULT)
+        adjacent = _REGIME_ADJACENT_ENTRIES.get(regime_key, set())
+        w = _GATE_WEIGHTS["gate5_regime"]   # 2
+
+        if entry_type in allowed:
+            return GateCheck(
+                passed=True,
+                name="Regime",
+                detail=(
+                    f"regime={regime_key.upper()} permits {entry_type} {side} "
+                    f"(+{w} pts)"
+                ),
+            )
+        elif entry_type in adjacent:
+            return GateCheck(
+                passed=False,
+                name="Regime",
+                partial_credit=0.5,   # earns 1 of 2 pts — positive but not ideal edge
+                detail=(
+                    f"regime={regime_key.upper()} partially supports {entry_type} {side} "
+                    f"(+{w * 0.5:.0f} partial pts)"
+                ),
+            )
+        else:
+            return GateCheck(
+                passed=False,
+                name="Regime",
+                partial_credit=-1.0,  # penalty: −2 pts — discourages the mismatch
+                detail=(
+                    f"regime={regime_key.upper()} conflicts with {entry_type} {side} "
+                    f"(−{w} pts penalty; strong signals still pass)"
+                ),
+            )
 
     # ------------------------------------------------------------------
     # Helpers
