@@ -6846,23 +6846,13 @@ class KrakenBroker(BaseBroker):
                 if _probe_ok:
                     logger.info(f"   ✅ Nonce resync handshake complete for {cred_label}")
                 else:
-                    # Check whether probe_and_resync detected a permanently invalid key.
-                    # If so, return False immediately — entering the retry loop would
-                    # only trigger nuclear resets and a 300 s pause cycle before failing
-                    # again with the same result.
-                    if is_kraken_key_invalidated is not None and is_kraken_key_invalidated():
-                        logger.critical(
-                            f"❌ Kraken API key for {cred_label} is PERMANENTLY INVALIDATED "
-                            f"(probe_and_resync: ceiling jump + escalation all failed). "
-                            f"A new API key is required — see logs above for step-by-step recovery."
-                        )
-                        return False
-                    # Probe could not calibrate the nonce even after a hard rebase.
-                    # Entering the retry loop would only trigger nuclear resets and
-                    # multi-minute pause cycles before failing with the same result.
+                    # Nonce desync could not be resolved in one server-sync recovery
+                    # cycle.  This is a temporary resync issue, not a key-validity
+                    # problem.  The bot will retry on the next connection attempt.
                     logger.error(
                         f"   ❌ Nonce resync handshake failed for {cred_label} — "
-                        f"aborting.  Rotate the API key if this persists."
+                        f"nonce desync unresolved.  Wait and retry, or restart with "
+                        f"NIJA_FORCE_NONCE_RESYNC=1 if this persists."
                     )
                     return False
 
@@ -7003,16 +6993,6 @@ class KrakenBroker(BaseBroker):
 
                                 if is_nonce_error:
                                     if get_global_nonce_manager is not None:
-                                        # Abort immediately if the key is permanently invalid —
-                                        # calling record_error() when the key is dead does nothing
-                                        # useful and would have caused the nuclear-reset loop.
-                                        if is_kraken_key_invalidated is not None and is_kraken_key_invalidated():
-                                            logger.critical(
-                                                f"❌ Kraken nonce error on {cred_label} but API key is "
-                                                f"already flagged as permanently invalidated — "
-                                                f"aborting retry loop.  Rotate the key and restart."
-                                            )
-                                            return False
                                         get_global_nonce_manager().record_error()
 
                                 # For nonce errors, log at INFO level on first attempt so users know what failed
@@ -7338,15 +7318,6 @@ class KrakenBroker(BaseBroker):
 
                         if is_nonce_error:
                             if get_global_nonce_manager is not None:
-                                # Abort immediately when key is flagged as permanently invalid —
-                                # no nuclear reset loop should fire for a dead key.
-                                if is_kraken_key_invalidated is not None and is_kraken_key_invalidated():
-                                    logger.critical(
-                                        f"❌ Kraken nonce error on {cred_label} but API key is "
-                                        f"permanently invalidated — aborting retry loop.  "
-                                        f"Rotate the key and restart."
-                                    )
-                                    return False
                                 get_global_nonce_manager().record_error()
 
                         # Log retryable errors appropriately:
