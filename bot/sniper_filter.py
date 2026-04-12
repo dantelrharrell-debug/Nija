@@ -197,18 +197,17 @@ class SniperResult:
 def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
     """Map AI confidence to a proportional score in [0.0, 2.0].
 
-    Below the weak_threshold hard floor → 0.0 (trade rejected by floor check).
-    At or above strong_threshold → 2.0 (maximum conviction).
-    Linear interpolation in between, starting at 0.5 at the floor.
+    Uses a simple linear scale (confidence * 10, capped at 2.0) so that ALL
+    confidence values contribute positively — no hard floor rejection.
+
+      confidence=0.05 → 0.5 pts
+      confidence=0.10 → 1.0 pts
+      confidence=0.20 → 2.0 pts (full credit, cap reached)
+      confidence≥0.20 → 2.0 pts
+
+    Architecture: everything contributes → nothing hard-blocks.
     """
-    if confidence < cfg.weak_threshold:
-        return 0.0
-    if confidence >= cfg.strong_threshold:
-        return 2.0
-    span = cfg.strong_threshold - cfg.weak_threshold
-    if span <= 0:
-        return 2.0
-    return 0.5 + 1.5 * (confidence - cfg.weak_threshold) / span
+    return min(confidence * 10, 2.0)
     """
     All-in-one pre-execution quality gate.
 
