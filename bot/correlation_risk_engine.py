@@ -234,7 +234,7 @@ class CorrelationRiskEngine:
         symbol: str,
         proposed_size_usd: float,
         active_positions: Dict[str, float],
-        portfolio_value: float,
+        portfolio_value: float = 0.0,
     ) -> CorrelationDecision:
         """
         Decide whether a new position in *symbol* is acceptable given current
@@ -249,13 +249,23 @@ class CorrelationRiskEngine:
         active_positions : Dict[str, float]
             Current open positions {symbol: size_usd}.
         portfolio_value : float
-            Total portfolio value in USD.
+            Total portfolio value in USD.  Pass 0.0 to have the Capital
+            Authority supply the live figure automatically.
 
         Returns
         -------
         CorrelationDecision
             Rich result with ``allowed`` flag, adjusted size, and diagnostics.
         """
+        # ── Capital Authority fallback ────────────────────────────────────────
+        if portfolio_value <= 0.0:
+            try:
+                from capital_authority import get_capital_authority as _get_ca_cre
+                _ca_cre = _get_ca_cre()
+                if not _ca_cre.is_stale(ttl_s=float("inf")):
+                    portfolio_value = _ca_cre.get_usable_capital()
+            except Exception:
+                pass
         with self._lock:
             # Sync internal position state with caller's view
             self._positions = {k: float(v) for k, v in active_positions.items()}

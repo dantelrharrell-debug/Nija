@@ -160,7 +160,19 @@ class CapitalAllocationBrain:
         self.config = config or {}
         
         # Allocation parameters
-        self.total_capital = self.config.get('total_capital', 10000.0)
+        # Use the Capital Authority's live observed equity when the caller does
+        # not supply an explicit total_capital in config.  Falls back to 0.0
+        # (instead of a synthetic $10 k) so misconfigured callers fail visibly
+        # rather than silently trading against a fake baseline.
+        _ca_total: float = 0.0
+        try:
+            from capital_authority import get_capital_authority as _get_ca_cab
+            _ca_cab_inst = _get_ca_cab()
+            if not _ca_cab_inst.is_stale(ttl_s=float("inf")):
+                _ca_total = _ca_cab_inst.get_real_capital()
+        except Exception:
+            pass
+        self.total_capital = self.config.get("total_capital", _ca_total)
         self.reserve_pct = self.config.get('reserve_pct', 0.1)  # 10% reserve
         self.rebalance_threshold = self.config.get('rebalance_threshold', 0.05)  # 5%
         self.rebalance_frequency_hours = self.config.get('rebalance_frequency_hours', 24)

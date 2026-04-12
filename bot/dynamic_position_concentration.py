@@ -199,7 +199,7 @@ class DynamicPositionConcentration:
         symbol: str,
         proposed_size_usd: float,
         current_positions: Dict[str, float],
-        portfolio_value: float,
+        portfolio_value: float = 0.0,
     ) -> ConcentrationDecision:
         """
         Decide whether *proposed_size_usd* for *symbol* is acceptable given
@@ -214,13 +214,23 @@ class DynamicPositionConcentration:
         current_positions : Dict[str, float]
             {symbol: size_usd} for all currently open positions.
         portfolio_value : float
-            Total portfolio value in USD (cash + open positions).
+            Total portfolio value in USD (cash + open positions).  Pass 0.0
+            to have the Capital Authority supply the live figure automatically.
 
         Returns
         -------
         ConcentrationDecision
             Rich result with ``allowed`` flag, adjusted size, and diagnostics.
         """
+        # ── Capital Authority fallback ────────────────────────────────────────
+        if portfolio_value <= 0.0:
+            try:
+                from capital_authority import get_capital_authority as _get_ca_dpc
+                _ca_dpc = _get_ca_dpc()
+                if not _ca_dpc.is_stale(ttl_s=float("inf")):
+                    portfolio_value = _ca_dpc.get_usable_capital()
+            except Exception:
+                pass
         with self._lock:
             if portfolio_value <= 0:
                 return self._deny(

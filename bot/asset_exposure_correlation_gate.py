@@ -326,7 +326,7 @@ class AssetExposureCorrelationGate:
         strategy: str,
         symbol: str,
         proposed_size_usd: float,
-        portfolio_value: float,
+        portfolio_value: float = 0.0,
     ) -> AssetExposureDecision:
         """
         Decide whether a new position from *strategy* in *symbol* is acceptable
@@ -349,6 +349,8 @@ class AssetExposureCorrelationGate:
             Requested position size in USD.
         portfolio_value : float
             Total portfolio value in USD (used for cluster weight calculation).
+            Pass 0.0 to have the Capital Authority supply the live figure
+            automatically.
 
         Returns
         -------
@@ -356,6 +358,15 @@ class AssetExposureCorrelationGate:
             Rich result with ``allowed`` flag, ``adjusted_size_usd``, and
             diagnostics including which peer strategies contributed correlation.
         """
+        # ── Capital Authority fallback ────────────────────────────────────────
+        if portfolio_value <= 0.0:
+            try:
+                from capital_authority import get_capital_authority as _get_ca_aec
+                _ca_aec = _get_ca_aec()
+                if not _ca_aec.is_stale(ttl_s=float("inf")):
+                    portfolio_value = _ca_aec.get_usable_capital()
+            except Exception:
+                pass
         with self._lock:
             self._rebuild_matrix_if_needed()
 

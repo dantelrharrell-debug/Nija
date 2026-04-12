@@ -4645,6 +4645,36 @@ class TradingStrategy:
                 logger.info("🔧 Initializing advanced trading modules with live capital...")
                 self._init_advanced_features(total_capital)
 
+                # ── Capital Authority — single source of truth ─────────────────
+                # Initialise the process-wide CapitalAuthority singleton with the
+                # live broker map collected above so every downstream module can
+                # call get_capital_authority().get_usable_capital() instead of
+                # relying on hardcoded $10 k baselines.
+                try:
+                    from capital_authority import get_capital_authority as _get_ca_startup
+                    _ca_startup = _get_ca_startup()
+                    _ca_broker_map: dict = {}
+                    for _ca_bt, _ca_b in self.multi_account_manager.platform_brokers.items():
+                        if _ca_b and getattr(_ca_b, "connected", False):
+                            _ca_broker_map[str(getattr(_ca_bt, "value", str(_ca_bt)))] = _ca_b
+                    if getattr(self.multi_account_manager, "user_brokers", None):
+                        for _ca_uid, _ca_ubmap in self.multi_account_manager.user_brokers.items():
+                            for _ca_ubt, _ca_ub in _ca_ubmap.items():
+                                if _ca_ub and getattr(_ca_ub, "connected", False):
+                                    _ca_key = f"{_ca_uid}_{getattr(_ca_ubt, 'value', str(_ca_ubt))}"
+                                    _ca_broker_map[_ca_key] = _ca_ub
+                    _ca_startup.refresh(_ca_broker_map)
+                    self._capital_authority = _ca_startup
+                    logger.info(
+                        "✅ CapitalAuthority initialized: real=$%.2f usable=$%.2f risk=$%.2f",
+                        _ca_startup.get_real_capital(),
+                        _ca_startup.get_usable_capital(),
+                        _ca_startup.get_risk_capital(),
+                    )
+                except Exception as _ca_startup_err:
+                    logger.warning("⚠️  CapitalAuthority startup init skipped: %s", _ca_startup_err)
+                    self._capital_authority = None
+
                 # FIX #3: Hard fail if capital below minimum (non-negotiable)
                 if total_capital < MINIMUM_TRADING_BALANCE:
                         logger.error("=" * 70)
@@ -8794,6 +8824,35 @@ class TradingStrategy:
             if account_balance > 0:
                 self._last_known_balance = account_balance
             _cycle_start_balance = account_balance
+
+            # ── Capital Authority per-cycle refresh ───────────────────────────
+            # Keep the single source of truth current (TTL 90 s).  Uses the
+            # same connected broker map as the startup init; failures are
+            # silently swallowed so a transient API error never blocks a cycle.
+            try:
+                from capital_authority import get_capital_authority as _get_ca_cycle
+                _ca_cycle = _get_ca_cycle()
+                if _ca_cycle.is_stale(ttl_s=90):
+                    _ca_cycle_map: dict = {}
+                    for _ca_cbt, _ca_cb in self.multi_account_manager.platform_brokers.items():
+                        if _ca_cb and getattr(_ca_cb, "connected", False):
+                            _ca_cycle_map[str(getattr(_ca_cbt, "value", str(_ca_cbt)))] = _ca_cb
+                    if account_balance > 0 and _ca_cycle_map:
+                        # Pass current open-position exposure if execution_engine available
+                        _ca_open_exp = 0.0
+                        if self.execution_engine and hasattr(self.execution_engine, "positions"):
+                            try:
+                                _ca_open_exp = sum(
+                                    float(p.get("size_usd", 0.0))
+                                    if isinstance(p, dict)
+                                    else float(getattr(p, "size_usd", 0.0))
+                                    for p in self.execution_engine.positions.values()
+                                )
+                            except Exception:
+                                pass
+                        _ca_cycle.refresh(_ca_cycle_map, open_exposure_usd=_ca_open_exp)
+            except Exception:
+                pass  # Capital Authority refresh is advisory; never block a cycle
 
             # ── PortfolioStateManager → AdvancedTradingManager sync ───────────
             # Every cycle: push the freshly-fetched balance into portfolio_manager
