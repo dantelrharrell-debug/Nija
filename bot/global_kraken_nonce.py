@@ -73,7 +73,7 @@ _RESET_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_RESET_OFFSET_MS", "300000
 # pause so the probe_and_resync handshake (which may need several 10-min steps)
 # can complete before new user-account connections attempt to use the nonce.
 _NUCLEAR_RESET_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_THRESHOLD", "5"))
-_NUCLEAR_RESET_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_OFFSET_MS", "1800000"))  # 30 min — kept for compat; not used by new recovery path
+_NUCLEAR_RESET_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_NUCLEAR_OFFSET_MS", "1800000"))  # retained for env-var compat only; no longer used internally
 _TRADING_PAUSE_S: float = float(os.environ.get("NIJA_NONCE_PAUSE_SECONDS", "300"))
 _ERROR_RESET_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_ERROR_RESET_THRESHOLD", "3"))  # errors < threshold: no jump
 
@@ -689,7 +689,9 @@ def _fetch_kraken_server_time_ms() -> "int | None":
 
     Uses ``urllib.request`` (stdlib) so there is no dependency on ``requests``
     or ``krakenex``.  The endpoint is unauthenticated and does not consume rate
-    limit budget.
+    limit budget.  ``urlopen`` validates the TLS certificate via the system CA
+    bundle by default (Python 3.4+), so MITM protection is in place without
+    any additional configuration.
 
     Returns ``None`` silently on any error: network failure, timeout (5 s),
     non-200 response, JSON parse error, or a non-empty Kraken error list.
@@ -1795,7 +1797,7 @@ class KrakenNonceManager:
             _logger.debug("KrakenNonceManager: persist failed (%s)", exc)
 
     def _backoff_ms(self, error_count: int) -> int:
-        """No forward jumps — all recovery is handled by server_sync_resync()."""
+        """No-op shim — retained for any external callers; server_sync_resync() handles all recovery."""
         return 0
 
 
