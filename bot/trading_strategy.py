@@ -11965,6 +11965,20 @@ class TradingStrategy:
                                     self.apex._current_symbol = symbol
                                 analysis = self.apex.analyze_market(df, symbol, broker_balance)
 
+                                # ── [APEX] DIAGNOSTIC LOG ────────────────────────────
+                                # Shows every analyze_market result so you can tell:
+                                #   action=hold + "Insufficient trend" → market filter blocking
+                                #   action=hold + "Smart filter"       → smart filter blocking
+                                #   action=enter_long/short            → signal exists, check downstream
+                                logger.info(
+                                    "[APEX] %s → action=%s | conf=%.2f | score=%s | %s",
+                                    symbol,
+                                    analysis.get('action', 'hold'),
+                                    float(analysis.get('confidence') or 0),
+                                    analysis.get('score', 'n/a'),
+                                    analysis.get('reason', ''),
+                                )
+
                                 # ═══════════════════════════════════════════════════════
                                 # LAYER 2: TRADE QUALITY GATE
                                 # ═══════════════════════════════════════════════════════
@@ -12254,6 +12268,24 @@ class TradingStrategy:
                                             _raw_score = analysis.get('score')
                                             _raw_conf = (_raw_score / 5.0) if _raw_score else 0.65
                                         _sf_confidence = float(_raw_conf)
+
+                                        # ── [SNIPER] DIAGNOSTIC LOG ──────────────────────────
+                                        # Shows what confidence goes into the sniper filter and
+                                        # what tier it will hit.  Look for:
+                                        #   ELITE   conf >= 0.70 (spread + regime required)
+                                        #   STANDARD conf >= 0.50 (volume + volatility + spread)
+                                        #   SCALP   conf >= 0.25 (spread only when low-liq allowed)
+                                        #   REJECTED conf < 0.25 → blocked before any check
+                                        logger.info(
+                                            "[SNIPER] %s | side=%s | confidence=%.3f "
+                                            "(raw_conf=%s, score=%s) | action=%s",
+                                            symbol,
+                                            _sf_side,
+                                            _sf_confidence,
+                                            _raw_conf,
+                                            analysis.get('score', 'n/a'),
+                                            analysis.get('action'),
+                                        )
 
                                         # ── MICRO-ACCOUNT SIGNAL LOOSENING ──────────────────
                                         # For accounts below $100 the sniper filter's confidence

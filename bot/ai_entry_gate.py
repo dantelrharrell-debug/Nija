@@ -66,6 +66,7 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
@@ -73,6 +74,15 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 logger = logging.getLogger("nija.ai_entry_gate")
+
+# ── DIAGNOSTIC BYPASS FLAGS ──────────────────────────────────────────────────
+# NIJA_DISABLE_REGIME_GATE=true → Gate 5 (regime compatibility check) always
+#   passes regardless of entry-type/regime mismatch.  Use during pipeline
+#   diagnostics to confirm signals exist without regime interference.
+#   Remove or set to "false" once you've confirmed the pipeline is working.
+_DISABLE_REGIME_GATE: bool = (
+    os.getenv("NIJA_DISABLE_REGIME_GATE", "false").lower() in ("1", "true", "yes")
+)
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +594,16 @@ class AIEntryGate:
     @staticmethod
     def _gate_regime(regime_key: str, entry_type: str, side: str) -> GateCheck:
         """Gate 5: Regime must permit the requested entry type."""
+        # NIJA_DISABLE_REGIME_GATE bypass: force pass for pipeline diagnostics.
+        if _DISABLE_REGIME_GATE:
+            return GateCheck(
+                passed=True,
+                name="Regime",
+                detail=(
+                    f"[BYPASS] NIJA_DISABLE_REGIME_GATE=true — "
+                    f"regime gate skipped for {regime_key.upper()} {entry_type} {side}"
+                ),
+            )
         allowed = _REGIME_ALLOWED_ENTRIES.get(regime_key, _REGIME_ALLOWED_DEFAULT)
         passed = entry_type in allowed
         return GateCheck(
