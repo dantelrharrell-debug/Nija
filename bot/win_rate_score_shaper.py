@@ -126,8 +126,8 @@ _MIN_HISTORY: int = max(1, int(os.getenv("NIJA_WRSS_MIN_HISTORY", "5")))
 _FACTOR_DOMINATING: float = float(os.getenv("NIJA_WRSS_WINRATE_DOMINATING_FACTOR", "1.30"))
 _FACTOR_STRONG:     float = float(os.getenv("NIJA_WRSS_WINRATE_STRONG_FACTOR",     "1.15"))
 _FACTOR_NEUTRAL:    float = float(os.getenv("NIJA_WRSS_WINRATE_NEUTRAL_FACTOR",    "1.05"))
-_FACTOR_STRUGGLING: float = float(os.getenv("NIJA_WRSS_WINRATE_STRUGGLING_FACTOR", "0.90"))
-_FACTOR_BROKEN:     float = float(os.getenv("NIJA_WRSS_WINRATE_BROKEN_FACTOR",     "0.70"))
+_FACTOR_STRUGGLING: float = float(os.getenv("NIJA_WRSS_WINRATE_STRUGGLING_FACTOR", "0.92"))  # was 0.90 → 0.92 (Apr 2026): reduce dampen on borderline regimes
+_FACTOR_BROKEN:     float = float(os.getenv("NIJA_WRSS_WINRATE_BROKEN_FACTOR",     "0.80"))  # was 0.70 → 0.80 (Apr 2026): reduce aggressive dampen on low win-rate regimes
 
 # Win-rate thresholds separating the 5 tiers (descending)
 _WR_DOMINATING_THR: float = 0.72   # ≥ this → DOMINATING
