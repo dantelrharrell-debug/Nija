@@ -90,9 +90,14 @@ class ExecutionMinimumPositionGate:
         'BALLER':   5.0,   # $5 minimum — avoids dust + exchange rejection
     }
     
-    # LOW_CAPITAL mode threshold - accounts below this use $5 minimum
+    # LOW_CAPITAL mode threshold - accounts below this use micro-cap minimum
     LOW_CAPITAL_THRESHOLD = 100.0  # Balance threshold
-    LOW_CAPITAL_MIN_POSITION = 5.0  # $5 minimum in LOW_CAPITAL mode
+    # Env-overridable: COINBASE_MIN_ORDER_USD=1 activates $1 micro-cap floor
+    import os as _gate_os
+    LOW_CAPITAL_MIN_POSITION: float = float(
+        _gate_os.getenv('COINBASE_MIN_ORDER_USD',
+                        _gate_os.getenv('COINBASE_MIN_ORDER', '5.0'))
+    )
     
     # Minimum percentage allocation (of account balance)
     # Prevents spreading capital too thin

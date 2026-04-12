@@ -439,12 +439,24 @@ class IndependentBrokerTrader:
         logger.info("=" * 70)
         if funded:
             logger.info(f"✅ FUNDED PLATFORM BROKERS: {len(funded)}")
-            total_capital = sum(funded.values())
-            logger.info(f"💰 TOTAL PLATFORM TRADING CAPITAL: ${total_capital:,.2f}")
+            # Step 4: Exclude isolated/passive brokers from execution capital total.
+            # Kraken and any non-active broker are excluded from the weighting.
+            try:
+                from bot.broker_isolation_registry import get_broker_isolation_registry
+                _reg = get_broker_isolation_registry()
+                execution_funded = {
+                    k: v for k, v in funded.items()
+                    if _reg.get(k) is None or _reg.get(k).capital.include_in_execution_capital
+                }
+            except Exception:
+                execution_funded = funded
+            total_capital = sum(execution_funded.values())
+            logger.info(f"💰 TOTAL EXECUTION CAPITAL (isolated brokers excluded): ${total_capital:,.2f}")
             logger.info("")
             logger.info("📊 Breakdown:")
             for broker_name, balance in funded.items():
-                logger.info(f"   • {broker_name.upper()}: ${balance:,.2f}")
+                tag = "" if broker_name in execution_funded else " [ISOLATED — excluded from capital]"
+                logger.info(f"   • {broker_name.upper()}: ${balance:,.2f}{tag}")
         else:
             logger.error("❌ NO FUNDED PLATFORM BROKERS DETECTED")
             logger.error("   No PLATFORM brokers have sufficient balance to trade")

@@ -97,9 +97,11 @@ class BrokerFeeOptimizer:
     """
 
     # Balance threshold for Coinbase disqualification
-    # UNIFIED MINIMUM: $25 to match broker_manager and config rules
-    # This ensures consistent enforcement across all systems
-    COINBASE_MIN_BALANCE = 25.0  # $25 minimum for Coinbase profitability (unified)
+    # In micro-cap mode (COINBASE_MICRO_CAP_MODE=true) this is lowered to
+    # COINBASE_MIN_CAPITAL ($1) so Coinbase is never disabled on small accounts.
+    import os as _os
+    _micro_cap = _os.getenv('COINBASE_MICRO_CAP_MODE', 'true').strip().lower() in ('1', 'true', 'yes')
+    COINBASE_MIN_BALANCE: float = float(_os.getenv('COINBASE_MIN_CAPITAL', '1.0')) if _micro_cap else 25.0
 
     def __init__(self):
         """Initialize broker fee optimizer."""
