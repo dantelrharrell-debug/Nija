@@ -4639,6 +4639,30 @@ class TradingStrategy:
                     except Exception as _ca_seed_err:
                         logger.warning("⚠️  CapitalAllocator startup rebalance failed: %s", _ca_seed_err)
 
+                # CAPITAL FLOOR FIX: Re-anchor CapitalScalingEngine to the verified live
+                # balance.  The engine was initialised with BASE_CAPITAL (env var default
+                # $100 or operator-set $10,000) before broker connections were made.
+                # DrawdownProtectionSystem.can_trade() computes the floor as
+                # base_capital * 0.80 — with $100 base that floor is $80, which is above
+                # the real $5-10 balance and causes can_trade() to return False every
+                # cycle, silently setting user_mode=True and blocking all new entries.
+                if (
+                    total_capital >= 1.0
+                    and hasattr(self, "capital_scaling_engine")
+                    and self.capital_scaling_engine is not None
+                ):
+                    try:
+                        self.capital_scaling_engine.reset_base_capital(total_capital)
+                        logger.info(
+                            "✅ CapitalScalingEngine re-anchored to live balance: $%.2f",
+                            total_capital,
+                        )
+                    except Exception as _cse_reset_err:
+                        logger.warning(
+                            "⚠️  CapitalScalingEngine reset_base_capital failed: %s",
+                            _cse_reset_err,
+                        )
+
                 # Initialize advanced trading features AFTER first live balance fetch
                 # This ensures advanced modules have access to real capital data
                 # Gated by LIVE_CAPITAL_VERIFIED environment variable
