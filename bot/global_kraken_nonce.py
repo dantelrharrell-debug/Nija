@@ -31,8 +31,10 @@ import glob as _glob
 import json
 import logging
 import os
+import socket
 import threading
 import time
+import uuid
 
 # fcntl is available on Linux/macOS; skip on Windows
 try:
@@ -43,6 +45,23 @@ except ImportError:
     _FCNTL_AVAILABLE = False
 
 _logger = logging.getLogger(__name__)
+_PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
+
+
+def _detect_container_id() -> str:
+    """Best-effort container/runtime id for duplicate-process fingerprinting."""
+    host = os.environ.get("HOSTNAME", "").strip()
+    if len(host) >= 12:
+        return host
+    try:
+        with open("/proc/self/cgroup", "r", encoding="utf-8") as fh:
+            for line in fh:
+                seg = line.strip().split("/")[-1]
+                if len(seg) >= 12:
+                    return seg
+    except Exception:
+        pass
+    return "unknown"
 
 # ── Persistence file ──────────────────────────────────────────────────────────
 _STATE_FILE = os.path.join(
@@ -809,6 +828,10 @@ class KrakenNonceManager:
             self._state_file    = _STATE_FILE
         self._lock_file     = self._state_file + ".lock"
         self._pid_lock_file = self._state_file + ".pid"
+        self._process_fingerprint = (
+            f"pid={os.getpid()}|host={socket.gethostname()}|container={_detect_container_id()}|"
+            f"startup={_PROCESS_STARTUP_HASH}|key={self._key_id or 'platform'}"
+        )
 
         self._error_count = 0
         self._trading_paused_until: float = 0.0   # epoch seconds; 0 = not paused
@@ -1975,6 +1998,16 @@ class KrakenNonceManager:
             except (BlockingIOError, OSError):
                 # Another process holds the lock.
                 fh.close()
+                _holder_meta = "unknown"
+                try:
+                    with open(self._pid_lock_file, "r", encoding="utf-8") as _hf:
+                        _lines = [ln.strip() for ln in _hf.readlines() if ln.strip()]
+                    if len(_lines) >= 2:
+                        _holder_meta = _lines[1]
+                    elif _lines:
+                        _holder_meta = _lines[0]
+                except Exception:
+                    pass
                 _logger.critical(
                     "🚨🚨 DUPLICATE BOT PROCESS DETECTED — another NIJA instance "
                     "already holds the process-lifetime nonce lock (%s). "
@@ -1985,19 +2018,35 @@ class KrakenNonceManager:
                     "  • Docker:  docker ps -a  →  docker stop <container_id>\n"
                     "  • systemd: systemctl stop nija  (check for multiple units)\n"
                     "  • Manual:  ps aux | grep bot.py  →  kill <pid>\n"
+                    "Existing lock holder fingerprint: %s\n"
                     "After stopping the duplicate, restart this instance.",
                     self._pid_lock_file,
+                    _holder_meta,
                 )
                 return None
             # Write PID for diagnostics (truncate after acquiring the lock so
             # there is no race between open and write).
             fh.truncate(0)
             fh.seek(0)
+            _meta = {
+                "pid": os.getpid(),
+                "fingerprint": self._process_fingerprint,
+                "hostname": socket.gethostname(),
+                "container_id": _detect_container_id(),
+                "startup_hash": _PROCESS_STARTUP_HASH,
+                "key_id": self._key_id or "platform",
+                "started_at": time.time(),
+            }
+            # Keep first line as PID for backward compatibility with existing tools.
             fh.write(f"{os.getpid()}\n")
+            fh.write(json.dumps(_meta, sort_keys=True) + "\n")
             fh.flush()
             _logger.debug(
                 "KrakenNonceManager: process-lifetime PID lock acquired "
-                "(pid=%d, file=%s)", os.getpid(), self._pid_lock_file,
+                "(pid=%d, file=%s, fingerprint=%s)",
+                os.getpid(),
+                self._pid_lock_file,
+                self._process_fingerprint,
             )
             return fh
         except Exception as exc:
