@@ -85,7 +85,9 @@ class APIKeyManager:
 
         if additional_params and broker_env == "ALPACA":
             if "paper" in additional_params:
-                os.environ[f"{prefix}_PAPER"] = str(additional_params.get("paper", "true")).lower()
+                paper_value = additional_params.get("paper")
+                normalized_paper = True if paper_value is None else bool(paper_value)
+                os.environ[f"{prefix}_PAPER"] = str(normalized_paper).lower()
 
     def _unwire_broker_env(self, user_id: str, broker: str) -> None:
         """Remove runtime env vars for a user broker connection."""
@@ -207,12 +209,12 @@ class APIKeyManager:
         Returns:
             bool: True if deleted successfully
         """
+        self._unwire_broker_env(user_id=user_id, broker=broker)
+
         if user_id in self.user_keys and broker in self.user_keys[user_id]:
             del self.user_keys[user_id][broker]
-            self._unwire_broker_env(user_id=user_id, broker=broker)
             logger.info(f"Deleted API credentials for user {user_id} on {broker}")
             return True
-        self._unwire_broker_env(user_id=user_id, broker=broker)
         return False
 
     def list_user_brokers(self, user_id: str) -> List[str]:
