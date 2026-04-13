@@ -623,13 +623,53 @@ class MultiAccountBrokerManager:
                 logger.error("❌ is_platform_connected called with broker_type=None")
                 return False
 
-            # ── Kraken fast path: FSM is the single authoritative source ──────
+            # ── Kraken: FSM gates startup; live broker.connected is the runtime truth ──
+            # The FSM is a one-way startup latch (once set it never clears) so it
+            # is authoritative for blocking USER threads during startup.  However,
+            # for runtime "is the broker currently connected?" checks it can
+            # return stale True after a post-startup drop.  We therefore check the
+            # live broker object AFTER confirming the FSM fired, mirroring the
+            # sticky-window logic applied to every other broker type.
             if broker_type == BrokerType.KRAKEN:
-                connected = _KRAKEN_STARTUP_FSM.is_connected
+                if not _KRAKEN_STARTUP_FSM.is_connected:
+                    logger.debug(
+                        f"🔍 Platform broker check for {broker_type.value}: FSM=not connected"
+                    )
+                    return False
+                # FSM says CONNECTED — platform handshake completed at least once.
+                # Now verify the live broker object so a post-startup drop is not
+                # reported as still connected.
+                broker_obj = self._platform_brokers.get(broker_type)
+                if broker_obj is not None and hasattr(broker_obj, 'connected'):
+                    live = getattr(broker_obj, 'connected', False)
+                    if live:
+                        self._last_platform_connected_time[broker_type] = time.time()
+                        logger.debug(
+                            f"🔍 Platform broker check for {broker_type.value}: FSM=CONNECTED, broker=CONNECTED"
+                        )
+                        return True
+                    # Apply sticky-connection grace window for transient drops
+                    # (same logic used for non-Kraken brokers below).
+                    last_seen = self._last_platform_connected_time.get(broker_type, 0.0)
+                    if (time.time() - last_seen) < self.STICKY_CONNECTION_WINDOW:
+                        logger.debug(
+                            f"🔍 Platform broker {broker_type.value} sticky-connected "
+                            f"(FSM=CONNECTED, broker=DISCONNECTED, "
+                            f"last seen {time.time() - last_seen:.1f}s ago, "
+                            f"window={self.STICKY_CONNECTION_WINDOW}s)"
+                        )
+                        return True
+                    logger.debug(
+                        f"🔍 Platform broker check for {broker_type.value}: FSM=CONNECTED "
+                        f"but broker.connected=False ({time.time() - last_seen:.1f}s "
+                        f"since last connection) — reporting as disconnected"
+                    )
+                    return False
+                # FSM connected but no registered broker object to verify — trust FSM.
                 logger.debug(
-                    f"🔍 Platform broker check for {broker_type.value}: FSM={'CONNECTED' if connected else 'not connected'}"
+                    f"🔍 Platform broker check for {broker_type.value}: FSM=CONNECTED (no live broker object)"
                 )
-                return connected
+                return True
 
             # Fast path: use the explicit ConnectionState machine
             state = self._platform_state.get(broker_type.value)

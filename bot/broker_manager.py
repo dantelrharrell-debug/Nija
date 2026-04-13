@@ -10383,6 +10383,33 @@ class BrokerManager:
             if getattr(self.platform_broker, 'connected', False):
                 return self.platform_broker
 
+        # ── 1b. KRAKEN-FIRST execution-layer rule ─────────────────────────────
+        # Bridges the gap between the platform-layer FSM (which may have promoted
+        # Kraken) and the execution-layer ``active_broker`` slot (which may still
+        # point to Coinbase from before a reconnect or from initial startup when
+        # Kraken was added while disconnected).
+        # When Kraken is connected, non-quarantined, and non-exit-only it always
+        # takes priority so the execution router never sticks on Coinbase after a
+        # Kraken recovery.
+        if (
+            not _kraken_quarantine_active
+            and BrokerType.KRAKEN in self.brokers
+        ):
+            _kraken_broker = self.brokers[BrokerType.KRAKEN]
+            if (
+                getattr(_kraken_broker, 'connected', False)
+                and not getattr(_kraken_broker, 'exit_only_mode', False)
+            ):
+                if self.active_broker is not _kraken_broker:
+                    logger.info(
+                        "🎯 KRAKEN-FIRST (execution): Kraken connected — "
+                        "promoting to active_broker (was %s)",
+                        self.active_broker.broker_type.value if self.active_broker else "none",
+                    )
+                    self.active_broker = _kraken_broker
+                    self.primary_broker_type = BrokerType.KRAKEN
+                return _kraken_broker
+
         # ── 2. Active broker is healthy ─────────────────────────────
         if self.active_broker is not None:
             if getattr(self.active_broker, 'connected', False):
