@@ -7118,9 +7118,9 @@ class KrakenBroker(BaseBroker):
                         make_api_key_id as _make_key_id,
                     )
 
-                self.api_key_id  = _make_key_id(api_key)
-                _dnm             = _get_dnm()
-                _kid             = self.api_key_id  # captured in closures below
+                self.api_key_id = _make_key_id(api_key)
+                _dnm = _get_dnm()
+                _kid = self.api_key_id  # captured in closures below
                 self.nonce_manager = _dnm
 
                 def _nonce_distributed() -> str:

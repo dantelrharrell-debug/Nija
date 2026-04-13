@@ -184,7 +184,16 @@ class _PerKeyRedisBackend:
     the same Redis server CANNOT receive the same nonce.
     """
 
-    # Atomically: next = max(current+1, floor); SET key next; RETURN next
+    # Lua script: atomically advance the nonce to max(current+1, floor_ms).
+    #
+    # Why GET + SET instead of INCRBY?
+    # Redis INCRBY only increments by a fixed amount.  Our requirement is
+    # max(current+1, floor_ms) — a conditional advance keyed to wall-clock time.
+    # INCRBY cannot express this in one command; the Lua script is the correct
+    # tool because the entire script runs atomically on the Redis server, so
+    # no two callers can interleave their read-compare-write.
+    #
+    # KEYS[1] = nonce key, ARGV[1] = floor_ms (int milliseconds).
     _LUA = """
         local cur   = tonumber(redis.call('GET', KEYS[1])) or 0
         local floor = tonumber(ARGV[1])

@@ -799,10 +799,11 @@ class KrakenNonceManager:
         # platform key.
         _data_dir = os.path.dirname(os.path.abspath(_STATE_FILE))
         if self._key_id:
-            _safe_id = (
-                self._key_id.replace("/", "_").replace("\\", "_")
-                            .replace(":", "_").replace(" ", "_")[:64]
-            )
+            # Whitelist: keep only alphanumeric and a small set of safe chars.
+            # This prevents directory traversal regardless of what the caller
+            # passes (e.g. ../../etc/passwd, :global, etc.).
+            import re as _re
+            _safe_id = _re.sub(r"[^A-Za-z0-9_\-]", "_", self._key_id)[:64]
             self._state_file    = os.path.join(_data_dir, f"kraken_nonce_{_safe_id}.state")
         else:
             self._state_file    = _STATE_FILE
@@ -854,13 +855,17 @@ class KrakenNonceManager:
                 "Stop all duplicate deployments/processes and restart a single writer."
             )
 
-        # Hard rule: disallow nonce backends that are explicitly intended for
-        # multi-container / multi-region shared-key topologies.
+        # Hard rule: disallow the LEGACY NIJA_NONCE_BACKEND=redis path.
+        # Redis nonce support is now exclusively through DistributedNonceManager
+        # (bot/distributed_nonce_manager.py), configured via NIJA_REDIS_URL.
+        # That path uses a per-key Redis key with atomic Lua INCR, which is the
+        # correct multi-instance design.  The legacy env-var path allowed
+        # ALL keys to share ONE Redis key, which violated key isolation.
         if _NONCE_BACKEND == "redis":
             raise RuntimeError(
-                "NIJA_NONCE_BACKEND=redis is disallowed. "
-                "Hard rule: ONE API KEY = ONE WRITER "
-                "(no multi-container, no multi-region, no independent nonce writers)."
+                "NIJA_NONCE_BACKEND=redis is disallowed for KrakenNonceManager. "
+                "Use NIJA_REDIS_URL instead — DistributedNonceManager will pick it up "
+                "and route each API key through its own Redis nonce sequence."
             )
 
         # ── Optional nonce backend ────────────────────────────────────────
