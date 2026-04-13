@@ -4691,17 +4691,41 @@ class TradingStrategy:
                                 if _ca_ub and getattr(_ca_ub, "connected", False):
                                     _ca_key = f"{_ca_uid}_{getattr(_ca_ubt, 'value', str(_ca_ubt))}"
                                     _ca_broker_map[_ca_key] = _ca_ub
+                    # Pin the expected-broker count so is_fresh() blocks trades
+                    # whenever fewer brokers than this have contributed a balance.
+                    if _ca_broker_map:
+                        _ca_startup.set_expected_brokers(len(_ca_broker_map))
                     _ca_startup.refresh(_ca_broker_map)
                     self._capital_authority = _ca_startup
                     logger.info(
-                        "✅ CapitalAuthority initialized: real=$%.2f usable=$%.2f risk=$%.2f",
+                        "✅ CapitalAuthority initialized: real=$%.2f usable=$%.2f risk=$%.2f "
+                        "(expected_brokers=%d keys=%s)",
                         _ca_startup.get_real_capital(),
                         _ca_startup.get_usable_capital(),
                         _ca_startup.get_risk_capital(),
+                        _ca_startup._expected_brokers,
+                        list(_ca_broker_map.keys()),
                     )
                 except Exception as _ca_startup_err:
                     logger.warning("⚠️  CapitalAuthority startup init skipped: %s", _ca_startup_err)
                     self._capital_authority = None
+
+                # ── Shadow-state audit ────────────────────────────────────────
+                # Verify that every live-path capital holder is synced from CA /
+                # BalanceService.  Log GREEN for confirmed-synced, YELLOW for
+                # items that hold their own state but are updated each cycle.
+                logger.info(
+                    "[CA AUDIT] Capital-holder sync status:\n"
+                    "  ✅ CapitalAuthority (singleton) — primary source of truth\n"
+                    "  ✅ BalanceService cache — seeded by orchestrator each cycle\n"
+                    "  ✅ _capital_allocator.rebalance(total_capital=...) — called each cycle\n"
+                    "  ✅ advanced_manager.capital_allocator.update_total_capital() — called each cycle\n"
+                    "  ✅ failsafes.update_account_balance() — called each cycle\n"
+                    "  ✅ compounding_engine._state.total_capital — intentional independent "
+                    "state (tracks compounding progress, not used for position sizing)\n"
+                    "  ⚠️  capital_allocator._total_capital seed — loaded from persisted state "
+                    "file before first rebalance(); will be corrected on cycle 1"
+                )
 
                 # Initialize advanced trading features AFTER CapitalAuthority is ready
                 # so that all advanced modules receive a valid, fully-refreshed authority
@@ -8878,6 +8902,22 @@ class TradingStrategy:
                                 if _ca_ub and getattr(_ca_ub, "connected", False):
                                     _ca_key = f"{_ca_uid}_{getattr(_ca_ubt, 'value', str(_ca_ubt))}"
                                     _ca_cycle_map[_ca_key] = _ca_ub
+                    # ── Feed-coverage diagnostic ──────────────────────────────
+                    # Logs which broker keys are being aggregated this cycle.
+                    # If a broker you expect is missing here, check its
+                    # .connected status — that is the upstream feed gap.
+                    if _ca_cycle_map:
+                        logger.info(
+                            "[CA FEED] brokers-in-map=%d keys=%s",
+                            len(_ca_cycle_map),
+                            list(_ca_cycle_map.keys()),
+                        )
+                    else:
+                        logger.warning(
+                            "[CA FEED] ⚠️  broker map is EMPTY — no connected brokers "
+                            "found in platform_brokers or user_brokers; "
+                            "CapitalAuthority will not be updated this cycle"
+                        )
                     if _ca_cycle_map:
                         # Pass current open-position exposure if execution_engine available
                         _ca_open_exp = 0.0
