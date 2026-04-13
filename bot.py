@@ -619,6 +619,35 @@ def _rerun_supervisor_loop(state: dict) -> None:
             _orch_cycle += 1
             health_manager.heartbeat()
 
+            # ── Adopt threads started by the connection monitor ───────────────
+            # The connection monitor in IndependentBrokerTrader can start new
+            # platform threads after a broker that was offline at boot comes
+            # back online.  Those threads live in independent_trader.broker_threads
+            # but are not initially tracked here.  Adopt them so the supervisor
+            # can restart them if they die.
+            if use_independent_trading and strategy.independent_trader:
+                _ibt = strategy.independent_trader
+                for _cm_bname, _cm_t in list(_ibt.broker_threads.items()):
+                    if _cm_bname not in _active_threads and _cm_t.is_alive():
+                        _cm_bt = _ibt.broker_thread_types.get(_cm_bname)
+                        _cm_broker = None
+                        if _cm_bt is not None:
+                            try:
+                                _cm_broker = _ibt._get_platform_broker_source().get(_cm_bt)
+                            except Exception:
+                                pass
+                        _active_threads[_cm_bname] = {
+                            "thread": _cm_t,
+                            "stop_flag": _ibt.stop_flags.get(_cm_bname, threading.Event()),
+                            "broker_type": _cm_bt,
+                            "broker": _cm_broker,
+                            "mode": "platform",
+                        }
+                        logger.info(
+                            "📌 [Orchestrator] Adopted connection-monitor thread '%s' into supervisor",
+                            _cm_bname.upper(),
+                        )
+
             for _bname, _entry in list(_active_threads.items()):
                 _t = _entry["thread"]
                 _sf = _entry["stop_flag"]
