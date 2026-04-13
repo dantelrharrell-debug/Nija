@@ -2,41 +2,49 @@
 NIJA User Nonce Manager
 =======================
 
-Per-user nonce tracking and self-healing for Kraken API.
+Per-user nonce tracking for Kraken API.
 
-Features:
-- Individual nonce files per user (completely isolated from PLATFORM nonce)
-- Automatic nonce collision detection
-- Self-healing nonce recovery
-- Thread-safe operations
-- NIJA_FORCE_NONCE_RESYNC=1 support: wipes all user nonce files on startup
+Design
+------
+Each Kraken API key has its own nonce window.  This module is a thin
+delegation layer: every ``get_nonce(user_id)`` / ``record_nonce_error(user_id)``
+/ ``record_success(user_id)`` call is forwarded to the dedicated
+``KrakenNonceManager`` instance for that ``user_id``, obtained via
+``get_nonce_manager_for_key(user_id)``.
 
-Design: USER API keys each have their own nonce window at Kraken.  This manager
-keeps per-user state files (data/kraken_nonce_<user_id>.state) that are entirely
-independent of the PLATFORM KrakenNonceManager singleton.  USER nonce errors
-therefore never trigger PLATFORM nuclear resets, and vice-versa.
+This gives every user key the same institutional-grade guarantees as the
+platform key:
+  ✅ Strictly monotonic — nonces never repeat or decrease.
+  ✅ Thread-safe via ``threading.Lock`` per key instance.
+  ✅ Cross-process safe via ``fcntl`` advisory lock on the per-key state file.
+  ✅ Persistent — survives hot restarts.
+  ✅ Pre-request guard — stale instances are rebuilt from Kraken server time.
+  ✅ Isolated — USER nonce errors never trigger PLATFORM nuclear resets.
+
+Kraken requirement: nonce must be strictly increasing per API key across ALL
+requests.  Routing every USER key through ``get_nonce_manager_for_key()``
+ensures this invariant holds regardless of concurrency.
 """
 
-import os
-import stat
-import time
 import logging
+import os
 import threading
 from typing import Dict, Optional
-from pathlib import Path
 
 logger = logging.getLogger('nija.nonce')
 
-# Data directory for nonce files
+# Data directory (kept for _wipe_all_nonce_files compatibility)
 _data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
-# Startup jump for user nonce files: start 10 s ahead of wall-clock on fresh
-# file or hot restart so the first call lands safely above Kraken's recorded
-# high-water mark for that API key.
-_USER_STARTUP_JUMP_MS: int = int(os.environ.get("NIJA_USER_NONCE_STARTUP_JUMP_MS", "10000"))
 
-# Jump amount used when self-healing after consecutive nonce errors (60 s).
-_USER_HEAL_JUMP_MS: int = int(os.environ.get("NIJA_USER_NONCE_HEAL_JUMP_MS", "60000"))
+def _get_registry_factory():
+    """Lazily import get_nonce_manager_for_key to avoid circular imports."""
+    try:
+        from bot.global_kraken_nonce import get_nonce_manager_for_key
+        return get_nonce_manager_for_key
+    except ImportError:
+        from global_kraken_nonce import get_nonce_manager_for_key  # type: ignore[import]
+        return get_nonce_manager_for_key
 
 
 class UserNonceManager:
