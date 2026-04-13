@@ -4238,6 +4238,10 @@ class TradingStrategy:
             connected_brokers = []
             user_brokers = []
             total_capital = 0.0  # initialised here so it is always in scope at the TRADING ACTIVE gate
+            # These isolation flags are initialised here so they are always in scope at the
+            # TRADING ACTIVE gate (lines 5040+) regardless of which code path we take.
+            _coinbase_isolated: bool = False
+            _authoritative_capital: float = 0.0
 
             # Add startup delay to avoid immediate rate limiting on restart
             # CRITICAL (Jan 2026): Increased to 45s to ensure API rate limits fully reset
@@ -4456,6 +4460,21 @@ class TradingStrategy:
                                 self.portfolio_manager.get_balance(_bk)
                                 if self.portfolio_manager else 0.0
                             ) or BalanceService.get(_bk)
+                            # Direct API fallback: if both cached stores returned 0 for a
+                            # connected broker, fetch live from the broker itself so a cold
+                            # BalanceService never triggers the "no capital" fatal exception.
+                            if balance <= 0:
+                                try:
+                                    balance = broker.get_account_balance() or 0.0
+                                    if balance > 0:
+                                        BalanceService.refresh(
+                                            _bk, lambda b=broker: b.get_account_balance()
+                                        )
+                                except Exception as _live_err:
+                                    logger.debug(
+                                        "Direct balance fallback for %s failed: %s",
+                                        broker_type.value, _live_err,
+                                    )
                             if broker_type == BrokerType.COINBASE:
                                 coinbase_balance = balance
                             elif broker_type == BrokerType.KRAKEN:
@@ -5037,7 +5056,16 @@ class TradingStrategy:
                 except Exception as _psm_sync_err:
                     logger.warning("⚠️  Pre-loop portfolio balance sync failed: %s", _psm_sync_err)
 
-            if (platform_account_connected or total_active > 0) and total_capital >= MINIMUM_TRADING_BALANCE:
+            # NANO-tier trading loop minimum: bypass global MINIMUM_TRADING_BALANCE when
+            # Coinbase NANO is the only active capital source.  The per-broker floor
+            # (COINBASE_MIN_DEPLOYABLE = $1) applies; the global floor ($25 default) would
+            # incorrectly block a legitimately funded NANO account from starting.
+            _effective_loop_min = (
+                COINBASE_MIN_DEPLOYABLE
+                if (_coinbase_isolated and _authoritative_capital <= 0)
+                else MINIMUM_TRADING_BALANCE
+            )
+            if (platform_account_connected or total_active > 0) and total_capital >= _effective_loop_min:
                 logger.info(f"🚀 TRADING ACTIVE: {total_active} account(s) ready")
                 if platform_account_connected:
                     logger.info("🚀 STARTING CORE TRADING LOOP (platform ready)")
@@ -5078,15 +5106,15 @@ class TradingStrategy:
                 if active_user_count == 0:
                     logger.info("💡 Tip: Add user accounts to enable multi-user trading")
                     logger.info("   See config/users/ for user configuration")
-            elif (platform_account_connected or total_active > 0) and total_capital < MINIMUM_TRADING_BALANCE:
+            elif (platform_account_connected or total_active > 0) and total_capital < _effective_loop_min:
                 # Broker is connected but capital is below the trading floor — do NOT
                 # show "TRADING ACTIVE" because no orders can be placed.
                 logger.error("=" * 70)
                 logger.error("⚠️  BROKER CONNECTED — INSUFFICIENT CAPITAL TO TRADE")
                 logger.error("=" * 70)
                 logger.error(f"   Current capital : ${total_capital:.2f}")
-                logger.error(f"   Minimum required: ${MINIMUM_TRADING_BALANCE:.2f}")
-                logger.error(f"   Shortfall       : ${MINIMUM_TRADING_BALANCE - total_capital:.2f}")
+                logger.error(f"   Minimum required: ${_effective_loop_min:.2f}")
+                logger.error(f"   Shortfall       : ${_effective_loop_min - total_capital:.2f}")
                 logger.error("")
                 logger.error("   🛑 Trading loop will NOT start until capital is above minimum")
                 logger.error("   💵 Fund your account and restart the bot")
@@ -6163,17 +6191,34 @@ class TradingStrategy:
             )
 
         # --- Live broker connection check (post-connection phase) ---
-        # Only CRITICAL brokers (Kraken, Coinbase) count toward the active-broker
-        # threshold.  OPTIONAL broker (OKX, Binance, Alpaca) disconnection MUST
-        # NEVER reduce this count to zero or prevent the trading loop from starting.
+        # CRITICAL brokers (Kraken) count toward the active-broker threshold.
+        # PRIMARY brokers (Coinbase) are also counted when the active_broker IS
+        # a Primary-tier venue — i.e. when it is the only execution authority
+        # on the platform.  OPTIONAL brokers (OKX, Binance, Alpaca) never count.
         platform_connected_count = 0
+        primary_connected_count = 0
         if self.multi_account_manager:
             for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                 if not _broker_type_is_critical(broker_type):
-                    # OPTIONAL broker — log at debug; never counts against the minimum
-                    if broker and not broker.connected:
+                    # Check if it is a PRIMARY venue (e.g. Coinbase) that is actively
+                    # serving as the execution broker.  Count it separately so we can
+                    # fall back to it when no CRITICAL broker is available.
+                    try:
+                        from broker_registry import BrokerCriticality as _BRC2
+                        from broker_registry import broker_registry as _breg2
+                        _crit2 = _breg2.get_criticality(broker_type.value)
+                        _is_primary = (_crit2 == _BRC2.PRIMARY)
+                    except Exception:
+                        _is_primary = broker_type.value.lower() == "coinbase"
+                    if _is_primary and broker and broker.connected:
+                        primary_connected_count += 1
+                        logger.info(
+                            "   ✅ Platform %s — connected (PRIMARY execution venue)",
+                            broker_type.value.upper(),
+                        )
+                    elif broker and not broker.connected:
                         logger.debug(
-                            "   ℹ️  Platform %s — not connected (OPTIONAL broker, non-blocking)",
+                            "   ℹ️  Platform %s — not connected (non-CRITICAL broker, non-blocking)",
                             broker_type.value.upper(),
                         )
                     continue
@@ -6182,6 +6227,11 @@ class TradingStrategy:
                     logger.info(f"   ✅ Platform {broker_type.value.upper()} — connected (CRITICAL)")
                 else:
                     logger.warning(f"   ⚠️  Platform {broker_type.value.upper()} — NOT connected (CRITICAL)")
+
+        # Accept PRIMARY brokers (e.g. Coinbase NANO) as the platform when no
+        # CRITICAL broker (Kraken) is available.  This removes the misleading
+        # "no platform brokers connected" warning for valid Coinbase-only setups.
+        effective_platform_count = platform_connected_count or primary_connected_count
 
         if platform_connected_count > 0:
             logger.info(
