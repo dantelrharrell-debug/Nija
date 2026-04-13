@@ -2845,7 +2845,7 @@ LOW_CAPITAL_THRESHOLD: float = float(
     os.getenv("NIJA_LOW_CAPITAL_THRESHOLD", str(MIN_DEPLOYABLE_BALANCE))
 )
 # Maximum position size as a fraction of balance in LOW_CAPITAL_MODE.
-# 30 % of a $20 account → $6 position (above $5 dust floor).
+# 30% of a $20 account → $6 position (above $5 dust floor).
 LOW_CAPITAL_POSITION_PCT: float = float(
     os.getenv("NIJA_LOW_CAPITAL_POSITION_PCT", "0.30")
 )
@@ -2863,6 +2863,10 @@ def is_low_capital_mode(balance: float) -> bool:
 
     In this mode the bot switches to micro-scalping with tighter signal quality
     requirements and a single-position limit rather than halting entirely.
+
+    Note: a balance exactly equal to LOW_CAPITAL_THRESHOLD (e.g. exactly $25.00)
+    is NOT in LOW_CAPITAL_MODE — the strict inequality means normal mode applies
+    at the boundary so full-mode trading resumes immediately on threshold recovery.
 
     Args:
         balance: Current account balance in USD.
@@ -7223,7 +7227,13 @@ class TradingStrategy:
                 # deployable minimum, activate LOW_CAPITAL_MODE (micro-scalping)
                 # rather than marking the broker PASSIVE and blocking all trades.
                 if is_low_capital_mode(balance):
-                    if hasattr(broker, 'mode') and broker.mode == "PASSIVE":
+                    # Ensure the broker is ACTIVE (not PASSIVE) for LOW_CAPITAL_MODE trading.
+                    if not hasattr(broker, 'mode'):
+                        logger.warning(
+                            "   ⚠️ %s missing 'mode' attribute — BaseBroker init may not have run",
+                            broker_name.upper(),
+                        )
+                    elif broker.mode != "ACTIVE":
                         broker.mode = "ACTIVE"
                     logger.info(
                         "   💡 LOW_CAPITAL_MODE active: %s balance $%.2f < $%.2f "
@@ -13828,6 +13838,12 @@ class TradingStrategy:
                                 # position size (LOW_CAPITAL_POSITION_PCT of balance) and
                                 # enforce the 1-position cap to prevent over-committing the
                                 # tiny capital base.
+                                #
+                                # Precedence: micro-cap compounding (_micro_cap_config is not None)
+                                # takes priority over LOW_CAPITAL_MODE because it provides its
+                                # own optimised sizing, TP, and SL logic for sub-$100 accounts.
+                                # LOW_CAPITAL_MODE sizing only activates when the micro-cap module
+                                # is unavailable or inactive (i.e. _micro_cap_config is None).
                                 if (
                                     account_balance is not None
                                     and is_low_capital_mode(account_balance)
