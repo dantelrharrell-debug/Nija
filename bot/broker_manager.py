@@ -285,8 +285,17 @@ def clear_kraken_broker_quarantine(
     """Clear the broker-level Kraken quarantine and restore entry eligibility.
 
     Resets the module-level ``_kraken_quarantine_active`` flag, mirrors the
-    clear into the nonce-manager module, and sets ``exit_only_mode = False``
-    on every KrakenBroker instance found in either registry supplied.
+    clear into the nonce-manager module, and resets Kraken PLATFORM broker
+    instance flags used by deterministic execution gates:
+        exit_only_mode = False
+        quarantined    = False
+        quarantine_until = 0
+        error_count    = 0
+
+    Instance discovery is resilient:
+      1) Explicit broker-manager registry (when provided)
+      2) Multi-account platform registry (when provided)
+      3) All live KrakenBroker PLATFORM instances (safe default path)
 
     Call this at startup (after the broker connection phase) so that a stale
     quarantine from a previous session never blocks new entries.  All three
@@ -306,7 +315,7 @@ def clear_kraken_broker_quarantine(
     except Exception as _qc_err:
         logging.warning("clear_kraken_broker_quarantine: nonce-manager clear failed: %s", _qc_err)
 
-    # Collect all unique KrakenBroker instances from both registries.
+    # Collect all unique KrakenBroker instances from supplied registries.
     _seen_ids: set = set()
     _kraken_instances = []
 
@@ -330,10 +339,25 @@ def clear_kraken_broker_quarantine(
         except Exception as _mam_err:
             logging.debug("clear_kraken_broker_quarantine: multi_account scan failed: %s", _mam_err)
 
+    # Safe default: also clear all live Kraken PLATFORM instances so callers
+    # that do not pass manager objects (e.g. reconnect path) still fully clear.
+    try:
+        for _live in KrakenBroker._iter_live():
+            if getattr(_live, 'account_type', None) != AccountType.PLATFORM:
+                continue
+            if id(_live) in _seen_ids:
+                continue
+            _seen_ids.add(id(_live))
+            _kraken_instances.append(_live)
+    except Exception as _live_err:
+        logging.debug("clear_kraken_broker_quarantine: live-instance scan failed: %s", _live_err)
+
     for _kb in _kraken_instances:
-        if getattr(_kb, 'exit_only_mode', False):
-            _kb.exit_only_mode = False
-            logging.info("✅ clear_kraken_broker_quarantine: exit_only_mode cleared on KrakenBroker")
+        _kb.exit_only_mode = False
+        _kb.quarantined = False
+        _kb.quarantine_until = 0.0
+        _kb.error_count = 0
+        logging.info("✅ clear_kraken_broker_quarantine: quarantine flags cleared on KrakenBroker")
         # Forced reconnect: trigger an immediate connection attempt so Kraken
         # is eligible for new entries on the very next market scan cycle.
         try:
