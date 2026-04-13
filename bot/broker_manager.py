@@ -18,6 +18,16 @@ import traceback
 import uuid
 import threading
 
+# Optional: 'requests' is used for Kraken gateway routing (NIJA_KRAKEN_GATEWAY_URL).
+# Imported here at module level so the dependency is visible to scanners;
+# gateway calls will raise RuntimeError if not installed.
+try:
+    import requests as _requests_lib  # type: ignore[import]
+    _REQUESTS_AVAILABLE = True
+except ImportError:
+    _requests_lib = None  # type: ignore[assignment]
+    _REQUESTS_AVAILABLE = False
+
 # Import circuit breaker for API reliability
 try:
     from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState  # type: ignore[assignment]
@@ -6685,6 +6695,19 @@ class KrakenBroker(BaseBroker):
         if not self.api:
             raise Exception("Kraken API not initialized - call connect() first")
 
+        # ── Gateway mode (Phase B) ─────────────────────────────────────────────
+        # When NIJA_KRAKEN_GATEWAY_URL is set, forward this private call to the
+        # Kraken Execution Gateway instead of calling Kraken directly.  The
+        # gateway owns the single nonce authority, the in-process API lock, and
+        # the idempotency journal — which allows strategy containers to scale
+        # horizontally without nonce collisions.
+        #
+        # Direct mode (existing path below) is used when the env var is absent.
+        _gateway_url = os.environ.get("NIJA_KRAKEN_GATEWAY_URL", "").strip()
+        if _gateway_url:
+            return self._call_via_gateway(_gateway_url, method, params or {})
+        # ── End gateway mode ───────────────────────────────────────────────────
+
         # Determine API category for rate limiting
         if category is None and KrakenAPICategory is not None:
             # Auto-detect category from method name
@@ -6788,6 +6811,62 @@ class KrakenBroker(BaseBroker):
             API response dict
         """
         return self._kraken_private_call(method, params, category)
+
+    def _call_via_gateway(self, gateway_url: str, method: str, params: Dict) -> Dict:
+        """Forward a Kraken private API call to the Execution Gateway.
+
+        This is the Phase-B routing path.  Strategy containers set
+        ``NIJA_KRAKEN_GATEWAY_URL`` to activate this path; the gateway process
+        owns the single nonce authority and serialization lock so containers
+        can scale freely without nonce collisions.
+
+        The method returns the same ``{"error": [...], "result": {...}}`` shape
+        that direct ``_kraken_private_call()`` returns, so all callers are
+        transparent to whether they are in direct or gateway mode.
+
+        Args:
+            gateway_url: Base URL of the Execution Gateway
+                (value of ``NIJA_KRAKEN_GATEWAY_URL``).
+            method: Kraken private API method name (e.g. ``"AddOrder"``).
+            params: Parameter dict for the Kraken call.  Must NOT include a
+                ``"nonce"`` key — the gateway injects that.
+
+        Returns:
+            Kraken-shaped result dict ``{"error": [...], "result": {...}}``.
+
+        Raises:
+            RuntimeError: If the gateway is unreachable or returns an HTTP error.
+        """
+        if not _REQUESTS_AVAILABLE or _requests_lib is None:
+            raise RuntimeError(
+                "KrakenBroker: the 'requests' package is required in gateway "
+                "mode.  Install it with: pip install requests"
+            )
+
+        intent_id = str(uuid.uuid4())
+        payload = {
+            "intent_id": intent_id,
+            "method": method,
+            "params": params,
+        }
+        endpoint = gateway_url.rstrip("/") + "/execute"
+
+        try:
+            resp = _requests_lib.post(endpoint, json=payload, timeout=30)
+            resp.raise_for_status()
+            body = resp.json()
+        except Exception as exc:
+            raise RuntimeError(
+                f"KrakenBroker: gateway call to {endpoint!r} failed "
+                f"for method {method!r}: {exc}"
+            ) from exc
+
+        # Translate gateway response back to the standard krakenex result shape:
+        #   {"error": [...], "result": {...}}
+        return {
+            "error": body.get("errors", []),
+            "result": body.get("result", {}),
+        }
 
     def _test_connection(self, retries: int = 5) -> bool:
         """

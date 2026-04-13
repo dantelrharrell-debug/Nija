@@ -4648,6 +4648,31 @@ class TradingStrategy:
                     if broker and broker.connected:
                         active_exchanges.append(broker_type.value)
 
+                # Reconcile capital-allocator membership to connected brokers.
+                # This is the fix for "Active Exchanges: 2" when only one broker
+                # is actually connected: the allocator is authoritative only after
+                # this call maps the runtime-connected set into its exchange entries.
+                if self.advanced_manager is not None and active_exchanges:
+                    try:
+                        from exchange_risk_profiles import ExchangeType as _ExchangeType
+                        _connected_types = []
+                        for _ex_name in active_exchanges:
+                            try:
+                                _connected_types.append(_ExchangeType(_ex_name))
+                            except ValueError:
+                                logger.warning(
+                                    "⚠️  reconcile_connected_exchanges: no ExchangeType mapping "
+                                    "for broker %r — skipping", _ex_name
+                                )
+                        if _connected_types:
+                            self.advanced_manager.capital_allocator.reconcile_connected_exchanges(
+                                _connected_types
+                            )
+                    except Exception as _reconcile_err:
+                        logger.warning(
+                            "⚠️  Could not reconcile exchange allocations: %s", _reconcile_err
+                        )
+
                 # Update capital allocator with live total
                 if self.advanced_manager and total_capital > 0:
                     try:
