@@ -270,13 +270,27 @@ class GlobalRiskGovernor:
         GovernorDecision
             ``.allowed`` is False if any RED gate fires.
         """
-        # ── Capital Authority fallback ────────────────────────────────────────
+        # ── Capital Authority freshness gate ─────────────────────────────────
+        # Use real observed equity only when the snapshot is current AND
+        # fully aggregated (all expected brokers present).  A stale or
+        # partial snapshot blocks this trade rather than silently trading
+        # against an outdated figure.
         if current_portfolio_value <= 0.0:
             try:
                 from capital_authority import get_capital_authority as _get_ca_gov
                 _ca_gov = _get_ca_gov()
-                if not _ca_gov.is_stale(ttl_s=float("inf")):
+                if _ca_gov.is_fresh():
                     current_portfolio_value = _ca_gov.get_usable_capital()
+                else:
+                    logger.warning(
+                        "[GlobalRiskGovernor] CapitalAuthority stale or incomplete "
+                        "(brokers=%d expected=%d age=%.0fs) — "
+                        "portfolio_value=0 → gates will block this trade",
+                        len(_ca_gov._broker_balances),
+                        _ca_gov._expected_brokers,
+                        ((__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - _ca_gov.last_updated).total_seconds()
+                         if _ca_gov.last_updated else float("inf")),
+                    )
             except Exception:
                 pass
         with self._lock:

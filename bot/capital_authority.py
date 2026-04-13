@@ -170,6 +170,10 @@ class CapitalAuthority:
             self._broker_balances = new_balances
             self._open_exposure_usd = max(0.0, float(open_exposure_usd))
             self.last_updated = datetime.now(timezone.utc)
+            # Auto-raise expected_brokers to match the largest map we have seen
+            # so that a future refresh with fewer brokers fails the is_fresh() check.
+            if len(new_balances) > self._expected_brokers:
+                self._expected_brokers = len(new_balances)
 
         logger.info(
             "[CapitalAuthority] refreshed — real=$%.2f usable=$%.2f risk=$%.2f "
@@ -179,6 +183,13 @@ class CapitalAuthority:
             self.get_risk_capital(),
             len(new_balances),
             self._reserve_pct * 100,
+        )
+        # ── Validation snapshot — exposes feed / aggregation issues instantly ──
+        logger.info(
+            "[CA VALIDATION] total=$%.2f | brokers=%d | values=%s",
+            self.get_real_capital(),
+            len(new_balances),
+            dict(new_balances),
         )
 
     # ------------------------------------------------------------------
@@ -312,26 +323,31 @@ class CapitalAuthority:
     def get_snapshot(self) -> dict:
         """Return a plain-dict snapshot suitable for dashboards and logging."""
         with self._lock:
+            real = sum(self._broker_balances.values())
+            age = (
+                (datetime.now(timezone.utc) - self.last_updated).total_seconds()
+                if self.last_updated is not None
+                else float("inf")
+            )
             return {
-                "real_capital": sum(self._broker_balances.values()),
-                "usable_capital": sum(self._broker_balances.values())
-                * (1.0 - self._reserve_pct),
+                "real_capital": real,
+                "usable_capital": real * (1.0 - self._reserve_pct),
                 "risk_capital": max(
                     0.0,
-                    sum(self._broker_balances.values()) * (1.0 - self._reserve_pct)
-                    - self._open_exposure_usd,
+                    real * (1.0 - self._reserve_pct) - self._open_exposure_usd,
                 ),
                 "open_exposure_usd": self._open_exposure_usd,
                 "reserve_pct": self._reserve_pct,
                 "broker_balances": dict(self._broker_balances),
+                "broker_count": len(self._broker_balances),
+                "expected_brokers": self._expected_brokers,
                 "last_updated": self.last_updated.isoformat()
                 if self.last_updated
                 else None,
-                "is_stale_60s": self.last_updated is None
-                or (
-                    datetime.now(timezone.utc) - self.last_updated
-                ).total_seconds()
-                > 60.0,
+                "age_s": age,
+                "is_fresh": age <= 90.0 and len(self._broker_balances) >= self._expected_brokers,
+                # kept for backwards-compat with any existing dashboard consumers
+                "is_stale_60s": age > 60.0,
             }
 
 

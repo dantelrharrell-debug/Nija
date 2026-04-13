@@ -257,13 +257,27 @@ class CorrelationRiskEngine:
         CorrelationDecision
             Rich result with ``allowed`` flag, adjusted size, and diagnostics.
         """
-        # ── Capital Authority fallback ────────────────────────────────────────
+        # ── Capital Authority freshness gate ─────────────────────────────────
+        # Use real observed equity only when the snapshot is current AND
+        # fully aggregated (all expected brokers present).  A stale or
+        # partial snapshot blocks this trade rather than silently trading
+        # against an outdated figure.
         if portfolio_value <= 0.0:
             try:
                 from capital_authority import get_capital_authority as _get_ca_cre
                 _ca_cre = _get_ca_cre()
-                if not _ca_cre.is_stale(ttl_s=float("inf")):
+                if _ca_cre.is_fresh():
                     portfolio_value = _ca_cre.get_usable_capital()
+                else:
+                    logger.warning(
+                        "[CorrelationRiskEngine] CapitalAuthority stale or incomplete "
+                        "(brokers=%d expected=%d age=%.0fs) — "
+                        "portfolio_value=0 → correlation gate will deny",
+                        len(_ca_cre._broker_balances),
+                        _ca_cre._expected_brokers,
+                        ((__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - _ca_cre.last_updated).total_seconds()
+                         if _ca_cre.last_updated else float("inf")),
+                    )
             except Exception:
                 pass
         with self._lock:

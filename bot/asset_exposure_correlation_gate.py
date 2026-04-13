@@ -358,13 +358,27 @@ class AssetExposureCorrelationGate:
             Rich result with ``allowed`` flag, ``adjusted_size_usd``, and
             diagnostics including which peer strategies contributed correlation.
         """
-        # ── Capital Authority fallback ────────────────────────────────────────
+        # ── Capital Authority freshness gate ─────────────────────────────────
+        # Use real observed equity only when the snapshot is current AND
+        # fully aggregated (all expected brokers present).  A stale or
+        # partial snapshot blocks this trade rather than silently trading
+        # against an outdated figure.
         if portfolio_value <= 0.0:
             try:
                 from capital_authority import get_capital_authority as _get_ca_aec
                 _ca_aec = _get_ca_aec()
-                if not _ca_aec.is_stale(ttl_s=float("inf")):
+                if _ca_aec.is_fresh():
                     portfolio_value = _ca_aec.get_usable_capital()
+                else:
+                    logger.warning(
+                        "[AssetExposureGate] CapitalAuthority stale or incomplete "
+                        "(brokers=%d expected=%d age=%.0fs) — "
+                        "portfolio_value=0 → exposure gate will deny",
+                        len(_ca_aec._broker_balances),
+                        _ca_aec._expected_brokers,
+                        ((__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - _ca_aec.last_updated).total_seconds()
+                         if _ca_aec.last_updated else float("inf")),
+                    )
             except Exception:
                 pass
         with self._lock:
