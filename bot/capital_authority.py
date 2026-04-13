@@ -95,6 +95,13 @@ class CapitalAuthority:
         self._open_exposure_usd: float = 0.0
         # Timestamp of most-recent successful refresh
         self.last_updated: Optional[datetime] = None
+        # Minimum number of brokers that must have contributed a non-zero balance
+        # for the snapshot to be considered complete.  Set at startup via
+        # set_expected_brokers() once the broker map is known.
+        # Overridable via env NIJA_CAPITAL_EXPECTED_BROKERS (default 1).
+        self._expected_brokers: int = int(
+            os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "1")
+        )
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -249,6 +256,54 @@ class CapitalAuthority:
                 return True
             age = (datetime.now(timezone.utc) - self.last_updated).total_seconds()
             return age > ttl_s
+
+    def is_fresh(self, ttl_s: float = 90.0) -> bool:
+        """
+        Return ``True`` only when **both** conditions hold:
+
+        1. The last refresh occurred within *ttl_s* seconds.
+        2. At least ``_expected_brokers`` brokers contributed a non-zero
+           balance (prevents partial-aggregation silently passing as valid).
+
+        This is the preferred freshness gate for live-trading code paths.
+        Unlike ``is_stale(ttl_s=float('inf'))``, a snapshot that was once
+        populated but has since gone stale will correctly return ``False``.
+
+        Parameters
+        ----------
+        ttl_s:
+            Maximum acceptable age of the cached snapshot in seconds.
+            Default 90 s (matches the per-cycle refresh cadence).
+        """
+        with self._lock:
+            if self.last_updated is None:
+                return False
+            age = (datetime.now(timezone.utc) - self.last_updated).total_seconds()
+            if age > ttl_s:
+                return False
+            if len(self._broker_balances) < self._expected_brokers:
+                return False
+            return True
+
+    def set_expected_brokers(self, count: int) -> None:
+        """
+        Set the minimum number of brokers whose balances must be present for
+        :meth:`is_fresh` to return ``True``.
+
+        Call this at startup once the broker map is known, e.g.::
+
+            authority.set_expected_brokers(len(connected_broker_map))
+
+        Parameters
+        ----------
+        count:
+            Minimum broker count.  Values < 1 are silently clamped to 1.
+        """
+        with self._lock:
+            self._expected_brokers = max(1, int(count))
+        logger.debug(
+            "[CapitalAuthority] expected_brokers set to %d", self._expected_brokers
+        )
 
     # ------------------------------------------------------------------
     # Diagnostics
