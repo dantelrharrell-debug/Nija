@@ -140,28 +140,44 @@ class IndividualUserConfig:
         """
         Check if API keys exist for this user in environment variables.
 
+        Checks both the short (first-name) and full (first_last) env var formats
+        to match the fallback logic in KrakenBroker.connect():
+          - Short: KRAKEN_USER_DAIVON_API_KEY
+          - Full:  KRAKEN_USER_DAIVON_FRAZIER_API_KEY
+
         Returns:
-            bool: True if both API key and secret are set
+            bool: True if both API key and secret are set in either format
         """
-        # Extract firstname from user_id (e.g., 'daivon_frazier' -> 'DAIVON')
-        # Validate format: expects 'firstname_lastname' or just 'firstname'
+        # Validate format: expects 'firstname' or 'firstname_lastname'
         parts = self.user_id.split('_')
         if not parts or not parts[0]:
             logger.warning(f"Invalid user_id format: {self.user_id} (expected 'firstname' or 'firstname_lastname')")
             return False
 
         firstname = parts[0].upper()
+        full_name = self.user_id.upper()  # e.g. DAIVON_FRAZIER
         broker_upper = self.broker.upper()
 
-        # Build environment variable names
-        api_key_var = f"{broker_upper}_USER_{firstname}_API_KEY"
-        api_secret_var = f"{broker_upper}_USER_{firstname}_API_SECRET"
+        # Short format (first-name only): KRAKEN_USER_DAIVON_API_KEY
+        short_key_var = f"{broker_upper}_USER_{firstname}_API_KEY"
+        short_secret_var = f"{broker_upper}_USER_{firstname}_API_SECRET"
+        short_key = os.getenv(short_key_var, "").strip()
+        short_secret = os.getenv(short_secret_var, "").strip()
 
-        # Check if both exist and are not empty
-        api_key = os.getenv(api_key_var, "").strip()
-        api_secret = os.getenv(api_secret_var, "").strip()
+        if short_key and short_secret:
+            return True
 
-        return bool(api_key and api_secret)
+        # Full-name fallback: KRAKEN_USER_DAIVON_FRAZIER_API_KEY
+        if full_name != firstname:
+            full_key_var = f"{broker_upper}_USER_{full_name}_API_KEY"
+            full_secret_var = f"{broker_upper}_USER_{full_name}_API_SECRET"
+            full_key = os.getenv(full_key_var, "").strip()
+            full_secret = os.getenv(full_secret_var, "").strip()
+
+            if full_key and full_secret:
+                return True
+
+        return False
 
 
 class IndividualUserConfigLoader:
