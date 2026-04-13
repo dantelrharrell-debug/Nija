@@ -6629,6 +6629,19 @@ class KrakenBroker(BaseBroker):
         # ``_KRAKEN_STARTUP_FSM.is_connected``; this flag is used only by USER
         # accounts which have their own independent connection lifecycles.
         self._connection_already_complete: bool = False
+        self._gateway_url: str = os.environ.get("NIJA_KRAKEN_GATEWAY_URL", "").strip()
+        self._gateway_only_mode: bool = os.environ.get(
+            "NIJA_KRAKEN_GATEWAY_ONLY", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._hard_stopped: bool = False
+        self._hard_stop_reason: str = ""
+
+    def _trigger_hard_stop(self, reason: str) -> None:
+        """Fail closed and permanently block Kraken activity for this instance."""
+        self._hard_stopped = True
+        self._hard_stop_reason = reason
+        self.connected = False
+        logger.critical("⛔ Kraken HARD STOP (%s): %s", self.account_identifier, reason)
 
     def _initialize_kraken_market_data(self):
         """
@@ -6683,8 +6696,10 @@ class KrakenBroker(BaseBroker):
         Raises:
             Exception: If API call fails or self.api is not initialized
         """
-        if not self.api:
-            raise Exception("Kraken API not initialized - call connect() first")
+        if self._hard_stopped:
+            raise RuntimeError(
+                f"Kraken hard-stopped ({self.account_identifier}): {self._hard_stop_reason}"
+            )
 
         # ── Gateway mode (Phase B) ─────────────────────────────────────────────
         # When NIJA_KRAKEN_GATEWAY_URL is set, forward this private call to the
@@ -6694,10 +6709,20 @@ class KrakenBroker(BaseBroker):
         # horizontally without nonce collisions.
         #
         # Direct mode (existing path below) is used when the env var is absent.
-        _gateway_url = os.environ.get("NIJA_KRAKEN_GATEWAY_URL", "").strip()
+        _gateway_url = self._gateway_url or os.environ.get("NIJA_KRAKEN_GATEWAY_URL", "").strip()
         if _gateway_url:
             return self._call_via_gateway(_gateway_url, method, params or {})
+        if self._gateway_only_mode:
+            self._trigger_hard_stop(
+                "Gateway-only mode enabled but NIJA_KRAKEN_GATEWAY_URL is missing."
+            )
+            raise RuntimeError(
+                "Kraken blocked: gateway-only mode requires NIJA_KRAKEN_GATEWAY_URL."
+            )
         # ── End gateway mode ───────────────────────────────────────────────────
+
+        if not self.api:
+            raise Exception("Kraken API not initialized - call connect() first")
 
         # Determine API category for rate limiting
         if category is None and KrakenAPICategory is not None:
@@ -6847,10 +6872,26 @@ class KrakenBroker(BaseBroker):
             resp.raise_for_status()
             body = resp.json()
         except Exception as exc:
+            if self._gateway_only_mode:
+                self._trigger_hard_stop(
+                    f"Gateway unreachable for required gateway-only mode: {exc}"
+                )
             raise RuntimeError(
                 f"KrakenBroker: gateway call to {endpoint!r} failed "
                 f"for method {method!r}: {exc}"
             ) from exc
+
+        errors = body.get("errors", [])
+        if self._gateway_only_mode and any(
+            any(tag in str(err).lower() for tag in ("blocked", "lease", "fencing"))
+            for err in errors
+        ):
+            self._trigger_hard_stop(
+                f"Gateway returned blocked/lease error in gateway-only mode: {errors}"
+            )
+            raise RuntimeError(
+                f"Kraken blocked by gateway policy in gateway-only mode: {errors}"
+            )
 
         # Translate gateway response back to the standard krakenex result shape:
         #   {"error": [...], "result": {...}}
@@ -6960,6 +7001,60 @@ class KrakenBroker(BaseBroker):
                     self.connected = False
                     return False
                 logger.info("✅ PLATFORM ready — proceeding with USER %s connection.", self.user_id)
+
+        self._gateway_url = os.environ.get("NIJA_KRAKEN_GATEWAY_URL", "").strip()
+        self._gateway_only_mode = os.environ.get(
+            "NIJA_KRAKEN_GATEWAY_ONLY", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+
+        if self._gateway_only_mode:
+            if not self._gateway_url:
+                self._trigger_hard_stop(
+                    "NIJA_KRAKEN_GATEWAY_ONLY=1 but NIJA_KRAKEN_GATEWAY_URL is not set."
+                )
+                return False
+
+            # Enforce strict credential isolation: strategy containers in
+            # gateway-only mode must not hold direct Kraken credentials.
+            leakage_vars: List[str] = []
+            if self.account_type == AccountType.PLATFORM:
+                for env_name in (
+                    "KRAKEN_PLATFORM_API_KEY",
+                    "KRAKEN_PLATFORM_API_SECRET",
+                    "KRAKEN_API_KEY",
+                    "KRAKEN_API_SECRET",
+                ):
+                    if os.getenv(env_name, "").strip():
+                        leakage_vars.append(env_name)
+            else:
+                user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
+                full_env_name = self.user_id.upper()
+                for env_name in (
+                    f"KRAKEN_USER_{user_env_name}_API_KEY",
+                    f"KRAKEN_USER_{user_env_name}_API_SECRET",
+                    f"KRAKEN_USER_{full_env_name}_API_KEY",
+                    f"KRAKEN_USER_{full_env_name}_API_SECRET",
+                ):
+                    if os.getenv(env_name, "").strip():
+                        leakage_vars.append(env_name)
+            if leakage_vars:
+                self._trigger_hard_stop(
+                    "Gateway-only credential isolation violated. "
+                    f"Unset direct Kraken credentials: {sorted(set(leakage_vars))}"
+                )
+                return False
+
+            # Gateway-only connect success: private execution is delegated to
+            # gateway, and this local broker never receives private credentials.
+            self.credentials_configured = True
+            self.connected = True
+            logger.info(
+                "✅ Kraken gateway-only mode active (%s) — direct credentials disabled, "
+                "private execution delegated to %s",
+                self.account_identifier,
+                self._gateway_url,
+            )
+            return True
 
         try:
             import krakenex
@@ -7227,7 +7322,16 @@ class KrakenBroker(BaseBroker):
                 )
                 return False
             except Exception as _ne:
-                # DistributedNonceManager import failed — fall back to global nonce
+                _strict_nonce_lease = os.environ.get(
+                    "NIJA_STRICT_REDIS_LEASE", "1"
+                ).strip().lower() in {"1", "true", "yes", "on"}
+                if _strict_nonce_lease:
+                    self._trigger_hard_stop(
+                        "DistributedNonceManager unavailable under strict lease policy "
+                        f"(NIJA_STRICT_REDIS_LEASE=1): {_ne}"
+                    )
+                    return False
+                # Legacy fallback (explicitly non-strict mode only).
                 logger.error(
                     "⚠️  DistributedNonceManager unavailable (%s) — "
                     "falling back to global platform nonce (single-instance safe only)",
