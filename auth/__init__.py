@@ -15,6 +15,7 @@ DO NOT store API keys in plain text or commit them to version control.
 import logging
 import json
 import os
+import re
 from typing import Dict, Optional, List, Any
 from datetime import datetime
 from cryptography.fernet import Fernet
@@ -44,6 +45,58 @@ class APIKeyManager:
         self.cipher = Fernet(encryption_key)
         self.user_keys: Dict[str, Dict[str, Any]] = {}
         logger.info("API key manager initialized with encryption")
+
+    @staticmethod
+    def _user_env_token(user_id: str) -> str:
+        """
+        Build a safe env-var token for a user id.
+
+        Keeps only A-Z and 0-9, converting all other characters to underscores.
+        """
+        return re.sub(r"[^A-Z0-9]", "_", user_id.upper())
+
+    def _wire_broker_env(
+        self,
+        user_id: str,
+        broker: str,
+        api_key: str,
+        api_secret: str,
+        additional_params: Optional[Dict] = None
+    ) -> None:
+        """
+        Expose broker credentials via process env vars for runtime broker connectors.
+        """
+        broker_env = broker.upper()
+        user_token = self._user_env_token(user_id)
+        prefix = f"{broker_env}_USER_{user_token}"
+
+        os.environ[f"{prefix}_API_KEY"] = api_key
+        os.environ[f"{prefix}_API_SECRET"] = api_secret
+
+        if additional_params and broker_env == "OKX":
+            passphrase = (
+                additional_params.get("passphrase")
+                or additional_params.get("api_passphrase")
+                or ""
+            )
+            passphrase_str = str(passphrase).strip()
+            if passphrase_str:
+                os.environ[f"{prefix}_PASSPHRASE"] = passphrase_str
+
+        if additional_params and broker_env == "ALPACA":
+            if "paper" in additional_params:
+                os.environ[f"{prefix}_PAPER"] = str(additional_params.get("paper", "true")).lower()
+
+    def _unwire_broker_env(self, user_id: str, broker: str) -> None:
+        """Remove runtime env vars for a user broker connection."""
+        broker_env = broker.upper()
+        user_token = self._user_env_token(user_id)
+        prefix = f"{broker_env}_USER_{user_token}"
+
+        os.environ.pop(f"{prefix}_API_KEY", None)
+        os.environ.pop(f"{prefix}_API_SECRET", None)
+        os.environ.pop(f"{prefix}_PASSPHRASE", None)
+        os.environ.pop(f"{prefix}_PAPER", None)
 
     def store_user_api_key(
         self,
@@ -85,6 +138,13 @@ class APIKeyManager:
             broker_creds['additional_params'] = encrypted_params
 
         self.user_keys[user_id][broker] = broker_creds
+        self._wire_broker_env(
+            user_id=user_id,
+            broker=broker,
+            api_key=api_key,
+            api_secret=api_secret,
+            additional_params=additional_params,
+        )
         logger.info(f"Stored encrypted API credentials for user {user_id} on {broker}")
 
     def get_user_api_key(
@@ -149,8 +209,10 @@ class APIKeyManager:
         """
         if user_id in self.user_keys and broker in self.user_keys[user_id]:
             del self.user_keys[user_id][broker]
+            self._unwire_broker_env(user_id=user_id, broker=broker)
             logger.info(f"Deleted API credentials for user {user_id} on {broker}")
             return True
+        self._unwire_broker_env(user_id=user_id, broker=broker)
         return False
 
     def list_user_brokers(self, user_id: str) -> List[str]:
