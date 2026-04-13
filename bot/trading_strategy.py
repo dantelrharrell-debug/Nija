@@ -8317,6 +8317,19 @@ class TradingStrategy:
                                 _success = self.multi_account_manager.try_reconnect_platform_broker(_bt)
                                 if _success:
                                     self._reconnect_fail_counts[_bt] = 0
+                                    # Sync execution layer: after Kraken reconnects, promote it
+                                    # as active_broker immediately so the execution router routes
+                                    # to Kraken and does not stay on Coinbase.  This bridges the
+                                    # gap between the platform-layer FSM (marked CONNECTED) and
+                                    # the BrokerManager active_broker slot.
+                                    if _bt == BrokerType.KRAKEN and hasattr(self, 'broker_manager') and self.broker_manager:
+                                        try:
+                                            self.broker_manager.set_primary_broker(BrokerType.KRAKEN)
+                                            logger.info(
+                                                "✅ Execution layer synced: Kraken promoted to active_broker after reconnect"
+                                            )
+                                        except Exception as _sync_err:
+                                            logger.debug(f"Broker manager Kraken promotion skipped: {_sync_err}")
                                     # Re-admit user accounts that were blocked when the platform
                                     # failed at startup.  Only runs once per recovery event.
                                     if not self._users_connected_after_platform.get(_bt, False):
