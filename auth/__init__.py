@@ -68,6 +68,9 @@ class APIKeyManager:
     ) -> None:
         """
         Expose broker credentials via process env vars for runtime broker connectors.
+
+        Credentials are plaintext in process memory while set in env vars; this
+        compatibility path should only be used in trusted runtime environments.
         """
         broker_env = broker.upper()
         user_token = self._user_env_token(user_id)
