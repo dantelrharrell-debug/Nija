@@ -33,6 +33,7 @@ try:
         GLOBAL_PLATFORM_BROKERS, _PLATFORM_BROKER_INSTANCES,
         _PLATFORM_BROKER_CONNECTED, _PLATFORM_BROKER_REGISTRY_LOCK,
         get_platform_broker,
+        _user_env_prefix,
     )
 except ImportError:
     from broker_manager import (
@@ -42,6 +43,7 @@ except ImportError:
         GLOBAL_PLATFORM_BROKERS, _PLATFORM_BROKER_INSTANCES,
         _PLATFORM_BROKER_CONNECTED, _PLATFORM_BROKER_REGISTRY_LOCK,
         get_platform_broker,
+        _user_env_prefix,
     )
 
 # Import broker registry for platform designation tracking
@@ -470,9 +472,17 @@ class MultiAccountBrokerManager:
                 broker = KrakenBroker(account_type=AccountType.USER, user_id=user_id)
             elif broker_type == BrokerType.ALPACA:
                 broker = AlpacaBroker(account_type=AccountType.USER, user_id=user_id)
+            elif broker_type == BrokerType.COINBASE:
+                broker = CoinbaseBroker(account_type=AccountType.USER, user_id=user_id)
+                _short, _ = _user_env_prefix(user_id)
+                logger.info("   ℹ️  Coinbase USER broker requires COINBASE_USER_%s_API_KEY / _API_SECRET", _short)
+            elif broker_type == BrokerType.OKX:
+                broker = OKXBroker(account_type=AccountType.USER, user_id=user_id)
+                _short, _ = _user_env_prefix(user_id)
+                logger.info("   ℹ️  OKX USER broker requires OKX_USER_%s_API_KEY / _API_SECRET / _PASSPHRASE", _short)
             else:
                 logger.warning(f"⚠️  Unsupported broker type for user: {broker_type.value}")
-                logger.warning(f"   Only KRAKEN and ALPACA are currently supported for user accounts")
+                logger.warning(f"   Supported types: KRAKEN, COINBASE, OKX, ALPACA")
                 return None
 
             # Store broker object in all_user_brokers for credential checking, even if connection fails
