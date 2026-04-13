@@ -267,7 +267,38 @@ class SafetyController:
     def get_current_mode(self) -> TradingMode:
         """Get current trading mode"""
         return self._mode
-        
+
+    def recheck_mode(self) -> bool:
+        """
+        Re-evaluate trading mode from current environment variables.
+
+        Call this at runtime whenever the safety gate may have been unblocked
+        without restarting the process — for example after a broker successfully
+        connects, or after ``LIVE_CAPITAL_VERIFIED`` / ``LIVE_TRADING`` is
+        written to the environment by an external orchestrator.
+
+        Emergency stop always wins; this method is a no-op when it is active.
+
+        Returns:
+            True  if the mode changed (e.g. MONITOR → LIVE).
+            False if the mode stayed the same.
+        """
+        if self._emergency_stop_active:
+            return False
+        if self._mode == TradingMode.LIVE:
+            return False  # Already live — nothing to do.
+
+        old_mode = self._mode
+        self._load_safety_configuration()
+        changed = self._mode != old_mode
+        if changed:
+            logger.info(
+                "🔄 SafetyController mode updated: %s → %s",
+                old_mode.value,
+                self._mode.value,
+            )
+        return changed
+
     def activate_emergency_stop(self, reason: str = "Manual activation"):
         """
         Activate emergency stop - halts ALL trading immediately.

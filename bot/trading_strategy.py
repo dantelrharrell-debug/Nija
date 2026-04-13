@@ -8138,9 +8138,18 @@ class TradingStrategy:
             except Exception as _safpm_exc:
                 logger.debug("Safe Profit Mode check skipped: %s", _safpm_exc)
 
-
         # CRITICAL SAFETY CHECK: Verify trading is allowed before ANY operations
         if self.safety:
+            # Attempt a runtime refresh in case LIVE_CAPITAL_VERIFIED was set after
+            # the SafetyController was initialised (e.g. .env loaded late, or the
+            # broker just successfully connected for the first time).  This is a
+            # cheap env-var re-read and is skipped when already LIVE.
+            if hasattr(self.safety, 'recheck_mode'):
+                try:
+                    self.safety.recheck_mode()
+                except Exception as _sc_recheck_err:
+                    logger.debug("safety.recheck_mode() skipped: %s", _sc_recheck_err)
+
             trading_allowed, reason = self.safety.is_trading_allowed()
             if not trading_allowed and not user_mode:
                 # Trading not allowed - only execute if this is a position management cycle
@@ -15950,6 +15959,11 @@ class TradingStrategy:
 
                             _ps_success = self.apex.execute_action(_ps_analysis, _ps_symbol)
                             if _ps_success:
+                                logger.info(
+                                    "🟢 EXECUTION ENGINE LIVE: order dispatched for %s "
+                                    "(execution_engine.execute_entry reached)",
+                                    _ps_symbol,
+                                )
                                 # Store entry reason for PatternWinTracker lookup on close
                                 if not hasattr(self, '_last_entry_reason'):
                                     self._last_entry_reason = {}

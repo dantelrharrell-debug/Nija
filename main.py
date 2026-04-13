@@ -1,51 +1,30 @@
-import time
-import logging
+"""
+NIJA Trading Bot — main.py
+==========================
+Production entry point.  Delegates to bot.py which contains the full
+startup sequence: health server, broker connections, safety gate activation,
+market scanning, and the self-healing trading loop.
 
-from strategy import MyStrategy
-from executor_real import RealOrderExecutor
-from safety import SafetyModule
-from data_provider import DataProvider
+Usage
+-----
+    python main.py          # same as: python bot.py
+    bash start.sh           # Railway / Docker production start (also uses bot.py)
+"""
+import os
+import runpy
+import sys
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-def main():
-    strategy = MyStrategy()  # instantiate your own strategy
-    executor = RealOrderExecutor()  # real (not stub) order executor for Coinbase
-    safety = SafetyModule()  # handles risk and halt triggers
-    data = DataProvider()  # gets the latest candles
 
-    logging.info("NIJA bot live loop started (real strategy -> executor wireup).")
+def main() -> None:
+    """Delegate to bot.py's __main__ block."""
+    # Ensure project root is importable so bot.py's relative imports work.
+    if _ROOT not in sys.path:
+        sys.path.insert(0, _ROOT)
 
-    while True:
-        try:
-            candles = data.fetch_latest_candles()
-            if not candles:
-                logging.warning("No candle data, skipping cycle.")
-                time.sleep(15)
-                continue
+    runpy.run_path(os.path.join(_ROOT, "bot.py"), run_name="__main__")
 
-            # Safety Checks (halt if needed)
-            if safety.should_halt():
-                logging.warning("Halted by safety module, skipping trading cycle.")
-                time.sleep(120)
-                continue
-
-            # Get signal from your trading strategy (e.g. 'buy', 'sell', 'hold')
-            signal = strategy.signal_at_index(candles, index=-1)
-            logging.info(f"Signal: {signal}")
-
-            # Wire-up: Only execute if a real trade should occur!
-            if signal in ['buy', 'sell']:
-                result = executor.submit_order(signal, candles[-1])
-                logging.info(f"Order executed: {result}")
-            else:
-                logging.info("No actionable signal.")
-
-        except Exception as e:
-            logging.exception(f"Exception in trading loop: {e}")
-
-        # Adjust this interval to match your candle granularity (e.g., 60 for 1m)
-        time.sleep(60)
 
 if __name__ == "__main__":
     main()

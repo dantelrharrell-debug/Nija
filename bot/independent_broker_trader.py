@@ -222,6 +222,10 @@ class IndependentBrokerTrader:
         self.active_trading_threads: Set[str] = set()
         self.active_threads_lock = threading.Lock()
 
+        # broker_name → BrokerType: stored so the supervisor can restart a
+        # thread started by the connection monitor with the correct broker type.
+        self.broker_thread_types: Dict[str, object] = {}
+
         # Connection monitor: periodically retries disconnected brokers so that
         # held trades are automatically released once credentials/funding are fixed.
         self._connection_monitor_stop = threading.Event()
@@ -1794,6 +1798,20 @@ class IndependentBrokerTrader:
                 return
             self.active_trading_threads.add(broker_name)
 
+        # Record broker_type so the external supervisor can restart this thread
+        # with the correct type if it dies (see bot.py _rerun_supervisor_loop).
+        self.broker_thread_types[broker_name] = broker_type
+
+        # Broker just (re)connected — ask the safety controller to re-check whether
+        # LIVE_CAPITAL_VERIFIED is now set so the execution engine is unblocked.
+        try:
+            _strategy = getattr(self, 'trading_strategy', None)
+            _safety = getattr(_strategy, 'safety', None) if _strategy else None
+            if _safety is not None and hasattr(_safety, 'recheck_mode'):
+                _safety.recheck_mode()
+        except Exception as _sr_err:
+            logger.debug("safety.recheck_mode() on connect skipped: %s", _sr_err)
+
         stop_flag = threading.Event()
         self.stop_flags[broker_name] = stop_flag
 
@@ -1808,6 +1826,7 @@ class IndependentBrokerTrader:
 
         logger.critical("🧠 TRADING THREAD STARTED")
         logger.info(f"   🚀 PLATFORM {broker_name.upper()} trading thread started (via connection monitor)")
+
 
     def _start_user_thread(self, user_id: str, broker_type, broker):
         """
