@@ -790,11 +790,18 @@ class KrakenNonceManager:
         # Hard rule: ONE API KEY = ONE WRITER.  If acquisition fails, fail
         # closed immediately so duplicate writers cannot run.
         self._pid_lock_fh = self._try_acquire_pid_lock()
-        if _FCNTL_AVAILABLE and self._pid_lock_fh is None:
+        if not _FCNTL_AVAILABLE:
+            _logger.warning(
+                "KrakenNonceManager: fcntl unavailable on this platform; "
+                "cannot hard-enforce process-lifetime single-writer locking."
+            )
+        elif self._pid_lock_fh is None:
             raise RuntimeError(
                 "Kraken nonce writer lock not acquired. "
                 "Hard rule violation: ONE API KEY = ONE WRITER "
-                "(no multi-container, no multi-region, no independent nonce writers)."
+                "(no multi-container, no multi-region, no independent nonce writers). "
+                "Likely causes: another NIJA process already running or lock-file permissions. "
+                "Stop all duplicate deployments/processes and restart a single writer."
             )
 
         # Hard rule: disallow nonce backends that are explicitly intended for
@@ -806,14 +813,9 @@ class KrakenNonceManager:
                 "(no multi-container, no multi-region, no independent nonce writers)."
             )
 
-        # ── Optional Redis nonce backend ───────────────────────────────────
-        if _NONCE_BACKEND == "redis":
-            self._redis_backend = _build_redis_backend()
-            if self._redis_backend is not None:
-                _logger.info(
-                    "KrakenNonceManager: using Redis nonce backend "
-                    "(key=%s, url=%s)", _REDIS_NONCE_KEY, _REDIS_URL
-                )
+        # ── Optional nonce backend ────────────────────────────────────────
+        # Redis backend path is intentionally disabled by the hard one-writer
+        # rule above.
         if _NONCE_MODE == "timestamp":
             _logger.info(
                 "KrakenNonceManager: NIJA_NONCE_MODE=timestamp — "
@@ -880,7 +882,7 @@ class KrakenNonceManager:
 
         # Warn loudly if another bot process is still running on platforms where
         # process-lifetime lock enforcement is unavailable.
-        if self._pid_lock_fh is None and KrakenNonceManager.detect_other_process_running():
+        if (not _FCNTL_AVAILABLE) and KrakenNonceManager.detect_other_process_running():
             _logger.error(
                 "🚨 KrakenNonceManager: another bot process appears to be holding "
                 "the nonce lock.  Stop ALL duplicate NIJA processes before this "
