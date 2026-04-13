@@ -8464,12 +8464,16 @@ class KrakenBroker(BaseBroker):
                     and not force_liquidate):
                 logger.critical(
                     "🚫 BUY order BLOCKED: Kraken broker is QUARANTINED due to confirmed nonce "
-                    "poisoning.  Rotate the API key and restart to re-enable entries."
+                    "poisoning.  FASTEST recovery: rotate API key (delete old, create new, "
+                    "update .env/store_user_api_key, restart)."
                 )
                 return {
                     "status": "unfilled",
                     "error": "BROKER_QUARANTINED",
-                    "message": "Kraken blocked: nonce poisoning confirmed — rotate API key to recover",
+                    "message": (
+                        "Kraken blocked: nonce poisoning confirmed — rotate API key "
+                        "(delete old, create new, update .env/store_user_api_key, restart)"
+                    ),
                     "partial_fill": False,
                     "filled_pct": 0.0,
                 }

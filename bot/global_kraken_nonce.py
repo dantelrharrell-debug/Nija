@@ -1832,11 +1832,15 @@ class KrakenNonceManager:
             "❌ KrakenNonceManager.probe_and_resync: ALL RECOVERY TIERS EXHAUSTED "
             "(standard → deep → ceiling jump + %d post-ceiling steps).  "
             "Automated recovery failed.  Kraken's stored nonce exceeds now + 24 h.\n"
-            "Recommended recovery actions:\n"
-            "  1. Stop ALL NIJA instances: ps aux | grep bot.py\n"
-            "  2. Check for duplicate Railway/Docker deployments.\n"
-            "  3. Rotate the Kraken API key on kraken.com → Settings → API.\n"
-            "  4. Set NIJA_FORCE_NONCE_RESYNC=1 and restart with ONE instance.",
+            "Only two real recovery paths remain:\n"
+            "  Option 1 (FASTEST + CLEAN): Rotate Kraken API keys.\n"
+            "    1. Kraken → Settings → API\n"
+            "    2. Delete old API key\n"
+            "    3. Create new API key\n"
+            "    4. Update bot credentials (.env or store_user_api_key())\n"
+            "    5. Restart bot/service\n"
+            "    👉 This resets the nonce floor to zero for the new key.\n"
+            "  Option 2: Wait until wall-clock time catches up to Kraken's poisoned nonce floor.",
             _cj_total,
         )
         # Intentionally NOT setting _key_invalidated = True.
