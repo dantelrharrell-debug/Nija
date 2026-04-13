@@ -4461,13 +4461,22 @@ class TradingStrategy:
                     logger.info(f"   👥 USER ACCOUNTS (INDEPENDENT): ${user_total_balance:,.2f}")
                 logger.info("=" * 70)
 
-                # FIX #2: Force capital re-hydration after broker connections
+                # FIX #2 / FIX #3: Force capital re-hydration after broker connections
+                # Use the seeded breakdown aggregate (coinbase + kraken + other) as the
+                # GLOBAL platform total so that both Kraken and Coinbase are always
+                # counted, not just the broker that happened to respond first in
+                # broker_manager.get_total_balance().
+                global_platform_total = coinbase_balance + kraken_balance + other_balance
                 # MASTER AUTHORITY RULE: Master capital is always authoritative
                 # Users are followers, not required for startup
-                if platform_balance > 0:
+                if global_platform_total > 0:
                     # Master is funded - include user balances for total capital
-                    total_capital = platform_balance + user_total_balance
-                    logger.info(f"   ✅ Capital calculation: Platform (${platform_balance:.2f}) + Users (${user_total_balance:.2f})")
+                    total_capital = global_platform_total + user_total_balance
+                    logger.info(
+                        "   ✅ Capital calculation: Kraken=$%.2f + Coinbase=$%.2f + Other=$%.2f + Users=$%.2f = $%.2f",
+                        kraken_balance, coinbase_balance, other_balance,
+                        user_total_balance, total_capital,
+                    )
                 elif user_total_balance > 0:
                     # Master unfunded but users have capital - allow user-only trading
                     total_capital = user_total_balance
@@ -4663,17 +4672,12 @@ class TradingStrategy:
                             _cse_reset_err,
                         )
 
-                # Initialize advanced trading features AFTER first live balance fetch
-                # This ensures advanced modules have access to real capital data
-                # Gated by LIVE_CAPITAL_VERIFIED environment variable
-                logger.info("🔧 Initializing advanced trading modules with live capital...")
-                self._init_advanced_features(total_capital)
-
                 # ── Capital Authority — single source of truth ─────────────────
-                # Initialise the process-wide CapitalAuthority singleton with the
-                # live broker map collected above so every downstream module can
-                # call get_capital_authority().get_usable_capital() instead of
-                # relying on hardcoded $10 k baselines.
+                # FIX #4: Initialise CapitalAuthority BEFORE _init_advanced_features so
+                # that every downstream module that calls get_capital_authority() during
+                # startup receives a fully-refreshed (non-stale) singleton.
+                # Correct order: connect brokers → fetch balances → aggregate capital →
+                # THEN initialize CapitalAuthority / DrawdownProtection / ScalingEngine.
                 try:
                     from capital_authority import get_capital_authority as _get_ca_startup
                     _ca_startup = _get_ca_startup()
@@ -4698,6 +4702,13 @@ class TradingStrategy:
                 except Exception as _ca_startup_err:
                     logger.warning("⚠️  CapitalAuthority startup init skipped: %s", _ca_startup_err)
                     self._capital_authority = None
+
+                # Initialize advanced trading features AFTER CapitalAuthority is ready
+                # so that all advanced modules receive a valid, fully-refreshed authority
+                # singleton rather than an empty placeholder.
+                # Gated by LIVE_CAPITAL_VERIFIED environment variable.
+                logger.info("🔧 Initializing advanced trading modules with live capital...")
+                self._init_advanced_features(total_capital)
 
                 # FIX #3: Hard fail if capital below minimum (non-negotiable)
                 if total_capital < MINIMUM_TRADING_BALANCE:
