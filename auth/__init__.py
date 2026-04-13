@@ -70,6 +70,8 @@ class APIKeyManager:
         user_token = self._user_env_token(user_id)
         prefix = f"{broker_env}_USER_{user_token}"
 
+        # Runtime compatibility path: broker connectors read process env vars.
+        # This is process-local only and is not persisted to disk.
         os.environ[f"{prefix}_API_KEY"] = api_key
         os.environ[f"{prefix}_API_SECRET"] = api_secret
 
@@ -209,9 +211,8 @@ class APIKeyManager:
         Returns:
             bool: True if deleted successfully
         """
-        self._unwire_broker_env(user_id=user_id, broker=broker)
-
         if user_id in self.user_keys and broker in self.user_keys[user_id]:
+            self._unwire_broker_env(user_id=user_id, broker=broker)
             del self.user_keys[user_id][broker]
             logger.info(f"Deleted API credentials for user {user_id} on {broker}")
             return True
