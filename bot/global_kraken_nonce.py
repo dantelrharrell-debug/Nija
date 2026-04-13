@@ -259,11 +259,9 @@ _PID_LOCK_FILE = _STATE_FILE + ".pid"
 #   "file"  (default) — atomic file-locked counter persisted to
 #                        data/kraken_nonce.state.  Works on any filesystem.
 #
-#   "redis"           — atomic Redis INCR via a Lua script; best for
-#                        multi-host / multi-container deployments where the
-#                        same Kraken API key is shared across nodes.
-#                        Requires NIJA_REDIS_URL (default: redis://localhost:6379/0).
-#                        Falls back to "file" mode when Redis is unavailable.
+#   "redis"           — legacy option (DISALLOWED by hard single-writer rule:
+#                        ONE API KEY = ONE WRITER).  Startup now fails closed
+#                        if NIJA_NONCE_BACKEND=redis is configured.
 #
 # NIJA_NONCE_MODE — controls what the initial nonce value is based on.
 #
@@ -789,10 +787,24 @@ class KrakenNonceManager:
         # ── Process-lifetime PID lock (duplicate-bot detection) ────────────
         # Acquired FIRST — before any other state I/O — so that a duplicate
         # process is detected as early as possible during startup.
-        # If acquisition fails (another process holds it) we log CRITICAL and
-        # continue rather than abort, since the cross-process nonce lock still
-        # prevents duplicate nonces at the increment level.
+        # Hard rule: ONE API KEY = ONE WRITER.  If acquisition fails, fail
+        # closed immediately so duplicate writers cannot run.
         self._pid_lock_fh = self._try_acquire_pid_lock()
+        if _FCNTL_AVAILABLE and self._pid_lock_fh is None:
+            raise RuntimeError(
+                "Kraken nonce writer lock not acquired. "
+                "Hard rule violation: ONE API KEY = ONE WRITER "
+                "(no multi-container, no multi-region, no independent nonce writers)."
+            )
+
+        # Hard rule: disallow nonce backends that are explicitly intended for
+        # multi-container / multi-region shared-key topologies.
+        if _NONCE_BACKEND == "redis":
+            raise RuntimeError(
+                "NIJA_NONCE_BACKEND=redis is disallowed. "
+                "Hard rule: ONE API KEY = ONE WRITER "
+                "(no multi-container, no multi-region, no independent nonce writers)."
+            )
 
         # ── Optional Redis nonce backend ───────────────────────────────────
         if _NONCE_BACKEND == "redis":
@@ -866,11 +878,8 @@ class KrakenNonceManager:
         # continuous "EAPI:Invalid nonce" errors that block ALL accounts.
         log_ntp_clock_status()
 
-        # Warn loudly if another bot process is still running.  A competing
-        # process will keep issuing nonces after our reset, making it ineffective.
-        # Note: _try_acquire_pid_lock() already logged CRITICAL if the PID lock
-        # was held; this secondary check uses the brief per-op lock as a fallback
-        # on platforms where _try_acquire_pid_lock() returned None.
+        # Warn loudly if another bot process is still running on platforms where
+        # process-lifetime lock enforcement is unavailable.
         if self._pid_lock_fh is None and KrakenNonceManager.detect_other_process_running():
             _logger.error(
                 "🚨 KrakenNonceManager: another bot process appears to be holding "
