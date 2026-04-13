@@ -1598,6 +1598,9 @@ class KrakenNonceManager:
         # jumps).  server_sync_resync() resets us to server_time+3s which is
         # often still below Kraken's floor.  We probe upward in fixed steps
         # until we find Kraken's actual floor or exhaust all attempts.
+        # Capture whether deep mode was active at entry so the auto-escalation
+        # path (below) knows which tiers have already been attempted.
+        was_deep = self._deep_reset_active
         effective_step: int = step_ms if step_ms > 0 else (
             _DEEP_PROBE_STEP_MS if self._deep_reset_active else _PROBE_STEP_MS
         )
@@ -1673,26 +1676,171 @@ class KrakenNonceManager:
                     elif _NONCE_MODE != "timestamp":
                         self._persist()
 
-        # ── All probe steps exhausted ─────────────────────────────────────
-        # Kraken's stored floor is more than effective_max × effective_step ms
-        # ahead of server time.  This is NOT a key-validity problem — it is a
-        # nonce-state problem caused by legacy forward-jump accumulation.
+        # ── All probe steps exhausted — auto-escalate through tiers ─────────
+        # Nonce desync accumulation: Kraken's server-side stored floor is further
+        # ahead of wall-clock than the current probe budget can reach.  This is
+        # NOT a key-validity problem; it is a recoverable resync issue caused by
+        # accumulated nuclear resets / ceiling jumps from prior sessions.
+        #
+        # Auto-escalation ladder (runs within this same call):
+        #   Tier 1 — DEEP PROBE  : 12 × 10 min = 120 min additional coverage
+        #                          (skipped when was_deep=True; deep mode was already used)
+        #   Tier 2 — CEILING JUMP: nonce → now + 24 h, then a few final probes
+        #
+        # This replaces the old pattern of requiring NIJA_DEEP_NONCE_RESET=1 or
+        # NIJA_NONCE_CEILING_JUMP=1 env-var restarts; recovery now happens at
+        # runtime without operator intervention.
+
         total_window_min = effective_max * effective_step / 60_000
-        _logger.error(
-            "❌ KrakenNonceManager.probe_and_resync: all %d probe step(s) × %d ms "
-            "(%.0f min total) exhausted.  Kraken's stored nonce floor is > %.0f min "
-            "ahead of server time (legacy forward-jump accumulation).\n"
-            "Recommended recovery actions:\n"
-            "  1. Set NIJA_DEEP_NONCE_RESET=1 and restart "
-            "(activates 12 × 10-min = 120-min probe coverage).\n"
-            "  2. Set NIJA_NONCE_CEILING_JUMP=1 and restart "
-            "(brute-force 24-h jump then probe).\n"
-            "  3. Check for duplicate bot instances: ps aux | grep bot.py\n"
-            "  4. Rotate the Kraken API key if all else fails.",
+        _logger.warning(
+            "KrakenNonceManager.probe_and_resync: %s-mode probes (%d × %d ms = %.0f min) "
+            "exhausted — Kraken nonce floor > %.0f min ahead of server time.  "
+            "Beginning auto-escalation.",
+            "deep" if was_deep else "standard",
             effective_max, effective_step, total_window_min, total_window_min,
         )
+
+        # ── Tier 1: deep probe (only when we started in standard mode) ────────
+        if not was_deep:
+            _logger.warning(
+                "KrakenNonceManager.probe_and_resync: [Tier 1] auto-escalating to "
+                "DEEP PROBE — %d × %d ms = %.0f min additional coverage "
+                "continuing from current nonce position",
+                _DEEP_PROBE_MAX_ATTEMPTS, _DEEP_PROBE_STEP_MS,
+                _DEEP_PROBE_MAX_ATTEMPTS * _DEEP_PROBE_STEP_MS / 60_000,
+            )
+            self._deep_reset_active = True
+            for dp_num in range(1, _DEEP_PROBE_MAX_ATTEMPTS + 1):
+                _logger.info(
+                    "KrakenNonceManager.probe_and_resync: DEEP probe %d/%d (nonce=%d)",
+                    dp_num, _DEEP_PROBE_MAX_ATTEMPTS, self.get_last_nonce(),
+                )
+                try:
+                    dp_result = api_call_fn()
+                except Exception as exc:
+                    _logger.debug(
+                        "KrakenNonceManager.probe_and_resync: DEEP probe %d raised (%s) — aborting",
+                        dp_num, exc,
+                    )
+                    return False
+                if not isinstance(dp_result, dict):
+                    _logger.debug(
+                        "KrakenNonceManager.probe_and_resync: unexpected response type on "
+                        "DEEP probe %d — aborting",
+                        dp_num,
+                    )
+                    return False
+                if not _is_nonce_error(dp_result):
+                    if not (dp_result.get("error") or []):
+                        _logger.info(
+                            "✅ KrakenNonceManager.probe_and_resync: accepted on DEEP probe "
+                            "%d/%d — nonce=%d",
+                            dp_num, _DEEP_PROBE_MAX_ATTEMPTS, self.get_last_nonce(),
+                        )
+                    # Record calibration so AdaptiveNonceOffsetEngine can learn
+                    # how many deep-probe steps were needed (dp_num - 1 failed
+                    # before this success; 0 means calibrated on the first try).
+                    AdaptiveNonceOffsetEngine().record_calibration(
+                        dp_num - 1, _DEEP_PROBE_STEP_MS
+                    )
+                    return True
+                # Advance for the next deep probe (skip on the last iteration)
+                if dp_num < _DEEP_PROBE_MAX_ATTEMPTS:
+                    _logger.warning(
+                        "KrakenNonceManager.probe_and_resync: DEEP probe %d/%d rejected — "
+                        "advancing +%d ms",
+                        dp_num, _DEEP_PROBE_MAX_ATTEMPTS, _DEEP_PROBE_STEP_MS,
+                    )
+                    with _LOCK:
+                        self._last_nonce += _DEEP_PROBE_STEP_MS
+                        if self._redis_backend is not None:
+                            try:
+                                self._redis_backend.advance_to(self._last_nonce)
+                            except Exception as _re:
+                                _logger.debug(
+                                    "KrakenNonceManager.probe_and_resync: Redis advance error (%s)", _re
+                                )
+                        elif _NONCE_MODE != "timestamp":
+                            self._persist()
+            _logger.warning(
+                "KrakenNonceManager.probe_and_resync: [Tier 1] DEEP probes (%d × %d ms = %.0f min) "
+                "also exhausted — escalating to CEILING JUMP",
+                _DEEP_PROBE_MAX_ATTEMPTS, _DEEP_PROBE_STEP_MS,
+                _DEEP_PROBE_MAX_ATTEMPTS * _DEEP_PROBE_STEP_MS / 60_000,
+            )
+
+        # ── Tier 2: ceiling jump (now + 24 h) ────────────────────────────────
+        # If the deep probes (or the caller-supplied deep mode) also failed the
+        # nonce is so far ahead that a large one-shot jump is the only option.
+        # force_ceiling_jump() sets self._last_nonce = now + _CEILING_JUMP_MS
+        # (default 24 h), which should land well above Kraken's stored floor.
+        _logger.critical(
+            "🚀 KrakenNonceManager.probe_and_resync: [Tier 2] automatic CEILING JUMP "
+            "(now + %d ms = %.1f h) — all progressive probe tiers exhausted.  "
+            "Check for duplicate bot instances if this fires repeatedly.",
+            _CEILING_JUMP_MS, _CEILING_JUMP_MS / 3_600_000,
+        )
+        self.force_ceiling_jump()
+        # Probe forward from the ceiling position to pin-point Kraken's floor.
+        # _DEEP_PROBE_STEP_MS (10 min) is used here because after a 24-h ceiling
+        # jump we need a coarse step that can cover multi-hour floors quickly
+        # without wasting many small increments (as _PROBE_STEP_MS = 5 min would).
+        _cj_total = _PROBE_ESCALATION_ATTEMPTS + 1
+        for cj_num in range(1, _cj_total + 1):
+            _logger.info(
+                "KrakenNonceManager.probe_and_resync: post-ceiling probe %d/%d (nonce=%d)",
+                cj_num, _cj_total, self.get_last_nonce(),
+            )
+            try:
+                cj_result = api_call_fn()
+            except Exception as exc:
+                _logger.debug(
+                    "KrakenNonceManager.probe_and_resync: post-ceiling probe %d raised (%s)",
+                    cj_num, exc,
+                )
+                return False
+            if not isinstance(cj_result, dict):
+                return False
+            if not _is_nonce_error(cj_result):
+                if not (cj_result.get("error") or []):
+                    _logger.info(
+                        "✅ KrakenNonceManager.probe_and_resync: accepted after CEILING JUMP "
+                        "(post-ceiling probe %d/%d) — nonce=%d",
+                        cj_num, _cj_total, self.get_last_nonce(),
+                    )
+                return True
+            # Advance for next post-ceiling probe (skip on last iteration)
+            if cj_num < _cj_total:
+                with _LOCK:
+                    self._last_nonce += _DEEP_PROBE_STEP_MS
+                    if self._redis_backend is not None:
+                        try:
+                            self._redis_backend.advance_to(self._last_nonce)
+                        except Exception as _re:
+                            _logger.debug(
+                                "KrakenNonceManager.probe_and_resync: Redis advance error (%s)", _re
+                            )
+                    elif _NONCE_MODE != "timestamp":
+                        self._persist()
+
+        # ── All tiers exhausted — log actionable remediation ──────────────────
+        # This should be extremely rare: Kraken's floor is > 24 h + probes ahead
+        # of wall-clock, which only happens if many ceiling jumps were stacked
+        # across sessions, OR a bug in this module accumulated extreme forward
+        # drift.  A new API key is the only guaranteed recovery at this point.
+        _logger.error(
+            "❌ KrakenNonceManager.probe_and_resync: ALL RECOVERY TIERS EXHAUSTED "
+            "(standard → deep → ceiling jump + %d post-ceiling steps).  "
+            "Automated recovery failed.  Kraken's stored nonce exceeds now + 24 h.\n"
+            "Recommended recovery actions:\n"
+            "  1. Stop ALL NIJA instances: ps aux | grep bot.py\n"
+            "  2. Check for duplicate Railway/Docker deployments.\n"
+            "  3. Rotate the Kraken API key on kraken.com → Settings → API.\n"
+            "  4. Set NIJA_FORCE_NONCE_RESYNC=1 and restart with ONE instance.",
+            _cj_total,
+        )
         # Intentionally NOT setting _key_invalidated = True.
-        # Nonce desync is recoverable; it is NOT a credential problem.
+        # Nonce desync is a resync problem, not a credential problem.
         return False
 
 
