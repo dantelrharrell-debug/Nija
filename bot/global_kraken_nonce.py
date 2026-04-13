@@ -1947,24 +1947,25 @@ class KrakenNonceManager:
         Non-blocking check: return ``True`` if another bot process appears to
         hold the cross-process nonce lock for this key right now.
 
-        Checks ``self._lock_file`` (the brief per-nonce-operation lock) using
-        ``fcntl.LOCK_NB``.  For a more reliable check that is not limited to
-        the instant a nonce is being issued, see ``_try_acquire_pid_lock()``
-        which checks ``self._pid_lock_file`` (the process-lifetime lock).
+        Checks ``self._pid_lock_file`` first (process-lifetime lock), then
+        ``self._lock_file`` (brief per-op lock) using ``fcntl.LOCK_NB``.
+        This catches duplicate processes even when they are idle between nonce
+        operations.
         Always returns ``False`` on platforms without fcntl.
         """
         if not _FCNTL_AVAILABLE:
             return False
         try:
-            # Use append mode — never truncate a file that an active process
-            # may have open as a lock target.
-            with open(self._lock_file, "a") as fh:
-                try:
-                    _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-                    _fcntl.flock(fh, _fcntl.LOCK_UN)
-                    return False   # lock was free — no other process doing a nonce op
-                except (BlockingIOError, OSError):
-                    return True    # lock is held by another process right now
+            for lock_path in (self._pid_lock_file, self._lock_file):
+                # Use append mode — never truncate a file that an active process
+                # may have open as a lock target.
+                with open(lock_path, "a") as fh:
+                    try:
+                        _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                        _fcntl.flock(fh, _fcntl.LOCK_UN)
+                    except (BlockingIOError, OSError):
+                        return True  # lock is held by another process right now
+            return False
         except Exception:
             return False
 
@@ -2075,7 +2076,9 @@ class KrakenNonceManager:
           (per-key) for the swap.
         * The old instance is NOT mutated; existing references are abandoned.
           Do **not** continue issuing nonces from a reference held before calling.
-        * PID lock files are NOT released — the process still owns them until exit.
+        * The old instance's PID-lock file handle is closed so the replacement
+          singleton in this same process can immediately reacquire the
+          process-lifetime lock.
         """
         if not key_id:
             with cls._instance_lock:
@@ -2093,6 +2096,18 @@ class KrakenNonceManager:
                 getattr(old, "_last_nonce", 0),
                 getattr(old, "_last_successful_nonce", 0),
             )
+            _old_pid_lock_fh = getattr(old, "_pid_lock_fh", None)
+            if _old_pid_lock_fh is not None:
+                try:
+                    _old_pid_lock_fh.close()
+                    _logger.debug(
+                        "KrakenNonceManager.destroy_instance: released old PID lock handle"
+                    )
+                except Exception as _lock_close_err:
+                    _logger.debug(
+                        "KrakenNonceManager.destroy_instance: PID lock close error (%s)",
+                        _lock_close_err,
+                    )
 
     # ── Private helpers ───────────────────────────────────────────────────
 
