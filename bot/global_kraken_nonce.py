@@ -88,6 +88,20 @@ _SERVER_SYNC_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_SERVER_SYNC_OFFSET_
 _RECOVERY_FREEZE_S: float   = float(os.environ.get("NIJA_NONCE_RECOVERY_FREEZE_S",    "3.0"))   # freeze before re-querying server time
 _ERROR_RECOVERY_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_ERROR_RECOVERY_THRESHOLD", "3"))  # consecutive errors before server_sync_resync fires
 
+# ── Pre-request guard constants (Step 4) ─────────────────────────────────────
+# Enforced by get_kraken_nonce() before issuing every nonce.
+# If either invariant is violated, the singleton is destroyed and rebuilt
+# from Kraken server time so stale-object reuse can never cause a desync loop.
+#
+#  epsilon      : minimum gap (ms) from the last SUCCESSFULLY USED nonce.
+#                 Value ≥ 1 guarantees strict monotonicity vs. recorded success.
+#
+#  safety_offset: minimum lead (ms) the pending nonce must have over local
+#                 wall-clock time.  0 = nonce must be ≥ now (no past nonces).
+#                 Negative values allow slack for minor backward clock drift.
+_PRE_REQUEST_EPSILON_MS: int      = int(os.environ.get("NIJA_NONCE_EPSILON_MS",       "1"))
+_PRE_REQUEST_SAFETY_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_SAFETY_OFFSET_MS", "0"))
+
 # After this many consecutive nuclear resets within one session the manager
 # automatically activates deep-probe mode (12 × 10 min = 120 min coverage),
 # exactly as if NIJA_DEEP_NONCE_RESET=1 had been set at startup.
@@ -759,6 +773,10 @@ class KrakenNonceManager:
         # no-op (no more nuclear resets) and broker_manager aborts retry loops
         # immediately so the infinite nonce-reset loop cannot happen.
         self._key_invalidated: bool = False
+        # Tracks the last nonce value that Kraken successfully accepted.
+        # Used by the pre-request guard (Step 4) to enforce strict monotonicity
+        # relative to the confirmed success history, not just the in-memory counter.
+        self._last_successful_nonce: int = 0
         # Process-lifetime lock file descriptor (None on Windows / error).
         # Kept open for the entire bot session so duplicate-process detection
         # is reliable even between nonce operations.
@@ -800,27 +818,30 @@ class KrakenNonceManager:
         _deep_reset = os.environ.get("NIJA_DEEP_NONCE_RESET", "").strip() == "1"
         self._deep_reset_active: bool = _deep_reset
 
-        # NIJA_FORCE_NONCE_RESYNC=1 → wipe persisted state + adaptive-offset EMA
-        # before initialising so the next probe_and_resync() starts from a clean
-        # slate.  Useful when the container's nonce state is too far behind
-        # Kraken's server-side floor (e.g. after multiple nuclear resets or a
-        # long outage).  The env var is intentionally checked only at _init()
-        # time so it has no effect once the singleton is running.
+        # ── Step 1 (hard reset): always delete persisted nonce state on init ──
+        # Every boot starts from a clean server-time anchor.  This prevents
+        # stale forward-drift (accumulated nuclear resets / ceiling jumps from
+        # prior sessions) from poisoning the new session's nonce.
+        # NOTE: _PID_LOCK_FILE is intentionally excluded — it is held open for
+        # the process lifetime and must not be deleted during init.
+        for _path in (_STATE_FILE, _STATE_FILE + ".lock", _STATE_FILE + ".tmp"):
+            try:
+                os.remove(_path)
+                _logger.debug("KrakenNonceManager: cleared persisted nonce state %s", _path)
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                _logger.debug("KrakenNonceManager: could not clear %s (%s)", _path, exc)
+
+        # NIJA_FORCE_NONCE_RESYNC=1 / deep-reset: also wipe the adaptive-offset
+        # EMA so the next probe_and_resync() starts from the conservative timing
+        # floor rather than a potentially-stale small EMA value.
         if os.environ.get("NIJA_FORCE_NONCE_RESYNC", "").strip() == "1" or _deep_reset:
             _logger.warning(
-                "KrakenNonceManager: %s — wiping nonce state and adaptive-offset "
-                "EMA for a guaranteed fresh calibration",
+                "KrakenNonceManager: %s — also wiping adaptive-offset EMA",
                 "NIJA_DEEP_NONCE_RESET=1" if _deep_reset else "NIJA_FORCE_NONCE_RESYNC=1",
             )
-            for _path in (
-                _STATE_FILE,
-                _STATE_FILE + ".lock",
-                _STATE_FILE + ".tmp",
-                _AO_STATE_FILE,
-                _AO_STATE_FILE + ".tmp",
-                # NOTE: _PID_LOCK_FILE is intentionally excluded — we hold it
-                # open for the process lifetime and must not delete it here.
-            ):
+            for _path in (_AO_STATE_FILE, _AO_STATE_FILE + ".tmp"):
                 try:
                     os.remove(_path)
                     _logger.debug("KrakenNonceManager: removed %s", _path)
@@ -1310,20 +1331,20 @@ class KrakenNonceManager:
 
         Recovery behaviour
         ------------------
-        errors 1–2 : no jump — the next natural ``next_nonce()`` call advances
+        errors 1–2 : no action — the next natural ``next_nonce()`` call advances
                      monotonically (``max(now_ms, last + 1)``).  Most transient
                      single-error rejections resolve without intervention.
 
-        error 3+   : trigger ``server_sync_resync()`` — freeze
-                     ``_RECOVERY_FREEZE_S`` seconds, re-query Kraken server
-                     time, reset the nonce to
-                     ``server_time_ms + _SERVER_SYNC_OFFSET_MS``.  The error
-                     counter is cleared inside ``server_sync_resync()`` so the
-                     escalation ladder starts fresh after each recovery.
+        error 3+   : **destroy this singleton** (Step 3) so the next
+                     ``get_kraken_nonce()`` call rebuilds a fully fresh instance
+                     anchored to Kraken server time.  A brief freeze
+                     (``_RECOVERY_FREEZE_S`` seconds, default 3 s) is applied
+                     first to let Kraken's nonce window settle before the rebuild
+                     queries ``/0/public/Time``.
 
-        There are **no** nuclear resets (+30 min forward jumps) and **no**
-        long trading pauses (300 s).  The brief freeze in
-        ``server_sync_resync()`` is the only delay.
+                     Using destroy-and-rebuild (not reset-in-place) prevents the
+                     "silent reuse of stale nonce object" failure mode where a
+                     partially-recovered instance accumulates further drift.
 
         No-op when the API key has been declared permanently invalid (retained
         for backward compatibility with call sites that guard on
@@ -1351,20 +1372,25 @@ class KrakenNonceManager:
         if trigger_recovery:
             _logger.warning(
                 "KrakenNonceManager.record_error: %d consecutive nonce errors — "
-                "triggering server-sync recovery (no nuclear jump)",
-                _ERROR_RECOVERY_THRESHOLD,
+                "freezing %.1f s then destroying singleton for a full rebuild "
+                "from Kraken server time (Step 3: no reset-in-place)",
+                _ERROR_RECOVERY_THRESHOLD, _RECOVERY_FREEZE_S,
             )
-            self.server_sync_resync()
+            if _RECOVERY_FREEZE_S > 0:
+                time.sleep(_RECOVERY_FREEZE_S)
+            # Destroy the singleton — get_kraken_nonce() will rebuild it fresh.
+            KrakenNonceManager.destroy_instance()
 
     def record_success(self) -> None:
         """Reset the consecutive-error counter after a successful API call.
 
-        Also clears any active trading pause so that connected user accounts
-        resume immediately once the platform Kraken nonce issue is resolved,
-        rather than waiting for the full pause timer to expire.
+        Also records the last nonce that Kraken confirmed as valid so the
+        pre-request guard (Step 4) can enforce strict monotonicity relative
+        to the confirmed success history, and clears any active trading pause.
         """
         with _LOCK:
             self._error_count = 0
+            self._last_successful_nonce = self._last_nonce  # Step 4: track for guard
             if self._trading_paused_until > 0.0:
                 _logger.info(
                     "✅ KrakenNonceManager: trading pause cleared on successful API call"
@@ -1760,6 +1786,46 @@ class KrakenNonceManager:
             )
             return None
 
+    @classmethod
+    def destroy_instance(cls) -> None:
+        """
+        Destroy the singleton completely (Step 3).
+
+        Sets ``cls._instance = None`` so the very next ``KrakenNonceManager()``
+        call — or the guard logic inside ``get_kraken_nonce()`` — constructs a
+        fully fresh object anchored to Kraken server time.
+
+        Contract
+        --------
+        * Thread-safe: acquires ``_instance_lock`` for the swap.
+        * The old instance is NOT mutated; any existing references are simply
+          abandoned.  Do **not** continue issuing nonces from a reference held
+          before ``destroy_instance()`` was called.
+        * The PID lock file is NOT released — the process still owns it until
+          normal process exit.
+
+        Called automatically by
+        -----------------------
+        * ``record_error()`` when the consecutive-error threshold is reached
+          (instead of reset-in-place via ``server_sync_resync()``).
+        * ``get_kraken_nonce()`` when the pre-request guard detects a violated
+          monotonicity or server-time invariant.
+
+        Operators can also call ``rebuild_nonce_manager()`` directly from
+        maintenance scripts for a forced clean slate without restarting.
+        """
+        with cls._instance_lock:
+            old = cls._instance
+            cls._instance = None
+        if old is not None:
+            _logger.warning(
+                "KrakenNonceManager.destroy_instance: singleton destroyed "
+                "(last_nonce=%d, last_successful=%d) — "
+                "next get_kraken_nonce() will rebuild from Kraken server time",
+                getattr(old, "_last_nonce", 0),
+                getattr(old, "_last_successful_nonce", 0),
+            )
+
     # ── Private helpers ───────────────────────────────────────────────────
 
     def _read_state_file_raw(self) -> int:
@@ -1772,49 +1838,28 @@ class KrakenNonceManager:
 
     def _load_last_nonce(self) -> int:
         """
-        Compute the startup nonce anchored to Kraken server time.
+        Compute the startup nonce from Kraken server time ONLY.
 
-        Strategy (per spec: "server_time_ms + small offset"):
-          1. Query ``/0/public/Time`` for Kraken's authoritative clock.
-             Falls back to ``time.time()`` when the endpoint is unreachable.
-          2. ``baseline = server_time_ms + _SERVER_SYNC_OFFSET_MS`` (default +3 s).
-          3. Return ``max(persisted + 1, baseline)`` — preserves strict
-             monotonicity when persisted is legitimately ahead of baseline;
-             uses baseline when starting fresh or when persisted is stale.
-
-        Corruption guard: values more than ``_CORRUPTION_RESET_MS`` (72 h)
-        ahead of wall-clock are discarded before the comparison.
+        Hard-reset contract (Step 1)
+        ----------------------------
+        The persisted nonce is intentionally **ignored**.  Every boot anchors
+        to ``server_time_ms + _SERVER_SYNC_OFFSET_MS`` so accumulated forward
+        drift from prior sessions (nuclear resets, ceiling jumps, etc.) is
+        discarded immediately.  If Kraken's stored floor is above this baseline,
+        ``probe_and_resync()`` (called from ``broker_manager.connect()``) will
+        walk upward until the floor is found.
 
         Must be called while holding both ``_LOCK`` and ``_CrossProcessLock``.
         """
-        now_ms = int(time.time() * 1000)
-        persisted = self._read_state_file_raw()
-
-        # Corruption guard
-        lead_ms = persisted - now_ms
-        if lead_ms > _CORRUPTION_RESET_MS:
-            _logger.error(
-                "KrakenNonceManager: persisted nonce is %d ms (%.1f h) ahead — "
-                "likely corrupted; resetting. Run reset_kraken_nonce.py to fix.",
-                lead_ms, lead_ms / 3_600_000,
-            )
-            persisted = 0
-        elif lead_ms > _CORRUPTION_WARN_MS:
-            _logger.warning(
-                "KrakenNonceManager: persisted nonce is %d ms (%.1f min) ahead — "
-                "system clock may have drifted backward.  Check NTP sync.",
-                lead_ms, lead_ms / 60_000,
-            )
-
-        # Server-synced baseline
         server_ms = _fetch_kraken_server_time_ms()
         if server_ms is None:
-            server_ms = now_ms
+            server_ms = int(time.time() * 1000)
             _logger.warning(
                 "KrakenNonceManager._load_last_nonce: Kraken server-time "
-                "endpoint unavailable — falling back to local clock"
+                "endpoint unavailable — using local clock as fallback"
             )
         else:
+            now_ms = int(time.time() * 1000)
             _logger.info(
                 "KrakenNonceManager._load_last_nonce: Kraken server time = %d ms "
                 "(local delta: %+d ms)",
@@ -1822,22 +1867,12 @@ class KrakenNonceManager:
             )
 
         baseline = server_ms + _SERVER_SYNC_OFFSET_MS
-
-        if persisted == 0:
-            _logger.info(
-                "KrakenNonceManager._load_last_nonce: no persisted nonce — "
-                "using server baseline %d (server+%d ms)",
-                baseline, _SERVER_SYNC_OFFSET_MS,
-            )
-            return baseline
-
-        result = max(persisted + 1, baseline)
         _logger.info(
-            "KrakenNonceManager._load_last_nonce: persisted=%d  baseline=%d  "
-            "→ startup nonce=%d  (lead=%+d ms)",
-            persisted, baseline, result, result - now_ms,
+            "KrakenNonceManager._load_last_nonce: hard-reset startup nonce = "
+            "server+%d ms → %d  (persisted nonce discarded)",
+            _SERVER_SYNC_OFFSET_MS, baseline,
         )
-        return result
+        return baseline
 
     def _persist(self) -> None:
         """Atomically write nonce to disk (write-then-rename, mode 0600).
@@ -1885,26 +1920,162 @@ def get_adaptive_offset_engine() -> AdaptiveNonceOffsetEngine:
 
 # ── Public shortcuts ──────────────────────────────────────────────────────────
 
+def _ensure_live_manager() -> KrakenNonceManager:
+    """
+    Return the current live KrakenNonceManager, rebuilding it if it was
+    destroyed (Step 3) or if the pre-request guard detects a violation (Step 4).
+
+    This is the single choke-point for all nonce issuance and is called by
+    both ``get_kraken_nonce()`` and ``get_global_kraken_nonce()``.
+
+    Pre-request guard (Step 4)
+    --------------------------
+    Two invariants are checked before every nonce:
+
+    1. ``pending_nonce >= last_successful_nonce + _PRE_REQUEST_EPSILON_MS``
+       Ensures strict monotonicity relative to the last nonce Kraken confirmed.
+       Catches the "stale object" bug where ``_last_nonce`` regressed below
+       the confirmed watermark.
+
+    2. ``pending_nonce >= now_ms + _PRE_REQUEST_SAFETY_OFFSET_MS``
+       Ensures the nonce is not in the past relative to wall-clock time.
+       Catches a frozen/sleeping instance whose ``_last_nonce`` is stale.
+
+    If either invariant is violated, the singleton is destroyed and a fresh
+    instance is built from Kraken server time before the nonce is returned.
+    """
+    global _nonce_manager
+
+    # ── Detect destroyed singleton ────────────────────────────────────────
+    current = KrakenNonceManager._instance
+    if current is None:
+        _logger.info(
+            "_ensure_live_manager: singleton was destroyed — rebuilding from "
+            "Kraken server time"
+        )
+        _nonce_manager = KrakenNonceManager()
+        return _nonce_manager
+
+    # Keep module-level alias in sync in case another code path rebuilt it.
+    if _nonce_manager is not current:
+        _nonce_manager = current
+
+    # ── Pre-request guard ─────────────────────────────────────────────────
+    now_ms = int(time.time() * 1000)
+    with _LOCK:
+        last_succ = getattr(current, "_last_successful_nonce", 0)
+        pending = current._last_nonce + 1
+
+    fail_monotonic = (
+        last_succ > 0
+        and pending < last_succ + _PRE_REQUEST_EPSILON_MS
+    )
+    fail_time = pending < now_ms + _PRE_REQUEST_SAFETY_OFFSET_MS
+
+    if fail_monotonic or fail_time:
+        _logger.warning(
+            "_ensure_live_manager: pre-request guard violated "
+            "(pending=%d, last_succ=%d, now=%d, eps=%d, safety_offset=%d) — "
+            "destroying and rebuilding nonce manager from server time",
+            pending, last_succ, now_ms,
+            _PRE_REQUEST_EPSILON_MS, _PRE_REQUEST_SAFETY_OFFSET_MS,
+        )
+        KrakenNonceManager.destroy_instance()
+        _nonce_manager = KrakenNonceManager()
+        return _nonce_manager
+
+    return current
+
+
 def get_kraken_nonce() -> int:
-    return _nonce_manager.next_nonce()
+    """
+    Return the next strictly-increasing Kraken nonce.
+
+    Includes the pre-request guard (Step 4): rebuilds the singleton from
+    server time if either the monotonicity or the server-time invariant is
+    violated.  Also detects and recovers from a destroyed singleton (Step 3).
+    """
+    return _ensure_live_manager().next_nonce()
 
 
 def get_global_kraken_nonce() -> int:
-    return _nonce_manager.next_nonce()
+    """Alias for ``get_kraken_nonce()`` — includes pre-request guard."""
+    return get_kraken_nonce()
 
 
 def get_global_nonce_manager() -> KrakenNonceManager:
+    """Return the live KrakenNonceManager singleton, rebuilding if destroyed."""
+    return _ensure_live_manager()
+
+
+def rebuild_nonce_manager() -> KrakenNonceManager:
+    """
+    Production-grade safe reset: destroy the current singleton and immediately
+    rebuild a fresh instance anchored to Kraken server time.
+
+    This is the **definitive recovery entry point** for preventing future
+    nonce desync.  It combines all four fix steps atomically:
+
+    Step 1 — Hard state reset
+        The new ``_init()`` unconditionally deletes ``kraken_nonce.state``
+        (and ``.lock`` / ``.tmp``) before computing the startup nonce, so
+        accumulated forward drift from the destroyed session is discarded.
+
+    Step 2 — Single-writer authority
+        ``destroy_instance()`` is called under ``_instance_lock`` so no
+        other thread can slip in a stale write between the destroy and the
+        rebuild.  The new instance is the sole writer from the moment it is
+        constructed.
+
+    Step 3 — Fresh instance, not reset-in-place
+        The old singleton is fully discarded; ``KrakenNonceManager()`` builds
+        a completely new object.  No stale error counters, no stale
+        ``_last_nonce``, no carry-over state.
+
+    Step 4 — Server-time anchor
+        ``_load_last_nonce()`` queries ``/0/public/Time`` and sets the new
+        nonce to ``server_time_ms + _SERVER_SYNC_OFFSET_MS``.  The pre-request
+        guard in ``get_kraken_nonce()`` will enforce both invariants on every
+        subsequent call.
+
+    Usage
+    -----
+    Call from any recovery path — maintenance scripts, the broker's error
+    handler, or the self-healing startup sequence::
+
+        from bot.global_kraken_nonce import rebuild_nonce_manager
+        new_mgr = rebuild_nonce_manager()
+
+    Safe to call while the bot is running (thread-safe).  For best results
+    stop all in-flight Kraken requests before calling so the new nonce floor
+    is not immediately stale-d by a concurrent write.
+
+    Returns the newly constructed singleton.
+    """
+    global _nonce_manager
+    _logger.warning(
+        "rebuild_nonce_manager: destroying existing singleton and rebuilding "
+        "from Kraken server time — all accumulated nonce drift discarded"
+    )
+    KrakenNonceManager.destroy_instance()
+    _nonce_manager = KrakenNonceManager()
+    _logger.warning(
+        "rebuild_nonce_manager: rebuild complete — new nonce=%d",
+        _nonce_manager.get_last_nonce(),
+    )
     return _nonce_manager
 
 
 def get_global_nonce_stats() -> dict:
+    mgr = _ensure_live_manager()
     return {
-        "last_nonce": _nonce_manager.get_last_nonce(),
-        "nuclear_reset_count": _nonce_manager.nuclear_reset_count,
-        "deep_reset_active": _nonce_manager.is_deep_reset_active,
-        "key_invalidated": _nonce_manager.is_key_invalidated,
-        "trading_paused": _nonce_manager.is_paused(),
-        "pause_remaining_s": _nonce_manager.get_pause_remaining(),
+        "last_nonce": mgr.get_last_nonce(),
+        "last_successful_nonce": getattr(mgr, "_last_successful_nonce", 0),
+        "nuclear_reset_count": mgr.nuclear_reset_count,
+        "deep_reset_active": mgr.is_deep_reset_active,
+        "key_invalidated": mgr.is_key_invalidated,
+        "trading_paused": mgr.is_paused(),
+        "pause_remaining_s": mgr.get_pause_remaining(),
         "broker_quarantined": _quarantine_triggered,
     }
 
@@ -1972,15 +2143,15 @@ def clear_broker_quarantine() -> None:
 
 
 def record_kraken_nonce_error() -> None:
-    _nonce_manager.record_error()
+    _ensure_live_manager().record_error()
 
 
 def record_kraken_nonce_success() -> None:
-    _nonce_manager.record_success()
+    _ensure_live_manager().record_success()
 
 
 def reset_global_kraken_nonce() -> None:
-    _nonce_manager.reset_to_safe_value()
+    _ensure_live_manager().reset_to_safe_value()
 
 
 def force_resync_kraken_nonce() -> None:
@@ -1991,7 +2162,7 @@ def force_resync_kraken_nonce() -> None:
     sets the nonce to ``now + 5 min`` so the very next API call is accepted.
     For operator / maintenance-script use — stop NIJA before calling this.
     """
-    _nonce_manager.force_resync()
+    _ensure_live_manager().force_resync()
 
 
 def force_ceiling_jump_kraken_nonce(ms: int | None = None) -> int:
@@ -2011,11 +2182,11 @@ def force_ceiling_jump_kraken_nonce(ms: int | None = None) -> int:
 
     Returns the new persisted nonce value.
     """
-    return _nonce_manager.force_ceiling_jump(ms)
+    return _ensure_live_manager().force_ceiling_jump(ms)
 
 
 def jump_global_kraken_nonce_forward(milliseconds: int) -> None:
-    _nonce_manager.jump_forward(milliseconds)
+    _ensure_live_manager().jump_forward(milliseconds)
 
 
 def probe_and_resync_nonce(api_call_fn, *, step_ms: int = 0, max_attempts: int = _PROBE_MAX_ATTEMPTS) -> bool:
@@ -2032,7 +2203,7 @@ def probe_and_resync_nonce(api_call_fn, *, step_ms: int = 0, max_attempts: int =
             lambda: self._kraken_private_call("Balance", {})
         )
     """
-    return _nonce_manager.probe_and_resync(
+    return _ensure_live_manager().probe_and_resync(
         api_call_fn, step_ms=step_ms, max_attempts=max_attempts
     )
 
@@ -2043,7 +2214,7 @@ def nonce_reset_triggered_recently(window_s: float = 300.0) -> bool:
 
 def is_nonce_trading_paused() -> bool:
     """Return True when a nuclear nonce reset has triggered a trading pause."""
-    return _nonce_manager.is_paused()
+    return _ensure_live_manager().is_paused()
 
 
 def get_nonce_backend_info() -> dict:
@@ -2061,7 +2232,7 @@ def get_nonce_backend_info() -> dict:
             "redis_key":        "nija:kraken:nonce" | None,
         }
     """
-    mgr = _nonce_manager
+    mgr = _ensure_live_manager()
     if mgr._redis_backend is not None:
         backend = "redis"
     elif _NONCE_MODE == "timestamp":
@@ -2080,7 +2251,7 @@ def get_nonce_backend_info() -> dict:
 
 def get_nonce_pause_remaining() -> float:
     """Return seconds remaining in the nonce-triggered trading pause (0.0 when clear)."""
-    return _nonce_manager.get_pause_remaining()
+    return _ensure_live_manager().get_pause_remaining()
 
 
 def is_kraken_key_invalidated() -> bool:
@@ -2096,7 +2267,7 @@ def is_kraken_key_invalidated() -> bool:
     The flag can still be set manually via internal paths or by calling
     ``force_resync()`` after rotating a key (which clears it).
     """
-    return _nonce_manager.is_key_invalidated
+    return _ensure_live_manager().is_key_invalidated
 
 
 __all__ = [
@@ -2126,6 +2297,7 @@ __all__ = [
     "cleanup_legacy_nonce_files",
     "check_ntp_sync",
     "log_ntp_clock_status",
+    "rebuild_nonce_manager",
     # Broker quarantine API
     "register_broker_quarantine_callback",
     "is_broker_quarantined",

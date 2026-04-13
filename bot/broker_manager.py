@@ -82,6 +82,7 @@ try:
         register_broker_quarantine_callback,
         is_broker_quarantined,
         is_kraken_key_invalidated,
+        rebuild_nonce_manager,
     )
 except ImportError:
     try:
@@ -99,6 +100,7 @@ except ImportError:
             register_broker_quarantine_callback,
             is_broker_quarantined,
             is_kraken_key_invalidated,
+            rebuild_nonce_manager,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -115,6 +117,7 @@ except ImportError:
         register_broker_quarantine_callback = None
         is_broker_quarantined = None
         is_kraken_key_invalidated = None
+        rebuild_nonce_manager = None
 
 # ── Broker quarantine state ───────────────────────────────────────────────────
 # Set to True when the nonce manager confirms nonce poisoning (consecutive
