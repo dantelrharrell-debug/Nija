@@ -183,6 +183,44 @@ class CapitalAuthority:
         with self._lock:
             self._open_exposure_usd = max(0.0, float(open_exposure_usd))
 
+    def feed_broker_balance(self, broker_key: str, balance: float) -> None:
+        """
+        Inject a freshly-fetched balance for a single broker directly into the
+        authority without issuing an additional broker API call.
+
+        This is the lightweight push-path used by :class:`BalanceService` so
+        that every successful ``BalanceService.refresh()`` automatically keeps
+        the authority current.  The authority's ``last_updated`` timestamp is
+        refreshed on every call so ``is_stale()`` reflects the most recent feed.
+
+        Parameters
+        ----------
+        broker_key:
+            Logical broker identifier (e.g. ``"coinbase"`` or ``"kraken"``).
+        balance:
+            Raw USD balance for this broker (positive values only; zero and
+            negative values are silently ignored so a bad API response cannot
+            wipe out a previously valid balance).
+        """
+        key = str(broker_key)
+        balance = float(balance)
+        if balance <= 0.0:
+            logger.debug(
+                "[CapitalAuthority] feed_broker_balance: broker=%s balance=$%.2f — ignored",
+                key,
+                balance,
+            )
+            return
+        with self._lock:
+            self._broker_balances[key] = balance
+            self.last_updated = datetime.now(timezone.utc)
+        logger.debug(
+            "[CapitalAuthority] fed broker=%s balance=$%.2f (real=$%.2f)",
+            key,
+            balance,
+            sum(self._broker_balances.values()),
+        )
+
     # ------------------------------------------------------------------
     # Capital accessors
     # ------------------------------------------------------------------
@@ -227,6 +265,19 @@ class CapitalAuthority:
         with self._lock:
             raw = self._broker_balances.get(str(broker_id), 0.0)
             return raw * (1.0 - self._reserve_pct)
+
+    def get_raw_per_broker(self, broker_id: str) -> float:
+        """
+        Raw (non-reserve-reduced) balance for a single broker as last reported
+        by :meth:`refresh` or :meth:`feed_broker_balance`.
+
+        Use this when you need the gross account balance for position-sizing
+        routines that apply their own reserve / risk logic internally.
+
+        Returns 0.0 when *broker_id* is not registered or has a $0 balance.
+        """
+        with self._lock:
+            return self._broker_balances.get(str(broker_id), 0.0)
 
     # ------------------------------------------------------------------
     # Staleness helper

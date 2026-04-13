@@ -26,6 +26,14 @@ import os
 import time
 from typing import Any, Callable, Dict
 
+try:
+    from capital_authority import get_capital_authority as _get_capital_authority
+except ImportError:
+    try:
+        from bot.capital_authority import get_capital_authority as _get_capital_authority
+    except ImportError:
+        _get_capital_authority = None  # type: ignore[assignment]
+
 logger = logging.getLogger("nija.balance_service")
 
 # ---------------------------------------------------------------------------
@@ -182,6 +190,14 @@ class BalanceService:
                     cls._last_logged[broker_key] = scalar
                 else:
                     logger.debug("[BalanceService] %s → $%.2f (no significant change)", broker_key, scalar)
+                # ── Push to CapitalAuthority (single source of truth) ─────────
+                # Every successful balance fetch is immediately reflected in the
+                # authority singleton so all downstream capital reads are current.
+                try:
+                    if _get_capital_authority is not None:
+                        _get_capital_authority().feed_broker_balance(broker_key, scalar)
+                except Exception as _ca_feed_err:
+                    logger.debug("[BalanceService] CA feed skipped for %s: %s", broker_key, _ca_feed_err)
             else:
                 # Still update the timestamp so the TTL gate prevents immediate retry
                 # storms when the exchange legitimately returns $0 (e.g. unfunded account).
