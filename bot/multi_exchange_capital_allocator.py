@@ -286,6 +286,71 @@ class MultiExchangeCapitalAllocator:
                 last_rebalance=datetime.now()
             )
 
+    def reconcile_connected_exchanges(self, connected_exchanges: List[ExchangeType]) -> None:
+        """Reconcile allocations to match the set of currently-connected exchanges.
+
+        Adds entries for newly-connected exchanges, removes entries for exchanges
+        that are no longer connected, then rebalances equal weights across the
+        surviving set.  This ensures ``Active Exchanges`` always reflects runtime
+        reality rather than the stale list written at construction time.
+
+        Args:
+            connected_exchanges: ExchangeType values for all currently connected
+                platform brokers.  Passing an empty list is a no-op (treated as a
+                misconfiguration guard to avoid accidentally wiping all allocations).
+        """
+        if not connected_exchanges:
+            logger.warning("reconcile_connected_exchanges: empty list — allocations unchanged")
+            return
+
+        current_set = set(self.allocations.keys())
+        new_set = set(connected_exchanges)
+
+        removed = sorted(current_set - new_set, key=lambda e: e.value)
+        added = sorted(new_set - current_set, key=lambda e: e.value)
+
+        for ex in removed:
+            logger.info("   🔌 Removing disconnected exchange from allocations: %s", ex.value)
+            del self.allocations[ex]
+
+        for ex in added:
+            logger.info("   ➕ Adding connected exchange to allocations: %s", ex.value)
+            self.allocations[ex] = ExchangeAllocation(
+                exchange=ex,
+                target_allocation_pct=0.0,   # recalculated below
+                current_allocation_pct=0.0,
+                allocated_capital_usd=0.0,
+                available_balance_usd=0.0,
+                in_positions_usd=0.0,
+                total_pnl_usd=0.0,
+                total_trades=0,
+                last_rebalance=datetime.now(),
+            )
+
+        if not added and not removed:
+            return  # membership unchanged — nothing to do
+
+        # Rebalance equal weights across all currently tracked exchanges
+        n = len(self.allocations)
+        if n > 0:
+            weight = 1.0 / n
+            per_exchange_usd = self.total_capital_usd * weight
+            for alloc in self.allocations.values():
+                alloc.target_allocation_pct = weight * 100.0
+                alloc.current_allocation_pct = weight * 100.0
+                alloc.allocated_capital_usd = per_exchange_usd
+                # Preserve non-zero available_balance from a real balance fetch;
+                # only back-fill the placeholder when no real data exists yet.
+                if alloc.available_balance_usd == 0.0:
+                    alloc.available_balance_usd = per_exchange_usd
+
+        self._save_state()
+        logger.info(
+            "✅ Exchange allocations reconciled — Active Exchanges: %d (%s)",
+            len(self.allocations),
+            ", ".join(sorted(ex.value for ex in self.allocations.keys())),
+        )
+
     def get_allocation(self, exchange: ExchangeType) -> Optional[ExchangeAllocation]:
         """Get allocation for an exchange"""
         return self.allocations.get(exchange)
