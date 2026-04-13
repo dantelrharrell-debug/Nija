@@ -129,6 +129,23 @@ except ImportError:
 _kraken_quarantine_active: bool = False
 
 
+# ── Shared credential-prefix helper ──────────────────────────────────────────
+def _user_env_prefix(user_id: str) -> tuple:
+    """Return ``(short_prefix, full_prefix)`` env-var name prefixes for *user_id*.
+
+    ``short_prefix`` is the first word of user_id in upper-case
+    (e.g. ``"DAIVON"`` for ``"daivon_frazier"``).
+    ``full_prefix`` is the entire user_id upper-cased with hyphens → underscores
+    (e.g. ``"DAIVON_FRAZIER"`` for ``"daivon_frazier"``).
+
+    Used by CoinbaseBroker, OKXBroker, and multi_account_broker_manager to build
+    environment-variable names like ``COINBASE_USER_{prefix}_API_KEY``.
+    """
+    short = user_id.split('_')[0].upper() if '_' in user_id else user_id.upper()
+    full = user_id.upper().replace('-', '_')
+    return short, full
+
+
 class NoncePauseActive(Exception):
     """Raised when a Kraken nonce trading pause is active.
 
@@ -1958,20 +1975,18 @@ class CoinbaseBroker(BaseBroker):
             # Get credentials from environment — support per-user overrides for USER accounts
             if self.account_type == AccountType.USER and self.user_id:
                 # Per-user Coinbase credentials: COINBASE_USER_{USERID}_API_KEY / _API_SECRET
-                _user_env = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
-                api_key = os.getenv(f"COINBASE_USER_{_user_env}_API_KEY", "")
-                api_secret = os.getenv(f"COINBASE_USER_{_user_env}_API_SECRET", "")
+                _short_env, _full_env = _user_env_prefix(self.user_id)
+                api_key = os.getenv(f"COINBASE_USER_{_short_env}_API_KEY", "")
+                api_secret = os.getenv(f"COINBASE_USER_{_short_env}_API_SECRET", "")
                 # Fallback: try full user_id in uppercase (e.g. COINBASE_USER_TANIA_GILBERT_API_KEY)
-                if not api_key or not api_secret:
-                    _full_env = self.user_id.upper().replace('-', '_')
-                    if _full_env != _user_env:
-                        api_key = api_key or os.getenv(f"COINBASE_USER_{_full_env}_API_KEY", "")
-                        api_secret = api_secret or os.getenv(f"COINBASE_USER_{_full_env}_API_SECRET", "")
+                if (not api_key or not api_secret) and _full_env != _short_env:
+                    api_key = api_key or os.getenv(f"COINBASE_USER_{_full_env}_API_KEY", "")
+                    api_secret = api_secret or os.getenv(f"COINBASE_USER_{_full_env}_API_SECRET", "")
                 if not api_key or not api_secret:
                     logging.info(
                         "ℹ️  Coinbase USER credentials not configured for %s "
                         "(checked COINBASE_USER_%s_API_KEY / _API_SECRET) — skipping",
-                        self.user_id, _user_env,
+                        self.user_id, _short_env,
                     )
                     return False
             else:
@@ -7218,8 +7233,8 @@ class KrakenBroker(BaseBroker):
                                         try:
                                             _mgr = get_global_nonce_manager()
                                             _nonce_state = (
-                                                f"  nonce={_mgr.get_last_nonce()}"
-                                                f"  nuclear_resets={_mgr.nuclear_reset_count}"
+                                                f" nonce={_mgr.get_last_nonce()}"
+                                                f" nuclear_resets={_mgr.nuclear_reset_count}"
                                             )
                                         except Exception:
                                             pass
@@ -7258,10 +7273,10 @@ class KrakenBroker(BaseBroker):
                                         cred_label, max_attempts, error_msgs, _nonce_state,
                                     )
                                 elif is_lockout_error:
+                                    # Do not include raw credential variable names — log account label only
                                     logger.error(
-                                        "❌ AUTH FAILURE [%s]: %s  "
-                                        "(credentials: key=%s  secret=%s)",
-                                        cred_label, error_msgs, key_name, secret_name,
+                                        "❌ AUTH FAILURE [%s]: %s",
+                                        cred_label, error_msgs,
                                     )
                                 else:
                                     logger.error(
@@ -9674,22 +9689,20 @@ class OKXBroker(BaseBroker):
             # Support per-user credentials for USER accounts:
             #   OKX_USER_{USERID}_API_KEY / _API_SECRET / _PASSPHRASE
             if self.account_type == AccountType.USER and self.user_id:
-                _user_env = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
-                api_key = os.getenv(f"OKX_USER_{_user_env}_API_KEY", "").strip()
-                api_secret = os.getenv(f"OKX_USER_{_user_env}_API_SECRET", "").strip()
-                passphrase = os.getenv(f"OKX_USER_{_user_env}_PASSPHRASE", "").strip()
+                _short_env, _full_env = _user_env_prefix(self.user_id)
+                api_key = os.getenv(f"OKX_USER_{_short_env}_API_KEY", "").strip()
+                api_secret = os.getenv(f"OKX_USER_{_short_env}_API_SECRET", "").strip()
+                passphrase = os.getenv(f"OKX_USER_{_short_env}_PASSPHRASE", "").strip()
                 # Fallback: full user_id in uppercase
-                if not api_key or not api_secret or not passphrase:
-                    _full_env = self.user_id.upper().replace('-', '_')
-                    if _full_env != _user_env:
-                        api_key = api_key or os.getenv(f"OKX_USER_{_full_env}_API_KEY", "").strip()
-                        api_secret = api_secret or os.getenv(f"OKX_USER_{_full_env}_API_SECRET", "").strip()
-                        passphrase = passphrase or os.getenv(f"OKX_USER_{_full_env}_PASSPHRASE", "").strip()
+                if (not api_key or not api_secret or not passphrase) and _full_env != _short_env:
+                    api_key = api_key or os.getenv(f"OKX_USER_{_full_env}_API_KEY", "").strip()
+                    api_secret = api_secret or os.getenv(f"OKX_USER_{_full_env}_API_SECRET", "").strip()
+                    passphrase = passphrase or os.getenv(f"OKX_USER_{_full_env}_PASSPHRASE", "").strip()
                 if not api_key or not api_secret or not passphrase:
                     logging.info(
                         "ℹ️  OKX USER credentials not configured for %s "
                         "(checked OKX_USER_%s_API_KEY / _API_SECRET / _PASSPHRASE) — skipping",
-                        self.user_id, _user_env,
+                        self.user_id, _short_env,
                     )
                     return False
             else:
