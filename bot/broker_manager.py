@@ -7601,14 +7601,14 @@ class KrakenBroker(BaseBroker):
 
                 except Exception as e:
                     error_msg = str(e)
-                    _err_l = error_msg.lower()
+                    error_msg_lower = error_msg.lower()
 
                     # Hard stop: another process owns this Kraken API key's
                     # process-lifetime nonce lock.  This instance may look
                     # "logically configured" but is physically blocked from
                     # safely issuing private Kraken requests until the
                     # duplicate process is stopped.
-                    is_nonce_lock_conflict = any(k in _err_l for k in (
+                    is_nonce_lock_conflict = any(error_keyword in error_msg_lower for error_keyword in (
                         "kraken nonce writer lock not acquired",
                         "one api key = one writer",
                         "process-lifetime nonce lock",

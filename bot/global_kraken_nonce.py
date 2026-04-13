@@ -1933,10 +1933,10 @@ class KrakenNonceManager:
         if not _FCNTL_AVAILABLE:
             return False
         try:
-            for _path in (self._pid_lock_file, self._lock_file):
+            for lock_path in (self._pid_lock_file, self._lock_file):
                 # Use append mode — never truncate a file that an active process
                 # may have open as a lock target.
-                with open(_path, "a") as fh:
+                with open(lock_path, "a") as fh:
                     try:
                         _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
                         _fcntl.flock(fh, _fcntl.LOCK_UN)
