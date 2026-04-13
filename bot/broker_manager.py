@@ -6525,8 +6525,16 @@ class KrakenBroker(BaseBroker):
 
         # Instance-level reference to the shared nonce manager singleton.
         # Populated during connect() from get_global_nonce_manager().
+        # For USER accounts this points to the UserNonceManager instead.
         self.nonce_manager = None
         self._kraken_private_call_nonce = None
+
+        # Per-account nonce error / success callables.
+        # Populated in connect() to route to the correct nonce manager
+        # (PLATFORM → global KrakenNonceManager; USER → UserNonceManager).
+        # Default no-ops so callers never need to guard for None.
+        self._record_nonce_error: Callable[[], None] = lambda: None
+        self._record_nonce_success: Callable[[], None] = lambda: None
 
         # CRITICAL FIX: API call serialization to prevent simultaneous Kraken calls
         # Problem: Multiple threads can call Kraken API simultaneously, causing nonce collisions
@@ -7084,38 +7092,100 @@ class KrakenBroker(BaseBroker):
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
 
-            # Install the single global nonce generator.
-            # ONE source of nonces across every broker, account, and thread.
-            self.nonce_manager = get_global_nonce_manager()
-            self._kraken_private_call_nonce = self.nonce_manager.get_nonce
+            # ── Nonce generator: per-account isolation ────────────────────────
+            # PLATFORM accounts use the shared global KrakenNonceManager so that
+            # the platform's nonce history is preserved across hot restarts and
+            # recoverable via probe_and_resync().
+            #
+            # USER accounts use an independent per-user nonce sequence persisted
+            # to data/kraken_nonce_<user_id>.state.  Each Kraken API key has its
+            # own nonce window — sharing the PLATFORM sequence means a PLATFORM
+            # nuclear reset would push USER nonces far into the future (and vice-
+            # versa), causing "EAPI:Invalid nonce" errors for the unrelated key.
+            if self.account_type == AccountType.USER and self.user_id:
+                try:
+                    from user_nonce_manager import get_user_nonce_manager as _get_unm
+                except ImportError:
+                    try:
+                        from bot.user_nonce_manager import get_user_nonce_manager as _get_unm
+                    except ImportError:
+                        _get_unm = None
 
-            def _nonce_monotonic() -> str:
-                """Thread-safe ms nonce — single global counter for all accounts."""
-                return str(get_kraken_nonce())
+                if _get_unm is not None:
+                    _user_nm = _get_unm()
+                    _uid = self.user_id  # capture in closure
+                    self.nonce_manager = _user_nm
 
-            # Replace the nonce generator
-            # NOTE: This directly overrides the internal _nonce method of krakenex.API
-            try:
-                self.api._nonce = _nonce_monotonic
-                if logger.isEnabledFor(logging.DEBUG):
-                    _mgr = get_global_nonce_manager()
-                    logger.debug(f"   Initial nonce (GLOBAL): {_mgr.get_last_nonce()} (peek only, counter not advanced)")
-            except AttributeError as e:
-                self.last_connection_error = f"Nonce generator override failed: {str(e)}"
-                logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
-                logger.error("   This may indicate a version incompatibility with krakenex library")
-                logger.error("   Please report this issue with your krakenex version")
-                return False
+                    def _nonce_user() -> str:
+                        """Per-user millisecond nonce — isolated from PLATFORM sequence."""
+                        return str(_user_nm.get_nonce(_uid))
+
+                    self._record_nonce_error = lambda: _user_nm.record_nonce_error(_uid)
+                    self._record_nonce_success = lambda: _user_nm.record_success(_uid, _user_nm.get_last_nonce(_uid))
+
+                    try:
+                        self.api._nonce = _nonce_user
+                        logger.debug(f"   ✅ Using PER-USER KrakenNonceManager for {cred_label}")
+                    except AttributeError as e:
+                        self.last_connection_error = f"Nonce generator override failed: {str(e)}"
+                        logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
+                        return False
+                else:
+                    # Fallback if user nonce manager unavailable — use global (less ideal)
+                    logger.warning(f"⚠️  UserNonceManager unavailable for {cred_label} — falling back to global nonce")
+                    _fallback_mgr = get_global_nonce_manager() if get_global_nonce_manager else None
+                    self.nonce_manager = _fallback_mgr
+                    if _fallback_mgr is not None:
+                        self._kraken_private_call_nonce = _fallback_mgr.get_nonce
+                        self._record_nonce_error = lambda: _fallback_mgr.record_error()
+                        self._record_nonce_success = lambda: _fallback_mgr.record_success()
+
+                    def _nonce_monotonic_fallback() -> str:
+                        return str(get_kraken_nonce())
+                    try:
+                        self.api._nonce = _nonce_monotonic_fallback
+                    except AttributeError as e:
+                        self.last_connection_error = f"Nonce generator override failed: {str(e)}"
+                        logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
+                        return False
+            else:
+                # PLATFORM — global shared nonce manager
+                _platform_mgr = get_global_nonce_manager() if get_global_nonce_manager else None
+                self.nonce_manager = _platform_mgr
+                if _platform_mgr is not None:
+                    self._kraken_private_call_nonce = _platform_mgr.get_nonce
+                    self._record_nonce_error = lambda: _platform_mgr.record_error()
+                    self._record_nonce_success = lambda: _platform_mgr.record_success()
+
+                def _nonce_monotonic() -> str:
+                    """Thread-safe ms nonce — single global counter for PLATFORM account."""
+                    return str(get_kraken_nonce())
+
+                # Replace the nonce generator
+                # NOTE: This directly overrides the internal _nonce method of krakenex.API
+                try:
+                    self.api._nonce = _nonce_monotonic
+                    if logger.isEnabledFor(logging.DEBUG):
+                        _mgr = get_global_nonce_manager()
+                        logger.debug(f"   Initial nonce (GLOBAL): {_mgr.get_last_nonce()} (peek only, counter not advanced)")
+                except AttributeError as e:
+                    self.last_connection_error = f"Nonce generator override failed: {str(e)}"
+                    logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
+                    logger.error("   This may indicate a version incompatibility with krakenex library")
+                    logger.error("   Please report this issue with your krakenex version")
+                    return False
 
             self.kraken_api = KrakenAPI(self.api)
 
-            # ONE startup reset — sets nonce to now + 1 s so the first API call
-            # lands safely ahead of any nonce Kraken may still hold from a
+            # ONE startup reset — sets PLATFORM nonce to now + 1 s so the first API
+            # call lands safely ahead of any nonce Kraken may still hold from a
             # previous session.  This is the only place reset_to_safe_value()
             # is called proactively; subsequent resets are triggered only by
             # KrakenNonceManager.record_error() after 3 consecutive errors with
             # no active in-flight requests.
-            get_global_nonce_manager().reset_to_safe_value()
+            # USER accounts manage their own startup jump inside UserNonceManager.get_nonce().
+            if self.account_type != AccountType.USER and get_global_nonce_manager is not None:
+                get_global_nonce_manager().reset_to_safe_value()
             logger.debug(f"   🔄 Startup nonce reset complete for {cred_label}")
 
 
@@ -7309,8 +7379,7 @@ class KrakenBroker(BaseBroker):
                                 last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
 
                                 if is_nonce_error:
-                                    if get_global_nonce_manager is not None:
-                                        get_global_nonce_manager().record_error()
+                                    self._record_nonce_error()
 
                                 # ── Structured logging for nonce / auth / reconnect ───────────
                                 if is_nonce_error:
@@ -7376,8 +7445,7 @@ class KrakenBroker(BaseBroker):
                         self.connected = True
 
                         # Record success — resets the consecutive-error counter
-                        if get_global_nonce_manager is not None:
-                            get_global_nonce_manager().record_success()
+                        self._record_nonce_success()
 
                         if attempt > 1:
                             logger.info(f"✅ Connected to Kraken Pro API ({cred_label}) (succeeded on attempt {attempt})")
@@ -7684,8 +7752,7 @@ class KrakenBroker(BaseBroker):
                         last_error_was_nonce = is_nonce_error and not is_lockout_error  # Lockout takes precedence
 
                         if is_nonce_error:
-                            if get_global_nonce_manager is not None:
-                                get_global_nonce_manager().record_error()
+                            self._record_nonce_error()
 
                         # Log retryable errors appropriately:
                         # - Timeout errors: Already logged above (special case)
