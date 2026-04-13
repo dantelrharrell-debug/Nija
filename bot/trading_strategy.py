@@ -963,6 +963,21 @@ def _broker_key(broker) -> str:
     return "unknown"
 
 
+# ── CapitalAuthority — single source of truth for all capital figures ─────────
+# Maximum age (seconds) before a cached CapitalAuthority snapshot is considered
+# stale and must be re-fetched.  Matches the per-cycle refresh TTL used in
+# run_cycle() so all capital reads agree on freshness.
+_CA_FRESHNESS_TTL_S: float = 90.0
+
+try:
+    from capital_authority import get_capital_authority as _get_capital_authority_ts
+except ImportError:
+    try:
+        from bot.capital_authority import get_capital_authority as _get_capital_authority_ts
+    except ImportError:
+        _get_capital_authority_ts = None  # type: ignore[assignment]
+
+
 # ── Nija Core Loop — rebuilt single-pass scan / rank / enter loop ────────────
 try:
     from nija_core_loop import get_nija_core_loop, NijaCoreLoop
@@ -8861,13 +8876,12 @@ class TradingStrategy:
             _cycle_start_balance = account_balance
 
             # ── Capital Authority per-cycle refresh ───────────────────────────
-            # Keep the single source of truth current (TTL 90 s).  Uses the
-            # same connected broker map as the startup init; failures are
+            # Keep the single source of truth current (TTL _CA_FRESHNESS_TTL_S).
+            # Uses the same connected broker map as the startup init; failures are
             # silently swallowed so a transient API error never blocks a cycle.
             try:
-                from capital_authority import get_capital_authority as _get_ca_cycle
-                _ca_cycle = _get_ca_cycle()
-                if _ca_cycle.is_stale(ttl_s=90):
+                _ca_cycle = _get_capital_authority_ts() if _get_capital_authority_ts is not None else None
+                if _ca_cycle is not None and _ca_cycle.is_stale(ttl_s=_CA_FRESHNESS_TTL_S):
                     _ca_cycle_map: dict = {}
                     for _ca_cbt, _ca_cb in self.multi_account_manager.platform_brokers.items():
                         if _ca_cb and getattr(_ca_cb, "connected", False):
@@ -8906,14 +8920,15 @@ class TradingStrategy:
             # applies.
             if not _balance_grace_mode:
                 try:
-                    _ca_ab_override = _ca_cycle.get_raw_per_broker(_bs_key)
-                    if _ca_ab_override > 0:
-                        account_balance = _ca_ab_override
-                        self._last_known_balance = account_balance
-                        logger.debug(
-                            "[CapitalAuthority] account_balance overridden: $%.2f",
-                            account_balance,
-                        )
+                    if _ca_cycle is not None:
+                        _ca_ab_override = _ca_cycle.get_raw_per_broker(_bs_key)
+                        if _ca_ab_override > 0:
+                            account_balance = _ca_ab_override
+                            self._last_known_balance = account_balance
+                            logger.debug(
+                                "[CapitalAuthority] account_balance overridden: $%.2f",
+                                account_balance,
+                            )
                 except Exception:
                     pass  # Override is advisory; retain BalanceService value on error
 
@@ -9049,13 +9064,16 @@ class TradingStrategy:
 
             # Get total capital across ALL accounts (master + users).
             # CapitalAuthority is the single source of truth: prefer its
-            # get_real_capital() when fresh (TTL 90 s).  Fall back to the
-            # direct multi-broker sum only when the authority is stale or
-            # returns zero (e.g. before the first cycle refresh completes).
+            # get_real_capital() when fresh (TTL _CA_FRESHNESS_TTL_S).  Fall
+            # back to the direct multi-broker sum only when the authority is
+            # stale or returns zero (e.g. before the first cycle refresh).
             try:
-                from capital_authority import get_capital_authority as _get_ca_tc
-                _ca_tc = _get_ca_tc()
-                _ca_tc_real = _ca_tc.get_real_capital() if not _ca_tc.is_stale(ttl_s=90) else 0.0
+                _ca_tc = _get_capital_authority_ts() if _get_capital_authority_ts is not None else None
+                _ca_tc_real = (
+                    _ca_tc.get_real_capital()
+                    if _ca_tc is not None and not _ca_tc.is_stale(ttl_s=_CA_FRESHNESS_TTL_S)
+                    else 0.0
+                )
             except Exception:
                 _ca_tc_real = 0.0
             if _ca_tc_real > 0.0:

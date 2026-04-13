@@ -26,6 +26,14 @@ import os
 import time
 from typing import Any, Callable, Dict
 
+try:
+    from capital_authority import get_capital_authority as _get_capital_authority
+except ImportError:
+    try:
+        from bot.capital_authority import get_capital_authority as _get_capital_authority
+    except ImportError:
+        _get_capital_authority = None  # type: ignore[assignment]
+
 logger = logging.getLogger("nija.balance_service")
 
 # ---------------------------------------------------------------------------
@@ -186,8 +194,8 @@ class BalanceService:
                 # Every successful balance fetch is immediately reflected in the
                 # authority singleton so all downstream capital reads are current.
                 try:
-                    from capital_authority import get_capital_authority as _get_ca_bs
-                    _get_ca_bs().feed_broker_balance(broker_key, scalar)
+                    if _get_capital_authority is not None:
+                        _get_capital_authority().feed_broker_balance(broker_key, scalar)
                 except Exception as _ca_feed_err:
                     logger.debug("[BalanceService] CA feed skipped for %s: %s", broker_key, _ca_feed_err)
             else:
