@@ -52,6 +52,90 @@ the manager falls back to the per-key file-lock mode transparently.  A
 ``CRITICAL`` log is emitted so operators know they have lost multi-instance
 coordination.
 
+─────────────────────────────────────────────────────────────────────────────
+ZERO-DOWNTIME MIGRATION: File-based → Redis
+─────────────────────────────────────────────────────────────────────────────
+
+Goal: switch from per-key fcntl file locks to Redis-backed atomic nonces
+without dropping any live orders or causing a nonce gap.
+
+Phase 0 — Prerequisites (no bot changes)
+  1. Provision a Redis instance reachable from every bot container.
+       Railway:  Add a Redis plugin to your project.
+       Docker:   docker run -d -p 6379:6379 redis:7-alpine
+       Managed:  Redis Cloud free tier, Upstash, etc.
+  2. Note the connection URL (``redis://:<password>@<host>:6379/0``).
+  3. Confirm Redis is running:  ``redis-cli -u $URL ping`` → PONG.
+
+Phase 1 — Seed Redis with current nonce high-water marks (live, zero-downtime)
+  Run once while the bot is running (it can keep trading):
+
+    from bot.distributed_nonce_manager import make_api_key_id
+    from bot.global_kraken_nonce import _KEY_REGISTRY, _KEY_REGISTRY_LOCK
+    import redis, os, time
+
+    r = redis.from_url(os.environ["NIJA_REDIS_URL"])
+    PREFIX = "nija:kraken:nonce:"
+
+    # Seed platform key
+    from bot.global_kraken_nonce import get_global_nonce_manager
+    mgr = get_global_nonce_manager()
+    platform_key = os.environ.get("KRAKEN_PLATFORM_API_KEY", "")
+    if platform_key:
+        kid = make_api_key_id(platform_key)
+        # Use SETNX so we never decrease an existing Redis value
+        r.execute_command("SET", PREFIX + kid, mgr.get_last_nonce(), "NX")
+
+    # Seed per-user keys
+    with _KEY_REGISTRY_LOCK:
+        entries = dict(_KEY_REGISTRY)
+    for key_id, nm in entries.items():
+        r.execute_command("SET", PREFIX + key_id, nm.get_last_nonce(), "NX")
+
+  Note: SETNX ("SET … NX") only writes if the key doesn't exist, so this
+  is idempotent — safe to run multiple times.
+
+Phase 2 — Set NIJA_REDIS_URL in the environment (no restart yet)
+  Add to Railway / .env:
+    NIJA_REDIS_URL=redis://:<password>@<host>:6379/0
+
+  The bot reads this on the NEXT restart.  Current session unaffected.
+
+Phase 3 — Rolling restart (zero-downtime)
+  If you run one container:
+    Deploy the new environment variable.  Railway automatically restarts.
+    The bot picks up NIJA_REDIS_URL on startup and ``DistributedNonceManager``
+    auto-connects to Redis.  Nonces continue from the seeded high-water mark.
+
+  If you run multiple containers (scale-out):
+    Restart them one at a time.  Each restarted instance picks up Redis.
+    Instances still running (file mode) continue independently — they write
+    their nonces to local state files.  Redis receives the higher value on
+    the next call from a restarted instance because of the ``max(current+1,
+    floor)`` Lua semantics — no nonce collision is possible.
+
+Phase 4 — Verify
+  Check logs for:
+    DistributedNonceManager: using Redis backend (multi-instance safe)
+    Nonce: DistributedNonceManager  backend=redis   key_id=<hex>
+
+  Run the concurrency test (bot/test_distributed_nonce_manager.py) against
+  the live Redis instance to confirm no collisions.
+
+Phase 5 — Key rotation (if ever needed after migration)
+  After generating a new Kraken API key:
+    1. Stop the bot (or enter maintenance mode).
+    2. Call:  get_distributed_nonce_manager().reset_key(new_key_id)
+             (this deletes the Redis key and destroys the local file manager)
+    3. Update KRAKEN_PLATFORM_API_KEY / KRAKEN_USER_<id>_API_KEY.
+    4. Restart.  The new key starts at nonce 0 — correct by design.
+
+Rollback
+  Unset NIJA_REDIS_URL and restart.  The bot falls back to file/fcntl mode
+  immediately.  Redis nonce keys are left in place and act as a safe floor
+  if you re-enable Redis later.
+─────────────────────────────────────────────────────────────────────────────
+
 Usage
 -----
     from bot.distributed_nonce_manager import (
@@ -61,12 +145,6 @@ Usage
 
     key_id = make_api_key_id(raw_api_key)       # once, at connect()
     nonce  = get_distributed_nonce_manager().get_nonce(key_id)
-
-    # In KrakenBroker.configure_credentials():
-    self.api_key_id  = make_api_key_id(api_key)
-    self.api._nonce  = lambda: str(
-        get_distributed_nonce_manager().get_nonce(self.api_key_id)
-    )
 """
 
 from __future__ import annotations
