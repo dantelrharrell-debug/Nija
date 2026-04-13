@@ -31,6 +31,7 @@ logger = logging.getLogger("nija.tier_config")
 
 class TradingTier(Enum):
     """User trading tiers with associated capital ranges."""
+    NANO_PLATFORM = "NANO_PLATFORM"  # < $25 — isolated micro-capital build mode
     STARTER = "STARTER"
     SAVER = "SAVER"
     INVESTOR = "INVESTOR"
@@ -357,6 +358,23 @@ STABLECOIN_PAIRS = ["USDT", "USDC", "DAI", "BUSD"]
 # HARD MINIMUM BALANCE FOR LIVE TRADING
 # Below this amount, fees dominate and Kraken/Coinbase may reject orders
 MINIMUM_LIVE_TRADING_BALANCE = 100.0
+
+# ---------------------------------------------------------------------------
+# Per-broker minimum capital gates (LOCAL — not a global policy)
+# ---------------------------------------------------------------------------
+# Each entry is the minimum balance that broker needs before NIJA will place
+# a new order there.  These are INDEPENDENT of each other:
+#   • Coinbase can trade at $1 while Kraken sits at $0.
+#   • Kraken can be offline while Coinbase trades its NANO scope.
+# Do NOT use the highest value here as a global gate — that is what caused
+# "FATAL: Capital below minimum ($5.43 < $25.00)" when only Coinbase was live.
+BROKER_MIN_CAPITAL: Dict[str, float] = {
+    "coinbase":  1.0,   # Coinbase exchange minimum: $1 (local, NANO-safe)
+    "kraken":   10.0,   # Kraken hard minimum: $10 (exchange floor)
+    "binance":   5.0,   # Binance minimum: $5
+    "okx":       5.0,   # OKX minimum: $5
+    "platform": 25.0,   # Platform-wide minimum: $25 (Kraken-primary only)
+}
 
 
 class StablecoinPolicy(Enum):

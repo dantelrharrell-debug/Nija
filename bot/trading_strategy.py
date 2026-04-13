@@ -2812,6 +2812,22 @@ MIN_BALANCE_TO_TRADE_USD = 1.0  # Minimum account balance to allow trading ($1 a
 # Brokers below this threshold are marked PASSIVE (track-only) for the cycle.
 MIN_DEPLOYABLE_BALANCE = float(os.getenv("NIJA_MIN_DEPLOYABLE_BALANCE", "25.0"))
 
+# ── BROKER CAPITAL ISOLATION ────────────────────────────────────────────────
+# Coinbase accounts below this threshold are treated as NANO/isolated.
+# Their balance is real and tradeable locally, but it CANNOT:
+#   • trigger the global FATAL minimum check
+#   • mark the system as "undercapitalized" when Kraken is offline
+#   • inflate (or deflate) the AI hub's portfolio_value
+# Configurable so ops can raise the threshold if Coinbase grows.
+COINBASE_ISOLATION_THRESHOLD: float = float(
+    os.getenv("COINBASE_ISOLATION_THRESHOLD", "25.0")
+)
+# Coinbase-local deployable minimum ($1 — the actual Coinbase exchange floor).
+# Distinct from MIN_DEPLOYABLE_BALANCE ($25) which applies to Kraken/primary.
+COINBASE_MIN_DEPLOYABLE: float = float(
+    os.getenv("COINBASE_MIN_DEPLOYABLE", "1.0")
+)
+
 # ── FIRST TRADE FORCE TRIGGER ──────────────────────────────────────────────
 # After this many consecutive zero-signal cycles while the first trade has not
 # yet been confirmed, the force trigger activates and bypasses soft gates
@@ -4222,6 +4238,10 @@ class TradingStrategy:
             connected_brokers = []
             user_brokers = []
             total_capital = 0.0  # initialised here so it is always in scope at the TRADING ACTIVE gate
+            # These isolation flags are initialised here so they are always in scope at the
+            # TRADING ACTIVE gate (lines 5040+) regardless of which code path we take.
+            _coinbase_isolated: bool = False
+            _authoritative_capital: float = 0.0
 
             # Add startup delay to avoid immediate rate limiting on restart
             # CRITICAL (Jan 2026): Increased to 45s to ensure API rate limits fully reset
@@ -4440,6 +4460,21 @@ class TradingStrategy:
                                 self.portfolio_manager.get_balance(_bk)
                                 if self.portfolio_manager else 0.0
                             ) or BalanceService.get(_bk)
+                            # Direct API fallback: if both cached stores returned 0 for a
+                            # connected broker, fetch live from the broker itself so a cold
+                            # BalanceService never triggers the "no capital" fatal exception.
+                            if balance <= 0:
+                                try:
+                                    balance = broker.get_account_balance() or 0.0
+                                    if balance > 0:
+                                        BalanceService.refresh(
+                                            _bk, lambda b=broker: b.get_account_balance()
+                                        )
+                                except Exception as _live_err:
+                                    logger.debug(
+                                        "Direct balance fallback for %s failed: %s",
+                                        broker_type.value, _live_err,
+                                    )
                             if broker_type == BrokerType.COINBASE:
                                 coinbase_balance = balance
                             elif broker_type == BrokerType.KRAKEN:
@@ -4476,11 +4511,44 @@ class TradingStrategy:
                     logger.info(f"   👥 USER ACCOUNTS (INDEPENDENT): ${user_total_balance:,.2f}")
                 logger.info("=" * 70)
 
-                # FIX #2 / FIX #3: Force capital re-hydration after broker connections
-                # Use the seeded breakdown aggregate (coinbase + kraken + other) as the
-                # GLOBAL platform total so that both Kraken and Coinbase are always
-                # counted, not just the broker that happened to respond first in
-                # broker_manager.get_total_balance().
+                # ── Capital isolation: detect Coinbase-NANO ───────────────────
+                # A Coinbase account below COINBASE_ISOLATION_THRESHOLD is
+                # classified as "isolated" (NANO/sandbox capital).  It is real
+                # and tradeable locally, but it must NOT:
+                #   • count toward the global MINIMUM_TRADING_BALANCE check
+                #   • mark the system as undercapitalized when Kraken is offline
+                #   • distort the AI hub or portfolio intelligence capital figure
+                _coinbase_isolated: bool = (
+                    0 < coinbase_balance < COINBASE_ISOLATION_THRESHOLD
+                )
+                # Authoritative capital = Kraken + Other (Coinbase excluded when isolated)
+                _authoritative_capital: float = kraken_balance + other_balance
+
+                # Tag brokers in CapitalAuthority so every downstream reader
+                # can call get_primary_capital() / get_isolated_capital().
+                try:
+                    from capital_authority import get_capital_authority as _get_ca_tag
+                    from capital_authority import BROKER_ROLE_PRIMARY, BROKER_ROLE_ISOLATED
+                    _ca_tag = _get_ca_tag()
+                    if kraken_balance > 0:
+                        _ca_tag.set_broker_role("kraken", BROKER_ROLE_PRIMARY)
+                    if _coinbase_isolated:
+                        _ca_tag.set_broker_role("coinbase", BROKER_ROLE_ISOLATED)
+                    elif coinbase_balance > 0:
+                        _ca_tag.set_broker_role("coinbase", BROKER_ROLE_PRIMARY)
+                except Exception as _ca_tag_err:
+                    logger.debug("Could not tag broker roles in CapitalAuthority: %s", _ca_tag_err)
+
+                if _coinbase_isolated:
+                    logger.info(
+                        "   🔒 Coinbase NANO-isolated: $%.2f < $%.2f threshold — "
+                        "excluded from global capital checks. Trades locally.",
+                        coinbase_balance, COINBASE_ISOLATION_THRESHOLD,
+                    )
+
+                # Use the seeded breakdown aggregate as the GLOBAL platform total.
+                # Both Kraken and Coinbase contribute to total_capital for sizing,
+                # but ONLY authoritative capital counts for the global minimum check.
                 global_platform_total = coinbase_balance + kraken_balance + other_balance
                 # MASTER AUTHORITY RULE: Master capital is always authoritative
                 # Users are followers, not required for startup
@@ -4488,9 +4556,10 @@ class TradingStrategy:
                     # Master is funded - include user balances for total capital
                     total_capital = global_platform_total + user_total_balance
                     logger.info(
-                        "   ✅ Capital calculation: Kraken=$%.2f + Coinbase=$%.2f + Other=$%.2f + Users=$%.2f = $%.2f",
-                        kraken_balance, coinbase_balance, other_balance,
-                        user_total_balance, total_capital,
+                        "   ✅ Capital calculation: Kraken=$%.2f + Coinbase=$%.2f"
+                        " (isolated=%s) + Other=$%.2f + Users=$%.2f = $%.2f",
+                        kraken_balance, coinbase_balance, _coinbase_isolated,
+                        other_balance, user_total_balance, total_capital,
                     )
                 elif user_total_balance > 0:
                     # Master unfunded but users have capital - allow user-only trading
@@ -4749,19 +4818,45 @@ class TradingStrategy:
                 logger.info("🔧 Initializing advanced trading modules with live capital...")
                 self._init_advanced_features(total_capital)
 
-                # Hard fail if capital below minimum (non-negotiable)
-                if total_capital < MINIMUM_TRADING_BALANCE:
+                # Hard fail if capital below minimum — but ONLY on authoritative
+                # (Kraken/primary) capital.  An isolated Coinbase-NANO account
+                # must never block startup: it trades locally and cannot gate
+                # the system on behalf of a disconnected Kraken.
+                _capital_for_min_check: float = (
+                    _authoritative_capital          # Kraken only when Coinbase is isolated
+                    if _coinbase_isolated
+                    else total_capital              # normal path: all brokers count
+                )
+                if _coinbase_isolated and _authoritative_capital <= 0:
+                    # Kraken offline, Coinbase NANO only — allow startup in isolated mode
+                    logger.warning("=" * 70)
+                    logger.warning("⚠️  NANO ISOLATED MODE — Kraken offline, Coinbase NANO only")
+                    logger.warning("=" * 70)
+                    logger.warning(f"   Coinbase (isolated): ${coinbase_balance:.2f}")
+                    logger.warning("   Kraken: offline / not connected")
+                    logger.warning("   Trading will proceed via Coinbase in NANO isolated scope.")
+                    logger.warning("   Global risk math is suppressed — only local sizing applies.")
+                    logger.warning("=" * 70)
+                elif _capital_for_min_check < MINIMUM_TRADING_BALANCE:
                         logger.error("=" * 70)
                         logger.error("❌ FATAL: Capital below minimum — trading disabled")
                         logger.error("=" * 70)
-                        logger.error(f"   Current capital: ${total_capital:.2f}")
+                        logger.error(f"   Authoritative capital: ${_capital_for_min_check:.2f}")
                         logger.error(f"   Minimum required: ${MINIMUM_TRADING_BALANCE:.2f}")
-                        logger.error(f"   Shortfall: ${MINIMUM_TRADING_BALANCE - total_capital:.2f}")
+                        logger.error(f"   Shortfall: ${MINIMUM_TRADING_BALANCE - _capital_for_min_check:.2f}")
                         logger.error("")
                         logger.error("   🛑 Bot cannot trade with insufficient capital")
-                        logger.error("   💵 Fund your account to continue trading")
+                        logger.error("   💵 Fund your Kraken account to continue trading")
+                        if _coinbase_isolated:
+                            logger.error(
+                                "   ℹ️  Coinbase $%.2f excluded (NANO-isolated, < $%.2f threshold)",
+                                coinbase_balance, COINBASE_ISOLATION_THRESHOLD,
+                            )
                         logger.error("=" * 70)
-                        raise RuntimeError(f"Capital below minimum — trading disabled (${total_capital:.2f} < ${MINIMUM_TRADING_BALANCE:.2f})")
+                        raise RuntimeError(
+                            f"Capital below minimum — trading disabled "
+                            f"(${_capital_for_min_check:.2f} < ${MINIMUM_TRADING_BALANCE:.2f})"
+                        )
 
                 # FIX #1: Select primary master broker with Kraken promotion logic
                 # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
@@ -4961,7 +5056,16 @@ class TradingStrategy:
                 except Exception as _psm_sync_err:
                     logger.warning("⚠️  Pre-loop portfolio balance sync failed: %s", _psm_sync_err)
 
-            if (platform_account_connected or total_active > 0) and total_capital >= MINIMUM_TRADING_BALANCE:
+            # NANO-tier trading loop minimum: bypass global MINIMUM_TRADING_BALANCE when
+            # Coinbase NANO is the only active capital source.  The per-broker floor
+            # (COINBASE_MIN_DEPLOYABLE = $1) applies; the global floor ($25 default) would
+            # incorrectly block a legitimately funded NANO account from starting.
+            _effective_loop_min = (
+                COINBASE_MIN_DEPLOYABLE
+                if (_coinbase_isolated and _authoritative_capital <= 0)
+                else MINIMUM_TRADING_BALANCE
+            )
+            if (platform_account_connected or total_active > 0) and total_capital >= _effective_loop_min:
                 logger.info(f"🚀 TRADING ACTIVE: {total_active} account(s) ready")
                 if platform_account_connected:
                     logger.info("🚀 STARTING CORE TRADING LOOP (platform ready)")
@@ -5002,15 +5106,15 @@ class TradingStrategy:
                 if active_user_count == 0:
                     logger.info("💡 Tip: Add user accounts to enable multi-user trading")
                     logger.info("   See config/users/ for user configuration")
-            elif (platform_account_connected or total_active > 0) and total_capital < MINIMUM_TRADING_BALANCE:
+            elif (platform_account_connected or total_active > 0) and total_capital < _effective_loop_min:
                 # Broker is connected but capital is below the trading floor — do NOT
                 # show "TRADING ACTIVE" because no orders can be placed.
                 logger.error("=" * 70)
                 logger.error("⚠️  BROKER CONNECTED — INSUFFICIENT CAPITAL TO TRADE")
                 logger.error("=" * 70)
                 logger.error(f"   Current capital : ${total_capital:.2f}")
-                logger.error(f"   Minimum required: ${MINIMUM_TRADING_BALANCE:.2f}")
-                logger.error(f"   Shortfall       : ${MINIMUM_TRADING_BALANCE - total_capital:.2f}")
+                logger.error(f"   Minimum required: ${_effective_loop_min:.2f}")
+                logger.error(f"   Shortfall       : ${_effective_loop_min - total_capital:.2f}")
                 logger.error("")
                 logger.error("   🛑 Trading loop will NOT start until capital is above minimum")
                 logger.error("   💵 Fund your account and restart the bot")
@@ -6087,17 +6191,34 @@ class TradingStrategy:
             )
 
         # --- Live broker connection check (post-connection phase) ---
-        # Only CRITICAL brokers (Kraken, Coinbase) count toward the active-broker
-        # threshold.  OPTIONAL broker (OKX, Binance, Alpaca) disconnection MUST
-        # NEVER reduce this count to zero or prevent the trading loop from starting.
+        # CRITICAL brokers (Kraken) count toward the active-broker threshold.
+        # PRIMARY brokers (Coinbase) are also counted when the active_broker IS
+        # a Primary-tier venue — i.e. when it is the only execution authority
+        # on the platform.  OPTIONAL brokers (OKX, Binance, Alpaca) never count.
         platform_connected_count = 0
+        primary_connected_count = 0
         if self.multi_account_manager:
             for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                 if not _broker_type_is_critical(broker_type):
-                    # OPTIONAL broker — log at debug; never counts against the minimum
-                    if broker and not broker.connected:
+                    # Check if it is a PRIMARY venue (e.g. Coinbase) that is actively
+                    # serving as the execution broker.  Count it separately so we can
+                    # fall back to it when no CRITICAL broker is available.
+                    try:
+                        from broker_registry import BrokerCriticality as _BRC2
+                        from broker_registry import broker_registry as _breg2
+                        _crit2 = _breg2.get_criticality(broker_type.value)
+                        _is_primary = (_crit2 == _BRC2.PRIMARY)
+                    except Exception:
+                        _is_primary = broker_type.value.lower() == "coinbase"
+                    if _is_primary and broker and broker.connected:
+                        primary_connected_count += 1
+                        logger.info(
+                            "   ✅ Platform %s — connected (PRIMARY execution venue)",
+                            broker_type.value.upper(),
+                        )
+                    elif broker and not broker.connected:
                         logger.debug(
-                            "   ℹ️  Platform %s — not connected (OPTIONAL broker, non-blocking)",
+                            "   ℹ️  Platform %s — not connected (non-CRITICAL broker, non-blocking)",
                             broker_type.value.upper(),
                         )
                     continue
@@ -6106,6 +6227,11 @@ class TradingStrategy:
                     logger.info(f"   ✅ Platform {broker_type.value.upper()} — connected (CRITICAL)")
                 else:
                     logger.warning(f"   ⚠️  Platform {broker_type.value.upper()} — NOT connected (CRITICAL)")
+
+        # Accept PRIMARY brokers (e.g. Coinbase NANO) as the platform when no
+        # CRITICAL broker (Kraken) is available.  This removes the misleading
+        # "no platform brokers connected" warning for valid Coinbase-only setups.
+        effective_platform_count = platform_connected_count or primary_connected_count
 
         if platform_connected_count > 0:
             logger.info(
@@ -7015,10 +7141,20 @@ class TradingStrategy:
                 return False, veto_reason
 
             # ── Deployable capital filter ──────────────────────────────────────
-            # Brokers below MIN_DEPLOYABLE_BALANCE cannot open new positions.
-            # They are marked PASSIVE (track-only) for this cycle so they do not
-            # waste scan time or consume margin on marginal accounts.
-            if balance < MIN_DEPLOYABLE_BALANCE:
+            # Brokers below their deployable minimum cannot open new positions.
+            # Kraken/primary uses MIN_DEPLOYABLE_BALANCE ($25, global floor).
+            # Coinbase uses COINBASE_MIN_DEPLOYABLE ($1, local floor) so a tiny
+            # NANO account is never vetoed by the Kraken-scale threshold.
+            _is_coinbase_broker = (
+                broker_type is not None
+                and str(getattr(broker_type, "value", "")).lower() == "coinbase"
+            )
+            _effective_deployable_min = (
+                COINBASE_MIN_DEPLOYABLE
+                if _is_coinbase_broker
+                else MIN_DEPLOYABLE_BALANCE
+            )
+            if balance < _effective_deployable_min:
                 if not hasattr(broker, 'mode'):
                     logger.warning(
                         "   ⚠️ %s missing 'mode' attribute — BaseBroker init may not have run",
@@ -7028,7 +7164,7 @@ class TradingStrategy:
                     broker.mode = "PASSIVE"
                 veto_reason = (
                     f"{broker_name.upper()} balance ${balance:.2f} < "
-                    f"${MIN_DEPLOYABLE_BALANCE:.2f} deployable minimum — marked PASSIVE"
+                    f"${_effective_deployable_min:.2f} deployable minimum — marked PASSIVE"
                 )
                 logger.info(f"🚫 TRADE VETO: {veto_reason}")
                 self.veto_count_session += 1

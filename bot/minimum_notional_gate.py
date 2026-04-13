@@ -25,17 +25,21 @@ class NotionalGateConfig:
     min_entry_notional_usd: float = 15.0  # $15 minimum entry size (lowered from $50 to allow small accounts)
     allow_stop_loss_bypass: bool = True  # Allow stop losses to bypass the gate
     
-    # Broker-specific overrides (optional)
+    # Broker-specific minimum notional values.
+    # These are LOCAL per-broker floors, not a global policy:
+    #   - Coinbase: $1  (actual exchange minimum; fee-viability enforced separately)
+    #   - Kraken/others: $15  (global policy floor, accounts for $10 hard minimum + fee buffer)
     broker_specific_limits: dict = None
-    
+
     def __post_init__(self):
         """Initialize mutable defaults"""
         if self.broker_specific_limits is None:
             self.broker_specific_limits = {
-                'coinbase': 15.0,   # $15 minimum — dust-prevention floor (Coinbase exchange min ~$1, but small positions face ~1.4% fee impact)
-                'kraken': 15.0,     # $15 minimum (lowered from $25)
-                'binance': 10.0,    # $10 minimum (lowered from $25)
-                'okx': 10.0,        # $10 minimum (lowered from $25)
+                'coinbase': 1.0,    # LOCAL: Coinbase exchange minimum ($1). A $5 NANO account
+                                    # must not be blocked by a $15 global floor.
+                'kraken': 15.0,     # GLOBAL: $10 hard minimum + ~$5 fee/slippage buffer
+                'binance': 10.0,    # $10 minimum
+                'okx': 10.0,        # $10 minimum
                 'alpaca': 5.0,      # $5 minimum
             }
     

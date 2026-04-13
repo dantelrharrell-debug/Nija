@@ -69,23 +69,57 @@ POSITION_BALANCE_MISMATCH_THRESHOLD = 20  # Legacy: warn if tracked > balance * 
 # Half-Kelly multiplier -- conservative default to limit ruin probability
 HALF_KELLY_FRACTION: float = 0.5
 
+# ---------------------------------------------------------------------------
+# NANO_PLATFORM tier constants
+# ---------------------------------------------------------------------------
+
+# Balance threshold below which an account is classified as NANO_PLATFORM
+NANO_PLATFORM_BALANCE_THRESHOLD: float = 25.0
+
+# Hard failsafe: never trade when balance is below this.  Even $2 is risky
+# when exchange latency + spread can consume the entire position.
+ABSOLUTE_MIN_CAPITAL_USD: float = 5.0
+
+# Minimum trade size for NANO_PLATFORM accounts (fee-adjusted floor).
+# max($2, fee_adjusted_min) ensures trades are mathematically viable.
+# Calculation: Coinbase round-trip fee ≈ 1.2%; to keep fee < 60% of the
+# smallest realistic 2% move, min_size = $2.  For Coinbase exchange minimum
+# ($1) this is also the safe absolute floor.
+NANO_ABS_MIN_POSITION_USD: float = 2.0
+
+# Capital Growth Mode — assigned to NANO_PLATFORM tier.
+# Signals to strategy layers: fewer trades, higher confidence threshold,
+# tighter risk, no overtrading.
+CAPITAL_BUILD_MODE: str = "CAPITAL_BUILD"
+
+# Modes that a NANO_PLATFORM account is allowed to trade.
+# All other modes are blocked to prevent overtrading on tiny capital.
+NANO_ALLOWED_MODES: frozenset = frozenset({"SCALP", "HIGH_CONFIDENCE_ONLY"})
+
+# Default fee/slippage parameters used by the Fee Viability Gate.
+_DEFAULT_FEE_RATE_PCT: float = 0.60       # Coinbase taker fee (%)
+_DEFAULT_SLIPPAGE_PCT: float = 0.10       # Estimated slippage (%)
+_DEFAULT_SAFETY_MARGIN_PCT: float = 0.15  # Additional safety buffer (%)
+
 # Per-tier config table rows:
 # (min_balance_usd, max_positions, max_risk_per_trade_pct, max_concentration_pct,
 #  max_portfolio_heat_pct, base_size_pct)
 _TIER_TABLE: List[Tuple[float, int, float, float, float, float]] = [
     #  min_bal   max_pos  risk%    conc%    heat%    base%
-    (    0.0,      2,    0.010,   0.40,    0.60,    0.030),  # NANO
-    (  100.0,      3,    0.015,   0.35,    0.65,    0.040),  # MICRO
-    (  500.0,      4,    0.020,   0.30,    0.70,    0.050),  # STARTER
-    ( 2_000.0,     5,    0.020,   0.25,    0.75,    0.060),  # GROWTH
-    (10_000.0,     6,    0.015,   0.20,    0.80,    0.060),  # ESTABLISHED
-    (50_000.0,     8,    0.010,   0.15,    0.85,    0.050),  # ELITE
+    (    0.0,      1,    0.005,   0.50,    0.50,    0.020),  # NANO_PLATFORM (< $25)
+    (   25.0,      2,    0.010,   0.40,    0.60,    0.030),  # NANO          ($25–$100)
+    (  100.0,      3,    0.015,   0.35,    0.65,    0.040),  # MICRO         ($100–$500)
+    (  500.0,      4,    0.020,   0.30,    0.70,    0.050),  # STARTER       ($500–$2k)
+    ( 2_000.0,     5,    0.020,   0.25,    0.75,    0.060),  # GROWTH        ($2k–$10k)
+    (10_000.0,     6,    0.015,   0.20,    0.80,    0.060),  # ESTABLISHED   ($10k–$50k)
+    (50_000.0,     8,    0.010,   0.15,    0.85,    0.050),  # ELITE         ($50k+)
 ]
 
 # Scale-in allocation splits (must sum to 1.0)
 SCALE_IN_SPLITS: Tuple[float, ...] = (0.50, 0.30, 0.20)
 
-# Absolute floor: never size below this regardless of tier
+# Absolute floor: never size below this regardless of tier.
+# NANO_PLATFORM uses NANO_ABS_MIN_POSITION_USD ($2) instead.
 ABS_MIN_POSITION_USD: float = 10.0
 
 
@@ -94,12 +128,13 @@ ABS_MIN_POSITION_USD: float = 10.0
 # ---------------------------------------------------------------------------
 
 class AccountTier(str, Enum):
-    NANO        = "NANO"         # < $100
-    MICRO       = "MICRO"        # $100 - $500
-    STARTER     = "STARTER"      # $500 - $2 000
-    GROWTH      = "GROWTH"       # $2 000 - $10 000
-    ESTABLISHED = "ESTABLISHED"  # $10 000 - $50 000
-    ELITE       = "ELITE"        # $50 000+
+    NANO_PLATFORM = "NANO_PLATFORM"  # < $25  — isolated CAPITAL_BUILD mode
+    NANO        = "NANO"             # $25  - $100
+    MICRO       = "MICRO"            # $100  - $500
+    STARTER     = "STARTER"          # $500  - $2 000
+    GROWTH      = "GROWTH"           # $2 000 - $10 000
+    ESTABLISHED = "ESTABLISHED"      # $10 000 - $50 000
+    ELITE       = "ELITE"            # $50 000+
 
 
 class DenyReason(str, Enum):
@@ -109,6 +144,9 @@ class DenyReason(str, Enum):
     PORTFOLIO_HEAT    = "PORTFOLIO_HEAT"
     SIZE_TOO_SMALL    = "SIZE_TOO_SMALL"
     INSUFFICIENT_CASH = "INSUFFICIENT_CASH"
+    BELOW_MIN_CAPITAL = "BELOW_MIN_CAPITAL"   # balance < ABSOLUTE_MIN_CAPITAL_USD
+    TRADE_MODE_BLOCKED = "TRADE_MODE_BLOCKED" # mode not in tier's allowed_modes
+    FEE_VIABILITY     = "FEE_VIABILITY"       # expected profit ≤ fees+slippage
 
 
 @dataclass
@@ -119,6 +157,9 @@ class TierConfig:
     max_concentration_pct: float
     max_portfolio_heat_pct: float
     base_size_pct: float
+    # Optional per-tier constraints
+    allowed_modes: Optional[frozenset] = None  # None = all modes allowed
+    trade_mode: str = "STANDARD"               # e.g. "CAPITAL_BUILD", "STANDARD"
 
 
 @dataclass
@@ -316,13 +357,24 @@ class PositionManager:
 # ---------------------------------------------------------------------------
 
 def _resolve_tier(balance: float) -> TierConfig:
+    """
+    Map an account balance to the appropriate :class:`TierConfig`.
+
+    The tier table is ordered by ascending minimum balance.  The highest
+    row whose ``min_balance`` is still ≤ *balance* wins, so a $30 account
+    gets NANO (row 1) rather than NANO_PLATFORM (row 0).
+
+    NANO_PLATFORM constraints (max_positions=1, CAPITAL_BUILD mode, and
+    SCALP/HIGH_CONFIDENCE_ONLY allowed modes) are injected here so every
+    caller automatically receives the correct behavioural limits.
+    """
     row = _TIER_TABLE[0]
     for entry in _TIER_TABLE:
         if balance >= entry[0]:
             row = entry
     tier_index = _TIER_TABLE.index(row)
     tier_enum = list(AccountTier)[tier_index]
-    return TierConfig(
+    cfg = TierConfig(
         tier=tier_enum,
         max_positions=row[1],
         max_risk_per_trade_pct=row[2],
@@ -330,6 +382,38 @@ def _resolve_tier(balance: float) -> TierConfig:
         max_portfolio_heat_pct=row[4],
         base_size_pct=row[5],
     )
+    if tier_enum is AccountTier.NANO_PLATFORM:
+        cfg.allowed_modes = NANO_ALLOWED_MODES
+        cfg.trade_mode = CAPITAL_BUILD_MODE
+    return cfg
+
+
+def _fee_adjusted_min_size(fee_rate_pct: float = _DEFAULT_FEE_RATE_PCT) -> float:
+    """
+    Return the minimum trade size where round-trip fees remain viable.
+
+    Formula: ``max($2, exchange_abs_min / max_fee_fraction)``
+
+    For Coinbase (fee=0.60%):
+      round-trip = 1.20%; exchange abs-min fee ≈ $0.01;
+      max_fee_fraction = 0.5% → min = max($2, $0.01/0.005) = $2.00.
+
+    The $2 hard floor is always dominant at current Coinbase rates, but
+    the formula auto-adjusts if exchange minimum fees ever increase.
+    """
+    # Approximation of the Coinbase minimum fee per order (absolute USD amount).
+    # Coinbase charges max(percentage_fee, min_fee) — the absolute floor is
+    # negligible for trades > $1 but used here to anchor the fee_adjusted_min
+    # calculation.  Override via env var NIJA_EXCHANGE_ABS_MIN_FEE_USD if your
+    # exchange has a different hard-coded minimum.
+    import os as _os
+    _exchange_abs_min_fee: float = float(_os.getenv("NIJA_EXCHANGE_ABS_MIN_FEE_USD", "0.01"))
+    _max_fee_fraction: float = 0.005     # fee must be < 0.5% of trade value
+    fee_fraction = fee_rate_pct / 100.0
+    if fee_fraction <= 0:
+        return NANO_ABS_MIN_POSITION_USD
+    fee_adjusted = _exchange_abs_min_fee / _max_fee_fraction
+    return max(NANO_ABS_MIN_POSITION_USD, fee_adjusted)
 
 
 def _kelly_size(
@@ -457,6 +541,9 @@ class ProPositionManager:
         scale_in: bool = False,
         broker: Optional[Any] = None,
         positions_list: Optional[List[Dict]] = None,
+        trade_mode: Optional[str] = None,
+        expected_profit_pct: float = 0.0,
+        fee_rate_pct: float = _DEFAULT_FEE_RATE_PCT,
     ) -> SizeDecision:
         """
         Gate check + Kelly sizing for a prospective entry.
@@ -475,6 +562,16 @@ class ProPositionManager:
             Optional broker passed to auto-cleanup on cap breach.
         positions_list:
             Optional list of all open position dicts (forwarded to cleanup).
+        trade_mode:
+            Strategy mode string (e.g. ``"SCALP"``, ``"TREND"``).  On
+            NANO_PLATFORM accounts only ``SCALP`` and
+            ``HIGH_CONFIDENCE_ONLY`` are permitted; other modes are blocked.
+        expected_profit_pct:
+            Expected profit as a percentage of position size (e.g. 2.0 = 2%).
+            When non-zero, Gate 8 (Fee Viability) rejects the trade if
+            expected profit ≤ fees + slippage + safety margin.
+        fee_rate_pct:
+            Broker taker fee in percent (default: 0.60 = Coinbase).
 
         Returns
         -------
@@ -482,7 +579,8 @@ class ProPositionManager:
         """
         with self._lock:
             return self._evaluate(
-                symbol, stop_loss_pct, signal_quality, scale_in, broker, positions_list
+                symbol, stop_loss_pct, signal_quality, scale_in, broker,
+                positions_list, trade_mode, expected_profit_pct, fee_rate_pct,
             )
 
     # ------------------------------------------------------------------
@@ -569,6 +667,9 @@ class ProPositionManager:
         return {
             "balance":                self._balance,
             "tier":                   tier.tier.value,
+            "trade_mode":             tier.trade_mode,
+            "allowed_modes":          sorted(tier.allowed_modes) if tier.allowed_modes else None,
+            "absolute_min_capital":   ABSOLUTE_MIN_CAPITAL_USD,
             "max_positions":          tier.max_positions,
             "open_positions":         self.open_count,
             "total_open_usd":         round(self.total_open_usd, 4),
@@ -585,7 +686,7 @@ class ProPositionManager:
         }
 
     # ------------------------------------------------------------------
-    # Private: 7-gate evaluation pipeline
+    # Private: evaluation pipeline (Gates 0–8)
     # ------------------------------------------------------------------
 
     def _evaluate(
@@ -596,9 +697,48 @@ class ProPositionManager:
         scale_in: bool,
         broker: Optional[Any],
         positions_list: Optional[List[Dict]],
+        trade_mode: Optional[str] = None,
+        expected_profit_pct: float = 0.0,
+        fee_rate_pct: float = _DEFAULT_FEE_RATE_PCT,
     ) -> SizeDecision:
         tier = _resolve_tier(self._balance)
         sq = max(0.0, min(1.0, signal_quality))
+
+        # ----- Gate 0: Absolute minimum capital ----------------------------
+        # Below ABSOLUTE_MIN_CAPITAL_USD execution is unreliable: exchange
+        # minimums + fees can consume the entire position.
+        if self._balance < ABSOLUTE_MIN_CAPITAL_USD:
+            return SizeDecision(
+                approved=False, size_usd=0.0, tier=tier.tier,
+                scale_in_leg=0,
+                deny_reason=DenyReason.BELOW_MIN_CAPITAL,
+                deny_detail=(
+                    f"Balance ${self._balance:.2f} < ABSOLUTE_MIN_CAPITAL "
+                    f"${ABSOLUTE_MIN_CAPITAL_USD:.2f} — trading unsafe"
+                ),
+                signal_quality=sq,
+            )
+
+        # ----- Gate 0b: NANO_PLATFORM trade-mode enforcement --------------
+        # CAPITAL_BUILD mode restricts NANO_PLATFORM accounts to
+        # SCALP / HIGH_CONFIDENCE_ONLY to prevent overtrading.
+        if (
+            tier.tier is AccountTier.NANO_PLATFORM
+            and trade_mode is not None
+            and tier.allowed_modes
+            and trade_mode not in tier.allowed_modes
+        ):
+            return SizeDecision(
+                approved=False, size_usd=0.0, tier=tier.tier,
+                scale_in_leg=0,
+                deny_reason=DenyReason.TRADE_MODE_BLOCKED,
+                deny_detail=(
+                    f"Mode '{trade_mode}' not allowed on NANO_PLATFORM "
+                    f"(allowed: {sorted(tier.allowed_modes)}, "
+                    f"trade_mode='{CAPITAL_BUILD_MODE}')"
+                ),
+                signal_quality=sq,
+            )
 
         # ----- Gate 1: Position cap ----------------------------------------
         if symbol not in self._open_positions:
@@ -669,7 +809,12 @@ class ProPositionManager:
         if projected_conc > tier.max_concentration_pct:
             raw_size = tier.max_concentration_pct * portfolio_value - existing
             raw_size = max(0.0, raw_size)
-            if raw_size < ABS_MIN_POSITION_USD:
+            _conc_floor = (
+                NANO_ABS_MIN_POSITION_USD
+                if tier.tier is AccountTier.NANO_PLATFORM
+                else ABS_MIN_POSITION_USD
+            )
+            if raw_size < _conc_floor:
                 return SizeDecision(
                     approved=False, size_usd=0.0, tier=tier.tier,
                     scale_in_leg=next_leg,
@@ -677,26 +822,60 @@ class ProPositionManager:
                     deny_detail=(
                         f"{symbol} would reach {projected_conc*100:.1f}% "
                         f"(max {tier.max_concentration_pct*100:.0f}%) – "
-                        f"remaining headroom ${raw_size:.2f} < min ${ABS_MIN_POSITION_USD}"
+                        f"remaining headroom ${raw_size:.2f} < min ${_conc_floor}"
                     ),
                     kelly_full_size=kelly_full, signal_quality=sq,
                 )
 
-        # ----- Gate 7: Absolute minimum ------------------------------------
-        if raw_size < ABS_MIN_POSITION_USD:
+        # ----- Gate 7: Absolute minimum (tier-aware) -----------------------
+        # NANO_PLATFORM accounts use fee-adjusted $2 floor; all others use $10.
+        _abs_min = (
+            _fee_adjusted_min_size(fee_rate_pct)
+            if tier.tier is AccountTier.NANO_PLATFORM
+            else ABS_MIN_POSITION_USD
+        )
+        if raw_size < _abs_min:
             return SizeDecision(
                 approved=False, size_usd=0.0, tier=tier.tier,
                 scale_in_leg=next_leg,
                 deny_reason=DenyReason.SIZE_TOO_SMALL,
-                deny_detail=f"Computed ${raw_size:.2f} < floor ${ABS_MIN_POSITION_USD}",
+                deny_detail=(
+                    f"Computed ${raw_size:.2f} < floor ${_abs_min:.2f} "
+                    f"({'fee-adjusted NANO' if tier.tier is AccountTier.NANO_PLATFORM else 'standard'})"
+                ),
                 kelly_full_size=kelly_full, signal_quality=sq,
             )
+
+        # ----- Gate 8: Fee Viability gate ----------------------------------
+        # Reject if expected profit ≤ round-trip fees + slippage + safety margin.
+        # At low capital, fees are the primary enemy — not market direction.
+        if expected_profit_pct > 0:
+            expected_profit_usd = raw_size * expected_profit_pct / 100.0
+            round_trip_fees_usd = raw_size * 2.0 * fee_rate_pct / 100.0
+            slippage_usd = raw_size * _DEFAULT_SLIPPAGE_PCT / 100.0
+            safety_margin_usd = raw_size * _DEFAULT_SAFETY_MARGIN_PCT / 100.0
+            total_cost_usd = round_trip_fees_usd + slippage_usd + safety_margin_usd
+            if expected_profit_usd <= total_cost_usd:
+                return SizeDecision(
+                    approved=False, size_usd=0.0, tier=tier.tier,
+                    scale_in_leg=next_leg,
+                    deny_reason=DenyReason.FEE_VIABILITY,
+                    deny_detail=(
+                        f"Expected profit ${expected_profit_usd:.4f} "
+                        f"≤ costs ${total_cost_usd:.4f} "
+                        f"(fees ${round_trip_fees_usd:.4f} + "
+                        f"slippage ${slippage_usd:.4f} + "
+                        f"margin ${safety_margin_usd:.4f})"
+                    ),
+                    kelly_full_size=kelly_full, signal_quality=sq,
+                )
 
         # ----- Approved ✅ ------------------------------------------------
         final_size = round(raw_size, 2)
         logger.info(
-            "✅ %s APPROVED | $%.2f | tier=%s | leg=%d | sq=%.2f | kelly=$%.2f",
-            symbol, final_size, tier.tier.value, next_leg, sq, kelly_full,
+            "✅ %s APPROVED | $%.2f | tier=%s | mode=%s | leg=%d | sq=%.2f | kelly=$%.2f",
+            symbol, final_size, tier.tier.value,
+            tier.trade_mode, next_leg, sq, kelly_full,
         )
         return SizeDecision(
             approved=True, size_usd=final_size, tier=tier.tier,
