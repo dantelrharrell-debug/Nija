@@ -53,6 +53,8 @@ class APIKeyManager:
 
         Keeps only A-Z and 0-9, converting all other characters to underscores.
         Environment variable names must avoid special characters.
+        Note: this normalization can map different raw ids to the same token
+        (e.g., "user-1" and "user_1").
         """
         return re.sub(r"[^A-Z0-9]", "_", user_id.upper())
 
@@ -81,9 +83,10 @@ class APIKeyManager:
                 passphrase = additional_params.get("passphrase")
             else:
                 passphrase = additional_params.get("api_passphrase", "")
-            passphrase_str = str(passphrase).strip()
-            if passphrase_str:
-                os.environ[f"{prefix}_PASSPHRASE"] = passphrase_str
+            if passphrase is not None:
+                passphrase_str = str(passphrase).strip()
+                if passphrase_str:
+                    os.environ[f"{prefix}_PASSPHRASE"] = passphrase_str
 
         if additional_params and broker_env == "ALPACA":
             paper_value = additional_params.get("paper")
