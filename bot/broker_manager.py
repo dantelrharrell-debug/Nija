@@ -6533,8 +6533,8 @@ class KrakenBroker(BaseBroker):
         # Populated in connect() to route to the correct nonce manager
         # (PLATFORM → global KrakenNonceManager; USER → UserNonceManager).
         # Default no-ops so callers never need to guard for None.
-        self._record_nonce_error: callable = lambda: None
-        self._record_nonce_success: callable = lambda: None
+        self._record_nonce_error: Callable[[], None] = lambda: None
+        self._record_nonce_success: Callable[[], None] = lambda: None
 
         # CRITICAL FIX: API call serialization to prevent simultaneous Kraken calls
         # Problem: Multiple threads can call Kraken API simultaneously, causing nonce collisions
@@ -7133,10 +7133,12 @@ class KrakenBroker(BaseBroker):
                 else:
                     # Fallback if user nonce manager unavailable — use global (less ideal)
                     logger.warning(f"⚠️  UserNonceManager unavailable for {cred_label} — falling back to global nonce")
-                    self.nonce_manager = get_global_nonce_manager()
-                    self._kraken_private_call_nonce = self.nonce_manager.get_nonce
-                    self._record_nonce_error = lambda: get_global_nonce_manager().record_error() if get_global_nonce_manager else None
-                    self._record_nonce_success = lambda: get_global_nonce_manager().record_success() if get_global_nonce_manager else None
+                    _fallback_mgr = get_global_nonce_manager() if get_global_nonce_manager else None
+                    self.nonce_manager = _fallback_mgr
+                    if _fallback_mgr is not None:
+                        self._kraken_private_call_nonce = _fallback_mgr.get_nonce
+                        self._record_nonce_error = lambda: _fallback_mgr.record_error()
+                        self._record_nonce_success = lambda: _fallback_mgr.record_success()
 
                     def _nonce_monotonic_fallback() -> str:
                         return str(get_kraken_nonce())
@@ -7148,10 +7150,12 @@ class KrakenBroker(BaseBroker):
                         return False
             else:
                 # PLATFORM — global shared nonce manager
-                self.nonce_manager = get_global_nonce_manager()
-                self._kraken_private_call_nonce = self.nonce_manager.get_nonce
-                self._record_nonce_error = lambda: get_global_nonce_manager().record_error() if get_global_nonce_manager else None
-                self._record_nonce_success = lambda: get_global_nonce_manager().record_success() if get_global_nonce_manager else None
+                _platform_mgr = get_global_nonce_manager() if get_global_nonce_manager else None
+                self.nonce_manager = _platform_mgr
+                if _platform_mgr is not None:
+                    self._kraken_private_call_nonce = _platform_mgr.get_nonce
+                    self._record_nonce_error = lambda: _platform_mgr.record_error()
+                    self._record_nonce_success = lambda: _platform_mgr.record_success()
 
                 def _nonce_monotonic() -> str:
                     """Thread-safe ms nonce — single global counter for PLATFORM account."""

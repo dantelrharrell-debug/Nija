@@ -92,12 +92,11 @@ class UserNonceManager:
     def _wipe_all_nonce_files(self) -> None:
         """Remove all per-user nonce state files (used by NIJA_FORCE_NONCE_RESYNC=1)."""
         try:
-            import glob as _glob
+            import glob
             pattern = os.path.join(_data_dir, "kraken_nonce_*.state")
-            for path in _glob.glob(pattern):
-                # Skip the PLATFORM state file (no underscore before the extension
-                # aside from the underscore in "kraken_nonce_")
-                if path.endswith("kraken_nonce.state"):
+            for path in glob.glob(pattern):
+                # Skip the PLATFORM state file (basename is exactly 'kraken_nonce.state')
+                if os.path.basename(path) == 'kraken_nonce.state':
                     continue
                 try:
                     os.remove(path)
