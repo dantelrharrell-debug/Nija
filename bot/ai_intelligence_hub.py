@@ -288,16 +288,37 @@ class AIIntelligenceHub:
         """
         # ── Capital Authority freshness gate ─────────────────────────────────
         # Callers that already pass a real balance are unaffected.
-        # Any path that omits the argument (or passes 0) uses the live observed
-        # equity from the single source of truth instead of a synthetic baseline.
-        # A stale or partial snapshot returns 0 so position sizing is zero until
-        # the authority is refreshed — prefer correctness over availability.
+        # When the caller passes 0 we fetch from CapitalAuthority, but we use
+        # get_primary_capital() — not get_usable_capital() — so that an isolated
+        # Coinbase NANO account ($5) never masquerades as the global portfolio
+        # value, causing the AI hub to treat the system as massively underfunded.
+        #
+        # Rule: NANO capital cannot influence global allocation decisions.
         if portfolio_value <= 0.0:
             try:
                 from capital_authority import get_capital_authority as _get_ca_hub
                 _ca_hub = _get_ca_hub()
                 if _ca_hub.is_fresh():
-                    portfolio_value = _ca_hub.get_usable_capital()
+                    # Primary capital = Kraken/authoritative only (NANO excluded).
+                    # Use get_usable_primary_capital() which applies the reserve
+                    # reduction internally — avoids accessing private _reserve_pct.
+                    _primary = _ca_hub.get_usable_primary_capital()
+                    if _primary > 0.0:
+                        portfolio_value = _primary
+                        logger.debug(
+                            "[AI Hub] Using primary (non-NANO) capital $%.2f for %s",
+                            portfolio_value, symbol,
+                        )
+                    else:
+                        # No primary capital — fall back to full usable so the
+                        # AI hub does not silently disable all trades when only
+                        # Coinbase is live (isolated-mode operation).
+                        portfolio_value = _ca_hub.get_usable_capital()
+                        logger.debug(
+                            "[AI Hub] No primary broker capital — falling back to "
+                            "full usable capital $%.2f for %s",
+                            portfolio_value, symbol,
+                        )
                 else:
                     logger.warning(
                         "[AI Hub] CapitalAuthority stale or incomplete "

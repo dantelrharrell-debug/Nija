@@ -63,6 +63,23 @@ logger = logging.getLogger("nija.capital_authority")
 
 _DEFAULT_RESERVE_PCT: float = 0.02  # 2 % held back as reserve dust
 
+# ---------------------------------------------------------------------------
+# Broker role constants — determines which brokers count as "authoritative"
+# for global-minimum and AI-capital checks.
+# ---------------------------------------------------------------------------
+
+#: Kraken and other primary execution brokers.  Capital from these accounts
+#: is authoritative for global minimum checks and AI capital allocation.
+BROKER_ROLE_PRIMARY = "primary"
+
+#: Coinbase (and any NANO/sandbox broker).  Capital is real but isolated:
+#: it cannot block startup, and it must never inflate the global capital figure
+#: seen by the AI hub, portfolio intelligence, or the FATAL minimum check.
+BROKER_ROLE_ISOLATED = "isolated"
+
+#: Default role when a broker is registered without an explicit role.
+BROKER_ROLE_UNKNOWN = "unknown"
+
 # Maximum acceptable age of a CA snapshot before is_fresh() returns False.
 # Must match (or be shorter than) the per-cycle refresh cadence in
 # trading_strategy.py so a missed refresh is caught before the next trade.
@@ -96,6 +113,10 @@ class CapitalAuthority:
         )
         # Per-broker raw balances: broker_id → USD balance
         self._broker_balances: Dict[str, float] = {}
+        # Per-broker roles: broker_id → BROKER_ROLE_* constant
+        # "primary"  = authoritative (Kraken, etc.) — counts for global minimum
+        # "isolated" = NANO/sandbox (Coinbase) — cannot block startup or AI hub
+        self._broker_roles: Dict[str, str] = {}
         # Registered open-position exposure in USD (updated by callers)
         self._open_exposure_usd: float = 0.0
         # Timestamp of most-recent successful refresh
@@ -247,6 +268,30 @@ class CapitalAuthority:
             sum(self._broker_balances.values()),
         )
 
+    def set_broker_role(self, broker_id: str, role: str) -> None:
+        """
+        Tag a broker as ``"primary"`` (Kraken/authoritative) or
+        ``"isolated"`` (Coinbase NANO / sandbox).
+
+        This is the single chokepoint that prevents isolated broker capital
+        from leaking into the global minimum check, the AI hub, and portfolio
+        intelligence.  Call this once at startup after connecting each broker.
+
+        Parameters
+        ----------
+        broker_id:
+            The same key used in :meth:`feed_broker_balance` / :meth:`refresh`.
+        role:
+            :data:`BROKER_ROLE_PRIMARY` or :data:`BROKER_ROLE_ISOLATED`.
+        """
+        with self._lock:
+            self._broker_roles[str(broker_id)] = role
+        logger.info(
+            "[CapitalAuthority] broker=%s role set to '%s'",
+            broker_id,
+            role,
+        )
+
     # ------------------------------------------------------------------
     # Capital accessors
     # ------------------------------------------------------------------
@@ -281,6 +326,74 @@ class CapitalAuthority:
             real = sum(self._broker_balances.values())
             usable = real * (1.0 - self._reserve_pct)
             return max(0.0, usable - self._open_exposure_usd)
+
+    def get_primary_capital(self) -> float:
+        """
+        Capital from *primary* (authoritative) brokers only — i.e. those tagged
+        with :data:`BROKER_ROLE_PRIMARY` via :meth:`set_broker_role`.
+
+        Use this figure for:
+          • Global minimum-capital checks at startup
+          • AI hub ``portfolio_value`` calculations
+          • Portfolio intelligence ``effective_capital``
+
+        Isolated (Coinbase NANO) brokers are intentionally excluded so a tiny
+        sandbox balance can never block startup or distort AI allocation math.
+
+        Falls back to :meth:`get_real_capital` when no roles have been
+        registered yet (backward-compatible with callers that do not call
+        ``set_broker_role``).
+        """
+        with self._lock:
+            if not self._broker_roles:
+                # No role info yet — fall back to full sum (safe default)
+                return sum(self._broker_balances.values())
+            total = sum(
+                bal
+                for bid, bal in self._broker_balances.items()
+                if self._broker_roles.get(bid, BROKER_ROLE_UNKNOWN) == BROKER_ROLE_PRIMARY
+            )
+            return total
+
+    def get_isolated_capital(self) -> float:
+        """
+        Capital from *isolated* brokers only (e.g. Coinbase NANO / sandbox).
+
+        Useful for sizing trades that execute exclusively within an isolated
+        account, or for reporting the sandbox balance separately from the
+        authoritative Kraken balance.
+
+        Returns 0.0 when no brokers have been tagged as isolated.
+        """
+        with self._lock:
+            return sum(
+                bal
+                for bid, bal in self._broker_balances.items()
+                if self._broker_roles.get(bid, BROKER_ROLE_UNKNOWN) == BROKER_ROLE_ISOLATED
+            )
+
+    def get_usable_primary_capital(self) -> float:
+        """
+        Reserve-reduced capital from *primary* (authoritative) brokers only.
+
+        This is the correct value for AI hub ``portfolio_value`` calculations
+        and replaces the pattern ``get_primary_capital() * (1 - _reserve_pct)``
+        that would require callers to access the private ``_reserve_pct``.
+
+        Falls back to :meth:`get_usable_capital` when no broker roles have
+        been set (backward-compatible default).
+        """
+        with self._lock:
+            if not self._broker_roles:
+                # No role info yet — fall back to full usable capital
+                real = sum(self._broker_balances.values())
+                return max(0.0, real * (1.0 - self._reserve_pct) - self._open_exposure_usd)
+            primary_raw = sum(
+                bal
+                for bid, bal in self._broker_balances.items()
+                if self._broker_roles.get(bid, BROKER_ROLE_UNKNOWN) == BROKER_ROLE_PRIMARY
+            )
+            return max(0.0, primary_raw * (1.0 - self._reserve_pct) - self._open_exposure_usd)
 
     def get_per_broker(self, broker_id: str) -> float:
         """

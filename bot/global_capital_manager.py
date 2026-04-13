@@ -53,6 +53,10 @@ logger = logging.getLogger("nija.global_capital")
 # ---------------------------------------------------------------------------
 MAX_GLOBAL_RISK = 0.06  # 6% total risk across all accounts
 
+# Tiers that are excluded from effective_total_capital() so a tiny sandbox
+# balance (e.g. Coinbase NANO at $5) cannot distort cross-account risk math.
+_NANO_EXCLUDED_TIERS: frozenset = frozenset({"NANO_PLATFORM"})
+
 
 class GlobalCapitalManager:
     """
@@ -63,20 +67,78 @@ class GlobalCapitalManager:
     def __init__(self) -> None:
         self.accounts: Dict[str, float] = {}        # account_id → balance USD
         self._account_risk: Dict[str, float] = {}   # account_id → current risk fraction
+        self._account_tiers: Dict[str, str] = {}    # account_id → tier string
+        self._account_active: Dict[str, bool] = {}  # account_id → is_active flag
         self._lock = threading.Lock()
 
     # ── Capital Scaling ───────────────────────────────────────────────────────
 
-    def register_account(self, account_id: str, balance: float) -> None:
-        """Register or update an account balance."""
+    def register_account(
+        self,
+        account_id: str,
+        balance: float,
+        tier: str = "",
+        is_active: bool = True,
+    ) -> None:
+        """
+        Register or update an account balance.
+
+        Parameters
+        ----------
+        account_id:
+            Unique identifier for the account (e.g. ``"coinbase"`` or
+            ``"kraken_platform"``).
+        balance:
+            Current USD balance.
+        tier:
+            Account tier string.  Accounts tagged ``"NANO_PLATFORM"`` are
+            excluded from :meth:`effective_total_capital` so they cannot
+            contaminate global risk math.
+        is_active:
+            ``False`` when the broker is offline or quarantined; inactive
+            accounts are also excluded from :meth:`effective_total_capital`.
+        """
         with self._lock:
             self.accounts[account_id] = max(0.0, balance)
-            logger.debug("[GlobalCapital] registered %s balance=%.2f", account_id, balance)
+            self._account_tiers[account_id] = tier
+            self._account_active[account_id] = is_active
+            logger.debug(
+                "[GlobalCapital] registered %s balance=%.2f tier=%s active=%s",
+                account_id, balance, tier or "(none)", is_active,
+            )
 
     def total_capital(self) -> float:
-        """Return the sum of all registered account balances."""
+        """Return the sum of all registered account balances (all tiers)."""
         with self._lock:
             return sum(self.accounts.values())
+
+    def effective_total_capital(
+        self,
+        ignore_tiers: frozenset = _NANO_EXCLUDED_TIERS,
+    ) -> float:
+        """
+        Return the sum of *active*, *non-NANO* account balances.
+
+        Excludes accounts whose tier is in *ignore_tiers* (default:
+        ``{"NANO_PLATFORM"}``) and accounts marked ``is_active=False``.
+
+        Use this figure for any global risk calculation that must not be
+        skewed by a tiny sandbox balance — e.g. cross-account heat
+        budgets, AI allocation math, or the global minimum check.
+
+        Falls back to :meth:`total_capital` when no tier metadata is
+        available (backward-compatible with old callers).
+        """
+        with self._lock:
+            if not self._account_tiers:
+                # No tier info registered — fall back to full sum
+                return sum(self.accounts.values())
+            return sum(
+                bal
+                for aid, bal in self.accounts.items()
+                if self._account_active.get(aid, True)
+                and self._account_tiers.get(aid, "") not in ignore_tiers
+            )
 
     def get_allocation(self, account_id: str) -> float:
         """

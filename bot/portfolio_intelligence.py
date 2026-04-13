@@ -92,6 +92,38 @@ class AllocationDecision(Enum):
 
 
 # ---------------------------------------------------------------------------
+# Capital source — broker-level isolation model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CapitalSource:
+    """
+    Represents a single capital pool (one broker / account).
+
+    ``PortfolioIntelligence.update_capital_sources()`` accepts a dict of
+    these so the module can compute ``effective_capital`` — the figure used
+    for all risk-percentage math — while deliberately excluding NANO-tier
+    and inactive accounts that must not distort global risk decisions.
+
+    Attributes
+    ----------
+    account_id  : Unique identifier (e.g. ``"kraken_platform"``).
+    balance     : Current USD balance for this source.
+    tier        : Account tier string (e.g. ``"NANO_PLATFORM"``, ``"STARTER"``).
+    broker      : Broker name (e.g. ``"coinbase"``, ``"kraken"``).
+    is_active   : False when the broker is offline or quarantined.
+    is_primary  : True for authoritative execution brokers (Kraken);
+                  False for sandbox / copy-trading accounts.
+    """
+    account_id: str
+    balance: float
+    tier: str = ""
+    broker: str = ""
+    is_active: bool = True
+    is_primary: bool = True
+
+
+# ---------------------------------------------------------------------------
 # Data-classes  (immutable snapshots / value objects)
 # ---------------------------------------------------------------------------
 
@@ -276,6 +308,18 @@ class PortfolioIntelligence:
        - Enforces a minimum position-size gate after all reductions.
     """
 
+    # ── Capital isolation constants ──────────────────────────────────────────
+    # Tiers listed here are excluded from effective_capital so they cannot
+    # inflate global exposure percentages or trigger false "undercapitalized"
+    # warnings when the primary (Kraken) broker is offline.
+    IGNORED_TIERS_FOR_RISK: frozenset = frozenset({"NANO_PLATFORM"})
+
+    # Minimum effective capital (primary brokers only) to enable global risk math.
+    # Below this threshold evaluate_new_position returns 0.0 for the portfolio_value
+    # denominator, which rejects all trades — that is the correct safe behaviour
+    # when primary capital is too small to be meaningful.
+    MIN_EFFECTIVE_CAPITAL_USD: float = 25.0
+
     def __init__(self, config: Optional[Dict] = None) -> None:
         """
         Initialise the Portfolio Intelligence module.
@@ -313,6 +357,13 @@ class PortfolioIntelligence:
         self.positions: Dict[str, Dict] = {}
         self.price_history: Dict[str, pd.Series] = {}
         self.portfolio_value: float = 0.0
+
+        # --- Capital source isolation ----------------------------------------
+        # Registered broker capital sources keyed by account_id.
+        # NANO_PLATFORM and inactive sources are excluded when computing
+        # effective_capital so they cannot distort global risk percentages.
+        self._capital_sources: Dict[str, "CapitalSource"] = {}
+        self._effective_capital: float = 0.0
 
         # --- Portfolio-level optimizer state ---
         # Completed trade records used by the optimizer.
@@ -396,6 +447,129 @@ class PortfolioIntelligence:
                 break
             except Exception:
                 continue
+
+    # =========================================================================
+    # Public API – capital source isolation
+    # =========================================================================
+
+    @property
+    def effective_capital(self) -> float:
+        """
+        Effective capital for risk-percentage calculations.
+
+        Returns the sum of active, non-NANO primary broker balances.
+        Falls back to :attr:`portfolio_value` when no capital sources have
+        been registered via :meth:`update_capital_sources` (backward-
+        compatible with callers that still use :meth:`update_portfolio_value`
+        directly).
+
+        Rule: NANO_PLATFORM and inactive accounts are **excluded** so a $5
+        sandbox balance cannot make the system appear globally underfunded.
+        """
+        if self._capital_sources:
+            return self._effective_capital
+        return self.portfolio_value
+
+    def update_capital_sources(
+        self,
+        sources: Dict[str, "CapitalSource"],
+    ) -> None:
+        """
+        Register all capital pools and recompute :attr:`effective_capital`.
+
+        Call this once at startup and again whenever a broker connects or
+        disconnects so the effective capital stays current.
+
+        Parameters
+        ----------
+        sources:
+            Mapping of ``account_id → CapitalSource``.  Example::
+
+                pi.update_capital_sources({
+                    "kraken_platform": CapitalSource(
+                        account_id="kraken_platform",
+                        balance=1_200.0,
+                        tier="STARTER",
+                        broker="kraken",
+                        is_active=True,
+                        is_primary=True,
+                    ),
+                    "coinbase_nano": CapitalSource(
+                        account_id="coinbase_nano",
+                        balance=5.43,
+                        tier="NANO_PLATFORM",
+                        broker="coinbase",
+                        is_active=True,
+                        is_primary=False,
+                    ),
+                })
+        """
+        self._capital_sources = dict(sources)
+        self._effective_capital = self._compute_effective_capital()
+        # Keep portfolio_value in sync when we have real primary capital.
+        if self._effective_capital > 0:
+            self.portfolio_value = self._effective_capital
+
+    def _compute_effective_capital(self) -> float:
+        """
+        Compute effective capital from registered sources.
+
+        Excludes:
+          * Sources whose tier is in :attr:`IGNORED_TIERS_FOR_RISK`
+            (e.g. ``"NANO_PLATFORM"``).
+          * Sources marked ``is_active=False`` (offline / quarantined broker).
+
+        Returns 0.0 when the result is non-zero but below
+        :attr:`MIN_EFFECTIVE_CAPITAL_USD` — this forces ``evaluate_new_position``
+        to reject all trades, which is the correct safe behaviour.
+        """
+        effective = sum(
+            s.balance
+            for s in self._capital_sources.values()
+            if s.is_active and s.tier not in self.IGNORED_TIERS_FOR_RISK
+        )
+        if 0 < effective < self.MIN_EFFECTIVE_CAPITAL_USD:
+            logger.warning(
+                "⚠️  [PortfolioIntelligence] effective_capital $%.2f < minimum $%.2f "
+                "— global risk math disabled until primary broker is funded",
+                effective,
+                self.MIN_EFFECTIVE_CAPITAL_USD,
+            )
+            return 0.0
+        return effective
+
+    def get_capital_source_report(self) -> Dict:
+        """
+        Return a diagnostic snapshot of registered capital sources and the
+        computed effective capital.  Useful for startup logs and monitoring.
+        """
+        included = {
+            aid: s
+            for aid, s in self._capital_sources.items()
+            if s.is_active and s.tier not in self.IGNORED_TIERS_FOR_RISK
+        }
+        excluded = {
+            aid: s
+            for aid, s in self._capital_sources.items()
+            if not s.is_active or s.tier in self.IGNORED_TIERS_FOR_RISK
+        }
+        return {
+            "effective_capital": self._effective_capital,
+            "portfolio_value": self.portfolio_value,
+            "sources_included": {
+                aid: {"balance": s.balance, "tier": s.tier, "broker": s.broker}
+                for aid, s in included.items()
+            },
+            "sources_excluded": {
+                aid: {
+                    "balance": s.balance,
+                    "tier": s.tier,
+                    "broker": s.broker,
+                    "reason": "NANO_PLATFORM" if s.tier in self.IGNORED_TIERS_FOR_RISK else "inactive",
+                }
+                for aid, s in excluded.items()
+            },
+        }
 
     # =========================================================================
     # Public API – state management
@@ -495,12 +669,25 @@ class PortfolioIntelligence:
         rejection_reasons: List[str] = []
         reduction_reasons: List[str] = []
         approved_size = requested_size_usd
-        portfolio_value = self.portfolio_value
+        # Use effective_capital (excludes NANO_PLATFORM and offline brokers) so
+        # a $5 sandbox balance cannot make every exposure percentage look huge
+        # and cause the system to reject all legitimate trades.
+        portfolio_value = self.effective_capital
 
         if portfolio_value <= 0:
-            rejection_reasons.append(
-                "Portfolio value not set — cannot evaluate exposure"
-            )
+            if self._capital_sources:
+                # Sources are registered but all are NANO_PLATFORM or inactive.
+                # effective_capital was filtered to 0 to prevent NANO balance
+                # from distorting global risk math.
+                rejection_reasons.append(
+                    "No primary-broker capital available — effective_capital=0 "
+                    f"({len(self._capital_sources)} source(s) registered but all are "
+                    "NANO_PLATFORM-tier or inactive; fund a primary broker to resume trading)"
+                )
+            else:
+                rejection_reasons.append(
+                    "Portfolio value not set — cannot evaluate exposure"
+                )
             return AllocationRecommendation(
                 symbol=symbol,
                 requested_size_usd=requested_size_usd,
