@@ -1458,40 +1458,46 @@ class KrakenNonceManager:
         max_attempts: int = 0,
     ) -> bool:
         """
-        Server-synced nonce calibration — two-step recovery protocol.
+        Server-synced nonce calibration with progressive forward probe.
 
         Recovery sequence
         -----------------
         1. **Attempt 1** — call ``api_call_fn()`` with the current nonce.
            Success → ``True``.
 
-        2. **Server-sync recovery** — nonce rejected →
+        2. **Server-sync anchor** — nonce rejected →
            ``server_sync_resync()`` (freeze ``_RECOVERY_FREEZE_S`` s, query
            ``/0/public/Time``, reset nonce to
-           ``server_time_ms + _SERVER_SYNC_OFFSET_MS``) → retry **once**.
-           Success → ``True``.
+           ``server_time_ms + _SERVER_SYNC_OFFSET_MS``).
 
-        3. **Desync unresolved** — retry also rejected.  Logs a warning that
-           the nonce is out of sync and a resync is required.  Does **NOT**
-           declare the API key permanently invalid — nonce desync is a
-           recoverable state, not a credential problem.
+        3. **Progressive forward probe** — call ``api_call_fn()`` starting
+           from the server-time baseline.  If still rejected, advance the
+           nonce by ``effective_step`` ms and retry, up to ``effective_max``
+           times.  This handles the case where Kraken's server-side stored
+           nonce is *far ahead* of wall-clock time due to legacy forward-jump
+           accumulation (nuclear resets, ceiling jumps from a prior strategy).
+           Success at any step → records calibration in
+           ``AdaptiveNonceOffsetEngine`` → ``True``.
 
-        This replaces the previous ``hard_nonce_rebase`` → 12-step forward
-        probe → ceiling jump → escalation → ``_key_invalidated`` chain.
+        4. **All steps exhausted** — logs actionable remediation steps and
+           returns ``False``.  Does **NOT** set ``_key_invalidated``; nonce
+           desync is a recoverable state, not a credential problem.
 
-        ``step_ms`` and ``max_attempts`` are accepted but ignored; they are
-        retained only for backward compatibility with existing call sites.
+        ``step_ms`` and ``max_attempts`` override the defaults derived from
+        ``_deep_reset_active`` (``_DEEP_PROBE_STEP_MS`` / ``_DEEP_PROBE_MAX_ATTEMPTS``
+        when deep mode is on, else ``_PROBE_STEP_MS`` / ``_PROBE_MAX_ATTEMPTS``).
 
         Args:
             api_call_fn:  ``callable() → dict`` — must return a Kraken API
                           response dict containing an ``"error"`` list.
-            step_ms:      Ignored (backward-compat shim).
-            max_attempts: Ignored (backward-compat shim).
+            step_ms:      Per-step forward jump in milliseconds (0 = auto).
+            max_attempts: Maximum number of probe steps after server-sync
+                          anchor (0 = auto).
 
         Returns:
             ``True``  — Kraken accepted a call; nonce is calibrated.
-            ``False`` — Network/auth error or nonce desync not resolved in
-                        one server-sync recovery cycle.
+            ``False`` — Network/auth error or nonce desync not resolved
+                        within the probe budget.
         """
         # ── NTP pre-check (diagnostic only — does not block) ─────────────
         _ntp = check_ntp_sync()
@@ -1551,53 +1557,116 @@ class KrakenNonceManager:
             return True
 
         # ── Server-sync recovery ──────────────────────────────────────────
+        # Step 1: anchor to Kraken's actual server time to discard any in-process
+        # forward drift (nuclear-reset jumps, ceiling jumps, etc.).
         _logger.warning(
             "KrakenNonceManager.probe_and_resync: nonce rejected (%s) — "
-            "entering server-sync recovery (freeze → server time → reset → retry once)",
+            "entering server-sync recovery then progressive forward probe",
             ", ".join(result.get("error") or []),
         )
         self.server_sync_resync()
 
-        _logger.info(
-            "KrakenNonceManager.probe_and_resync: recovery retry (nonce=%d)",
-            self.get_last_nonce(),
+        # Step 2: progressive forward probe.
+        # Kraken's SERVER-SIDE stored floor may be hours ahead of wall-clock time
+        # due to legacy forward-jump accumulation (old nuclear resets, ceiling
+        # jumps).  server_sync_resync() resets us to server_time+3s which is
+        # often still below Kraken's floor.  We probe upward in fixed steps
+        # until we find Kraken's actual floor or exhaust all attempts.
+        effective_step: int = step_ms if step_ms > 0 else (
+            _DEEP_PROBE_STEP_MS if self._deep_reset_active else _PROBE_STEP_MS
         )
-        try:
-            retry_result = api_call_fn()
-        except Exception as exc:
-            _logger.debug(
-                "KrakenNonceManager.probe_and_resync: recovery retry raised (%s)", exc,
+        effective_max: int = max_attempts if max_attempts > 0 else (
+            _DEEP_PROBE_MAX_ATTEMPTS if self._deep_reset_active else _PROBE_MAX_ATTEMPTS
+        )
+
+        failed_probe_attempts = 0
+        total_probe_count = effective_max + 1  # baseline (server_time+3s) + effective_max steps
+
+        for probe_num in range(1, total_probe_count + 1):
+            _logger.info(
+                "KrakenNonceManager.probe_and_resync: probe %d/%d (nonce=%d)",
+                probe_num, total_probe_count, self.get_last_nonce(),
             )
-            return False
-
-        if not isinstance(retry_result, dict):
-            return False
-
-        if not _is_nonce_error(retry_result):
-            if not (retry_result.get("error") or []):
-                _logger.info(
-                    "✅ KrakenNonceManager.probe_and_resync: accepted after "
-                    "server_sync_resync() — nonce=%d", self.get_last_nonce(),
+            try:
+                probe_result = api_call_fn()
+            except Exception as exc:
+                _logger.debug(
+                    "KrakenNonceManager.probe_and_resync: probe %d raised (%s) — "
+                    "not a nonce issue; aborting",
+                    probe_num, exc,
                 )
-            return True
+                return False
 
-        # ── Nonce desync unresolved ───────────────────────────────────────
-        # The single recovery cycle did not resolve the desync.  This is a
-        # temporary state — Kraken's stored floor may be ahead of our
-        # server-time reference due to large forward jumps from an older
-        # strategy.  This is NOT a key-validity problem.
+            if not isinstance(probe_result, dict):
+                _logger.debug(
+                    "KrakenNonceManager.probe_and_resync: unexpected response type %s "
+                    "on probe %d — aborting",
+                    type(probe_result).__name__, probe_num,
+                )
+                return False
+
+            if not _is_nonce_error(probe_result):
+                if not (probe_result.get("error") or []):
+                    _logger.info(
+                        "✅ KrakenNonceManager.probe_and_resync: accepted on probe "
+                        "%d/%d — nonce=%d (%d step(s) × %d ms above server time)",
+                        probe_num, total_probe_count,
+                        self.get_last_nonce(), failed_probe_attempts, effective_step,
+                    )
+                else:
+                    _logger.debug(
+                        "KrakenNonceManager.probe_and_resync: non-nonce error (%s) on "
+                        "probe %d — nonce is OK",
+                        ", ".join(probe_result.get("error") or []), probe_num,
+                    )
+                # Record calibration so AdaptiveNonceOffsetEngine can learn the gap
+                if failed_probe_attempts > 0:
+                    AdaptiveNonceOffsetEngine().record_calibration(
+                        failed_probe_attempts, effective_step
+                    )
+                return True
+
+            # Nonce still rejected — advance by one step and try again (if budget remains)
+            failed_probe_attempts += 1
+            if probe_num < total_probe_count:
+                _logger.warning(
+                    "KrakenNonceManager.probe_and_resync: nonce rejected on probe "
+                    "%d/%d — advancing +%d ms (Kraken floor is ahead of server time)",
+                    probe_num, total_probe_count, effective_step,
+                )
+                with _LOCK:
+                    self._last_nonce += effective_step
+                    if self._redis_backend is not None:
+                        try:
+                            self._redis_backend.advance_to(self._last_nonce)
+                        except Exception as _re:
+                            _logger.debug(
+                                "KrakenNonceManager.probe_and_resync: Redis advance error (%s)",
+                                _re,
+                            )
+                    elif _NONCE_MODE != "timestamp":
+                        self._persist()
+
+        # ── All probe steps exhausted ─────────────────────────────────────
+        # Kraken's stored floor is more than effective_max × effective_step ms
+        # ahead of server time.  This is NOT a key-validity problem — it is a
+        # nonce-state problem caused by legacy forward-jump accumulation.
+        total_window_min = effective_max * effective_step / 60_000
         _logger.error(
-            "❌ KrakenNonceManager.probe_and_resync: nonce desync unresolved "
-            "after server-sync recovery.  Kraken's stored nonce floor may be "
-            "ahead of server time (legacy forward-jump accumulation). "
-            "This is a RESYNC issue — NOT a key invalidation. "
-            "Recommended actions:\n"
-            "  1. Wait 30–60 s and retry (Kraken's window drains naturally).\n"
-            "  2. Set NIJA_FORCE_NONCE_RESYNC=1 and restart for a clean slate.\n"
-            "  3. Check for duplicate bot instances (ps aux | grep bot.py)."
+            "❌ KrakenNonceManager.probe_and_resync: all %d probe step(s) × %d ms "
+            "(%.0f min total) exhausted.  Kraken's stored nonce floor is > %.0f min "
+            "ahead of server time (legacy forward-jump accumulation).\n"
+            "Recommended recovery actions:\n"
+            "  1. Set NIJA_DEEP_NONCE_RESET=1 and restart "
+            "(activates 12 × 10-min = 120-min probe coverage).\n"
+            "  2. Set NIJA_NONCE_CEILING_JUMP=1 and restart "
+            "(brute-force 24-h jump then probe).\n"
+            "  3. Check for duplicate bot instances: ps aux | grep bot.py\n"
+            "  4. Rotate the Kraken API key if all else fails.",
+            effective_max, effective_step, total_window_min, total_window_min,
         )
         # Intentionally NOT setting _key_invalidated = True.
-        # Nonce desync is recoverable without credential rotation.
+        # Nonce desync is recoverable; it is NOT a credential problem.
         return False
 
 
