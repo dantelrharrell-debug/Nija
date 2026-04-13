@@ -1737,10 +1737,12 @@ class KrakenNonceManager:
                             "%d/%d — nonce=%d",
                             dp_num, _DEEP_PROBE_MAX_ATTEMPTS, self.get_last_nonce(),
                         )
-                    if dp_num > 1:
-                        AdaptiveNonceOffsetEngine().record_calibration(
-                            dp_num - 1, _DEEP_PROBE_STEP_MS
-                        )
+                    # Record calibration so AdaptiveNonceOffsetEngine can learn
+                    # how many deep-probe steps were needed (dp_num - 1 failed
+                    # before this success; 0 means calibrated on the first try).
+                    AdaptiveNonceOffsetEngine().record_calibration(
+                        dp_num - 1, _DEEP_PROBE_STEP_MS
+                    )
                     return True
                 # Advance for the next deep probe (skip on the last iteration)
                 if dp_num < _DEEP_PROBE_MAX_ATTEMPTS:
@@ -1770,6 +1772,8 @@ class KrakenNonceManager:
         # ── Tier 2: ceiling jump (now + 24 h) ────────────────────────────────
         # If the deep probes (or the caller-supplied deep mode) also failed the
         # nonce is so far ahead that a large one-shot jump is the only option.
+        # force_ceiling_jump() sets self._last_nonce = now + _CEILING_JUMP_MS
+        # (default 24 h), which should land well above Kraken's stored floor.
         _logger.critical(
             "🚀 KrakenNonceManager.probe_and_resync: [Tier 2] automatic CEILING JUMP "
             "(now + %d ms = %.1f h) — all progressive probe tiers exhausted.  "
@@ -1778,6 +1782,9 @@ class KrakenNonceManager:
         )
         self.force_ceiling_jump()
         # Probe forward from the ceiling position to pin-point Kraken's floor.
+        # _DEEP_PROBE_STEP_MS (10 min) is used here because after a 24-h ceiling
+        # jump we need a coarse step that can cover multi-hour floors quickly
+        # without wasting many small increments (as _PROBE_STEP_MS = 5 min would).
         _cj_total = _PROBE_ESCALATION_ATTEMPTS + 1
         for cj_num in range(1, _cj_total + 1):
             _logger.info(
