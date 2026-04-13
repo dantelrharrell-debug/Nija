@@ -150,6 +150,8 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                     "\n🚫 Distributed single-writer lock lost; "
                     "another NIJA writer may be active. Exiting for safety."
                 )
+                _distributed_writer_lock_stop.set()
+                _release_distributed_process_lock()
                 os._exit(1)
             _failure_streak = 0
         except Exception as _hb_exc:
@@ -159,6 +161,8 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                     f"\n🚫 Distributed lock heartbeat failed 3x ({_hb_exc}); "
                     "exiting to preserve single-writer invariant."
                 )
+                _distributed_writer_lock_stop.set()
+                _release_distributed_process_lock()
                 os._exit(1)
 
 
@@ -182,7 +186,12 @@ def _acquire_distributed_process_lock() -> None:
             socket_connect_timeout=3,
             socket_timeout=3,
         )
-        _client.ping()
+        try:
+            _client.ping()
+        except Exception as _ping_exc:
+            raise RuntimeError(
+                f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
+            ) from _ping_exc
         _acquired = _client.set(_lock_key, _token, nx=True, ex=_ttl_s)
         if not _acquired:
             _holder = _client.get(_lock_key) or "<unknown-holder>"

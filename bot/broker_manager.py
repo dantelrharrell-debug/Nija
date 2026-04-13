@@ -7623,7 +7623,6 @@ class KrakenBroker(BaseBroker):
                         for error_keyword in _KRAKEN_NONCE_LOCK_ERROR_FRAGMENTS
                     )
                     if is_nonce_lock_conflict:
-                        self.connected = False
                         self.last_connection_error = (
                             "PHYSICALLY_BLOCKED_NONCE_LOCK: another running NIJA "
                             "instance holds the process-level nonce lock for this key"
