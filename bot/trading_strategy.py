@@ -11637,6 +11637,11 @@ class TradingStrategy:
                     # FIX #3 (Jan 20, 2026): Kraken markets already filtered at startup
                     # No need to filter again during scan - markets_to_scan already contains only supported pairs
                     scan_limit = len(markets_to_scan)
+                    logger.critical(
+                        "🔁 EXECUTION LOOP ACTIVE — signal scan started | broker=%s | markets=%d",
+                        entry_broker_name.upper() if entry_broker_name else "unknown",
+                        scan_limit,
+                    )
                     logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
 
                     # ⏱️ Record the scan-only start time so the per-market cycle cap

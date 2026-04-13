@@ -10517,6 +10517,18 @@ class BrokerManager:
         This ensures the platform portfolio uses the correct broker for new entries.
         """
         if not self.active_broker and BrokerType.KRAKEN not in self.brokers:
+            # No active broker AND no Kraken registered — try any connected broker
+            # before giving up so Coinbase can serve as the sole execution authority.
+            for _fb_type, _fb_broker in self.brokers.items():
+                if getattr(_fb_broker, 'connected', False) and not getattr(_fb_broker, 'exit_only_mode', False):
+                    self.active_broker = _fb_broker
+                    self.primary_broker_type = _fb_type
+                    logger.info(
+                        "🔄 select_primary_platform_broker: no active broker — "
+                        "promoted %s as primary (first connected broker)",
+                        _fb_type.value,
+                    )
+                    return
             logger.warning("⚠️ No primary broker set - cannot select primary platform")
             return
 
@@ -10538,6 +10550,18 @@ class BrokerManager:
             return
 
         if not self.active_broker:
+            # Kraken is offline and no active_broker is set — promote the first
+            # connected, non-exit-only broker so trading is not silently blocked.
+            for _fb_type, _fb_broker in self.brokers.items():
+                if getattr(_fb_broker, 'connected', False) and not getattr(_fb_broker, 'exit_only_mode', False):
+                    self.active_broker = _fb_broker
+                    self.primary_broker_type = _fb_type
+                    logger.info(
+                        "🔄 select_primary_platform_broker: Kraken offline, active_broker=None — "
+                        "promoted %s as primary fallback",
+                        _fb_type.value,
+                    )
+                    return
             logger.warning("⚠️ No primary broker set - cannot select primary platform")
             return
 
@@ -10586,7 +10610,16 @@ class BrokerManager:
                     promotion_reason = f"{current_primary} balance (${balance:.2f}) < minimum (${MINIMUM_TRADING_BALANCE:.2f})"
                     logger.info(f"🔍 {current_primary} has insufficient balance: ${balance:.2f} < ${MINIMUM_TRADING_BALANCE:.2f}")
             except Exception as e:
-                logger.warning(f"⚠️ Could not check balance for {current_primary}: {e}")
+                # Broker is unreachable — treat the same as insufficient balance so the
+                # fallback scan below promotes Coinbase (or another live broker) instead
+                # of silently leaving a disconnected Kraken as active_broker.
+                should_promote_kraken = True
+                promotion_reason = f"{current_primary} balance unavailable (exception: {e})"
+                logger.warning(
+                    "⚠️ Could not check balance for %s — treating as offline and "
+                    "promoting fallback broker: %s",
+                    current_primary, e,
+                )
 
         if should_promote_kraken:
             # FIX #2: Promote Kraken to PRIMARY broker for all new entries
