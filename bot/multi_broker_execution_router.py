@@ -981,8 +981,200 @@ class MultiBrokerExecutionRouter:
         return results
 
     # ------------------------------------------------------------------
-    # Reporting
+    # Split execution  (institutional-grade multi-broker layer)
     # ------------------------------------------------------------------
+
+    def execute_trade_split(
+        self,
+        broker: BrokerProfile,
+        request: RouteRequest,
+        slice_usd: float,
+    ) -> RouteResult:
+        """Dispatch a *slice* of a trade through a single *broker*.
+
+        This is the per-venue building-block for :meth:`route_split`.
+        It dispatches exactly ``slice_usd`` to ``broker`` and records the
+        outcome in the route log and performance scorer.
+
+        Args:
+            broker:    The :class:`BrokerProfile` that will receive the order.
+            request:   The original :class:`RouteRequest` (strategy, symbol,
+                       side, metadata).  ``request.size_usd`` is ignored here;
+                       ``slice_usd`` is used instead.
+            slice_usd: USD notional allocated to this broker.
+
+        Returns:
+            A :class:`RouteResult` describing success or failure for this slice.
+        """
+        t0 = time.monotonic()
+
+        # Detect asset class once so _make_result has the correct label.
+        if request.asset_class:
+            try:
+                ac = AssetClass(request.asset_class.lower())
+            except ValueError:
+                ac = detect_asset_class(request.symbol)
+        else:
+            ac = detect_asset_class(request.symbol)
+
+        # Minimum notional guard
+        if slice_usd < broker.min_notional_usd:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            error = (
+                f"Slice ${slice_usd:.2f} below minimum "
+                f"notional ${broker.min_notional_usd:.2f} for {broker.name}"
+            )
+            logger.warning("execute_trade_split: skipping %s — %s", broker.name, error)
+            return self._make_result(request, ac, broker.name, False, 0.0, 0.0, elapsed_ms, error)
+
+        # Build a size-adjusted sub-request for this slice
+        slice_request = RouteRequest(
+            strategy=request.strategy,
+            symbol=request.symbol,
+            side=request.side,
+            size_usd=slice_usd,
+            asset_class=request.asset_class,
+            order_type=request.order_type,
+            limit_price=request.limit_price,
+            preferred_broker=broker.name,
+            metadata=request.metadata,
+        )
+
+        fill_price, filled_usd, dispatch_error = self._dispatch(slice_request, broker)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        success = dispatch_error is None and fill_price > 0
+
+        result = self._make_result(
+            slice_request, ac, broker.name, success,
+            fill_price, filled_usd, elapsed_ms, dispatch_error,
+        )
+
+        # Feed performance scorer
+        scorer = self._get_scorer()
+        if scorer is not None:
+            try:
+                scorer.record_order_result(
+                    broker=broker.name,
+                    success=success,
+                    latency_ms=elapsed_ms,
+                    slippage_bps=0.0,
+                    error=dispatch_error,
+                )
+            except Exception:
+                pass
+
+        # Update shared stats + route log
+        with self._lock:
+            self._stats["total_routes"] += 1
+            if success:
+                self._stats["successful_routes"] += 1
+                logger.info(
+                    "✅ [split] %s %s filled via %s at %.4f (%.2f USD, %.0f ms)",
+                    request.side.upper(), request.symbol, broker.name,
+                    fill_price, filled_usd, elapsed_ms,
+                )
+            else:
+                self._stats["failed_routes"] += 1
+                logger.error(
+                    "❌ [split] %s %s via %s failed: %s",
+                    request.side.upper(), request.symbol, broker.name, dispatch_error,
+                )
+            if broker.name in self._brokers:
+                self._brokers[broker.name].observation_count += 1
+            self._route_log.append({
+                "timestamp": result.timestamp,
+                "symbol": request.symbol,
+                "side": request.side,
+                "size_usd": slice_usd,
+                "asset_class": ac.value,
+                "broker": broker.name,
+                "success": success,
+                "fill_price": fill_price,
+                "latency_ms": elapsed_ms,
+                "error": dispatch_error,
+                "split": True,
+            })
+            if len(self._route_log) > 1000:
+                self._route_log = self._route_log[-500:]
+
+        return result
+
+    def route_split(
+        self,
+        request: RouteRequest,
+        n_brokers: Optional[int] = None,
+    ) -> List[RouteResult]:
+        """Split a trade evenly across all active brokers for the asset class.
+
+        This is the institutional-grade multi-broker execution path.  Instead
+        of routing the full ``request.size_usd`` to a single primary venue, the
+        order is divided equally across every available broker for the detected
+        asset class::
+
+            for broker in active_brokers:
+                execute_trade_split(broker, slice_usd)
+
+        When only one broker is available the call degrades gracefully to a
+        single-venue order, matching the behaviour of :meth:`route`.
+
+        Args:
+            request:   Full :class:`RouteRequest` with the *total* notional in
+                       ``request.size_usd``.
+            n_brokers: Optional cap on the number of brokers to use.  When
+                       ``None`` (default) all available brokers participate.
+
+        Returns:
+            List of :class:`RouteResult` — one per broker attempted, in
+            priority order.  An empty list means no broker was available.
+        """
+        # Determine asset class
+        if request.asset_class:
+            try:
+                ac = AssetClass(request.asset_class.lower())
+            except ValueError:
+                ac = detect_asset_class(request.symbol)
+        else:
+            ac = detect_asset_class(request.symbol)
+
+        brokers = self._select_all_brokers(ac)
+        if not brokers:
+            logger.warning(
+                "route_split: no available brokers for asset_class=%s", ac.value
+            )
+            return []
+
+        if n_brokers is not None:
+            brokers = brokers[:n_brokers]
+
+        n = len(brokers)
+        base_slice = round(request.size_usd / n, 6)
+        # Last broker absorbs any rounding residual so all slices sum exactly to total.
+        final_slice = round(request.size_usd - base_slice * (n - 1), 6)
+        slices = [base_slice] * (n - 1) + [final_slice]
+
+        logger.info(
+            "🏦 route_split: distributing %.2f USD across %d broker(s): %s",
+            request.size_usd,
+            n,
+            ", ".join(f"{b.name}=${s:.2f}" for b, s in zip(brokers, slices)),
+        )
+
+        results: List[RouteResult] = []
+        for broker, slice_usd in zip(brokers, slices):
+            result = self.execute_trade_split(broker, request, slice_usd)
+            results.append(result)
+
+        successes = sum(1 for r in results if r.success)
+        total_filled = sum(r.filled_size_usd for r in results if r.success)
+        logger.info(
+            "🏦 route_split complete: %d/%d brokers succeeded | "
+            "%.2f / %.2f USD filled for %s %s",
+            successes, n, total_filled, request.size_usd,
+            request.side.upper(), request.symbol,
+        )
+        return results
+
+
 
     def get_stats(self) -> Dict[str, Any]:
         """Return routing statistics."""

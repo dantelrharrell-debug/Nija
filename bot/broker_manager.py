@@ -223,7 +223,7 @@ def clear_kraken_broker_quarantine() -> None:
         except Exception as _ce:
             logging.warning("⚠️  clear_broker_quarantine() raised: %s", _ce)
 
-    # Reset all live KrakenBroker instances
+    # Reset all live KrakenBroker instances and immediately attempt reconnect.
     cleared_count = 0
     try:
         for _broker in KrakenBroker._iter_live():
@@ -232,6 +232,17 @@ def clear_kraken_broker_quarantine() -> None:
             _broker.quarantine_until = 0.0
             _broker.error_count = 0
             cleared_count += 1
+            # Forced reconnect: bring Kraken back online without waiting for the
+            # next trading loop iteration.
+            try:
+                _broker.connect()
+                logging.info(
+                    "🔌 clear_kraken_broker_quarantine: forced reconnect triggered for KrakenBroker"
+                )
+            except Exception as _conn_err:
+                logging.warning(
+                    "⚠️  clear_kraken_broker_quarantine: reconnect attempt failed: %s", _conn_err
+                )
     except Exception as _re:
         logging.warning("⚠️  Error resetting broker instances during quarantine clear: %s", _re)
 
@@ -302,6 +313,17 @@ def clear_kraken_broker_quarantine(
         if getattr(_kb, 'exit_only_mode', False):
             _kb.exit_only_mode = False
             logging.info("✅ clear_kraken_broker_quarantine: exit_only_mode cleared on KrakenBroker")
+        # Forced reconnect: trigger an immediate connection attempt so Kraken
+        # is eligible for new entries on the very next market scan cycle.
+        try:
+            _kb.connect()
+            logging.info(
+                "🔌 clear_kraken_broker_quarantine: forced reconnect triggered for KrakenBroker"
+            )
+        except Exception as _conn_err:
+            logging.warning(
+                "⚠️ clear_kraken_broker_quarantine: reconnect attempt failed: %s", _conn_err
+            )
 
     logging.info(
         "✅ Kraken broker quarantine cleared — "
@@ -11158,6 +11180,26 @@ class BrokerManager:
     def get_connected_brokers(self) -> List[str]:
         """Get list of connected broker names"""
         return [b.broker_type.value for b in self.brokers.values() if b.connected]
+
+    def get_active_brokers(self) -> List['BaseBroker']:
+        """Return execution-eligible broker instances for multi-broker order splitting.
+
+        A broker is considered *active* when it is CONNECTED, HEALTHY,
+        NOT QUARANTINED, and NOT in EXIT_ONLY mode — the same four conditions
+        enforced by :meth:`is_execution_eligible`.
+
+        Use this method wherever the execution layer needs to iterate across
+        all live venues::
+
+            for broker in self.broker_manager.get_active_brokers():
+                execute_trade_split(broker, ...)
+
+        Returns:
+            List of :class:`BaseBroker` instances ordered by broker-type value
+            (deterministic; insertion order of ``self.brokers``).  An empty
+            list means no broker is currently eligible for new entries.
+        """
+        return [b for b in self.brokers.values() if self.is_execution_eligible(b)]
 
     def get_all_brokers(self) -> Dict[BrokerType, 'BaseBroker']:
         """
