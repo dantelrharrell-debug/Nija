@@ -28,6 +28,8 @@ except ImportError:
     _requests_lib = None  # type: ignore[assignment]
     _REQUESTS_AVAILABLE = False
 
+_GATEWAY_BLOCKED_ERROR_TAGS = ("blocked", "lease", "fencing")
+
 # Import circuit breaker for API reliability
 try:
     from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState  # type: ignore[assignment]
@@ -6709,7 +6711,7 @@ class KrakenBroker(BaseBroker):
         # horizontally without nonce collisions.
         #
         # Direct mode (existing path below) is used when the env var is absent.
-        _gateway_url = self._gateway_url or os.environ.get("NIJA_KRAKEN_GATEWAY_URL", "").strip()
+        _gateway_url = self._gateway_url
         if _gateway_url:
             return self._call_via_gateway(_gateway_url, method, params or {})
         if self._gateway_only_mode:
@@ -6883,7 +6885,7 @@ class KrakenBroker(BaseBroker):
 
         errors = body.get("errors", [])
         if self._gateway_only_mode and any(
-            any(tag in str(err).lower() for tag in ("blocked", "lease", "fencing"))
+            any(tag in str(err).lower() for tag in _GATEWAY_BLOCKED_ERROR_TAGS)
             for err in errors
         ):
             self._trigger_hard_stop(
@@ -7016,7 +7018,7 @@ class KrakenBroker(BaseBroker):
 
             # Enforce strict credential isolation: strategy containers in
             # gateway-only mode must not hold direct Kraken credentials.
-            leakage_vars: List[str] = []
+            detected_credential_vars: List[str] = []
             if self.account_type == AccountType.PLATFORM:
                 for env_name in (
                     "KRAKEN_PLATFORM_API_KEY",
@@ -7025,7 +7027,7 @@ class KrakenBroker(BaseBroker):
                     "KRAKEN_API_SECRET",
                 ):
                     if os.getenv(env_name, "").strip():
-                        leakage_vars.append(env_name)
+                        detected_credential_vars.append(env_name)
             else:
                 user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
                 full_env_name = self.user_id.upper()
@@ -7036,11 +7038,11 @@ class KrakenBroker(BaseBroker):
                     f"KRAKEN_USER_{full_env_name}_API_SECRET",
                 ):
                     if os.getenv(env_name, "").strip():
-                        leakage_vars.append(env_name)
-            if leakage_vars:
+                        detected_credential_vars.append(env_name)
+            if detected_credential_vars:
                 self._trigger_hard_stop(
                     "Gateway-only credential isolation violated. "
-                    f"Unset direct Kraken credentials: {sorted(set(leakage_vars))}"
+                    f"Unset direct Kraken credentials: {sorted(set(detected_credential_vars))}"
                 )
                 return False
 
@@ -7295,6 +7297,7 @@ class KrakenBroker(BaseBroker):
                 self.api_key_id = _make_key_id(api_key)
                 _dnm = _get_dnm()
                 _kid = self.api_key_id  # captured in closures below
+                _dnm.ensure_writer_lock(_kid)
                 self.nonce_manager = _dnm
 
                 def _nonce_distributed() -> str:

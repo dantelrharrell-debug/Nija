@@ -169,6 +169,7 @@ def _env_true(name: str, default: str = "0") -> bool:
 
 _REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "15000")))
 _STRICT_REDIS_LEASE = _env_true("NIJA_STRICT_REDIS_LEASE", "1")
+_PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 
 
 def _detect_container_id() -> str:
@@ -193,8 +194,7 @@ def _build_process_fingerprint() -> str:
     pid = os.getpid()
     host = socket.gethostname()
     container_id = _detect_container_id()
-    startup_hash = uuid.uuid4().hex[:16]
-    return f"pid={pid}|host={host}|container={container_id}|startup={startup_hash}"
+    return f"pid={pid}|host={host}|container={container_id}|startup={_PROCESS_STARTUP_HASH}"
 
 # ── Key derivation ─────────────────────────────────────────────────────────────
 
@@ -410,6 +410,10 @@ class _PerKeyRedisBackend:
             self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
         return lease_version
 
+    def ensure_writer_lease(self, key_id: str) -> int:
+        """Public wrapper around lease acquire/renew + fencing validation."""
+        return self._ensure_writer_lease(key_id)
+
 
 # ── Distributed nonce manager ─────────────────────────────────────────────────
 
@@ -598,6 +602,17 @@ class DistributedNonceManager:
             return self._get_file_manager(api_key_id).get_last_nonce()
         except Exception:
             return 0
+
+    def ensure_writer_lock(self, api_key_id: str) -> None:
+        """
+        Ensure the runtime single-writer lease is held for *api_key_id*.
+
+        In strict Redis mode this fails closed if lease acquisition/renewal
+        fails, guaranteeing single-writer lock ownership is validated at runtime.
+        """
+        if self._redis is None:
+            return
+        self._redis.ensure_writer_lease(api_key_id)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
