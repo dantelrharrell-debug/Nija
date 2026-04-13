@@ -1148,10 +1148,9 @@ class MultiBrokerExecutionRouter:
 
         n = len(brokers)
         base_slice = round(request.size_usd / n, 6)
-        # Last broker absorbs rounding residual so slices sum exactly to total.
-        slices = [base_slice] * (n - 1) + [
-            round(request.size_usd - base_slice * (n - 1), 6)
-        ]
+        # Last broker absorbs any rounding residual so all slices sum exactly to total.
+        final_slice = round(request.size_usd - base_slice * (n - 1), 6)
+        slices = [base_slice] * (n - 1) + [final_slice]
 
         logger.info(
             "🏦 route_split: distributing %.2f USD across %d broker(s): %s",
