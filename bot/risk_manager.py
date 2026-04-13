@@ -875,7 +875,7 @@ class AdaptiveRiskManager:
                     try:
                         from tier_config import PLATFORM_FUNDING_RULES, get_platform_funding_tier
                         # Get funding tier based on balance
-                        funding_tier_name = get_platform_funding_tier(sizing_base) if sizing_base >= 25.0 else 'MICRO_PLATFORM'
+                        funding_tier_name = get_platform_funding_tier(sizing_base) if sizing_base >= 1.0 else 'NANO_PLATFORM'
                         if funding_tier_name and funding_tier_name in PLATFORM_FUNDING_RULES:
                             funding_rules = PLATFORM_FUNDING_RULES[funding_tier_name]
                             tier_max_risk_pct = funding_rules.max_trade_size_pct / 100.0  # Convert from percentage to decimal

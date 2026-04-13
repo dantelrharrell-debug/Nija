@@ -205,12 +205,31 @@ TIER_CONFIGS: Dict[TradingTier, TierConfig] = {
 # - Handle fees without position lockouts
 #
 # Design Philosophy:
+# - NANO_PLATFORM ($1-$25): Ultra-minimal, single position, Coinbase only, micro-cap mode
 # - MICRO_PLATFORM ($25-$50): Ultra-safe, single position, copy trading optimized
 # - STARTER ($50-$99): Learning mode, copy trading recommended
 # - SAVER+ ($100+): Full feature operation
 # ============================================================================
 
 PLATFORM_FUNDING_RULES: Dict[str, PlatformFundingRules] = {
+    # NANO_PLATFORM: Special tier for $1-$25 accounts
+    # Minimal capital — Coinbase only, single position, micro-cap operational range
+    'NANO_PLATFORM': PlatformFundingRules(
+        tier=TradingTier.STARTER,
+        absolute_minimum=1.0,   # Absolute floor: $1 (matches broker_manager default)
+        recommended_minimum=25.0,  # Recommended: $25 for better fee efficiency
+        micro_platform_mode=True,  # Enable micro-platform optimizations
+        max_trade_size_pct=30.0,  # Max 30% per trade (conservative for minimal capital)
+        min_trade_size_usd=1.0,  # Minimum $1 trades (Coinbase micro-cap)
+        max_positions=1,  # Single position only
+        requires_copy_trading=False,  # Can operate independently
+        warning_message=(
+            "⚠️ NANO-PLATFORM MODE ($1-$25): "
+            "Use Coinbase only. Single position. Fees heavily impact profitability. "
+            "Fund to $25+ for MICRO_PLATFORM mode."
+        )
+    ),
+
     # MICRO_PLATFORM: Special tier for $25-$50 accounts
     # Optimized for copy trading with minimal capital
     'MICRO_PLATFORM': PlatformFundingRules(
@@ -908,11 +927,14 @@ def get_platform_funding_tier(balance: float) -> str:
         balance: Platform account balance in USD
 
     Returns:
-        Platform funding tier name: 'MICRO_PLATFORM', 'STARTER', 'SAVER', etc.
+        Platform funding tier name: 'NANO_PLATFORM', 'MICRO_PLATFORM', 'STARTER', 'SAVER', etc.
     """
-    if balance < 25.0:
-        logger.error(f"❌ Platform balance ${balance:.2f} below absolute minimum $25.00")
+    if balance < 1.0:
+        logger.error(f"❌ Platform balance ${balance:.2f} below absolute minimum $1.00")
         return None
+    elif balance < 25.0:
+        logger.warning(f"⚠️ Platform balance ${balance:.2f} is in NANO_PLATFORM range ($1-$25) — limited operation")
+        return 'NANO_PLATFORM'
     elif balance < 50.0:
         return 'MICRO_PLATFORM'
     elif balance < 100.0:
@@ -953,11 +975,11 @@ def validate_platform_minimum_funding(balance: float, log_warnings: bool = True)
     funding_tier_name = get_platform_funding_tier(balance)
 
     if funding_tier_name is None:
-        msg = f"❌ CRITICAL: Master balance ${balance:.2f} below absolute minimum $25.00. Cannot operate."
+        msg = f"❌ CRITICAL: Master balance ${balance:.2f} below absolute minimum $1.00. Cannot operate."
         if log_warnings:
             logger.error(msg)
-            logger.error("   Platform accounts require at least $25 to function.")
-            logger.error("   Recommended: $50+ for STARTER, $100+ for stable operation")
+            logger.error("   Platform accounts require at least $1 to function.")
+            logger.error("   Recommended: $25+ for NANO_PLATFORM, $50+ for MICRO_PLATFORM, $100+ for stable operation")
         return (False, msg, None)
 
     # Get funding rules for this tier
