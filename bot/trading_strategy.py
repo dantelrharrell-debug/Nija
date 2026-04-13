@@ -4710,7 +4710,7 @@ class TradingStrategy:
                 logger.info("🔧 Initializing advanced trading modules with live capital...")
                 self._init_advanced_features(total_capital)
 
-                # FIX #3: Hard fail if capital below minimum (non-negotiable)
+                # Hard fail if capital below minimum (non-negotiable)
                 if total_capital < MINIMUM_TRADING_BALANCE:
                         logger.error("=" * 70)
                         logger.error("❌ FATAL: Capital below minimum — trading disabled")
