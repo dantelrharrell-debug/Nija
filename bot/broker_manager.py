@@ -161,6 +161,71 @@ def _on_kraken_nonce_quarantine() -> None:
 
 if register_broker_quarantine_callback is not None:
     register_broker_quarantine_callback(_on_kraken_nonce_quarantine)
+
+
+def clear_kraken_broker_quarantine(
+    broker_manager_instance=None,
+    multi_account_manager_instance=None,
+) -> None:
+    """Clear the broker-level Kraken quarantine and restore entry eligibility.
+
+    Resets the module-level ``_kraken_quarantine_active`` flag, mirrors the
+    clear into the nonce-manager module, and sets ``exit_only_mode = False``
+    on every KrakenBroker instance found in either registry supplied.
+
+    Call this at startup (after the broker connection phase) so that a stale
+    quarantine from a previous session never blocks new entries.  All three
+    promotion conditions then pass:
+        connected == True  AND  quarantined == False  AND  exit_only == False
+    """
+    global _kraken_quarantine_active
+    _kraken_quarantine_active = False
+
+    # Mirror the clear into the nonce-manager module so both flags stay in sync.
+    try:
+        try:
+            from bot.global_kraken_nonce import clear_broker_quarantine as _gnm_clear
+        except ImportError:
+            from global_kraken_nonce import clear_broker_quarantine as _gnm_clear  # type: ignore
+        _gnm_clear()
+    except Exception as _qc_err:
+        logging.warning("clear_kraken_broker_quarantine: nonce-manager clear failed: %s", _qc_err)
+
+    # Collect all unique KrakenBroker instances from both registries.
+    _seen_ids: set = set()
+    _kraken_instances = []
+
+    if broker_manager_instance is not None:
+        _kb = broker_manager_instance.brokers.get(BrokerType.KRAKEN)
+        if _kb is not None:
+            _seen_ids.add(id(_kb))
+            _kraken_instances.append(_kb)
+
+    # Also scan multi_account_manager.platform_brokers (may be a distinct registry).
+    if multi_account_manager_instance is not None:
+        try:
+            for _bt, _b in multi_account_manager_instance.platform_brokers.items():
+                if (
+                    _b is not None
+                    and getattr(_bt, 'value', '') == 'kraken'
+                    and id(_b) not in _seen_ids
+                ):
+                    _seen_ids.add(id(_b))
+                    _kraken_instances.append(_b)
+        except Exception as _mam_err:
+            logging.debug("clear_kraken_broker_quarantine: multi_account scan failed: %s", _mam_err)
+
+    for _kb in _kraken_instances:
+        if getattr(_kb, 'exit_only_mode', False):
+            _kb.exit_only_mode = False
+            logging.info("✅ clear_kraken_broker_quarantine: exit_only_mode cleared on KrakenBroker")
+
+    logging.info(
+        "✅ Kraken broker quarantine cleared — "
+        "connected + NOT quarantined + NOT exit_only → eligible for new entries"
+    )
+
+
 try:
     from bot.balance_models import BalanceSnapshot, UserBrokerState, create_balance_snapshot_from_broker_response
 except ImportError:
