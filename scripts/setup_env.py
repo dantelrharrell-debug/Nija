@@ -130,7 +130,7 @@ _DEFAULTS: dict[str, str] = {
     "RETRY_DELAY":           "5",
     "MAX_RETRIES":           "5",
     "MAX_CONCURRENT_POSITIONS": "7",
-    "MINIMUM_TRADING_BALANCE": "25.0",
+    "MINIMUM_TRADING_BALANCE": "1.0",
     "SECRETS_BACKEND":       "env",
     "RATELIMIT_STORAGE_URI": "memory://",
 }
