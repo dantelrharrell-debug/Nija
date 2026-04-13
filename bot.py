@@ -9,6 +9,9 @@ import os
 import sys
 import time
 import logging
+import socket
+import secrets
+import hashlib
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 import signal
@@ -82,6 +85,140 @@ if os.path.exists('EMERGENCY_STOP'):
 # would generate its own nonce sequence, immediately desyncing from the first
 # and producing continuous "EAPI:Invalid nonce" errors on both.
 _PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "nija.pid")
+_distributed_writer_lock_client = None
+_distributed_writer_lock_key = ""
+_distributed_writer_lock_token = ""
+_distributed_writer_lock_stop = threading.Event()
+_distributed_writer_lock_thread = None
+
+
+def _writer_lock_scope() -> str:
+    """Return a stable, non-secret scope id for the current Kraken key."""
+    _raw = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+        or os.environ.get("KRAKEN_API_KEY", "").strip()
+        or "default"
+    )
+    return hashlib.sha256(_raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _release_distributed_process_lock() -> None:
+    """Release distributed single-writer lock iff this process still owns it."""
+    global _distributed_writer_lock_client, _distributed_writer_lock_key, _distributed_writer_lock_token
+    if not _distributed_writer_lock_client or not _distributed_writer_lock_key or not _distributed_writer_lock_token:
+        return
+    try:
+        _distributed_writer_lock_client.eval(
+            """
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+            return 0
+            """,
+            1,
+            _distributed_writer_lock_key,
+            _distributed_writer_lock_token,
+        )
+    except Exception:
+        pass
+    finally:
+        _distributed_writer_lock_client = None
+        _distributed_writer_lock_key = ""
+        _distributed_writer_lock_token = ""
+
+
+def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
+    """Keep the distributed writer lock alive; fail closed if ownership is lost."""
+    _interval = max(10, ttl_s // 3)
+    _failure_streak = 0
+    while not _distributed_writer_lock_stop.wait(_interval):
+        try:
+            _result = _distributed_writer_lock_client.eval(
+                """
+                if redis.call('GET', KEYS[1]) == ARGV[1] then
+                    return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+                end
+                return 0
+                """,
+                1,
+                _distributed_writer_lock_key,
+                _distributed_writer_lock_token,
+                str(ttl_s),
+            )
+            if int(_result or 0) != 1:
+                print(
+                    "\n🚫 Distributed single-writer lock lost; "
+                    "another NIJA writer may be active. Exiting for safety."
+                )
+                _distributed_writer_lock_stop.set()
+                _release_distributed_process_lock()
+                os._exit(1)
+            _failure_streak = 0
+        except Exception as _hb_exc:
+            _failure_streak += 1
+            if _failure_streak >= 3:
+                print(
+                    f"\n🚫 Distributed lock heartbeat failed 3x ({_hb_exc}); "
+                    "exiting to preserve single-writer invariant."
+                )
+                _distributed_writer_lock_stop.set()
+                _release_distributed_process_lock()
+                os._exit(1)
+
+
+def _acquire_distributed_process_lock() -> None:
+    """Acquire cross-deployment single-writer lock via Redis when configured."""
+    global _distributed_writer_lock_client, _distributed_writer_lock_key, _distributed_writer_lock_token
+    global _distributed_writer_lock_thread
+    _redis_url = os.environ.get("NIJA_REDIS_URL", "").strip() or os.environ.get("REDIS_URL", "").strip()
+    if not _redis_url:
+        print("⚠️ Distributed single-writer lock disabled (NIJA_REDIS_URL/REDIS_URL not set).")
+        return
+    try:
+        import redis  # local import to avoid hard startup dependency when Redis isn't used
+        _ttl_s = max(30, int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "90")))
+        _scope = _writer_lock_scope()
+        _lock_key = os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{_scope}"
+        _token = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(8)}"
+        _client = redis.Redis.from_url(
+            _redis_url,
+            decode_responses=True,
+            socket_connect_timeout=3,
+            socket_timeout=3,
+        )
+        try:
+            _client.ping()
+        except Exception as _ping_exc:
+            raise RuntimeError(
+                f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
+            ) from _ping_exc
+        _acquired = _client.set(_lock_key, _token, nx=True, ex=_ttl_s)
+        if not _acquired:
+            _holder = _client.get(_lock_key) or "<unknown-holder>"
+            print("\n" + "┏" + "━" * 78 + "┓")
+            print("┃ 🚫 DUPLICATE DEPLOYMENT BLOCKED                                           ┃")
+            print("┃ Another NIJA writer already holds the distributed runtime lock.          ┃")
+            print("┃ Single-writer invariant violated by deployment topology.                 ┃")
+            print(f"┃ Lock key: {_lock_key[-58:]:<58} ┃")
+            print(f"┃ Holder:   {_holder[:58]:<58} ┃")
+            print("┗" + "━" * 78 + "┛\n")
+            sys.exit(1)
+        _distributed_writer_lock_client = _client
+        _distributed_writer_lock_key = _lock_key
+        _distributed_writer_lock_token = _token
+        _distributed_writer_lock_stop.clear()
+        _distributed_writer_lock_thread = threading.Thread(
+            target=_distributed_writer_lock_heartbeat,
+            args=(_ttl_s,),
+            daemon=True,
+            name="DistributedWriterLockHeartbeat",
+        )
+        _distributed_writer_lock_thread.start()
+        print(f"🔒 Distributed writer lock acquired — key={_lock_key}")
+    except Exception as _lock_exc:
+        print(f"❌ Failed to acquire distributed single-writer lock: {_lock_exc}")
+        print("   Exiting fail-closed to preserve one-writer invariant.")
+        sys.exit(1)
 
 
 def _acquire_process_lock() -> None:
@@ -116,11 +253,14 @@ def _acquire_process_lock() -> None:
 
     import atexit
     atexit.register(_release_process_lock)
+    _acquire_distributed_process_lock()
     print(f"🔒 Process lock acquired (PID {os.getpid()}) — {_PID_FILE}")
 
 
 def _release_process_lock() -> None:
     """Remove the PID file on clean exit."""
+    _distributed_writer_lock_stop.set()
+    _release_distributed_process_lock()
     try:
         if os.path.exists(_PID_FILE):
             with open(_PID_FILE) as _pf:

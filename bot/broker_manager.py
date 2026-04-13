@@ -138,6 +138,15 @@ except ImportError:
 # orders (exit-only) and BrokerManager auto-promotes Coinbase to primary.
 _kraken_quarantine_active: bool = False
 
+# Error fragments that indicate Kraken is physically blocked by a duplicate
+# NIJA process holding the process-level nonce lock for this API key.
+_KRAKEN_NONCE_LOCK_ERROR_FRAGMENTS = (
+    "kraken nonce writer lock not acquired",
+    "one api key = one writer",
+    "process-lifetime nonce lock",
+    "duplicate bot process detected",
+)
+
 
 # ── Shared credential-prefix helper ──────────────────────────────────────────
 def _user_env_prefix(user_id: str) -> tuple:
@@ -7680,6 +7689,30 @@ class KrakenBroker(BaseBroker):
 
                 except Exception as e:
                     error_msg = str(e)
+                    error_msg_lower = error_msg.lower()
+                    self.connected = False
+
+                    # Hard stop: another process owns this Kraken API key's
+                    # process-lifetime nonce lock.  This instance may look
+                    # "logically configured" but is physically blocked from
+                    # safely issuing private Kraken requests until the
+                    # duplicate process is stopped.
+                    is_nonce_lock_conflict = any(
+                        error_keyword in error_msg_lower
+                        for error_keyword in _KRAKEN_NONCE_LOCK_ERROR_FRAGMENTS
+                    )
+                    if is_nonce_lock_conflict:
+                        self.last_connection_error = (
+                            "PHYSICALLY_BLOCKED_NONCE_LOCK: another running NIJA "
+                            "instance holds the process-level nonce lock for this key"
+                        )
+                        logger.critical(
+                            "🚫 Kraken connect blocked (%s): logically configured but physically "
+                            "blocked by another NIJA instance holding the process-level nonce "
+                            "lock. Stop duplicate deployments/processes and retry.",
+                            cred_label,
+                        )
+                        return False
 
                     # Check if this is a timeout or connection error from requests library
                     # These errors should be logged clearly and are always retryable
