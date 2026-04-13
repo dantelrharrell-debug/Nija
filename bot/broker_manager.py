@@ -18,6 +18,16 @@ import traceback
 import uuid
 import threading
 
+# Optional: 'requests' is used for Kraken gateway routing (NIJA_KRAKEN_GATEWAY_URL).
+# Imported here at module level so the dependency is visible to scanners;
+# gateway calls will raise RuntimeError if not installed.
+try:
+    import requests as _requests_lib  # type: ignore[import]
+    _REQUESTS_AVAILABLE = True
+except ImportError:
+    _requests_lib = None  # type: ignore[assignment]
+    _REQUESTS_AVAILABLE = False
+
 # Import circuit breaker for API reliability
 try:
     from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState  # type: ignore[assignment]
@@ -6818,16 +6828,13 @@ class KrakenBroker(BaseBroker):
         Raises:
             RuntimeError: If the gateway is unreachable or returns an HTTP error.
         """
-        try:
-            import requests as _requests  # type: ignore[import]
-        except ImportError:
+        if not _REQUESTS_AVAILABLE or _requests_lib is None:
             raise RuntimeError(
                 "KrakenBroker: the 'requests' package is required in gateway "
                 "mode.  Install it with: pip install requests"
             )
-        import uuid as _uuid
 
-        intent_id = str(_uuid.uuid4())
+        intent_id = str(uuid.uuid4())
         payload = {
             "intent_id": intent_id,
             "method": method,
@@ -6836,7 +6843,7 @@ class KrakenBroker(BaseBroker):
         endpoint = gateway_url.rstrip("/") + "/execute"
 
         try:
-            resp = _requests.post(endpoint, json=payload, timeout=30)
+            resp = _requests_lib.post(endpoint, json=payload, timeout=30)
             resp.raise_for_status()
             body = resp.json()
         except Exception as exc:

@@ -341,7 +341,9 @@ class MultiExchangeCapitalAllocator:
                 alloc.allocated_capital_usd = per_exchange_usd
                 # Preserve non-zero available_balance from a real balance fetch;
                 # only back-fill the placeholder when no real data exists yet.
-                if alloc.available_balance_usd == 0.0:
+                # Use an epsilon threshold rather than exact == 0.0 to avoid
+                # floating-point precision surprises.
+                if abs(alloc.available_balance_usd) < 1e-9:
                     alloc.available_balance_usd = per_exchange_usd
 
         self._save_state()

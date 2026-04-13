@@ -4660,7 +4660,10 @@ class TradingStrategy:
                             try:
                                 _connected_types.append(_ExchangeType(_ex_name))
                             except ValueError:
-                                pass
+                                logger.warning(
+                                    "⚠️  reconcile_connected_exchanges: no ExchangeType mapping "
+                                    "for broker %r — skipping", _ex_name
+                                )
                         if _connected_types:
                             self.advanced_manager.capital_allocator.reconcile_connected_exchanges(
                                 _connected_types
