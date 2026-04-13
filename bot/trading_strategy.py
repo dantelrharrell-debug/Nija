@@ -8861,7 +8861,13 @@ class TradingStrategy:
                     for _ca_cbt, _ca_cb in self.multi_account_manager.platform_brokers.items():
                         if _ca_cb and getattr(_ca_cb, "connected", False):
                             _ca_cycle_map[str(getattr(_ca_cbt, "value", str(_ca_cbt)))] = _ca_cb
-                    if account_balance > 0 and _ca_cycle_map:
+                    if getattr(self.multi_account_manager, "user_brokers", None):
+                        for _ca_uid, _ca_ubmap in self.multi_account_manager.user_brokers.items():
+                            for _ca_ubt, _ca_ub in _ca_ubmap.items():
+                                if _ca_ub and getattr(_ca_ub, "connected", False):
+                                    _ca_key = f"{_ca_uid}_{getattr(_ca_ubt, 'value', str(_ca_ubt))}"
+                                    _ca_cycle_map[_ca_key] = _ca_ub
+                    if _ca_cycle_map:
                         # Pass current open-position exposure if execution_engine available
                         _ca_open_exp = 0.0
                         if self.execution_engine and hasattr(self.execution_engine, "positions"):
