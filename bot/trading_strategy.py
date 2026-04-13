@@ -4944,26 +4944,49 @@ class TradingStrategy:
 
                 # ── STARTUP: Clear any stale Kraken quarantine / exit_only ──────
                 # A fresh process start should never inherit a quarantine from a
-                # previous session.  Clearing both flags here ensures all three
-                # promotion conditions are met:
+                # previous session.  Clearing both registries (BrokerManager +
+                # MultiAccountBrokerManager) ensures all three promotion conditions:
                 #   connected == True  AND  quarantined == False  AND  exit_only == False
                 try:
                     try:
                         from broker_manager import clear_kraken_broker_quarantine as _ckbq
                     except ImportError:
                         from bot.broker_manager import clear_kraken_broker_quarantine as _ckbq
-                    _ckbq(broker_manager_instance=self.broker_manager)
+                    _ckbq(
+                        broker_manager_instance=self.broker_manager,
+                        multi_account_manager_instance=self.multi_account_manager,
+                    )
                 except Exception as _ckbq_err:
                     logger.warning("⚠️  Could not clear Kraken quarantine at startup: %s", _ckbq_err)
 
-                # FIX #1: Select primary master broker with Kraken promotion logic
-                # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
-                # Only call this after all brokers are connected to make an informed decision
+                # Select primary master broker with Kraken promotion logic.
+                # Run AFTER the quarantine clear so Kraken is immediately eligible.
                 self.broker_manager.select_primary_platform_broker()
 
                 # Get the primary broker from broker_manager
                 # This is used for platform account trading
                 self.broker = self.broker_manager.get_primary_broker()
+
+                # ── Broker fallback: ensure self.broker is a connected instance ──
+                # get_primary_broker() may return a disconnected/None broker when
+                # all three promotion conditions (connected, !quarantined, !exit_only)
+                # were not met.  Scan platform_brokers for any connected broker so the
+                # trading loop starts and exits/SELLs are still routed correctly.
+                if self.broker is None or not getattr(self.broker, 'connected', False):
+                    _fallback_broker = None
+                    for _fb_bt, _fb_b in self.multi_account_manager.platform_brokers.items():
+                        if _fb_b is not None and getattr(_fb_b, 'connected', False):
+                            _fallback_broker = _fb_b
+                            break
+                    if _fallback_broker is not None:
+                        logger.warning(
+                            "⚠️  Primary broker unavailable — falling back to %s "
+                            "(connected but may be limited; quarantine/exit_only cleared at startup)",
+                            _fallback_broker.broker_type.value.upper(),
+                        )
+                        self.broker = _fallback_broker
+                        self.broker_manager.active_broker = _fallback_broker
+
                 if self.broker:
                     # Log the primary master broker with explicit reason if it was switched
                     broker_name = self.broker.broker_type.value.upper()
@@ -5154,13 +5177,19 @@ class TradingStrategy:
                 except Exception as _psm_sync_err:
                     logger.warning("⚠️  Pre-loop portfolio balance sync failed: %s", _psm_sync_err)
 
-            # NANO-tier trading loop minimum: bypass global MINIMUM_TRADING_BALANCE when
-            # Coinbase NANO is the only active capital source.  The per-broker floor
-            # (COINBASE_MIN_DEPLOYABLE = $1) applies; the global floor ($25 default) would
-            # incorrectly block a legitimately funded NANO account from starting.
+            # Micro-cap / NANO-tier trading loop minimum.
+            # Use COINBASE_MIN_DEPLOYABLE ($1) instead of MINIMUM_TRADING_BALANCE when:
+            #   • Coinbase NANO is the only active capital source (Kraken offline), OR
+            #   • total_capital is in LOW_CAPITAL_MODE range (< $25) — prevents a
+            #     higher MINIMUM_TRADING_BALANCE env setting from blocking micro-cap
+            #     accounts that should trade in LOW_CAPITAL_MODE (1 position, tight TP).
+            # MINIMUM_TRADING_BALANCE ($1 default) applies only for standard accounts.
             _effective_loop_min = (
                 COINBASE_MIN_DEPLOYABLE
-                if (_coinbase_isolated and _authoritative_capital <= 0)
+                if (
+                    (_coinbase_isolated and _authoritative_capital <= 0)
+                    or is_low_capital_mode(total_capital)
+                )
                 else MINIMUM_TRADING_BALANCE
             )
             if (platform_account_connected or total_active > 0) and total_capital >= _effective_loop_min:
