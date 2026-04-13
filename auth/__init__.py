@@ -52,6 +52,7 @@ class APIKeyManager:
         Build a safe env-var token for a user id.
 
         Keeps only A-Z and 0-9, converting all other characters to underscores.
+        Environment variable names must avoid special characters.
         """
         return re.sub(r"[^A-Z0-9]", "_", user_id.upper())
 
@@ -85,11 +86,10 @@ class APIKeyManager:
                 os.environ[f"{prefix}_PASSPHRASE"] = passphrase_str
 
         if additional_params and broker_env == "ALPACA":
-            if "paper" in additional_params:
-                paper_value = additional_params.get("paper")
-                if paper_value is not None:
-                    normalized_paper = bool(paper_value)
-                    os.environ[f"{prefix}_PAPER"] = str(normalized_paper).lower()
+            paper_value = additional_params.get("paper")
+            if paper_value is not None:
+                normalized_paper = bool(paper_value)
+                os.environ[f"{prefix}_PAPER"] = str(normalized_paper).lower()
 
     def _unwire_broker_env(self, user_id: str, broker: str) -> None:
         """Remove runtime env vars for a user broker connection."""
