@@ -130,7 +130,7 @@ _kraken_quarantine_active: bool = False
 
 # Error fragments that indicate Kraken is physically blocked by a duplicate
 # NIJA process holding the process-level nonce lock for this API key.
-_KRAKEN_NONCE_LOCK_ERROR_KEYWORDS = (
+_KRAKEN_NONCE_LOCK_ERROR_FRAGMENTS = (
     "kraken nonce writer lock not acquired",
     "one api key = one writer",
     "process-lifetime nonce lock",
@@ -7611,6 +7611,7 @@ class KrakenBroker(BaseBroker):
                 except Exception as e:
                     error_msg = str(e)
                     error_msg_lower = error_msg.lower()
+                    self.connected = False
 
                     # Hard stop: another process owns this Kraken API key's
                     # process-lifetime nonce lock.  This instance may look
@@ -7619,7 +7620,7 @@ class KrakenBroker(BaseBroker):
                     # duplicate process is stopped.
                     is_nonce_lock_conflict = any(
                         error_keyword in error_msg_lower
-                        for error_keyword in _KRAKEN_NONCE_LOCK_ERROR_KEYWORDS
+                        for error_keyword in _KRAKEN_NONCE_LOCK_ERROR_FRAGMENTS
                     )
                     if is_nonce_lock_conflict:
                         self.connected = False
