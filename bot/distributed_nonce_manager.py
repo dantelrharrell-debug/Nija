@@ -152,11 +152,49 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import socket
 import threading
 import time
-from typing import Optional
+import uuid
+from dataclasses import dataclass
+from typing import Dict, Optional
 
 _logger = logging.getLogger(__name__)
+
+
+def _env_true(name: str, default: str = "0") -> bool:
+    """Return True if env var *name* is set to a truthy value."""
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+_REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "15000")))
+_STRICT_REDIS_LEASE = _env_true("NIJA_STRICT_REDIS_LEASE", "1")
+_PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
+
+
+def _detect_container_id() -> str:
+    """Best-effort container id for process fingerprinting."""
+    # Kubernetes / Docker often provide HOSTNAME as the pod/container id.
+    host = os.environ.get("HOSTNAME", "").strip()
+    if len(host) >= 12:
+        return host
+    try:
+        with open("/proc/self/cgroup", "r", encoding="utf-8") as fh:
+            for line in fh:
+                seg = line.strip().split("/")[-1]
+                if len(seg) >= 12:
+                    return seg
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _build_process_fingerprint() -> str:
+    """Return a stable-per-process fingerprint for lease ownership metadata."""
+    pid = os.getpid()
+    host = socket.gethostname()
+    container_id = _detect_container_id()
+    return f"pid={pid}|host={host}|container={container_id}|startup={_PROCESS_STARTUP_HASH}"
 
 # ── Key derivation ─────────────────────────────────────────────────────────────
 
@@ -202,19 +240,111 @@ class _PerKeyRedisBackend:
         return next
     """
     _KEY_PREFIX = "nija:kraken:nonce:"
+    _LEASE_OWNER_PREFIX = "nija:kraken:writer:owner:"
+    _LEASE_VERSION_PREFIX = "nija:kraken:writer:lease_version:"
+    _LEASE_VERSION_COUNTER_PREFIX = "nija:kraken:writer:version_counter:"
+    _LEASE_FINGERPRINT_PREFIX = "nija:kraken:writer:fingerprint:"
 
-    def __init__(self, redis_client: object) -> None:
+    _LEASE_LUA = """
+        local owner_key = KEYS[1]
+        local version_key = KEYS[2]
+        local counter_key = KEYS[3]
+        local fingerprint_key = KEYS[4]
+        local owner = ARGV[1]
+        local ttl = tonumber(ARGV[2])
+        local fingerprint = ARGV[3]
+
+        local current_owner = redis.call('GET', owner_key)
+        if not current_owner then
+            local version = redis.call('INCR', counter_key)
+            redis.call('SET', owner_key, owner, 'PX', ttl)
+            redis.call('SET', version_key, tostring(version), 'PX', ttl)
+            redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl)
+            return {1, version, owner}
+        end
+
+        if current_owner == owner then
+            local version = tonumber(redis.call('GET', version_key))
+            if not version then
+                version = redis.call('INCR', counter_key)
+            end
+            redis.call('PEXPIRE', owner_key, ttl)
+            redis.call('SET', version_key, tostring(version), 'PX', ttl)
+            redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl)
+            return {1, version, owner}
+        end
+
+        local current_version = tonumber(redis.call('GET', version_key)) or 0
+        return {0, current_version, current_owner}
+    """
+    _NEXT_WITH_FENCE_LUA = """
+        local nonce_key = KEYS[1]
+        local owner_key = KEYS[2]
+        local version_key = KEYS[3]
+        local floor = tonumber(ARGV[1])
+        local expected_owner = ARGV[2]
+        local expected_version = tonumber(ARGV[3])
+
+        local current_owner = redis.call('GET', owner_key)
+        local current_version = tonumber(redis.call('GET', version_key)) or 0
+
+        if current_owner ~= expected_owner then
+            return {0, "OWNER_MISMATCH", current_version, current_owner or ""}
+        end
+        if current_version ~= expected_version then
+            return {0, "VERSION_MISMATCH", current_version, current_owner or ""}
+        end
+
+        local cur = tonumber(redis.call('GET', nonce_key)) or 0
+        local next = math.max(cur + 1, floor)
+        redis.call('SET', nonce_key, tostring(next))
+        return {1, next, current_version, current_owner}
+    """
+
+    @dataclass
+    class _LeaseState:
+        version: int
+        owner_id: str
+
+    def __init__(
+        self,
+        redis_client: object,
+        owner_id: str,
+        owner_fingerprint: str,
+        lease_ttl_ms: int = _REDIS_LEASE_TTL_MS,
+        strict_lease: bool = _STRICT_REDIS_LEASE,
+    ) -> None:
         self._client = redis_client
         self._script = redis_client.register_script(self._LUA)  # type: ignore[attr-defined]
+        self._lease_script = redis_client.register_script(self._LEASE_LUA)  # type: ignore[attr-defined]
+        self._next_with_fence_script = redis_client.register_script(  # type: ignore[attr-defined]
+            self._NEXT_WITH_FENCE_LUA
+        )
         self._client.ping()  # type: ignore[attr-defined]
+        self._owner_id = owner_id
+        self._owner_fingerprint = owner_fingerprint
+        self._lease_ttl_ms = lease_ttl_ms
+        self._strict_lease = strict_lease
+        self._lease_by_key: Dict[str, _PerKeyRedisBackend._LeaseState] = {}
         _logger.info("DistributedNonceManager: Redis backend connected")
 
     def next_nonce(self, key_id: str) -> int:
         """Atomically return the next nonce for *key_id* (>= now_ms, strictly increasing)."""
+        lease_version = self._ensure_writer_lease(key_id)
         floor = int(time.time() * 1000)
         redis_key = self._KEY_PREFIX + key_id
-        result = self._script(keys=[redis_key], args=[floor])
-        return int(result)
+        owner_key = self._LEASE_OWNER_PREFIX + key_id
+        version_key = self._LEASE_VERSION_PREFIX + key_id
+        result = self._next_with_fence_script(
+            keys=[redis_key, owner_key, version_key],
+            args=[floor, self._owner_id, lease_version],
+        )
+        if int(result[0]) != 1:
+            raise RuntimeError(
+                "Redis fencing check rejected nonce issuance "
+                f"(key_id={key_id}, reason={result[1]}, lease_version={result[2]}, owner={result[3]})"
+            )
+        return int(result[1])
 
     def get_last(self, key_id: str) -> int:
         """Return the last issued nonce without advancing (0 if never set)."""
@@ -224,11 +354,65 @@ class _PerKeyRedisBackend:
     def reset(self, key_id: str) -> None:
         """Delete the nonce key for *key_id* (fresh start — use only after key rotation)."""
         self._client.delete(self._KEY_PREFIX + key_id)  # type: ignore[attr-defined]
+        self._lease_by_key.pop(key_id, None)
         _logger.warning(
             "DistributedNonceManager: Redis nonce key reset for key_id=%s "
             "(new key rotation — nonce sequence restarting from 0)",
             key_id,
         )
+
+    def _ensure_writer_lease(self, key_id: str) -> int:
+        """
+        Acquire/renew strict Redis writer lease and enforce fencing token stability.
+
+        Fail closed when lease ownership changes or when fencing token rotates
+        within the same process lifetime.
+        """
+        owner_key = self._LEASE_OWNER_PREFIX + key_id
+        version_key = self._LEASE_VERSION_PREFIX + key_id
+        counter_key = self._LEASE_VERSION_COUNTER_PREFIX + key_id
+        fingerprint_key = self._LEASE_FINGERPRINT_PREFIX + key_id
+        result = self._lease_script(
+            keys=[owner_key, version_key, counter_key, fingerprint_key],
+            args=[self._owner_id, self._lease_ttl_ms, self._owner_fingerprint],
+        )
+        granted = int(result[0]) == 1
+        lease_version = int(result[1])
+        current_owner = str(result[2])
+        if not granted:
+            raise RuntimeError(
+                "Redis writer lease rejected "
+                f"(key_id={key_id}, owner={current_owner}, lease_version={lease_version})"
+            )
+
+        prev = self._lease_by_key.get(key_id)
+        if prev is None:
+            self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
+            _logger.info(
+                "DistributedNonceManager: Redis writer lease acquired key=%s lease_version=%d owner=%s",
+                key_id,
+                lease_version,
+                self._owner_fingerprint,
+            )
+            return lease_version
+
+        # Fencing rule: once a process has a lease version, any version rotation
+        # means lease continuity was lost (TTL expiry / partition / failover).
+        if prev.version != lease_version:
+            msg = (
+                "Redis writer lease fencing token changed "
+                f"(key_id={key_id}, prev={prev.version}, new={lease_version}). "
+                "Hard-stopping to prevent split-brain writes."
+            )
+            if self._strict_lease:
+                raise RuntimeError(msg)
+            _logger.critical(msg)
+            self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
+        return lease_version
+
+    def ensure_writer_lease(self, key_id: str) -> int:
+        """Public wrapper around lease acquire/renew + fencing validation."""
+        return self._ensure_writer_lease(key_id)
 
 
 # ── Distributed nonce manager ─────────────────────────────────────────────────
@@ -265,15 +449,34 @@ class DistributedNonceManager:
     def __init__(self, redis_client: Optional[object] = None) -> None:
         self._lock = threading.Lock()
         self._redis: Optional[_PerKeyRedisBackend] = None
+        self._owner_id = str(uuid.uuid4())
+        self._owner_fingerprint = _build_process_fingerprint()
+        self._strict_redis_lease = _STRICT_REDIS_LEASE
 
         if redis_client is not None:
             try:
-                self._redis = _PerKeyRedisBackend(redis_client)
+                self._redis = _PerKeyRedisBackend(
+                    redis_client=redis_client,
+                    owner_id=self._owner_id,
+                    owner_fingerprint=self._owner_fingerprint,
+                    lease_ttl_ms=_REDIS_LEASE_TTL_MS,
+                    strict_lease=self._strict_redis_lease,
+                )
                 _logger.info(
                     "DistributedNonceManager: using Redis backend "
-                    "(multi-instance safe)"
+                    "(multi-instance safe, strict_lease=%s, lease_ttl_ms=%d, owner=%s)",
+                    self._strict_redis_lease,
+                    _REDIS_LEASE_TTL_MS,
+                    self._owner_fingerprint,
                 )
             except Exception as exc:
+                if self._strict_redis_lease:
+                    _logger.critical(
+                        "DistributedNonceManager: strict Redis lease required but unavailable (%s). "
+                        "Failing closed to prevent split-brain.",
+                        exc,
+                    )
+                    raise
                 _logger.critical(
                     "DistributedNonceManager: Redis backend unavailable (%s) — "
                     "falling back to per-key file locks.  "
@@ -310,6 +513,11 @@ class DistributedNonceManager:
                 )
                 return nonce
             except Exception as exc:
+                if self._strict_redis_lease:
+                    raise RuntimeError(
+                        "DistributedNonceManager: strict Redis lease enforcement blocked nonce issuance "
+                        f"for key={api_key_id}: {exc}"
+                    ) from exc
                 _logger.error(
                     "DistributedNonceManager: Redis nonce call failed for "
                     "key=%s (%s) — falling back to file mode for this call",
@@ -394,6 +602,17 @@ class DistributedNonceManager:
             return self._get_file_manager(api_key_id).get_last_nonce()
         except Exception:
             return 0
+
+    def ensure_writer_lock(self, api_key_id: str) -> None:
+        """
+        Ensure the runtime single-writer lease is held for *api_key_id*.
+
+        In strict Redis mode this fails closed if lease acquisition/renewal
+        fails, guaranteeing single-writer lock ownership is validated at runtime.
+        """
+        if self._redis is None:
+            return
+        self._redis.ensure_writer_lease(api_key_id)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
