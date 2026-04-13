@@ -7601,6 +7601,32 @@ class KrakenBroker(BaseBroker):
 
                 except Exception as e:
                     error_msg = str(e)
+                    _err_l = error_msg.lower()
+
+                    # Hard stop: another process owns this Kraken API key's
+                    # process-lifetime nonce lock.  This instance may look
+                    # "logically configured" but is physically blocked from
+                    # safely issuing private Kraken requests until the
+                    # duplicate process is stopped.
+                    is_nonce_lock_conflict = any(k in _err_l for k in (
+                        "kraken nonce writer lock not acquired",
+                        "one api key = one writer",
+                        "process-lifetime nonce lock",
+                        "duplicate bot process detected",
+                    ))
+                    if is_nonce_lock_conflict:
+                        self.connected = False
+                        self.last_connection_error = (
+                            "PHYSICALLY_BLOCKED_NONCE_LOCK: another running NIJA "
+                            "instance holds the process-level nonce lock for this key"
+                        )
+                        logger.critical(
+                            "🚫 Kraken connect blocked (%s): logically configured but physically "
+                            "blocked by another NIJA instance holding the process-level nonce "
+                            "lock. Stop duplicate deployments/processes and retry.",
+                            cred_label,
+                        )
+                        return False
 
                     # Check if this is a timeout or connection error from requests library
                     # These errors should be logged clearly and are always retryable

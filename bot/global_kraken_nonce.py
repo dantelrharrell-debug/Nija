@@ -2059,11 +2059,7 @@ class KrakenNonceManager:
                         "KrakenNonceManager.destroy_instance: PID lock close error (%s)",
                         _lock_close_err,
                     )
-                finally:
-                    try:
-                        old._pid_lock_fh = None
-                    except Exception:
-                        pass
+                old._pid_lock_fh = None
 
     # ── Private helpers ───────────────────────────────────────────────────
 
