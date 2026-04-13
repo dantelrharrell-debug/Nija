@@ -289,7 +289,7 @@ def clear_kraken_broker_quarantine(
     instance flags used by deterministic execution gates:
         exit_only_mode = False
         quarantined    = False
-        quarantine_until = 0
+        quarantine_until = 0.0
         error_count    = 0
 
     Instance discovery is resilient:
@@ -353,10 +353,14 @@ def clear_kraken_broker_quarantine(
         logging.debug("clear_kraken_broker_quarantine: live-instance scan failed: %s", _live_err)
 
     for _kb in _kraken_instances:
-        _kb.exit_only_mode = False
-        _kb.quarantined = False
-        _kb.quarantine_until = 0.0
-        _kb.error_count = 0
+        if hasattr(_kb, "exit_only_mode"):
+            _kb.exit_only_mode = False
+        if hasattr(_kb, "quarantined"):
+            _kb.quarantined = False
+        if hasattr(_kb, "quarantine_until"):
+            _kb.quarantine_until = 0.0
+        if hasattr(_kb, "error_count"):
+            _kb.error_count = 0
         logging.info("✅ clear_kraken_broker_quarantine: quarantine flags cleared on KrakenBroker")
         # Forced reconnect: trigger an immediate connection attempt so Kraken
         # is eligible for new entries on the very next market scan cycle.
