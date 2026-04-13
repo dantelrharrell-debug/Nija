@@ -161,6 +161,48 @@ def _on_kraken_nonce_quarantine() -> None:
 
 if register_broker_quarantine_callback is not None:
     register_broker_quarantine_callback(_on_kraken_nonce_quarantine)
+
+
+def clear_kraken_broker_quarantine(broker_manager_instance=None) -> None:
+    """Clear the broker-level Kraken quarantine and restore entry eligibility.
+
+    Resets both the module-level ``_kraken_quarantine_active`` flag and, when
+    a *broker_manager_instance* is supplied, clears ``exit_only_mode`` on every
+    registered KrakenBroker so the three-condition promotion gate
+    (connected AND NOT quarantined AND NOT exit_only) passes.
+
+    This should be called at startup, after the broker connection phase, so
+    that a stale quarantine from a previous session does not block new entries
+    on a fresh start.
+    """
+    global _kraken_quarantine_active
+    _kraken_quarantine_active = False
+
+    # Mirror the clear into the nonce-manager module so both flags are in sync.
+    try:
+        try:
+            from bot.global_kraken_nonce import clear_broker_quarantine as _gnm_clear
+        except ImportError:
+            from global_kraken_nonce import clear_broker_quarantine as _gnm_clear  # type: ignore
+        _gnm_clear()
+    except Exception as _qc_err:
+        logging.warning("clear_kraken_broker_quarantine: nonce-manager clear failed: %s", _qc_err)
+
+    # Clear exit_only_mode on every Kraken broker registered with the manager.
+    if broker_manager_instance is not None:
+        kraken_broker = broker_manager_instance.brokers.get(BrokerType.KRAKEN)
+        if kraken_broker is not None and getattr(kraken_broker, 'exit_only_mode', False):
+            kraken_broker.exit_only_mode = False
+            logging.info(
+                "✅ clear_kraken_broker_quarantine: exit_only_mode cleared on KrakenBroker"
+            )
+
+    logging.info(
+        "✅ Kraken broker quarantine cleared — "
+        "connected + NOT quarantined + NOT exit_only → eligible for new entries"
+    )
+
+
 try:
     from bot.balance_models import BalanceSnapshot, UserBrokerState, create_balance_snapshot_from_broker_response
 except ImportError:

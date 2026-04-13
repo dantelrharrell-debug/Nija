@@ -4902,25 +4902,59 @@ class TradingStrategy:
                     logger.warning("   Global risk math is suppressed — only local sizing applies.")
                     logger.warning("=" * 70)
                 elif _capital_for_min_check < MINIMUM_TRADING_BALANCE:
-                        logger.error("=" * 70)
-                        logger.error("❌ FATAL: Capital below minimum — trading disabled")
-                        logger.error("=" * 70)
-                        logger.error(f"   Authoritative capital: ${_capital_for_min_check:.2f}")
-                        logger.error(f"   Minimum required: ${MINIMUM_TRADING_BALANCE:.2f}")
-                        logger.error(f"   Shortfall: ${MINIMUM_TRADING_BALANCE - _capital_for_min_check:.2f}")
-                        logger.error("")
-                        logger.error("   🛑 Bot cannot trade with insufficient capital")
-                        logger.error("   💵 Fund your Kraken account to continue trading")
-                        if _coinbase_isolated:
-                            logger.error(
-                                "   ℹ️  Coinbase $%.2f excluded (NANO-isolated, < $%.2f threshold)",
-                                coinbase_balance, COINBASE_ISOLATION_THRESHOLD,
+                        # If total_capital (all brokers combined) is above the
+                        # deployable floor, activate LOW_CAPITAL_MODE (micro-scalping)
+                        # instead of hard-failing.  This allows a micro-cap account
+                        # (e.g. Coinbase $5–$24) to trade when Kraken has minimal or
+                        # zero authoritative capital, rather than raising a fatal error.
+                        if total_capital >= COINBASE_MIN_DEPLOYABLE:
+                            logger.warning("=" * 70)
+                            logger.warning("⚠️  LOW_CAPITAL_MODE — authoritative capital below minimum")
+                            logger.warning("=" * 70)
+                            logger.warning(f"   Authoritative capital : ${_capital_for_min_check:.2f}")
+                            logger.warning(f"   Minimum required      : ${MINIMUM_TRADING_BALANCE:.2f}")
+                            logger.warning(f"   Total capital (all)   : ${total_capital:.2f}")
+                            logger.warning(
+                                "   💡 LOW_CAPITAL_MODE active — micro-scalping only "
+                                "(1 position, elevated TP targets, Coinbase preferred)."
                             )
-                        logger.error("=" * 70)
-                        raise RuntimeError(
-                            f"Capital below minimum — trading disabled "
-                            f"(${_capital_for_min_check:.2f} < ${MINIMUM_TRADING_BALANCE:.2f})"
-                        )
+                            if _coinbase_isolated:
+                                logger.warning(
+                                    "   ℹ️  Coinbase $%.2f included as active capital "
+                                    "(NANO-isolated from global risk math only).",
+                                    coinbase_balance,
+                                )
+                            logger.warning("=" * 70)
+                            # LOW_CAPITAL_MODE is handled automatically by is_low_capital_mode()
+                            # throughout the trading loop — no explicit flag needed here.
+                        else:
+                            logger.error("=" * 70)
+                            logger.error("❌ FATAL: Capital below absolute floor — trading disabled")
+                            logger.error("=" * 70)
+                            logger.error(f"   Authoritative capital: ${_capital_for_min_check:.2f}")
+                            logger.error(f"   Total capital (all)  : ${total_capital:.2f}")
+                            logger.error(f"   Absolute floor       : ${COINBASE_MIN_DEPLOYABLE:.2f}")
+                            logger.error("")
+                            logger.error("   🛑 Bot cannot trade — fund any connected account to continue")
+                            logger.error("=" * 70)
+                            raise RuntimeError(
+                                f"Capital below absolute floor — trading disabled "
+                                f"(total ${total_capital:.2f} < ${COINBASE_MIN_DEPLOYABLE:.2f})"
+                            )
+
+                # ── STARTUP: Clear any stale Kraken quarantine / exit_only ──────
+                # A fresh process start should never inherit a quarantine from a
+                # previous session.  Clearing both flags here ensures all three
+                # promotion conditions are met:
+                #   connected == True  AND  quarantined == False  AND  exit_only == False
+                try:
+                    try:
+                        from broker_manager import clear_kraken_broker_quarantine as _ckbq
+                    except ImportError:
+                        from bot.broker_manager import clear_kraken_broker_quarantine as _ckbq
+                    _ckbq(broker_manager_instance=self.broker_manager)
+                except Exception as _ckbq_err:
+                    logger.warning("⚠️  Could not clear Kraken quarantine at startup: %s", _ckbq_err)
 
                 # FIX #1: Select primary master broker with Kraken promotion logic
                 # CRITICAL: If Coinbase is in exit_only mode or has insufficient balance, promote Kraken to primary
