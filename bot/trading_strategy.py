@@ -2457,6 +2457,21 @@ PROFIT_TARGETS_ALPACA = [
     (0.005, "Profit target +0.5% (Net +0.2% after fees) - MINIMAL"),              # Bare minimum profit
 ]
 
+# ── LOW_CAPITAL_MODE PROFIT TARGETS (balance < $25) ─────────────────────────
+# When capital is below the standard deployable threshold ($25) the bot enters
+# LOW_CAPITAL_MODE — micro-scalping only.  Profit targets are raised compared
+# to the standard micro tier so every trade covers fees with a safety margin.
+# Minimum gross target: 3.5% (covers ~1.4% Coinbase round-trip fees + 2.1% net)
+# Conservative targets ensure each trade is meaningfully profitable, not merely
+# fee-neutral.  "Beat fees first, compound second."
+PROFIT_TARGETS_LOW_CAPITAL = [
+    (0.090, "Profit target +9.0% (LOW_CAPITAL scalp) - EXCEPTIONAL"),
+    (0.070, "Profit target +7.0% (LOW_CAPITAL scalp) - MAJOR PROFIT"),
+    (0.055, "Profit target +5.5% (LOW_CAPITAL scalp) - EXCELLENT"),
+    (0.040, "Profit target +4.0% (LOW_CAPITAL scalp) - GOOD"),
+    (0.035, "Profit target +3.5% (LOW_CAPITAL scalp) - MINIMUM (beat fees + meaningful net)"),
+]
+
 # PROFITABILITY FIX (Jan 27, 2026): Updated profit targets to ensure NET gains
 # NIJA is for PROFIT - all targets now ensure positive returns after fees
 # Risk/Reward: Minimum 2:1 ratio enforced via stop loss sizing
@@ -2755,6 +2770,7 @@ def get_balance_based_max_positions(balance: float) -> int:
     Uses the CapitalTierHierarchy for smooth, tier-based scaling so the
     position cap grows proportionally with account size:
 
+      LOW_CAPITAL ($0–$24.99): max 1 position (micro-scalping mode)
       STARTER  ($50–99):    max 2–5 positions (18% per position → 90% max exposure)
       SAVER    ($100–249):  max 2–3 positions
       INVESTOR ($250–999):  max 3–5 positions
@@ -2782,7 +2798,10 @@ def get_balance_based_max_positions(balance: float) -> int:
         )
         balance = 0.0
 
-    # Micro-cap: pin to 1 position (maximum capital concentration for compounding)
+    # LOW_CAPITAL_MODE / micro-cap: pin to 1 position (capital too small for
+    # diversification; maximum concentration for compounding).
+    # Accounts < $25 are in LOW_CAPITAL_MODE (see LOW_CAPITAL_MAX_POSITIONS = 1).
+    # Accounts $25–$50 are still micro-cap and also capped at 1.
     if balance < BALANCE_THRESHOLD_MICRO:
         return 1
 
@@ -2809,8 +2828,53 @@ MIN_POSITION_SIZE_USD = BASE_MIN_POSITION_SIZE_USD  # Legacy fallback (use get_d
 MIN_BALANCE_TO_TRADE_USD = 1.0  # Minimum account balance to allow trading ($1 allows tiny-position accounts)
 
 # Minimum balance required to actively deploy new capital (open new positions).
-# Brokers below this threshold are marked PASSIVE (track-only) for the cycle.
+# Brokers at or above this threshold trade with full strategy settings.
+# Brokers BELOW this threshold but above MIN_BALANCE_TO_TRADE_USD enter
+# LOW_CAPITAL_MODE (micro-scalping) instead of being marked PASSIVE.
 MIN_DEPLOYABLE_BALANCE = float(os.getenv("NIJA_MIN_DEPLOYABLE_BALANCE", "25.0"))
+
+# ── LOW_CAPITAL_MODE ─────────────────────────────────────────────────────────
+# When account balance < LOW_CAPITAL_THRESHOLD (default = MIN_DEPLOYABLE_BALANCE
+# = $25), the bot switches to a micro-scalping mode instead of shutting down:
+#   • Reduces position size to LOW_CAPITAL_POSITION_PCT of balance
+#   • Limits to 1 open position at most
+#   • Raises minimum signal confidence to LOW_CAPITAL_MIN_CONFIDENCE
+#   • Uses PROFIT_TARGETS_LOW_CAPITAL (higher targets to beat fees)
+# Configurable via env vars for live tuning without code changes.
+LOW_CAPITAL_THRESHOLD: float = float(
+    os.getenv("NIJA_LOW_CAPITAL_THRESHOLD", str(MIN_DEPLOYABLE_BALANCE))
+)
+# Maximum position size as a fraction of balance in LOW_CAPITAL_MODE.
+# 30% of a $20 account → $6 position (above $5 dust floor).
+LOW_CAPITAL_POSITION_PCT: float = float(
+    os.getenv("NIJA_LOW_CAPITAL_POSITION_PCT", "0.30")
+)
+# Minimum AI confidence score required to open a trade in LOW_CAPITAL_MODE.
+# Raised vs the normal SCALP tier (0.35) to filter for only high-quality entries.
+LOW_CAPITAL_MIN_CONFIDENCE: float = float(
+    os.getenv("NIJA_LOW_CAPITAL_MIN_CONFIDENCE", "0.55")
+)
+# Hard cap on concurrent open positions when LOW_CAPITAL_MODE is active.
+LOW_CAPITAL_MAX_POSITIONS: int = 1
+
+
+def is_low_capital_mode(balance: float) -> bool:
+    """Return True when *balance* is below LOW_CAPITAL_THRESHOLD.
+
+    In this mode the bot switches to micro-scalping with tighter signal quality
+    requirements and a single-position limit rather than halting entirely.
+
+    Note: a balance exactly equal to LOW_CAPITAL_THRESHOLD (e.g. exactly $25.00)
+    is NOT in LOW_CAPITAL_MODE — the strict inequality means normal mode applies
+    at the boundary so full-mode trading resumes immediately on threshold recovery.
+
+    Args:
+        balance: Current account balance in USD.
+
+    Returns:
+        True if LOW_CAPITAL_MODE should be active for this balance.
+    """
+    return 0.0 < balance < LOW_CAPITAL_THRESHOLD
 
 # ── BROKER CAPITAL ISOLATION ────────────────────────────────────────────────
 # Coinbase accounts below this threshold are treated as NANO/isolated.
@@ -6351,6 +6415,9 @@ class TradingStrategy:
         Returns:
             list: Profit target ladder (tuples of (pct, reason))
         """
+        if is_low_capital_mode(balance):
+            # LOW_CAPITAL_MODE: elevated targets to guarantee fee coverage + meaningful net
+            return PROFIT_TARGETS_LOW_CAPITAL
         if balance < 100:
             # MICRO tier: Aggressive profit-taking
             return PROFIT_TARGETS_MICRO
@@ -7155,6 +7222,26 @@ class TradingStrategy:
                 else MIN_DEPLOYABLE_BALANCE
             )
             if balance < _effective_deployable_min:
+                # ── LOW_CAPITAL_MODE: allow micro-scalping instead of shutdown ──
+                # When balance is between MIN_BALANCE_TO_TRADE_USD and the full
+                # deployable minimum, activate LOW_CAPITAL_MODE (micro-scalping)
+                # rather than marking the broker PASSIVE and blocking all trades.
+                if is_low_capital_mode(balance):
+                    # Ensure the broker is ACTIVE (not PASSIVE) for LOW_CAPITAL_MODE trading.
+                    if not hasattr(broker, 'mode'):
+                        logger.warning(
+                            "   ⚠️ %s missing 'mode' attribute — BaseBroker init may not have run",
+                            broker_name.upper(),
+                        )
+                    elif broker.mode != "ACTIVE":
+                        broker.mode = "ACTIVE"
+                    logger.info(
+                        "   💡 LOW_CAPITAL_MODE active: %s balance $%.2f < $%.2f "
+                        "— micro-scalping only (1 position, conf≥%.2f, elevated TP targets)",
+                        broker_name.upper(), balance, _effective_deployable_min,
+                        LOW_CAPITAL_MIN_CONFIDENCE,
+                    )
+                    return True, f"LOW_CAPITAL_MODE (${balance:.2f}) — micro-scalping active"
                 if not hasattr(broker, 'mode'):
                     logger.warning(
                         "   ⚠️ %s missing 'mode' attribute — BaseBroker init may not have run",
@@ -12946,6 +13033,25 @@ class TradingStrategy:
                                             pass
 
                                         # Use dynamic sniper thresholds when available
+                                        # ── LOW_CAPITAL_MODE SIGNAL QUALITY GATE ──────────────
+                                        # In LOW_CAPITAL_MODE (balance < $25) only high-quality
+                                        # setups are accepted.  Signals below LOW_CAPITAL_MIN_CONFIDENCE
+                                        # are rejected here before reaching the sniper filter so the
+                                        # compounding engine concentrates on genuinely strong entries.
+                                        if (
+                                            account_balance is not None
+                                            and is_low_capital_mode(account_balance)
+                                            and _sf_confidence < LOW_CAPITAL_MIN_CONFIDENCE
+                                        ):
+                                            logger.info(
+                                                "   💡 LOW_CAPITAL_MODE gate [%s]: "
+                                                "conf %.3f < %.3f minimum — signal rejected "
+                                                "(balance $%.2f)",
+                                                symbol, _sf_confidence,
+                                                LOW_CAPITAL_MIN_CONFIDENCE, account_balance,
+                                            )
+                                            continue
+
                                         _dyn_sniper = (
                                             getattr(self, 'dynamic_sniper_thresholds', None)
                                             if DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE else None
@@ -13725,6 +13831,45 @@ class TradingStrategy:
                                     else:
                                         # Entry price not available; just update position_size in analysis
                                         analysis['position_size'] = position_size
+
+                                # ── LOW_CAPITAL_MODE POSITION SIZING & POSITION CAP ──
+                                # When micro-cap compounding is not active but the account
+                                # is in LOW_CAPITAL_MODE (< $25), apply a conservative
+                                # position size (LOW_CAPITAL_POSITION_PCT of balance) and
+                                # enforce the 1-position cap to prevent over-committing the
+                                # tiny capital base.
+                                #
+                                # Precedence: micro-cap compounding (_micro_cap_config is not None)
+                                # takes priority over LOW_CAPITAL_MODE because it provides its
+                                # own optimised sizing, TP, and SL logic for sub-$100 accounts.
+                                # LOW_CAPITAL_MODE sizing only activates when the micro-cap module
+                                # is unavailable or inactive (i.e. _micro_cap_config is None).
+                                if (
+                                    account_balance is not None
+                                    and is_low_capital_mode(account_balance)
+                                    and _micro_cap_config is None
+                                ):
+                                    # 1. Position cap: block entry if already at max
+                                    if len(current_positions) >= LOW_CAPITAL_MAX_POSITIONS:
+                                        logger.info(
+                                            "   🛑 %s: LOW_CAPITAL_MODE position limit reached "
+                                            "(%d/%d) — entry blocked (balance $%.2f)",
+                                            symbol, len(current_positions),
+                                            LOW_CAPITAL_MAX_POSITIONS, account_balance,
+                                        )
+                                        filter_stats['market_filter'] += 1
+                                        continue
+
+                                    # 2. Position sizing: cap at LOW_CAPITAL_POSITION_PCT of balance
+                                    _lc_size = account_balance * LOW_CAPITAL_POSITION_PCT
+                                    if _lc_size > 0 and position_size != _lc_size:
+                                        logger.info(
+                                            "   💡 %s: LOW_CAPITAL_MODE sizing — "
+                                            "%.0f%% of $%.2f = $%.2f (was $%.2f)",
+                                            symbol, LOW_CAPITAL_POSITION_PCT * 100,
+                                            account_balance, _lc_size, position_size,
+                                        )
+                                        position_size = _lc_size
 
                                 # ── $100 → $1K ACCELERATOR MODE ────────────────────────
                                 # Feature 4: Boost position-size percentage for accounts in the
