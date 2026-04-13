@@ -32,7 +32,7 @@ Date: March 2026
 import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import numpy as np
@@ -286,21 +286,34 @@ class AIIntelligenceHub:
         -------
         TradeEvaluation with ai_approved flag and adjusted size.
         """
-        # ── Capital Authority fallback ─────────────────────────────────────────
+        # ── Capital Authority freshness gate ─────────────────────────────────
         # Callers that already pass a real balance are unaffected.
         # Any path that omits the argument (or passes 0) uses the live observed
         # equity from the single source of truth instead of a synthetic baseline.
+        # A stale or partial snapshot returns 0 so position sizing is zero until
+        # the authority is refreshed — prefer correctness over availability.
         if portfolio_value <= 0.0:
             try:
                 from capital_authority import get_capital_authority as _get_ca_hub
                 _ca_hub = _get_ca_hub()
-                if not _ca_hub.is_stale(ttl_s=float("inf")):
+                if _ca_hub.is_fresh():
                     portfolio_value = _ca_hub.get_usable_capital()
+                else:
+                    logger.warning(
+                        "[AI Hub] CapitalAuthority stale or incomplete "
+                        "(brokers=%d expected=%d age=%.0fs) for %s — "
+                        "position sizing will be zero until authority is refreshed.",
+                        len(_ca_hub._broker_balances),
+                        _ca_hub._expected_brokers,
+                        (datetime.now(timezone.utc) - _ca_hub.last_updated).total_seconds()
+                        if _ca_hub.last_updated else float("inf"),
+                        symbol,
+                    )
             except Exception:
                 pass
             if portfolio_value <= 0.0:
                 logger.warning(
-                    "[AI Hub] portfolio_value=0 for %s — Capital Authority not yet seeded; "
+                    "[AI Hub] portfolio_value=0 for %s — "
                     "position sizing will be zero until authority is refreshed.",
                     symbol,
                 )

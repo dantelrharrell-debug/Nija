@@ -222,13 +222,27 @@ class DynamicPositionConcentration:
         ConcentrationDecision
             Rich result with ``allowed`` flag, adjusted size, and diagnostics.
         """
-        # ── Capital Authority fallback ────────────────────────────────────────
+        # ── Capital Authority freshness gate ─────────────────────────────────
+        # Use real observed equity only when the snapshot is current AND
+        # fully aggregated (all expected brokers present).  A stale or
+        # partial snapshot blocks this trade rather than silently trading
+        # against an outdated figure.
         if portfolio_value <= 0.0:
             try:
                 from capital_authority import get_capital_authority as _get_ca_dpc
                 _ca_dpc = _get_ca_dpc()
-                if not _ca_dpc.is_stale(ttl_s=float("inf")):
+                if _ca_dpc.is_fresh():
                     portfolio_value = _ca_dpc.get_usable_capital()
+                else:
+                    logger.warning(
+                        "[DynamicPositionConcentration] CapitalAuthority stale or incomplete "
+                        "(brokers=%d expected=%d age=%.0fs) — "
+                        "portfolio_value=0 → concentration gate will deny",
+                        len(_ca_dpc._broker_balances),
+                        _ca_dpc._expected_brokers,
+                        (datetime.now(timezone.utc) - _ca_dpc.last_updated).total_seconds()
+                        if _ca_dpc.last_updated else float("inf"),
+                    )
             except Exception:
                 pass
         with self._lock:

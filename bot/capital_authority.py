@@ -63,6 +63,11 @@ logger = logging.getLogger("nija.capital_authority")
 
 _DEFAULT_RESERVE_PCT: float = 0.02  # 2 % held back as reserve dust
 
+# Maximum acceptable age of a CA snapshot before is_fresh() returns False.
+# Must match (or be shorter than) the per-cycle refresh cadence in
+# trading_strategy.py so a missed refresh is caught before the next trade.
+_DEFAULT_FRESHNESS_TTL_S: float = 90.0
+
 # ---------------------------------------------------------------------------
 # Singleton state
 # ---------------------------------------------------------------------------
@@ -95,6 +100,16 @@ class CapitalAuthority:
         self._open_exposure_usd: float = 0.0
         # Timestamp of most-recent successful refresh
         self.last_updated: Optional[datetime] = None
+        # Minimum number of brokers that must have contributed a non-zero balance
+        # for the snapshot to be considered complete.  Automatically raised by
+        # refresh() to match the largest broker map seen so far.  Can also be set
+        # explicitly at startup via set_expected_brokers() once the broker map is
+        # known.  The env var NIJA_CAPITAL_EXPECTED_BROKERS is an advanced override
+        # intended for multi-process deployments; in normal operation the value is
+        # derived at runtime and this env var should not be needed.
+        self._expected_brokers: int = int(
+            os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "1")
+        )
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -163,6 +178,10 @@ class CapitalAuthority:
             self._broker_balances = new_balances
             self._open_exposure_usd = max(0.0, float(open_exposure_usd))
             self.last_updated = datetime.now(timezone.utc)
+            # Auto-raise expected_brokers to match the largest map we have seen
+            # so that a future refresh with fewer brokers fails the is_fresh() check.
+            if len(new_balances) > self._expected_brokers:
+                self._expected_brokers = len(new_balances)
 
         logger.info(
             "[CapitalAuthority] refreshed — real=$%.2f usable=$%.2f risk=$%.2f "
@@ -172,6 +191,13 @@ class CapitalAuthority:
             self.get_risk_capital(),
             len(new_balances),
             self._reserve_pct * 100,
+        )
+        # ── Validation snapshot — exposes feed / aggregation issues instantly ──
+        logger.info(
+            "[CA VALIDATION] total=$%.2f | brokers=%d | values=%s",
+            self.get_real_capital(),
+            len(new_balances),
+            dict(new_balances),
         )
 
     # ------------------------------------------------------------------
@@ -301,6 +327,54 @@ class CapitalAuthority:
             age = (datetime.now(timezone.utc) - self.last_updated).total_seconds()
             return age > ttl_s
 
+    def is_fresh(self, ttl_s: float = _DEFAULT_FRESHNESS_TTL_S) -> bool:
+        """
+        Return ``True`` only when **both** conditions hold:
+
+        1. The last refresh occurred within *ttl_s* seconds.
+        2. At least ``_expected_brokers`` brokers contributed a non-zero
+           balance (prevents partial-aggregation silently passing as valid).
+
+        This is the preferred freshness gate for live-trading code paths.
+        Unlike ``is_stale(ttl_s=float('inf'))``, a snapshot that was once
+        populated but has since gone stale will correctly return ``False``.
+
+        Parameters
+        ----------
+        ttl_s:
+            Maximum acceptable age of the cached snapshot in seconds.
+            Default 90 s (matches the per-cycle refresh cadence).
+        """
+        with self._lock:
+            if self.last_updated is None:
+                return False
+            age = (datetime.now(timezone.utc) - self.last_updated).total_seconds()
+            if age > ttl_s:
+                return False
+            if len(self._broker_balances) < self._expected_brokers:
+                return False
+            return True
+
+    def set_expected_brokers(self, count: int) -> None:
+        """
+        Set the minimum number of brokers whose balances must be present for
+        :meth:`is_fresh` to return ``True``.
+
+        Call this at startup once the broker map is known, e.g.::
+
+            authority.set_expected_brokers(len(connected_broker_map))
+
+        Parameters
+        ----------
+        count:
+            Minimum broker count.  Values < 1 are silently clamped to 1.
+        """
+        with self._lock:
+            self._expected_brokers = max(1, int(count))
+        logger.debug(
+            "[CapitalAuthority] expected_brokers set to %d", self._expected_brokers
+        )
+
     # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------
@@ -308,26 +382,31 @@ class CapitalAuthority:
     def get_snapshot(self) -> dict:
         """Return a plain-dict snapshot suitable for dashboards and logging."""
         with self._lock:
+            real = sum(self._broker_balances.values())
+            age = (
+                (datetime.now(timezone.utc) - self.last_updated).total_seconds()
+                if self.last_updated is not None
+                else float("inf")
+            )
             return {
-                "real_capital": sum(self._broker_balances.values()),
-                "usable_capital": sum(self._broker_balances.values())
-                * (1.0 - self._reserve_pct),
+                "real_capital": real,
+                "usable_capital": real * (1.0 - self._reserve_pct),
                 "risk_capital": max(
                     0.0,
-                    sum(self._broker_balances.values()) * (1.0 - self._reserve_pct)
-                    - self._open_exposure_usd,
+                    real * (1.0 - self._reserve_pct) - self._open_exposure_usd,
                 ),
                 "open_exposure_usd": self._open_exposure_usd,
                 "reserve_pct": self._reserve_pct,
                 "broker_balances": dict(self._broker_balances),
+                "broker_count": len(self._broker_balances),
+                "expected_brokers": self._expected_brokers,
                 "last_updated": self.last_updated.isoformat()
                 if self.last_updated
                 else None,
-                "is_stale_60s": self.last_updated is None
-                or (
-                    datetime.now(timezone.utc) - self.last_updated
-                ).total_seconds()
-                > 60.0,
+                "age_s": age,
+                "is_fresh": self.is_fresh(),  # uses _DEFAULT_FRESHNESS_TTL_S
+                # kept for backwards-compat with any existing dashboard consumers
+                "is_stale_60s": age > 60.0,
             }
 
 

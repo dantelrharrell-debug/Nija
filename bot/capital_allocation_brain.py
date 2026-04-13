@@ -168,8 +168,16 @@ class CapitalAllocationBrain:
         try:
             from capital_authority import get_capital_authority as _get_ca_cab
             _ca_cab_inst = _get_ca_cab()
-            if not _ca_cab_inst.is_stale(ttl_s=float("inf")):
+            if _ca_cab_inst.is_fresh():
                 _ca_total = _ca_cab_inst.get_real_capital()
+            else:
+                logger.warning(
+                    "[CapitalAllocationBrain] CapitalAuthority stale or incomplete "
+                    "(brokers=%d expected=%d) — total_capital will be 0.0; "
+                    "allocations blocked until authority is refreshed.",
+                    len(_ca_cab_inst._broker_balances),
+                    _ca_cab_inst._expected_brokers,
+                )
         except Exception:
             pass
         self.total_capital = self.config.get("total_capital", _ca_total)
