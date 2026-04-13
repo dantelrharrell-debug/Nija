@@ -182,6 +182,14 @@ class BalanceService:
                     cls._last_logged[broker_key] = scalar
                 else:
                     logger.debug("[BalanceService] %s → $%.2f (no significant change)", broker_key, scalar)
+                # ── Push to CapitalAuthority (single source of truth) ─────────
+                # Every successful balance fetch is immediately reflected in the
+                # authority singleton so all downstream capital reads are current.
+                try:
+                    from capital_authority import get_capital_authority as _get_ca_bs
+                    _get_ca_bs().feed_broker_balance(broker_key, scalar)
+                except Exception as _ca_feed_err:
+                    logger.debug("[BalanceService] CA feed skipped for %s: %s", broker_key, _ca_feed_err)
             else:
                 # Still update the timestamp so the TTL gate prevents immediate retry
                 # storms when the exchange legitimately returns $0 (e.g. unfunded account).

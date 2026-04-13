@@ -8895,6 +8895,28 @@ class TradingStrategy:
             except Exception:
                 pass  # Capital Authority refresh is advisory; never block a cycle
 
+            # ── Override account_balance from CapitalAuthority ────────────────
+            # CapitalAuthority is the single source of truth for all capital
+            # figures.  Once the per-cycle refresh above has been attempted,
+            # read the raw per-broker balance directly from the authority so
+            # that all downstream code (position_sizer, risk_manager, apex
+            # strategy) uses the same authoritative number.  Grace-mode cycles
+            # (where BalanceService returned $0 and we are using a stale cache)
+            # are intentionally left unchanged so the 0.5× sizing penalty still
+            # applies.
+            if not _balance_grace_mode:
+                try:
+                    _ca_ab_override = _ca_cycle.get_raw_per_broker(_bs_key)
+                    if _ca_ab_override > 0:
+                        account_balance = _ca_ab_override
+                        self._last_known_balance = account_balance
+                        logger.debug(
+                            "[CapitalAuthority] account_balance overridden: $%.2f",
+                            account_balance,
+                        )
+                except Exception:
+                    pass  # Override is advisory; retain BalanceService value on error
+
             # ── PortfolioStateManager → AdvancedTradingManager sync ───────────
             # Every cycle: push the freshly-fetched balance into portfolio_manager
             # (single source of truth) then forward it to advanced_manager so the
@@ -9025,8 +9047,22 @@ class TradingStrategy:
             # Capital must be fetched live, not stuck at initialization value
             # This ensures failsafes and allocators use current real balance
 
-            # Get total capital across ALL accounts (master + users)
-            total_capital = self._get_total_capital_across_all_accounts()
+            # Get total capital across ALL accounts (master + users).
+            # CapitalAuthority is the single source of truth: prefer its
+            # get_real_capital() when fresh (TTL 90 s).  Fall back to the
+            # direct multi-broker sum only when the authority is stale or
+            # returns zero (e.g. before the first cycle refresh completes).
+            try:
+                from capital_authority import get_capital_authority as _get_ca_tc
+                _ca_tc = _get_ca_tc()
+                _ca_tc_real = _ca_tc.get_real_capital() if not _ca_tc.is_stale(ttl_s=90) else 0.0
+            except Exception:
+                _ca_tc_real = 0.0
+            if _ca_tc_real > 0.0:
+                total_capital = _ca_tc_real
+                logger.debug("[CapitalAuthority] total_capital sourced: $%.2f", total_capital)
+            else:
+                total_capital = self._get_total_capital_across_all_accounts()
 
             # Update failsafes with TOTAL capital (all accounts summed)
             # Note: Failsafes protect the ENTIRE trading operation, not just one broker
