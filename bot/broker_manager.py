@@ -128,6 +128,15 @@ except ImportError:
 # orders (exit-only) and BrokerManager auto-promotes Coinbase to primary.
 _kraken_quarantine_active: bool = False
 
+# Error fragments that indicate Kraken is physically blocked by a duplicate
+# NIJA process holding the process-level nonce lock for this API key.
+_KRAKEN_NONCE_LOCK_ERROR_KEYWORDS = (
+    "kraken nonce writer lock not acquired",
+    "one api key = one writer",
+    "process-lifetime nonce lock",
+    "duplicate bot process detected",
+)
+
 
 # ── Shared credential-prefix helper ──────────────────────────────────────────
 def _user_env_prefix(user_id: str) -> tuple:
@@ -7608,12 +7617,10 @@ class KrakenBroker(BaseBroker):
                     # "logically configured" but is physically blocked from
                     # safely issuing private Kraken requests until the
                     # duplicate process is stopped.
-                    is_nonce_lock_conflict = any(error_keyword in error_msg_lower for error_keyword in (
-                        "kraken nonce writer lock not acquired",
-                        "one api key = one writer",
-                        "process-lifetime nonce lock",
-                        "duplicate bot process detected",
-                    ))
+                    is_nonce_lock_conflict = any(
+                        error_keyword in error_msg_lower
+                        for error_keyword in _KRAKEN_NONCE_LOCK_ERROR_KEYWORDS
+                    )
                     if is_nonce_lock_conflict:
                         self.connected = False
                         self.last_connection_error = (
