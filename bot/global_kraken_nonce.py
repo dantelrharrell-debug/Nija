@@ -1580,11 +1580,12 @@ class KrakenNonceManager:
         )
 
         failed_probe_attempts = 0
+        total_probe_count = effective_max + 1  # baseline (server_time+3s) + effective_max steps
 
-        for probe_num in range(1, effective_max + 2):  # +1: first attempt at server_time+3s
+        for probe_num in range(1, total_probe_count + 1):
             _logger.info(
                 "KrakenNonceManager.probe_and_resync: probe %d/%d (nonce=%d)",
-                probe_num, effective_max + 1, self.get_last_nonce(),
+                probe_num, total_probe_count, self.get_last_nonce(),
             )
             try:
                 probe_result = api_call_fn()
@@ -1608,8 +1609,8 @@ class KrakenNonceManager:
                 if not (probe_result.get("error") or []):
                     _logger.info(
                         "✅ KrakenNonceManager.probe_and_resync: accepted on probe "
-                        "%d/%d — nonce=%d  (%d step(s) × %d ms above server time)",
-                        probe_num, effective_max + 1,
+                        "%d/%d — nonce=%d (%d step(s) × %d ms above server time)",
+                        probe_num, total_probe_count,
                         self.get_last_nonce(), failed_probe_attempts, effective_step,
                     )
                 else:
@@ -1625,32 +1626,32 @@ class KrakenNonceManager:
                     )
                 return True
 
-            # Nonce still rejected — advance by one step and try again
+            # Nonce still rejected — advance by one step and try again (if budget remains)
             failed_probe_attempts += 1
-            if failed_probe_attempts > effective_max:
-                # All steps exhausted — fall through to error block below
-                break
-            _logger.warning(
-                "KrakenNonceManager.probe_and_resync: nonce rejected on probe "
-                "%d/%d — advancing +%d ms (Kraken floor is ahead of server time)",
-                probe_num, effective_max + 1, effective_step,
-            )
-            with _LOCK:
-                self._last_nonce += effective_step
-                if self._redis_backend is not None:
-                    try:
-                        self._redis_backend.advance_to(self._last_nonce)
-                    except Exception as _re:
-                        _logger.debug(
-                            "KrakenNonceManager.probe_and_resync: Redis advance error (%s)", _re
-                        )
-                elif _NONCE_MODE != "timestamp":
-                    self._persist()
+            if probe_num < total_probe_count:
+                _logger.warning(
+                    "KrakenNonceManager.probe_and_resync: nonce rejected on probe "
+                    "%d/%d — advancing +%d ms (Kraken floor is ahead of server time)",
+                    probe_num, total_probe_count, effective_step,
+                )
+                with _LOCK:
+                    self._last_nonce += effective_step
+                    if self._redis_backend is not None:
+                        try:
+                            self._redis_backend.advance_to(self._last_nonce)
+                        except Exception as _re:
+                            _logger.debug(
+                                "KrakenNonceManager.probe_and_resync: Redis advance error (%s)",
+                                _re,
+                            )
+                    elif _NONCE_MODE != "timestamp":
+                        self._persist()
 
         # ── All probe steps exhausted ─────────────────────────────────────
         # Kraken's stored floor is more than effective_max × effective_step ms
         # ahead of server time.  This is NOT a key-validity problem — it is a
         # nonce-state problem caused by legacy forward-jump accumulation.
+        total_window_min = effective_max * effective_step / 60_000
         _logger.error(
             "❌ KrakenNonceManager.probe_and_resync: all %d probe step(s) × %d ms "
             "(%.0f min total) exhausted.  Kraken's stored nonce floor is > %.0f min "
@@ -1662,9 +1663,7 @@ class KrakenNonceManager:
             "(brute-force 24-h jump then probe).\n"
             "  3. Check for duplicate bot instances: ps aux | grep bot.py\n"
             "  4. Rotate the Kraken API key if all else fails.",
-            effective_max, effective_step,
-            effective_max * effective_step / 60_000,
-            effective_max * effective_step / 60_000,
+            effective_max, effective_step, total_window_min, total_window_min,
         )
         # Intentionally NOT setting _key_invalidated = True.
         # Nonce desync is recoverable; it is NOT a credential problem.
