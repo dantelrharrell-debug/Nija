@@ -7092,101 +7092,81 @@ class KrakenBroker(BaseBroker):
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
 
-            # ── Nonce generator: per-account isolation ────────────────────────
-            # PLATFORM accounts use the shared global KrakenNonceManager so that
-            # the platform's nonce history is preserved across hot restarts and
-            # recoverable via probe_and_resync().
+            # ── Nonce generator: DistributedNonceManager (unified path) ──────
+            # ONE authority per API key — routes to Redis when available
+            # (multi-instance safe across containers/regions) and falls back to
+            # per-key fcntl file lock (single-host multi-process safe).
             #
-            # USER accounts use an independent per-user nonce sequence persisted
-            # to data/kraken_nonce_<user_id>.state.  Each Kraken API key has its
-            # own nonce window — sharing the PLATFORM sequence means a PLATFORM
-            # nuclear reset would push USER nonces far into the future (and vice-
-            # versa), causing "EAPI:Invalid nonce" errors for the unrelated key.
-            if self.account_type == AccountType.USER and self.user_id:
+            # Key identity is sha256(raw_api_key)[:16] — deterministic and
+            # stable across user_id changes.  Keys can rotate freely: a new
+            # raw key gets a new id and a fresh nonce sequence, which is correct
+            # because Kraken resets the nonce floor to 0 for a new key.
+            #
+            # This replaces the old PLATFORM / USER branching entirely.
+            # Both account types go through exactly the same code path so there
+            # is no way for a PLATFORM nuclear reset to poison USER nonces or
+            # vice-versa.
+            try:
                 try:
-                    from user_nonce_manager import get_user_nonce_manager as _get_unm
+                    from bot.distributed_nonce_manager import (
+                        get_distributed_nonce_manager as _get_dnm,
+                        make_api_key_id as _make_key_id,
+                    )
                 except ImportError:
-                    try:
-                        from bot.user_nonce_manager import get_user_nonce_manager as _get_unm
-                    except ImportError:
-                        _get_unm = None
+                    from distributed_nonce_manager import (  # type: ignore[import]
+                        get_distributed_nonce_manager as _get_dnm,
+                        make_api_key_id as _make_key_id,
+                    )
 
-                if _get_unm is not None:
-                    _user_nm = _get_unm()
-                    _uid = self.user_id  # capture in closure
-                    self.nonce_manager = _user_nm
+                self.api_key_id = _make_key_id(api_key)
+                _dnm = _get_dnm()
+                _kid = self.api_key_id  # captured in closures below
+                self.nonce_manager = _dnm
 
-                    def _nonce_user() -> str:
-                        """Per-user millisecond nonce — isolated from PLATFORM sequence."""
-                        return str(_user_nm.get_nonce(_uid))
+                def _nonce_distributed() -> str:
+                    """Unified nonce — DistributedNonceManager (Redis or file/fcntl)."""
+                    return str(_dnm.get_nonce(_kid))
 
-                    self._record_nonce_error = lambda: _user_nm.record_nonce_error(_uid)
-                    self._record_nonce_success = lambda: _user_nm.record_success(_uid, _user_nm.get_last_nonce(_uid))
+                self._record_nonce_error   = lambda: _dnm.record_error(_kid)
+                self._record_nonce_success = lambda: _dnm.record_success(
+                    _kid, _dnm.get_last_nonce(_kid)
+                )
 
-                    try:
-                        self.api._nonce = _nonce_user
-                        logger.debug(f"   ✅ Using PER-USER KrakenNonceManager for {cred_label}")
-                    except AttributeError as e:
-                        self.last_connection_error = f"Nonce generator override failed: {str(e)}"
-                        logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
-                        return False
-                else:
-                    # Fallback if user nonce manager unavailable — use global (less ideal)
-                    logger.warning(f"⚠️  UserNonceManager unavailable for {cred_label} — falling back to global nonce")
-                    _fallback_mgr = get_global_nonce_manager() if get_global_nonce_manager else None
-                    self.nonce_manager = _fallback_mgr
-                    if _fallback_mgr is not None:
-                        self._kraken_private_call_nonce = _fallback_mgr.get_nonce
-                        self._record_nonce_error = lambda: _fallback_mgr.record_error()
-                        self._record_nonce_success = lambda: _fallback_mgr.record_success()
+                self.api._nonce = _nonce_distributed
+                _backend = "redis" if _dnm._redis is not None else "file/fcntl"
+                logger.info(
+                    "   ✅ Nonce: DistributedNonceManager  backend=%-10s  "
+                    "key_id=%s  account=%s",
+                    _backend, _kid, cred_label,
+                )
 
-                    def _nonce_monotonic_fallback() -> str:
-                        return str(get_kraken_nonce())
-                    try:
-                        self.api._nonce = _nonce_monotonic_fallback
-                    except AttributeError as e:
-                        self.last_connection_error = f"Nonce generator override failed: {str(e)}"
-                        logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
-                        return False
-            else:
-                # PLATFORM — global shared nonce manager
-                _platform_mgr = get_global_nonce_manager() if get_global_nonce_manager else None
-                self.nonce_manager = _platform_mgr
-                if _platform_mgr is not None:
-                    self._kraken_private_call_nonce = _platform_mgr.get_nonce
-                    self._record_nonce_error = lambda: _platform_mgr.record_error()
-                    self._record_nonce_success = lambda: _platform_mgr.record_success()
-
-                def _nonce_monotonic() -> str:
-                    """Thread-safe ms nonce — single global counter for PLATFORM account."""
-                    return str(get_kraken_nonce())
-
-                # Replace the nonce generator
-                # NOTE: This directly overrides the internal _nonce method of krakenex.API
+            except AttributeError as _ae:
+                self.last_connection_error = f"Nonce generator override failed: {_ae}"
+                logger.error("❌ Failed to override krakenex nonce generator: %s", _ae)
+                logger.error(
+                    "   This may indicate a version incompatibility with krakenex."
+                )
+                return False
+            except Exception as _ne:
+                # DistributedNonceManager import failed — fall back to global nonce
+                logger.error(
+                    "⚠️  DistributedNonceManager unavailable (%s) — "
+                    "falling back to global platform nonce (single-instance safe only)",
+                    _ne,
+                )
+                self.api_key_id = ""
                 try:
-                    self.api._nonce = _nonce_monotonic
-                    if logger.isEnabledFor(logging.DEBUG):
-                        _mgr = get_global_nonce_manager()
-                        logger.debug(f"   Initial nonce (GLOBAL): {_mgr.get_last_nonce()} (peek only, counter not advanced)")
-                except AttributeError as e:
-                    self.last_connection_error = f"Nonce generator override failed: {str(e)}"
-                    logger.error(f"❌ Failed to override krakenex nonce generator: {e}")
-                    logger.error("   This may indicate a version incompatibility with krakenex library")
-                    logger.error("   Please report this issue with your krakenex version")
+                    self.api._nonce = lambda: str(get_kraken_nonce())
+                except AttributeError as _ae2:
+                    self.last_connection_error = f"Nonce generator override failed: {_ae2}"
+                    logger.error("❌ Failed to override krakenex nonce generator: %s", _ae2)
                     return False
 
             self.kraken_api = KrakenAPI(self.api)
 
-            # ONE startup reset — sets PLATFORM nonce to now + 1 s so the first API
-            # call lands safely ahead of any nonce Kraken may still hold from a
-            # previous session.  This is the only place reset_to_safe_value()
-            # is called proactively; subsequent resets are triggered only by
-            # KrakenNonceManager.record_error() after 3 consecutive errors with
-            # no active in-flight requests.
-            # USER accounts manage their own startup jump inside UserNonceManager.get_nonce().
-            if self.account_type != AccountType.USER and get_global_nonce_manager is not None:
-                get_global_nonce_manager().reset_to_safe_value()
-            logger.debug(f"   🔄 Startup nonce reset complete for {cred_label}")
+            # DistributedNonceManager anchors each key's startup nonce to
+            # Kraken server time inside _init() — no additional reset needed here.
+            logger.debug(f"   🔄 Nonce startup anchor complete for {cred_label}")
 
 
             # Startup delay before first Kraken API call.
@@ -8464,12 +8444,16 @@ class KrakenBroker(BaseBroker):
                     and not force_liquidate):
                 logger.critical(
                     "🚫 BUY order BLOCKED: Kraken broker is QUARANTINED due to confirmed nonce "
-                    "poisoning.  Rotate the API key and restart to re-enable entries."
+                    "poisoning.  FASTEST recovery: rotate API key (delete old, create new, "
+                    "update .env/store_user_api_key, restart)."
                 )
                 return {
                     "status": "unfilled",
                     "error": "BROKER_QUARANTINED",
-                    "message": "Kraken blocked: nonce poisoning confirmed — rotate API key to recover",
+                    "message": (
+                        "Kraken blocked: nonce poisoning confirmed — rotate API key "
+                        "(delete old, create new, update .env/store_user_api_key, restart)"
+                    ),
                     "partial_fill": False,
                     "filled_pct": 0.0,
                 }

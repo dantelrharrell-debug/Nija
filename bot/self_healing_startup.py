@@ -517,12 +517,15 @@ class CeilingJumpEscalator:
             elif tier == EscalationTier.EMERGENCY:
                 msg = (
                     "🚨 NONCE ESCALATION FAILED — ALL RECOVERY TIERS EXHAUSTED.\n"
-                    "Only a new Kraken API key will fix this.  Steps:\n"
-                    "  1. Stop ALL NIJA services / deployments using this API key.\n"
-                    "  2. Go to kraken.com → Settings → API → Delete the compromised key.\n"
-                    "  3. Create a NEW Classic API key with Nonce Window = 10000.\n"
-                    "  4. Update KRAKEN_PLATFORM_API_KEY + KRAKEN_PLATFORM_API_SECRET in .env.\n"
-                    "  5. Set NIJA_FORCE_NONCE_RESYNC=1, then restart with ONE instance.\n"
+                    "Only two real recovery paths remain:\n"
+                    "  Option 1 (FASTEST + CLEAN): Rotate Kraken API keys.\n"
+                    "    1. Kraken → Settings → API\n"
+                    "    2. Delete old API key\n"
+                    "    3. Create new API key\n"
+                    "    4. Update bot credentials (.env or store_user_api_key())\n"
+                    "    5. Restart bot/service\n"
+                    "    👉 This resets the nonce floor to zero for the new key.\n"
+                    "  Option 2: Wait until wall-clock time catches up to Kraken's poisoned nonce floor.\n"
                 )
                 logger.critical(msg)
                 self._fire_alert(msg, severity="EMERGENCY")

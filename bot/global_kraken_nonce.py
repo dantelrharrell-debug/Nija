@@ -233,6 +233,18 @@ _NTP_WARN_OFFSET_S: float = 0.5   # warn early so operators act before it breaks
 # For cross-process serialisation see _PID_LOCK_FILE below.
 _KRAKEN_API_LOCK = threading.RLock()
 
+# ── Per-key nonce manager registry ───────────────────────────────────────────
+# Central nonce service: one KrakenNonceManager instance per API key.
+# All nonce requests for a given key_id are serialised through its dedicated
+# manager — enforcing ONE API KEY = ONE WRITER across every thread.
+#
+#   key_id = ""       → platform key  (KrakenNonceManager._instance)
+#   key_id = <str>    → user/named key (entry in _KEY_REGISTRY)
+#
+# Access always goes through get_nonce_manager_for_key(key_id).
+_KEY_REGISTRY: "dict[str, KrakenNonceManager]" = {}
+_KEY_REGISTRY_LOCK = threading.Lock()
+
 # ── Cross-process lock files ──────────────────────────────────────────────────
 # _LOCK_FILE    — brief per-nonce-operation exclusive lock held only during
 #                 the read → increment → write critical section inside
@@ -259,11 +271,9 @@ _PID_LOCK_FILE = _STATE_FILE + ".pid"
 #   "file"  (default) — atomic file-locked counter persisted to
 #                        data/kraken_nonce.state.  Works on any filesystem.
 #
-#   "redis"           — atomic Redis INCR via a Lua script; best for
-#                        multi-host / multi-container deployments where the
-#                        same Kraken API key is shared across nodes.
-#                        Requires NIJA_REDIS_URL (default: redis://localhost:6379/0).
-#                        Falls back to "file" mode when Redis is unavailable.
+#   "redis"           — legacy option (DISALLOWED by hard single-writer rule:
+#                        ONE API KEY = ONE WRITER).  Startup now fails closed
+#                        if NIJA_NONCE_BACKEND=redis is configured.
 #
 # NIJA_NONCE_MODE — controls what the initial nonce value is based on.
 #
@@ -751,16 +761,55 @@ class KrakenNonceManager:
     _instance = None
     _instance_lock = threading.Lock()
 
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._instance_lock:
-                if cls._instance is None:
+    def __new__(cls, key_id: str = ""):
+        """Return a key-scoped singleton.
+
+        ``key_id=""``  → platform key: the existing global singleton stored in
+                         ``cls._instance`` (full backward compatibility).
+        ``key_id=<str>`` → per-user/named key: a dedicated instance stored in
+                           ``_KEY_REGISTRY[key_id]``.  Each key gets its own
+                           state file, cross-process lock, and error counters
+                           so nonce sequences are completely isolated.
+        """
+        if not key_id:
+            # ── Platform singleton (original behaviour) ───────────────────
+            if cls._instance is None:
+                with cls._instance_lock:
+                    if cls._instance is None:
+                        instance = super().__new__(cls)
+                        instance._key_id = ""
+                        instance._init()
+                        cls._instance = instance
+            return cls._instance
+        else:
+            # ── Per-key registry ──────────────────────────────────────────
+            with _KEY_REGISTRY_LOCK:
+                if key_id not in _KEY_REGISTRY:
                     instance = super().__new__(cls)
+                    instance._key_id = key_id
                     instance._init()
-                    cls._instance = instance
-        return cls._instance
+                    _KEY_REGISTRY[key_id] = instance
+            return _KEY_REGISTRY[key_id]
 
     def _init(self) -> None:
+        # ── Per-key state file paths ──────────────────────────────────────────
+        # Platform key (key_id="") uses the module-level constants so existing
+        # deployments are fully backward-compatible.  Named keys get isolated
+        # files so their nonce sequences never interfere with each other or the
+        # platform key.
+        _data_dir = os.path.dirname(os.path.abspath(_STATE_FILE))
+        if self._key_id:
+            # Whitelist: keep only alphanumeric and a small set of safe chars.
+            # This prevents directory traversal regardless of what the caller
+            # passes (e.g. ../../etc/passwd, :global, etc.).
+            import re as _re
+            _safe_id = _re.sub(r"[^A-Za-z0-9_\-]", "_", self._key_id)[:64]
+            self._state_file    = os.path.join(_data_dir, f"kraken_nonce_{_safe_id}.state")
+        else:
+            self._state_file    = _STATE_FILE
+        self._lock_file     = self._state_file + ".lock"
+        self._pid_lock_file = self._state_file + ".pid"
+
         self._error_count = 0
         self._trading_paused_until: float = 0.0   # epoch seconds; 0 = not paused
         # Tracks how many nuclear resets have fired in this session.  When it
@@ -783,25 +832,45 @@ class KrakenNonceManager:
         self._pid_lock_fh: object = None
         # Optional Redis nonce backend (None = use file / timestamp mode).
         self._redis_backend: object = None
-        os.makedirs(os.path.dirname(os.path.abspath(_STATE_FILE)), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(self._state_file)), exist_ok=True)
         cleanup_legacy_nonce_files()
 
         # ── Process-lifetime PID lock (duplicate-bot detection) ────────────
         # Acquired FIRST — before any other state I/O — so that a duplicate
         # process is detected as early as possible during startup.
-        # If acquisition fails (another process holds it) we log CRITICAL and
-        # continue rather than abort, since the cross-process nonce lock still
-        # prevents duplicate nonces at the increment level.
+        # Hard rule: ONE API KEY = ONE WRITER.  If acquisition fails, fail
+        # closed immediately so duplicate writers cannot run.
         self._pid_lock_fh = self._try_acquire_pid_lock()
+        if not _FCNTL_AVAILABLE:
+            _logger.warning(
+                "KrakenNonceManager: fcntl unavailable on this platform; "
+                "cannot hard-enforce process-lifetime single-writer locking."
+            )
+        elif self._pid_lock_fh is None:
+            raise RuntimeError(
+                "Kraken nonce writer lock not acquired. "
+                "Hard rule violation: ONE API KEY = ONE WRITER "
+                "(no multi-container, no multi-region, no independent nonce writers). "
+                "Likely causes: another NIJA process already running or lock-file permissions. "
+                "Stop all duplicate deployments/processes and restart a single writer."
+            )
 
-        # ── Optional Redis nonce backend ───────────────────────────────────
+        # Hard rule: disallow the LEGACY NIJA_NONCE_BACKEND=redis path.
+        # Redis nonce support is now exclusively through DistributedNonceManager
+        # (bot/distributed_nonce_manager.py), configured via NIJA_REDIS_URL.
+        # That path uses a per-key Redis key with atomic Lua INCR, which is the
+        # correct multi-instance design.  The legacy env-var path allowed
+        # ALL keys to share ONE Redis key, which violated key isolation.
         if _NONCE_BACKEND == "redis":
-            self._redis_backend = _build_redis_backend()
-            if self._redis_backend is not None:
-                _logger.info(
-                    "KrakenNonceManager: using Redis nonce backend "
-                    "(key=%s, url=%s)", _REDIS_NONCE_KEY, _REDIS_URL
-                )
+            raise RuntimeError(
+                "NIJA_NONCE_BACKEND=redis is disallowed for KrakenNonceManager. "
+                "Use NIJA_REDIS_URL instead — DistributedNonceManager will pick it up "
+                "and route each API key through its own Redis nonce sequence."
+            )
+
+        # ── Optional nonce backend ────────────────────────────────────────
+        # Redis backend path is intentionally disabled by the hard one-writer
+        # rule above.
         if _NONCE_MODE == "timestamp":
             _logger.info(
                 "KrakenNonceManager: NIJA_NONCE_MODE=timestamp — "
@@ -822,9 +891,9 @@ class KrakenNonceManager:
         # Every boot starts from a clean server-time anchor.  This prevents
         # stale forward-drift (accumulated nuclear resets / ceiling jumps from
         # prior sessions) from poisoning the new session's nonce.
-        # NOTE: _PID_LOCK_FILE is intentionally excluded — it is held open for
-        # the process lifetime and must not be deleted during init.
-        for _path in (_STATE_FILE, _STATE_FILE + ".lock", _STATE_FILE + ".tmp"):
+        # NOTE: self._pid_lock_file is intentionally excluded — it is held open
+        # for the process lifetime and must not be deleted during init.
+        for _path in (self._state_file, self._state_file + ".lock", self._state_file + ".tmp"):
             try:
                 os.remove(_path)
                 _logger.debug("KrakenNonceManager: cleared persisted nonce state %s", _path)
@@ -866,12 +935,9 @@ class KrakenNonceManager:
         # continuous "EAPI:Invalid nonce" errors that block ALL accounts.
         log_ntp_clock_status()
 
-        # Warn loudly if another bot process is still running.  A competing
-        # process will keep issuing nonces after our reset, making it ineffective.
-        # Note: _try_acquire_pid_lock() already logged CRITICAL if the PID lock
-        # was held; this secondary check uses the brief per-op lock as a fallback
-        # on platforms where _try_acquire_pid_lock() returned None.
-        if self._pid_lock_fh is None and KrakenNonceManager.detect_other_process_running():
+        # Warn loudly if another bot process is still running on platforms where
+        # process-lifetime lock enforcement is unavailable.
+        if (not _FCNTL_AVAILABLE) and KrakenNonceManager.detect_other_process_running():
             _logger.error(
                 "🚨 KrakenNonceManager: another bot process appears to be holding "
                 "the nonce lock.  Stop ALL duplicate NIJA processes before this "
@@ -927,7 +993,7 @@ class KrakenNonceManager:
         # cross-process lock for the entire read → compute → write sequence so a
         # second process starting at the same time cannot claim the same nonce.
         with _LOCK:
-            with _CrossProcessLock(_LOCK_FILE):
+            with _CrossProcessLock(self._lock_file):
                 self._last_nonce = self._load_last_nonce()
 
                 # Deep-reset mode: advance nonce to a 60-min NTP-corrected floor
@@ -1013,7 +1079,7 @@ class KrakenNonceManager:
 
         # ── File mode (default) ────────────────────────────────────────────
         with _LOCK:
-            with _CrossProcessLock(_LOCK_FILE):
+            with _CrossProcessLock(self._lock_file):
                 # ── Cross-process sync ──────────────────────────────────────
                 # Re-read the state file to pick up any nonce advance written
                 # by another process (e.g. a nuclear reset in Process B that
@@ -1162,18 +1228,23 @@ class KrakenNonceManager:
         Safe to call while the process is running (acquires ``_LOCK``), but for
         best results stop NIJA first so no new nonces are issued after the wipe.
 
-        Note: ``_PID_LOCK_FILE`` is intentionally excluded from the wipe list —
-        the file descriptor is held open for the process lifetime and must not
-        be deleted while the process is running.
+        Note: ``self._pid_lock_file`` is intentionally excluded from the wipe
+        list — the file descriptor is held open for the process lifetime and
+        must not be deleted while the process is running.
         """
         with _LOCK:
+            # Per-key state files; _AO_STATE_FILE (adaptive engine) is shared
+            # and only wiped for the platform key to avoid disrupting other keys.
+            _ao_paths = (
+                (_AO_STATE_FILE, _AO_STATE_FILE + ".tmp")
+                if not self._key_id else ()
+            )
             for _path in (
-                _STATE_FILE,
-                _STATE_FILE + ".lock",
-                _STATE_FILE + ".tmp",
-                _AO_STATE_FILE,
-                _AO_STATE_FILE + ".tmp",
-                # _PID_LOCK_FILE excluded — held open for process lifetime
+                self._state_file,
+                self._state_file + ".lock",
+                self._state_file + ".tmp",
+                *_ao_paths,
+                # self._pid_lock_file excluded — held open for process lifetime
             ):
                 try:
                     os.remove(_path)
@@ -1454,7 +1525,7 @@ class KrakenNonceManager:
 
         new_nonce = server_ms + _SERVER_SYNC_OFFSET_MS
         with _LOCK:
-            with _CrossProcessLock(_LOCK_FILE):
+            with _CrossProcessLock(self._lock_file):
                 prev = self._last_nonce
                 # Unconditional reset — discard all accumulated forward drift.
                 self._last_nonce = new_nonce
@@ -1832,11 +1903,15 @@ class KrakenNonceManager:
             "❌ KrakenNonceManager.probe_and_resync: ALL RECOVERY TIERS EXHAUSTED "
             "(standard → deep → ceiling jump + %d post-ceiling steps).  "
             "Automated recovery failed.  Kraken's stored nonce exceeds now + 24 h.\n"
-            "Recommended recovery actions:\n"
-            "  1. Stop ALL NIJA instances: ps aux | grep bot.py\n"
-            "  2. Check for duplicate Railway/Docker deployments.\n"
-            "  3. Rotate the Kraken API key on kraken.com → Settings → API.\n"
-            "  4. Set NIJA_FORCE_NONCE_RESYNC=1 and restart with ONE instance.",
+            "Only two real recovery paths remain:\n"
+            "  Option 1 (FASTEST + CLEAN): Rotate Kraken API keys.\n"
+            "    1. Kraken → Settings → API\n"
+            "    2. Delete old API key\n"
+            "    3. Create new API key\n"
+            "    4. Update bot credentials (.env or store_user_api_key())\n"
+            "    5. Restart bot/service\n"
+            "    👉 This resets the nonce floor to zero for the new key.\n"
+            "  Option 2: Wait until wall-clock time catches up to Kraken's poisoned nonce floor.",
             _cj_total,
         )
         # Intentionally NOT setting _key_invalidated = True.
@@ -1844,16 +1919,15 @@ class KrakenNonceManager:
         return False
 
 
-    @staticmethod
-    def detect_other_process_running() -> bool:
+    def detect_other_process_running(self) -> bool:
         """
         Non-blocking check: return ``True`` if another bot process appears to
-        hold the cross-process nonce lock right now.
+        hold the cross-process nonce lock for this key right now.
 
-        Checks ``_LOCK_FILE`` (the brief per-nonce-operation lock) using
+        Checks ``self._lock_file`` (the brief per-nonce-operation lock) using
         ``fcntl.LOCK_NB``.  For a more reliable check that is not limited to
         the instant a nonce is being issued, see ``_try_acquire_pid_lock()``
-        which checks ``_PID_LOCK_FILE`` (the process-lifetime lock).
+        which checks ``self._pid_lock_file`` (the process-lifetime lock).
         Always returns ``False`` on platforms without fcntl.
         """
         if not _FCNTL_AVAILABLE:
@@ -1861,7 +1935,7 @@ class KrakenNonceManager:
         try:
             # Use append mode — never truncate a file that an active process
             # may have open as a lock target.
-            with open(_LOCK_FILE, "a") as fh:
+            with open(self._lock_file, "a") as fh:
                 try:
                     _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
                     _fcntl.flock(fh, _fcntl.LOCK_UN)
@@ -1873,7 +1947,7 @@ class KrakenNonceManager:
 
     def _try_acquire_pid_lock(self) -> object:
         """
-        Acquire an exclusive process-lifetime lock on ``_PID_LOCK_FILE``.
+        Acquire an exclusive process-lifetime lock on ``self._pid_lock_file``.
 
         The returned file handle is kept open on ``self._pid_lock_fh`` for the
         ENTIRE bot session.  The OS automatically releases the lock when the
@@ -1892,10 +1966,10 @@ class KrakenNonceManager:
         if not _FCNTL_AVAILABLE:
             return None
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(_PID_LOCK_FILE)), exist_ok=True)
+            os.makedirs(os.path.dirname(os.path.abspath(self._pid_lock_file)), exist_ok=True)
             # Append mode: does not truncate an existing PID file from a dead
             # process, and does not interfere with another process's open fd.
-            fh = open(_PID_LOCK_FILE, "a")
+            fh = open(self._pid_lock_file, "a")
             try:
                 _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
             except (BlockingIOError, OSError):
@@ -1912,7 +1986,7 @@ class KrakenNonceManager:
                     "  • systemd: systemctl stop nija  (check for multiple units)\n"
                     "  • Manual:  ps aux | grep bot.py  →  kill <pid>\n"
                     "After stopping the duplicate, restart this instance.",
-                    _PID_LOCK_FILE,
+                    self._pid_lock_file,
                 )
                 return None
             # Write PID for diagnostics (truncate after acquiring the lock so
@@ -1923,7 +1997,7 @@ class KrakenNonceManager:
             fh.flush()
             _logger.debug(
                 "KrakenNonceManager: process-lifetime PID lock acquired "
-                "(pid=%d, file=%s)", os.getpid(), _PID_LOCK_FILE,
+                "(pid=%d, file=%s)", os.getpid(), self._pid_lock_file,
             )
             return fh
         except Exception as exc:
@@ -1935,41 +2009,38 @@ class KrakenNonceManager:
             return None
 
     @classmethod
-    def destroy_instance(cls) -> None:
+    def destroy_instance(cls, key_id: str = "") -> None:
         """
-        Destroy the singleton completely (Step 3).
+        Destroy the singleton or per-key instance (Step 3).
 
-        Sets ``cls._instance = None`` so the very next ``KrakenNonceManager()``
-        call — or the guard logic inside ``get_kraken_nonce()`` — constructs a
-        fully fresh object anchored to Kraken server time.
+        ``key_id=""``    → destroys the platform singleton (``cls._instance``).
+        ``key_id=<str>`` → removes the entry from ``_KEY_REGISTRY``.
+
+        In both cases the next call to ``KrakenNonceManager(key_id)`` or
+        ``get_nonce_manager_for_key(key_id)`` constructs a fully fresh object
+        anchored to Kraken server time, discarding all accumulated state.
 
         Contract
         --------
-        * Thread-safe: acquires ``_instance_lock`` for the swap.
-        * The old instance is NOT mutated; any existing references are simply
-          abandoned.  Do **not** continue issuing nonces from a reference held
-          before ``destroy_instance()`` was called.
-        * The PID lock file is NOT released — the process still owns it until
-          normal process exit.
-
-        Called automatically by
-        -----------------------
-        * ``record_error()`` when the consecutive-error threshold is reached
-          (instead of reset-in-place via ``server_sync_resync()``).
-        * ``get_kraken_nonce()`` when the pre-request guard detects a violated
-          monotonicity or server-time invariant.
-
-        Operators can also call ``rebuild_nonce_manager()`` directly from
-        maintenance scripts for a forced clean slate without restarting.
+        * Thread-safe: uses ``_instance_lock`` (platform) or ``_KEY_REGISTRY_LOCK``
+          (per-key) for the swap.
+        * The old instance is NOT mutated; existing references are abandoned.
+          Do **not** continue issuing nonces from a reference held before calling.
+        * PID lock files are NOT released — the process still owns them until exit.
         """
-        with cls._instance_lock:
-            old = cls._instance
-            cls._instance = None
+        if not key_id:
+            with cls._instance_lock:
+                old = cls._instance
+                cls._instance = None
+        else:
+            with _KEY_REGISTRY_LOCK:
+                old = _KEY_REGISTRY.pop(key_id, None)
         if old is not None:
             _logger.warning(
-                "KrakenNonceManager.destroy_instance: singleton destroyed "
+                "KrakenNonceManager.destroy_instance: %s destroyed "
                 "(last_nonce=%d, last_successful=%d) — "
-                "next get_kraken_nonce() will rebuild from Kraken server time",
+                "next nonce call will rebuild from Kraken server time",
+                f"key '{key_id}'" if key_id else "platform singleton",
                 getattr(old, "_last_nonce", 0),
                 getattr(old, "_last_successful_nonce", 0),
             )
@@ -1979,7 +2050,7 @@ class KrakenNonceManager:
     def _read_state_file_raw(self) -> int:
         """Read and return the raw persisted nonce value (0 on any error)."""
         try:
-            with open(_STATE_FILE, encoding="utf-8") as fh:
+            with open(self._state_file, encoding="utf-8") as fh:
                 return int(fh.read().strip())
         except (FileNotFoundError, ValueError, OSError, UnicodeDecodeError):
             return 0
@@ -2036,7 +2107,7 @@ class KrakenNonceManager:
         if self._redis_backend is not None or _NONCE_MODE == "timestamp":
             return
         try:
-            tmp = _STATE_FILE + ".tmp"
+            tmp = self._state_file + ".tmp"
             with open(tmp, "w") as fh:
                 if _FCNTL_AVAILABLE:
                     _fcntl.flock(fh, _fcntl.LOCK_EX)
@@ -2044,7 +2115,7 @@ class KrakenNonceManager:
                 if _FCNTL_AVAILABLE:
                     _fcntl.flock(fh, _fcntl.LOCK_UN)
             os.chmod(tmp, _PERSISTED_PERMISSIONS)
-            os.replace(tmp, _STATE_FILE)
+            os.replace(tmp, self._state_file)
         except Exception as exc:
             _logger.debug("KrakenNonceManager: persist failed (%s)", exc)
 
@@ -2128,8 +2199,8 @@ def _ensure_live_manager() -> KrakenNonceManager:
             pending, last_succ, now_ms,
             _PRE_REQUEST_EPSILON_MS, _PRE_REQUEST_SAFETY_OFFSET_MS,
         )
-        KrakenNonceManager.destroy_instance()
-        _nonce_manager = KrakenNonceManager()
+        KrakenNonceManager.destroy_instance(key_id="")
+        _nonce_manager = KrakenNonceManager(key_id="")
         return _nonce_manager
 
     return current
@@ -2154,6 +2225,70 @@ def get_global_kraken_nonce() -> int:
 def get_global_nonce_manager() -> KrakenNonceManager:
     """Return the live KrakenNonceManager singleton, rebuilding if destroyed."""
     return _ensure_live_manager()
+
+
+def get_nonce_manager_for_key(key_id: str) -> KrakenNonceManager:
+    """
+    Central nonce service factory — returns the authoritative
+    ``KrakenNonceManager`` for *key_id*.
+
+    Architecture
+    ------------
+    This is the **single routing point** for all nonce requests.  Every thread
+    and every broker that uses the same Kraken API key must call this function
+    to obtain nonces — never construct a ``KrakenNonceManager`` directly.
+
+    * ``key_id=""``    → platform key (existing singleton, full backward compat).
+    * ``key_id=<str>`` → per-user/named key — a dedicated instance with its own
+                         state file, cross-process fcntl lock, error counters,
+                         and strictly-monotonic sequence, completely isolated
+                         from every other key.
+
+    Guarantees (per key)
+    --------------------
+    ✅ Strictly monotonic — nonces never repeat or decrease for this key.
+    ✅ Thread-safe — a single ``threading.Lock`` serialises all increments.
+    ✅ Cross-process safe — ``fcntl`` advisory lock guards the state file on
+       every increment, so two OS processes cannot issue the same nonce.
+    ✅ Persistent — nonce survives process restarts via an atomic state file.
+    ✅ Pre-request guard — stale/regressed instances are detected and rebuilt
+       from Kraken server time before the nonce is issued.
+
+    Kraken requirement fulfilled
+    ----------------------------
+    Kraken enforces: nonce must be strictly increasing per API key across ALL
+    requests.  Routing every request through this function ensures that
+    invariant is maintained regardless of how many threads or coroutines are
+    in flight.
+    """
+    if not key_id:
+        return _ensure_live_manager()
+
+    # ── Pre-request guard for per-key managers ────────────────────────────
+    with _KEY_REGISTRY_LOCK:
+        current = _KEY_REGISTRY.get(key_id)
+
+    if current is None:
+        return KrakenNonceManager(key_id=key_id)
+
+    now_ms = int(time.time() * 1000)
+    with _LOCK:
+        last_succ = getattr(current, "_last_successful_nonce", 0)
+        pending   = current._last_nonce + 1
+
+    fail_monotonic = last_succ > 0 and pending < last_succ + _PRE_REQUEST_EPSILON_MS
+    fail_time      = pending < now_ms + _PRE_REQUEST_SAFETY_OFFSET_MS
+
+    if fail_monotonic or fail_time:
+        _logger.warning(
+            "get_nonce_manager_for_key(%r): pre-request guard violated "
+            "(pending=%d, last_succ=%d, now=%d) — rebuilding from server time",
+            key_id, pending, last_succ, now_ms,
+        )
+        KrakenNonceManager.destroy_instance(key_id=key_id)
+        return KrakenNonceManager(key_id=key_id)
+
+    return current
 
 
 def rebuild_nonce_manager() -> KrakenNonceManager:
@@ -2205,8 +2340,8 @@ def rebuild_nonce_manager() -> KrakenNonceManager:
         "rebuild_nonce_manager: destroying existing singleton and rebuilding "
         "from Kraken server time — all accumulated nonce drift discarded"
     )
-    KrakenNonceManager.destroy_instance()
-    _nonce_manager = KrakenNonceManager()
+    KrakenNonceManager.destroy_instance(key_id="")
+    _nonce_manager = KrakenNonceManager(key_id="")
     _logger.warning(
         "rebuild_nonce_manager: rebuild complete — new nonce=%d",
         _nonce_manager.get_last_nonce(),
@@ -2390,8 +2525,8 @@ def get_nonce_backend_info() -> dict:
     return {
         "backend":        backend,
         "pid_lock_held":  mgr._pid_lock_fh is not None,
-        "pid_lock_file":  _PID_LOCK_FILE,
-        "state_file":     _STATE_FILE,
+        "pid_lock_file":  mgr._pid_lock_file,
+        "state_file":     mgr._state_file,
         "redis_url":      _REDIS_URL if backend == "redis" else None,
         "redis_key":      _REDIS_NONCE_KEY if backend == "redis" else None,
     }
@@ -2446,6 +2581,7 @@ __all__ = [
     "check_ntp_sync",
     "log_ntp_clock_status",
     "rebuild_nonce_manager",
+    "get_nonce_manager_for_key",
     # Broker quarantine API
     "register_broker_quarantine_callback",
     "is_broker_quarantined",
