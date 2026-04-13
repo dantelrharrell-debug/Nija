@@ -470,9 +470,17 @@ class MultiAccountBrokerManager:
                 broker = KrakenBroker(account_type=AccountType.USER, user_id=user_id)
             elif broker_type == BrokerType.ALPACA:
                 broker = AlpacaBroker(account_type=AccountType.USER, user_id=user_id)
+            elif broker_type == BrokerType.COINBASE:
+                broker = CoinbaseBroker(account_type=AccountType.USER, user_id=user_id)
+                logger.info("   ℹ️  Coinbase USER broker requires COINBASE_USER_%s_API_KEY / _API_SECRET",
+                            user_id.split('_')[0].upper() if '_' in user_id else user_id.upper())
+            elif broker_type == BrokerType.OKX:
+                broker = OKXBroker(account_type=AccountType.USER, user_id=user_id)
+                logger.info("   ℹ️  OKX USER broker requires OKX_USER_%s_API_KEY / _API_SECRET / _PASSPHRASE",
+                            user_id.split('_')[0].upper() if '_' in user_id else user_id.upper())
             else:
                 logger.warning(f"⚠️  Unsupported broker type for user: {broker_type.value}")
-                logger.warning(f"   Only KRAKEN and ALPACA are currently supported for user accounts")
+                logger.warning(f"   Supported types: KRAKEN, COINBASE, OKX, ALPACA")
                 return None
 
             # Store broker object in all_user_brokers for credential checking, even if connection fails

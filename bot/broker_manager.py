@@ -83,6 +83,7 @@ try:
         is_broker_quarantined,
         is_kraken_key_invalidated,
         rebuild_nonce_manager,
+        clear_broker_quarantine,
     )
 except ImportError:
     try:
@@ -101,6 +102,7 @@ except ImportError:
             is_broker_quarantined,
             is_kraken_key_invalidated,
             rebuild_nonce_manager,
+            clear_broker_quarantine,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -118,6 +120,7 @@ except ImportError:
         is_broker_quarantined = None
         is_kraken_key_invalidated = None
         rebuild_nonce_manager = None
+        clear_broker_quarantine = None
 
 # ── Broker quarantine state ───────────────────────────────────────────────────
 # Set to True when the nonce manager confirms nonce poisoning (consecutive
@@ -136,9 +139,12 @@ class NoncePauseActive(Exception):
 
 def _on_kraken_nonce_quarantine() -> None:
     """Quarantine callback: fired by KrakenNonceManager when nonce poisoning is
-    confirmed.  Marks every connected KrakenBroker instance as exit-only and
-    logs a prominent alert.  BrokerManager.get_primary_broker() will then skip
-    Kraken and promote the next available broker (Coinbase) automatically.
+    confirmed.  Marks every connected KrakenBroker PLATFORM instance as
+    exit-only and logs a prominent alert.  USER accounts have independent API
+    keys and are intentionally NOT quarantined here — only the platform account
+    whose nonce window is poisoned is restricted.
+    BrokerManager.get_primary_broker() will then skip Kraken and promote the
+    next available broker (Coinbase) automatically.
     """
     global _kraken_quarantine_active
     _kraken_quarantine_active = True
@@ -146,8 +152,9 @@ def _on_kraken_nonce_quarantine() -> None:
         "\n" + "=" * 70 + "\n"
         "🚫  KRAKEN BROKER QUARANTINED — NONCE POISONING CONFIRMED\n"
         "    Consecutive nuclear nonce resets have exceeded the quarantine\n"
-        "    threshold.  Kraken is now in EXIT-ONLY mode; all new entries\n"
-        "    will be routed to the Coinbase fallback broker.\n\n"
+        "    threshold.  Kraken PLATFORM is now in EXIT-ONLY mode; all new\n"
+        "    entries will be routed to the Coinbase fallback broker.\n"
+        "    USER accounts with separate API keys remain unaffected.\n\n"
         "    REQUIRED RECOVERY STEPS:\n"
         "      1. Stop ALL Railway/Heroku deployments using this API key.\n"
         "      2. Revoke the compromised Kraken key and create a NEW one.\n"
@@ -156,6 +163,65 @@ def _on_kraken_nonce_quarantine() -> None:
         "      5. Set NIJA_DEEP_NONCE_RESET=1 on the first restart.\n"
         "      6. Deploy ONE instance only.\n"
         + "=" * 70
+    )
+    # Mark every live PLATFORM KrakenBroker with quarantine flags so per-instance
+    # callers can inspect broker.quarantined without reading the module global.
+    # USER accounts are deliberately skipped — their nonce windows are independent.
+    try:
+        for _broker in KrakenBroker._iter_live():
+            if getattr(_broker, 'account_type', None) == AccountType.PLATFORM:
+                _broker.exit_only_mode = True
+                _broker.quarantined = True
+                _broker.quarantine_until = 0.0  # permanent until cleared
+                logging.warning(
+                    "🚫  KrakenBroker[PLATFORM] flagged quarantined/exit-only"
+                )
+    except Exception as _qe:
+        logging.warning("⚠️  Could not mark broker instances during quarantine: %s", _qe)
+
+
+def clear_kraken_broker_quarantine() -> None:
+    """Clear the Kraken broker quarantine after a successful key rotation + resync.
+
+    Performs a full reset:
+      - Clears the module-level ``_kraken_quarantine_active`` flag.
+      - Calls ``clear_broker_quarantine()`` on the nonce module to reset
+        ``_quarantine_triggered`` there too.
+      - Resets every live KrakenBroker instance:
+          broker.exit_only_mode  = False
+          broker.quarantined     = False
+          broker.quarantine_until = 0
+          broker.error_count     = 0
+
+    Call this only after the compromised API key has been rotated and a fresh
+    ``probe_and_resync_nonce()`` confirms the new key is healthy.
+    """
+    global _kraken_quarantine_active
+    _kraken_quarantine_active = False
+
+    # Clear the nonce-module quarantine flag as well
+    if clear_broker_quarantine is not None:
+        try:
+            clear_broker_quarantine()
+        except Exception as _ce:
+            logging.warning("⚠️  clear_broker_quarantine() raised: %s", _ce)
+
+    # Reset all live KrakenBroker instances
+    cleared_count = 0
+    try:
+        for _broker in KrakenBroker._iter_live():
+            _broker.exit_only_mode = False
+            _broker.quarantined = False
+            _broker.quarantine_until = 0.0
+            _broker.error_count = 0
+            cleared_count += 1
+    except Exception as _re:
+        logging.warning("⚠️  Error resetting broker instances during quarantine clear: %s", _re)
+
+    logging.warning(
+        "✅  Kraken broker quarantine CLEARED — %d broker instance(s) reset.  "
+        "Ensure the API key has been rotated before resuming live entries.",
+        cleared_count,
     )
 
 
@@ -1044,6 +1110,17 @@ class BaseBroker(ABC):
         self.last_connection_error = None  # Track last connection error for troubleshooting
         self.exit_only_mode = False  # Default: not in exit-only mode (can be overridden by subclasses)
         self.mode = "ACTIVE"  # Broker deployment mode: "ACTIVE" = tradable, "PASSIVE" = track-only (balance below deployable threshold)
+
+        # ── Quarantine state (broker-instance level) ─────────────────────────
+        # Set by clear_kraken_broker_quarantine() / _on_kraken_nonce_quarantine().
+        # `quarantined` mirrors the module-level _kraken_quarantine_active flag
+        # so external code can inspect individual broker instances without reading
+        # the module global.  `quarantine_until` is reserved for time-bounded
+        # quarantines (0 = permanent until explicitly cleared).  `error_count`
+        # is the consecutive-error counter driving quarantine escalation.
+        self.quarantined: bool = False
+        self.quarantine_until: float = 0.0   # epoch seconds; 0 = not time-bounded
+        self.error_count: int = 0
         
         # Initialize circuit breaker for this broker
         if CIRCUIT_BREAKER_AVAILABLE:
@@ -1878,9 +1955,28 @@ class CoinbaseBroker(BaseBroker):
             import os
             import time
 
-            # Get credentials from environment
-            api_key = os.getenv("COINBASE_API_KEY")
-            api_secret = os.getenv("COINBASE_API_SECRET")
+            # Get credentials from environment — support per-user overrides for USER accounts
+            if self.account_type == AccountType.USER and self.user_id:
+                # Per-user Coinbase credentials: COINBASE_USER_{USERID}_API_KEY / _API_SECRET
+                _user_env = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
+                api_key = os.getenv(f"COINBASE_USER_{_user_env}_API_KEY", "")
+                api_secret = os.getenv(f"COINBASE_USER_{_user_env}_API_SECRET", "")
+                # Fallback: try full user_id in uppercase (e.g. COINBASE_USER_TANIA_GILBERT_API_KEY)
+                if not api_key or not api_secret:
+                    _full_env = self.user_id.upper().replace('-', '_')
+                    if _full_env != _user_env:
+                        api_key = api_key or os.getenv(f"COINBASE_USER_{_full_env}_API_KEY", "")
+                        api_secret = api_secret or os.getenv(f"COINBASE_USER_{_full_env}_API_SECRET", "")
+                if not api_key or not api_secret:
+                    logging.info(
+                        "ℹ️  Coinbase USER credentials not configured for %s "
+                        "(checked COINBASE_USER_%s_API_KEY / _API_SECRET) — skipping",
+                        self.user_id, _user_env,
+                    )
+                    return False
+            else:
+                api_key = os.getenv("COINBASE_API_KEY")
+                api_secret = os.getenv("COINBASE_API_SECRET")
 
             if not api_key or not api_secret:
                 logging.error("❌ Coinbase API credentials not found")
@@ -6221,6 +6317,29 @@ class KrakenBroker(BaseBroker):
     # be resolved by retrying. Thread-safe: uses same lock as _permission_error_details_logged
     _permission_failed_accounts = set()
 
+    # ── Live-instance registry (weakrefs) ─────────────────────────────────────
+    # Used by _on_kraken_nonce_quarantine() and clear_kraken_broker_quarantine()
+    # to update per-instance quarantine state on all live KrakenBroker objects
+    # without requiring a shared dict or a global reference.
+    _live_instances: "ClassVar[List[weakref.ref]]" = []
+    _instances_lock: "ClassVar[threading.Lock]" = threading.Lock()
+
+    @classmethod
+    def _register_instance(cls, instance: "KrakenBroker") -> None:
+        """Register a new instance and prune stale weakrefs."""
+        import weakref as _wr
+        with cls._instances_lock:
+            # Prune dead refs before appending so the list never grows unboundedly.
+            cls._live_instances = [r for r in cls._live_instances if r() is not None]
+            cls._live_instances.append(_wr.ref(instance))
+
+    @classmethod
+    def _iter_live(cls) -> "List[KrakenBroker]":
+        """Return a snapshot list of all currently alive KrakenBroker instances."""
+        with cls._instances_lock:
+            live = [r() for r in cls._live_instances]
+        return [b for b in live if b is not None]
+
     def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         """
         Initialize Kraken broker with account type support.
@@ -6233,6 +6352,10 @@ class KrakenBroker(BaseBroker):
             ValueError: If account_type is USER but user_id is not provided
         """
         super().__init__(BrokerType.KRAKEN, account_type=account_type, user_id=user_id)
+
+        # Register this instance in the class-level live-instance registry so
+        # quarantine callbacks can reach every KrakenBroker in the process.
+        KrakenBroker._register_instance(self)
 
         # Validate that USER account_type has user_id
         if account_type == AccountType.USER and not user_id:
@@ -6951,18 +7074,28 @@ class KrakenBroker(BaseBroker):
                 try:
                     # Log connection attempt at INFO level so users can see progress
                     if attempt == 1:
-                        logger.info(f"   Testing Kraken connection ({cred_label})...")
+                        logger.info("🔌 RECONNECT [%s] attempt %d/%d — connecting to Kraken…",
+                                    cred_label, attempt, max_attempts)
 
                     if attempt > 1:
                         if last_error_was_lockout:
                             delay = lockout_base_delay * (attempt - 1)
-                            logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, lockout)")
+                            logger.warning(
+                                "🔄 RECONNECT [%s] attempt %d/%d in %.0fs (lockout backoff)",
+                                cred_label, attempt, max_attempts, delay,
+                            )
                         elif last_error_was_nonce:
                             delay = 5.0
-                            logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts}, nonce)")
+                            logger.warning(
+                                "🔄 RECONNECT [%s] attempt %d/%d in %.0fs (nonce recovery)",
+                                cred_label, attempt, max_attempts, delay,
+                            )
                         else:
                             delay = base_delay * (2 ** (attempt - 2))
-                            logger.info(f"   🔄 Retrying Kraken ({cred_label}) in {delay:.0f}s (attempt {attempt}/{max_attempts})")
+                            logger.info(
+                                "🔄 RECONNECT [%s] attempt %d/%d in %.0fs",
+                                cred_label, attempt, max_attempts, delay,
+                            )
                         time.sleep(delay)
 
                     # The _nonce_monotonic() function automatically handles nonce generation
@@ -7077,24 +7210,64 @@ class KrakenBroker(BaseBroker):
                                     if get_global_nonce_manager is not None:
                                         get_global_nonce_manager().record_error()
 
-                                # For nonce errors, log at INFO level on first attempt so users know what failed
-                                # Log at DEBUG level on retries to reduce spam
-                                # These are transient and automatically retried with nonce jumps
+                                # ── Structured logging for nonce / auth / reconnect ───────────
                                 if is_nonce_error:
-                                    if attempt == 1:
-                                        logger.info(f"   ⚠️  Kraken ({cred_label}) nonce error on attempt {attempt}/{max_attempts} (auto-retry): {error_msgs}")
-                                    else:
-                                        logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} nonce error (auto-retry): {error_msgs}")
-                                # For lockout/other errors, log at WARNING on first attempt only
-                                elif attempt == 1:
-                                    logger.warning(f"⚠️  Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
-                                # All retries after first attempt: DEBUG level only
+                                    # Always warn on nonce errors — they indicate a real sync issue
+                                    _nonce_state = ""
+                                    if get_global_nonce_manager is not None:
+                                        try:
+                                            _mgr = get_global_nonce_manager()
+                                            _nonce_state = (
+                                                f"  nonce={_mgr.get_last_nonce()}"
+                                                f"  nuclear_resets={_mgr.nuclear_reset_count}"
+                                            )
+                                        except Exception:
+                                            pass
+                                    logger.warning(
+                                        "⚠️  NONCE ERROR [%s] attempt %d/%d: %s%s — "
+                                        "nonce manager will rebuild on next call",
+                                        cred_label, attempt, max_attempts,
+                                        error_msgs, _nonce_state,
+                                    )
+                                elif is_lockout_error:
+                                    logger.warning(
+                                        "⚠️  AUTH/LOCKOUT [%s] attempt %d/%d: %s",
+                                        cred_label, attempt, max_attempts, error_msgs,
+                                    )
                                 else:
-                                    logger.debug(f"🔄 Kraken ({cred_label}) attempt {attempt}/{max_attempts} failed ({error_type}): {error_msgs}")
+                                    logger.info(
+                                        "🔄 RECONNECT [%s] attempt %d/%d retrying: %s",
+                                        cred_label, attempt, max_attempts, error_msgs,
+                                    )
                                 continue
                             else:
                                 self.last_connection_error = error_msgs
-                                logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
+                                if is_nonce_error:
+                                    _nonce_state = ""
+                                    if get_global_nonce_manager is not None:
+                                        try:
+                                            _mgr = get_global_nonce_manager()
+                                            _nonce_state = (
+                                                f" (nonce={_mgr.get_last_nonce()}"
+                                                f", nuclear_resets={_mgr.nuclear_reset_count})"
+                                            )
+                                        except Exception:
+                                            pass
+                                    logger.error(
+                                        "❌ NONCE ERROR [%s] all %d attempts exhausted: %s%s",
+                                        cred_label, max_attempts, error_msgs, _nonce_state,
+                                    )
+                                elif is_lockout_error:
+                                    logger.error(
+                                        "❌ AUTH FAILURE [%s]: %s  "
+                                        "(credentials: key=%s  secret=%s)",
+                                        cred_label, error_msgs, key_name, secret_name,
+                                    )
+                                else:
+                                    logger.error(
+                                        "❌ Kraken connection test failed [%s]: %s",
+                                        cred_label, error_msgs,
+                                    )
                                 return False
 
                     if balance and 'result' in balance:
@@ -7253,6 +7426,16 @@ class KrakenBroker(BaseBroker):
                             logger.info(
                                 "✅ PLATFORM Kraken connected — USER accounts may now connect."
                             )
+                            # If the platform was previously quarantined due to nonce poisoning
+                            # and has now successfully reconnected (implying a key rotation + resync
+                            # completed), automatically lift the quarantine so new entries are
+                            # re-enabled without requiring a full bot restart.
+                            if _kraken_quarantine_active:
+                                logger.warning(
+                                    "🔓 PLATFORM Kraken reconnected while quarantine was active — "
+                                    "lifting quarantine now."
+                                )
+                                clear_kraken_broker_quarantine()
 
                         return True
                     else:
@@ -8103,8 +8286,13 @@ class KrakenBroker(BaseBroker):
                     "filled_pct": 0.0
                 }
 
-            # Quarantine check: nonce poisoning confirmed — no new entries until key is rotated
-            if side.lower() == 'buy' and _kraken_quarantine_active and not force_liquidate:
+            # Quarantine check: nonce poisoning confirmed — no new entries until key is rotated.
+            # Only the PLATFORM account is quarantined; USER accounts have independent API keys
+            # with their own nonce windows and must not be blocked by a platform-level quarantine.
+            if (side.lower() == 'buy'
+                    and _kraken_quarantine_active
+                    and self.account_type == AccountType.PLATFORM
+                    and not force_liquidate):
                 logger.critical(
                     "🚫 BUY order BLOCKED: Kraken broker is QUARANTINED due to confirmed nonce "
                     "poisoning.  Rotate the API key and restart to re-enable entries."
@@ -9483,9 +9671,31 @@ class OKXBroker(BaseBroker):
             from okx.api import Account, Market, Trade
             import time
 
-            api_key = os.getenv("OKX_API_KEY", "").strip()
-            api_secret = os.getenv("OKX_API_SECRET", "").strip()
-            passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
+            # Support per-user credentials for USER accounts:
+            #   OKX_USER_{USERID}_API_KEY / _API_SECRET / _PASSPHRASE
+            if self.account_type == AccountType.USER and self.user_id:
+                _user_env = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
+                api_key = os.getenv(f"OKX_USER_{_user_env}_API_KEY", "").strip()
+                api_secret = os.getenv(f"OKX_USER_{_user_env}_API_SECRET", "").strip()
+                passphrase = os.getenv(f"OKX_USER_{_user_env}_PASSPHRASE", "").strip()
+                # Fallback: full user_id in uppercase
+                if not api_key or not api_secret or not passphrase:
+                    _full_env = self.user_id.upper().replace('-', '_')
+                    if _full_env != _user_env:
+                        api_key = api_key or os.getenv(f"OKX_USER_{_full_env}_API_KEY", "").strip()
+                        api_secret = api_secret or os.getenv(f"OKX_USER_{_full_env}_API_SECRET", "").strip()
+                        passphrase = passphrase or os.getenv(f"OKX_USER_{_full_env}_PASSPHRASE", "").strip()
+                if not api_key or not api_secret or not passphrase:
+                    logging.info(
+                        "ℹ️  OKX USER credentials not configured for %s "
+                        "(checked OKX_USER_%s_API_KEY / _API_SECRET / _PASSPHRASE) — skipping",
+                        self.user_id, _user_env,
+                    )
+                    return False
+            else:
+                api_key = os.getenv("OKX_API_KEY", "").strip()
+                api_secret = os.getenv("OKX_API_SECRET", "").strip()
+                passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
 
             if not api_key or not api_secret or not passphrase:
