@@ -288,8 +288,8 @@ class GlobalRiskGovernor:
                         "portfolio_value=0 → gates will block this trade",
                         len(_ca_gov._broker_balances),
                         _ca_gov._expected_brokers,
-                        ((__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - _ca_gov.last_updated).total_seconds()
-                         if _ca_gov.last_updated else float("inf")),
+                        (datetime.now(timezone.utc) - _ca_gov.last_updated).total_seconds()
+                        if _ca_gov.last_updated else float("inf"),
                     )
             except Exception:
                 pass

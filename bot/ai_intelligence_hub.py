@@ -32,7 +32,7 @@ Date: March 2026
 import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import numpy as np
@@ -305,8 +305,8 @@ class AIIntelligenceHub:
                         "position sizing will be zero until authority is refreshed.",
                         len(_ca_hub._broker_balances),
                         _ca_hub._expected_brokers,
-                        ((__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - _ca_hub.last_updated).total_seconds()
-                         if _ca_hub.last_updated else float("inf")),
+                        (datetime.now(timezone.utc) - _ca_hub.last_updated).total_seconds()
+                        if _ca_hub.last_updated else float("inf"),
                         symbol,
                     )
             except Exception:

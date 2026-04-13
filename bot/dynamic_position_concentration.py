@@ -240,8 +240,8 @@ class DynamicPositionConcentration:
                         "portfolio_value=0 → concentration gate will deny",
                         len(_ca_dpc._broker_balances),
                         _ca_dpc._expected_brokers,
-                        ((__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - _ca_dpc.last_updated).total_seconds()
-                         if _ca_dpc.last_updated else float("inf")),
+                        (datetime.now(timezone.utc) - _ca_dpc.last_updated).total_seconds()
+                        if _ca_dpc.last_updated else float("inf"),
                     )
             except Exception:
                 pass

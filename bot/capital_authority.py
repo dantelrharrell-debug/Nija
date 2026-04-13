@@ -63,6 +63,11 @@ logger = logging.getLogger("nija.capital_authority")
 
 _DEFAULT_RESERVE_PCT: float = 0.02  # 2 % held back as reserve dust
 
+# Maximum acceptable age of a CA snapshot before is_fresh() returns False.
+# Must match (or be shorter than) the per-cycle refresh cadence in
+# trading_strategy.py so a missed refresh is caught before the next trade.
+_DEFAULT_FRESHNESS_TTL_S: float = 90.0
+
 # ---------------------------------------------------------------------------
 # Singleton state
 # ---------------------------------------------------------------------------
@@ -96,9 +101,12 @@ class CapitalAuthority:
         # Timestamp of most-recent successful refresh
         self.last_updated: Optional[datetime] = None
         # Minimum number of brokers that must have contributed a non-zero balance
-        # for the snapshot to be considered complete.  Set at startup via
-        # set_expected_brokers() once the broker map is known.
-        # Overridable via env NIJA_CAPITAL_EXPECTED_BROKERS (default 1).
+        # for the snapshot to be considered complete.  Automatically raised by
+        # refresh() to match the largest broker map seen so far.  Can also be set
+        # explicitly at startup via set_expected_brokers() once the broker map is
+        # known.  The env var NIJA_CAPITAL_EXPECTED_BROKERS is an advanced override
+        # intended for multi-process deployments; in normal operation the value is
+        # derived at runtime and this env var should not be needed.
         self._expected_brokers: int = int(
             os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "1")
         )
@@ -268,7 +276,7 @@ class CapitalAuthority:
             age = (datetime.now(timezone.utc) - self.last_updated).total_seconds()
             return age > ttl_s
 
-    def is_fresh(self, ttl_s: float = 90.0) -> bool:
+    def is_fresh(self, ttl_s: float = _DEFAULT_FRESHNESS_TTL_S) -> bool:
         """
         Return ``True`` only when **both** conditions hold:
 
@@ -345,7 +353,7 @@ class CapitalAuthority:
                 if self.last_updated
                 else None,
                 "age_s": age,
-                "is_fresh": age <= 90.0 and len(self._broker_balances) >= self._expected_brokers,
+                "is_fresh": self.is_fresh(),  # uses _DEFAULT_FRESHNESS_TTL_S
                 # kept for backwards-compat with any existing dashboard consumers
                 "is_stale_60s": age > 60.0,
             }
