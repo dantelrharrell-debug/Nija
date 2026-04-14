@@ -2159,6 +2159,8 @@ class KrakenNonceManager:
         ``max(persisted_nonce, now_ms + _STARTUP_JUMP_MS)``.
         This guarantees a forward jump on every boot while still preserving the
         persisted high-water mark when it is already ahead.
+        On first boot (no state file / persisted nonce == 0), startup uses
+        ``now_ms + _STARTUP_JUMP_MS``.
 
         Must be called while holding both ``_LOCK`` and ``_CrossProcessLock``.
         """
@@ -2166,7 +2168,7 @@ class KrakenNonceManager:
         persisted_nonce = self._read_state_file_raw()
         now_ms = int(time.time() * 1000)
         # Startup floor is intentionally local-time based for deterministic
-        # restart recovery; persisted_nonce remains the non-regression anchor.
+        # restart recovery; persisted_nonce remains the high-water anchor.
         safety_floor = now_ms + _STARTUP_JUMP_MS
         baseline = max(persisted_nonce, safety_floor)
         _logger.info(
