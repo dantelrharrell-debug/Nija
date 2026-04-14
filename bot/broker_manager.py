@@ -7455,7 +7455,9 @@ class KrakenBroker(BaseBroker):
                             _probe_key_id, _probe_mgr_err,
                         )
 
-                _probe_call = lambda: self._kraken_private_call("Balance", {}, category=_probe_cat)  # noqa: E731
+                def _probe_call():
+                    return self._kraken_private_call("Balance", {}, category=_probe_cat)
+
                 if _probe_mgr is not None:
                     _probe_ok = _probe_mgr.probe_and_resync(
                         _probe_call,
