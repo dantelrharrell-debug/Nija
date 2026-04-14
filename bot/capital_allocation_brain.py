@@ -158,6 +158,9 @@ class CapitalAllocationBrain:
             config: Configuration dictionary
         """
         self.config = config or {}
+        # When true, caller explicitly pinned total_capital in config and runtime
+        # auto-sync from CapitalAuthority must not overwrite that value.
+        self._explicit_total_capital = "total_capital" in self.config
         
         # Allocation parameters
         # Use the Capital Authority's live observed equity when the caller does
@@ -168,15 +171,12 @@ class CapitalAllocationBrain:
         try:
             from capital_authority import get_capital_authority as _get_ca_cab
             _ca_cab_inst = _get_ca_cab()
-            if _ca_cab_inst.is_fresh():
-                _ca_total = _ca_cab_inst.get_real_capital()
-            else:
+            _ca_total = float(_ca_cab_inst.get_real_capital())
+            if _ca_total <= 0.0:
                 logger.warning(
-                    "[CapitalAllocationBrain] CapitalAuthority stale or incomplete "
-                    "(brokers=%d expected=%d) — total_capital will be 0.0; "
-                    "allocations blocked until authority is refreshed.",
-                    len(_ca_cab_inst._broker_balances),
-                    _ca_cab_inst._expected_brokers,
+                    "[CapitalAllocationBrain] CapitalAuthority has non-positive total_capital=%.2f "
+                    "— allocations blocked until authority is refreshed.",
+                    _ca_total,
                 )
         except Exception:
             pass
@@ -211,6 +211,56 @@ class CapitalAllocationBrain:
             f"capital=${self.total_capital:,.2f}, "
             f"method={self.default_method.value}"
         )
+
+    def refresh_authority(self) -> float:
+        """
+        Fail-safe auto-refresh of unified CapitalAuthority.
+
+        Returns:
+            Latest observed total capital (>= 0).
+        """
+        try:
+            # Event-driven refresh path (preferred): ask multi-account manager to
+            # rebuild authority from currently connected healthy brokers.
+            try:
+                from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm
+            except ImportError:
+                from multi_account_broker_manager import multi_account_broker_manager as _mabm  # type: ignore[import]
+            if _mabm is not None and hasattr(_mabm, "refresh_capital_authority"):
+                _mabm.refresh_capital_authority(trigger="capital_allocation_brain")
+        except Exception:
+            pass
+
+        try:
+            from capital_authority import get_capital_authority as _get_ca
+        except ImportError:
+            try:
+                from bot.capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+            except ImportError:
+                _get_ca = None  # type: ignore[assignment]
+
+        if _get_ca is None:
+            return max(0.0, float(self.total_capital))
+
+        try:
+            total_capital = float(_get_ca().get_real_capital())
+        except Exception:
+            total_capital = 0.0
+
+        # Auto-sync runtime capital unless the caller explicitly pinned a value.
+        if total_capital > 0.0 and not self._explicit_total_capital:
+            self.total_capital = total_capital
+
+        return max(0.0, total_capital)
+
+    # Backward-compatible aliases requested by ops runbooks
+    def _rebuild_capital_authority(self) -> float:
+        """Legacy alias for :meth:`refresh_authority`."""
+        return self.refresh_authority()
+
+    def _sync_broker_balances(self) -> float:
+        """Legacy alias for :meth:`refresh_authority`."""
+        return self.refresh_authority()
     
     def add_target(
         self,
@@ -595,7 +645,23 @@ class CapitalAllocationBrain:
         Returns:
             AllocationPlan
         """
+        # Critical guard: never allocate when total capital is non-positive.
+        latest_total = self.refresh_authority()
+        if latest_total > 0.0 and not self._explicit_total_capital:
+            self.total_capital = latest_total
+
         method = method or self.default_method
+
+        if self.total_capital <= 0.0:
+            logger.error(
+                "⛔ Capital allocation blocked: total_capital <= 0.0 "
+                "(total_capital=$%.2f)",
+                self.total_capital,
+            )
+            return AllocationPlan(
+                total_capital=self.total_capital,
+                method=method,
+            )
         
         # Filter targets
         target_ids = []
