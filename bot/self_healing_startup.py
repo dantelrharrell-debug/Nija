@@ -66,7 +66,7 @@ try:
         get_global_nonce_manager,
         get_global_nonce_stats,
         KrakenNonceManager,
-        _PROBE_SYSTEM_ENABLED as _NONCE_PROBE_SYSTEM_ENABLED,
+        _PROBE_SYSTEM_ENABLED as _NONCE_PROBE_SYSTEM_ENABLED,  # noqa: PLC2701
     )
     _NONCE_MGR_AVAILABLE = True
 except ImportError:

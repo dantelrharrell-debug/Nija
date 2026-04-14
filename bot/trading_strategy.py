@@ -4316,9 +4316,21 @@ class TradingStrategy:
             # Default is now 2 s — enough for HTTP clients to initialise
             # without burning 45 s on every Railway cold start.
             # Override via NIJA_STARTUP_DELAY_S if 403 recovery is needed.
-            startup_delay: float = float(
-                os.environ.get("NIJA_STARTUP_DELAY_S", "2.0")
-            )
+            def _ts_float_env(name: str, default: float) -> float:
+                """Read a float from an env var; warn and fall back on invalid input."""
+                _raw = os.environ.get(name, "")
+                if not _raw:
+                    return default
+                try:
+                    return float(_raw)
+                except ValueError:
+                    logger.warning(
+                        "⚠️  Invalid value for %s=%r — expected a number; using default %.1f",
+                        name, _raw, default,
+                    )
+                    return default
+
+            startup_delay: float = _ts_float_env("NIJA_STARTUP_DELAY_S", 2.0)
             if startup_delay > 0:
                 logger.info(
                     "⏱️  Startup delay: %.1fs (NIJA_STARTUP_DELAY_S) before broker connections...",
@@ -4457,9 +4469,7 @@ class TradingStrategy:
             # is impossible regardless of timing.
             # Default: 0.5 s (still serialises the init log stream neatly).
             # Override via NIJA_USER_CONNECT_DELAY_S.
-            _user_connect_delay: float = float(
-                os.environ.get("NIJA_USER_CONNECT_DELAY_S", "0.5")
-            )
+            _user_connect_delay: float = _ts_float_env("NIJA_USER_CONNECT_DELAY_S", 0.5)
             if _user_connect_delay > 0:
                 time.sleep(_user_connect_delay)
 

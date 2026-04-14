@@ -1223,7 +1223,7 @@ class KrakenNonceManager:
         # (up to 5 s timeout) never holds the global nonce lock.  The result
         # is cached for _SERVER_TIME_CACHE_TTL_S seconds so at most one
         # network round-trip occurs per second across all threads.
-        _server_floor = _get_cached_server_time_ms() + _SERVER_SYNC_OFFSET_MS
+        _kraken_floor_ms = _get_cached_server_time_ms() + _SERVER_SYNC_OFFSET_MS
         with _LOCK:
             with _CrossProcessLock(self._lock_file):
                 # ── Cross-process sync ──────────────────────────────────────
@@ -1250,9 +1250,9 @@ class KrakenNonceManager:
                 # Server-anchored formula: every nonce is at or ahead of Kraken's
                 # authoritative clock + safety margin so any forward drift is
                 # self-correcting on the very next call.  _get_cached_server_time_ms()
-                # is called OUTSIDE _LOCK below and the cached value is passed in to
+                # is called OUTSIDE _LOCK above and the cached value is passed in to
                 # avoid a network call while holding the lock.
-                self._last_nonce = max(_server_floor, self._last_nonce + 1)
+                self._last_nonce = max(_kraken_floor_ms, self._last_nonce + 1)
                 self._persist()
                 return self._last_nonce
 
@@ -1743,18 +1743,18 @@ class KrakenNonceManager:
                 if api_call_fn is None:
                     return True
                 try:
-                    _result = api_call_fn()
+                    _probe_result = api_call_fn()
                 except Exception as _exc:
                     _logger.debug(
                         "KrakenNonceManager.probe_and_resync (server-sync mode): "
                         "api_call raised (%s)", _exc,
                     )
                     return False
-                if not isinstance(_result, dict):
+                if not isinstance(_probe_result, dict):
                     return False
-                _errs = ", ".join(_result.get("error") or [])
+                _probe_errs = ", ".join(_probe_result.get("error") or [])
                 if any(
-                    kw in _errs.lower()
+                    kw in _probe_errs.lower()
                     for kw in ("invalid nonce", "eapi:invalid nonce", "nonce window")
                 ):
                     _logger.warning(
