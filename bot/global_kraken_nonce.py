@@ -291,19 +291,28 @@ _PROBE_SYSTEM_ENABLED: bool = os.environ.get(
 ).strip().lower() in ("1", "true", "yes", "on")
 
 # ── Nonce issuance authorization ──────────────────────────────────────────────
-# A process-wide gate that the startup FSM controls.  Starts ``True`` so that
-# the startup probe (which must issue nonces before NONCE_READY is signalled)
-# can proceed.
+# A process-wide gate that the startup FSM controls.
+#
+# Design note — why starts True
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# The gate starts ``True`` (authorized) so that the startup probe — which
+# must issue test nonces to calibrate the counter before the FSM reaches
+# NONCE_READY — can proceed without a bootstrapping deadlock.
+#
+# No nonce issuance occurs during module import; the first actual call to
+# ``next_nonce()`` happens inside ``probe_and_resync()`` which is invoked
+# from ``KrakenBroker.connect()``, by which time ``begin_platform_boot()``
+# has already been called.  This assumption is documented in the startup
+# flow: boot → ``begin_platform_boot()`` → probe → ``mark_nonce_ready()``
+# → connect.
 #
 # The FSM in ``broker_manager.py`` calls:
 #   • ``revoke_nonce_issuance()``     — on ``mark_failed()`` / ``reset()``
 #   • ``authorize_nonce_issuance()``  — on ``begin_platform_boot()`` (retry),
 #                                       ``mark_nonce_ready()``, ``mark_connected()``
 #
-# This eliminates "hidden rebuild paths" and "race-condition recovery attempts"
-# by making the gate a hard single-bit authority: anything issuing nonces while
-# revoked gets a RuntimeError instead of silently producing a stale or
-# regressed nonce value.
+# After ``revoke_nonce_issuance()`` any code that tries to issue a nonce
+# receives a RuntimeError instead of silently producing a stale counter value.
 _NONCE_ISSUANCE_AUTHORIZED: bool = True
 _NONCE_AUTH_LOCK = threading.Lock()
 

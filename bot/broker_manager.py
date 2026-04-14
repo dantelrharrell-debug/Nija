@@ -855,6 +855,11 @@ class KrakenStartupFSM:
                 # Re-open the gate so the startup probe can issue nonces.
                 if authorize_nonce_issuance is not None:
                     authorize_nonce_issuance()
+                else:
+                    logger.warning(
+                        "KrakenStartupFSM.begin_platform_boot: authorize_nonce_issuance "
+                        "unavailable — FSM gate is not enforced (degraded mode)"
+                    )
             else:
                 logger.debug(
                     "KrakenStartupFSM.begin_platform_boot: ignored because state is CONNECTED"
@@ -871,6 +876,11 @@ class KrakenStartupFSM:
                 self._nonce_ready.set()
                 if authorize_nonce_issuance is not None:
                     authorize_nonce_issuance()
+                else:
+                    logger.warning(
+                        "KrakenStartupFSM.mark_nonce_ready: authorize_nonce_issuance "
+                        "unavailable — FSM gate is not enforced (degraded mode)"
+                    )
             else:
                 logger.debug(
                     "KrakenStartupFSM.mark_nonce_ready: ignored (connecting=%s failed=%s connected=%s)",
@@ -890,6 +900,11 @@ class KrakenStartupFSM:
             self._nonce_ready.set()
             if authorize_nonce_issuance is not None:
                 authorize_nonce_issuance()
+            else:
+                logger.warning(
+                    "KrakenStartupFSM.mark_connected: authorize_nonce_issuance "
+                    "unavailable — FSM gate is not enforced (degraded mode)"
+                )
         self._connected.set()
 
     def mark_failed(self) -> None:
@@ -899,6 +914,11 @@ class KrakenStartupFSM:
             self._nonce_ready.clear()
             if revoke_nonce_issuance is not None:
                 revoke_nonce_issuance()
+            else:
+                logger.warning(
+                    "KrakenStartupFSM.mark_failed: revoke_nonce_issuance "
+                    "unavailable — FSM gate is not enforced (degraded mode)"
+                )
         self._failed.set()
 
     def reset(self) -> None:
@@ -914,6 +934,11 @@ class KrakenStartupFSM:
                 self._connecting = False
                 if revoke_nonce_issuance is not None:
                     revoke_nonce_issuance()
+                else:
+                    logger.warning(
+                        "KrakenStartupFSM.reset: revoke_nonce_issuance "
+                        "unavailable — FSM gate is not enforced (degraded mode)"
+                    )
 
     # ── Queries (read-only, derived from events) ───────────────────────────────
 

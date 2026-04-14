@@ -195,7 +195,14 @@ def _get_nonce_auth() -> bool:
                         )
                     _nonce_auth_fn = is_nonce_issuance_authorized
                 except ImportError:
-                    _nonce_auth_fn = lambda: True  # noqa: E731  # degraded: no gate
+                    _logger.critical(
+                        "DistributedNonceManager: could not import "
+                        "is_nonce_issuance_authorized from global_kraken_nonce — "
+                        "nonce authorization gate is DISABLED (degraded mode). "
+                        "All nonce issuance will be allowed regardless of FSM state. "
+                        "Ensure global_kraken_nonce is installed and importable."
+                    )
+                    _nonce_auth_fn = lambda: True  # noqa: E731  # degraded: gate disabled
     return _nonce_auth_fn()
 
 
