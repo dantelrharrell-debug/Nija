@@ -157,7 +157,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -170,6 +170,40 @@ def _env_true(name: str, default: str = "0") -> bool:
 _REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "15000")))
 _STRICT_REDIS_LEASE = _env_true("NIJA_STRICT_REDIS_LEASE", "1")
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
+
+# ── Nonce issuance authorization check (lazy reference) ──────────────────────
+# Resolved on first use to avoid any import-order issues.  Returns True in
+# degraded / unavailable mode so the gate degrades gracefully.
+_nonce_auth_fn: Optional[Callable[[], bool]] = None
+_nonce_auth_fn_lock = threading.Lock()
+
+
+def _get_nonce_auth() -> bool:
+    """Return True if nonce issuance is currently authorized."""
+    global _nonce_auth_fn
+    if _nonce_auth_fn is None:
+        with _nonce_auth_fn_lock:
+            if _nonce_auth_fn is None:
+                try:
+                    try:
+                        from bot.global_kraken_nonce import (
+                            is_nonce_issuance_authorized,
+                        )
+                    except ImportError:
+                        from global_kraken_nonce import (  # type: ignore[import]
+                            is_nonce_issuance_authorized,
+                        )
+                    _nonce_auth_fn = is_nonce_issuance_authorized
+                except ImportError:
+                    _logger.critical(
+                        "DistributedNonceManager: could not import "
+                        "is_nonce_issuance_authorized from global_kraken_nonce — "
+                        "nonce authorization gate is DISABLED (degraded mode). "
+                        "All nonce issuance will be allowed regardless of FSM state. "
+                        "Ensure global_kraken_nonce is installed and importable."
+                    )
+                    _nonce_auth_fn = lambda: True  # noqa: E731  # degraded: gate disabled
+    return _nonce_auth_fn()
 
 
 def _detect_container_id() -> str:
@@ -498,12 +532,23 @@ class DistributedNonceManager:
         Routes through Redis when available (multi-instance safe), otherwise
         through the per-key ``KrakenNonceManager`` with ``fcntl`` locking.
 
+        Raises ``RuntimeError`` if the startup FSM has revoked nonce issuance
+        (FAILED / IDLE state) — hard fail-closed instead of silently issuing
+        a stale or invalid nonce.
+
         Parameters
         ----------
         api_key_id:
             The opaque key identifier returned by ``make_api_key_id(raw_key)``.
             Must be the SAME id used by every instance that shares this key.
         """
+        # Hard gate: fail immediately if the FSM has revoked nonce issuance.
+        if not _get_nonce_auth():
+            raise RuntimeError(
+                f"DistributedNonceManager.get_nonce: nonce issuance not authorized "
+                f"(key={api_key_id}) — startup FSM is in FAILED/IDLE state; "
+                "wait for NONCE_READY / CONNECTED before issuing nonces"
+            )
         if self._redis is not None:
             try:
                 nonce = self._redis.next_nonce(api_key_id)

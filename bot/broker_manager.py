@@ -96,6 +96,8 @@ try:
         is_kraken_key_invalidated,
         rebuild_nonce_manager,
         clear_broker_quarantine,
+        authorize_nonce_issuance,
+        revoke_nonce_issuance,
     )
 except ImportError:
     try:
@@ -115,6 +117,8 @@ except ImportError:
             is_kraken_key_invalidated,
             rebuild_nonce_manager,
             clear_broker_quarantine,
+            authorize_nonce_issuance,
+            revoke_nonce_issuance,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -133,6 +137,8 @@ except ImportError:
         is_kraken_key_invalidated = None
         rebuild_nonce_manager = None
         clear_broker_quarantine = None
+        authorize_nonce_issuance = None
+        revoke_nonce_issuance = None
 
 # ── Broker quarantine state ───────────────────────────────────────────────────
 # Set to True when the nonce manager confirms nonce poisoning (consecutive
@@ -846,6 +852,14 @@ class KrakenStartupFSM:
                 self._failed.clear()
                 self._nonce_ready.clear()
                 self._connecting = True
+                # Re-open the gate so the startup probe can issue nonces.
+                if authorize_nonce_issuance is not None:
+                    authorize_nonce_issuance()
+                else:
+                    logger.warning(
+                        "KrakenStartupFSM.begin_platform_boot: authorize_nonce_issuance "
+                        "unavailable — FSM gate is not enforced (degraded mode)"
+                    )
             else:
                 logger.debug(
                     "KrakenStartupFSM.begin_platform_boot: ignored because state is CONNECTED"
@@ -860,6 +874,13 @@ class KrakenStartupFSM:
         with self._lock:
             if self._connecting and not self._failed.is_set() and not self._connected.is_set():
                 self._nonce_ready.set()
+                if authorize_nonce_issuance is not None:
+                    authorize_nonce_issuance()
+                else:
+                    logger.warning(
+                        "KrakenStartupFSM.mark_nonce_ready: authorize_nonce_issuance "
+                        "unavailable — FSM gate is not enforced (degraded mode)"
+                    )
             else:
                 logger.debug(
                     "KrakenStartupFSM.mark_nonce_ready: ignored (connecting=%s failed=%s connected=%s)",
@@ -877,6 +898,13 @@ class KrakenStartupFSM:
         with self._lock:
             self._connecting = False
             self._nonce_ready.set()
+            if authorize_nonce_issuance is not None:
+                authorize_nonce_issuance()
+            else:
+                logger.warning(
+                    "KrakenStartupFSM.mark_connected: authorize_nonce_issuance "
+                    "unavailable — FSM gate is not enforced (degraded mode)"
+                )
         self._connected.set()
 
     def mark_failed(self) -> None:
@@ -884,6 +912,13 @@ class KrakenStartupFSM:
         with self._lock:
             self._connecting = False
             self._nonce_ready.clear()
+            if revoke_nonce_issuance is not None:
+                revoke_nonce_issuance()
+            else:
+                logger.warning(
+                    "KrakenStartupFSM.mark_failed: revoke_nonce_issuance "
+                    "unavailable — FSM gate is not enforced (degraded mode)"
+                )
         self._failed.set()
 
     def reset(self) -> None:
@@ -897,6 +932,13 @@ class KrakenStartupFSM:
                 self._failed.clear()
                 self._nonce_ready.clear()
                 self._connecting = False
+                if revoke_nonce_issuance is not None:
+                    revoke_nonce_issuance()
+                else:
+                    logger.warning(
+                        "KrakenStartupFSM.reset: revoke_nonce_issuance "
+                        "unavailable — FSM gate is not enforced (degraded mode)"
+                    )
 
     # ── Queries (read-only, derived from events) ───────────────────────────────
 
@@ -7434,28 +7476,11 @@ class KrakenBroker(BaseBroker):
                 )
                 return False
             except Exception as _ne:
-                _strict_nonce_lease = os.environ.get(
-                    "NIJA_STRICT_REDIS_LEASE", "1"
-                ).strip().lower() in {"1", "true", "yes", "on"}
-                if _strict_nonce_lease:
-                    self._trigger_hard_stop(
-                        "DistributedNonceManager unavailable under strict lease policy "
-                        f"(NIJA_STRICT_REDIS_LEASE=1): {_ne}"
-                    )
-                    return False
-                # Legacy fallback (explicitly non-strict mode only).
-                logger.error(
-                    "⚠️  DistributedNonceManager unavailable (%s) — "
-                    "falling back to global platform nonce (single-instance safe only)",
-                    _ne,
+                self._trigger_hard_stop(
+                    "DistributedNonceManager unavailable — nonce authority cannot be established: "
+                    f"{_ne}"
                 )
-                self.api_key_id = ""
-                try:
-                    self.api._nonce = lambda: str(get_kraken_nonce())
-                except AttributeError as _ae2:
-                    self.last_connection_error = f"Nonce generator override failed: {_ae2}"
-                    logger.error("❌ Failed to override krakenex nonce generator: %s", _ae2)
-                    return False
+                return False
 
             self.kraken_api = KrakenAPI(self.api)
 
