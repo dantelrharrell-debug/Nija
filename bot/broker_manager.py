@@ -650,6 +650,12 @@ COINBASE_MIN_ORDER: float = float(os.getenv('COINBASE_MIN_ORDER_USD', os.getenv(
 COINBASE_MICRO_CAP_MODE: bool = os.getenv('COINBASE_MICRO_CAP_MODE', 'true').strip().lower() in ('1', 'true', 'yes')
 COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR: bool = os.getenv('COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR', 'false').strip().lower() in ('1', 'true', 'yes')
 KRAKEN_EXECUTION_DISABLED: bool = os.getenv('KRAKEN_EXECUTION_DISABLED', 'false').strip().lower() in ('1', 'true', 'yes')
+# Opt-in emergency test mode: force routing to Kraken while validating live order flow.
+# Default OFF to preserve normal multi-broker safety behavior.
+NIJA_FORCE_KRAKEN_ONLY_TEST: bool = os.getenv('NIJA_FORCE_KRAKEN_ONLY_TEST', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+# Optional companion flag for tiny-balance validation runs: bypass Kraken BUY capital gates.
+# Default OFF so production capital protections remain intact.
+NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES: bool = os.getenv('NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES', '0').strip().lower() in ('1', 'true', 'yes', 'on')
 
 # When micro-cap mode is active, Coinbase minimum balance matches COINBASE_MIN_CAPITAL ($1)
 if COINBASE_MICRO_CAP_MODE:
@@ -6816,7 +6822,12 @@ class KrakenBroker(BaseBroker):
                 with suppress_pykrakenapi_prints():
                     result = self.api.query_private(method, params)
             finally:
-                self.nonce_manager.end_request()
+                # Compatibility: DistributedNonceManager does not expose end_request().
+                # Never hard-fail private calls on legacy nonce lifecycle hooks.
+                _nm = self.nonce_manager
+                _end_request = getattr(_nm, "end_request", None) if _nm is not None else None
+                if callable(_end_request):
+                    _end_request()
 
             return result
 
@@ -7702,7 +7713,7 @@ class KrakenBroker(BaseBroker):
                         # FIX 2: FORCED EXIT OVERRIDES - Allow connection even when balance < minimum
                         # This enables emergency sells to close losing positions
                         # FIX (Jan 23, 2026): Use total_funds (available + held) for minimum check
-                        if total_funds < KRAKEN_MINIMUM_BALANCE:
+                        if total_funds < KRAKEN_MINIMUM_BALANCE and not NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES:
                             logger.warning("=" * 70)
                             logger.warning("⚠️ KRAKEN: Account balance below minimum for NEW ENTRIES")
                             logger.warning("=" * 70)
@@ -7727,6 +7738,13 @@ class KrakenBroker(BaseBroker):
                         else:
                             # Normal mode - full trading allowed
                             self.exit_only_mode = False
+                            if total_funds < KRAKEN_MINIMUM_BALANCE and NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES:
+                                logger.warning(
+                                    "⚠️ NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES=1: allowing Kraken BUY entries "
+                                    "below minimum balance for test validation "
+                                    "(total_funds=$%.2f, minimum=$%.2f)",
+                                    total_funds, KRAKEN_MINIMUM_BALANCE,
+                                )
 
                         logger.info("=" * 70)
 
@@ -8642,7 +8660,10 @@ class KrakenBroker(BaseBroker):
 
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
             # NOTE: SELL orders are NOT checked here - they always pass through
-            if side.lower() == 'buy' and getattr(self, 'exit_only_mode', False) and not force_liquidate:
+            if (side.lower() == 'buy'
+                    and getattr(self, 'exit_only_mode', False)
+                    and not force_liquidate
+                    and not NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES):
                 logger.error(f"❌ BUY order rejected: Kraken is in EXIT-ONLY mode (balance < ${KRAKEN_MINIMUM_BALANCE:.2f})")
                 logger.error(f"   Only SELL orders are allowed to close existing positions")
                 logger.error(f"   To enable new entries, fund your account to at least ${KRAKEN_MINIMUM_BALANCE:.2f}")
@@ -8660,7 +8681,8 @@ class KrakenBroker(BaseBroker):
             if (side.lower() == 'buy'
                     and _kraken_quarantine_active
                     and self.account_type == AccountType.PLATFORM
-                    and not force_liquidate):
+                    and not force_liquidate
+                    and not NIJA_FORCE_KRAKEN_ONLY_TEST):
                 logger.critical(
                     "🚫 BUY order BLOCKED: Kraken broker is QUARANTINED due to confirmed nonce "
                     "poisoning.  FASTEST recovery: rotate API key (delete old, create new, "
@@ -10883,6 +10905,13 @@ class BrokerManager:
         if not getattr(broker, 'connected', False):
             return BrokerEligibilityStatus.INELIGIBLE_DISCONNECTED
 
+        if NIJA_FORCE_KRAKEN_ONLY_TEST:
+            if broker.broker_type == BrokerType.KRAKEN:
+                if getattr(broker, 'exit_only_mode', False) and not NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES:
+                    return BrokerEligibilityStatus.INELIGIBLE_EXIT_ONLY
+                return BrokerEligibilityStatus.ELIGIBLE
+            return BrokerEligibilityStatus.INELIGIBLE_UNHEALTHY
+
         if (
             _kraken_quarantine_active
             and broker.broker_type == BrokerType.KRAKEN
@@ -10962,6 +10991,19 @@ class BrokerManager:
         if prefer_platform and self.platform_broker is not None:
             if getattr(self.platform_broker, 'connected', False):
                 return self.platform_broker
+
+        # ── 1a. Kraken-only test override (temporary validation mode) ─────────
+        if NIJA_FORCE_KRAKEN_ONLY_TEST and BrokerType.KRAKEN in self.brokers:
+            _kraken_broker = self.brokers[BrokerType.KRAKEN]
+            if getattr(_kraken_broker, 'connected', False):
+                if self.active_broker is not _kraken_broker:
+                    logger.warning(
+                        "🧪 NIJA_FORCE_KRAKEN_ONLY_TEST=1: forcing Kraken as active broker "
+                        "(bypassing selection/promotion routing)"
+                    )
+                    self.active_broker = _kraken_broker
+                    self.primary_broker_type = BrokerType.KRAKEN
+                return _kraken_broker
 
         # ── 1b. KRAKEN-FIRST execution-layer rule ─────────────────────────────
         # Bridges the gap between the platform-layer FSM (which may have promoted
@@ -11126,6 +11168,19 @@ class BrokerManager:
 
         This ensures the platform portfolio uses the correct broker for new entries.
         """
+        if NIJA_FORCE_KRAKEN_ONLY_TEST:
+            kraken_broker = self.brokers.get(BrokerType.KRAKEN)
+            if kraken_broker is not None and getattr(kraken_broker, 'connected', False):
+                if self.active_broker is not kraken_broker:
+                    logger.warning(
+                        "🧪 NIJA_FORCE_KRAKEN_ONLY_TEST=1: forcing Kraken primary "
+                        "(temporary routing bypass mode)"
+                    )
+                self.active_broker = kraken_broker
+                self.primary_broker_type = BrokerType.KRAKEN
+                self.primary_broker = kraken_broker
+                return
+
         if not self.active_broker and BrokerType.KRAKEN not in self.brokers:
             # No active broker AND no Kraken registered — try any connected broker
             # before giving up so Coinbase can serve as the sole execution authority.
