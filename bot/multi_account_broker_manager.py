@@ -299,10 +299,12 @@ class MultiAccountBrokerManager:
         self._capital_watchdog_stop: threading.Event = threading.Event()
         self._capital_watchdog_thread: Optional[threading.Thread] = None
         self._trading_halted_due_to_capital: bool = False
-        self.CAPITAL_WATCHDOG_INTERVAL_S: float = float(
+        self._capital_state_lock: threading.Lock = threading.Lock()
+        self.capital_watchdog_interval_s: float = float(
             os.environ.get("NIJA_CAPITAL_WATCHDOG_INTERVAL_S", "10.0")
         )
-        self.CAPITAL_STALE_TIMEOUT_S: float = float(
+        # Max acceptable age for authority snapshot before watchdog forces refresh.
+        self.capital_stale_timeout_s: float = float(
             os.environ.get("NIJA_CAPITAL_STALE_TIMEOUT_S", "30.0")
         )
 
@@ -398,7 +400,8 @@ class MultiAccountBrokerManager:
             - aggregated total capital > 0.0
         """
         if get_capital_authority is None:
-            self._capital_ready = False
+            with self._capital_state_lock:
+                self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
         try:
@@ -419,16 +422,20 @@ class MultiAccountBrokerManager:
             total_capital = float(authority.get_real_capital())
             valid_brokers = len(broker_map)
             ready = valid_brokers >= 1 and total_capital > 0.0
-            self._capital_ready = ready
-            self._capital_last_refresh_ts = time.time()
+            with self._capital_state_lock:
+                self._capital_ready = ready
+                self._capital_last_refresh_ts = time.time()
 
             if ready:
-                if self._trading_halted_due_to_capital:
+                with self._capital_state_lock:
+                    was_halted = self._trading_halted_due_to_capital
+                if was_halted:
                     logger.info(
                         "✅ CapitalAuthority recovered (trigger=%s): brokers=%d total=$%.2f — trading resume allowed",
                         trigger, valid_brokers, total_capital,
                     )
-                self._trading_halted_due_to_capital = False
+                with self._capital_state_lock:
+                    self._trading_halted_due_to_capital = False
             else:
                 logger.error(
                     "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f",
@@ -442,16 +449,19 @@ class MultiAccountBrokerManager:
             }
         except Exception as exc:
             logger.error("❌ CapitalAuthority refresh failed (%s): %s", trigger, exc)
-            self._capital_ready = False
+            with self._capital_state_lock:
+                self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
     def is_capital_authority_ready(self) -> bool:
         """Return True only when unified capital is ready for trading gates."""
-        return bool(self._capital_ready)
+        with self._capital_state_lock:
+            return bool(self._capital_ready)
 
     def is_trading_halted_due_to_capital(self) -> bool:
         """Return True when all brokers failed / zero-capital invariant is active."""
-        return bool(self._trading_halted_due_to_capital)
+        with self._capital_state_lock:
+            return bool(self._trading_halted_due_to_capital)
 
     def _start_capital_watchdog(self) -> None:
         """Start fail-safe capital auto-refresh watchdog thread once per process."""
@@ -461,11 +471,12 @@ class MultiAccountBrokerManager:
         self._capital_watchdog_stop.clear()
 
         def _watchdog() -> None:
-            while not self._capital_watchdog_stop.wait(self.CAPITAL_WATCHDOG_INTERVAL_S):
+            while not self._capital_watchdog_stop.wait(self.capital_watchdog_interval_s):
                 try:
-                    authority = get_capital_authority() if get_capital_authority is not None else None
-                    needs_refresh = not self._capital_ready
-                    if authority is not None and authority.is_stale(ttl_s=self.CAPITAL_STALE_TIMEOUT_S):
+                    authority = get_capital_authority() if get_capital_authority else None
+                    with self._capital_state_lock:
+                        needs_refresh = not self._capital_ready
+                    if authority is not None and authority.is_stale(ttl_s=self.capital_stale_timeout_s):
                         needs_refresh = True
                     if needs_refresh:
                         self.refresh_capital_authority(trigger="watchdog")
@@ -474,14 +485,19 @@ class MultiAccountBrokerManager:
                         self.is_platform_connected(bt) and getattr(b, "connected", False)
                         for bt, b in self._platform_brokers.items()
                     )
-                    if not self._capital_ready and not healthy_connected:
-                        if not self._trading_halted_due_to_capital:
+                    with self._capital_state_lock:
+                        capital_ready = self._capital_ready
+                        halted = self._trading_halted_due_to_capital
+                    if not capital_ready and not healthy_connected:
+                        if not halted:
                             logger.critical(
                                 "🛑 ALL platform brokers unavailable and capital not ready — HALTING trading until recovery"
                             )
-                        self._trading_halted_due_to_capital = True
-                    elif self._capital_ready:
-                        self._trading_halted_due_to_capital = False
+                        with self._capital_state_lock:
+                            self._trading_halted_due_to_capital = True
+                    elif capital_ready:
+                        with self._capital_state_lock:
+                            self._trading_halted_due_to_capital = False
                 except Exception as exc:
                     logger.debug("Capital watchdog iteration error: %s", exc)
 
@@ -2610,7 +2626,7 @@ class MultiAccountBrokerManager:
                 # Event-driven capital refresh: any successful platform connect
                 # immediately revalidates unified capital readiness.
                 _cap = self.refresh_capital_authority(trigger=f"platform_connect:{key}")
-                if bool(_cap.get("ready", 0.0)):
+                if _cap.get("ready", 0.0) > 0.0:
                     self._mark_platform_connected(broker_type)
                     logger.info(
                         "   ✅ Platform %s connected and capital-ready (total=$%.2f)",

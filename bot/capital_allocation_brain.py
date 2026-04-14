@@ -158,6 +158,8 @@ class CapitalAllocationBrain:
             config: Configuration dictionary
         """
         self.config = config or {}
+        # When true, caller explicitly pinned total_capital in config and runtime
+        # auto-sync from CapitalAuthority must not overwrite that value.
         self._explicit_total_capital = "total_capital" in self.config
         
         # Allocation parameters
@@ -234,7 +236,7 @@ class CapitalAllocationBrain:
         except ImportError:
             try:
                 from bot.capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
-            except Exception:
+            except ImportError:
                 _get_ca = None  # type: ignore[assignment]
 
         if _get_ca is None:
@@ -253,9 +255,11 @@ class CapitalAllocationBrain:
 
     # Backward-compatible aliases requested by ops runbooks
     def _rebuild_capital_authority(self) -> float:
+        """Legacy alias for :meth:`refresh_authority`."""
         return self.refresh_authority()
 
     def _sync_broker_balances(self) -> float:
+        """Legacy alias for :meth:`refresh_authority`."""
         return self.refresh_authority()
     
     def add_target(

@@ -821,7 +821,7 @@ class KrakenStartupFSM:
 
     States (strictly linear — no backward transitions once CONNECTED):
 
-        IDLE → CONNECTING → NONCE_READY → CONNECTED   (success path)
+        IDLE → CONNECTING → NONCE_READY → CAPITAL_READY → CONNECTED   (success path)
         IDLE → CONNECTING → FAILED                    (failure path)
 
     Principle: **event = truth, state = derived.**
@@ -838,6 +838,7 @@ class KrakenStartupFSM:
         self._connected: threading.Event = threading.Event()
         self._failed: threading.Event = threading.Event()
         self._nonce_ready: threading.Event = threading.Event()
+        self._capital_ready: threading.Event = threading.Event()
         # Lightweight "in-flight" marker — NOT the authoritative state.
         self._connecting: bool = False
         self._lock: threading.Lock = threading.Lock()
@@ -854,11 +855,15 @@ class KrakenStartupFSM:
             if not self._connected.is_set():
                 self._failed.clear()
                 self._nonce_ready.clear()
+                self._capital_ready.clear()
                 self._connecting = True
                 # Keep nonce issuance CLOSED during boot until capital readiness
                 # gating passes (non-negotiable startup invariant).
                 if revoke_nonce_issuance is not None:
                     revoke_nonce_issuance()
+                    logger.info(
+                        "KrakenStartupFSM.begin_platform_boot: nonce issuance revoked pending CAPITAL_READY"
+                    )
                 else:
                     logger.warning(
                         "KrakenStartupFSM.begin_platform_boot: revoke_nonce_issuance "
@@ -902,6 +907,7 @@ class KrakenStartupFSM:
         with self._lock:
             self._connecting = False
             self._nonce_ready.set()
+            self._capital_ready.set()
             if authorize_nonce_issuance is not None:
                 authorize_nonce_issuance()
             else:
@@ -916,6 +922,7 @@ class KrakenStartupFSM:
         with self._lock:
             self._connecting = False
             self._nonce_ready.clear()
+            self._capital_ready.clear()
             if revoke_nonce_issuance is not None:
                 revoke_nonce_issuance()
             else:
@@ -935,6 +942,7 @@ class KrakenStartupFSM:
             if not self._connected.is_set():
                 self._failed.clear()
                 self._nonce_ready.clear()
+                self._capital_ready.clear()
                 self._connecting = False
                 if revoke_nonce_issuance is not None:
                     revoke_nonce_issuance()
@@ -973,6 +981,24 @@ class KrakenStartupFSM:
     def is_nonce_ready(self) -> bool:
         with self._lock:
             return self._nonce_ready.is_set() and not self._failed.is_set()
+
+    @property
+    def is_capital_ready(self) -> bool:
+        with self._lock:
+            return self._capital_ready.is_set() and not self._failed.is_set()
+
+    def mark_capital_ready(self) -> None:
+        """Signal that capital authority has been refreshed and validated."""
+        with self._lock:
+            if self._connecting and not self._failed.is_set() and not self._connected.is_set():
+                self._capital_ready.set()
+            else:
+                logger.debug(
+                    "KrakenStartupFSM.mark_capital_ready: ignored (connecting=%s failed=%s connected=%s)",
+                    self._connecting,
+                    self._failed.is_set(),
+                    self._connected.is_set(),
+                )
 
     # ── Blocking wait (called by USER accounts) ────────────────────────────────
 
@@ -7997,6 +8023,7 @@ class KrakenBroker(BaseBroker):
 
                             if _capital_ready:
                                 _KRAKEN_STARTUP_FSM.mark_nonce_ready()
+                                _KRAKEN_STARTUP_FSM.mark_capital_ready()
                                 _KRAKEN_STARTUP_FSM.mark_connected()
                                 logger.info(
                                     "✅ PLATFORM Kraken connected + capital READY "
@@ -11717,12 +11744,45 @@ class BrokerManager:
 
     def place_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Route order to appropriate broker"""
-        if not self.is_trading_allowed():
+        nonce_ok = True
+        if is_nonce_issuance_authorized is not None:
+            try:
+                nonce_ok = bool(is_nonce_issuance_authorized())
+            except Exception:
+                nonce_ok = False
+
+        platform_ok = False
+        capital_ok = False
+        try:
+            try:
+                from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm_gate
+            except ImportError:
+                from multi_account_broker_manager import multi_account_broker_manager as _mabm_gate  # type: ignore[import]
+
+            if _mabm_gate is not None:
+                platform_ok = any(
+                    _mabm_gate.is_platform_connected(bt)
+                    for bt in list(_mabm_gate.platform_brokers.keys())
+                )
+                capital_ok = bool(
+                    getattr(_mabm_gate, "is_capital_authority_ready", lambda: False)()
+                )
+        except Exception:
+            platform_ok = any(
+                getattr(b, "connected", False)
+                and getattr(getattr(b, "account_type", None), "value", "") == "platform"
+                for b in self.brokers.values()
+            )
+            # Conservative fail-closed fallback: if MABM is unavailable we do not
+            # assume capital readiness to avoid trading on unknown capital state.
+            capital_ok = False
+
+        if not (nonce_ok and platform_ok and capital_ok):
             return {
                 "status": "error",
                 "error": (
-                    "Trading gate blocked: nonce issuance unauthorized, platform not connected, "
-                    "or capital authority not ready"
+                    "Trading gate blocked: "
+                    f"nonce_ok={nonce_ok}, platform_ok={platform_ok}, capital_ok={capital_ok}"
                 ),
             }
 
@@ -11774,6 +11834,7 @@ class BrokerManager:
                 and getattr(getattr(b, "account_type", None), "value", "") == "platform"
                 for b in self.brokers.values()
             )
+            # Fail-closed on capital readiness if authoritative source is unavailable.
             capital_ok = False
 
         return nonce_ok and platform_ok and capital_ok
