@@ -1658,10 +1658,27 @@ def _run_bot_startup_and_trading():
             logger.info("⛔ STARTUP INVARIANT: BLOCK TRADING UNTIL TOTAL CAPITAL > $0")
             logger.info("=" * 70)
             _capital_gate_interval_s = 15
+            _capital_gate_log_every_n_checks = 4
             _capital_gate_checks = 0
+
+            def _get_startup_total_capital() -> float:
+                _mam = getattr(strategy, "multi_account_manager", None)
+                if _mam and hasattr(_mam, "get_all_balances"):
+                    _all_balances = _mam.get_all_balances()
+                    _platform_total = sum((_all_balances.get("platform") or {}).values())
+                    _users_total = sum(
+                        sum((_user_balances or {}).values())
+                        for _user_balances in (_all_balances.get("users") or {}).values()
+                    )
+                    return float(_platform_total + _users_total)
+                _bm = getattr(strategy, "broker_manager", None)
+                if _bm and hasattr(_bm, "get_total_balance"):
+                    return float(_bm.get_total_balance())
+                return 0.0
+
             while True:
                 try:
-                    _total_capital = float(strategy._get_total_capital_across_all_accounts())
+                    _total_capital = _get_startup_total_capital()
                 except Exception as _cap_gate_err:
                     logger.warning(
                         "⚠️ Startup capital invariant check failed: %s",
@@ -1675,7 +1692,10 @@ def _run_bot_startup_and_trading():
                     break
 
                 _capital_gate_checks += 1
-                if _capital_gate_checks == 1 or _capital_gate_checks % 4 == 0:
+                if (
+                    _capital_gate_checks == 1
+                    or _capital_gate_checks % _capital_gate_log_every_n_checks == 0
+                ):
                     logger.warning(
                         "⏳ Trading loop blocked: waiting for total capital > $0 "
                         "(current=$%.2f, next check in %ds)",
