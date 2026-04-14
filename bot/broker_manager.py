@@ -98,6 +98,7 @@ try:
         clear_broker_quarantine,
         authorize_nonce_issuance,
         revoke_nonce_issuance,
+        is_nonce_issuance_authorized,
     )
 except ImportError:
     try:
@@ -119,6 +120,7 @@ except ImportError:
             clear_broker_quarantine,
             authorize_nonce_issuance,
             revoke_nonce_issuance,
+            is_nonce_issuance_authorized,
         )
     except ImportError:
         # Fallback: Global nonce manager not available
@@ -139,6 +141,7 @@ except ImportError:
         clear_broker_quarantine = None
         authorize_nonce_issuance = None
         revoke_nonce_issuance = None
+        is_nonce_issuance_authorized = None
 
 # ── Broker quarantine state ───────────────────────────────────────────────────
 # Set to True when the nonce manager confirms nonce poisoning (consecutive
@@ -852,12 +855,13 @@ class KrakenStartupFSM:
                 self._failed.clear()
                 self._nonce_ready.clear()
                 self._connecting = True
-                # Re-open the gate so the startup probe can issue nonces.
-                if authorize_nonce_issuance is not None:
-                    authorize_nonce_issuance()
+                # Keep nonce issuance CLOSED during boot until capital readiness
+                # gating passes (non-negotiable startup invariant).
+                if revoke_nonce_issuance is not None:
+                    revoke_nonce_issuance()
                 else:
                     logger.warning(
-                        "KrakenStartupFSM.begin_platform_boot: authorize_nonce_issuance "
+                        "KrakenStartupFSM.begin_platform_boot: revoke_nonce_issuance "
                         "unavailable — FSM gate is not enforced (degraded mode)"
                     )
             else:
@@ -7963,10 +7967,55 @@ class KrakenBroker(BaseBroker):
                         # event = truth: mark_connected() is the single authoritative write;
                         # all readers derive their answer from the FSM.
                         if self.account_type == AccountType.PLATFORM:
-                            _KRAKEN_STARTUP_FSM.mark_connected()
-                            logger.info(
-                                "✅ PLATFORM Kraken connected — USER accounts may now connect."
-                            )
+                            _capital_ready = False
+                            _cap_total = 0.0
+                            _valid = 0
+                            try:
+                                # Event-driven startup gate:
+                                # refresh unified capital authority immediately and only
+                                # release nonce/trading gates when capital is READY.
+                                try:
+                                    from bot.multi_account_broker_manager import (
+                                        multi_account_broker_manager as _mabm_startup,
+                                    )
+                                except ImportError:
+                                    from multi_account_broker_manager import (  # type: ignore[import]
+                                        multi_account_broker_manager as _mabm_startup,
+                                    )
+                                if _mabm_startup is not None:
+                                    _cap = _mabm_startup.refresh_capital_authority(
+                                        trigger="kraken_platform_connect"
+                                    )
+                                    _capital_ready = bool(_cap.get("ready", 0.0))
+                                    _cap_total = float(_cap.get("total_capital", 0.0))
+                                    _valid = int(_cap.get("valid_brokers", 0.0))
+                            except Exception as _cap_err:
+                                logger.warning(
+                                    "⚠️ CapitalAuthority startup refresh unavailable: %s",
+                                    _cap_err,
+                                )
+
+                            if _capital_ready:
+                                _KRAKEN_STARTUP_FSM.mark_nonce_ready()
+                                _KRAKEN_STARTUP_FSM.mark_connected()
+                                logger.info(
+                                    "✅ PLATFORM Kraken connected + capital READY "
+                                    "(brokers=%d total=$%.2f) — USER accounts may now connect.",
+                                    _valid, _cap_total,
+                                )
+                            else:
+                                self.connected = False
+                                _KRAKEN_STARTUP_FSM.mark_failed()
+                                self.last_connection_error = (
+                                    "CapitalAuthority not ready after platform connect "
+                                    f"(valid_brokers={_valid}, total_capital={_cap_total:.2f})"
+                                )
+                                logger.error(
+                                    "⛔ PLATFORM Kraken connected but capital authority NOT READY "
+                                    "(valid_brokers=%d total=$%.2f) — startup gated",
+                                    _valid, _cap_total,
+                                )
+                                return False
                             # If the platform was previously quarantined due to nonce poisoning
                             # and has now successfully reconnected (implying a key rotation + resync
                             # completed), automatically lift the quarantine so new entries are
@@ -11668,6 +11717,15 @@ class BrokerManager:
 
     def place_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Route order to appropriate broker"""
+        if not self.is_trading_allowed():
+            return {
+                "status": "error",
+                "error": (
+                    "Trading gate blocked: nonce issuance unauthorized, platform not connected, "
+                    "or capital authority not ready"
+                ),
+            }
+
         broker = self.get_broker_for_symbol(symbol)
 
         if not broker:
@@ -11678,6 +11736,47 @@ class BrokerManager:
 
         logger.info(f"📤 Routing {side} order for {symbol} to {broker.broker_type.value}")
         return broker.place_market_order(symbol, side, quantity)
+
+    def is_trading_allowed(self) -> bool:
+        """
+        Hard trading gate:
+          1) nonce issuance must be authorized
+          2) at least one platform broker must be connected
+          3) unified capital authority must be ready
+        """
+        nonce_ok = True
+        if is_nonce_issuance_authorized is not None:
+            try:
+                nonce_ok = bool(is_nonce_issuance_authorized())
+            except Exception:
+                nonce_ok = False
+
+        platform_ok = False
+        capital_ok = False
+        try:
+            try:
+                from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm_gate
+            except ImportError:
+                from multi_account_broker_manager import multi_account_broker_manager as _mabm_gate  # type: ignore[import]
+
+            if _mabm_gate is not None:
+                platform_ok = any(
+                    _mabm_gate.is_platform_connected(bt)
+                    for bt in list(_mabm_gate.platform_brokers.keys())
+                )
+                capital_ok = bool(
+                    getattr(_mabm_gate, "is_capital_authority_ready", lambda: False)()
+                )
+        except Exception:
+            # Conservative fallback when multi-account manager is unavailable.
+            platform_ok = any(
+                getattr(b, "connected", False)
+                and getattr(getattr(b, "account_type", None), "value", "") == "platform"
+                for b in self.brokers.values()
+            )
+            capital_ok = False
+
+        return nonce_ok and platform_ok and capital_ok
 
     def get_total_balance(self) -> float:
         """Get total USD balance across all brokers"""
