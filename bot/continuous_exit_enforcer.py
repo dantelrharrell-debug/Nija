@@ -68,15 +68,20 @@ class ContinuousExitEnforcer:
         if self._monitor_thread and self._monitor_thread.is_alive():
             logger.warning("Exit enforcer already running")
             return
-        
-        self._stop_event.clear()
-        self._monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            name="ContinuousExitEnforcer",
-            daemon=True
-        )
-        self._monitor_thread.start()
-        logger.info("🛡️ Continuous exit enforcer started")
+
+        try:
+            self._stop_event.clear()
+            self._monitor_thread = threading.Thread(
+                target=self._monitor_loop,
+                name="ContinuousExitEnforcer",
+                daemon=True
+            )
+            self._monitor_thread.start()
+            logger.info("🛡️ Continuous exit enforcer started (thread=%s)", self._monitor_thread.name)
+        except Exception as exc:
+            logger.error("❌ Failed to start ContinuousExitEnforcer thread: %s", exc, exc_info=True)
+            self._monitor_thread = None
+            raise
     
     def stop(self):
         """Stop the continuous monitoring thread."""

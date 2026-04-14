@@ -26,7 +26,8 @@ try:
     from profit_compounding_engine import (
         ProfitCompoundingEngine,
         CompoundingStrategy,
-        CompoundingConfig
+        CompoundingConfig,
+        get_profit_compounding_engine,
     )
     from drawdown_protection_system import (
         DrawdownProtectionSystem,
@@ -41,7 +42,8 @@ except ImportError:
     from bot.profit_compounding_engine import (
         ProfitCompoundingEngine,
         CompoundingStrategy,
-        CompoundingConfig
+        CompoundingConfig,
+        get_profit_compounding_engine,
     )
     from bot.drawdown_protection_system import (
         DrawdownProtectionSystem,
@@ -114,13 +116,13 @@ class CapitalScalingEngine:
         # Initialize subsystems
         logger.info("🚀 Initializing Capital Scaling & Compounding Engine")
 
-        # 1. Profit Compounding Engine
-        compounding_config = CompoundingConfig(
-            strategy=CompoundingStrategy(self.config.compounding_strategy),
-            reinvest_percentage=self.config.reinvest_percentage,
-            preserve_percentage=self.config.preserve_percentage
+        # 1. Profit Compounding Engine — reuse the process-wide singleton so that
+        # trading_strategy.py and CapitalScalingEngine share a single instance
+        # instead of creating two separate engines with diverging state.
+        self.compounding = get_profit_compounding_engine(
+            base_capital=base_capital,
+            strategy=self.config.compounding_strategy,
         )
-        self.compounding = ProfitCompoundingEngine(base_capital, compounding_config)
 
         # 2. Drawdown Protection System
         if self.config.enable_drawdown_protection:
