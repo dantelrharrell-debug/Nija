@@ -421,7 +421,9 @@ class MultiAccountBrokerManager:
 
             total_capital = float(authority.get_real_capital())
             valid_brokers = len(broker_map)
-            ready = valid_brokers >= 1 and total_capital > 0.0
+            # Critical invariant: readiness is determined by live capital, not
+            # registration-count parity (e.g. brokers=0 expected=1).
+            ready = total_capital > 0.0
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
