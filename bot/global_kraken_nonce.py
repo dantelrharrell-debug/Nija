@@ -1044,7 +1044,7 @@ class KrakenNonceManager:
                 "cannot hard-enforce process-lifetime single-writer locking."
             )
         elif self._pid_lock_fh is None:
-            _lock_error = (
+            _pid_lock_failure_message = (
                 "Kraken nonce writer lock not acquired. "
                 "Hard rule violation: ONE API KEY = ONE WRITER "
                 "(no multi-container, no multi-region, no independent nonce writers). "
@@ -1052,13 +1052,13 @@ class KrakenNonceManager:
                 "Stop all duplicate deployments/processes and restart a single writer."
             )
             if _FAIL_CLOSED_ON_PID_LOCK_MISS:
-                raise RuntimeError(_lock_error)
+                raise RuntimeError(_pid_lock_failure_message)
             _logger.critical(
                 "Continuing in degraded mode because "
                 "NIJA_NONCE_FAIL_CLOSED_ON_PID_LOCK_MISS is disabled; "
                 "per-operation nonce lock checks remain active. "
                 "Original lock error: %s",
-                _lock_error,
+                _pid_lock_failure_message,
             )
 
         # Hard rule: disallow the LEGACY NIJA_NONCE_BACKEND=redis path.
