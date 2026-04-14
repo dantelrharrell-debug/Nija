@@ -1655,7 +1655,34 @@ def _run_bot_startup_and_trading():
                 health_manager.update_exchange_status(connected=0, expected=exchanges_configured)
 
             logger.info("=" * 70)
-            logger.info("🚀 NIJA SYSTEM FULLY OPERATIONAL — TRADING ENABLED")
+            logger.info("⛔ STARTUP INVARIANT: BLOCK TRADING UNTIL TOTAL CAPITAL > $0")
+            logger.info("=" * 70)
+            _capital_gate_interval_s = 15
+            _capital_gate_checks = 0
+            while True:
+                try:
+                    _total_capital = float(strategy._get_total_capital_across_all_accounts())
+                except Exception as _cap_gate_err:
+                    logger.warning(
+                        "⚠️ Startup capital invariant check failed: %s",
+                        _cap_gate_err,
+                    )
+                    _total_capital = 0.0
+
+                if _total_capital > 0.0:
+                    logger.info("🚀 SYSTEM READY — TRADING ENABLED")
+                    logger.info("💰 Startup total capital: $%.2f", _total_capital)
+                    break
+
+                _capital_gate_checks += 1
+                if _capital_gate_checks == 1 or _capital_gate_checks % 4 == 0:
+                    logger.warning(
+                        "⏳ Trading loop blocked: waiting for total capital > $0 "
+                        "(current=$%.2f, next check in %ds)",
+                        _total_capital,
+                        _capital_gate_interval_s,
+                    )
+                time.sleep(_capital_gate_interval_s)
             logger.info("=" * 70)
 
             # ═══════════════════════════════════════════════════════════════════════
