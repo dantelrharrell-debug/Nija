@@ -131,6 +131,11 @@ class CapitalAuthority:
         self._expected_brokers: int = int(
             os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "1")
         )
+        # Maximum age for retaining a previous non-zero balance when a refresh
+        # call returns zero/errors (prevents indefinite stale-capital retention).
+        self._preserve_nonzero_ttl_s: float = float(
+            os.environ.get("NIJA_CAPITAL_PRESERVE_TTL_S", "180.0")
+        )
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -156,16 +161,26 @@ class CapitalAuthority:
             Sum of all open-position notional values in USD.  Pass 0.0 (or
             omit) when the caller does not yet have position data.
         """
-        with self._lock:
-            previous_balances: Dict[str, float] = dict(self._broker_balances)
-
         new_balances: Dict[str, float] = {}
 
         for broker_id, broker in broker_map.items():
             if broker is None:
                 continue
             broker_key = str(broker_id)
-            previous = float(previous_balances.get(broker_key, 0.0))
+            with self._lock:
+                previous = float(self._broker_balances.get(broker_key, 0.0))
+                if self.last_updated is not None:
+                    previous_age_s = (
+                        datetime.now(timezone.utc) - self.last_updated
+                    ).total_seconds()
+                else:
+                    # First refresh (or explicit reset): without a timestamp we
+                    # cannot prove freshness, so preservation is intentionally
+                    # disabled to avoid carrying unknown stale balances.
+                    previous_age_s = float("inf")
+            can_preserve_previous = (
+                previous > 0.0 and previous_age_s <= self._preserve_nonzero_ttl_s
+            )
             try:
                 raw = broker.get_account_balance()
                 if isinstance(raw, dict):
@@ -188,7 +203,7 @@ class CapitalAuthority:
                         broker_id,
                         balance,
                     )
-                elif previous > 0.0:
+                elif can_preserve_previous:
                     # Hard capital-truth contract: never let a transient zero read
                     # wipe an already-validated non-zero balance snapshot.
                     new_balances[broker_key] = previous
@@ -205,7 +220,7 @@ class CapitalAuthority:
                         broker_id,
                     )
             except Exception as exc:
-                if previous > 0.0:
+                if can_preserve_previous:
                     # Contract fail-closed path: retain last known good capital on
                     # fetch errors to avoid phantom-zero state transitions.
                     new_balances[broker_key] = previous

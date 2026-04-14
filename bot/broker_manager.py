@@ -7255,6 +7255,7 @@ class KrakenBroker(BaseBroker):
                 _capital_ready = False
                 _cap_total = 0.0
                 _valid = 0
+                _capital_resolver_error = None
                 try:
                     try:
                         from bot.multi_account_broker_manager import (
@@ -7272,6 +7273,7 @@ class KrakenBroker(BaseBroker):
                         _cap_total = float(_cap.get("total_capital", 0.0))
                         _valid = int(_cap.get("valid_brokers", 0.0))
                 except Exception as _cap_err:
+                    _capital_resolver_error = str(_cap_err)
                     logger.warning(
                         "⚠️ CapitalAuthority startup resolver unavailable (gateway mode): %s",
                         _cap_err,
@@ -7283,14 +7285,16 @@ class KrakenBroker(BaseBroker):
                     self.connected = False
                     _KRAKEN_STARTUP_FSM.mark_failed()
                     self.last_connection_error = (
-                        "CapitalAuthority not ready after gateway-only platform connect "
-                        f"(valid_brokers={_valid}, total_capital={_cap_total:.2f})"
+                        "CapitalAuthority not ready after platform connection in gateway-only mode "
+                        f"(valid_brokers={_valid}, total_capital={_cap_total:.2f}, "
+                        f"resolver_error={_capital_resolver_error or 'none'})"
                     )
                     logger.error(
                         "⛔ PLATFORM Kraken gateway-only connect blocked: capital authority NOT READY "
-                        "(valid_brokers=%d total=$%.2f) — startup gated",
+                        "(valid_brokers=%d total=$%.2f resolver_error=%s) — startup gated",
                         _valid,
                         _cap_total,
+                        _capital_resolver_error or "none",
                     )
                     return False
             logger.info(

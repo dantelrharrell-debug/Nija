@@ -175,6 +175,9 @@ class MultiAccountBrokerManager:
     # Maximum length for error messages stored in failed connection tracking
     # Prevents excessive memory usage from very long error strings
     MAX_ERROR_MESSAGE_LENGTH = 50
+    MIN_STARTUP_CAPITAL_TIMEOUT_S = 1.0
+    MIN_STARTUP_CAPITAL_POLL_S = 0.1
+    MIN_STARTUP_CAPITAL_SLEEP_S = 0.05
 
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
@@ -307,11 +310,16 @@ class MultiAccountBrokerManager:
         self.capital_stale_timeout_s: float = float(
             os.environ.get("NIJA_CAPITAL_STALE_TIMEOUT_S", "30.0")
         )
-        self.capital_startup_invariant_timeout_s: float = float(
-            os.environ.get("NIJA_CAPITAL_STARTUP_INVARIANT_TIMEOUT_S", "30.0")
+        # Startup capital truth contract tuning:
+        # - timeout: maximum wait for non-zero capital readiness during startup
+        # - poll: refresh cadence while resolving the startup capital invariant
+        self.capital_startup_invariant_timeout_s: float = max(
+            self.MIN_STARTUP_CAPITAL_TIMEOUT_S,
+            float(os.environ.get("NIJA_CAPITAL_STARTUP_INVARIANT_TIMEOUT_S", "30.0")),
         )
-        self.capital_startup_invariant_poll_s: float = float(
-            os.environ.get("NIJA_CAPITAL_STARTUP_INVARIANT_POLL_S", "1.0")
+        self.capital_startup_invariant_poll_s: float = max(
+            self.MIN_STARTUP_CAPITAL_POLL_S,
+            float(os.environ.get("NIJA_CAPITAL_STARTUP_INVARIANT_POLL_S", "1.0")),
         )
 
         logger.info("=" * 70)
@@ -486,12 +494,12 @@ class MultiAccountBrokerManager:
         timeout = (
             timeout_s
             if timeout_s is not None
-            else max(1.0, self.capital_startup_invariant_timeout_s)
+            else max(self.MIN_STARTUP_CAPITAL_TIMEOUT_S, self.capital_startup_invariant_timeout_s)
         )
         poll = (
             poll_s
             if poll_s is not None
-            else max(0.1, self.capital_startup_invariant_poll_s)
+            else max(self.MIN_STARTUP_CAPITAL_POLL_S, self.capital_startup_invariant_poll_s)
         )
 
         start = time.monotonic()
@@ -541,7 +549,14 @@ class MultiAccountBrokerManager:
                     "elapsed_s": float(elapsed),
                 }
 
-            time.sleep(min(poll, max(0.0, timeout - elapsed)))
+            remaining = max(0.0, timeout - elapsed)
+            # Keep a small floor to avoid a tight near-timeout spin loop that
+            # can burn CPU while still allowing prompt timeout exit.
+            sleep_for = min(
+                remaining,
+                max(self.MIN_STARTUP_CAPITAL_SLEEP_S, min(poll, remaining)),
+            )
+            time.sleep(sleep_for)
 
     def is_capital_authority_ready(self) -> bool:
         """Return True only when unified capital is ready for trading gates."""
