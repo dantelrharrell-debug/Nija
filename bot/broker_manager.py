@@ -812,8 +812,8 @@ class KrakenStartupFSM:
 
     States (strictly linear — no backward transitions once CONNECTED):
 
-        IDLE → CONNECTING → CONNECTED   (success path)
-        IDLE → CONNECTING → FAILED      (failure path)
+        IDLE → CONNECTING → NONCE_READY → CONNECTED   (success path)
+        IDLE → CONNECTING → FAILED                    (failure path)
 
     Principle: **event = truth, state = derived.**
 
@@ -828,17 +828,30 @@ class KrakenStartupFSM:
     def __init__(self) -> None:
         self._connected: threading.Event = threading.Event()
         self._failed: threading.Event = threading.Event()
+        self._nonce_ready: threading.Event = threading.Event()
         # Lightweight "in-flight" marker — NOT the authoritative state.
         self._connecting: bool = False
         self._lock: threading.Lock = threading.Lock()
 
     # ── Transitions (all writes go through here) ──────────────────────────────
 
-    def mark_connecting(self) -> None:
-        """Signal that the PLATFORM handshake has started."""
+    def begin_platform_boot(self) -> None:
+        """Start a fresh PLATFORM boot attempt from a deterministic baseline."""
         with self._lock:
-            if not self._connected.is_set() and not self._failed.is_set():
+            if not self._connected.is_set():
+                self._failed.clear()
+                self._nonce_ready.clear()
                 self._connecting = True
+
+    def mark_connecting(self) -> None:
+        """Backward-compatible alias for begin_platform_boot()."""
+        self.begin_platform_boot()
+
+    def mark_nonce_ready(self) -> None:
+        """Signal that nonce startup calibration is complete for this boot attempt."""
+        with self._lock:
+            if self._connecting and not self._failed.is_set() and not self._connected.is_set():
+                self._nonce_ready.set()
 
     def mark_connected(self) -> None:
         """Atomically signal CONNECTED — wakes all waiting USER threads instantly.
@@ -848,12 +861,14 @@ class KrakenStartupFSM:
         """
         with self._lock:
             self._connecting = False
+            self._nonce_ready.set()
         self._connected.set()
 
     def mark_failed(self) -> None:
         """Atomically signal FAILED — wakes all waiting USER threads instantly."""
         with self._lock:
             self._connecting = False
+            self._nonce_ready.clear()
         self._failed.set()
 
     def reset(self) -> None:
@@ -865,6 +880,7 @@ class KrakenStartupFSM:
         with self._lock:
             if not self._connected.is_set():
                 self._failed.clear()
+                self._nonce_ready.clear()
                 self._connecting = False
 
     # ── Queries (read-only, derived from events) ───────────────────────────────
@@ -891,6 +907,10 @@ class KrakenStartupFSM:
                 and not self._connected.is_set()
                 and not self._failed.is_set()
             )
+
+    @property
+    def is_nonce_ready(self) -> bool:
+        return self._nonce_ready.is_set() and not self._failed.is_set()
 
     # ── Blocking wait (called by USER accounts) ────────────────────────────────
 
@@ -7077,6 +7097,8 @@ class KrakenBroker(BaseBroker):
         self._gateway_only_mode = os.environ.get(
             "NIJA_KRAKEN_GATEWAY_ONLY", "0"
         ).strip().lower() in {"1", "true", "yes", "on"}
+        if self.account_type == AccountType.PLATFORM:
+            _KRAKEN_STARTUP_FSM.begin_platform_boot()
 
         if self._gateway_only_mode:
             if not self._gateway_url:
@@ -7119,6 +7141,8 @@ class KrakenBroker(BaseBroker):
             # gateway, and this local broker never receives private credentials.
             self.credentials_configured = True
             self.connected = True
+            if self.account_type == AccountType.PLATFORM:
+                _KRAKEN_STARTUP_FSM.mark_connected()
             logger.info(
                 "✅ Kraken gateway-only mode active (%s) — direct credentials disabled, "
                 "private execution delegated to %s",
@@ -7448,7 +7472,16 @@ class KrakenBroker(BaseBroker):
             # AdaptiveNonceOffsetEngine records each outcome (how many jump steps
             # were needed) and feeds an EMA so subsequent restarts land in range
             # on the very first probe attempt instead of iterating several times.
-            if probe_and_resync_nonce is not None:
+            _skip_probe_handshake = (
+                self.account_type == AccountType.PLATFORM
+                and _KRAKEN_STARTUP_FSM.is_nonce_ready
+            )
+            if _skip_probe_handshake:
+                logger.info(
+                    "   ✅ Nonce resync handshake already completed in this boot attempt "
+                    "(PLATFORM FSM NONCE_READY) — skipping duplicate calibration."
+                )
+            elif probe_and_resync_nonce is not None:
                 _probe_cat = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                 logger.info(f"   🔍 Nonce resync handshake: calibrating nonce to Kraken's server window ({cred_label})...")
 
@@ -7499,6 +7532,8 @@ class KrakenBroker(BaseBroker):
                     )
                 if _probe_ok:
                     logger.info(f"   ✅ Nonce resync handshake complete for {cred_label}")
+                    if self.account_type == AccountType.PLATFORM:
+                        _KRAKEN_STARTUP_FSM.mark_nonce_ready()
                 else:
                     # Nonce desync could not be resolved in one server-sync recovery
                     # cycle.  This is a temporary resync issue, not a key-validity

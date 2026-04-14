@@ -1777,11 +1777,30 @@ class KrakenNonceManager:
                     "(NIJA_ENABLE_PROBE_SYSTEM not set) — running "
                     "server_sync_resync() + single retry instead of probe loop"
                 )
-                # freeze_s=0.0: this is a startup handshake, not an error
-                # recovery.  There is no stale nonce window to wait out —
-                # the server-anchored next_nonce() formula already guarantees
-                # the next issued nonce is above server_time + offset.
-                self.server_sync_resync(freeze_s=0.0)
+                # Deterministic startup fast-path:
+                # if our current nonce is already above Kraken server_time+offset
+                # (plus monotonic +1), skip the no-op server_sync_resync call.
+                _skip_server_sync = False
+                _startup_server_ms = _fetch_kraken_server_time_ms()
+                if _startup_server_ms is not None:
+                    _startup_floor = _startup_server_ms + _SERVER_SYNC_OFFSET_MS + 1
+                    with _LOCK:
+                        _current_nonce = self._last_nonce
+                    if _current_nonce >= _startup_floor:
+                        _skip_server_sync = True
+                        _logger.info(
+                            "KrakenNonceManager.probe_and_resync: startup nonce already aligned "
+                            "(current=%d floor=%d delta=%+d ms) — skipping server_sync_resync()",
+                            _current_nonce,
+                            _startup_floor,
+                            _current_nonce - _startup_floor,
+                        )
+                if not _skip_server_sync:
+                    # freeze_s=0.0: this is a startup handshake, not an error
+                    # recovery.  There is no stale nonce window to wait out —
+                    # the server-anchored next_nonce() formula already guarantees
+                    # the next issued nonce is above server_time + offset.
+                    self.server_sync_resync(freeze_s=0.0)
                 if api_call_fn is None:
                     return True
                 try:
