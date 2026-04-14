@@ -131,6 +131,11 @@ class CapitalAuthority:
         self._expected_brokers: int = int(
             os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "1")
         )
+        # Maximum age for retaining a previous non-zero balance when a refresh
+        # call returns zero/errors (prevents indefinite stale-capital retention).
+        self._preserve_nonzero_ttl_s: float = float(
+            os.environ.get("NIJA_CAPITAL_PRESERVE_TTL_S", "180.0")
+        )
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -161,6 +166,21 @@ class CapitalAuthority:
         for broker_id, broker in broker_map.items():
             if broker is None:
                 continue
+            broker_key = str(broker_id)
+            with self._lock:
+                previous = float(self._broker_balances.get(broker_key, 0.0))
+                if self.last_updated is not None:
+                    previous_age_s = (
+                        datetime.now(timezone.utc) - self.last_updated
+                    ).total_seconds()
+                else:
+                    # First refresh (or explicit reset): without a timestamp we
+                    # cannot prove freshness, so preservation is intentionally
+                    # disabled to avoid carrying unknown stale balances.
+                    previous_age_s = float("inf")
+            can_preserve_previous = (
+                previous > 0.0 and previous_age_s <= self._preserve_nonzero_ttl_s
+            )
             try:
                 raw = broker.get_account_balance()
                 if isinstance(raw, dict):
@@ -177,11 +197,22 @@ class CapitalAuthority:
                     balance = 0.0
 
                 if balance > 0.0:
-                    new_balances[str(broker_id)] = balance
+                    new_balances[broker_key] = balance
                     logger.debug(
                         "[CapitalAuthority] broker=%s balance=$%.2f",
                         broker_id,
                         balance,
+                    )
+                elif can_preserve_previous:
+                    # Hard capital-truth contract: never let a transient zero read
+                    # wipe an already-validated non-zero balance snapshot.
+                    new_balances[broker_key] = previous
+                    logger.warning(
+                        "[CapitalAuthority] broker=%s returned non-positive balance (%.2f) — "
+                        "preserving previous non-zero balance=$%.2f",
+                        broker_id,
+                        balance,
+                        previous,
                     )
                 else:
                     logger.debug(
@@ -189,11 +220,23 @@ class CapitalAuthority:
                         broker_id,
                     )
             except Exception as exc:
-                logger.warning(
-                    "[CapitalAuthority] Failed to fetch balance for broker=%s: %s",
-                    broker_id,
-                    exc,
-                )
+                if can_preserve_previous:
+                    # Contract fail-closed path: retain last known good capital on
+                    # fetch errors to avoid phantom-zero state transitions.
+                    new_balances[broker_key] = previous
+                    logger.warning(
+                        "[CapitalAuthority] Failed to fetch balance for broker=%s (%s) — "
+                        "preserving previous non-zero balance=$%.2f",
+                        broker_id,
+                        exc,
+                        previous,
+                    )
+                else:
+                    logger.warning(
+                        "[CapitalAuthority] Failed to fetch balance for broker=%s: %s",
+                        broker_id,
+                        exc,
+                    )
 
         with self._lock:
             self._broker_balances = new_balances

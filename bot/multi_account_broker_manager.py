@@ -175,6 +175,9 @@ class MultiAccountBrokerManager:
     # Maximum length for error messages stored in failed connection tracking
     # Prevents excessive memory usage from very long error strings
     MAX_ERROR_MESSAGE_LENGTH = 50
+    MIN_STARTUP_CAPITAL_TIMEOUT_S = 1.0
+    MIN_STARTUP_CAPITAL_POLL_S = 0.1
+    MIN_STARTUP_CAPITAL_SLEEP_S = 0.05
 
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
@@ -307,6 +310,17 @@ class MultiAccountBrokerManager:
         self.capital_stale_timeout_s: float = float(
             os.environ.get("NIJA_CAPITAL_STALE_TIMEOUT_S", "30.0")
         )
+        # Startup capital truth contract tuning:
+        # - timeout: maximum wait for non-zero capital readiness during startup
+        # - poll: refresh cadence while resolving the startup capital invariant
+        self.capital_startup_invariant_timeout_s: float = max(
+            self.MIN_STARTUP_CAPITAL_TIMEOUT_S,
+            float(os.environ.get("NIJA_CAPITAL_STARTUP_INVARIANT_TIMEOUT_S", "30.0")),
+        )
+        self.capital_startup_invariant_poll_s: float = max(
+            self.MIN_STARTUP_CAPITAL_POLL_S,
+            float(os.environ.get("NIJA_CAPITAL_STARTUP_INVARIANT_POLL_S", "1.0")),
+        )
 
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
@@ -421,9 +435,17 @@ class MultiAccountBrokerManager:
 
             total_capital = float(authority.get_real_capital())
             valid_brokers = len(broker_map)
-            # Critical invariant: readiness is determined by live capital, not
-            # registration-count parity (e.g. brokers=0 expected=1).
-            ready = total_capital > 0.0
+            # Hard capital-truth contract:
+            # If Kraken is connected, Kraken's balance is the startup/readiness
+            # authority. This prevents cross-venue non-zero balances from masking
+            # a phantom Kraken-zero state.
+            kraken_connected = "kraken" in broker_map
+            kraken_capital = (
+                float(authority.get_raw_per_broker("kraken"))
+                if kraken_connected
+                else 0.0
+            )
+            ready = (kraken_capital > 0.0) if kraken_connected else (total_capital > 0.0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
@@ -440,20 +462,101 @@ class MultiAccountBrokerManager:
                     self._trading_halted_due_to_capital = False
             else:
                 logger.error(
-                    "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f",
-                    trigger, valid_brokers, total_capital,
+                    "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f "
+                    "kraken_connected=%s kraken_capital=$%.2f",
+                    trigger, valid_brokers, total_capital, kraken_connected, kraken_capital,
                 )
 
             return {
                 "ready": 1.0 if ready else 0.0,
                 "total_capital": total_capital,
                 "valid_brokers": float(valid_brokers),
+                "kraken_capital": kraken_capital,
             }
         except Exception as exc:
             logger.error("❌ CapitalAuthority refresh failed (%s): %s", trigger, exc)
             with self._capital_state_lock:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+    def resolve_startup_capital_invariant(
+        self,
+        trigger: str,
+        timeout_s: Optional[float] = None,
+        poll_s: Optional[float] = None,
+    ) -> Dict[str, float]:
+        """
+        Hard startup invariant resolver.
+
+        No broker connect is considered complete until CapitalAuthority is READY
+        with non-zero total capital.
+        """
+        timeout = (
+            timeout_s
+            if timeout_s is not None
+            else max(self.MIN_STARTUP_CAPITAL_TIMEOUT_S, self.capital_startup_invariant_timeout_s)
+        )
+        poll = (
+            poll_s
+            if poll_s is not None
+            else max(self.MIN_STARTUP_CAPITAL_POLL_S, self.capital_startup_invariant_poll_s)
+        )
+
+        start = time.monotonic()
+        attempts = 0
+        snapshot: Dict[str, float] = {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+        while True:
+            attempts += 1
+            snapshot = self.refresh_capital_authority(trigger=f"{trigger}:attempt_{attempts}")
+            total_capital = snapshot.get("total_capital", 0.0)
+            if snapshot.get("ready", 0.0) > 0.0 and total_capital > 0.0:
+                elapsed = time.monotonic() - start
+                logger.info(
+                    "✅ Startup capital invariant satisfied (%s): attempts=%d elapsed=%.2fs total=$%.2f",
+                    trigger,
+                    attempts,
+                    elapsed,
+                    total_capital,
+                )
+                return {
+                    "ready": 1.0,
+                    "total_capital": total_capital,
+                    "valid_brokers": float(snapshot.get("valid_brokers", 0.0)),
+                    "attempts": float(attempts),
+                    "elapsed_s": float(elapsed),
+                }
+
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout:
+                with self._capital_state_lock:
+                    self._capital_ready = False
+                    self._trading_halted_due_to_capital = True
+                logger.error(
+                    "⛔ Startup capital invariant unresolved (%s): attempts=%d elapsed=%.2fs "
+                    "valid_brokers=%d total=$%.2f",
+                    trigger,
+                    attempts,
+                    elapsed,
+                    int(snapshot.get("valid_brokers", 0.0)),
+                    float(snapshot.get("total_capital", 0.0)),
+                )
+                return {
+                    "ready": 0.0,
+                    "total_capital": total_capital,
+                    "valid_brokers": float(snapshot.get("valid_brokers", 0.0)),
+                    "attempts": float(attempts),
+                    "elapsed_s": float(elapsed),
+                }
+
+            remaining = max(0.0, timeout - elapsed)
+            # Keep a small floor to avoid a tight near-timeout spin loop that
+            # can burn CPU while still allowing prompt timeout exit.
+            sleep_for = min(
+                remaining,
+                max(self.MIN_STARTUP_CAPITAL_SLEEP_S, min(poll, remaining)),
+            )
+            time.sleep(sleep_for)
 
     def is_capital_authority_ready(self) -> bool:
         """Return True only when unified capital is ready for trading gates."""
@@ -2618,8 +2721,6 @@ class MultiAccountBrokerManager:
                 logger.error("❌ Platform %s connect() raised: %s", key.upper(), exc)
                 connected = False
             if connected:
-                with _PLATFORM_BROKER_REGISTRY_LOCK:
-                    _PLATFORM_BROKER_CONNECTED[key] = True
                 self.register_platform_broker_instance(
                     broker_type,
                     broker,
@@ -2627,14 +2728,19 @@ class MultiAccountBrokerManager:
                 )
                 # Event-driven capital refresh: any successful platform connect
                 # immediately revalidates unified capital readiness.
-                _cap = self.refresh_capital_authority(trigger=f"platform_connect:{key}")
+                _cap = self.resolve_startup_capital_invariant(trigger=f"platform_connect:{key}")
                 if _cap.get("ready", 0.0) > 0.0:
+                    with _PLATFORM_BROKER_REGISTRY_LOCK:
+                        _PLATFORM_BROKER_CONNECTED[key] = True
                     self._mark_platform_connected(broker_type)
                     logger.info(
                         "   ✅ Platform %s connected and capital-ready (total=$%.2f)",
                         key.upper(), float(_cap.get("total_capital", 0.0)),
                     )
                 else:
+                    with _PLATFORM_BROKER_REGISTRY_LOCK:
+                        _PLATFORM_BROKER_CONNECTED[key] = False
+                        setattr(broker, "connected", False)
                     self.mark_platform_failed(broker_type)
                     logger.error(
                         "   ⛔ Platform %s connected but capital not ready "
@@ -2656,7 +2762,7 @@ class MultiAccountBrokerManager:
                     key.upper(),
                 )
             self._start_capital_watchdog()
-            return connected
+            return connected and (_cap.get("ready", 0.0) > 0.0)
 
         # ── Kraken (PRIMARY) ─────────────────────────────────────────────────
         logger.info("📊 Attempting to connect Kraken Pro (PLATFORM - PRIMARY)…")
@@ -2727,7 +2833,9 @@ class MultiAccountBrokerManager:
         # Startup ordering invariant:
         # 1) brokers connect, 2) balances fetched, 3) CapitalAuthority built,
         # 4) readiness marked, 5) trading engines may proceed.
-        _startup_cap = self.refresh_capital_authority(trigger="initialize_platform_brokers")
+        _startup_cap = self.resolve_startup_capital_invariant(
+            trigger="initialize_platform_brokers"
+        )
         if bool(_startup_cap.get("ready", 0.0)):
             logger.info(
                 "✅ CapitalAuthority READY at startup (brokers=%d total=$%.2f)",
