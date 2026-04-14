@@ -836,12 +836,20 @@ class KrakenStartupFSM:
     # ── Transitions (all writes go through here) ──────────────────────────────
 
     def begin_platform_boot(self) -> None:
-        """Start a fresh PLATFORM boot attempt from a deterministic baseline."""
+        """Start a fresh PLATFORM boot attempt from a deterministic baseline.
+
+        No-op once CONNECTED is reached; that stable state is intentionally
+        immutable for the lifetime of the process.
+        """
         with self._lock:
             if not self._connected.is_set():
                 self._failed.clear()
                 self._nonce_ready.clear()
                 self._connecting = True
+            else:
+                logger.debug(
+                    "KrakenStartupFSM.begin_platform_boot: ignored because state is CONNECTED"
+                )
 
     def mark_connecting(self) -> None:
         """Backward-compatible alias for begin_platform_boot()."""
@@ -852,6 +860,13 @@ class KrakenStartupFSM:
         with self._lock:
             if self._connecting and not self._failed.is_set() and not self._connected.is_set():
                 self._nonce_ready.set()
+            else:
+                logger.debug(
+                    "KrakenStartupFSM.mark_nonce_ready: ignored (connecting=%s failed=%s connected=%s)",
+                    self._connecting,
+                    self._failed.is_set(),
+                    self._connected.is_set(),
+                )
 
     def mark_connected(self) -> None:
         """Atomically signal CONNECTED — wakes all waiting USER threads instantly.
@@ -910,7 +925,8 @@ class KrakenStartupFSM:
 
     @property
     def is_nonce_ready(self) -> bool:
-        return self._nonce_ready.is_set() and not self._failed.is_set()
+        with self._lock:
+            return self._nonce_ready.is_set() and not self._failed.is_set()
 
     # ── Blocking wait (called by USER accounts) ────────────────────────────────
 

@@ -1790,11 +1790,16 @@ class KrakenNonceManager:
                         _skip_server_sync = True
                         _logger.info(
                             "KrakenNonceManager.probe_and_resync: startup nonce already aligned "
-                            "(current=%d floor=%d delta=%+d ms) — skipping server_sync_resync()",
+                            "(current=%d floor=%d delta=%+d) — skipping server_sync_resync()",
                             _current_nonce,
                             _startup_floor,
                             _current_nonce - _startup_floor,
                         )
+                else:
+                    _logger.warning(
+                        "KrakenNonceManager.probe_and_resync: startup fast-path could not fetch "
+                        "Kraken server time; falling back to server_sync_resync()"
+                    )
                 if not _skip_server_sync:
                     # freeze_s=0.0: this is a startup handshake, not an error
                     # recovery.  There is no stale nonce window to wait out —
