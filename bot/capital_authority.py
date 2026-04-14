@@ -156,11 +156,16 @@ class CapitalAuthority:
             Sum of all open-position notional values in USD.  Pass 0.0 (or
             omit) when the caller does not yet have position data.
         """
+        with self._lock:
+            previous_balances: Dict[str, float] = dict(self._broker_balances)
+
         new_balances: Dict[str, float] = {}
 
         for broker_id, broker in broker_map.items():
             if broker is None:
                 continue
+            broker_key = str(broker_id)
+            previous = float(previous_balances.get(broker_key, 0.0))
             try:
                 raw = broker.get_account_balance()
                 if isinstance(raw, dict):
@@ -177,11 +182,22 @@ class CapitalAuthority:
                     balance = 0.0
 
                 if balance > 0.0:
-                    new_balances[str(broker_id)] = balance
+                    new_balances[broker_key] = balance
                     logger.debug(
                         "[CapitalAuthority] broker=%s balance=$%.2f",
                         broker_id,
                         balance,
+                    )
+                elif previous > 0.0:
+                    # Hard capital-truth contract: never let a transient zero read
+                    # wipe an already-validated non-zero balance snapshot.
+                    new_balances[broker_key] = previous
+                    logger.warning(
+                        "[CapitalAuthority] broker=%s returned non-positive balance (%.2f) — "
+                        "preserving previous non-zero balance=$%.2f",
+                        broker_id,
+                        balance,
+                        previous,
                     )
                 else:
                     logger.debug(
@@ -189,11 +205,23 @@ class CapitalAuthority:
                         broker_id,
                     )
             except Exception as exc:
-                logger.warning(
-                    "[CapitalAuthority] Failed to fetch balance for broker=%s: %s",
-                    broker_id,
-                    exc,
-                )
+                if previous > 0.0:
+                    # Contract fail-closed path: retain last known good capital on
+                    # fetch errors to avoid phantom-zero state transitions.
+                    new_balances[broker_key] = previous
+                    logger.warning(
+                        "[CapitalAuthority] Failed to fetch balance for broker=%s (%s) — "
+                        "preserving previous non-zero balance=$%.2f",
+                        broker_id,
+                        exc,
+                        previous,
+                    )
+                else:
+                    logger.warning(
+                        "[CapitalAuthority] Failed to fetch balance for broker=%s: %s",
+                        broker_id,
+                        exc,
+                    )
 
         with self._lock:
             self._broker_balances = new_balances

@@ -427,9 +427,17 @@ class MultiAccountBrokerManager:
 
             total_capital = float(authority.get_real_capital())
             valid_brokers = len(broker_map)
-            # Critical invariant: readiness is determined by live capital, not
-            # registration-count parity (e.g. brokers=0 expected=1).
-            ready = total_capital > 0.0
+            # Hard capital-truth contract:
+            # If Kraken is connected, Kraken's balance is the startup/readiness
+            # authority. This prevents cross-venue non-zero balances from masking
+            # a phantom Kraken-zero state.
+            kraken_connected = "kraken" in broker_map
+            kraken_capital = (
+                float(authority.get_raw_per_broker("kraken"))
+                if kraken_connected
+                else 0.0
+            )
+            ready = (kraken_capital > 0.0) if kraken_connected else (total_capital > 0.0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
@@ -446,14 +454,16 @@ class MultiAccountBrokerManager:
                     self._trading_halted_due_to_capital = False
             else:
                 logger.error(
-                    "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f",
-                    trigger, valid_brokers, total_capital,
+                    "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f "
+                    "kraken_connected=%s kraken_capital=$%.2f",
+                    trigger, valid_brokers, total_capital, kraken_connected, kraken_capital,
                 )
 
             return {
                 "ready": 1.0 if ready else 0.0,
                 "total_capital": total_capital,
                 "valid_brokers": float(valid_brokers),
+                "kraken_capital": kraken_capital,
             }
         except Exception as exc:
             logger.error("❌ CapitalAuthority refresh failed (%s): %s", trigger, exc)
