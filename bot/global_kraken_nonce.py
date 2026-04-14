@@ -1735,7 +1735,11 @@ class KrakenNonceManager:
                     "(NIJA_ENABLE_PROBE_SYSTEM not set) — running "
                     "server_sync_resync() + single retry instead of probe loop"
                 )
-                self.server_sync_resync()
+                # freeze_s=0.0: this is a startup handshake, not an error
+                # recovery.  There is no stale nonce window to wait out —
+                # the server-anchored next_nonce() formula already guarantees
+                # the next issued nonce is above server_time + offset.
+                self.server_sync_resync(freeze_s=0.0)
                 if api_call_fn is None:
                     return True
                 try:

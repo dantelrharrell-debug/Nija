@@ -4307,15 +4307,24 @@ class TradingStrategy:
             _coinbase_isolated: bool = False
             _authoritative_capital: float = 0.0
 
-            # Add startup delay to avoid immediate rate limiting on restart
-            # CRITICAL (Jan 2026): Increased to 45s to ensure API rate limits fully reset
-            # Previous 30s delay was still causing rate limit issues in production
-            # Coinbase appears to have a ~30-60 second cooldown period after 403 errors
-            # Combined with improved retry logic (10 attempts, 15s base delay with 120s cap),
-            # this gives the bot multiple chances to recover from temporary API blocks
-            startup_delay = 45
-            logger.info(f"⏱️  Waiting {startup_delay}s before connecting to avoid rate limits...")
-            time.sleep(startup_delay)
+            # Pre-connection startup delay.
+            #
+            # History: 45 s was added (Jan 2026) to absorb Coinbase 403
+            # rate-limit cooldowns after a hot restart.  With the server-
+            # anchored Kraken nonce formula there is no stale nonce window,
+            # and Coinbase connections are independent of Kraken timing.
+            # Default is now 2 s — enough for HTTP clients to initialise
+            # without burning 45 s on every Railway cold start.
+            # Override via NIJA_STARTUP_DELAY_S if 403 recovery is needed.
+            startup_delay: float = float(
+                os.environ.get("NIJA_STARTUP_DELAY_S", "2.0")
+            )
+            if startup_delay > 0:
+                logger.info(
+                    "⏱️  Startup delay: %.1fs (NIJA_STARTUP_DELAY_S) before broker connections...",
+                    startup_delay,
+                )
+                time.sleep(startup_delay)
             logger.info("✅ Startup delay complete, beginning broker connections...")
 
             # ── Platform broker initialisation ───────────────────────────────
@@ -4439,12 +4448,20 @@ class TradingStrategy:
             logger.info("=" * 70)
             logger.info("✅ Broker connection phase complete (platform init delegated to multi_account_manager)")
 
-            # Add delay before user account connections to ensure platform account
-            # connection has completed and nonce ranges are separated
-            # CRITICAL (Jan 14, 2026): Increased from 2.0s to 5.0s to prevent Kraken nonce conflicts
-            # Master Kraken connection may still be using nonces in the current time window.
-            # User connections should wait long enough to ensure non-overlapping nonce ranges.
-            time.sleep(5.0)
+            # Inter-account nonce-separation delay before user connections.
+            #
+            # History: 5 s was added (Jan 2026) to ensure platform Kraken
+            # nonces were "settled" before user accounts started.  With the
+            # server-anchored next_nonce() formula each manager independently
+            # anchors to server_time + offset, so cross-account nonce overlap
+            # is impossible regardless of timing.
+            # Default: 0.5 s (still serialises the init log stream neatly).
+            # Override via NIJA_USER_CONNECT_DELAY_S.
+            _user_connect_delay: float = float(
+                os.environ.get("NIJA_USER_CONNECT_DELAY_S", "0.5")
+            )
+            if _user_connect_delay > 0:
+                time.sleep(_user_connect_delay)
 
             # Connect User Accounts - Load from config files
             logger.info("=" * 70)
