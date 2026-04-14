@@ -313,9 +313,10 @@ _PROBE_SYSTEM_ENABLED: bool = os.environ.get(
 # → connect.
 #
 # The FSM in ``broker_manager.py`` calls:
-#   • ``revoke_nonce_issuance()``     — on ``mark_failed()`` / ``reset()``
-#   • ``authorize_nonce_issuance()``  — on ``begin_platform_boot()`` (retry),
-#                                       ``mark_nonce_ready()``, ``mark_connected()``
+#   • ``revoke_nonce_issuance()``     — on ``begin_platform_boot()``,
+#                                       ``mark_failed()`` / ``reset()``
+#   • ``authorize_nonce_issuance()``  — on ``mark_capital_ready()``,
+#                                       ``mark_connected()``
 #
 # After ``revoke_nonce_issuance()`` any code that tries to issue a nonce
 # receives a RuntimeError instead of silently producing a stale counter value.
@@ -324,7 +325,7 @@ _NONCE_AUTH_LOCK = threading.Lock()
 
 
 def authorize_nonce_issuance() -> None:
-    """Open the nonce-issuance gate (called by FSM at NONCE_READY / begin_platform_boot)."""
+    """Open the nonce-issuance gate (called by FSM at CAPITAL_READY / CONNECTED)."""
     global _NONCE_ISSUANCE_AUTHORIZED
     with _NONCE_AUTH_LOCK:
         _NONCE_ISSUANCE_AUTHORIZED = True
