@@ -1657,9 +1657,9 @@ def _run_bot_startup_and_trading():
             logger.info("=" * 70)
             logger.info("⛔ STARTUP INVARIANT: BLOCK TRADING UNTIL TOTAL CAPITAL > $0")
             logger.info("=" * 70)
-            _capital_gate_interval_s = 15
-            _capital_gate_log_every_n_checks = 4
-            _capital_gate_checks = 0
+            CAPITAL_GATE_INTERVAL_S = 15
+            CAPITAL_GATE_LOG_EVERY_N_CHECKS = 4
+            capital_gate_checks = 0
 
             def _get_startup_total_capital() -> float:
                 _mam = getattr(strategy, "multi_account_manager", None)
@@ -1691,18 +1691,18 @@ def _run_bot_startup_and_trading():
                     logger.info("💰 Startup total capital: $%.2f", _total_capital)
                     break
 
-                _capital_gate_checks += 1
+                capital_gate_checks += 1
                 if (
-                    _capital_gate_checks == 1
-                    or _capital_gate_checks % _capital_gate_log_every_n_checks == 0
+                    capital_gate_checks == 1
+                    or capital_gate_checks % CAPITAL_GATE_LOG_EVERY_N_CHECKS == 0
                 ):
                     logger.warning(
                         "⏳ Trading loop blocked: waiting for total capital > $0 "
                         "(current=$%.2f, next check in %ds)",
                         _total_capital,
-                        _capital_gate_interval_s,
+                        CAPITAL_GATE_INTERVAL_S,
                     )
-                time.sleep(_capital_gate_interval_s)
+                time.sleep(CAPITAL_GATE_INTERVAL_S)
             logger.info("=" * 70)
 
             # ═══════════════════════════════════════════════════════════════════════
