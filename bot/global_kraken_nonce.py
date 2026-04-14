@@ -2046,7 +2046,52 @@ class KrakenNonceManager:
         except Exception:
             return False
 
-    def _try_acquire_pid_lock(self, log_failure: bool = True) -> object:
+    def _read_pid_from_pid_lock(self) -> int:
+        """Read PID from the first line of the PID lock file (0 when unavailable)."""
+        try:
+            with open(self._pid_lock_file, "r", encoding="utf-8") as fh:
+                first = fh.readline().strip()
+            return int(first) if first else 0
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _is_process_alive(pid: int) -> bool:
+        """Return True if *pid* appears alive on this host."""
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # Process exists but is not signalable by this user.
+            return True
+        except Exception:
+            return False
+
+    def _delete_stale_pid_lock(self, stale_pid: int) -> bool:
+        """Delete stale PID lock metadata file when the recorded pid is dead."""
+        try:
+            os.remove(self._pid_lock_file)
+            _logger.warning(
+                "KrakenNonceManager: removed stale PID lock file (%s, pid=%d not alive)",
+                self._pid_lock_file,
+                stale_pid,
+            )
+            return True
+        except FileNotFoundError:
+            return True
+        except Exception as exc:
+            _logger.debug(
+                "KrakenNonceManager: failed removing stale PID lock (%s): %s",
+                self._pid_lock_file,
+                exc,
+            )
+            return False
+
+    def _try_acquire_pid_lock(self, log_failure: bool = True, allow_stale_cleanup: bool = True) -> object:
         """
         Acquire an exclusive process-lifetime lock on ``self._pid_lock_file``.
 
@@ -2076,6 +2121,14 @@ class KrakenNonceManager:
             except (BlockingIOError, OSError):
                 # Another process holds the lock.
                 fh.close()
+                if allow_stale_cleanup:
+                    _holder_pid = self._read_pid_from_pid_lock()
+                    if _holder_pid > 0 and not self._is_process_alive(_holder_pid):
+                        if self._delete_stale_pid_lock(_holder_pid):
+                            return self._try_acquire_pid_lock(
+                                log_failure=log_failure,
+                                allow_stale_cleanup=False,
+                            )
                 _holder_meta = "unknown"
                 try:
                     with open(self._pid_lock_file, "r", encoding="utf-8") as _hf:
