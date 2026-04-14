@@ -1609,6 +1609,20 @@ class KrakenNonceManager:
 
     def server_sync_resync(self, freeze_s: float = _RECOVERY_FREEZE_S) -> None:
         """
+        Serialize nonce recovery against all in-process Kraken private requests.
+
+        Holding the process-wide Kraken API lock here guarantees that no live
+        request thread can issue a nonce while recovery is recalibrating the
+        nonce floor.
+
+        Args:
+            freeze_s: Seconds to wait before querying Kraken server time.
+        """
+        with _KRAKEN_API_LOCK:
+            self._server_sync_resync_locked(freeze_s=freeze_s)
+
+    def _server_sync_resync_locked(self, freeze_s: float = _RECOVERY_FREEZE_S) -> None:
+        """
         Nonce lock recovery mode — the single recovery path for all nonce rejections.
 
         Three-step sequence
@@ -1702,6 +1716,34 @@ class KrakenNonceManager:
         )
 
     def probe_and_resync(
+        self,
+        api_call_fn,
+        *,
+        step_ms: int = 0,
+        max_attempts: int = 0,
+    ) -> bool:
+        """
+        Serialize probe calibration against all in-process Kraken private requests.
+
+        This prevents probe/recovery nonce mutations from interleaving with live
+        request nonces in the same process.
+
+        Args:
+            api_call_fn: Callable that executes the probe Kraken private request.
+            step_ms: Optional probe forward-step override in milliseconds.
+            max_attempts: Optional probe attempt-count override.
+
+        Returns:
+            True when probe calibration succeeds; False otherwise.
+        """
+        with _KRAKEN_API_LOCK:
+            return self._probe_and_resync_locked(
+                api_call_fn,
+                step_ms=step_ms,
+                max_attempts=max_attempts,
+            )
+
+    def _probe_and_resync_locked(
         self,
         api_call_fn,
         *,
@@ -2245,7 +2287,8 @@ def get_kraken_nonce() -> int:
     server time if either the monotonicity or the server-time invariant is
     violated.  Also detects and recovers from a destroyed singleton (Step 3).
     """
-    return _ensure_live_manager().next_nonce()
+    with _KRAKEN_API_LOCK:
+        return _ensure_live_manager().next_nonce()
 
 
 def get_global_kraken_nonce() -> int:
