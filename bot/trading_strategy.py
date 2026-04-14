@@ -968,6 +968,10 @@ def _broker_key(broker) -> str:
 # stale and must be re-fetched.  Matches the per-cycle refresh TTL used in
 # run_cycle() so all capital reads agree on freshness.
 _CA_FRESHNESS_TTL_S: float = 90.0
+# Central emergency entry-stop file used by manual and automatic safety halts.
+_STOP_ALL_ENTRIES_CONF = os.path.join(os.path.dirname(__file__), "..", "STOP_ALL_ENTRIES.conf")
+# Denominator floor to prevent divide-by-zero in percentage drift calculations.
+_MIN_CAPITAL_DENOMINATOR = 1e-9
 
 try:
     from capital_authority import get_capital_authority as _get_capital_authority_ts
@@ -3343,9 +3347,13 @@ class TradingStrategy:
         self._capital_prev_total = 0.0
         self._capital_drift_alert_last_ts = 0.0
         self._sudden_drop_auto_disabled = False
+        # Broker health score threshold (0-100) considered "trade-ready."
         self._capital_health_min_score = float(os.getenv("NIJA_CAPITAL_HEALTH_MIN_SCORE", "65"))
+        # Alert threshold for cycle-to-cycle capital drift percentage.
         self._capital_drift_alert_pct = float(os.getenv("NIJA_CAPITAL_DRIFT_ALERT_PCT", "12"))
+        # Auto-disable threshold for sudden drop percentage between cycles.
         self._capital_sudden_drop_disable_pct = float(os.getenv("NIJA_SUDDEN_CAPITAL_DROP_DISABLE_PCT", "20"))
+        # Minimum seconds between repeated drift alerts.
         self._capital_drift_cooldown_s = int(os.getenv("NIJA_CAPITAL_DRIFT_ALERT_COOLDOWN_S", "300"))
         self._alert_manager = None
         self._text_alert_system = None
@@ -7419,7 +7427,7 @@ class TradingStrategy:
             self._capital_prev_total = total_capital
             return False
 
-        _base = max(_prev, 1e-9)
+        _base = max(_prev, _MIN_CAPITAL_DENOMINATOR)
         _drift_pct = abs(total_capital - _prev) / _base * 100.0
         _drop_pct = max(0.0, (_prev - total_capital) / _base * 100.0)
         _now = time.time()
@@ -7442,9 +7450,10 @@ class TradingStrategy:
             self._capital_drift_alert_last_ts = _now
 
         if _drop_pct >= self._capital_sudden_drop_disable_pct:
-            _stop_file = os.path.join(os.path.dirname(__file__), "..", "STOP_ALL_ENTRIES.conf")
+            _stop_file = _STOP_ALL_ENTRIES_CONF
             try:
                 with open(_stop_file, "w", encoding="utf-8") as _fh:
+                    # Pipe-delimited key-value record for human + simple parser consumption.
                     _fh.write(
                         f"AUTO-DISABLED {datetime.now(timezone.utc).isoformat()} | "
                         f"drop={_drop_pct:.2f}% | prev=${_prev:.2f} | now=${total_capital:.2f}\n"
@@ -9380,7 +9389,7 @@ class TradingStrategy:
             self.open_positions_count = len(current_positions)
             # ─────────────────────────────────────────────────────────────────
 
-            stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
+            stop_entries_file = _STOP_ALL_ENTRIES_CONF
             entries_blocked = os.path.exists(stop_entries_file)
 
             # Determine if we're in management-only mode
@@ -9756,6 +9765,7 @@ class TradingStrategy:
                     _total_count,
                 )
             elif _total_count > 0 and _healthy_count == 0 and not user_mode:
+                # Graceful fail-safe: block new entries but keep management logic active for exits/stops.
                 logger.warning("🛑 No healthy brokers detected — switching to position-management mode")
                 user_mode = True
 
