@@ -4238,16 +4238,43 @@ class TradingStrategy:
         # Initialize continuous exit enforcer for fail-safe position management
         # This runs independently of the main trading loop to ensure positions
         # are always managed even when main loop encounters errors
+
+        # How long to wait after Thread.start() before checking is_alive().
+        _THREAD_START_VERIFY_DELAY_S = 0.1  # 100 ms
+
+        def _flush_log_handlers():
+            """Best-effort flush all log handlers (ensures messages reach disk before crash)."""
+            for _h in logging.getLogger().handlers:
+                try:
+                    _h.flush()
+                except Exception:
+                    pass
+
         try:
             from continuous_exit_enforcer import get_continuous_exit_enforcer
             logger.info("🛡️ Starting continuous exit enforcer...")
             self.continuous_exit_enforcer = get_continuous_exit_enforcer()
+            # Flush handlers so "BEFORE THREAD START" is persisted to disk
+            # before the thread is created — helps diagnose crash/OOM scenarios.
+            _flush_log_handlers()
             logger.critical("BEFORE THREAD START")
+            _flush_log_handlers()
             self.continuous_exit_enforcer.start()
-            logger.critical("AFTER THREAD START")
-            logger.info("   ✅ Continuous exit enforcer active (checks every 60 seconds)")
+            # Brief pause so the daemon thread has time to begin executing,
+            # then verify it is alive before continuing.
+            time.sleep(_THREAD_START_VERIFY_DELAY_S)
+            _thread = self.continuous_exit_enforcer._monitor_thread
+            _thread_alive = _thread is not None and _thread.is_alive()
+            logger.critical("AFTER THREAD START — thread_alive=%s", _thread_alive)
+            if not _thread_alive:
+                logger.warning(
+                    "⚠️  ContinuousExitEnforcer thread did not start or died immediately"
+                )
+            else:
+                logger.info("   ✅ Continuous exit enforcer active (checks every 60 seconds)")
+            _flush_log_handlers()
         except Exception as e:
-            logger.warning(f"⚠️  Could not start continuous exit enforcer: {e}")
+            logger.warning(f"⚠️  Could not start continuous exit enforcer: {e}", exc_info=True)
             self.continuous_exit_enforcer = None
 
         # Default apex to None before the broker initialization block so that
