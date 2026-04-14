@@ -290,6 +290,49 @@ _PROBE_SYSTEM_ENABLED: bool = os.environ.get(
     "NIJA_ENABLE_PROBE_SYSTEM", "0"
 ).strip().lower() in ("1", "true", "yes", "on")
 
+# ── Nonce issuance authorization ──────────────────────────────────────────────
+# A process-wide gate that the startup FSM controls.  Starts ``True`` so that
+# the startup probe (which must issue nonces before NONCE_READY is signalled)
+# can proceed.
+#
+# The FSM in ``broker_manager.py`` calls:
+#   • ``revoke_nonce_issuance()``     — on ``mark_failed()`` / ``reset()``
+#   • ``authorize_nonce_issuance()``  — on ``begin_platform_boot()`` (retry),
+#                                       ``mark_nonce_ready()``, ``mark_connected()``
+#
+# This eliminates "hidden rebuild paths" and "race-condition recovery attempts"
+# by making the gate a hard single-bit authority: anything issuing nonces while
+# revoked gets a RuntimeError instead of silently producing a stale or
+# regressed nonce value.
+_NONCE_ISSUANCE_AUTHORIZED: bool = True
+_NONCE_AUTH_LOCK = threading.Lock()
+
+
+def authorize_nonce_issuance() -> None:
+    """Open the nonce-issuance gate (called by FSM at NONCE_READY / begin_platform_boot)."""
+    global _NONCE_ISSUANCE_AUTHORIZED
+    with _NONCE_AUTH_LOCK:
+        _NONCE_ISSUANCE_AUTHORIZED = True
+    _logger.debug("KrakenNonceManager: nonce issuance authorized")
+
+
+def revoke_nonce_issuance() -> None:
+    """Close the nonce-issuance gate (called by FSM on FAILED / reset)."""
+    global _NONCE_ISSUANCE_AUTHORIZED
+    with _NONCE_AUTH_LOCK:
+        _NONCE_ISSUANCE_AUTHORIZED = False
+    _logger.warning(
+        "KrakenNonceManager: nonce issuance revoked — FSM in FAILED/IDLE state; "
+        "all nonce issuance attempts will raise RuntimeError until re-authorized"
+    )
+
+
+def is_nonce_issuance_authorized() -> bool:
+    """Return True when the FSM has authorized nonce issuance."""
+    with _NONCE_AUTH_LOCK:
+        return _NONCE_ISSUANCE_AUTHORIZED
+
+
 # ── NTP clock-sync constants ──────────────────────────────────────────────────
 # Kraken is EXTREMELY sensitive to clock drift.  Even a few seconds off can
 # trigger continuous nonce errors that block ALL accounts.
@@ -1219,16 +1262,22 @@ class KrakenNonceManager:
                 return self._last_nonce
 
         # ── File mode (default) ────────────────────────────────────────────
-        # Fetch server time BEFORE acquiring _LOCK so a slow network call
-        # (up to 5 s timeout) never holds the global nonce lock.  The result
-        # is cached for _SERVER_TIME_CACHE_TTL_S seconds so at most one
-        # network round-trip occurs per second across all threads.
-        _kraken_floor_ms = _get_cached_server_time_ms() + _SERVER_SYNC_OFFSET_MS
+        # Pure monotonic increment.  Server-floor re-anchoring is intentionally
+        # NOT performed here.  The nonce is anchored to Kraken server time ONLY:
+        #   • at startup  — _load_last_nonce() / server_sync_resync()
+        #   • on explicit operator resync — force_resync(), reset_to_safe_value()
+        #
+        # Removing the per-call server-time fetch eliminates the clock-domain
+        # oscillation ("nonce reset to server_floor during live operation") and
+        # the "+1 ms reset" log pattern caused by the old max(server_floor, last+1)
+        # formula.  The startup anchor already places the nonce above Kraken's
+        # floor; strict +1 increments are the correct on-wire behaviour from that
+        # point forward.
         with _LOCK:
             with _CrossProcessLock(self._lock_file):
                 # ── Cross-process sync ──────────────────────────────────────
                 # Re-read the state file to pick up any nonce advance written
-                # by another process (e.g. a nuclear reset in Process B that
+                # by another process (e.g. a manual resync in Process B that
                 # put the high-water mark above this process's in-memory value).
                 file_nonce = self._read_state_file_raw()
                 if file_nonce == 0 and self._last_nonce > 0:
@@ -1246,13 +1295,8 @@ class KrakenNonceManager:
                     )
                     self._last_nonce = file_nonce
 
-                # ── Enforce: nonce = max(server_time_ms + offset, last_nonce + 1) ────
-                # Server-anchored formula: every nonce is at or ahead of Kraken's
-                # authoritative clock + safety margin so any forward drift is
-                # self-correcting on the very next call.  _get_cached_server_time_ms()
-                # is called OUTSIDE _LOCK above and the cached value is passed in to
-                # avoid a network call while holding the lock.
-                self._last_nonce = max(_kraken_floor_ms, self._last_nonce + 1)
+                # ── Strictly monotonic +1 increment ─────────────────────────
+                self._last_nonce += 1
                 self._persist()
                 return self._last_nonce
 
@@ -1550,17 +1594,19 @@ class KrakenNonceManager:
 
         Recovery behaviour
         ------------------
-        errors 1–2 : no action — the next natural ``next_nonce()`` call advances
-                     monotonically (``max(now_ms, last + 1)``).  Most transient
-                     single-error rejections resolve without intervention.
+        Consecutive nonce errors are counted and logged.  **No runtime nonce
+        mutation is triggered.** The pure-monotonic ``next_nonce()`` counter
+        continues advancing by +1 on every call, which self-corrects without
+        operator intervention in the vast majority of transient cases.
 
-        error 3+   : invoke ``server_sync_resync()`` (freeze + server-time
-                     re-anchor) to move forward in-place without destroying the
-                     active manager object.
+        ``server_sync_resync()`` is intentionally **not** called here.  Runtime
+        server-floor re-anchoring was the root cause of clock-domain oscillation
+        (the ``"+1 ms reset to server_floor"`` log pattern seen during live
+        operation).  If recovery is needed after persistent failures the operator
+        should call ``force_resync()`` manually or restart with
+        ``NIJA_FORCE_NONCE_RESYNC=1``.
 
-        No-op when the API key has been declared permanently invalid (retained
-        for backward compatibility with call sites that guard on
-        ``is_key_invalidated``).
+        No-op when the API key has been declared permanently invalid.
         """
         if getattr(self, "_key_invalidated", False):
             _logger.debug(
@@ -1569,25 +1615,14 @@ class KrakenNonceManager:
             )
             return
 
-        trigger_recovery = False
         with _LOCK:
             self._error_count += 1
             current_count = self._error_count
             _logger.warning(
-                "KrakenNonceManager.record_error: consecutive error #%d  nonce=%d",
+                "KrakenNonceManager.record_error: consecutive error #%d  nonce=%d  "
+                "(no runtime re-anchor — monotonic counter continues)",
                 current_count, self._last_nonce,
             )
-            if current_count >= _ERROR_RECOVERY_THRESHOLD:
-                trigger_recovery = True
-                self._error_count = 0   # reset inside lock before releasing
-
-        if trigger_recovery:
-            _logger.warning(
-                "KrakenNonceManager.record_error: %d consecutive nonce errors — "
-                "running server_sync_resync() (forward-only, no destroy/rebuild)",
-                _ERROR_RECOVERY_THRESHOLD,
-            )
-            self.server_sync_resync(freeze_s=_RECOVERY_FREEZE_S)
 
     def record_success(self) -> None:
         """Reset the consecutive-error counter after a successful API call.
@@ -2234,71 +2269,41 @@ def _raise_nonce_floor_in_place(
 
 def _ensure_live_manager() -> KrakenNonceManager:
     """
-    Return the current live KrakenNonceManager, rebuilding it if it was
-    destroyed (Step 3) or if the pre-request guard detects a violation (Step 4).
+    Return the current live KrakenNonceManager singleton.
 
-    This is the single choke-point for all nonce issuance and is called by
-    both ``get_kraken_nonce()`` and ``get_global_kraken_nonce()``.
+    Raises ``RuntimeError`` if:
 
-    Pre-request guard (Step 4)
-    --------------------------
-    Two invariants are checked before every nonce:
+    * Nonce issuance has been revoked by the startup FSM (FAILED / IDLE state).
+    * The singleton was destroyed and has not been explicitly rebuilt.
 
-    1. ``pending_nonce >= last_successful_nonce + _PRE_REQUEST_EPSILON_MS``
-       Ensures strict monotonicity relative to the last nonce Kraken confirmed.
-       Catches the "stale object" bug where ``_last_nonce`` regressed below
-       the confirmed watermark.
-
-    2. ``pending_nonce >= now_ms + _PRE_REQUEST_SAFETY_OFFSET_MS``
-       Ensures the nonce is not in the past relative to wall-clock time.
-       Catches a frozen/sleeping instance whose ``_last_nonce`` is stale.
-
-    If either invariant is violated, the nonce floor is adjusted forward
-    in-place (no destroy/rebuild loop).
+    The lazy-rebuild and in-place floor-repair paths that previously existed
+    here have been removed.  Nonce state is now authoritative: if the manager
+    does not exist or is not authorized, the caller receives a hard error
+    instead of a silently-repaired stale counter.  This eliminates hidden
+    rebuild races and the "four sources of truth" clock-domain oscillation.
     """
     global _nonce_manager
     _wait_for_probe_window("_ensure_live_manager")
 
-    # ── Detect destroyed singleton ────────────────────────────────────────
+    # ── Hard gate: authorization check ───────────────────────────────────
+    if not _NONCE_ISSUANCE_AUTHORIZED:
+        raise RuntimeError(
+            "KrakenNonceManager: nonce issuance is not authorized — "
+            "the startup FSM is in FAILED or IDLE state.  "
+            "Wait for NONCE_READY / CONNECTED before issuing nonces."
+        )
+
+    # ── Hard gate: destroyed singleton — no lazy rebuild ─────────────────
     current = KrakenNonceManager._instance
     if current is None:
-        _logger.info(
-            "_ensure_live_manager: singleton was destroyed — rebuilding from "
-            "Kraken server time"
+        raise RuntimeError(
+            "KrakenNonceManager singleton was destroyed and has not been rebuilt. "
+            "Call rebuild_nonce_manager() from a controlled recovery path."
         )
-        _nonce_manager = KrakenNonceManager()
-        return _nonce_manager
 
-    # Keep module-level alias in sync in case another code path rebuilt it.
+    # Keep module-level alias in sync.
     if _nonce_manager is not current:
         _nonce_manager = current
-
-    # ── Pre-request guard ─────────────────────────────────────────────────
-    now_ms = int(time.time() * 1000)
-    with _LOCK:
-        last_succ = getattr(current, "_last_successful_nonce", 0)
-        pending = current._last_nonce + 1
-
-    fail_monotonic = (
-        last_succ > 0
-        and pending < last_succ + _PRE_REQUEST_EPSILON_MS
-    )
-    fail_time = pending < now_ms + _PRE_REQUEST_SAFETY_OFFSET_MS
-
-    if fail_monotonic or fail_time:
-        _logger.warning(
-            "_ensure_live_manager: pre-request guard violated "
-            "(pending=%d, last_succ=%d, now=%d, eps=%d, safety_offset=%d) — "
-            "raising floor in-place (forward-only)",
-            pending, last_succ, now_ms,
-            _PRE_REQUEST_EPSILON_MS, _PRE_REQUEST_SAFETY_OFFSET_MS,
-        )
-        _raise_nonce_floor_in_place(
-            current,
-            now_ms=now_ms,
-            last_successful_nonce=last_succ,
-            context="_ensure_live_manager",
-        )
 
     return current
 
@@ -2349,8 +2354,7 @@ def get_nonce_manager_for_key(key_id: str) -> KrakenNonceManager:
     ✅ Cross-process safe — ``fcntl`` advisory lock guards the state file on
        every increment, so two OS processes cannot issue the same nonce.
     ✅ Persistent — nonce survives process restarts via an atomic state file.
-    ✅ Pre-request guard — stale/regressed instances are detected and rebuilt
-       from Kraken server time before the nonce is issued.
+    ✅ Strictly monotonic — pure +1 increment; no runtime server-floor re-anchoring.
 
     Kraken requirement fulfilled
     ----------------------------
@@ -2362,33 +2366,12 @@ def get_nonce_manager_for_key(key_id: str) -> KrakenNonceManager:
     if not key_id:
         return _ensure_live_manager()
 
-    # ── Pre-request guard for per-key managers ────────────────────────────
+    # ── Per-key registry lookup ────────────────────────────────────────────
     with _KEY_REGISTRY_LOCK:
         current = _KEY_REGISTRY.get(key_id)
 
     if current is None:
         return KrakenNonceManager(key_id=key_id)
-
-    now_ms = int(time.time() * 1000)
-    with _LOCK:
-        last_succ = getattr(current, "_last_successful_nonce", 0)
-        pending   = current._last_nonce + 1
-
-    fail_monotonic = last_succ > 0 and pending < last_succ + _PRE_REQUEST_EPSILON_MS
-    fail_time      = pending < now_ms + _PRE_REQUEST_SAFETY_OFFSET_MS
-
-    if fail_monotonic or fail_time:
-        _logger.warning(
-            "get_nonce_manager_for_key(%r): pre-request guard violated "
-            "(pending=%d, last_succ=%d, now=%d) — raising floor in-place",
-            key_id, pending, last_succ, now_ms,
-        )
-        _raise_nonce_floor_in_place(
-            current,
-            now_ms=now_ms,
-            last_successful_nonce=last_succ,
-            context=f"get_nonce_manager_for_key({key_id!r})",
-        )
 
     return current
 
@@ -2662,6 +2645,10 @@ __all__ = [
     "AdaptiveNonceOffsetEngine",
     "_RedisNonceBackend",
     "_PROBE_SYSTEM_ENABLED",
+    # Nonce issuance authorization (FSM gate)
+    "authorize_nonce_issuance",
+    "revoke_nonce_issuance",
+    "is_nonce_issuance_authorized",
     "get_kraken_api_lock",
     "get_kraken_nonce",
     "get_global_kraken_nonce",
