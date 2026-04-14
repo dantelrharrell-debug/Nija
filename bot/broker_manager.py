@@ -7685,6 +7685,11 @@ class KrakenBroker(BaseBroker):
                         if held_amount > 0:
                             logger.info(f"   Held in Orders: ${held_amount:.2f}")
                             logger.info(f"   Total Funds: ${total_funds:.2f}")
+                        if NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES:
+                            logger.warning(
+                                "🧪 NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES=1 is enabled for this run "
+                                "(Kraken BUY minimum-capital gate override active)"
+                            )
 
                         # Initialize Kraken rate profile based on account balance (Jan 23, 2026)
                         # Separate entry/exit/monitoring API budgets for optimal performance
@@ -10910,6 +10915,11 @@ class BrokerManager:
                 if getattr(broker, 'exit_only_mode', False) and not NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES:
                     return BrokerEligibilityStatus.INELIGIBLE_EXIT_ONLY
                 return BrokerEligibilityStatus.ELIGIBLE
+            logger.debug(
+                "NIJA_FORCE_KRAKEN_ONLY_TEST=1: broker %s marked ineligible "
+                "(Kraken-only validation mode)",
+                broker.broker_type.value,
+            )
             return BrokerEligibilityStatus.INELIGIBLE_UNHEALTHY
 
         if (
@@ -11003,6 +11013,10 @@ class BrokerManager:
                     )
                     self.active_broker = _kraken_broker
                     self.primary_broker_type = BrokerType.KRAKEN
+                else:
+                    logger.debug(
+                        "NIJA_FORCE_KRAKEN_ONLY_TEST=1: Kraken already active broker"
+                    )
                 return _kraken_broker
 
         # ── 1b. KRAKEN-FIRST execution-layer rule ─────────────────────────────
