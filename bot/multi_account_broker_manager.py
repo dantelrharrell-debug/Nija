@@ -474,14 +474,14 @@ class MultiAccountBrokerManager:
         with non-zero total capital.
         """
         timeout = (
-            float(timeout_s)
+            timeout_s
             if timeout_s is not None
-            else max(1.0, float(self.capital_startup_invariant_timeout_s))
+            else max(1.0, self.capital_startup_invariant_timeout_s)
         )
         poll = (
-            float(poll_s)
+            poll_s
             if poll_s is not None
-            else max(0.1, float(self.capital_startup_invariant_poll_s))
+            else max(0.1, self.capital_startup_invariant_poll_s)
         )
 
         start = time.monotonic()
@@ -491,18 +491,19 @@ class MultiAccountBrokerManager:
         while True:
             attempts += 1
             snapshot = self.refresh_capital_authority(trigger=f"{trigger}:attempt_{attempts}")
-            if bool(snapshot.get("ready", 0.0)) and float(snapshot.get("total_capital", 0.0)) > 0.0:
+            total_capital = snapshot.get("total_capital", 0.0)
+            if snapshot.get("ready", 0.0) > 0.0 and total_capital > 0.0:
                 elapsed = time.monotonic() - start
                 logger.info(
                     "✅ Startup capital invariant satisfied (%s): attempts=%d elapsed=%.2fs total=$%.2f",
                     trigger,
                     attempts,
                     elapsed,
-                    float(snapshot.get("total_capital", 0.0)),
+                    total_capital,
                 )
                 return {
                     "ready": 1.0,
-                    "total_capital": float(snapshot.get("total_capital", 0.0)),
+                    "total_capital": total_capital,
                     "valid_brokers": float(snapshot.get("valid_brokers", 0.0)),
                     "attempts": float(attempts),
                     "elapsed_s": float(elapsed),
@@ -524,7 +525,7 @@ class MultiAccountBrokerManager:
                 )
                 return {
                     "ready": 0.0,
-                    "total_capital": float(snapshot.get("total_capital", 0.0)),
+                    "total_capital": total_capital,
                     "valid_brokers": float(snapshot.get("valid_brokers", 0.0)),
                     "attempts": float(attempts),
                     "elapsed_s": float(elapsed),
@@ -2714,7 +2715,7 @@ class MultiAccountBrokerManager:
                 else:
                     with _PLATFORM_BROKER_REGISTRY_LOCK:
                         _PLATFORM_BROKER_CONNECTED[key] = False
-                    setattr(broker, "connected", False)
+                        setattr(broker, "connected", False)
                     self.mark_platform_failed(broker_type)
                     logger.error(
                         "   ⛔ Platform %s connected but capital not ready "
@@ -2736,7 +2737,7 @@ class MultiAccountBrokerManager:
                     key.upper(),
                 )
             self._start_capital_watchdog()
-            return bool(connected and (_cap.get("ready", 0.0) > 0.0 if connected else True))
+            return connected and (_cap.get("ready", 0.0) > 0.0)
 
         # ── Kraken (PRIMARY) ─────────────────────────────────────────────────
         logger.info("📊 Attempting to connect Kraken Pro (PLATFORM - PRIMARY)…")
