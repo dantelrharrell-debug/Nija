@@ -7429,10 +7429,45 @@ class KrakenBroker(BaseBroker):
             if probe_and_resync_nonce is not None:
                 _probe_cat = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                 logger.info(f"   🔍 Nonce resync handshake: calibrating nonce to Kraken's server window ({cred_label})...")
-                _probe_ok = probe_and_resync_nonce(
-                    lambda: self._kraken_private_call("Balance", {}, category=_probe_cat),
-                    step_ms=_NONCE_PROBE_STEP_MS,   # 0 = let AdaptiveOffsetEngine choose
-                )
+
+                # ── Route probe to the CORRECT nonce manager ─────────────────
+                # When DistributedNonceManager is active, all private API calls
+                # use the PER-KEY manager (self.api_key_id → _KEY_REGISTRY entry),
+                # NOT the module-level platform singleton.  probe_and_resync_nonce()
+                # calls _ensure_live_manager() which returns the PLATFORM singleton
+                # and advances its nonce — but the actual API call inside the probe
+                # uses the per-key manager, so the jump is lost and every probe
+                # attempt uses the same near-now_ms nonce.  Fix: call probe_and_resync()
+                # directly on the per-key manager so advances target the right counter.
+                _probe_key_id = getattr(self, "api_key_id", "")
+                _probe_mgr = None
+                if _probe_key_id:
+                    try:
+                        try:
+                            from bot.global_kraken_nonce import get_nonce_manager_for_key as _gnmfk
+                        except ImportError:
+                            from global_kraken_nonce import get_nonce_manager_for_key as _gnmfk  # type: ignore[import]
+                        _probe_mgr = _gnmfk(_probe_key_id)
+                    except Exception as _probe_mgr_err:
+                        logger.debug(
+                            "   ⚠️  Could not obtain per-key nonce manager for probe "
+                            "(key_id=%s, err=%s) — falling back to platform manager",
+                            _probe_key_id, _probe_mgr_err,
+                        )
+
+                def _probe_call():
+                    return self._kraken_private_call("Balance", {}, category=_probe_cat)
+
+                if _probe_mgr is not None:
+                    _probe_ok = _probe_mgr.probe_and_resync(
+                        _probe_call,
+                        step_ms=_NONCE_PROBE_STEP_MS,   # 0 = let AdaptiveOffsetEngine choose
+                    )
+                else:
+                    _probe_ok = probe_and_resync_nonce(
+                        _probe_call,
+                        step_ms=_NONCE_PROBE_STEP_MS,   # 0 = let AdaptiveOffsetEngine choose
+                    )
                 if _probe_ok:
                     logger.info(f"   ✅ Nonce resync handshake complete for {cred_label}")
                 else:
