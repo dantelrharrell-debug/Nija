@@ -6,7 +6,7 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 
 from enum import Enum
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import functools
 import json
 import logging
@@ -11040,6 +11040,171 @@ class BrokerManager:
         self.platform_broker: Optional[BaseBroker] = None
         self.primary_broker: Optional[BaseBroker] = None
         self._platform_locked: bool = False
+        self._stale_balance_ttl_s: float = float(
+            os.environ.get("NIJA_BROKER_BALANCE_STALE_TTL_S", "30")
+        )
+
+    def _get_broker_health_score(self, broker: BaseBroker) -> float:
+        """Return broker health score in range [0, 100].
+
+        Resolution order:
+          1) broker.health_score attribute (if present)
+          2) ExecutionRiskFirewall venue score snapshot
+          3) 100.0 conservative default
+        """
+        # Prefer explicit broker health score when present.
+        _raw = getattr(broker, "health_score", None)
+        if _raw is not None:
+            try:
+                return max(0.0, min(100.0, float(_raw)))
+            except Exception:
+                pass
+        # Fallback to execution risk firewall venue score.
+        if _ERF_BM_AVAILABLE and _get_erf_bm is not None:
+            try:
+                _report = _get_erf_bm().get_report()
+                _scores = _report.get("venue_scores", {}) if isinstance(_report, dict) else {}
+                if broker.broker_type.value in _scores:
+                    return max(0.0, min(100.0, float(_scores.get(broker.broker_type.value, 100.0))))
+            except Exception:
+                pass
+        return 100.0
+
+    def _get_broker_equity(self, broker: BaseBroker) -> float:
+        """Best-effort non-blocking broker equity fetch for routing math."""
+        try:
+            _cached = getattr(broker, "_last_known_balance", None)
+            if _cached is not None:
+                return max(0.0, float(_cached))
+        except Exception:
+            pass
+        try:
+            _live = broker.get_account_balance()
+            if isinstance(_live, dict):
+                _equity = float(
+                    _live.get("trading_balance")
+                    or _live.get("total_funds")
+                    or (_live.get("usd", 0.0) + _live.get("usdc", 0.0))
+                    or 0.0
+                )
+            else:
+                _equity = float(_live or 0.0)
+            if _equity > 0.0:
+                return _equity
+        except Exception:
+            pass
+        return 0.0
+
+    def _get_broker_balance_age_s(self, broker: BaseBroker) -> Optional[float]:
+        """Return balance snapshot age in seconds, or None when unknown.
+
+        Uses ``broker.last_updated`` first, then ``broker._balance_last_updated``.
+        """
+        try:
+            ts = getattr(broker, "last_updated", None)
+            if ts is None:
+                ts = getattr(broker, "_balance_last_updated", None)
+            if ts is None:
+                return None
+            if hasattr(ts, "timestamp"):
+                ts = float(ts.timestamp())
+            else:
+                ts = float(ts)
+            return max(0.0, time.time() - ts)
+        except Exception:
+            return None
+
+    def _resolve_broker_effective_metrics(self, broker: BaseBroker) -> Tuple[float, float, bool]:
+        """Return ``(equity, health_score, is_stale)`` and update broker.health_score."""
+        _equity = self._get_broker_equity(broker)
+        _health = self._get_broker_health_score(broker)
+        _age_s = self._get_broker_balance_age_s(broker)
+        _is_stale = _age_s is None or (_age_s > self._stale_balance_ttl_s)
+        if _is_stale:
+            _health = 0.0
+        setattr(broker, "health_score", _health)
+        return _equity, _health, _is_stale
+
+    def _evaluate_system_ready(self) -> Tuple[bool, bool, bool, float, float, int]:
+        """
+        Evaluate hard trading gates and return diagnostics.
+
+        Returns:
+            (nonce_ok, platform_ok, capital_ok, total_capital, effective_capital, healthy_count)
+
+        Note:
+            This method normalizes ``broker.health_score`` in-place (stale brokers
+            are forced to 0) so downstream routing/allocation remains consistent.
+        """
+        nonce_ok = True
+        if is_nonce_issuance_authorized is not None:
+            try:
+                nonce_ok = bool(is_nonce_issuance_authorized())
+            except Exception:
+                nonce_ok = False
+
+        platform_ok = False
+        capital_ok = False
+        try:
+            try:
+                from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm_gate
+            except ImportError:
+                from multi_account_broker_manager import multi_account_broker_manager as _mabm_gate  # type: ignore[import]
+
+            if _mabm_gate is not None:
+                platform_ok = any(
+                    _mabm_gate.is_platform_connected(bt)
+                    for bt in list(_mabm_gate.platform_brokers.keys())
+                )
+                capital_ok = bool(
+                    getattr(_mabm_gate, "is_capital_authority_ready", lambda: False)()
+                )
+        except Exception:
+            platform_ok = any(
+                getattr(b, "connected", False)
+                and getattr(getattr(b, "account_type", None), "value", "") == "platform"
+                for b in self.brokers.values()
+            )
+            capital_ok = False
+
+        platform_brokers = [
+            b for b in self.brokers.values()
+            if getattr(b, "connected", False)
+            and getattr(getattr(b, "account_type", None), "value", "") == "platform"
+        ]
+
+        total_capital = 0.0
+        effective_capital = 0.0
+        healthy_count = 0
+        stale_count = 0
+
+        for _b in platform_brokers:
+            _equity, _health, _is_stale = self._resolve_broker_effective_metrics(_b)
+
+            if _is_stale:
+                stale_count += 1
+            else:
+                healthy_count += 1
+
+            total_capital += _equity
+            effective_capital += _equity * (_health / 100.0)
+
+        # Phantom-capital detection: if all connected platform brokers are stale,
+        # force capital gate closed regardless of prior readiness state.
+        if platform_brokers and stale_count == len(platform_brokers):
+            capital_ok = False
+
+        logger.info(
+            f"[SYSTEM READY CHECK] "
+            f"nonce={nonce_ok} | "
+            f"platform={platform_ok} | "
+            f"capital={capital_ok} | "
+            f"total=${total_capital:.2f} | "
+            f"effective=${effective_capital:.2f} | "
+            f"healthy_brokers={healthy_count} | "
+            f"stale_brokers={stale_count}"
+        )
+        return nonce_ok, platform_ok, capital_ok, total_capital, effective_capital, healthy_count
 
     def add_broker(self, broker: BaseBroker):
         """
@@ -11704,13 +11869,12 @@ class BrokerManager:
             # → {"coinbase": 1000.0}  when kraken is quarantined
             # → {"kraken": 666.67, "coinbase": 333.33}  when both healthy (scores 80/40)
         """
-        eligible_venues = [
-            b.broker_type.value
-            for b in self.brokers.values()
-            if self.is_execution_eligible(b)
+        eligible_brokers = [
+            b for b in self.brokers.values() if self.is_execution_eligible(b)
         ]
-        if not eligible_venues:
+        if not eligible_brokers:
             return {}
+        eligible_venues = [b.broker_type.value for b in eligible_brokers]
 
         def _equal_split() -> Dict[str, float]:
             # Adjust last entry so amounts sum exactly to total_capital.
@@ -11723,13 +11887,25 @@ class BrokerManager:
             result[eligible_venues[-1]] = round(total_capital - running, 6)
             return result
 
-        if not (_ERF_BM_AVAILABLE and _get_erf_bm is not None):
+        # Next-level weighting: effective_capital = sum(equity * health_score/100)
+        # and venue split is proportional to each broker's effective contribution.
+        effective_by_venue: Dict[str, float] = {}
+        for _b in eligible_brokers:
+            _equity, _health, _ = self._resolve_broker_effective_metrics(_b)
+            effective_by_venue[_b.broker_type.value] = max(0.0, _equity * (_health / 100.0))
+
+        _effective_total = sum(effective_by_venue.values())
+        if _effective_total <= 0.0:
             return _equal_split()
 
-        try:
-            weights = _get_erf_bm().get_capital_weights(eligible_venues)
-        except Exception:
-            return _equal_split()
+        weights = {}
+        running_w = 0.0
+        items_w = list(effective_by_venue.items())
+        for v, eff in items_w[:-1]:
+            w = round(eff / _effective_total, 6)
+            weights[v] = w
+            running_w += w
+        weights[items_w[-1][0]] = round(1.0 - running_w, 6)
 
         # Multiply weights × total_capital; last entry absorbs rounding residual.
         result: Dict[str, float] = {}
@@ -11744,38 +11920,7 @@ class BrokerManager:
 
     def place_order(self, symbol: str, side: str, quantity: float) -> Dict:
         """Route order to appropriate broker"""
-        nonce_ok = True
-        if is_nonce_issuance_authorized is not None:
-            try:
-                nonce_ok = bool(is_nonce_issuance_authorized())
-            except Exception:
-                nonce_ok = False
-
-        platform_ok = False
-        capital_ok = False
-        try:
-            try:
-                from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm_gate
-            except ImportError:
-                from multi_account_broker_manager import multi_account_broker_manager as _mabm_gate  # type: ignore[import]
-
-            if _mabm_gate is not None:
-                platform_ok = any(
-                    _mabm_gate.is_platform_connected(bt)
-                    for bt in list(_mabm_gate.platform_brokers.keys())
-                )
-                capital_ok = bool(
-                    getattr(_mabm_gate, "is_capital_authority_ready", lambda: False)()
-                )
-        except Exception:
-            platform_ok = any(
-                getattr(b, "connected", False)
-                and getattr(getattr(b, "account_type", None), "value", "") == "platform"
-                for b in self.brokers.values()
-            )
-            # Conservative fail-closed fallback: if MABM is unavailable we do not
-            # assume capital readiness to avoid trading on unknown capital state.
-            capital_ok = False
+        nonce_ok, platform_ok, capital_ok, _, _, _ = self._evaluate_system_ready()
 
         if not (nonce_ok and platform_ok and capital_ok):
             return {
@@ -11804,39 +11949,7 @@ class BrokerManager:
           2) at least one platform broker must be connected
           3) unified capital authority must be ready
         """
-        nonce_ok = True
-        if is_nonce_issuance_authorized is not None:
-            try:
-                nonce_ok = bool(is_nonce_issuance_authorized())
-            except Exception:
-                nonce_ok = False
-
-        platform_ok = False
-        capital_ok = False
-        try:
-            try:
-                from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm_gate
-            except ImportError:
-                from multi_account_broker_manager import multi_account_broker_manager as _mabm_gate  # type: ignore[import]
-
-            if _mabm_gate is not None:
-                platform_ok = any(
-                    _mabm_gate.is_platform_connected(bt)
-                    for bt in list(_mabm_gate.platform_brokers.keys())
-                )
-                capital_ok = bool(
-                    getattr(_mabm_gate, "is_capital_authority_ready", lambda: False)()
-                )
-        except Exception:
-            # Conservative fallback when multi-account manager is unavailable.
-            platform_ok = any(
-                getattr(b, "connected", False)
-                and getattr(getattr(b, "account_type", None), "value", "") == "platform"
-                for b in self.brokers.values()
-            )
-            # Fail-closed on capital readiness if authoritative source is unavailable.
-            capital_ok = False
-
+        nonce_ok, platform_ok, capital_ok, _, _, _ = self._evaluate_system_ready()
         return nonce_ok and platform_ok and capital_ok
 
     def get_total_balance(self) -> float:
