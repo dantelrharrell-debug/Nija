@@ -77,7 +77,10 @@ class ContinuousExitEnforcer:
                 daemon=True
             )
             self._monitor_thread.start()
-            logger.info("🛡️ Continuous exit enforcer started (thread=%s)", self._monitor_thread.name)
+            logger.info(
+                "🛡️ Continuous exit enforcer started (thread_id=%s)",
+                self._monitor_thread.ident,
+            )
         except Exception as exc:
             logger.error("❌ Failed to start ContinuousExitEnforcer thread: %s", exc, exc_info=True)
             self._monitor_thread = None
