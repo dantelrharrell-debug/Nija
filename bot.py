@@ -36,6 +36,37 @@ except Exception:
 # supervisor-loop-only restart path so TradingStrategy is never created twice.
 _initialized_state: dict = {}
 _initialized_state_lock = threading.Lock()
+_external_watchdog_restart: dict = {"requested": False, "reason": ""}
+_external_watchdog_restart_lock = threading.Lock()
+
+
+def _request_external_watchdog_restart(reason: str) -> None:
+    """Flag that the main supervisor must exit for an external watchdog restart."""
+    with _external_watchdog_restart_lock:
+        _external_watchdog_restart["requested"] = True
+        _external_watchdog_restart["reason"] = str(reason)
+
+
+def _consume_external_watchdog_restart_reason() -> str:
+    """Return pending external-restart reason and clear the pending flag."""
+    with _external_watchdog_restart_lock:
+        if not _external_watchdog_restart.get("requested"):
+            return ""
+        reason = str(_external_watchdog_restart.get("reason", "")).strip()
+        _external_watchdog_restart["requested"] = False
+        _external_watchdog_restart["reason"] = ""
+        return reason
+
+
+def _is_fatal_nonce_restart_error(exc: Exception) -> bool:
+    """Return True when *exc* mandates a clean external watchdog restart."""
+    if not isinstance(exc, RuntimeError):
+        return False
+    msg = str(exc).lower()
+    return (
+        "nonce not authorized" in msg
+        or "invalid nonce spike detected" in msg
+    )
 
 # Import broker types for error reporting
 try:
@@ -892,6 +923,17 @@ def _run_bot_startup_and_trading_with_retry():
             raise
 
         except Exception as e:
+            if _is_fatal_nonce_restart_error(e):
+                logger.critical(
+                    "🚨 Fatal nonce authorization/desync error detected: %s",
+                    e,
+                    exc_info=True,
+                )
+                logger.critical(
+                    "🚨 Requesting clean process exit so external watchdog can restart service"
+                )
+                _request_external_watchdog_restart(str(e))
+                raise
             attempt += 1
             connection_attempts += 1  # FIX 4: track connection attempts
 
@@ -1989,6 +2031,19 @@ def main():
         try:
             supervisor_cycle += 1
 
+            restart_reason = _consume_external_watchdog_restart_reason()
+            if restart_reason:
+                _log_exit_point(
+                    "External Watchdog Restart Requested",
+                    exit_code=1,
+                    details=[
+                        "Fatal nonce condition requires clean external restart",
+                        f"Reason: {restart_reason}",
+                        *_get_thread_status(),
+                    ],
+                )
+                raise RuntimeError(f"External watchdog restart requested: {restart_reason}")
+
             # Check if startup thread is still alive — restart if not
             if not startup_thread.is_alive():
                 logger.critical(
@@ -2027,6 +2082,13 @@ def main():
             logger.info("Waiting for startup thread to finish...")
             startup_thread.join(timeout=10)
             break
+        except RuntimeError as e:
+            if "External watchdog restart requested:" in str(e):
+                logger.critical("🚨 Exiting main supervisor for external watchdog restart")
+                raise
+            logger.error(f"❌ RuntimeError in supervisor loop: {e}", exc_info=True)
+            logger.warning("Recovering from supervisor loop runtime error...")
+            time.sleep(10)
         except Exception as e:
             logger.error(f"❌ Error in supervisor loop: {e}", exc_info=True)
             logger.warning("Recovering from supervisor loop error...")

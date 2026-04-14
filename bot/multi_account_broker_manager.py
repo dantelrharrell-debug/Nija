@@ -338,8 +338,6 @@ class MultiAccountBrokerManager:
         
         # Register the broker instance
         self._platform_brokers[broker_type] = broker
-        # Mirror into the string-keyed flag dict so _platform_connected stays in sync
-        self._platform_connected[broker_type.value] = True
         # Pre-create the readiness Event before advancing the state machine.
         # This guarantees that any thread which calls _get_or_create_platform_event()
         # (directly or via wait_for_platform_ready()) always gets the same Event
@@ -722,9 +720,8 @@ class MultiAccountBrokerManager:
             logger.debug(f"🔍 Platform broker check for {broker_type.value}: broker={broker_obj.__class__.__name__}, connected={connected_status}")
 
             if connected_status:
-                # Sync state machine and update sticky connection timestamp
-                self._platform_state[broker_type.value] = ConnectionState.CONNECTED
-                self._last_platform_connected_time[broker_type] = time.time()
+                # Sync state machine and all related invariant mirrors.
+                self._transition_platform_state(broker_type, ConnectionState.CONNECTED)
                 return True
 
             # Sticky connection grace window: if the broker was connected very
@@ -820,6 +817,33 @@ class MultiAccountBrokerManager:
         """
         return self._platform_ready_events.setdefault(broker_type.value, threading.Event())
 
+    def _transition_platform_state(self, broker_type: BrokerType, new_state: ConnectionState) -> None:
+        """Apply a platform-state transition while keeping all FSM invariants aligned."""
+        key = broker_type.value
+        event = self._get_or_create_platform_event(broker_type)
+        self._platform_state[key] = new_state
+
+        if new_state == ConnectionState.CONNECTED:
+            self._platform_connected[key] = True
+            self._platform_failed_types.discard(broker_type)
+            self._last_platform_connected_time[broker_type] = time.time()
+            if broker_type == BrokerType.KRAKEN:
+                _KRAKEN_STARTUP_FSM.mark_connected()
+            event.set()
+            return
+
+        if new_state == ConnectionState.FAILED:
+            self._platform_connected[key] = False
+            self._platform_failed_types.add(broker_type)
+            if broker_type == BrokerType.KRAKEN:
+                _KRAKEN_STARTUP_FSM.mark_failed()
+            event.set()
+            return
+
+        # CONNECTING / NOT_STARTED / DISCONNECTED
+        self._platform_connected[key] = False
+        event.clear()
+
     def begin_platform_connection(self, broker_type: BrokerType) -> None:
         """Signal that a platform connection attempt is about to start.
 
@@ -831,9 +855,7 @@ class MultiAccountBrokerManager:
         Call this immediately before invoking the broker's ``connect()``
         method (e.g. in ``trading_strategy.py`` before ``kraken.connect()``).
         """
-        key = broker_type.value
-        self._platform_state[key] = ConnectionState.CONNECTING
-        self._get_or_create_platform_event(broker_type)  # pre-create; NOT set yet
+        self._transition_platform_state(broker_type, ConnectionState.CONNECTING)
         logger.info(
             "🔄 Platform %s connection starting (state → CONNECTING)",
             broker_type.value.upper(),
@@ -850,17 +872,7 @@ class MultiAccountBrokerManager:
         For Kraken: also ensures the FSM is in CONNECTED state (idempotent —
         ``mark_connected()`` is a no-op after the first call).
         """
-        self._platform_state[broker_type.value] = ConnectionState.CONNECTED
-        self._last_platform_connected_time[broker_type] = time.time()
-        # Clear any previous failure record now that the platform is live
-        self._platform_failed_types.discard(broker_type)
-        # Keep Kraken FSM in sync (idempotent after first mark_connected()).
-        if broker_type == BrokerType.KRAKEN:
-            _KRAKEN_STARTUP_FSM.mark_connected()
-        # Signal all threads waiting in wait_for_platform_ready() that the
-        # state has reached CONNECTED.  They will wake up immediately and
-        # re-read _platform_state to confirm the CONNECTED status.
-        self._get_or_create_platform_event(broker_type).set()
+        self._transition_platform_state(broker_type, ConnectionState.CONNECTED)
         # Propagate connected status to the PlatformAccountLayer singleton so
         # display_hierarchy() and external health checks see "CONNECTED".
         try:
@@ -902,12 +914,7 @@ class MultiAccountBrokerManager:
         USER accounts will be blocked from connecting until the platform
         either succeeds (clears this flag) or is explicitly retried.
         """
-        self._platform_state[broker_type.value] = ConnectionState.FAILED
-        self._platform_failed_types.add(broker_type)
-        # Transition Kraken FSM to FAILED so waiting USER threads wake
-        # immediately rather than sitting out a long timeout.
-        if broker_type == BrokerType.KRAKEN:
-            _KRAKEN_STARTUP_FSM.mark_failed()
+        self._transition_platform_state(broker_type, ConnectionState.FAILED)
         # Log at ERROR for CRITICAL brokers (they block trading) and WARNING
         # for non-CRITICAL brokers (system degrades but continues without them).
         is_critical = (
@@ -927,10 +934,6 @@ class MultiAccountBrokerManager:
                 "without this broker.  Fix credentials or network when possible.",
                 broker_type.value.upper(),
             )
-        # Unblock any threads waiting in wait_for_platform_ready() so they
-        # can observe the FAILED state and return False immediately instead
-        # of waiting until an optional timeout expires.
-        self._get_or_create_platform_event(broker_type).set()
         # Record failure with broker failure manager — this increments the
         # per-broker error counter so the circuit breaker can disable only this
         # broker without affecting Kraken or other healthy venues.
