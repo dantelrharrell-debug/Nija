@@ -990,7 +990,9 @@ except ImportError:
         def is_nonce_issuance_authorized() -> bool:  # type: ignore[no-redef]
             return False
         def get_global_nonce_manager():  # type: ignore[no-redef]
-            raise RuntimeError("global nonce manager unavailable")
+            raise RuntimeError(
+                "global nonce manager unavailable - cannot verify PID lock authority for trading operations"
+            )
         logger.warning(
             "⚠️ Nonce authorization module unavailable — defaulting nonce authorization to False"
         )

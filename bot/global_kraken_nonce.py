@@ -46,7 +46,10 @@ except ImportError:
 
 _logger = logging.getLogger(__name__)
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
-_PID_LOCK_FAIL_CLOSED = os.environ.get("FAIL_CLOSED", "0").strip().lower() in {
+_PID_LOCK_FAIL_CLOSED = os.environ.get(
+    "NIJA_FAIL_CLOSED",
+    os.environ.get("FAIL_CLOSED", "0"),
+).strip().lower() in {
     "1", "true", "yes", "on"
 }
 
@@ -2063,7 +2066,7 @@ class KrakenNonceManager:
 
     @staticmethod
     def _is_process_alive(pid: int) -> bool:
-        """Return True if *pid* appears alive on this host."""
+        """Return True if *pid* appears alive on this host (Unix signal-0 check)."""
         if pid <= 0:
             return False
         try:
