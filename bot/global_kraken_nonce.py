@@ -1537,6 +1537,9 @@ class KrakenNonceManager:
         Holding the process-wide Kraken API lock here guarantees that no live
         request thread can issue a nonce while recovery is recalibrating the
         nonce floor.
+
+        Args:
+            freeze_s: Seconds to wait before querying Kraken server time.
         """
         with _KRAKEN_API_LOCK:
             self._server_sync_resync_locked(freeze_s=freeze_s)
@@ -1647,6 +1650,14 @@ class KrakenNonceManager:
 
         This prevents probe/recovery nonce mutations from interleaving with live
         request nonces in the same process.
+
+        Args:
+            api_call_fn: Callable that executes the probe Kraken private request.
+            step_ms: Optional probe forward-step override in milliseconds.
+            max_attempts: Optional probe attempt-count override.
+
+        Returns:
+            True when probe calibration succeeds; False otherwise.
         """
         with _KRAKEN_API_LOCK:
             return self._probe_and_resync_locked(
