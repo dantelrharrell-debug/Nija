@@ -1655,7 +1655,54 @@ def _run_bot_startup_and_trading():
                 health_manager.update_exchange_status(connected=0, expected=exchanges_configured)
 
             logger.info("=" * 70)
-            logger.info("🚀 NIJA SYSTEM FULLY OPERATIONAL — TRADING ENABLED")
+            logger.info("⛔ STARTUP INVARIANT: BLOCK TRADING UNTIL TOTAL CAPITAL > $0")
+            logger.info("=" * 70)
+            CAPITAL_GATE_INTERVAL_S = 15
+            CAPITAL_GATE_LOG_EVERY_N_CHECKS = 4
+            capital_gate_checks = 0
+
+            def _get_startup_total_capital() -> float:
+                _mam = getattr(strategy, "multi_account_manager", None)
+                if _mam and hasattr(_mam, "get_all_balances"):
+                    _all_balances = _mam.get_all_balances()
+                    _platform_total = sum((_all_balances.get("platform") or {}).values())
+                    _users_total = sum(
+                        sum((_user_balances or {}).values())
+                        for _user_balances in (_all_balances.get("users") or {}).values()
+                    )
+                    return float(_platform_total + _users_total)
+                _bm = getattr(strategy, "broker_manager", None)
+                if _bm and hasattr(_bm, "get_total_balance"):
+                    return float(_bm.get_total_balance())
+                return 0.0
+
+            while True:
+                try:
+                    _total_capital = _get_startup_total_capital()
+                except Exception as _cap_gate_err:
+                    logger.warning(
+                        "⚠️ Startup capital invariant check failed: %s",
+                        _cap_gate_err,
+                    )
+                    _total_capital = 0.0
+
+                if _total_capital > 0.0:
+                    logger.info("🚀 SYSTEM READY — TRADING ENABLED")
+                    logger.info("💰 Startup total capital: $%.2f", _total_capital)
+                    break
+
+                capital_gate_checks += 1
+                if (
+                    capital_gate_checks == 1
+                    or capital_gate_checks % CAPITAL_GATE_LOG_EVERY_N_CHECKS == 0
+                ):
+                    logger.warning(
+                        "⏳ Trading loop blocked: waiting for total capital > $0 "
+                        "(current=$%.2f, next check in %ds)",
+                        _total_capital,
+                        CAPITAL_GATE_INTERVAL_S,
+                    )
+                time.sleep(CAPITAL_GATE_INTERVAL_S)
             logger.info("=" * 70)
 
             # ═══════════════════════════════════════════════════════════════════════
