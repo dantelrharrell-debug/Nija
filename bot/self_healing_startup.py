@@ -66,6 +66,7 @@ try:
         get_global_nonce_manager,
         get_global_nonce_stats,
         KrakenNonceManager,
+        _PROBE_SYSTEM_ENABLED as _NONCE_PROBE_SYSTEM_ENABLED,
     )
     _NONCE_MGR_AVAILABLE = True
 except ImportError:
@@ -73,6 +74,7 @@ except ImportError:
     get_global_nonce_manager = None  # type: ignore[assignment]
     get_global_nonce_stats   = None  # type: ignore[assignment]
     KrakenNonceManager       = None  # type: ignore[assignment]
+    _NONCE_PROBE_SYSTEM_ENABLED = False
     logger.warning("⚠️  global_kraken_nonce not importable — nonce checks skipped")
 
 try:
@@ -1112,13 +1114,30 @@ class SelfHealingStartup:
             # inside KrakenBroker.connect(), so we just flag it here.
             escalator = CeilingJumpEscalator(api_call_fn=None, config=self._cfg)
             if nonce_report.recommended_tier == EscalationTier.CEILING_JUMP:
-                esc_result = escalator.run(starting_tier=EscalationTier.CEILING_JUMP)
+                if _NONCE_PROBE_SYSTEM_ENABLED:
+                    esc_result = escalator.run(starting_tier=EscalationTier.CEILING_JUMP)
+                else:
+                    logger.info(
+                        "SelfHealingStartup: CEILING_JUMP recommended but probe system is "
+                        "disabled (NIJA_ENABLE_PROBE_SYSTEM not set) — "
+                        "server-anchored next_nonce() will self-heal on the first API call "
+                        "(nonce lead=%.1f min). Skipping ceiling jump.",
+                        nonce_report.lead_ms / 60_000,
+                    )
             elif nonce_report.recommended_tier == EscalationTier.DEEP_PROBE:
-                if _NONCE_MGR_AVAILABLE:
+                if _NONCE_PROBE_SYSTEM_ENABLED and _NONCE_MGR_AVAILABLE:
                     get_global_nonce_manager().activate_deep_reset()
                     logger.warning(
                         "SelfHealingStartup: deep-reset mode activated on nonce manager "
                         "(probe_and_resync inside KrakenBroker.connect() will use 120-min coverage)"
+                    )
+                else:
+                    logger.info(
+                        "SelfHealingStartup: DEEP_PROBE recommended but probe system is "
+                        "disabled (NIJA_ENABLE_PROBE_SYSTEM not set) — "
+                        "server-anchored next_nonce() will self-heal on the first API call "
+                        "(nonce lead=%.1f min). Skipping deep-reset activation.",
+                        nonce_report.lead_ms / 60_000,
                     )
             elif nonce_report.recommended_tier == EscalationTier.EMERGENCY:
                 esc_result = escalator.run(starting_tier=EscalationTier.EMERGENCY)
