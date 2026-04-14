@@ -4168,6 +4168,18 @@ class TradingStrategy:
         # cache is exhausted AND live fetches fail, preventing the $0 sentinel from
         # bottlenecking the position-cap calculation and killing all trading.
         self._last_known_balance: Optional[float] = None
+        # Capital drift guard state (EMA + hysteresis).
+        self._ema_capital: Optional[float] = None
+        self._capital_ema_alpha: float = float(os.environ.get("NIJA_CAPITAL_EMA_ALPHA", "0.2"))
+        self._capital_warning_drop_pct: float = float(
+            os.environ.get("NIJA_CAPITAL_WARNING_DROP_PCT", "10.0")
+        )
+        self._capital_hard_stop_drop_pct: float = float(
+            os.environ.get("NIJA_CAPITAL_HARD_STOP_DROP_PCT", "20.0")
+        )
+        self._capital_recovery_threshold_usd: float = float(
+            os.environ.get("NIJA_CAPITAL_RECOVERY_THRESHOLD_USD", str(MIN_BALANCE_TO_TRADE_USD))
+        )
 
         # Initialize advanced trading features placeholder
         # NOTE: Advanced modules will be initialized AFTER first live balance fetch
@@ -7954,6 +7966,86 @@ class TradingStrategy:
             logger.error(f"   {traceback.format_exc()}")
             return False
 
+    def _get_total_capital_snapshot(self, fallback: float = 0.0) -> float:
+        """Best-effort authoritative total capital snapshot for safety gates."""
+        try:
+            _ca = _get_capital_authority_ts() if _get_capital_authority_ts is not None else None
+            if _ca is not None:
+                _total = float(_ca.get_real_capital())
+                if _total > 0.0:
+                    return _total
+        except Exception:
+            pass
+        return max(0.0, float(fallback))
+
+    def _attempt_stop_entries_recovery(self, stop_file: str, total_capital: float) -> bool:
+        """Auto-clear STOP_ALL_ENTRIES when capital recovers above threshold."""
+        if not os.path.exists(stop_file):
+            return False
+        if total_capital < self._capital_recovery_threshold_usd:
+            return False
+        try:
+            os.remove(stop_file)
+            logger.info(
+                "✅ Trading re-enabled after recovery "
+                "(total_capital=$%.2f >= recovery_threshold=$%.2f)",
+                total_capital,
+                self._capital_recovery_threshold_usd,
+            )
+            return True
+        except Exception as exc:
+            logger.warning("⚠️ Could not remove STOP_ALL_ENTRIES.conf during recovery: %s", exc)
+            return False
+
+    def _apply_capital_drift_hysteresis(self, current_capital: float, stop_file: str) -> None:
+        """Apply EMA-based drift check with warning/hard-stop hysteresis bands."""
+        current_capital = max(0.0, float(current_capital))
+        if current_capital <= 0.0:
+            return
+
+        if self._ema_capital is None or self._ema_capital <= 0.0:
+            self._ema_capital = current_capital
+            return
+
+        alpha = min(1.0, max(0.0, self._capital_ema_alpha))
+        self._ema_capital = ((1.0 - alpha) * self._ema_capital) + (alpha * current_capital)
+        ema_baseline = self._ema_capital
+        if ema_baseline <= 0.0:
+            return
+
+        drift = current_capital - ema_baseline
+        drop_pct = max(0.0, ((ema_baseline - current_capital) / ema_baseline) * 100.0)
+
+        if drop_pct >= self._capital_hard_stop_drop_pct:
+            if not os.path.exists(stop_file):
+                try:
+                    with open(stop_file, "w", encoding="utf-8") as f:
+                        f.write(
+                            "AUTO_STOP=1\n"
+                            "reason=capital_drift_hard_stop\n"
+                            f"drop_pct={drop_pct:.4f}\n"
+                            f"warning_threshold_pct={self._capital_warning_drop_pct:.4f}\n"
+                            f"hard_stop_threshold_pct={self._capital_hard_stop_drop_pct:.4f}\n"
+                            f"ema_capital={ema_baseline:.2f}\n"
+                            f"current_capital={current_capital:.2f}\n"
+                        )
+                    logger.critical(
+                        "🛑 HARD STOP: capital drop %.2f%% (EMA=$%.2f current=$%.2f drift=$%.2f) "
+                        ">= hard threshold %.2f%% — STOP_ALL_ENTRIES.conf created",
+                        drop_pct, ema_baseline, current_capital, drift, self._capital_hard_stop_drop_pct,
+                    )
+                except Exception as exc:
+                    logger.error("❌ Failed to create STOP_ALL_ENTRIES.conf: %s", exc)
+            return
+
+        if drop_pct >= self._capital_warning_drop_pct:
+            logger.warning(
+                "⚠️ Capital warning only: drop %.2f%% (EMA=$%.2f current=$%.2f drift=$%.2f) "
+                ">= warning %.2f%% and < hard stop %.2f%%",
+                drop_pct, ema_baseline, current_capital, drift,
+                self._capital_warning_drop_pct, self._capital_hard_stop_drop_pct,
+            )
+
     def run_cycle(self, broker=None, user_mode=False):
         """Execute a complete trading cycle with position cap enforcement.
 
@@ -9176,6 +9268,10 @@ class TradingStrategy:
 
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
             entries_blocked = os.path.exists(stop_entries_file)
+            if entries_blocked:
+                _startup_capital = self._get_total_capital_snapshot(fallback=0.0)
+                self._attempt_stop_entries_recovery(stop_entries_file, _startup_capital)
+                entries_blocked = os.path.exists(stop_entries_file)
 
             # Determine if we're in management-only mode
             managing_only = user_mode or entries_blocked or len(current_positions) >= MAX_POSITIONS_ALLOWED
@@ -9358,6 +9454,13 @@ class TradingStrategy:
                             )
                 except Exception:
                     pass  # Override is advisory; retain BalanceService value on error
+
+            # EMA capital drift hysteresis + auto recovery gate for STOP_ALL_ENTRIES.
+            _current_total_capital = self._get_total_capital_snapshot(fallback=account_balance)
+            self._apply_capital_drift_hysteresis(_current_total_capital, stop_entries_file)
+            if os.path.exists(stop_entries_file):
+                self._attempt_stop_entries_recovery(stop_entries_file, _current_total_capital)
+            entries_blocked = os.path.exists(stop_entries_file)
 
             # ── PortfolioStateManager → AdvancedTradingManager sync ───────────
             # Every cycle: push the freshly-fetched balance into portfolio_manager
