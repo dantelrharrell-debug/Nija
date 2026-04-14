@@ -7457,7 +7457,8 @@ class KrakenBroker(BaseBroker):
                         )
                         self.last_connection_error = (
                             "Per-key nonce manager unavailable during probe; "
-                            "platform fallback blocked to prevent nonce desync"
+                            "platform fallback blocked to prevent nonce desync: "
+                            f"{_probe_mgr_err}"
                         )
                         return False
 

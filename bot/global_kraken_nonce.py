@@ -93,6 +93,10 @@ def _probe_window_end() -> None:
     with _PROBE_WINDOW_COND:
         if _PROBE_WINDOW_ACTIVE > 0:
             _PROBE_WINDOW_ACTIVE -= 1
+        else:
+            _logger.warning(
+                "_probe_window_end called with no active probe window; counter already at zero"
+            )
         _PROBE_WINDOW_COND.notify_all()
 
 
@@ -339,13 +343,16 @@ _NONCE_BACKEND   = os.environ.get("NIJA_NONCE_BACKEND",   "file").strip().lower(
 _REDIS_URL       = os.environ.get("NIJA_REDIS_URL",        "redis://localhost:6379/0")
 _REDIS_NONCE_KEY = os.environ.get("NIJA_REDIS_NONCE_KEY",  "nija:kraken:nonce")
 _NONCE_MODE      = os.environ.get("NIJA_NONCE_MODE",       "file").strip().lower()
+_FORCE_PERSISTED_NONCE_SOURCE = os.environ.get(
+    "NIJA_FORCE_PERSISTED_NONCE_SOURCE", "1"
+).strip().lower() in {"1", "true", "yes", "on"}
 
 # Fast stabilisation guard: enforce a single persisted nonce source.
 # Timestamp mode bypasses persisted state and is disabled until incident recovery
 # is complete.
-if _NONCE_MODE != "file":
+if _FORCE_PERSISTED_NONCE_SOURCE and _NONCE_MODE != "file":
     _logger.warning(
-        "KrakenNonceManager: NIJA_NONCE_MODE=%r disabled during stabilisation; "
+        "KrakenNonceManager: NIJA_NONCE_MODE=%r disabled during stabilization; "
         "forcing file mode (persisted monotonic source).",
         _NONCE_MODE,
     )
@@ -1624,7 +1631,18 @@ class KrakenNonceManager:
         step_ms: int = 0,
         max_attempts: int = 0,
     ) -> bool:
-        """Calibrate nonce via server-sync + forward-only probing (no rebuilds)."""
+        """Calibrate nonce via server-sync + forward-only probing (no rebuilds).
+
+        Args:
+            api_call_fn: Callable that executes a Kraken request and returns a
+                Kraken-style response dict with optional "error" list.
+            step_ms: Forward jump (ms) between retries; 0 uses mode defaults.
+            max_attempts: Number of forward retry steps after server-sync; 0 uses
+                mode defaults.
+
+        Returns:
+            True when nonce calibration succeeds; False otherwise.
+        """
         _probe_window_begin()
         try:
             _ntp = check_ntp_sync()
@@ -1687,9 +1705,9 @@ class KrakenNonceManager:
             self.server_sync_resync()
 
             failed_probe_attempts = 0
-            total_probe_count = max(1, effective_max + 1)
-            for probe_num in range(1, total_probe_count + 1):
-                ok, nonce_err = _call_once(f"probe {probe_num}/{total_probe_count}")
+            max_probe_num = effective_max + 1
+            for probe_num in range(1, max_probe_num + 1):
+                ok, nonce_err = _call_once(f"probe {probe_num}/{max_probe_num}")
                 if ok:
                     if failed_probe_attempts > 0:
                         AdaptiveNonceOffsetEngine().record_calibration(
@@ -1699,21 +1717,22 @@ class KrakenNonceManager:
                 if not nonce_err:
                     return False
                 failed_probe_attempts += 1
-                if probe_num < total_probe_count:
+                if probe_num < max_probe_num:
                     with _LOCK:
                         self._last_nonce += effective_step
                         self._persist()
                     _logger.warning(
                         "KrakenNonceManager.probe_and_resync: nonce still ahead; "
                         "advanced +%d ms (probe %d/%d)",
-                        effective_step, probe_num, total_probe_count,
+                        effective_step, probe_num, max_probe_num,
                     )
 
             _logger.error(
                 "KrakenNonceManager.probe_and_resync: forward-only probe window exhausted "
-                "(%d attempts, step=%d ms). Do not rotate keys for nonce issues; "
+                "(%d total probes including post-sync baseline, step=%d ms). "
+                "Do not rotate keys for nonce issues; "
                 "only rotate for invalid/permission/key errors.",
-                total_probe_count, effective_step,
+                max_probe_num, effective_step,
             )
             return False
         finally:
@@ -1994,7 +2013,17 @@ def _raise_nonce_floor_in_place(
     last_successful_nonce: int,
     context: str,
 ) -> None:
-    """Repair nonce floor in-place (forward-only), without destroy/rebuild."""
+    """Repair nonce floor in-place (forward-only), without destroy/rebuild.
+
+    Args:
+        mgr: Active nonce manager instance to adjust.
+        now_ms: Current wall-clock time in milliseconds.
+        last_successful_nonce: Last nonce Kraken accepted for this manager.
+        context: Caller label for structured logs.
+
+    Returns:
+        None.
+    """
     required_floor = max(
         last_successful_nonce + _PRE_REQUEST_EPSILON_MS,
         now_ms + _PRE_REQUEST_SAFETY_OFFSET_MS,
