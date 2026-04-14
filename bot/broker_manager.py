@@ -11045,7 +11045,13 @@ class BrokerManager:
         )
 
     def _get_broker_health_score(self, broker: BaseBroker) -> float:
-        """Return broker health score in range [0, 100]."""
+        """Return broker health score in range [0, 100].
+
+        Resolution order:
+          1) broker.health_score attribute (if present)
+          2) ExecutionRiskFirewall venue score snapshot
+          3) 100.0 conservative default
+        """
         # Prefer explicit broker health score when present.
         _raw = getattr(broker, "health_score", None)
         if _raw is not None:
@@ -11090,7 +11096,10 @@ class BrokerManager:
         return 0.0
 
     def _get_broker_balance_age_s(self, broker: BaseBroker) -> Optional[float]:
-        """Return balance snapshot age in seconds, or None when unknown."""
+        """Return balance snapshot age in seconds, or None when unknown.
+
+        Uses ``broker.last_updated`` first, then ``broker._balance_last_updated``.
+        """
         try:
             ts = getattr(broker, "last_updated", None)
             if ts is None:
@@ -11105,12 +11114,27 @@ class BrokerManager:
         except Exception:
             return None
 
+    def _resolve_broker_effective_metrics(self, broker: BaseBroker) -> Tuple[float, float, bool]:
+        """Return ``(equity, health_score, is_stale)`` and update broker.health_score."""
+        _equity = self._get_broker_equity(broker)
+        _health = self._get_broker_health_score(broker)
+        _age_s = self._get_broker_balance_age_s(broker)
+        _is_stale = _age_s is None or (_age_s > self._stale_balance_ttl_s)
+        if _is_stale:
+            _health = 0.0
+        setattr(broker, "health_score", _health)
+        return _equity, _health, _is_stale
+
     def _evaluate_system_ready(self) -> Tuple[bool, bool, bool, float, float, int]:
         """
         Evaluate hard trading gates and return diagnostics.
 
         Returns:
             (nonce_ok, platform_ok, capital_ok, total_capital, effective_capital, healthy_count)
+
+        Note:
+            This method normalizes ``broker.health_score`` in-place (stale brokers
+            are forced to 0) so downstream routing/allocation remains consistent.
         """
         nonce_ok = True
         if is_nonce_issuance_authorized is not None:
@@ -11155,18 +11179,11 @@ class BrokerManager:
         stale_count = 0
 
         for _b in platform_brokers:
-            _equity = self._get_broker_equity(_b)
-            _health = self._get_broker_health_score(_b)
-            _age_s = self._get_broker_balance_age_s(_b)
-            _is_stale = _age_s is None or (_age_s > self._stale_balance_ttl_s)
+            _equity, _health, _is_stale = self._resolve_broker_effective_metrics(_b)
 
             if _is_stale:
                 stale_count += 1
-                _health = 0.0
-                # Phantom-capital guard: stale balance cannot contribute to health weighting.
-                setattr(_b, "health_score", 0.0)
             else:
-                setattr(_b, "health_score", _health)
                 healthy_count += 1
 
             total_capital += _equity
@@ -11184,7 +11201,8 @@ class BrokerManager:
             f"capital={capital_ok} | "
             f"total=${total_capital:.2f} | "
             f"effective=${effective_capital:.2f} | "
-            f"healthy_brokers={healthy_count}"
+            f"healthy_brokers={healthy_count} | "
+            f"stale_brokers={stale_count}"
         )
         return nonce_ok, platform_ok, capital_ok, total_capital, effective_capital, healthy_count
 
@@ -11873,14 +11891,7 @@ class BrokerManager:
         # and venue split is proportional to each broker's effective contribution.
         effective_by_venue: Dict[str, float] = {}
         for _b in eligible_brokers:
-            _equity = self._get_broker_equity(_b)
-            _health = self._get_broker_health_score(_b)
-            _age_s = self._get_broker_balance_age_s(_b)
-            if _age_s is None or _age_s > self._stale_balance_ttl_s:
-                _health = 0.0
-                setattr(_b, "health_score", 0.0)
-            else:
-                setattr(_b, "health_score", _health)
+            _equity, _health, _ = self._resolve_broker_effective_metrics(_b)
             effective_by_venue[_b.broker_type.value] = max(0.0, _equity * (_health / 100.0))
 
         _effective_total = sum(effective_by_venue.values())

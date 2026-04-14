@@ -4170,7 +4170,10 @@ class TradingStrategy:
         self._last_known_balance: Optional[float] = None
         # Capital drift guard state (EMA + hysteresis).
         self._ema_capital: Optional[float] = None
-        self._capital_ema_alpha: float = float(os.environ.get("NIJA_CAPITAL_EMA_ALPHA", "0.2"))
+        self._capital_ema_alpha: float = min(
+            1.0,
+            max(0.0, float(os.environ.get("NIJA_CAPITAL_EMA_ALPHA", "0.2")))
+        )
         self._capital_warning_drop_pct: float = float(
             os.environ.get("NIJA_CAPITAL_WARNING_DROP_PCT", "10.0")
         )
@@ -8007,8 +8010,10 @@ class TradingStrategy:
             self._ema_capital = current_capital
             return
 
-        alpha = min(1.0, max(0.0, self._capital_ema_alpha))
-        self._ema_capital = ((1.0 - alpha) * self._ema_capital) + (alpha * current_capital)
+        self._ema_capital = (
+            ((1.0 - self._capital_ema_alpha) * self._ema_capital)
+            + (self._capital_ema_alpha * current_capital)
+        )
         ema_baseline = self._ema_capital
         if ema_baseline <= 0.0:
             return
