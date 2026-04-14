@@ -413,6 +413,12 @@ _NONCE_BACKEND   = os.environ.get("NIJA_NONCE_BACKEND",   "file").strip().lower(
 _REDIS_URL       = os.environ.get("NIJA_REDIS_URL",        "redis://localhost:6379/0")
 _REDIS_NONCE_KEY = os.environ.get("NIJA_REDIS_NONCE_KEY",  "nija:kraken:nonce")
 _NONCE_MODE      = os.environ.get("NIJA_NONCE_MODE",       "file").strip().lower()
+# If enabled, missing process-lifetime PID lock is treated as fatal (raise).
+# Default is disabled to avoid import-time crash loops in environments where
+# lock acquisition can be transiently unavailable; per-operation lock remains.
+_FAIL_CLOSED_ON_PID_LOCK_MISS = os.environ.get(
+    "NIJA_NONCE_FAIL_CLOSED_ON_PID_LOCK_MISS", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
 _FORCE_PERSISTED_NONCE_SOURCE = os.environ.get(
     "NIJA_FORCE_PERSISTED_NONCE_SOURCE", "1"
 ).strip().lower() in {"1", "true", "yes", "on"}
@@ -1041,12 +1047,21 @@ class KrakenNonceManager:
                 "cannot hard-enforce process-lifetime single-writer locking."
             )
         elif self._pid_lock_fh is None:
-            raise RuntimeError(
+            _pid_lock_failure_message = (
                 "Kraken nonce writer lock not acquired. "
                 "Hard rule violation: ONE API KEY = ONE WRITER "
                 "(no multi-container, no multi-region, no independent nonce writers). "
                 "Likely causes: another NIJA process already running or lock-file permissions. "
                 "Stop all duplicate deployments/processes and restart a single writer."
+            )
+            if _FAIL_CLOSED_ON_PID_LOCK_MISS:
+                raise RuntimeError(_pid_lock_failure_message)
+            _logger.critical(
+                "Continuing in degraded mode because "
+                "NIJA_NONCE_FAIL_CLOSED_ON_PID_LOCK_MISS is not enabled; "
+                "per-operation nonce lock checks remain active. "
+                "Original lock error: %s",
+                _pid_lock_failure_message,
             )
 
         # Hard rule: disallow the LEGACY NIJA_NONCE_BACKEND=redis path.
