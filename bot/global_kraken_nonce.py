@@ -1054,9 +1054,10 @@ class KrakenNonceManager:
             if _FAIL_CLOSED_ON_PID_LOCK_MISS:
                 raise RuntimeError(_lock_error)
             _logger.critical(
-                "%s Continuing in degraded mode because "
+                "Continuing in degraded mode because "
                 "NIJA_NONCE_FAIL_CLOSED_ON_PID_LOCK_MISS is disabled; "
-                "per-operation nonce lock checks remain active.",
+                "per-operation nonce lock checks remain active. "
+                "Original lock error: %s",
                 _lock_error,
             )
 
