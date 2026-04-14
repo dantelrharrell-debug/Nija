@@ -7451,9 +7451,15 @@ class KrakenBroker(BaseBroker):
                     except Exception as _probe_mgr_err:
                         logger.debug(
                             "   ⚠️  Could not obtain per-key nonce manager for probe "
-                            "(key_id=%s, err=%s) — falling back to platform manager",
+                            "(key_id=%s, err=%s) — refusing platform fallback to "
+                            "prevent mixed nonce ownership",
                             _probe_key_id, _probe_mgr_err,
                         )
+                        self.last_connection_error = (
+                            "Per-key nonce manager unavailable during probe; "
+                            "platform fallback blocked to prevent nonce desync"
+                        )
+                        return False
 
                 def _probe_call():
                     return self._kraken_private_call("Balance", {}, category=_probe_cat)
