@@ -12,6 +12,7 @@ import logging
 import socket
 import secrets
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 import signal
@@ -36,30 +37,46 @@ except Exception:
 # supervisor-loop-only restart path so TradingStrategy is never created twice.
 _initialized_state: dict = {}
 _initialized_state_lock = threading.Lock()
-_external_watchdog_restart: dict = {"requested": False, "reason": ""}
+
+
+@dataclass
+class _ExternalWatchdogRestartState:
+    requested: bool = False
+    reason: str = ""
+
+
+_external_watchdog_restart = _ExternalWatchdogRestartState()
 _external_watchdog_restart_lock = threading.Lock()
 
 
 def _request_external_watchdog_restart(reason: str) -> None:
     """Flag that the main supervisor must exit for an external watchdog restart."""
     with _external_watchdog_restart_lock:
-        _external_watchdog_restart["requested"] = True
-        _external_watchdog_restart["reason"] = str(reason)
+        _external_watchdog_restart.requested = True
+        _external_watchdog_restart.reason = str(reason)
 
 
 def _consume_external_watchdog_restart_reason() -> str:
     """Return pending external-restart reason and clear the pending flag."""
     with _external_watchdog_restart_lock:
-        if not _external_watchdog_restart.get("requested"):
+        if not _external_watchdog_restart.requested:
             return ""
-        reason = str(_external_watchdog_restart.get("reason", "")).strip()
-        _external_watchdog_restart["requested"] = False
-        _external_watchdog_restart["reason"] = ""
+        reason = str(_external_watchdog_restart.reason).strip()
+        _external_watchdog_restart.requested = False
+        _external_watchdog_restart.reason = ""
         return reason
 
 
 def _is_fatal_nonce_restart_error(exc: Exception) -> bool:
-    """Return True when *exc* mandates a clean external watchdog restart."""
+    """Return True for fatal nonce RuntimeErrors that must be externally restarted.
+
+    Triggers on:
+      - ``RuntimeError: nonce not authorized``
+      - ``RuntimeError: Invalid nonce spike detected``
+
+    These indicate nonce state/auth desync that should not be retried in-process.
+    Exiting lets the external watchdog restart with a clean runtime state.
+    """
     if not isinstance(exc, RuntimeError):
         return False
     msg = str(exc).lower()

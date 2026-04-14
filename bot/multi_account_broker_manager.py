@@ -818,7 +818,17 @@ class MultiAccountBrokerManager:
         return self._platform_ready_events.setdefault(broker_type.value, threading.Event())
 
     def _transition_platform_state(self, broker_type: BrokerType, new_state: ConnectionState) -> None:
-        """Apply a platform-state transition while keeping all FSM invariants aligned."""
+        """Apply a platform-state transition while keeping all FSM invariants aligned.
+
+        Invariants enforced per transition:
+          - ``_platform_state[key]`` always matches the latest transition target.
+          - ``_platform_connected[key]`` is True only in CONNECTED.
+          - ``_platform_failed_types`` includes broker_type only in FAILED.
+          - ``_last_platform_connected_time[broker_type]`` is refreshed only in CONNECTED.
+          - ``_platform_ready_events[key]`` is set in terminal states (CONNECTED/FAILED)
+            and cleared in non-terminal states (CONNECTING/NOT_STARTED/DISCONNECTED).
+          - Kraken startup FSM mirror is synchronized for CONNECTED/FAILED transitions.
+        """
         key = broker_type.value
         event = self._get_or_create_platform_event(broker_type)
         self._platform_state[key] = new_state
