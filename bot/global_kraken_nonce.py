@@ -2148,46 +2148,37 @@ class KrakenNonceManager:
 
     def _load_last_nonce(self) -> int:
         """
-        Compute startup nonce with a persistent monotonic floor.
+        Compute startup nonce with a persisted-or-time safety floor.
 
         Startup invariant
         -----------------
         Every rebuild/restart must satisfy:
-        ``startup_nonce >= last_issued_nonce + 1``.
+        ``startup_nonce >= max(persisted_nonce, now_ms + startup_jump_ms)``.
 
         The startup floor is:
-        ``max(server_time_ms + _SERVER_SYNC_OFFSET_MS, persisted_nonce + 1)``.
-        This prevents nonce regressions when process/container lifecycle resets
-        while Kraken still remembers a higher nonce.
+        ``max(persisted_nonce, now_ms + _STARTUP_JUMP_MS)``.
+        This guarantees a forward jump on every boot while still preserving the
+        persisted high-water mark when it is already ahead.
+        On first boot (no state file / persisted nonce == 0), startup uses
+        ``now_ms + _STARTUP_JUMP_MS``.
 
         Must be called while holding both ``_LOCK`` and ``_CrossProcessLock``.
         """
         _wait_for_probe_window("KrakenNonceManager._load_last_nonce")
-        server_ms = _fetch_kraken_server_time_ms()
-        if server_ms is None:
-            server_ms = int(time.time() * 1000)
-            _logger.warning(
-                "KrakenNonceManager._load_last_nonce: Kraken server-time "
-                "endpoint unavailable — using local clock as fallback"
-            )
-        else:
-            now_ms = int(time.time() * 1000)
-            _logger.info(
-                "KrakenNonceManager._load_last_nonce: Kraken server time = %d ms "
-                "(local delta: %+d ms)",
-                server_ms, server_ms - now_ms,
-            )
-
         persisted_nonce = self._read_state_file_raw()
-        persisted_floor = persisted_nonce + 1 if persisted_nonce > 0 else 0
-        baseline = max(server_ms + _SERVER_SYNC_OFFSET_MS, persisted_floor)
+        now_ms = int(time.time() * 1000)
+        # Startup floor is intentionally local-time based for deterministic
+        # restart recovery; persisted_nonce remains the high-water anchor.
+        safety_floor = now_ms + _STARTUP_JUMP_MS
+        baseline = max(persisted_nonce, safety_floor)
         _logger.info(
             "KrakenNonceManager._load_last_nonce: startup nonce = %d "
-            "(server_floor=%d persisted_nonce=%d persisted_floor=%d)",
+            "(persisted_nonce=%d now_ms=%d STARTUP_JUMP_MS=%d safety_floor=%d)",
             baseline,
-            server_ms + _SERVER_SYNC_OFFSET_MS,
             persisted_nonce,
-            persisted_floor,
+            now_ms,
+            _STARTUP_JUMP_MS,
+            safety_floor,
         )
         return baseline
 
