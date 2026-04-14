@@ -1472,8 +1472,10 @@ class KrakenNonceManager:
             )
             if _RECOVERY_FREEZE_S > 0:
                 time.sleep(_RECOVERY_FREEZE_S)
-            # Destroy the singleton — get_kraken_nonce() will rebuild it fresh.
-            KrakenNonceManager.destroy_instance()
+            # Destroy the singleton — the next nonce call will rebuild it fresh.
+            # Use self._key_id so that a per-key manager destroys itself (its
+            # own registry entry) rather than the unrelated platform singleton.
+            KrakenNonceManager.destroy_instance(key_id=getattr(self, "_key_id", ""))
 
     def record_success(self) -> None:
         """Reset the consecutive-error counter after a successful API call.
