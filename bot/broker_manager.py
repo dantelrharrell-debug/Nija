@@ -6824,8 +6824,7 @@ class KrakenBroker(BaseBroker):
             finally:
                 # Compatibility: DistributedNonceManager does not expose end_request().
                 # Never hard-fail private calls on legacy nonce lifecycle hooks.
-                _nm = self.nonce_manager
-                _end_request = getattr(_nm, "end_request", None) if _nm is not None else None
+                _end_request = getattr(self.nonce_manager, "end_request", None)
                 if callable(_end_request):
                     _end_request()
 
@@ -7685,11 +7684,13 @@ class KrakenBroker(BaseBroker):
                         if held_amount > 0:
                             logger.info(f"   Held in Orders: ${held_amount:.2f}")
                             logger.info(f"   Total Funds: ${total_funds:.2f}")
-                        if NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES:
+                        if (NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES
+                                and not getattr(self, "_capital_gate_override_logged", False)):
                             logger.warning(
                                 "🧪 NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES=1 is enabled for this run "
                                 "(Kraken BUY minimum-capital gate override active)"
                             )
+                            self._capital_gate_override_logged = True
 
                         # Initialize Kraken rate profile based on account balance (Jan 23, 2026)
                         # Separate entry/exit/monitoring API budgets for optimal performance
@@ -8665,6 +8666,15 @@ class KrakenBroker(BaseBroker):
 
             # FIX 2: Reject BUY orders when in EXIT-ONLY mode
             # NOTE: SELL orders are NOT checked here - they always pass through
+            if (side.lower() == 'buy'
+                    and NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES
+                    and not getattr(self, "_capital_gate_runtime_warned", False)):
+                logger.critical(
+                    "🧪 CAPITAL GATE OVERRIDE ACTIVE: NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES=1 "
+                    "permits Kraken BUY attempts below configured minimum balance. "
+                    "Use for controlled testing only."
+                )
+                self._capital_gate_runtime_warned = True
             if (side.lower() == 'buy'
                     and getattr(self, 'exit_only_mode', False)
                     and not force_liquidate
