@@ -756,8 +756,30 @@ _KRAKEN_BALANCE_CACHE_TTL_SECONDS: int = int(os.environ.get('NIJA_KRAKEN_BALANCE
 # - Nonce file exists and is initialized properly
 # - No collision with other user accounts starting simultaneously
 # - No parallel nonce generation during bootstrap
-KRAKEN_STARTUP_DELAY_SECONDS = 10.0   # Base startup cooldown (increased from 5 s)
-KRAKEN_STARTUP_DELAY_JITTER  =  5.0   # Additional random jitter (0 – 5 s) to stagger multi-instance starts
+# Pre-connection startup delay and jitter.
+#
+# History: these were 10 s base + 5 s jitter to serialise multi-instance
+# nonce ownership.  With the server-anchored nonce formula each manager
+# independently anchors to Kraken server time, so the nonce-gap rationale
+# no longer applies.  The values are now env-overridable so operators can
+# tune without a redeploy; Railway single-replica deployments use the lower
+# default (1 s base + 1 s jitter → 1–2 s total).
+def _float_env(name: str, default: float) -> float:
+    """Read a float from an env var; fall back to *default* and warn on invalid input."""
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "⚠️  Invalid value for %s=%r — expected a number; using default %.1f",
+            name, raw, default,
+        )
+        return default
+
+KRAKEN_STARTUP_DELAY_SECONDS: float = _float_env("NIJA_KRAKEN_STARTUP_DELAY_S", 1.0)
+KRAKEN_STARTUP_DELAY_JITTER:  float = _float_env("NIJA_KRAKEN_STARTUP_DELAY_JITTER_S", 1.0)
 # Minimum inter-call spacing injected in _kraken_private_call() to prevent
 # ultra-fast bursts that can cause nonce-ordering issues on Kraken's servers.
 # Jittered: random.uniform(0.05, 0.15) seconds per call.
@@ -7828,18 +7850,22 @@ class KrakenBroker(BaseBroker):
                         # Fetch minimum volumes for all trading pairs to prevent order rejections
                         self._initialize_kraken_market_data()
 
-                        # CRITICAL FIX (Jan 18, 2026): Add post-connection delay
-                        # After successful connection test, wait before allowing next API call
-                        # This prevents "Invalid nonce" when balance is checked immediately after
-                        # The connection test already called Balance API, and rapid consecutive
-                        # calls (even with 1s interval) can trigger nonce errors
-                        # NOTE: time.sleep() blocking is INTENTIONAL - we want to pause execution
-                        # to ensure proper timing between API calls. This is a synchronous operation
-                        # during bot startup, not an async/event-driven context.
-                        post_connection_delay = 10.0  # 10 seconds post-connection cooldown (increased from 2 s to allow nonce to settle)
-                        logger.info(f"   ⏳ Post-connection cooldown: {post_connection_delay:.1f}s (prevents nonce errors)...")
-                        time.sleep(post_connection_delay)
-                        logger.debug(f"   ✅ Cooldown complete - ready for balance checks")
+                        # Post-connection cooldown — originally 10 s to let nonces "settle".
+                        # With the server-anchored next_nonce() formula every subsequent
+                        # nonce is independently floored to server_time + offset, so there
+                        # is no stale-nonce window to wait out.  Default is now 0 s;
+                        # operators can restore a delay via NIJA_KRAKEN_POST_CONNECT_DELAY_S
+                        # if they observe nonce collisions with an unusually fast caller.
+                        post_connection_delay: float = _float_env("NIJA_KRAKEN_POST_CONNECT_DELAY_S", 0.0)
+                        if post_connection_delay > 0:
+                            logger.info(
+                                "   ⏳ Post-connection cooldown: %.1fs "
+                                "(NIJA_KRAKEN_POST_CONNECT_DELAY_S)...",
+                                post_connection_delay,
+                            )
+                            time.sleep(post_connection_delay)
+                        else:
+                            logger.debug("   ✅ Post-connection cooldown skipped (server-anchored nonce)")
 
                         # CONNECTION STABILITY: Register broker and start watchdog
                         if self._connection_stability_manager is not None:
