@@ -1024,6 +1024,12 @@ class KrakenNonceManager:
         # Kept open for the entire bot session so duplicate-process detection
         # is reliable even between nonce operations.
         self._pid_lock_fh: object = None
+        self._pid_lock_acquired: bool = False
+        self._pid_lock_reacquire_lock = threading.Lock()
+        self._last_pid_lock_reacquire_attempt_ts: float = 0.0
+        self._pid_lock_reacquire_interval_s: float = max(
+            1.0, float(os.environ.get("NIJA_PID_LOCK_REACQUIRE_INTERVAL_S", "5"))
+        )
         # Optional Redis nonce backend (None = use file / timestamp mode).
         self._redis_backend: object = None
         os.makedirs(os.path.dirname(os.path.abspath(self._state_file)), exist_ok=True)
@@ -1035,18 +1041,18 @@ class KrakenNonceManager:
         # Hard rule: ONE API KEY = ONE WRITER.  If acquisition fails, fail
         # closed immediately so duplicate writers cannot run.
         self._pid_lock_fh = self._try_acquire_pid_lock()
+        self._pid_lock_acquired = self._pid_lock_fh is not None
         if not _FCNTL_AVAILABLE:
             _logger.warning(
                 "KrakenNonceManager: fcntl unavailable on this platform; "
                 "cannot hard-enforce process-lifetime single-writer locking."
             )
         elif self._pid_lock_fh is None:
-            raise RuntimeError(
-                "Kraken nonce writer lock not acquired. "
-                "Hard rule violation: ONE API KEY = ONE WRITER "
-                "(no multi-container, no multi-region, no independent nonce writers). "
-                "Likely causes: another NIJA process already running or lock-file permissions. "
-                "Stop all duplicate deployments/processes and restart a single writer."
+            _logger.critical(
+                "Kraken nonce writer lock not acquired for key=%s. "
+                "Entering degraded read-only-safe mode: nonce issuance for trading "
+                "must remain blocked until PID lock is held.",
+                self._key_id or "platform",
             )
 
         # Hard rule: disallow the LEGACY NIJA_NONCE_BACKEND=redis path.
@@ -1312,6 +1318,50 @@ class KrakenNonceManager:
     def get_nonce(self) -> int:
         """Alias for next_nonce() — backward compatibility."""
         return self.next_nonce()
+
+    def can_issue_nonce(self) -> bool:
+        """Return True only when this manager holds the process-lifetime PID lock."""
+        if not self._pid_lock_acquired:
+            self.try_reacquire_pid_lock()
+        return self._pid_lock_acquired
+
+    def try_reacquire_pid_lock(self) -> bool:
+        """
+        Attempt to reacquire the process-lifetime PID lock when not currently held.
+
+        Retries are rate-limited to avoid lock-file churn and log spam.
+        """
+        if self._pid_lock_acquired:
+            return True
+
+        now = time.monotonic()
+        if (now - self._last_pid_lock_reacquire_attempt_ts) < self._pid_lock_reacquire_interval_s:
+            return False
+
+        with self._pid_lock_reacquire_lock:
+            if self._pid_lock_acquired:
+                return True
+            now = time.monotonic()
+            if (now - self._last_pid_lock_reacquire_attempt_ts) < self._pid_lock_reacquire_interval_s:
+                return False
+            self._last_pid_lock_reacquire_attempt_ts = now
+            success = self._attempt_lock()
+            if success:
+                _logger.info(
+                    "✅ PID lock reacquired — nonce authority restored (key=%s)",
+                    self._key_id or "platform",
+                )
+                self._pid_lock_acquired = True
+                return True
+            return False
+
+    def _attempt_lock(self) -> bool:
+        """Best-effort internal PID-lock attempt used by self-healing reacquire."""
+        fh = self._try_acquire_pid_lock(log_failure=False)
+        if fh is None:
+            return False
+        self._pid_lock_fh = fh
+        return True
 
     def get_last_nonce(self) -> int:
         """Return the last issued nonce without advancing it."""
@@ -1996,7 +2046,7 @@ class KrakenNonceManager:
         except Exception:
             return False
 
-    def _try_acquire_pid_lock(self) -> object:
+    def _try_acquire_pid_lock(self, log_failure: bool = True) -> object:
         """
         Acquire an exclusive process-lifetime lock on ``self._pid_lock_file``.
 
@@ -2036,21 +2086,22 @@ class KrakenNonceManager:
                         _holder_meta = _lines[0]
                 except Exception:
                     pass
-                _logger.critical(
-                    "🚨🚨 DUPLICATE BOT PROCESS DETECTED — another NIJA instance "
-                    "already holds the process-lifetime nonce lock (%s). "
-                    "TWO processes sharing the same Kraken API key WILL cause "
-                    "persistent 'EAPI:Invalid nonce' errors on ALL accounts. "
-                    "STOP the other process immediately:\n"
-                    "  • Railway: stop/delete the duplicate service or deployment\n"
-                    "  • Docker:  docker ps -a  →  docker stop <container_id>\n"
-                    "  • systemd: systemctl stop nija  (check for multiple units)\n"
-                    "  • Manual:  ps aux | grep bot.py  →  kill <pid>\n"
-                    "Existing lock holder fingerprint: %s\n"
-                    "After stopping the duplicate, restart this instance.",
-                    self._pid_lock_file,
-                    _holder_meta,
-                )
+                if log_failure:
+                    _logger.critical(
+                        "🚨🚨 DUPLICATE BOT PROCESS DETECTED — another NIJA instance "
+                        "already holds the process-lifetime nonce lock (%s). "
+                        "TWO processes sharing the same Kraken API key WILL cause "
+                        "persistent 'EAPI:Invalid nonce' errors on ALL accounts. "
+                        "STOP the other process immediately:\n"
+                        "  • Railway: stop/delete the duplicate service or deployment\n"
+                        "  • Docker:  docker ps -a  →  docker stop <container_id>\n"
+                        "  • systemd: systemctl stop nija  (check for multiple units)\n"
+                        "  • Manual:  ps aux | grep bot.py  →  kill <pid>\n"
+                        "Existing lock holder fingerprint: %s\n"
+                        "After stopping the duplicate, restart this instance.",
+                        self._pid_lock_file,
+                        _holder_meta,
+                    )
                 return None
             # Write PID for diagnostics (truncate after acquiring the lock so
             # there is no race between open and write).
@@ -2127,6 +2178,7 @@ class KrakenNonceManager:
             if _old_pid_lock_fh is not None:
                 try:
                     _old_pid_lock_fh.close()
+                    setattr(old, "_pid_lock_acquired", False)
                     _logger.debug(
                         "KrakenNonceManager.destroy_instance: released old PID lock handle"
                     )
@@ -2609,7 +2661,7 @@ def get_nonce_backend_info() -> dict:
         backend = "file"
     return {
         "backend":        backend,
-        "pid_lock_held":  mgr._pid_lock_fh is not None,
+        "pid_lock_held":  bool(getattr(mgr, "_pid_lock_acquired", False)),
         "pid_lock_file":  mgr._pid_lock_file,
         "state_file":     mgr._state_file,
         "redis_url":      _REDIS_URL if backend == "redis" else None,

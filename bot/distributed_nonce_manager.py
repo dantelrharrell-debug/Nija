@@ -659,6 +659,20 @@ class DistributedNonceManager:
             return
         self._redis.ensure_writer_lease(api_key_id)
 
+    def can_issue_nonce(self, api_key_id: str) -> bool:
+        """
+        Return True only when nonce issuance is currently safe for *api_key_id*.
+
+        This combines the startup-FSM authorization gate with the per-key
+        PID-lock ownership gate exposed by the file-backed nonce manager.
+        """
+        if not _get_nonce_auth():
+            return False
+        try:
+            return bool(self._get_file_manager(api_key_id).can_issue_nonce())
+        except Exception:
+            return False
+
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _file_nonce(self, api_key_id: str) -> int:

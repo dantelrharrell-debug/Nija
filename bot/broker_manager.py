@@ -158,6 +158,16 @@ _KRAKEN_NONCE_LOCK_ERROR_FRAGMENTS = (
     "duplicate bot process detected",
 )
 
+_KRAKEN_NONCE_MUTATING_METHODS = {
+    "AddOrder",
+    "AddOrderBatch",
+    "CancelOrder",
+    "CancelOrderBatch",
+    "CancelAll",
+    "CancelAllOrdersAfter",
+    "EditOrder",
+}
+
 
 # ── Shared credential-prefix helper ──────────────────────────────────────────
 def _user_env_prefix(user_id: str) -> tuple:
@@ -6899,6 +6909,21 @@ class KrakenBroker(BaseBroker):
         if not self.api:
             raise Exception("Kraken API not initialized - call connect() first")
 
+        if method in _KRAKEN_NONCE_MUTATING_METHODS:
+            _can_issue = False
+            _nm = getattr(self, "nonce_manager", None)
+            _can_issue_fn = getattr(_nm, "can_issue_nonce", None)
+            if callable(_can_issue_fn):
+                try:
+                    _key_id = getattr(self, "api_key_id", "")
+                    _can_issue = bool(_can_issue_fn(_key_id)) if _key_id else bool(_can_issue_fn())
+                except TypeError:
+                    _can_issue = bool(_can_issue_fn())
+                except Exception:
+                    _can_issue = False
+            if not _can_issue:
+                raise RuntimeError("Nonce issuance blocked (PID lock not held)")
+
         # Determine API category for rate limiting
         if category is None and KrakenAPICategory is not None:
             # Auto-detect category from method name
@@ -11136,12 +11161,19 @@ class BrokerManager:
             This method normalizes ``broker.health_score`` in-place (stale brokers
             are forced to 0) so downstream routing/allocation remains consistent.
         """
-        nonce_ok = True
-        if is_nonce_issuance_authorized is not None:
-            try:
+        nonce_ok = False
+        try:
+            if get_global_nonce_manager is not None:
+                _mgr = get_global_nonce_manager()
+                _can_issue = getattr(_mgr, "can_issue_nonce", None)
+                if callable(_can_issue):
+                    nonce_ok = bool(_can_issue())
+                elif is_nonce_issuance_authorized is not None:
+                    nonce_ok = bool(is_nonce_issuance_authorized())
+            elif is_nonce_issuance_authorized is not None:
                 nonce_ok = bool(is_nonce_issuance_authorized())
-            except Exception:
-                nonce_ok = False
+        except Exception:
+            nonce_ok = False
 
         platform_ok = False
         capital_ok = False

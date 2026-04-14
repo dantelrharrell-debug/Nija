@@ -982,13 +982,15 @@ except ImportError:
         _get_capital_authority_ts = None  # type: ignore[assignment]
 
 try:
-    from global_kraken_nonce import is_nonce_issuance_authorized
+    from global_kraken_nonce import is_nonce_issuance_authorized, get_global_nonce_manager
 except ImportError:
     try:
-        from bot.global_kraken_nonce import is_nonce_issuance_authorized
+        from bot.global_kraken_nonce import is_nonce_issuance_authorized, get_global_nonce_manager
     except ImportError:
         def is_nonce_issuance_authorized() -> bool:  # type: ignore[no-redef]
             return False
+        def get_global_nonce_manager():  # type: ignore[no-redef]
+            raise RuntimeError("global nonce manager unavailable")
         logger.warning(
             "⚠️ Nonce authorization module unavailable — defaulting nonce authorization to False"
         )
@@ -9840,7 +9842,12 @@ class TradingStrategy:
             _platform_ok = self._is_any_platform_connected(_broker_health)
             _capital_ok = total_capital > 0.0 and _healthy_count > 0
             try:
-                _nonce_ok = bool(is_nonce_issuance_authorized())
+                _nonce_mgr = get_global_nonce_manager()
+                _can_issue = getattr(_nonce_mgr, "can_issue_nonce", None)
+                if callable(_can_issue):
+                    _nonce_ok = bool(_can_issue())
+                else:
+                    _nonce_ok = bool(is_nonce_issuance_authorized())
             except Exception as _nonce_err:
                 logger.debug("nonce readiness check failed: %s", _nonce_err)
                 _nonce_ok = False
