@@ -910,20 +910,9 @@ class KrakenNonceManager:
         _deep_reset = os.environ.get("NIJA_DEEP_NONCE_RESET", "").strip() == "1"
         self._deep_reset_active: bool = _deep_reset
 
-        # ── Step 1 (hard reset): always delete persisted nonce state on init ──
-        # Every boot starts from a clean server-time anchor.  This prevents
-        # stale forward-drift (accumulated nuclear resets / ceiling jumps from
-        # prior sessions) from poisoning the new session's nonce.
-        # NOTE: self._pid_lock_file is intentionally excluded — it is held open
-        # for the process lifetime and must not be deleted during init.
-        for _path in (self._state_file, self._state_file + ".lock", self._state_file + ".tmp"):
-            try:
-                os.remove(_path)
-                _logger.debug("KrakenNonceManager: cleared persisted nonce state %s", _path)
-            except FileNotFoundError:
-                pass
-            except Exception as exc:
-                _logger.debug("KrakenNonceManager: could not clear %s (%s)", _path, exc)
+        # Preserve persisted nonce state on startup.
+        # Hard invariant: every rebuilt manager must continue from the global
+        # high-water mark (persisted file / Redis), never from server-time only.
 
         # NIJA_FORCE_NONCE_RESYNC=1 / deep-reset: also wipe the adaptive-offset
         # EMA so the next probe_and_resync() starts from the conservative timing
@@ -982,10 +971,18 @@ class KrakenNonceManager:
             )
             return
 
-        # In Redis mode the initial in-memory floor comes from Redis.
+        # In Redis mode the startup floor is:
+        #   max(server_time_ms + _SERVER_SYNC_OFFSET_MS, redis_last_nonce + 1)
+        # This guarantees no backward regression after rebuild/restart.
         if self._redis_backend is not None:
             try:
-                self._last_nonce = self._redis_backend.get_last()
+                server_ms = _fetch_kraken_server_time_ms()
+                if server_ms is None:
+                    server_ms = int(time.time() * 1000)
+                server_floor = server_ms + _SERVER_SYNC_OFFSET_MS
+                redis_last = self._redis_backend.get_last()
+                redis_floor = redis_last + 1 if redis_last > 0 else 0
+                self._last_nonce = max(server_floor, redis_floor)
                 if _deep_reset:
                     ntp_corr_ms = _get_ntp_backward_drift_ms()
                     deep_floor = int(time.time() * 1000) + _DEEP_STARTUP_FLOOR_MS + ntp_corr_ms
@@ -998,10 +995,12 @@ class KrakenNonceManager:
                         )
                         self._redis_backend.advance_to(deep_floor)
                         self._last_nonce = deep_floor
+                self._redis_backend.advance_to(self._last_nonce)
                 lead_ms = self._last_nonce - int(time.time() * 1000)
                 _logger.info(
-                    "KrakenNonceManager: ready (Redis mode) — nonce=%d  lead=%+d ms",
-                    self._last_nonce, lead_ms,
+                    "KrakenNonceManager: ready (Redis mode) — nonce=%d  lead=%+d ms "
+                    "(server_floor=%d redis_last=%d)",
+                    self._last_nonce, lead_ms, server_floor, redis_last,
                 )
                 return
             except Exception as exc:
@@ -1509,10 +1508,11 @@ class KrakenNonceManager:
            authoritative clock reference.  Falls back to ``time.time()`` if the
            endpoint is unreachable (no hard failure on network issues).
 
-        3. **Nonce reset** — set ``_last_nonce = server_time_ms + _SERVER_SYNC_OFFSET_MS``
-           (default ``server_time + 3 s``).  This unconditionally replaces the
-           current value, discarding all accumulated forward drift from any
-           previous strategy (nuclear resets, ceiling jumps, etc.).
+        3. **Nonce reset** — set
+           ``_last_nonce = max(server_time_ms + _SERVER_SYNC_OFFSET_MS, floor+1)``,
+           where ``floor`` is the max of the in-memory and persisted high-water
+           marks.  This guarantees ``nonce >= last_issued_nonce + 1`` even after
+           rebuild/recovery.
 
         After the reset ``_error_count`` and ``_trading_paused_until`` are
         cleared so the escalation ladder starts fresh.  The new value is
@@ -1548,11 +1548,23 @@ class KrakenNonceManager:
                 server_ms, server_ms - int(time.time() * 1000),
             )
 
-        new_nonce = server_ms + _SERVER_SYNC_OFFSET_MS
         with _LOCK:
             with _CrossProcessLock(self._lock_file):
                 prev = self._last_nonce
-                # Unconditional reset — discard all accumulated forward drift.
+                persisted_last = 0
+                if self._redis_backend is not None:
+                    try:
+                        persisted_last = int(self._redis_backend.get_last())
+                    except Exception as _re:
+                        _logger.debug(
+                            "KrakenNonceManager.server_sync_resync: "
+                            "Redis get_last error (%s)", _re
+                        )
+                elif _NONCE_MODE != "timestamp":
+                    persisted_last = self._read_state_file_raw()
+
+                monotonic_floor = max(prev, persisted_last) + 1
+                new_nonce = max(server_ms + _SERVER_SYNC_OFFSET_MS, monotonic_floor)
                 self._last_nonce = new_nonce
                 self._error_count = 0
                 self._trading_paused_until = 0.0
@@ -1567,9 +1579,13 @@ class KrakenNonceManager:
                 elif _NONCE_MODE != "timestamp":
                     self._persist()
         _logger.warning(
-            "KrakenNonceManager.server_sync_resync: nonce reset "
-            "server+%d ms → %d  (prev=%d  delta=%+d ms)",
-            _SERVER_SYNC_OFFSET_MS, new_nonce, prev, new_nonce - prev,
+            "KrakenNonceManager.server_sync_resync: nonce reset to %d "
+            "(server_floor=%d prev=%d persisted_last=%d delta=%+d ms)",
+            new_nonce,
+            server_ms + _SERVER_SYNC_OFFSET_MS,
+            prev,
+            persisted_last,
+            new_nonce - prev,
         )
 
     def probe_and_resync(
@@ -2123,16 +2139,17 @@ class KrakenNonceManager:
 
     def _load_last_nonce(self) -> int:
         """
-        Compute the startup nonce from Kraken server time ONLY.
+        Compute startup nonce with a persistent monotonic floor.
 
-        Hard-reset contract (Step 1)
-        ----------------------------
-        The persisted nonce is intentionally **ignored**.  Every boot anchors
-        to ``server_time_ms + _SERVER_SYNC_OFFSET_MS`` so accumulated forward
-        drift from prior sessions (nuclear resets, ceiling jumps, etc.) is
-        discarded immediately.  If Kraken's stored floor is above this baseline,
-        ``probe_and_resync()`` (called from ``broker_manager.connect()``) will
-        walk upward until the floor is found.
+        Startup invariant
+        -----------------
+        Every rebuild/restart must satisfy:
+        ``startup_nonce >= last_issued_nonce + 1``.
+
+        The startup floor is:
+        ``max(server_time_ms + _SERVER_SYNC_OFFSET_MS, persisted_nonce + 1)``.
+        This prevents nonce regressions when process/container lifecycle resets
+        while Kraken still remembers a higher nonce.
 
         Must be called while holding both ``_LOCK`` and ``_CrossProcessLock``.
         """
@@ -2151,11 +2168,16 @@ class KrakenNonceManager:
                 server_ms, server_ms - now_ms,
             )
 
-        baseline = server_ms + _SERVER_SYNC_OFFSET_MS
+        persisted_nonce = self._read_state_file_raw()
+        persisted_floor = persisted_nonce + 1 if persisted_nonce > 0 else 0
+        baseline = max(server_ms + _SERVER_SYNC_OFFSET_MS, persisted_floor)
         _logger.info(
-            "KrakenNonceManager._load_last_nonce: hard-reset startup nonce = "
-            "server+%d ms → %d  (persisted nonce discarded)",
-            _SERVER_SYNC_OFFSET_MS, baseline,
+            "KrakenNonceManager._load_last_nonce: startup nonce = %d "
+            "(server_floor=%d persisted_nonce=%d persisted_floor=%d)",
+            baseline,
+            server_ms + _SERVER_SYNC_OFFSET_MS,
+            persisted_nonce,
+            persisted_floor,
         )
         return baseline
 
