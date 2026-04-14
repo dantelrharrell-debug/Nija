@@ -893,13 +893,6 @@ class KrakenStartupFSM:
         with self._lock:
             if self._connecting and not self._failed.is_set() and not self._connected.is_set():
                 self._nonce_ready.set()
-                if authorize_nonce_issuance is not None:
-                    authorize_nonce_issuance()
-                else:
-                    logger.warning(
-                        "KrakenStartupFSM.mark_nonce_ready: authorize_nonce_issuance "
-                        "unavailable — FSM gate is not enforced (degraded mode)"
-                    )
             else:
                 logger.debug(
                     "KrakenStartupFSM.mark_nonce_ready: ignored (connecting=%s failed=%s connected=%s)",
@@ -1002,6 +995,13 @@ class KrakenStartupFSM:
         with self._lock:
             if self._connecting and not self._failed.is_set() and not self._connected.is_set():
                 self._capital_ready.set()
+                if authorize_nonce_issuance is not None:
+                    authorize_nonce_issuance()
+                else:
+                    logger.warning(
+                        "KrakenStartupFSM.mark_capital_ready: authorize_nonce_issuance "
+                        "unavailable — FSM gate is not enforced (degraded mode)"
+                    )
             else:
                 logger.debug(
                     "KrakenStartupFSM.mark_capital_ready: ignored (connecting=%s failed=%s connected=%s)",
