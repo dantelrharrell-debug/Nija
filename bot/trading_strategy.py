@@ -11,7 +11,7 @@ import collections
 from pathlib import Path
 from threading import Thread
 from typing import Dict, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from enum import Enum
 import pandas as pd
@@ -984,7 +984,10 @@ except ImportError:
         from bot.global_kraken_nonce import is_nonce_issuance_authorized
     except ImportError:
         def is_nonce_issuance_authorized() -> bool:  # type: ignore[no-redef]
-            return True
+            return False
+        logger.warning(
+            "⚠️ Nonce authorization module unavailable — defaulting nonce authorization to False"
+        )
 
 try:
     from alert_manager import (
@@ -7443,7 +7446,7 @@ class TradingStrategy:
             try:
                 with open(_stop_file, "w", encoding="utf-8") as _fh:
                     _fh.write(
-                        f"AUTO-DISABLED {datetime.utcnow().isoformat()}Z | "
+                        f"AUTO-DISABLED {datetime.now(timezone.utc).isoformat()} | "
                         f"drop={_drop_pct:.2f}% | prev=${_prev:.2f} | now=${total_capital:.2f}\n"
                     )
                 self._sudden_drop_auto_disabled = True
@@ -9493,6 +9496,7 @@ class TradingStrategy:
             # Keep the single source of truth current (TTL _CA_FRESHNESS_TTL_S).
             # Uses the same connected broker map as the startup init; failures are
             # silently swallowed so a transient API error never blocks a cycle.
+            _ca_cycle = None
             try:
                 _ca_cycle = _get_capital_authority_ts() if _get_capital_authority_ts is not None else None
                 if _ca_cycle is not None and _ca_cycle.is_stale(ttl_s=_CA_FRESHNESS_TTL_S):
@@ -9712,7 +9716,7 @@ class TradingStrategy:
             else:
                 total_capital = self._get_total_capital_across_all_accounts()
 
-            _ca_health = _ca_cycle if "_ca_cycle" in locals() else None
+            _ca_health = _ca_cycle
             _broker_health = self._collect_platform_broker_health(_ca_health)
             _healthy_count = sum(1 for _h in _broker_health.values() if _h.get("healthy"))
             _total_count = len(_broker_health)
@@ -9720,7 +9724,8 @@ class TradingStrategy:
             _capital_ok = total_capital > 0.0 and _healthy_count > 0
             try:
                 _nonce_ok = bool(is_nonce_issuance_authorized())
-            except Exception:
+            except Exception as _nonce_err:
+                logger.debug("nonce readiness check failed: %s", _nonce_err)
                 _nonce_ok = False
 
             logger.info(
