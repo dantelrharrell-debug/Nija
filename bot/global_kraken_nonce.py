@@ -1033,9 +1033,11 @@ class KrakenNonceManager:
         self._pid_lock_acquired: bool = False
         self._pid_lock_reacquire_mutex = threading.Lock()
         self._last_pid_lock_reacquire_attempt_ts: float = 0.0
-        self._pid_lock_reacquire_interval_s: float = max(
-            1.0, float(os.environ.get("NIJA_PID_LOCK_REACQUIRE_INTERVAL_S", "5"))
-        )
+        try:
+            _reacquire_interval_raw = float(os.environ.get("NIJA_PID_LOCK_REACQUIRE_INTERVAL_S", "5"))
+        except Exception:
+            _reacquire_interval_raw = 5.0
+        self._pid_lock_reacquire_interval_s: float = max(1.0, _reacquire_interval_raw)
         # Optional Redis nonce backend (None = use file / timestamp mode).
         self._redis_backend: object = None
         os.makedirs(os.path.dirname(os.path.abspath(self._state_file)), exist_ok=True)
@@ -2100,6 +2102,32 @@ class KrakenNonceManager:
             )
             return False
 
+    def _cleanup_stale_pid_lock_if_safe(self) -> None:
+        """
+        Remove stale PID lock file metadata only when we can prove no lock holder exists.
+
+        Safety rule: delete only after taking an exclusive non-blocking lock on
+        the file descriptor in this process.
+        """
+        if not _FCNTL_AVAILABLE:
+            return
+        stale_pid = self._read_pid_from_pid_lock()
+        if stale_pid <= 0 or self._is_process_alive(stale_pid):
+            return
+        try:
+            with open(self._pid_lock_file, "a") as _stale_fh:
+                _fcntl.flock(_stale_fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                try:
+                    self._delete_stale_pid_lock(stale_pid)
+                finally:
+                    try:
+                        _fcntl.flock(_stale_fh, _fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+        except Exception:
+            # If we cannot lock it, another process may still be active.
+            return
+
     def _try_acquire_pid_lock(self, log_failure: bool = True, allow_stale_cleanup: bool = True) -> object:
         """
         Acquire an exclusive process-lifetime lock on ``self._pid_lock_file``.
@@ -2122,28 +2150,16 @@ class KrakenNonceManager:
             return None
         try:
             os.makedirs(os.path.dirname(os.path.abspath(self._pid_lock_file)), exist_ok=True)
+            if allow_stale_cleanup:
+                self._cleanup_stale_pid_lock_if_safe()
             # Append mode: does not truncate an existing PID file from a dead
             # process, and does not interfere with another process's open fd.
             fh = open(self._pid_lock_file, "a")
-            _stale_cleanup_attempts = 1 if allow_stale_cleanup else 0
-            while True:
-                try:
-                    _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-                    break
-                except (BlockingIOError, OSError):
-                    if _stale_cleanup_attempts > 0:
-                        _holder_pid = self._read_pid_from_pid_lock()
-                        if _holder_pid > 0 and not self._is_process_alive(_holder_pid):
-                            if self._delete_stale_pid_lock(_holder_pid):
-                                _stale_cleanup_attempts -= 1
-                                try:
-                                    fh.close()
-                                except Exception:
-                                    pass
-                                fh = open(self._pid_lock_file, "a")
-                                continue
-                    # Another process holds the lock.
-                    fh.close()
+            try:
+                _fcntl.flock(fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except (BlockingIOError, OSError):
+                # Another process holds the lock.
+                fh.close()
                 _holder_meta = "unknown"
                 try:
                     with open(self._pid_lock_file, "r", encoding="utf-8") as _hf:
