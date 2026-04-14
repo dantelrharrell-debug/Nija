@@ -272,6 +272,24 @@ _CORRUPTION_RESET_MS: int = int(os.environ.get("NIJA_NONCE_CORRUPTION_RESET_MS",
 # remains the only guaranteed fix for a badly out-of-sync nonce.
 _CEILING_JUMP_MS: int = int(os.environ.get("NIJA_NONCE_CEILING_JUMP_MS", "86400000"))  # default 24 h
 
+# ── Probe-system kill-switch ──────────────────────────────────────────────────
+# When False (default) the multi-step probe loop, nuclear resets, ceiling jumps,
+# and deep-probe mode are all dormant.  Every nonce is produced by the formula:
+#
+#   nonce = max(local_monotonic_counter + 1, kraken_server_time_ms + _SERVER_SYNC_OFFSET_MS)
+#
+# This formula is self-correcting: any clock or forward-drift desync is healed
+# automatically on the very next call.  Recovery from a nonce error no longer
+# requires operator intervention or a multi-minute probe loop.
+#
+# Set NIJA_ENABLE_PROBE_SYSTEM=1 to restore the full legacy probe-loop behaviour
+# (probe_and_resync, nuclear resets, ceiling jumps, deep-probe mode).  This flag
+# provides a one-env-var rollback path if the new strategy ever needs to be
+# temporarily disabled.
+_PROBE_SYSTEM_ENABLED: bool = os.environ.get(
+    "NIJA_ENABLE_PROBE_SYSTEM", "0"
+).strip().lower() in ("1", "true", "yes", "on")
+
 # ── NTP clock-sync constants ──────────────────────────────────────────────────
 # Kraken is EXTREMELY sensitive to clock drift.  Even a few seconds off can
 # trigger continuous nonce errors that block ALL accounts.
@@ -807,6 +825,58 @@ def _fetch_kraken_server_time_ms() -> "int | None":
         return None
 
 
+# ── Server-time cache (1-second TTL) ─────────────────────────────────────────
+# _get_cached_server_time_ms() wraps _fetch_kraken_server_time_ms() with a
+# per-process in-memory cache so repeated next_nonce() calls within the same
+# second share one network round-trip.
+#
+# Key design decisions:
+#  • Uses time.monotonic() for the TTL check — immune to wall-clock jumps.
+#  • Fetches server time OUTSIDE any lock so a 5-second network timeout cannot
+#    block nonce issuance for other threads.
+#  • Does NOT cache fallback (local-clock) values so the next call after
+#    network recovery will re-query the real server time.
+#  • TTL is tunable via NIJA_NONCE_SERVER_TIME_CACHE_TTL_S (default 1.0 s).
+_SERVER_TIME_CACHE_LOCK = threading.Lock()
+_SERVER_TIME_CACHE_TTL_S: float = float(
+    os.environ.get("NIJA_NONCE_SERVER_TIME_CACHE_TTL_S", "1.0")
+)
+_server_time_cache_monotonic: float = 0.0
+_server_time_cache_value_ms: int = 0
+
+
+def _get_cached_server_time_ms() -> int:
+    """Return Kraken server time (ms) with a 1-second TTL cache.
+
+    On cache hit   — returns the cached value instantly (no I/O).
+    On cache miss  — calls ``_fetch_kraken_server_time_ms()``.  On any network
+                     error the function falls back to ``int(time.time() * 1000)``
+                     so availability is never reduced by the server-time query.
+
+    Must be called *outside* ``_LOCK`` — a network call of up to 5 seconds
+    must not hold the global nonce lock.
+    """
+    global _server_time_cache_monotonic, _server_time_cache_value_ms
+    now_mono = time.monotonic()
+    with _SERVER_TIME_CACHE_LOCK:
+        if (
+            _server_time_cache_value_ms > 0
+            and now_mono - _server_time_cache_monotonic < _SERVER_TIME_CACHE_TTL_S
+        ):
+            return _server_time_cache_value_ms
+
+    # Cache miss — network fetch without holding any lock
+    fetched = _fetch_kraken_server_time_ms()
+    if fetched is None:
+        # Fallback to local clock; do NOT cache so the next call retries
+        return int(time.time() * 1000)
+
+    with _SERVER_TIME_CACHE_LOCK:
+        _server_time_cache_monotonic = time.monotonic()
+        _server_time_cache_value_ms = fetched
+    return fetched
+
+
 # ── Nonce manager ─────────────────────────────────────────────────────────────
 
 class KrakenNonceManager:
@@ -1149,6 +1219,11 @@ class KrakenNonceManager:
                 return self._last_nonce
 
         # ── File mode (default) ────────────────────────────────────────────
+        # Fetch server time BEFORE acquiring _LOCK so a slow network call
+        # (up to 5 s timeout) never holds the global nonce lock.  The result
+        # is cached for _SERVER_TIME_CACHE_TTL_S seconds so at most one
+        # network round-trip occurs per second across all threads.
+        _kraken_floor_ms = _get_cached_server_time_ms() + _SERVER_SYNC_OFFSET_MS
         with _LOCK:
             with _CrossProcessLock(self._lock_file):
                 # ── Cross-process sync ──────────────────────────────────────
@@ -1171,11 +1246,13 @@ class KrakenNonceManager:
                     )
                     self._last_nonce = file_nonce
 
-                # ── Enforce: nonce = max(local_time_ms, last_nonce + 1) ────────
-                # Keeps the series strictly monotonic and always at or ahead of
-                # wall-clock — no backward drift, no runaway forward lead.
-                now_ms = int(time.time() * 1000)
-                self._last_nonce = max(now_ms, self._last_nonce + 1)
+                # ── Enforce: nonce = max(server_time_ms + offset, last_nonce + 1) ────
+                # Server-anchored formula: every nonce is at or ahead of Kraken's
+                # authoritative clock + safety margin so any forward drift is
+                # self-correcting on the very next call.  _get_cached_server_time_ms()
+                # is called OUTSIDE _LOCK above and the cached value is passed in to
+                # avoid a network call while holding the lock.
+                self._last_nonce = max(_kraken_floor_ms, self._last_nonce + 1)
                 self._persist()
                 return self._last_nonce
 
@@ -1687,6 +1764,49 @@ class KrakenNonceManager:
         """
         _probe_window_begin()
         try:
+            # ── Probe-system kill-switch ───────────────────────────────────────
+            # When _PROBE_SYSTEM_ENABLED=False (the default) the multi-step probe
+            # loop is dormant.  Recovery is handled by:
+            #   1. server_sync_resync() — re-anchors nonce to Kraken server time
+            #   2. A single retry call to confirm the new nonce is accepted
+            # Because next_nonce() already uses max(server_time+offset, last+1),
+            # the very next issued nonce is server-anchored even without probing.
+            if not _PROBE_SYSTEM_ENABLED:
+                _logger.info(
+                    "KrakenNonceManager.probe_and_resync: probe system disabled "
+                    "(NIJA_ENABLE_PROBE_SYSTEM not set) — running "
+                    "server_sync_resync() + single retry instead of probe loop"
+                )
+                # freeze_s=0.0: this is a startup handshake, not an error
+                # recovery.  There is no stale nonce window to wait out —
+                # the server-anchored next_nonce() formula already guarantees
+                # the next issued nonce is above server_time + offset.
+                self.server_sync_resync(freeze_s=0.0)
+                if api_call_fn is None:
+                    return True
+                try:
+                    _probe_result = api_call_fn()
+                except Exception as _exc:
+                    _logger.debug(
+                        "KrakenNonceManager.probe_and_resync (server-sync mode): "
+                        "api_call raised (%s)", _exc,
+                    )
+                    return False
+                if not isinstance(_probe_result, dict):
+                    return False
+                _probe_errs = ", ".join(_probe_result.get("error") or [])
+                if any(
+                    kw in _probe_errs.lower()
+                    for kw in ("invalid nonce", "eapi:invalid nonce", "nonce window")
+                ):
+                    _logger.warning(
+                        "KrakenNonceManager.probe_and_resync (server-sync mode): "
+                        "nonce still rejected after server_sync_resync(); "
+                        "set NIJA_ENABLE_PROBE_SYSTEM=1 for full probe recovery"
+                    )
+                    return False
+                return True
+
             _ntp = check_ntp_sync()
             if _ntp.get("error"):
                 _logger.warning(
@@ -2517,6 +2637,7 @@ __all__ = [
     "GlobalKrakenNonceManager",
     "AdaptiveNonceOffsetEngine",
     "_RedisNonceBackend",
+    "_PROBE_SYSTEM_ENABLED",
     "get_kraken_api_lock",
     "get_kraken_nonce",
     "get_global_kraken_nonce",
