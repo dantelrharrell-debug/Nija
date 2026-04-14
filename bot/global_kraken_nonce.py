@@ -1074,6 +1074,7 @@ class KrakenNonceManager:
                 "Entering degraded read-only-safe mode: nonce issuance for trading "
                 "must remain blocked until PID lock is held.",
                 self._key_id or "platform",
+            )
             _pid_lock_failure_message = (
                 "Kraken nonce writer lock not acquired. "
                 "Hard rule violation: ONE API KEY = ONE WRITER "
