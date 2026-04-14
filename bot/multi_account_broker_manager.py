@@ -99,6 +99,15 @@ except ImportError:
     except ImportError:
         get_platform_account_layer = None
 
+# Import CapitalAuthority singleton for unified multi-broker capital readiness
+try:
+    from bot.capital_authority import get_capital_authority
+except ImportError:
+    try:
+        from capital_authority import get_capital_authority
+    except ImportError:
+        get_capital_authority = None  # type: ignore[assignment]
+
 logger = logging.getLogger('nija.multi_account')
 
 # Import Execution Risk Firewall for per-venue API-call health scoring
@@ -283,6 +292,22 @@ class MultiAccountBrokerManager:
             except Exception as _bfm_init_err:
                 logger.warning("⚠️ Could not initialize broker failure manager: %s", _bfm_init_err)
 
+        # CapitalAuthority readiness + watchdog state (fail-safe auto-refresh loop)
+        self._capital_ready: bool = False
+        self._capital_last_refresh_ts: float = 0.0
+        self._capital_watchdog_started: bool = False
+        self._capital_watchdog_stop: threading.Event = threading.Event()
+        self._capital_watchdog_thread: Optional[threading.Thread] = None
+        self._trading_halted_due_to_capital: bool = False
+        self._capital_state_lock: threading.Lock = threading.Lock()
+        self.capital_watchdog_interval_s: float = float(
+            os.environ.get("NIJA_CAPITAL_WATCHDOG_INTERVAL_S", "10.0")
+        )
+        # Max acceptable age for authority snapshot before watchdog forces refresh.
+        self.capital_stale_timeout_s: float = float(
+            os.environ.get("NIJA_CAPITAL_STALE_TIMEOUT_S", "30.0")
+        )
+
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
@@ -308,7 +333,12 @@ class MultiAccountBrokerManager:
         self._platform_brokers_locked = True
         logger.info("🔒 Platform brokers locked (immutable)")
 
-    def register_platform_broker_instance(self, broker_type: BrokerType, broker: BaseBroker) -> bool:
+    def register_platform_broker_instance(
+        self,
+        broker_type: BrokerType,
+        broker: BaseBroker,
+        mark_connected_state: bool = False,
+    ) -> bool:
         """
         Register an already-created broker instance for the platform account.
         
@@ -343,10 +373,11 @@ class MultiAccountBrokerManager:
         # (directly or via wait_for_platform_ready()) always gets the same Event
         # object that _mark_platform_connected() will set below.
         self._get_or_create_platform_event(broker_type)
-        # Advance the state machine to CONNECTED — the caller has already verified the
-        # broker is live before passing it here, so wait_for_platform_ready() must not
-        # block for 30 s waiting for a state transition that would never happen.
-        self._mark_platform_connected(broker_type)
+        # Caller controls whether this registration should also transition to
+        # CONNECTED.  For failed connects we must register the object without
+        # forcing a CONNECTED state.
+        if mark_connected_state:
+            self._mark_platform_connected(broker_type)
         # Mark in the global broker registry so any module can check is_platform()
         # and get_criticality() — single source of truth across all layers.
         if broker_registry is not None:
@@ -359,6 +390,125 @@ class MultiAccountBrokerManager:
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
+
+    def refresh_capital_authority(self, trigger: str = "manual") -> Dict[str, float]:
+        """
+        Refresh unified CapitalAuthority from all currently connected healthy platform brokers.
+
+        READY condition:
+            - at least one healthy connected platform broker contributes, and
+            - aggregated total capital > 0.0
+        """
+        if get_capital_authority is None:
+            with self._capital_state_lock:
+                self._capital_ready = False
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+        try:
+            authority = get_capital_authority()
+            broker_map: Dict[str, BaseBroker] = {}
+            for broker_type, broker in self._platform_brokers.items():
+                if broker is None or not getattr(broker, "connected", False):
+                    continue
+                if not self.is_platform_connected(broker_type):
+                    continue
+                broker_map[broker_type.value] = broker
+
+            if broker_map:
+                authority.refresh(broker_map, open_exposure_usd=0.0)
+            else:
+                authority.refresh({}, open_exposure_usd=0.0)
+
+            total_capital = float(authority.get_real_capital())
+            valid_brokers = len(broker_map)
+            # Critical invariant: readiness is determined by live capital, not
+            # registration-count parity (e.g. brokers=0 expected=1).
+            ready = total_capital > 0.0
+            with self._capital_state_lock:
+                self._capital_ready = ready
+                self._capital_last_refresh_ts = time.time()
+
+            if ready:
+                with self._capital_state_lock:
+                    was_halted = self._trading_halted_due_to_capital
+                if was_halted:
+                    logger.info(
+                        "✅ CapitalAuthority recovered (trigger=%s): brokers=%d total=$%.2f — trading resume allowed",
+                        trigger, valid_brokers, total_capital,
+                    )
+                with self._capital_state_lock:
+                    self._trading_halted_due_to_capital = False
+            else:
+                logger.error(
+                    "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f",
+                    trigger, valid_brokers, total_capital,
+                )
+
+            return {
+                "ready": 1.0 if ready else 0.0,
+                "total_capital": total_capital,
+                "valid_brokers": float(valid_brokers),
+            }
+        except Exception as exc:
+            logger.error("❌ CapitalAuthority refresh failed (%s): %s", trigger, exc)
+            with self._capital_state_lock:
+                self._capital_ready = False
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+    def is_capital_authority_ready(self) -> bool:
+        """Return True only when unified capital is ready for trading gates."""
+        with self._capital_state_lock:
+            return bool(self._capital_ready)
+
+    def is_trading_halted_due_to_capital(self) -> bool:
+        """Return True when all brokers failed / zero-capital invariant is active."""
+        with self._capital_state_lock:
+            return bool(self._trading_halted_due_to_capital)
+
+    def _start_capital_watchdog(self) -> None:
+        """Start fail-safe capital auto-refresh watchdog thread once per process."""
+        if self._capital_watchdog_started:
+            return
+        self._capital_watchdog_started = True
+        self._capital_watchdog_stop.clear()
+
+        def _watchdog() -> None:
+            while not self._capital_watchdog_stop.wait(self.capital_watchdog_interval_s):
+                try:
+                    authority = get_capital_authority() if get_capital_authority else None
+                    with self._capital_state_lock:
+                        needs_refresh = not self._capital_ready
+                    if authority is not None and authority.is_stale(ttl_s=self.capital_stale_timeout_s):
+                        needs_refresh = True
+                    if needs_refresh:
+                        self.refresh_capital_authority(trigger="watchdog")
+
+                    healthy_connected = any(
+                        self.is_platform_connected(bt) and getattr(b, "connected", False)
+                        for bt, b in self._platform_brokers.items()
+                    )
+                    with self._capital_state_lock:
+                        capital_ready = self._capital_ready
+                        halted = self._trading_halted_due_to_capital
+                    if not capital_ready and not healthy_connected:
+                        if not halted:
+                            logger.critical(
+                                "🛑 ALL platform brokers unavailable and capital not ready — HALTING trading until recovery"
+                            )
+                        with self._capital_state_lock:
+                            self._trading_halted_due_to_capital = True
+                    elif capital_ready:
+                        with self._capital_state_lock:
+                            self._trading_halted_due_to_capital = False
+                except Exception as exc:
+                    logger.debug("Capital watchdog iteration error: %s", exc)
+
+        self._capital_watchdog_thread = threading.Thread(
+            target=_watchdog,
+            name="capital-authority-watchdog",
+            daemon=True,
+        )
+        self._capital_watchdog_thread.start()
 
     def add_platform_broker(self, broker_type: BrokerType) -> Optional[BaseBroker]:
         """
@@ -2470,16 +2620,42 @@ class MultiAccountBrokerManager:
             if connected:
                 with _PLATFORM_BROKER_REGISTRY_LOCK:
                     _PLATFORM_BROKER_CONNECTED[key] = True
-                self.register_platform_broker_instance(broker_type, broker)
-                logger.info("   ✅ Platform %s connected and registered", key.upper())
+                self.register_platform_broker_instance(
+                    broker_type,
+                    broker,
+                    mark_connected_state=False,
+                )
+                # Event-driven capital refresh: any successful platform connect
+                # immediately revalidates unified capital readiness.
+                _cap = self.refresh_capital_authority(trigger=f"platform_connect:{key}")
+                if _cap.get("ready", 0.0) > 0.0:
+                    self._mark_platform_connected(broker_type)
+                    logger.info(
+                        "   ✅ Platform %s connected and capital-ready (total=$%.2f)",
+                        key.upper(), float(_cap.get("total_capital", 0.0)),
+                    )
+                else:
+                    self.mark_platform_failed(broker_type)
+                    logger.error(
+                        "   ⛔ Platform %s connected but capital not ready "
+                        "(valid_brokers=%d total=$%.2f) — gating trading",
+                        key.upper(),
+                        int(_cap.get("valid_brokers", 0.0)),
+                        float(_cap.get("total_capital", 0.0)),
+                    )
             else:
                 self.mark_platform_failed(broker_type)
                 # Still register so the background reconnect loop can retry.
-                self.register_platform_broker_instance(broker_type, broker)
+                self.register_platform_broker_instance(
+                    broker_type,
+                    broker,
+                    mark_connected_state=False,
+                )
                 logger.warning(
                     "   ⚠️  Platform %s connection failed — registered for background retry",
                     key.upper(),
                 )
+            self._start_capital_watchdog()
             return connected
 
         # ── Kraken (PRIMARY) ─────────────────────────────────────────────────
@@ -2547,6 +2723,26 @@ class MultiAccountBrokerManager:
         except Exception as exc:
             logger.warning("⚠️  Alpaca PLATFORM error: %s", exc)
             results["alpaca"] = {"broker": None, "connected": False, "error": str(exc)}
+
+        # Startup ordering invariant:
+        # 1) brokers connect, 2) balances fetched, 3) CapitalAuthority built,
+        # 4) readiness marked, 5) trading engines may proceed.
+        _startup_cap = self.refresh_capital_authority(trigger="initialize_platform_brokers")
+        if bool(_startup_cap.get("ready", 0.0)):
+            logger.info(
+                "✅ CapitalAuthority READY at startup (brokers=%d total=$%.2f)",
+                int(_startup_cap.get("valid_brokers", 0.0)),
+                float(_startup_cap.get("total_capital", 0.0)),
+            )
+        else:
+            logger.error(
+                "⛔ CapitalAuthority NOT READY at startup (brokers=%d total=$%.2f) "
+                "— trading must remain gated until watchdog recovery",
+                int(_startup_cap.get("valid_brokers", 0.0)),
+                float(_startup_cap.get("total_capital", 0.0)),
+            )
+            self._trading_halted_due_to_capital = True
+        self._start_capital_watchdog()
 
         return results
 
