@@ -977,6 +977,41 @@ except ImportError:
     except ImportError:
         _get_capital_authority_ts = None  # type: ignore[assignment]
 
+try:
+    from global_kraken_nonce import is_nonce_issuance_authorized
+except ImportError:
+    try:
+        from bot.global_kraken_nonce import is_nonce_issuance_authorized
+    except ImportError:
+        def is_nonce_issuance_authorized() -> bool:  # type: ignore[no-redef]
+            return True
+
+try:
+    from alert_manager import (
+        get_alert_manager as _get_alert_manager_ts,
+        AlertSeverity as _AlertSeverity_ts,
+        AlertCategory as _AlertCategory_ts,
+    )
+except ImportError:
+    try:
+        from bot.alert_manager import (  # type: ignore
+            get_alert_manager as _get_alert_manager_ts,
+            AlertSeverity as _AlertSeverity_ts,
+            AlertCategory as _AlertCategory_ts,
+        )
+    except ImportError:
+        _get_alert_manager_ts = None  # type: ignore[assignment]
+        _AlertSeverity_ts = None  # type: ignore[assignment]
+        _AlertCategory_ts = None  # type: ignore[assignment]
+
+try:
+    from text_alert_system import get_text_alert_system as _get_text_alert_system_ts
+except ImportError:
+    try:
+        from bot.text_alert_system import get_text_alert_system as _get_text_alert_system_ts
+    except ImportError:
+        _get_text_alert_system_ts = None  # type: ignore[assignment]
+
 
 # ── Nija Core Loop — rebuilt single-pass scan / rank / enter loop ────────────
 try:
@@ -3299,6 +3334,18 @@ class TradingStrategy:
                 self._log_rl = None
         else:
             self._log_rl = None
+
+        # ── System readiness / broker-capital health state ─────────────────────
+        self._broker_capital_health_scores = {}
+        self._capital_prev_total = 0.0
+        self._capital_drift_alert_last_ts = 0.0
+        self._sudden_drop_auto_disabled = False
+        self._capital_health_min_score = float(os.getenv("NIJA_CAPITAL_HEALTH_MIN_SCORE", "65"))
+        self._capital_drift_alert_pct = float(os.getenv("NIJA_CAPITAL_DRIFT_ALERT_PCT", "12"))
+        self._capital_sudden_drop_disable_pct = float(os.getenv("NIJA_SUDDEN_CAPITAL_DROP_DISABLE_PCT", "20"))
+        self._capital_drift_cooldown_s = int(os.getenv("NIJA_CAPITAL_DRIFT_ALERT_COOLDOWN_S", "300"))
+        self._alert_manager = None
+        self._text_alert_system = None
 
         # Initialize Account-Level Capital Flow — connects CCE + AIAllocator
         if ACCOUNT_FLOW_AVAILABLE and get_account_level_capital_flow is not None:
@@ -7264,6 +7311,162 @@ class TradingStrategy:
         # Fallback to class name
         return broker.__class__.__name__.lower()
 
+    def _collect_platform_broker_health(self, capital_authority=None) -> dict:
+        """Score broker capital health (0-100) for all platform brokers."""
+        _health = {}
+        _mabm = getattr(self, "multi_account_manager", None)
+        _broker_map = {}
+        if _mabm is not None and hasattr(_mabm, "platform_brokers"):
+            _broker_map = getattr(_mabm, "platform_brokers", {}) or {}
+        elif hasattr(self, "broker_manager") and self.broker_manager is not None:
+            _broker_map = getattr(self.broker_manager, "brokers", {}) or {}
+
+        for _bt, _broker in _broker_map.items():
+            _key = str(getattr(_bt, "value", str(_bt))).lower()
+            _connected = bool(_broker is not None and getattr(_broker, "connected", False))
+            _balance = 0.0
+            try:
+                if capital_authority is not None and hasattr(capital_authority, "get_raw_per_broker"):
+                    _balance = float(capital_authority.get_raw_per_broker(_key) or 0.0)
+            except Exception:
+                _balance = 0.0
+            if _balance <= 0.0:
+                try:
+                    _balance = float(BalanceService.get(_key) or 0.0)
+                except Exception:
+                    _balance = 0.0
+
+            _min_balance = float(BROKER_MIN_BALANCE.get(_bt, MIN_BALANCE_TO_TRADE_USD))
+            _balance_ok = _balance >= _min_balance
+            _score = 0
+            if _connected:
+                _score += 40
+            if _balance > 0.0:
+                _score += 35
+            if _balance_ok:
+                _score += 25
+            _healthy = _score >= self._capital_health_min_score and _connected and _balance_ok
+
+            _health[_key] = {
+                "score": int(_score),
+                "connected": _connected,
+                "balance": float(_balance),
+                "min_balance": float(_min_balance),
+                "healthy": bool(_healthy),
+            }
+
+        self._broker_capital_health_scores = {k: int(v.get("score", 0)) for k, v in _health.items()}
+        return _health
+
+    def _is_any_platform_connected(self, broker_health: Optional[dict] = None) -> bool:
+        """Return True when at least one platform broker is connected."""
+        _mabm = getattr(self, "multi_account_manager", None)
+        if _mabm is not None and hasattr(_mabm, "platform_brokers") and hasattr(_mabm, "is_platform_connected"):
+            try:
+                for _bt in getattr(_mabm, "platform_brokers", {}).keys():
+                    if _mabm.is_platform_connected(_bt):
+                        return True
+            except Exception:
+                pass
+        if broker_health:
+            return any(bool(v.get("connected", False)) for v in broker_health.values())
+        return False
+
+    def _dispatch_capital_alert(self, severity: str, title: str, message: str, data: Optional[dict] = None) -> None:
+        """Dispatch capital alerts to alert manager + text/webhook alert channels."""
+        _payload = data or {}
+        try:
+            if self._alert_manager is None and _get_alert_manager_ts is not None:
+                self._alert_manager = _get_alert_manager_ts()
+            if self._alert_manager is not None and _AlertSeverity_ts is not None and _AlertCategory_ts is not None:
+                _sev = getattr(_AlertSeverity_ts, severity.upper(), _AlertSeverity_ts.WARNING)
+                self._alert_manager.fire(
+                    severity=_sev,
+                    category=_AlertCategory_ts.SYSTEM,
+                    title=title,
+                    message=message,
+                    data=_payload,
+                    cooldown_key=f"capital_{severity.lower()}_{title.lower().replace(' ', '_')}",
+                )
+        except Exception as _alert_err:
+            logger.debug("capital alert manager dispatch skipped: %s", _alert_err)
+
+        try:
+            if self._text_alert_system is None and _get_text_alert_system_ts is not None:
+                self._text_alert_system = _get_text_alert_system_ts()
+            if self._text_alert_system is not None and hasattr(self._text_alert_system, "emergency_mode_triggered"):
+                _drop_pct = float(_payload.get("drop_pct", _payload.get("drift_pct", 0.0)) or 0.0)
+                _level = "EMERGENCY" if severity.upper() in ("CRITICAL", "EMERGENCY") else "WARNING"
+                self._text_alert_system.emergency_mode_triggered(
+                    level=_level,
+                    drawdown_pct=_drop_pct,
+                    previous_level="NORMAL",
+                    extra=message,
+                )
+        except Exception as _text_alert_err:
+            logger.debug("capital text alert dispatch skipped: %s", _text_alert_err)
+
+    def _evaluate_capital_drift_and_auto_disable(self, total_capital: float) -> bool:
+        """Alert on drift and auto-disable entries on sudden capital drops."""
+        if total_capital <= 0:
+            return False
+
+        _prev = float(getattr(self, "_capital_prev_total", 0.0) or 0.0)
+        if _prev <= 0.0:
+            self._capital_prev_total = total_capital
+            return False
+
+        _base = max(_prev, 1e-9)
+        _drift_pct = abs(total_capital - _prev) / _base * 100.0
+        _drop_pct = max(0.0, (_prev - total_capital) / _base * 100.0)
+        _now = time.time()
+
+        if (
+            _drift_pct >= self._capital_drift_alert_pct
+            and (_now - self._capital_drift_alert_last_ts) >= self._capital_drift_cooldown_s
+        ):
+            _msg = (
+                f"Capital drift detected: ${_prev:.2f} -> ${total_capital:.2f} "
+                f"({_drift_pct:.2f}% change)"
+            )
+            logger.warning("⚠️ %s", _msg)
+            self._dispatch_capital_alert(
+                severity="WARNING",
+                title="Capital Drift Alert",
+                message=_msg,
+                data={"prev_capital": _prev, "current_capital": total_capital, "drift_pct": _drift_pct},
+            )
+            self._capital_drift_alert_last_ts = _now
+
+        if _drop_pct >= self._capital_sudden_drop_disable_pct:
+            _stop_file = os.path.join(os.path.dirname(__file__), "..", "STOP_ALL_ENTRIES.conf")
+            try:
+                with open(_stop_file, "w", encoding="utf-8") as _fh:
+                    _fh.write(
+                        f"AUTO-DISABLED {datetime.utcnow().isoformat()}Z | "
+                        f"drop={_drop_pct:.2f}% | prev=${_prev:.2f} | now=${total_capital:.2f}\n"
+                    )
+                self._sudden_drop_auto_disabled = True
+            except Exception as _stop_err:
+                logger.error("❌ Failed to write STOP_ALL_ENTRIES.conf: %s", _stop_err)
+
+            _critical = (
+                f"Sudden capital drop {_drop_pct:.2f}% detected "
+                f"(${_prev:.2f} -> ${total_capital:.2f}) — entries auto-disabled"
+            )
+            logger.critical("🚨 %s", _critical)
+            self._dispatch_capital_alert(
+                severity="CRITICAL",
+                title="Capital Sudden Drop Auto-Disable",
+                message=_critical,
+                data={"prev_capital": _prev, "current_capital": total_capital, "drop_pct": _drop_pct},
+            )
+            self._capital_prev_total = total_capital
+            return True
+
+        self._capital_prev_total = total_capital
+        return False
+
     def _is_broker_eligible_for_entry(self, broker: Optional[object]) -> Tuple[bool, str]:
         """
         Check if a broker is eligible for new entry (BUY) orders.
@@ -9508,6 +9711,51 @@ class TradingStrategy:
                 logger.debug("[CapitalAuthority] total_capital sourced: $%.2f", total_capital)
             else:
                 total_capital = self._get_total_capital_across_all_accounts()
+
+            _ca_health = _ca_cycle if "_ca_cycle" in locals() else None
+            _broker_health = self._collect_platform_broker_health(_ca_health)
+            _healthy_count = sum(1 for _h in _broker_health.values() if _h.get("healthy"))
+            _total_count = len(_broker_health)
+            _platform_ok = self._is_any_platform_connected(_broker_health)
+            _capital_ok = total_capital > 0.0 and _healthy_count > 0
+            try:
+                _nonce_ok = bool(is_nonce_issuance_authorized())
+            except Exception:
+                _nonce_ok = False
+
+            logger.info(
+                f"[SYSTEM READY CHECK] "
+                f"nonce_ok={_nonce_ok} | "
+                f"platform_ok={_platform_ok} | "
+                f"capital_ok={_capital_ok} | "
+                f"total_capital=${total_capital:.2f}"
+            )
+
+            if _broker_health:
+                logger.info(
+                    "[BROKER CAPITAL HEALTH] %s",
+                    {
+                        _k: {
+                            "score": int(_v.get("score", 0)),
+                            "healthy": bool(_v.get("healthy", False)),
+                            "balance": round(float(_v.get("balance", 0.0)), 2),
+                        }
+                        for _k, _v in _broker_health.items()
+                    },
+                )
+
+            if 0 < _healthy_count < _total_count:
+                logger.warning(
+                    "⚠️ GRACEFUL DEGRADATION ACTIVE: %d/%d brokers healthy — trading continues on healthy broker(s)",
+                    _healthy_count,
+                    _total_count,
+                )
+            elif _total_count > 0 and _healthy_count == 0 and not user_mode:
+                logger.warning("🛑 No healthy brokers detected — switching to position-management mode")
+                user_mode = True
+
+            if self._evaluate_capital_drift_and_auto_disable(total_capital):
+                user_mode = True
 
             # Update failsafes with TOTAL capital (all accounts summed)
             # Note: Failsafes protect the ENTIRE trading operation, not just one broker
