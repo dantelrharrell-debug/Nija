@@ -6914,11 +6914,8 @@ class KrakenBroker(BaseBroker):
             _nm = getattr(self, "nonce_manager", None)
             _can_issue_fn = getattr(_nm, "can_issue_nonce", None)
             if callable(_can_issue_fn):
-                _key_id = getattr(self, "api_key_id", "")
                 try:
-                    _can_issue = bool(_can_issue_fn(_key_id))
-                except TypeError:
-                    _can_issue = bool(_can_issue_fn())
+                    _can_issue = bool(_can_issue_fn(getattr(self, "api_key_id", "")))
                 except Exception:
                     _can_issue = False
             if not _can_issue:

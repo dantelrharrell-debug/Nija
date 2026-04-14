@@ -1035,7 +1035,7 @@ class KrakenNonceManager:
         self._last_pid_lock_reacquire_attempt_ts: float = 0.0
         try:
             _reacquire_interval_raw = float(os.environ.get("NIJA_PID_LOCK_REACQUIRE_INTERVAL_S", "5"))
-        except Exception:
+        except (TypeError, ValueError):
             _reacquire_interval_raw = 5.0
         self._pid_lock_reacquire_interval_s: float = max(1.0, _reacquire_interval_raw)
         # Optional Redis nonce backend (None = use file / timestamp mode).
@@ -1334,7 +1334,7 @@ class KrakenNonceManager:
         """Alias for next_nonce() — backward compatibility."""
         return self.next_nonce()
 
-    def can_issue_nonce(self) -> bool:
+    def can_issue_nonce(self, _api_key_id: str = "") -> bool:
         """Return True only when this manager holds the process-lifetime PID lock."""
         if not self._pid_lock_acquired:
             self.try_reacquire_pid_lock()
@@ -1371,6 +1371,12 @@ class KrakenNonceManager:
         fh = self._try_acquire_pid_lock(log_failure=False)
         if fh is None:
             return False
+        old_fh = self._pid_lock_fh
+        if old_fh is not None and old_fh is not fh:
+            try:
+                old_fh.close()
+            except Exception:
+                pass
         self._pid_lock_fh = fh
         return True
 
