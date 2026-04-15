@@ -108,6 +108,37 @@ except ImportError:
     except ImportError:
         get_capital_authority = None  # type: ignore[assignment]
 
+# Import deterministic capital-flow infrastructure (coordinator + FSMs)
+try:
+    from bot.capital_flow_state_machine import (
+        CapitalBootstrapState,
+        CapitalBootstrapStateMachine,
+        CapitalEvent,
+        CapitalEventBus,
+        CapitalEventType,
+        CapitalRefreshCoordinator,
+        CapitalRuntimeStateMachine,
+        get_capital_bootstrap_fsm,
+        get_capital_event_bus,
+    )
+    _CAPITAL_FSM_AVAILABLE = True
+except ImportError:
+    try:
+        from capital_flow_state_machine import (  # type: ignore[no-redef]
+            CapitalBootstrapState,
+            CapitalBootstrapStateMachine,
+            CapitalEvent,
+            CapitalEventBus,
+            CapitalEventType,
+            CapitalRefreshCoordinator,
+            CapitalRuntimeStateMachine,
+            get_capital_bootstrap_fsm,
+            get_capital_event_bus,
+        )
+        _CAPITAL_FSM_AVAILABLE = True
+    except ImportError:
+        _CAPITAL_FSM_AVAILABLE = False
+
 logger = logging.getLogger('nija.multi_account')
 
 # Import Execution Risk Firewall for per-venue API-call health scoring
@@ -322,6 +353,35 @@ class MultiAccountBrokerManager:
             float(os.environ.get("NIJA_CAPITAL_STARTUP_INVARIANT_POLL_S", "1.0")),
         )
 
+        # ── Deterministic capital-flow infrastructure ──────────────────────────
+        # The coordinator is the **single writer** for CapitalAuthority.  All
+        # balance fetches, snapshot computations, and authority publishes go
+        # through it.  The bootstrap / runtime FSMs track readiness state.
+        if _CAPITAL_FSM_AVAILABLE:
+            self._capital_event_bus: CapitalEventBus = get_capital_event_bus()
+            self._capital_bootstrap_fsm: CapitalBootstrapStateMachine = (
+                get_capital_bootstrap_fsm()
+            )
+            self._capital_runtime_fsm: CapitalRuntimeStateMachine = (
+                CapitalRuntimeStateMachine()
+            )
+            self._capital_coordinator: CapitalRefreshCoordinator = (
+                CapitalRefreshCoordinator(
+                    event_bus=self._capital_event_bus,
+                    bootstrap_fsm=self._capital_bootstrap_fsm,
+                    runtime_fsm=self._capital_runtime_fsm,
+                )
+            )
+            # Advance bootstrap FSM to WAIT_PLATFORM — brokers not yet connected.
+            self._capital_bootstrap_fsm.transition(
+                CapitalBootstrapState.WAIT_PLATFORM, "mabm_init"
+            )
+        else:
+            self._capital_event_bus = None  # type: ignore[assignment]
+            self._capital_bootstrap_fsm = None  # type: ignore[assignment]
+            self._capital_runtime_fsm = None  # type: ignore[assignment]
+            self._capital_coordinator = None  # type: ignore[assignment]
+
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
@@ -407,7 +467,8 @@ class MultiAccountBrokerManager:
 
     def refresh_capital_authority(self, trigger: str = "manual") -> Dict[str, float]:
         """
-        Refresh unified CapitalAuthority from all currently connected healthy platform brokers.
+        Refresh unified CapitalAuthority from all currently connected healthy
+        platform brokers via the deterministic five-stage pipeline.
 
         READY condition:
             - at least one healthy connected platform broker contributes, and
@@ -419,7 +480,6 @@ class MultiAccountBrokerManager:
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
         try:
-            authority = get_capital_authority()
             broker_map: Dict[str, BaseBroker] = {}
             for broker_type, broker in self._platform_brokers.items():
                 if broker is None or not getattr(broker, "connected", False):
@@ -443,24 +503,49 @@ class MultiAccountBrokerManager:
                 trigger,
                 sorted(broker_map.keys()),
             )
-            if broker_map:
-                authority.refresh(broker_map, open_exposure_usd=0.0)
-            else:
-                authority.refresh({}, open_exposure_usd=0.0)
 
-            total_capital = float(authority.get_real_capital())
-            authority.update(total_capital)
-            valid_brokers = len(broker_map)
-            # Hard capital-truth contract:
-            # If Kraken is connected, Kraken's balance is the startup/readiness
-            # authority. This prevents cross-venue non-zero balances from masking
-            # a phantom Kraken-zero state.
+            # ── Emit REFRESH_REQUESTED event (bootstrap FSM observability) ────
+            if _CAPITAL_FSM_AVAILABLE and self._capital_event_bus is not None:
+                self._capital_event_bus.emit(CapitalEvent(
+                    event_type=CapitalEventType.REFRESH_REQUESTED,
+                    trigger=trigger,
+                ))
+                # Advance bootstrap FSM: WAIT_PLATFORM → REFRESH_REQUESTED
+                self._capital_bootstrap_fsm.transition(
+                    CapitalBootstrapState.REFRESH_REQUESTED, trigger
+                )
+
+            # ── Route through coordinator (single writer) ─────────────────────
+            snapshot = None
+            if _CAPITAL_FSM_AVAILABLE and self._capital_coordinator is not None:
+                snapshot = self._capital_coordinator.execute_refresh(
+                    broker_map=broker_map,
+                    trigger=trigger,
+                    open_exposure_usd=0.0,
+                )
+
+            # ── Derive return dict from snapshot or fall back to legacy read ──
+            authority = get_capital_authority()
+            if snapshot is not None:
+                total_capital = snapshot.real_capital
+                kraken_capital = snapshot.broker_balances.get("kraken", 0.0)
+                valid_brokers = snapshot.broker_count
+            else:
+                # Coordinator not available or rejected snapshot — read CA directly.
+                if broker_map:
+                    authority.refresh(broker_map, open_exposure_usd=0.0)
+                else:
+                    authority.refresh({}, open_exposure_usd=0.0)
+                total_capital = float(authority.get_real_capital())
+                authority.update(total_capital)
+                valid_brokers = len(broker_map)
+                kraken_capital = (
+                    float(authority.get_raw_per_broker("kraken"))
+                    if "kraken" in broker_map
+                    else 0.0
+                )
+
             kraken_connected = "kraken" in broker_map
-            kraken_capital = (
-                float(authority.get_raw_per_broker("kraken"))
-                if kraken_connected
-                else 0.0
-            )
             ready = (kraken_capital > 0.0) if kraken_connected else (total_capital > 0.0)
             with self._capital_state_lock:
                 self._capital_ready = ready
@@ -543,6 +628,24 @@ class MultiAccountBrokerManager:
 
         while True:
             attempts += 1
+            # Bootstrap loop must only request a refresh — it must NOT write
+            # capital state directly.  The coordinator handles the actual fetch
+            # and the single atomic publish to CapitalAuthority.
+            if _CAPITAL_FSM_AVAILABLE and self._capital_event_bus is not None:
+                self._capital_event_bus.emit(CapitalEvent(
+                    event_type=CapitalEventType.REFRESH_REQUESTED,
+                    trigger=f"{trigger}:attempt_{attempts}",
+                ))
+                # Allow FSM to retry from DEGRADED / FAILED back to REFRESH_REQUESTED.
+                boot_state = self._capital_bootstrap_fsm.state
+                if boot_state in (
+                    CapitalBootstrapState.DEGRADED,
+                    CapitalBootstrapState.FAILED,
+                ):
+                    self._capital_bootstrap_fsm.transition(
+                        CapitalBootstrapState.REFRESH_REQUESTED,
+                        f"{trigger}:retry_{attempts}",
+                    )
             snapshot = self.refresh_capital_authority(trigger=f"{trigger}:attempt_{attempts}")
             total_capital = snapshot.get("total_capital", 0.0)
             if snapshot.get("ready", 0.0) > 0.0 and total_capital > 0.0:

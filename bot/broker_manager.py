@@ -6670,6 +6670,10 @@ class KrakenBroker(BaseBroker):
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
+        # Fraction of non-USD Kraken assets successfully priced in the most
+        # recent compute_total_usd_balance() pass.  Used by the capital
+        # confidence scorer (Stage 4 of the deterministic pipeline).
+        self._last_pricing_coverage_pct: float = 1.0
 
         # FIX 2: EXIT-ONLY mode when balance is below minimum (Jan 20, 2026)
         # Allows emergency sells even when account is too small for new entries
@@ -8742,6 +8746,27 @@ class KrakenBroker(BaseBroker):
         """
         return self._balance_fetch_errors
 
+    def get_last_pricing_coverage(self) -> float:
+        """
+        Return the fraction of non-USD Kraken assets successfully priced in
+        the most recent ``compute_total_usd_balance()`` pass (0..1).
+
+        A value of 1.0 means all assets were priced; 0.0 means none were.
+        Used by the capital-confidence scorer (Stage 4 of the deterministic
+        pipeline) to assess valuation quality without an extra API call.
+        """
+        return self._last_pricing_coverage_pct
+
+    def get_balance_fetch_timestamp(self) -> Optional[float]:
+        """
+        Return the ``time.time()`` timestamp of the last successful Kraken
+        balance fetch, or ``None`` if no fetch has succeeded yet.
+
+        Used by the capital-confidence scorer to compute data freshness
+        (Stage 4 of the deterministic pipeline).
+        """
+        return self._balance_last_updated
+
     def _normalize_kraken_asset_code(self, asset_code: str) -> str:
         """Normalize Kraken asset codes (e.g. XXBT/XETH/ZUSD) to standard symbols."""
         token = str(asset_code or "").strip().upper()
@@ -8766,8 +8791,15 @@ class KrakenBroker(BaseBroker):
         return fallback
 
     def compute_total_usd_balance(self, balance: dict, price_lookup) -> float:
-        """Convert all balance assets to total USD value."""
+        """Convert all balance assets to total USD value.
+
+        Also updates ``_last_pricing_coverage_pct`` — the fraction of
+        non-USD / non-stablecoin assets that were successfully priced — so
+        the capital-confidence scorer can use it without an extra API call.
+        """
         total = 0.0
+        non_usd_count = 0
+        priced_count = 0
         for asset, amount in (balance or {}).items():
             try:
                 qty = float(amount)
@@ -8793,9 +8825,11 @@ class KrakenBroker(BaseBroker):
                     )
                     total += qty
                 continue
+            non_usd_count += 1
             price = price_lookup(symbol)
             if price is not None and float(price) > 0.0:
                 total += qty * float(price)
+                priced_count += 1
             else:
                 logger.warning(
                     "[KrakenBalancePipeline] usd_conversion_missing account=%s asset=%s qty=%.8f",
@@ -8803,6 +8837,10 @@ class KrakenBroker(BaseBroker):
                     symbol,
                     qty,
                 )
+        # Store pricing coverage for Stage 4 confidence scoring.
+        self._last_pricing_coverage_pct = (
+            priced_count / non_usd_count if non_usd_count > 0 else 1.0
+        )
         return total
 
     def get_current_price(self, symbol: str) -> Optional[float]:
