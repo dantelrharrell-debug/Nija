@@ -209,6 +209,17 @@ class MultiAccountBrokerManager:
     MIN_STARTUP_CAPITAL_TIMEOUT_S = 1.0
     MIN_STARTUP_CAPITAL_POLL_S = 0.1
     MIN_STARTUP_CAPITAL_SLEEP_S = 0.05
+    BOOTSTRAP_REFRESH_TRIGGER_PREFIXES = ("platform_connect:", "initialize_platform_brokers")
+    WATCHDOG_REFRESH_TRIGGER = "watchdog"
+    BOOTSTRAP_CONNECTED_ELIGIBLE_STATES = (
+        CapitalBootstrapState.WAIT_PLATFORM,
+        CapitalBootstrapState.REFRESH_REQUESTED,
+        CapitalBootstrapState.REFRESH_IN_FLIGHT,
+        CapitalBootstrapState.SNAPSHOT_EVALUATING,
+        CapitalBootstrapState.DEGRADED,
+        CapitalBootstrapState.FAILED,
+    )
+
     BOOTSTRAP_TRIGGERS = {
         "platform_connect",
         "initialize_platform_brokers",
@@ -496,6 +507,28 @@ class MultiAccountBrokerManager:
                         reason,
                     )
                     continue
+                is_platform_ready = self.is_platform_connected(broker_type)
+                allow_bootstrap_connected = self._can_include_bootstrap_connected_broker(
+                    trigger=trigger,
+                    is_platform_ready=is_platform_ready,
+                    broker=broker,
+                )
+                if not (is_platform_ready or allow_bootstrap_connected):
+                    logger.info(
+                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready "
+                        "(bootstrap_trigger=%s state=%s)",
+                        trigger,
+                        broker_type.value,
+                        bootstrap_trigger,
+                        self._get_bootstrap_state_value(),
+                    )
+                    continue
+                if allow_bootstrap_connected:
+                    logger.info(
+                        "[CapitalAuthorityRefresh] trigger=%s include broker=%s reason=bootstrap_connected",
+                        trigger,
+                        broker_type.value,
+                    )
                 broker_map[broker_type.value] = broker
 
             logger.info(
@@ -545,6 +578,11 @@ class MultiAccountBrokerManager:
                     else 0.0
                 )
 
+            kraken_connected = "kraken" in broker_map
+            # Unified readiness should reflect aggregate usable capital, not require
+            # a specific venue to hold funds.
+            has_connected_brokers = bool(broker_map)
+            ready = has_connected_brokers and (total_capital > 0.0)
             kraken_broker = self._platform_brokers.get(BrokerType.KRAKEN)
             kraken_connected_layer = bool(getattr(kraken_broker, "connected", False))
             kraken_included = "kraken" in broker_map
@@ -600,6 +638,8 @@ class MultiAccountBrokerManager:
 
             if ready:
                 logger.info("CAPITAL_READY")
+                self._sync_platform_connection_states(broker_map)
+                if kraken_connected:
                 if kraken_included:
                     try:
                         _KRAKEN_STARTUP_FSM.mark_capital_ready()
@@ -656,6 +696,29 @@ class MultiAccountBrokerManager:
         This is intentionally state-driven only; trigger names do not influence
         broker eligibility.
 
+    def _can_include_bootstrap_connected_broker(
+        self,
+        trigger: str,
+        is_platform_ready: bool,
+        broker: BaseBroker,
+    ) -> bool:
+        # Bootstrap-only relaxation: include connected brokers that already
+        # produced a balance payload, even before platform-ready flips true.
+        # Once bootstrap reaches READY, strict gating resumes automatically.
+        if is_platform_ready:
+            return False
+        has_payload_attr = getattr(broker, "has_balance_payload", None)
+        has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
+        if not has_payload:
+            return False
+        if not (
+            self._is_bootstrap_refresh_trigger(trigger)
+            or trigger == self.WATCHDOG_REFRESH_TRIGGER
+        ):
+            return False
+        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
+            return False
+        return self._capital_bootstrap_fsm.state in self.BOOTSTRAP_CONNECTED_ELIGIBLE_STATES
         Args:
             broker_type: Platform broker type being evaluated.
             broker: Platform broker instance (may be None).
@@ -684,6 +747,16 @@ class MultiAccountBrokerManager:
 
     def _is_bootstrap_trigger(self, trigger: str) -> bool:
         return trigger.split(":", 1)[0] in self.BOOTSTRAP_TRIGGERS
+
+    def _sync_platform_connection_states(self, broker_map: Dict[str, BaseBroker]) -> None:
+        """Mark connected platform brokers as CONNECTED after capital becomes ready."""
+        for broker_type, broker in self._platform_brokers.items():
+            if (
+                broker_type.value in broker_map
+                and getattr(broker, "connected", False)
+                and not self.is_platform_connected(broker_type)
+            ):
+                self._mark_platform_connected(broker_type)
 
     def resolve_startup_capital_invariant(
         self,
@@ -808,7 +881,7 @@ class MultiAccountBrokerManager:
                     if authority is not None and authority.is_stale(ttl_s=self.capital_stale_timeout_s):
                         needs_refresh = True
                     if needs_refresh:
-                        self.refresh_capital_authority(trigger="watchdog")
+                        self.refresh_capital_authority(trigger=self.WATCHDOG_REFRESH_TRIGGER)
 
                     healthy_connected = any(
                         self.is_platform_connected(bt) and getattr(b, "connected", False)
@@ -2964,11 +3037,9 @@ class MultiAccountBrokerManager:
                 else:
                     with _PLATFORM_BROKER_REGISTRY_LOCK:
                         _PLATFORM_BROKER_CONNECTED[key] = False
-                        setattr(broker, "connected", False)
-                    self.mark_platform_failed(broker_type)
-                    logger.error(
-                        "   ⛔ Platform %s connected but capital not ready "
-                        "(valid_brokers=%d total=$%.2f) — gating trading",
+                    logger.warning(
+                        "   ⏳ Platform %s connected but capital not ready yet "
+                        "(valid_brokers=%d total=$%.2f) — waiting for re-evaluation",
                         key.upper(),
                         int(_cap.get("valid_brokers", 0.0)),
                         float(_cap.get("total_capital", 0.0)),

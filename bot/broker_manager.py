@@ -1411,6 +1411,7 @@ class BaseBroker(ABC):
         self.last_connection_error = None  # Track last connection error for troubleshooting
         self.exit_only_mode = False  # Default: not in exit-only mode (can be overridden by subclasses)
         self.mode = "ACTIVE"  # Broker deployment mode: "ACTIVE" = tradable, "PASSIVE" = track-only (balance below deployable threshold)
+        self._has_balance_payload = False
 
         # ── Quarantine state (broker-instance level) ─────────────────────────
         # Set by clear_kraken_broker_quarantine() / _on_kraken_nonce_quarantine().
@@ -1465,6 +1466,9 @@ class BaseBroker(ABC):
             return self.circuit_breaker.get_status()
         return None
 
+    def has_balance_payload(self) -> bool:
+        """Return whether this broker has observed a real balance payload this session."""
+        return bool(self._has_balance_payload)
     def has_balance_payload_for_capital(self) -> bool:
         """
         Return True when a usable balance payload exists for capital accounting.
@@ -7307,7 +7311,9 @@ class KrakenBroker(BaseBroker):
             # Gateway-only connect success: private execution is delegated to
             # gateway, and this local broker never receives private credentials.
             self.credentials_configured = True
-            self.connected = True
+            # Avoid a connected/ready mismatch for PLATFORM startup: connection
+            # is only marked true after capital readiness is validated.
+            self.connected = self.account_type != AccountType.PLATFORM  # PLATFORM waits for capital-ready gate
             if self.account_type == AccountType.PLATFORM:
                 _capital_ready = False
                 _cap_total = 0.0
@@ -7948,7 +7954,10 @@ class KrakenBroker(BaseBroker):
                                 return False
 
                     if balance and 'result' in balance:
-                        self.connected = True
+                        self._has_balance_payload = True
+                        # Avoid a transient connected/ready mismatch for PLATFORM:
+                        # keep connected False until startup capital gate is ready.
+                        self.connected = self.account_type != AccountType.PLATFORM
 
                         # Record success — resets the consecutive-error counter
                         self._record_nonce_success()
@@ -8145,6 +8154,7 @@ class KrakenBroker(BaseBroker):
                                 )
 
                             if _capital_ready:
+                                self.connected = True
                                 _KRAKEN_STARTUP_FSM.mark_nonce_ready()
                                 _KRAKEN_STARTUP_FSM.mark_capital_ready()
                                 _KRAKEN_STARTUP_FSM.mark_connected()
@@ -8496,6 +8506,7 @@ class KrakenBroker(BaseBroker):
                     return 0.0
 
             if balance and 'result' in balance:
+                self._has_balance_payload = True
                 result = balance['result']
                 logger.info(
                     "[KrakenBalancePipeline] raw_balance_keys account=%s keys=%s",
@@ -8543,6 +8554,7 @@ class KrakenBroker(BaseBroker):
                 balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                 trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
                 held_amount = 0.0
+                trade_balance_equity_usd = 0.0
 
                 if trade_balance and 'result' in trade_balance:
                     tb_result = trade_balance['result']
@@ -8551,6 +8563,7 @@ class KrakenBroker(BaseBroker):
                     # held = eb - tb
                     eb = float(tb_result.get('eb', 0))
                     tb = float(tb_result.get('tb', 0))
+                    trade_balance_equity_usd = max(0.0, eb)
                     held_amount = eb - tb if eb > tb else 0.0
 
                 # Enhanced balance logging with clear breakdown (Jan 19, 2026)
@@ -8563,15 +8576,25 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                     logger.info(f"   💵 Total Available: ${total:.2f}")
 
-                # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
-                total_funds = total + held_amount + non_usd_usd_value
+                # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken.
+                # Use the larger of:
+                #   1) local valuation (cash + held + priced non-USD assets), and
+                #   2) Kraken TradeBalance equivalent balance (eb).
+                # This ensures startup capital doesn't collapse to $0 when local
+                # asset pricing coverage is temporarily cold while Kraken already
+                # reports a valid equivalent-balance snapshot.
+                total_funds = max(
+                    total + held_amount + non_usd_usd_value,
+                    trade_balance_equity_usd,  # prevents startup $0 when local pricing cache is still cold
+                )
                 logger.info(
                     "[KrakenBalancePipeline] total_funds account=%s cash=%.8f held=%.8f "
-                    "non_usd_usd=%.8f total=%.8f",
+                    "non_usd_usd=%.8f eb=%.8f total=%.8f",
                     self.account_identifier,
                     total,
                     held_amount,
                     non_usd_usd_value,
+                    trade_balance_equity_usd,
                     total_funds,
                 )
 
