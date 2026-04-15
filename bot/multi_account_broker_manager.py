@@ -648,7 +648,8 @@ class MultiAccountBrokerManager:
         # Once bootstrap reaches READY, strict gating resumes automatically.
         if is_platform_ready:
             return False
-        has_payload = bool(getattr(broker, "has_balance_payload", lambda: False)())
+        has_payload_attr = getattr(broker, "has_balance_payload", None)
+        has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
         if not has_payload:
             return False
         if not (

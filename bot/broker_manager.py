@@ -7264,7 +7264,7 @@ class KrakenBroker(BaseBroker):
             self.credentials_configured = True
             # Avoid a connected/ready mismatch for PLATFORM startup: connection
             # is only marked true after capital readiness is validated.
-            self.connected = self.account_type != AccountType.PLATFORM
+            self.connected = self.account_type != AccountType.PLATFORM  # PLATFORM waits for capital-ready gate
             if self.account_type == AccountType.PLATFORM:
                 _capital_ready = False
                 _cap_total = 0.0
@@ -8536,7 +8536,7 @@ class KrakenBroker(BaseBroker):
                 # reports a valid equivalent-balance snapshot.
                 total_funds = max(
                     total + held_amount + non_usd_usd_value,
-                    trade_balance_equity_usd,  # fallback when local pricing is incomplete
+                    trade_balance_equity_usd,  # prevents startup $0 when local pricing cache is still cold
                 )
                 logger.info(
                     "[KrakenBalancePipeline] total_funds account=%s cash=%.8f held=%.8f "
