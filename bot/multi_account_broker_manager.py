@@ -349,6 +349,7 @@ class MultiAccountBrokerManager:
         self._capital_watchdog_thread: Optional[threading.Thread] = None
         self._trading_halted_due_to_capital: bool = False
         self._capital_state_lock: threading.Lock = threading.Lock()
+        self._capital_bootstrap_barrier_started_at: Optional[float] = None
         self.capital_watchdog_interval_s: float = float(
             os.environ.get("NIJA_CAPITAL_WATCHDOG_INTERVAL_S", "10.0")
         )
@@ -496,7 +497,10 @@ class MultiAccountBrokerManager:
 
         try:
             bootstrap_trigger = self._is_bootstrap_trigger(trigger)
+            if bootstrap_trigger and self._capital_bootstrap_barrier_started_at is None:
+                self._capital_bootstrap_barrier_started_at = time.monotonic()
             broker_map: Dict[str, BaseBroker] = {}
+            registered_sources = len(self._platform_brokers)
             for broker_type, broker in self._platform_brokers.items():
                 broker_ready, reason = self._is_broker_ready_for_capital_refresh(broker_type, broker)
                 if not broker_ready:
@@ -536,6 +540,47 @@ class MultiAccountBrokerManager:
                 trigger,
                 sorted(broker_map.keys()),
             )
+
+            # Bootstrap minimum-source barrier: never run an authority refresh on
+            # empty eligible inputs during startup. This prevents empty-input
+            # $0 snapshots from driving FAILED loops while brokers are still
+            # registering / producing first balance payloads.
+            if not broker_map:
+                barrier_elapsed = (
+                    0.0
+                    if self._capital_bootstrap_barrier_started_at is None
+                    else (time.monotonic() - self._capital_bootstrap_barrier_started_at)
+                )
+                barrier_timeout = max(
+                    self.MIN_STARTUP_CAPITAL_TIMEOUT_S,
+                    self.capital_startup_invariant_timeout_s,
+                )
+                if bootstrap_trigger or (
+                    trigger == self.WATCHDOG_REFRESH_TRIGGER and barrier_elapsed < barrier_timeout
+                ):
+                    pending_reason = (
+                        "no_registered_sources"
+                        if registered_sources <= 0
+                        else "no_eligible_capital_sources"
+                    )
+                    logger.info(
+                        "[CapitalAuthorityRefresh] pending trigger=%s reason=%s "
+                        "registered_sources=%d elapsed=%.2fs timeout=%.2fs",
+                        trigger,
+                        pending_reason,
+                        registered_sources,
+                        barrier_elapsed,
+                        barrier_timeout,
+                    )
+                    with self._capital_state_lock:
+                        self._capital_ready = False
+                    return {
+                        "ready": 0.0,
+                        "total_capital": 0.0,
+                        "valid_brokers": 0.0,
+                        "kraken_capital": 0.0,
+                        "pending": 1.0,
+                    }
 
             # ── Emit REFRESH_REQUESTED event (bootstrap FSM observability) ────
             if _CAPITAL_FSM_AVAILABLE and self._capital_event_bus is not None:
@@ -637,6 +682,7 @@ class MultiAccountBrokerManager:
             )
 
             if ready:
+                self._capital_bootstrap_barrier_started_at = None
                 logger.info("CAPITAL_READY")
                 self._sync_platform_connection_states(broker_map)
                 if kraken_connected:
@@ -696,29 +742,6 @@ class MultiAccountBrokerManager:
         This is intentionally state-driven only; trigger names do not influence
         broker eligibility.
 
-    def _can_include_bootstrap_connected_broker(
-        self,
-        trigger: str,
-        is_platform_ready: bool,
-        broker: BaseBroker,
-    ) -> bool:
-        # Bootstrap-only relaxation: include connected brokers that already
-        # produced a balance payload, even before platform-ready flips true.
-        # Once bootstrap reaches READY, strict gating resumes automatically.
-        if is_platform_ready:
-            return False
-        has_payload_attr = getattr(broker, "has_balance_payload", None)
-        has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
-        if not has_payload:
-            return False
-        if not (
-            self._is_bootstrap_refresh_trigger(trigger)
-            or trigger == self.WATCHDOG_REFRESH_TRIGGER
-        ):
-            return False
-        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
-            return False
-        return self._capital_bootstrap_fsm.state in self.BOOTSTRAP_CONNECTED_ELIGIBLE_STATES
         Args:
             broker_type: Platform broker type being evaluated.
             broker: Platform broker instance (may be None).
@@ -744,6 +767,30 @@ class MultiAccountBrokerManager:
                 )
                 return False, "capital_readiness_error"
         return False, "capital_readiness_unavailable"
+
+    def _can_include_bootstrap_connected_broker(
+        self,
+        trigger: str,
+        is_platform_ready: bool,
+        broker: BaseBroker,
+    ) -> bool:
+        # Bootstrap-only relaxation: include connected brokers that already
+        # produced a balance payload, even before platform-ready flips true.
+        # Once bootstrap reaches READY, strict gating resumes automatically.
+        if is_platform_ready:
+            return False
+        has_payload_attr = getattr(broker, "has_balance_payload", None)
+        has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
+        if not has_payload:
+            return False
+        if not (
+            self._is_bootstrap_trigger(trigger)
+            or trigger == self.WATCHDOG_REFRESH_TRIGGER
+        ):
+            return False
+        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
+            return False
+        return self._capital_bootstrap_fsm.state in self.BOOTSTRAP_CONNECTED_ELIGIBLE_STATES
 
     def _is_bootstrap_trigger(self, trigger: str) -> bool:
         return trigger.split(":", 1)[0] in self.BOOTSTRAP_TRIGGERS
@@ -3011,6 +3058,14 @@ class MultiAccountBrokerManager:
                 )
                 return getattr(broker, "connected", True)
 
+            # Register the broker object first so startup capital-refresh loops
+            # can deterministically observe a non-empty source registry even
+            # while connect() is still in flight.
+            self.register_platform_broker_instance(
+                broker_type,
+                broker,
+                mark_connected_state=False,
+            )
             self.begin_platform_connection(broker_type)
             try:
                 connected = broker.connect()
@@ -3018,11 +3073,6 @@ class MultiAccountBrokerManager:
                 logger.error("❌ Platform %s connect() raised: %s", key.upper(), exc)
                 connected = False
             if connected:
-                self.register_platform_broker_instance(
-                    broker_type,
-                    broker,
-                    mark_connected_state=False,
-                )
                 # Event-driven capital refresh: any successful platform connect
                 # immediately revalidates unified capital readiness.
                 _cap = self.resolve_startup_capital_invariant(trigger=f"platform_connect:{key}")
@@ -3046,12 +3096,6 @@ class MultiAccountBrokerManager:
                     )
             else:
                 self.mark_platform_failed(broker_type)
-                # Still register so the background reconnect loop can retry.
-                self.register_platform_broker_instance(
-                    broker_type,
-                    broker,
-                    mark_connected_state=False,
-                )
                 logger.warning(
                     "   ⚠️  Platform %s connection failed — registered for background retry",
                     key.upper(),
