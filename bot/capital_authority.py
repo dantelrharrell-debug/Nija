@@ -199,7 +199,7 @@ class CapitalAuthority:
         if not effective_broker_map:
             try:
                 platform_brokers = getattr(canonical_broker_manager, "platform_brokers", {})
-                for broker_type, broker in dict(platform_brokers).items():
+                for broker_type, broker in platform_brokers.items():
                     if broker is None:
                         continue
                     broker_key = getattr(broker_type, "value", str(broker_type))
