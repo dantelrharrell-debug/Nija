@@ -70,6 +70,40 @@ class TestCapitalStartupBarrier(unittest.TestCase):
         self.assertEqual(snapshot.get("total_capital"), 0.0)
         self.assertEqual(snapshot.get("pending"), 1.0)
 
+    def test_bootstrap_trigger_allows_payload_when_readiness_flag_lags(self):
+        manager = get_broker_manager()
+        broker = _MockBroker(
+            broker_type=BrokerType.KRAKEN,
+            connected=True,
+            ready_for_capital=False,
+            has_payload=True,
+            balance=125.0,
+        )
+        manager.register_platform_broker_instance(BrokerType.KRAKEN, broker, mark_connected_state=False)
+
+        snapshot = manager.refresh_capital_authority(trigger="capital_allocation_brain")
+
+        self.assertGreaterEqual(snapshot.get("valid_brokers", 0.0), 1.0)
+        self.assertGreater(snapshot.get("total_capital", 0.0), 0.0)
+        self.assertGreater(snapshot.get("kraken_capital", 0.0), 0.0)
+
+    def test_non_bootstrap_trigger_stays_strict_when_readiness_false(self):
+        manager = get_broker_manager()
+        broker = _MockBroker(
+            broker_type=BrokerType.KRAKEN,
+            connected=True,
+            ready_for_capital=False,
+            has_payload=True,
+            balance=125.0,
+        )
+        manager.register_platform_broker_instance(BrokerType.KRAKEN, broker, mark_connected_state=False)
+
+        snapshot = manager.refresh_capital_authority(trigger="manual")
+
+        self.assertEqual(snapshot.get("ready"), 0.0)
+        self.assertEqual(snapshot.get("total_capital"), 0.0)
+        self.assertEqual(snapshot.get("valid_brokers"), 0.0)
+
     def test_bootstrap_connected_kraken_contributes_nonzero_capital(self):
         manager = get_broker_manager()
         broker = _MockBroker(
