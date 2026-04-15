@@ -1498,21 +1498,40 @@ class BaseBroker(ABC):
         """
         Single-source readiness contract for capital eligibility.
 
-        Ready means: physically connected AND has balance payload.
-        Kraken additionally requires a non-terminal/usable FSM state.
+        A broker is eligible to contribute capital when it has a balance
+        payload — i.e. it has completed at least one successful balance fetch
+        this session.
+
+        **Why ``self.connected`` is intentionally NOT checked here:**
+        The PLATFORM KrakenBroker sets ``connected = False`` until
+        ``mark_connected()`` fires (which only happens *after* the capital
+        authority confirms a non-zero balance).  Requiring ``connected = True``
+        here creates a circular deadlock:
+
+            connect()
+              └─▶ resolve_startup_capital_invariant()
+                    └─▶ _is_broker_ready_for_capital()  # needs connected=True
+                          └─▶ is_ready_for_capital()   # connected=False → False
+                                ← broker excluded from broker_map
+                                ← total_capital = $0
+                                ← NOT READY → timeout → trading halted
+
+        Balance-payload presence is the correct gate: if the broker fetched a
+        balance (even a zero balance), it is alive and can contribute to the
+        capital picture.  The ``connected`` flag is separately gated by the
+        trading execution layers and does not need to be duplicated here.
+
+        Kraken additionally requires a non-terminal FSM state so that a
+        permanently failed / revoked-key broker cannot accidentally contribute
+        stale cached capital.
         """
-        if not self.connected:
-            return False
         if not self.has_balance_payload_for_capital():
             return False
         if self.broker_type != BrokerType.KRAKEN:
             return True
-        # Eligibility rule (not final readiness): when Kraken is physically connected and has a
-        # valid balance payload, allow capital readiness in:
-        # - CONNECTED: fully booted steady state
-        # - CONNECTING: startup fetches can already produce balance payloads
-        # - FAILED: allows capital ingestion needed to escape FAILED loops;
-        #           final "system ready" still requires bootstrap FSM exit.
+        # Kraken eligibility: allow capital ingestion in CONNECTING (startup
+        # balance fetch in flight), CONNECTED (steady state), and even FAILED
+        # (lets the refresh escape a FAILED loop while the broker is alive).
         return (
             _KRAKEN_STARTUP_FSM.is_connected
             or _KRAKEN_STARTUP_FSM.is_connecting

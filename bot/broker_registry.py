@@ -45,7 +45,6 @@ import logging
 import threading
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, Iterator, Optional
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 logger = logging.getLogger("nija.broker_registry")
@@ -53,34 +52,6 @@ logger = logging.getLogger("nija.broker_registry")
 # ---------------------------------------------------------------------------
 # Broker Criticality
 # ---------------------------------------------------------------------------
-
-
-class BrokerCriticality(str, Enum):
-    """Importance tier for a broker in the execution pipeline.
-
-    CRITICAL : A primary production venue (Coinbase, Kraken).  Its failure
-               blocks new BUY orders on that broker until it recovers.  At
-               least one CRITICAL broker must be connected for the trading
-               cycle to proceed.
-    OPTIONAL : A supplementary / degraded venue (OKX, Binance, Alpaca).
-               Its failure is explicitly tolerated.  An OPTIONAL failure
-               MUST NEVER block execution, reduce active_account_count to
-               zero, or invalidate trading-cycle eligibility.
-    """
-
-    CRITICAL = "CRITICAL"
-    OPTIONAL = "OPTIONAL"
-
-
-#: Default criticality keyed by lowercase broker name.
-#: Override at runtime: ``broker_registry["okx"]["criticality"] = BrokerCriticality.CRITICAL``
-_DEFAULT_CRITICALITY: Dict[str, BrokerCriticality] = {
-    "coinbase": BrokerCriticality.CRITICAL,
-    "kraken": BrokerCriticality.CRITICAL,
-    "okx": BrokerCriticality.OPTIONAL,
-    "binance": BrokerCriticality.OPTIONAL,
-    "alpaca": BrokerCriticality.OPTIONAL,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +353,7 @@ class BrokerRegistry(dict):
 
         Checks a runtime override stored in the registry first
         (``broker_registry[name]["criticality"]``), then falls back to
-        :data:`_DEFAULT_CRITICALITY`.  Unknown brokers return ``False``
+        :data:`BROKER_DEFAULT_CRITICALITY`.  Unknown brokers return ``False``
         (treated as OPTIONAL) so unrecognised venues are never blocking.
 
         Args:
@@ -396,7 +367,7 @@ class BrokerRegistry(dict):
                 return crit == BrokerCriticality.CRITICAL
             except ValueError:
                 pass
-        return _DEFAULT_CRITICALITY.get(name, BrokerCriticality.OPTIONAL) == BrokerCriticality.CRITICAL
+        return BROKER_DEFAULT_CRITICALITY.get(name, BrokerCriticality.OPTIONAL) == BrokerCriticality.CRITICAL
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +389,7 @@ def get_broker_criticality(broker_name: str) -> BrokerCriticality:
 
     Checks a runtime override in the live registry first
     (``broker_registry[name]["criticality"]``), then falls back to
-    :data:`_DEFAULT_CRITICALITY`.  Unknown brokers default to
+    :data:`BROKER_DEFAULT_CRITICALITY`.  Unknown brokers default to
     ``BrokerCriticality.OPTIONAL`` so unrecognised venues are always
     treated as non-blocking.
 
@@ -435,4 +406,4 @@ def get_broker_criticality(broker_name: str) -> BrokerCriticality:
             return BrokerCriticality(override) if isinstance(override, str) else override
         except ValueError:
             pass
-    return _DEFAULT_CRITICALITY.get(name, BrokerCriticality.OPTIONAL)
+    return BROKER_DEFAULT_CRITICALITY.get(name, BrokerCriticality.OPTIONAL)
