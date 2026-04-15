@@ -506,6 +506,14 @@ class MultiAccountBrokerManager:
         Raises:
             RuntimeError: If platform brokers are locked
         """
+        target_manager = self._get_registration_target_manager()
+        if target_manager is not self:
+            return target_manager.register_platform_broker_instance(
+                broker_type=broker_type,
+                broker=broker,
+                mark_connected_state=mark_connected_state,
+            )
+
         # Enforce immutability: Cannot add brokers after locking
         if self._platform_brokers_locked:
             error_msg = f"❌ INVARIANT VIOLATION: Cannot register platform broker {broker_type.value} - platform brokers are locked (immutable)"
@@ -542,6 +550,16 @@ class MultiAccountBrokerManager:
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
+
+    def _get_registration_target_manager(self) -> "MultiAccountBrokerManager":
+        """Return canonical registration target manager and log when redirecting."""
+        canonical_manager = get_broker_manager()
+        if self is canonical_manager:
+            return self
+        logger.warning(
+            "Redirecting platform broker registration to canonical manager instance"
+        )
+        return canonical_manager
 
     def refresh_capital_authority(self, trigger: str = "manual") -> Dict[str, float]:
         """
@@ -1103,6 +1121,10 @@ class MultiAccountBrokerManager:
             RuntimeError: If platform brokers are locked or broker already registered
         """
         try:
+            target_manager = self._get_registration_target_manager()
+            if target_manager is not self:
+                return target_manager.add_platform_broker(broker_type)
+
             # Enforce immutability: Cannot add brokers after locking
             if self._platform_brokers_locked:
                 error_msg = f"❌ INVARIANT VIOLATION: Cannot add platform broker {broker_type.value} - platform brokers are locked (immutable)"
