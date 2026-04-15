@@ -137,6 +137,12 @@ class TestCapitalStartupBarrier(unittest.TestCase):
         self.assertIn(BrokerType.KRAKEN, canonical._platform_brokers)
         self.assertNotIn(BrokerType.KRAKEN, non_canonical._platform_brokers)
 
+    def test_register_broker_string_path_registers_in_canonical_manager(self):
+        canonical = get_broker_manager()
+        registered = canonical.register_broker("kraken", _MockBroker(BrokerType.KRAKEN))
+        self.assertTrue(registered)
+        self.assertGreater(len(canonical.platform_brokers), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

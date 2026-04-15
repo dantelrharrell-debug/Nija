@@ -21,7 +21,7 @@ import threading
 import time
 from types import MappingProxyType
 import traceback
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from enum import Enum
 
 # Import broker classes
@@ -550,6 +550,22 @@ class MultiAccountBrokerManager:
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
+
+    def register_broker(self, broker_type: Union[str, BrokerType], broker: BaseBroker) -> bool:
+        """Canonical broker registration entrypoint used by broker connect() paths."""
+        if isinstance(broker_type, BrokerType):
+            broker_enum = broker_type
+        else:
+            broker_key = str(broker_type).strip().lower()
+            try:
+                broker_enum = BrokerType(broker_key)
+            except ValueError as exc:
+                raise ValueError(f"Unsupported broker type for platform registration: {broker_type}") from exc
+        return self.register_platform_broker_instance(
+            broker_type=broker_enum,
+            broker=broker,
+            mark_connected_state=bool(getattr(broker, "connected", False)),
+        )
 
     def _get_registration_target_manager(self) -> "MultiAccountBrokerManager":
         """Return canonical registration target manager and log when redirecting."""
