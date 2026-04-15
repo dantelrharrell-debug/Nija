@@ -867,16 +867,16 @@ class KrakenStartupFSM:
                 self._nonce_ready.clear()
                 self._capital_ready.clear()
                 self._connecting = True
-                # Keep nonce issuance CLOSED during boot until capital readiness
-                # gating passes (non-negotiable startup invariant).
-                if revoke_nonce_issuance is not None:
-                    revoke_nonce_issuance()
+                # Keep nonce issuance OPEN during bootstrap so auth + balance
+                # fetch private calls can complete before CAPITAL_READY.
+                if authorize_nonce_issuance is not None:
+                    authorize_nonce_issuance()
                     logger.info(
-                        "KrakenStartupFSM.begin_platform_boot: nonce issuance revoked pending CAPITAL_READY"
+                        "KrakenStartupFSM.begin_platform_boot: nonce issuance authorized for bootstrap private calls"
                     )
                 else:
                     logger.warning(
-                        "KrakenStartupFSM.begin_platform_boot: revoke_nonce_issuance "
+                        "KrakenStartupFSM.begin_platform_boot: authorize_nonce_issuance "
                         "unavailable — FSM gate is not enforced (degraded mode)"
                     )
             else:
