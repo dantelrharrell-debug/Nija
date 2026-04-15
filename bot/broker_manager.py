@@ -2311,28 +2311,34 @@ class CoinbaseBroker(BaseBroker):
             import time
 
             # Get credentials from environment — support per-user overrides for USER accounts
+            # and both secret variable conventions:
+            # - COINBASE_*_API_SECRET
+            # - COINBASE_*_PEM_CONTENT
             if self.account_type == AccountType.USER and self.user_id:
-                # Per-user Coinbase credentials: COINBASE_USER_{USERID}_API_KEY / _API_SECRET
+                # Per-user Coinbase credentials:
+                # COINBASE_USER_{USERID}_API_KEY + (_API_SECRET or _PEM_CONTENT)
                 _short_env, _full_env = _user_env_prefix(self.user_id)
                 api_key = os.getenv(f"COINBASE_USER_{_short_env}_API_KEY", "")
                 api_secret = os.getenv(f"COINBASE_USER_{_short_env}_API_SECRET", "")
+                api_secret = api_secret or os.getenv(f"COINBASE_USER_{_short_env}_PEM_CONTENT", "")
                 # Fallback: try full user_id in uppercase (e.g. COINBASE_USER_TANIA_GILBERT_API_KEY)
                 if (not api_key or not api_secret) and _full_env != _short_env:
                     api_key = api_key or os.getenv(f"COINBASE_USER_{_full_env}_API_KEY", "")
                     api_secret = api_secret or os.getenv(f"COINBASE_USER_{_full_env}_API_SECRET", "")
+                    api_secret = api_secret or os.getenv(f"COINBASE_USER_{_full_env}_PEM_CONTENT", "")
                 if not api_key or not api_secret:
                     logging.info(
                         "ℹ️  Coinbase USER credentials not configured for %s "
-                        "(checked COINBASE_USER_%s_API_KEY / _API_SECRET) — skipping",
+                        "(checked COINBASE_USER_%s_API_KEY + _API_SECRET/_PEM_CONTENT) — skipping",
                         self.user_id, _short_env,
                     )
                     return False
             else:
                 api_key = os.getenv("COINBASE_API_KEY")
-                api_secret = os.getenv("COINBASE_API_SECRET")
+                api_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT")
 
             if not api_key or not api_secret:
-                logging.error("❌ Coinbase API credentials not found")
+                logging.error("❌ Coinbase API credentials not found (need COINBASE_API_KEY + COINBASE_API_SECRET/COINBASE_PEM_CONTENT)")
                 return False
 
             # Normalize PEM key: Railway/Docker env vars may store newlines as
@@ -2456,7 +2462,7 @@ class CoinbaseBroker(BaseBroker):
                     # 401 Unauthorized means invalid credentials — retrying is pointless
                     if is_401_unauthorized:
                         logging.error("❌ Coinbase authentication failed (401 Unauthorized)")
-                        logging.error("   Your COINBASE_API_KEY or COINBASE_API_SECRET is invalid.")
+                        logging.error("   Your COINBASE_API_KEY or Coinbase PEM secret is invalid.")
                         logging.error("   Possible causes:")
                         logging.error("   1. API key was revoked or expired")
                         logging.error("   2. Wrong key/secret values in environment")
@@ -3462,10 +3468,10 @@ class CoinbaseBroker(BaseBroker):
                 from cryptography.hazmat.primitives import serialization
 
                 api_key = os.getenv("COINBASE_API_KEY")
-                api_secret = os.getenv("COINBASE_API_SECRET")
+                api_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT")
 
                 if not api_secret:
-                    raise ValueError("COINBASE_API_SECRET environment variable not set")
+                    raise ValueError("COINBASE_API_SECRET/COINBASE_PEM_CONTENT environment variable not set")
 
                 # Normalize PEM
                 if '\\n' in api_secret:

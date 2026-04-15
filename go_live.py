@@ -113,6 +113,7 @@ class GoLiveValidator:
         self._check_recovery_mechanisms()
         self._check_credentials_configured()
         self._check_kraken_connectivity()
+        self._check_coinbase_connectivity()
         self._check_emergency_stops()
         
         # Print results
@@ -418,7 +419,7 @@ class GoLiveValidator:
         
         # Check for Coinbase credentials (optional, now secondary)
         coinbase_api_key = os.getenv('COINBASE_API_KEY', '')
-        coinbase_api_secret = os.getenv('COINBASE_API_SECRET', '')
+        coinbase_api_secret = os.getenv('COINBASE_API_SECRET', '') or os.getenv('COINBASE_PEM_CONTENT', '')
         
         # Kraken Platform account check
         has_kraken_platform = bool(kraken_platform_key and kraken_platform_secret)
@@ -475,6 +476,54 @@ class GoLiveValidator:
                 message="Coinbase credentials configured (secondary broker) ✅",
                 critical=False
             ))
+
+    def _check_coinbase_connectivity(self):
+        """Check Coinbase platform connectivity when Coinbase credentials are present."""
+        coinbase_api_key = os.getenv('COINBASE_API_KEY', '')
+        coinbase_api_secret = os.getenv('COINBASE_API_SECRET', '') or os.getenv('COINBASE_PEM_CONTENT', '')
+        if not (coinbase_api_key and coinbase_api_secret):
+            return
+
+        try:
+            from bot.broker_manager import BrokerType, get_broker_manager
+
+            broker_mgr = get_broker_manager()
+            coinbase_broker = broker_mgr.brokers.get(BrokerType.COINBASE)
+
+            if coinbase_broker and coinbase_broker.connect():
+                self.checks.append(CheckResult(
+                    name="Coinbase Platform Connection",
+                    passed=True,
+                    message="Coinbase platform account connection successful ✅",
+                    critical=False
+                ))
+            elif not coinbase_broker:
+                self.checks.append(CheckResult(
+                    name="Coinbase Platform Connection",
+                    passed=False,
+                    message="Coinbase broker not initialized in broker manager",
+                    remediation="Ensure Coinbase broker is configured and added to broker manager on startup",
+                    critical=False
+                ))
+                self.warnings += 1
+            else:
+                self.checks.append(CheckResult(
+                    name="Coinbase Platform Connection",
+                    passed=False,
+                    message="Unable to connect to Coinbase platform account",
+                    remediation="Verify COINBASE_API_KEY and COINBASE_API_SECRET/COINBASE_PEM_CONTENT are correct.",
+                    critical=False
+                ))
+                self.warnings += 1
+        except Exception as e:
+            self.checks.append(CheckResult(
+                name="Coinbase Platform Connection",
+                passed=False,
+                message=f"Error checking Coinbase connectivity: {str(e)}",
+                remediation="Check Coinbase API credentials and network connectivity",
+                critical=False
+            ))
+            self.warnings += 1
     
     def _check_kraken_connectivity(self):
         """Check Kraken platform and user account connectivity"""
