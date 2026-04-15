@@ -7387,6 +7387,36 @@ class KrakenBroker(BaseBroker):
                 self.account_identifier,
                 self._gateway_url,
             )
+
+            # REQUIRED INVARIANT: seed _last_known_balance so CapitalAuthority can pass.
+            # Without this, the bootstrap balance check (_last_known_balance is not None)
+            # never fires for gateway-only brokers, permanently blocking capital readiness.
+            try:
+                gw_balance = self.get_account_balance(verbose=False)
+                if self._last_known_balance is not None:
+                    logger.info(
+                        "[BrokerBalance] broker=kraken balance=$%.2f source=API",
+                        self._last_known_balance,
+                    )
+                else:
+                    logger.warning(
+                        "⚠️ [BrokerBalance] broker=kraken gateway balance fetch returned %.2f "
+                        "but _last_known_balance is still None — CapitalAuthority may block",
+                        gw_balance,
+                    )
+            except Exception as gw_bal_exc:
+                logger.warning(
+                    "⚠️ [BrokerBalance] broker=kraken gateway balance fetch failed: %s — "
+                    "CapitalAuthority may block until next refresh",
+                    gw_bal_exc,
+                )
+
+            if self._last_known_balance is None:
+                raise RuntimeError(
+                    "FATAL: Kraken broker connected (gateway-only) but no balance payload — "
+                    "CapitalAuthority invariant violated"
+                )
+
             return True
 
         try:
@@ -8459,27 +8489,33 @@ class KrakenBroker(BaseBroker):
         """
         try:
             if not self.api:
-                # FIX #2: Not connected - log warning and use last known balance
-                # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
-                self._balance_fetch_errors += 1
-                if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
-                    self._is_available = False
-                    self.exit_only_mode = True  # Pause new entries
-                    self.kraken_health = "ERROR"
-                    logger.error(f"❌ CAPITAL PROTECTION: Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
-                    logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
+                # In gateway-only mode the API object is intentionally absent; private calls
+                # are routed through _gateway_url instead.  Allow the balance fetch to
+                # proceed to the _kraken_private_call path below so _last_known_balance
+                # can be seeded and CapitalAuthority's invariant can be satisfied.
+                if not getattr(self, "_gateway_url", ""):
+                    # FIX #2: Not connected - log warning and use last known balance
+                    # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
+                    self._balance_fetch_errors += 1
+                    if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
+                        self._is_available = False
+                        self.exit_only_mode = True  # Pause new entries
+                        self.kraken_health = "ERROR"
+                        logger.error(f"❌ CAPITAL PROTECTION: Kraken marked unavailable ({self.account_identifier}) after {self._balance_fetch_errors} consecutive errors")
+                        logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
 
-                if self._last_known_balance is not None:
-                    logger.warning(f"⚠️ Kraken API not connected ({self.account_identifier}), using last known balance: ${self._last_known_balance:.2f}")
-                    # Use cached balance if available
-                    if "kraken" in self.balance_cache:
-                        return self.balance_cache["kraken"]
-                    return self._last_known_balance
-                else:
-                    logger.error(f"❌ Kraken API not connected ({self.account_identifier}) and no last known balance")
-                    self._is_available = False
-                    self.kraken_health = "ERROR"
-                    return 0.0
+                    if self._last_known_balance is not None:
+                        logger.warning(f"⚠️ Kraken API not connected ({self.account_identifier}), using last known balance: ${self._last_known_balance:.2f}")
+                        # Use cached balance if available
+                        if "kraken" in self.balance_cache:
+                            return self.balance_cache["kraken"]
+                        return self._last_known_balance
+                    else:
+                        logger.error(f"❌ Kraken API not connected ({self.account_identifier}) and no last known balance")
+                        self._is_available = False
+                        self.kraken_health = "ERROR"
+                        return 0.0
+                # else: _gateway_url is set — fall through to _kraken_private_call (gateway route)
 
             # ── TTL cache check: skip API call if balance was recently fetched ──────
             if (self._last_known_balance is not None
