@@ -825,7 +825,11 @@ def _coinbase_sdk_is_available() -> bool:
 
 
 def _resolve_kraken_startup_credentials() -> tuple:
-    """Resolve Kraken startup credentials from supported sources in priority order."""
+    """Resolve Kraken startup credentials from supported sources in priority order.
+
+    Returns:
+        tuple[str | None, str | None]: (key, secret)
+    """
     key = (
         os.getenv("KRAKEN_PLATFORM_API_KEY")
         or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_KEY")
