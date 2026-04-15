@@ -7316,9 +7316,13 @@ class KrakenBroker(BaseBroker):
             self.credentials_configured = True
             self.connected = True
             if self.account_type == AccountType.PLATFORM:
+                # Intentional: nonce readiness can be true before capital readiness.
+                # USER connect attempts still remain blocked because the startup
+                # FSM unblocks wait_connected() only after mark_connected(), which
+                # is set only when capital authority is ready.
                 _KRAKEN_STARTUP_FSM.mark_nonce_ready()
                 logger.info(
-                    "⏳ PLATFORM Kraken gateway-only connected — awaiting CapitalAuthority READY before releasing USER gate"
+                    "⏳ PLATFORM Kraken gateway-only connected — awaiting CapitalAuthority ready before releasing user-connect gate"
                 )
             logger.info(
                 "✅ Kraken gateway-only mode active (%s) — direct credentials disabled, "
@@ -8128,8 +8132,12 @@ class KrakenBroker(BaseBroker):
                                 # keep broker connected so CapitalAuthority can ingest
                                 # upstream sources on subsequent refresh attempts.
                                 self.connected = True
+                                # Intentional: nonce calibration is complete, but
+                                # mark_connected() remains blocked until capital ready.
                                 _KRAKEN_STARTUP_FSM.mark_nonce_ready()
-                                self.last_connection_error = None
+                                self.last_connection_error = (
+                                    "Waiting for CapitalAuthority readiness after successful Kraken connection"
+                                )
                                 logger.warning(
                                     "⏳ PLATFORM Kraken connected; CapitalAuthority not ready yet "
                                     "(valid_brokers=%d total=$%.2f) — awaiting bootstrap convergence",
