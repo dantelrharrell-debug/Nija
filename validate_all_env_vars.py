@@ -335,7 +335,7 @@ def check_coinbase() -> bool:
         _warn("Coinbase credentials not configured — Coinbase trading will be disabled.")
 
     # Informational JWT fields
-    for var in ("COINBASE_JWT_ISSUER", "COINBASE_JWT_KID"):
+    for var in ("COINBASE_ORG_ID", "COINBASE_JWT_ISSUER", "COINBASE_JWT_KID"):
         is_set, disp = _check_var(var)
         if is_set:
             _info(f"{var} = {disp}  (optional — present)")

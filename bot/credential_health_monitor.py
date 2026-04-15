@@ -124,11 +124,23 @@ class CredentialHealthMonitor:
                         f'KRAKEN_USER_{first_name}_API_KEY',
                         f'KRAKEN_USER_{first_name}_API_SECRET'
                     }
+                    full_name = user_id.upper()
+                    if full_name != first_name:
+                        creds[category].update({
+                            f'KRAKEN_USER_{full_name}_API_KEY',
+                            f'KRAKEN_USER_{full_name}_API_SECRET'
+                        })
                 elif broker_type == 'ALPACA':
                     creds[category] = {
                         f'ALPACA_USER_{first_name}_API_KEY',
                         f'ALPACA_USER_{first_name}_API_SECRET'
                     }
+                    full_name = user_id.upper()
+                    if full_name != first_name:
+                        creds[category].update({
+                            f'ALPACA_USER_{full_name}_API_KEY',
+                            f'ALPACA_USER_{full_name}_API_SECRET'
+                        })
         except Exception as e:
             logger.debug(f"Could not load user credentials for monitoring: {e}")
 

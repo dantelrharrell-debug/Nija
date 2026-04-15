@@ -88,6 +88,10 @@ _SECRET_VARS = {
     "KRAKEN_USER_DAIVON_API_SECRET",
     "KRAKEN_USER_TANIA_API_KEY",
     "KRAKEN_USER_TANIA_API_SECRET",
+    "KRAKEN_USER_TANIA_GILBERT_API_KEY",
+    "KRAKEN_USER_TANIA_GILBERT_API_SECRET",
+    "ALPACA_USER_TANIA_API_KEY",
+    "ALPACA_USER_TANIA_API_SECRET",
     "COINBASE_API_KEY",
     "COINBASE_API_SECRET",
     "COINBASE_PEM_CONTENT",
@@ -230,6 +234,13 @@ def _category_label(key: str) -> str:
     return "optional"
 
 
+def _is_secret_var(key: str) -> bool:
+    """Return True when a variable should be treated as secret."""
+    if key in _SECRET_VARS:
+        return True
+    return key.endswith("_API_KEY") or key.endswith("_API_SECRET") or key.endswith("_SECRET")
+
+
 # ── Main logic ─────────────────────────────────────────────────────────────────
 
 def _check_only(example_rows: list, existing: dict, final: dict) -> None:
@@ -242,7 +253,7 @@ def _check_only(example_rows: list, existing: dict, final: dict) -> None:
         val = final.get(key, "")
         cat = _category_label(key)
         if val:
-            masked = ("*" * 8) if key in _SECRET_VARS else val[:40]
+            masked = ("*" * 8) if _is_secret_var(key) else val[:40]
             print(f"  {_c(_GREEN, '✅')} {key:<45} {masked}")
         elif cat == "REQUIRED":
             print(f"  {_c(_RED,    '❌')} {key:<45} (REQUIRED — not set)")
@@ -361,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         default = _DEFAULTS.get(key, example_val)
-        is_secret = key in _SECRET_VARS
+        is_secret = _is_secret_var(key)
         new_val = _prompt(key, current_val, default, is_secret)
         if new_val and new_val != current_val:
             updates[key] = new_val
