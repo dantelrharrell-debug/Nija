@@ -119,6 +119,8 @@ class CapitalAuthority:
         self._broker_roles: Dict[str, str] = {}
         # Registered open-position exposure in USD (updated by callers)
         self._open_exposure_usd: float = 0.0
+        # Last total explicitly provided through update(total_capital).
+        self._last_updated_total: float = 0.0
         # Timestamp of most-recent successful refresh
         self.last_updated: Optional[datetime] = None
         # Minimum number of brokers that must have contributed a non-zero balance
@@ -294,6 +296,7 @@ class CapitalAuthority:
         """
         total = max(0.0, float(total_capital))
         with self._lock:
+            self._last_updated_total = total
             self.last_updated = datetime.now(timezone.utc)
         logger.info("CapitalAuthority updated: $%.2f", total)
 
@@ -589,6 +592,7 @@ class CapitalAuthority:
                 "broker_balances": dict(self._broker_balances),
                 "broker_count": len(self._broker_balances),
                 "expected_brokers": self._expected_brokers,
+                "updated_total_capital": self._last_updated_total,
                 "last_updated": self.last_updated.isoformat()
                 if self.last_updated
                 else None,

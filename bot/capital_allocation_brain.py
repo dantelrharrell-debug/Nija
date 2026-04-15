@@ -234,14 +234,20 @@ class CapitalAllocationBrain:
                     "[CapitalAllocationBrain] Triggering CapitalAuthority refresh via MABM"
                 )
                 _snapshot = _mabm.refresh_capital_authority(trigger="capital_allocation_brain")
-                logger.info(
-                    "[CapitalAllocationBrain] MABM refresh result: ready=%s total=$%.2f "
-                    "valid_brokers=%d kraken_capital=$%.2f",
-                    bool(_snapshot.get("ready", False)),
-                    float(_snapshot.get("total_capital", 0.0)),
-                    int(_snapshot.get("valid_brokers", 0)),
-                    float(_snapshot.get("kraken_capital", 0.0)),
-                )
+                if isinstance(_snapshot, dict):
+                    logger.info(
+                        "[CapitalAllocationBrain] MABM refresh result: ready=%s total=$%.2f "
+                        "valid_brokers=%d kraken_capital=$%.2f",
+                        bool(_snapshot.get("ready", False)),
+                        float(_snapshot.get("total_capital", 0.0)),
+                        int(_snapshot.get("valid_brokers", 0)),
+                        float(_snapshot.get("kraken_capital", 0.0)),
+                    )
+                else:
+                    logger.warning(
+                        "[CapitalAllocationBrain] MABM refresh returned non-dict snapshot: %r",
+                        _snapshot,
+                    )
         except Exception as exc:
             logger.warning(
                 "[CapitalAllocationBrain] MABM CapitalAuthority refresh failed: %s",
