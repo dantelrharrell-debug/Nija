@@ -7389,32 +7389,41 @@ class KrakenBroker(BaseBroker):
             )
 
             # REQUIRED INVARIANT: seed _last_known_balance so CapitalAuthority can pass.
-            # Without this, the bootstrap balance check (_last_known_balance is not None)
-            # never fires for gateway-only brokers, permanently blocking capital readiness.
+            # Best-effort: call get_account_balance() now so the fast-path shortcut in
+            # BrokerPayloadFSM.mark_payload_ready() can fire immediately, skipping the
+            # probing round-trip.  If this call fails, do NOT raise — the BrokerPayloadFSM
+            # in MultiAccountBrokerManager is the authoritative convergence mechanism.
+            # It will probe this broker up to MAX_PROBE_ATTEMPTS times and guarantee a
+            # terminal outcome (PAYLOAD_READY or EXHAUSTED) without an infinite loop.
             try:
                 gw_balance = self.get_account_balance(verbose=False)
                 if self._last_known_balance is not None:
                     logger.info(
-                        "[BrokerBalance] broker=kraken balance=$%.2f source=API",
+                        "[BrokerBalance] broker=kraken balance=$%.2f source=gateway",
                         self._last_known_balance,
                     )
                 else:
                     logger.warning(
                         "⚠️ [BrokerBalance] broker=kraken gateway balance fetch returned %.2f "
-                        "but _last_known_balance is still None — CapitalAuthority may block",
+                        "but _last_known_balance is still None — BrokerPayloadFSM will probe",
                         gw_balance,
                     )
             except Exception as gw_bal_exc:
                 logger.warning(
                     "⚠️ [BrokerBalance] broker=kraken gateway balance fetch failed: %s — "
-                    "CapitalAuthority may block until next refresh",
+                    "BrokerPayloadFSM will probe balance during bootstrap convergence",
                     gw_bal_exc,
                 )
 
+            # Do NOT raise RuntimeError here when _last_known_balance is None.
+            # The gateway IS connected — the initial balance probe is just deferred.
+            # BrokerPayloadFSM.probe_and_advance() in MABM.refresh_capital_authority
+            # will call get_account_balance() on each bootstrap iteration, guaranteeing
+            # convergence to PAYLOAD_READY or EXHAUSTED with a bounded attempt counter.
             if self._last_known_balance is None:
-                raise RuntimeError(
-                    "FATAL: Kraken broker connected (gateway-only) but no balance payload — "
-                    "CapitalAuthority invariant violated"
+                logger.info(
+                    "⏳ [BrokerPayloadFSM] broker=kraken gateway connected; "
+                    "balance payload deferred — bootstrap probing will converge"
                 )
 
             return True
