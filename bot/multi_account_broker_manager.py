@@ -921,8 +921,8 @@ class MultiAccountBrokerManager:
         """
         Unified broker-readiness gate for capital refresh.
 
-        This is intentionally state-driven only; trigger names do not influence
-        broker eligibility.
+        Normal mode is strict state-driven readiness. Bootstrap mode is strict
+        payload-driven readiness.
 
         Args:
             broker_type: Platform broker type being evaluated.
@@ -935,25 +935,33 @@ class MultiAccountBrokerManager:
         """
         if broker is None:
             return False, "missing_broker"
+        name = broker_type.value
         ready_getter = getattr(broker, "is_ready_for_capital", None)
         if callable(ready_getter):
             try:
-                if bool(ready_getter()):
-                    return True, "broker_ready_for_capital"
-                has_payload = False
-                has_payload_for_capital_attr = getattr(broker, "has_balance_payload_for_capital", None)
-                if callable(has_payload_for_capital_attr):
-                    has_payload = bool(has_payload_for_capital_attr())
-                elif hasattr(broker, "has_balance_payload"):
-                    has_payload_attr = getattr(broker, "has_balance_payload", None)
-                    has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
-                if has_payload and self._is_bootstrap_trigger(trigger):
+                # STRICT MODE (normal operation)
+                if not self._is_bootstrap_trigger(trigger):
+                    is_ready = bool(ready_getter())
+                    return is_ready, "broker_ready_for_capital" if is_ready else "broker_not_ready_for_capital"
+
+                # BOOTSTRAP MODE (payload-driven only)
+                has_payload = (
+                    getattr(broker, "has_balance_payload_for_capital", lambda: False)()
+                    or getattr(broker, "has_balance_payload", lambda: False)()
+                    or getattr(broker, "_last_known_balance", None) is not None
+                )
+                logger.info(
+                    f"[CapitalAuthorityDebug] broker={name} "
+                    f"has_payload={has_payload} "
+                    f"balance={getattr(broker, '_last_known_balance', None)}"
+                )
+                if has_payload:
                     return True, "bootstrap_balance_payload_ready"
-                return False, "broker_not_ready_for_capital"
+                return False, "bootstrap_missing_balance_payload"
             except Exception as exc:
                 logger.debug(
                     "[CapitalAuthorityRefresh] broker=%s is_ready_for_capital raised: %s",
-                    broker_type.value,
+                    name,
                     exc,
                 )
                 return False, "capital_readiness_error"
