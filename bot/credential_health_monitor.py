@@ -145,7 +145,8 @@ class CredentialHealthMonitor:
 
         Args:
             broker_prefix: Broker env prefix (e.g., 'KRAKEN', 'ALPACA').
-            user_id: Full configured user_id (e.g., 'tania_gilbert').
+            user_id: Full configured user_id (e.g., 'tania_gilbert'). If it is the same
+                token as first_name, only short-format env vars are returned.
             first_name: Uppercased first-name token from user_id (e.g., 'TANIA').
         """
         names = {
