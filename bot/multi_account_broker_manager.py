@@ -570,7 +570,9 @@ class MultiAccountBrokerManager:
                 )
 
             kraken_connected = "kraken" in broker_map
-            ready = (kraken_capital > 0.0) if kraken_connected else (total_capital > 0.0)
+            # Unified readiness should reflect aggregate usable capital, not require
+            # a specific venue to hold funds.
+            ready = bool(broker_map) and (total_capital > 0.0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
