@@ -607,6 +607,15 @@ class MultiAccountBrokerManager:
 
         This is intentionally state-driven only; trigger names do not influence
         broker eligibility.
+
+        Args:
+            broker_type: Platform broker type being evaluated.
+            broker: Platform broker instance (may be None).
+
+        Returns:
+            Tuple[bool, str]:
+                - bool: Whether this broker is eligible to contribute capital now.
+                - str: Eligibility reason code for observability/logging.
         """
         if broker is None:
             return False, "missing_broker"
@@ -621,7 +630,7 @@ class MultiAccountBrokerManager:
         if _KRAKEN_STARTUP_FSM.is_connecting:
             return True, "kraken_fsm_connecting"
         if _KRAKEN_STARTUP_FSM.is_failed:
-            return True, "kraken_live_connected_fsm_failed_recovery"
+            return True, "kraken_fsm_failed_recovery"
         return False, "kraken_fsm_not_ready"
 
     def resolve_startup_capital_invariant(
