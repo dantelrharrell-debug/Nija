@@ -113,6 +113,9 @@ HEARTBEAT_INTERVAL_SECONDS = 10
 # Note: Heartbeat is updated by dedicated background thread, not by this loop
 KEEP_ALIVE_SLEEP_INTERVAL_SECONDS = 300
 
+# Synthetic price used only for startup market-readiness probe.
+_MARKET_GATE_PROBE_PRICE = 100.0
+
 # EMERGENCY STOP CHECK
 # Note: Uses print() instead of logger because logger is not yet initialized
 if os.path.exists('EMERGENCY_STOP'):
@@ -894,7 +897,7 @@ def _verify_startup_truth_conditions(
     try:
         _mode, _conditions, _details = _mrg.check_market_readiness(
             atr=float(_mrg.AGGRESSIVE_ATR_MIN),
-            current_price=100.0,
+            current_price=_MARKET_GATE_PROBE_PRICE,
             adx=float(_mrg.AGGRESSIVE_ADX_MIN),
             volume_percentile=float(_mrg.AGGRESSIVE_VOLUME_PERCENTILE_MIN),
             spread_pct=float(_mrg.AGGRESSIVE_SPREAD_MAX),
@@ -1162,6 +1165,7 @@ def _run_bot_startup_and_trading():
 
     # TEMPORARY OPERATIONAL HOTFIX:
     # Disable Coinbase completely so startup/trading depends only on Kraken readiness.
+    # TODO: Remove this forced disable once Kraken-only validation phase is complete.
     if not _is_truthy_env("NIJA_DISABLE_COINBASE", "false"):
         os.environ["NIJA_DISABLE_COINBASE"] = "true"
         logger.warning("⛔ TEMPORARY MODE: Coinbase disabled (NIJA_DISABLE_COINBASE=true)")
@@ -1504,6 +1508,7 @@ def _run_bot_startup_and_trading():
                 logger.warning("⚠️  Coinbase credentials not configured")
 
             # Check Kraken Platform
+            # Prefer platform keys; legacy KRAKEN_API_* pair remains supported for backward compatibility.
             kraken_platform_configured = bool(
                 (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
                 and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
