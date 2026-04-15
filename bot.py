@@ -1188,7 +1188,17 @@ def _run_bot_startup_and_trading():
     # skip it entirely on retry so we never loop back through broker init.
     with _initialized_state_lock:
         _connection_already_complete = _initialized_state.get("connection_complete", False)
-    _kraken_credentials_valid = False
+    _resolved_kraken_key = (
+        os.getenv("KRAKEN_PLATFORM_API_KEY")
+        or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_KEY")
+        or os.getenv("KRAKEN_API_KEY")
+    )
+    _resolved_kraken_secret = (
+        os.getenv("KRAKEN_PLATFORM_API_SECRET")
+        or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_SECRET")
+        or os.getenv("KRAKEN_API_SECRET")
+    )
+    _kraken_credentials_valid = bool(_resolved_kraken_key and _resolved_kraken_secret)
     _coinbase_sdk_available = _coinbase_sdk_is_available()
     try:
         # Import here to ensure logging is set up
@@ -1384,7 +1394,7 @@ def _run_bot_startup_and_trading():
                     _cv_configured = sum(1 for r in _cv_results if r["configured"])
                     _cv_errors     = sum(1 for r in _cv_results if r["configured"] and not r["valid"])
                     _cv_by_broker = {r.get("broker", "").lower(): r for r in _cv_results}
-                    _kraken_credentials_valid = bool(
+                    _kraken_credentials_valid = _kraken_credentials_valid and bool(
                         (_cv_by_broker.get("kraken (platform)") or {}).get("valid", False)
                     )
 
@@ -1422,15 +1432,28 @@ def _run_bot_startup_and_trading():
                     else:
                         logger.info("✅ CREDENTIAL VALIDATION: All configured brokers passed")
                 else:
-                    logger.warning("⚠️  validate_broker_credentials.py not found — skipping validation")
+                    logger.info("ℹ️  validate_broker_credentials.py not found — skipping external validation")
             except Exception as _cv_err:
                 logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
 
             _startup_blockers = []
-            if not _kraken_credentials_valid:
+            _resolved_kraken_key = (
+                os.getenv("KRAKEN_PLATFORM_API_KEY")
+                or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_KEY")
+                or os.getenv("KRAKEN_API_KEY")
+            )
+            _resolved_kraken_secret = (
+                os.getenv("KRAKEN_PLATFORM_API_SECRET")
+                or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_SECRET")
+                or os.getenv("KRAKEN_API_SECRET")
+            )
+            if not _resolved_kraken_key or not _resolved_kraken_secret:
                 _startup_blockers.append(
-                    "Missing credentials: Kraken credentials are missing/invalid "
-                    "(set valid KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET or legacy pair)."
+                    "Missing Kraken credentials (all sources exhausted): "
+                    "set one valid key/secret pair from "
+                    "KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET, "
+                    "KRAKEN_USER_TANIA_GILBERT_API_KEY/KRAKEN_USER_TANIA_GILBERT_API_SECRET, "
+                    "or KRAKEN_API_KEY/KRAKEN_API_SECRET."
                 )
 
             import importlib.util as _iutil
