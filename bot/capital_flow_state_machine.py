@@ -803,10 +803,10 @@ class CapitalRefreshCoordinator:
                 if is_kraken:
                     kraken_fetch_ts = time.time()
                 raw = broker.get_account_balance()
-                if is_kraken and hasattr(broker, "_balance_last_updated"):
+                if is_kraken and hasattr(broker, "get_balance_fetch_timestamp"):
                     # Use the broker's own timestamp for accuracy (it may have
                     # served a TTL-cached result rather than hitting the API).
-                    _blt = broker._balance_last_updated
+                    _blt = broker.get_balance_fetch_timestamp()
                     if _blt is not None:
                         kraken_response_age_s = max(0.0, time.time() - float(_blt))
                     # Re-read pricing coverage from the broker post-fetch, in
