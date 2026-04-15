@@ -65,6 +65,7 @@ Author: NIJA Trading Systems
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
 import time
@@ -1094,13 +1095,12 @@ class BrokerPayloadFSM:
         broker_id: str,
         max_probe_attempts: Optional[int] = None,
     ) -> None:
-        import os as _os
         self.broker_id = broker_id
         self._max_probe_attempts: int = (
             max_probe_attempts
             if max_probe_attempts is not None
             else int(
-                _os.getenv(
+                os.getenv(
                     "NIJA_BALANCE_PROBE_MAX_ATTEMPTS",
                     str(self.DEFAULT_MAX_PROBE_ATTEMPTS),
                 )

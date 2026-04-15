@@ -7419,7 +7419,8 @@ class KrakenBroker(BaseBroker):
             # The gateway IS connected — the initial balance probe is just deferred.
             # BrokerPayloadFSM.probe_and_advance() in MABM.refresh_capital_authority
             # will call get_account_balance() on each bootstrap iteration, guaranteeing
-            # convergence to PAYLOAD_READY or EXHAUSTED with a bounded attempt counter.
+            # convergence to PAYLOAD_READY or EXHAUSTED within
+            # NIJA_BALANCE_PROBE_MAX_ATTEMPTS (default 5) attempts.
             if self._last_known_balance is None:
                 logger.info(
                     "⏳ [BrokerPayloadFSM] broker=kraken gateway connected; "

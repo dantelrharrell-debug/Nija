@@ -655,9 +655,11 @@ class MultiAccountBrokerManager:
                 # During startup triggers, the FSM is the sole eligibility gate.
                 # It actively probes brokers that are registered but have no
                 # payload yet, advancing them to PAYLOAD_READY or EXHAUSTED in a
-                # bounded number of attempts.  This eliminates the
-                # `bootstrap_missing_balance_payload` infinite loop: every broker
-                # either produces a payload or is explicitly exhausted.
+                # bounded number of attempts.  This eliminates the class of
+                # failure where connect() failed before seeding _last_known_balance
+                # (logged as reason=bootstrap_missing_balance_payload in prior code),
+                # leaving the broker permanently stuck with no payload and capital
+                # frozen at $0 indefinitely.
                 if bootstrap_trigger and _CAPITAL_FSM_AVAILABLE and BrokerPayloadFSM is not None:
                     payload_fsm = self._broker_payload_fsm.get(broker_type)
                     if payload_fsm is None:
