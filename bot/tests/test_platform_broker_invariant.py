@@ -208,6 +208,31 @@ def test_retrieval_methods():
     print()
 
 
+def test_bootstrap_refresh_includes_connected_platform_broker_before_ready_state():
+    """Test startup refresh includes connected broker before platform-ready state flips."""
+    print("=" * 70)
+    print("TEST 6: Bootstrap Refresh Includes Connected Broker")
+    print("=" * 70)
+
+    manager = MultiAccountBrokerManager()
+
+    # Simulate a broker that has connected but has not yet been marked
+    # platform-ready in the connection state machine.
+    broker = MockBroker(BrokerType.KRAKEN)
+    broker.connect()
+    manager.register_platform_broker_instance(BrokerType.KRAKEN, broker, mark_connected_state=False)
+
+    assert manager.is_platform_connected(BrokerType.KRAKEN) is False
+
+    snapshot = manager.refresh_capital_authority(trigger="platform_connect:kraken:attempt_1")
+
+    assert snapshot["valid_brokers"] >= 1.0, "Connected broker should be eligible during bootstrap refresh"
+    assert snapshot["total_capital"] > 0.0, "Bootstrap refresh should publish non-zero capital from connected broker"
+
+    print("✅ Test 6 PASSED: Bootstrap refresh uses connected broker before CONNECTED state")
+    print()
+
+
 def run_all_tests():
     """Run all tests"""
     print("\n" + "=" * 70)
@@ -220,6 +245,7 @@ def run_all_tests():
         test_read_only_property()
         test_single_registration_globally()
         test_retrieval_methods()
+        test_bootstrap_refresh_includes_connected_platform_broker_before_ready_state()
         
         print("\n" + "=" * 70)
         print("✅ ALL TESTS PASSED")

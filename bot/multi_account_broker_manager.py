@@ -209,6 +209,15 @@ class MultiAccountBrokerManager:
     MIN_STARTUP_CAPITAL_TIMEOUT_S = 1.0
     MIN_STARTUP_CAPITAL_POLL_S = 0.1
     MIN_STARTUP_CAPITAL_SLEEP_S = 0.05
+    BOOTSTRAP_REFRESH_TRIGGER_PREFIXES = ("platform_connect:", "initialize_platform_brokers")
+    BOOTSTRAP_CONNECTED_ELIGIBLE_STATES = (
+        CapitalBootstrapState.WAIT_PLATFORM,
+        CapitalBootstrapState.REFRESH_REQUESTED,
+        CapitalBootstrapState.REFRESH_IN_FLIGHT,
+        CapitalBootstrapState.SNAPSHOT_EVALUATING,
+        CapitalBootstrapState.DEGRADED,
+        CapitalBootstrapState.FAILED,
+    )
 
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
@@ -480,6 +489,7 @@ class MultiAccountBrokerManager:
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
         try:
+            bootstrap_trigger = self._is_bootstrap_refresh_trigger(trigger)
             broker_map: Dict[str, BaseBroker] = {}
             for broker_type, broker in self._platform_brokers.items():
                 if broker is None or not getattr(broker, "connected", False):
@@ -489,13 +499,27 @@ class MultiAccountBrokerManager:
                         broker_type.value,
                     )
                     continue
-                if not self.is_platform_connected(broker_type):
+                is_platform_ready = self.is_platform_connected(broker_type)
+                allow_bootstrap_connected = self._can_include_bootstrap_connected_broker(
+                    trigger=trigger,
+                    is_platform_ready=is_platform_ready,
+                )
+                if not (is_platform_ready or allow_bootstrap_connected):
                     logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready",
+                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready "
+                        "(bootstrap_trigger=%s state=%s)",
+                        trigger,
+                        broker_type.value,
+                        bootstrap_trigger,
+                        self._get_bootstrap_state_value(),
+                    )
+                    continue
+                if allow_bootstrap_connected:
+                    logger.info(
+                        "[CapitalAuthorityRefresh] trigger=%s include broker=%s reason=bootstrap_connected",
                         trigger,
                         broker_type.value,
                     )
-                    continue
                 broker_map[broker_type.value] = broker
 
             logger.info(
@@ -598,6 +622,25 @@ class MultiAccountBrokerManager:
             with self._capital_state_lock:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+    def _is_bootstrap_refresh_trigger(self, trigger: str) -> bool:
+        return trigger.startswith(self.BOOTSTRAP_REFRESH_TRIGGER_PREFIXES)
+
+    def _get_bootstrap_state_value(self) -> str:
+        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
+            return "n/a"
+        return self._capital_bootstrap_fsm.state.value
+
+    def _can_include_bootstrap_connected_broker(
+        self,
+        trigger: str,
+        is_platform_ready: bool,
+    ) -> bool:
+        if is_platform_ready or not self._is_bootstrap_refresh_trigger(trigger):
+            return False
+        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
+            return False
+        return self._capital_bootstrap_fsm.state in self.BOOTSTRAP_CONNECTED_ELIGIBLE_STATES
 
     def resolve_startup_capital_invariant(
         self,
