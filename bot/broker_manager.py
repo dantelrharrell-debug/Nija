@@ -1465,6 +1465,46 @@ class BaseBroker(ABC):
             return self.circuit_breaker.get_status()
         return None
 
+    def has_balance_payload_for_capital(self) -> bool:
+        """
+        Return True when a usable balance payload exists for capital accounting.
+
+        Contract: this is a payload-presence check, not a positivity check; a
+        legitimate zero balance is still a valid payload.
+        """
+        try:
+            ts_getter = getattr(self, "get_balance_fetch_timestamp", None)
+            if callable(ts_getter):
+                if ts_getter() is not None:
+                    return True
+        except Exception:
+            pass
+
+        if getattr(self, "_last_known_balance", None) is not None:
+            return True
+        if getattr(self, "_balance_cache", None) is not None:
+            return True
+        return False
+
+    def is_ready_for_capital(self) -> bool:
+        """
+        Single-source readiness contract for capital eligibility.
+
+        Ready means: physically connected AND has balance payload.
+        Kraken additionally requires a non-terminal/usable FSM state.
+        """
+        if not self.connected:
+            return False
+        if not self.has_balance_payload_for_capital():
+            return False
+        if self.broker_type != BrokerType.KRAKEN:
+            return True
+        return (
+            _KRAKEN_STARTUP_FSM.is_connected
+            or _KRAKEN_STARTUP_FSM.is_connecting
+            or _KRAKEN_STARTUP_FSM.is_failed
+        )
+
     @abstractmethod
     def connect(self) -> bool:
         """Establish connection to broker"""

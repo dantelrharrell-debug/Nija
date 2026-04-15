@@ -619,19 +619,29 @@ class MultiAccountBrokerManager:
         """
         if broker is None:
             return False, "missing_broker"
+        ready_getter = getattr(broker, "is_ready_for_capital", None)
+        if callable(ready_getter):
+            try:
+                if bool(ready_getter()):
+                    return True, "broker_ready_for_capital"
+            except Exception as exc:
+                logger.debug(
+                    "[CapitalAuthorityRefresh] broker=%s is_ready_for_capital raised: %s",
+                    broker_type.value,
+                    exc,
+                )
         if not getattr(broker, "connected", False):
             return False, "not_connected"
-        if broker_type != BrokerType.KRAKEN:
-            if self.is_platform_connected(broker_type):
-                return True, "platform_connected"
-            return False, "platform_not_ready"
-        if _KRAKEN_STARTUP_FSM.is_connected:
-            return True, "kraken_fsm_connected"
-        if _KRAKEN_STARTUP_FSM.is_connecting:
-            return True, "kraken_fsm_connecting"
-        if _KRAKEN_STARTUP_FSM.is_failed:
-            return True, "kraken_fsm_failed_recovery"
-        return False, "kraken_fsm_not_ready"
+        payload_getter = getattr(broker, "has_balance_payload_for_capital", None)
+        if callable(payload_getter):
+            try:
+                if not bool(payload_getter()):
+                    return False, "missing_balance_payload"
+            except Exception:
+                return False, "balance_payload_check_error"
+        if broker_type == BrokerType.KRAKEN:
+            return False, "kraken_fsm_not_ready"
+        return False, "broker_not_ready_for_capital"
 
     def resolve_startup_capital_invariant(
         self,
