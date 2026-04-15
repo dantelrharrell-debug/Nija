@@ -902,7 +902,8 @@ def _verify_startup_truth_conditions(
         )
     except Exception as _gate_err:
         raise RuntimeError(f"Startup verification failed: market readiness gate probe error: {_gate_err}")
-    if _mode == MarketMode.IDLE:
+    _mode_value = getattr(_mode, "value", str(_mode)).lower()
+    if _mode_value == "idle":
         raise RuntimeError(
             f"Startup verification failed: relaxed market gate probe returned IDLE ({_details.get('message')})."
         )
@@ -1408,18 +1409,31 @@ def _run_bot_startup_and_trading():
             except Exception as _cv_err:
                 logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
 
+            _startup_blockers = []
             if not _kraken_credentials_valid:
-                raise RuntimeError(
-                    "Kraken credentials are missing/invalid. "
-                    "Fix KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET (or legacy pair)."
+                _startup_blockers.append(
+                    "Missing credentials: Kraken credentials are missing/invalid "
+                    "(set valid KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET or legacy pair)."
+                )
+
+            import importlib.util as _iutil
+            _kraken_sdk_missing = (
+                _iutil.find_spec("krakenex") is None or _iutil.find_spec("pykrakenapi") is None
+            )
+            if _kraken_credentials_valid and _kraken_sdk_missing:
+                _startup_blockers.append(
+                    "Missing modules: Kraken SDK not installed (requires krakenex + pykrakenapi)."
                 )
 
             _coinbase_disabled = _is_truthy_env("NIJA_DISABLE_COINBASE", "false")
             if not _coinbase_disabled and not _coinbase_sdk_available:
-                raise RuntimeError(
-                    "Coinbase SDK is not installed but Coinbase is enabled. "
-                    "Install coinbase-advanced-py or set NIJA_DISABLE_COINBASE=true."
+                _startup_blockers.append(
+                    "Missing modules: Coinbase SDK not installed while Coinbase is enabled "
+                    "(install coinbase-advanced-py or set NIJA_DISABLE_COINBASE=true)."
                 )
+
+            if _startup_blockers:
+                raise RuntimeError("Hard startup blockers detected: " + " | ".join(_startup_blockers))
 
             # ═══════════════════════════════════════════════════════════════════════
             # KRAKEN PRE-CONNECTION NONCE RESET
