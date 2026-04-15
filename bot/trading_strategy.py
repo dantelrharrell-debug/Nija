@@ -9871,7 +9871,7 @@ class TradingStrategy:
 
             if total_capital <= 0.0:
                 logger.critical(
-                    "🛑 TRADING BLOCKED: total_capital <= 0.00 (total_capital=$%.2f)",
+                    "🛑 TRADING BLOCKED: total_capital <= 0.0 (total_capital=$%.2f)",
                     total_capital,
                 )
                 return
