@@ -751,3 +751,11 @@ def get_capital_authority() -> CapitalAuthority:
                 _authority_instance = CapitalAuthority()
                 logger.debug("[CapitalAuthority] singleton created")
     return _authority_instance
+
+
+def reset_capital_authority_singleton() -> None:
+    """Clear the cached CapitalAuthority singleton (cold-start helper)."""
+    global _authority_instance
+    with _authority_lock:
+        _authority_instance = None
+    logger.warning("[CapitalAuthority] singleton cache cleared")

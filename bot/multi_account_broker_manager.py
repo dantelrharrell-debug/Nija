@@ -352,6 +352,8 @@ class MultiAccountBrokerManager:
         self._capital_watchdog_stop: threading.Event = threading.Event()
         self._capital_watchdog_thread: Optional[threading.Thread] = None
         self._trading_halted_due_to_capital: bool = False
+        self._bootstrap_contract_ok: bool = False
+        self._bootstrap_contract_last_error: str = ""
         self._capital_state_lock: threading.Lock = threading.Lock()
         self.capital_watchdog_interval_s: float = float(
             os.environ.get("NIJA_CAPITAL_WATCHDOG_INTERVAL_S", "10.0")
@@ -447,6 +449,23 @@ class MultiAccountBrokerManager:
             self._registry_version += 1
             self._last_update_ts = time.time()
 
+    def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
+        """Propagate broker-registration metadata and notifications."""
+        self._registry_version += 1
+        self._last_update_ts = time.time()
+        logger.info("broker_registered: %s", broker_type.value.title())
+        if self._event_bus is not None and hasattr(self._event_bus, "publish"):
+            try:
+                self._event_bus.publish("broker_registered", broker)
+            except Exception as _pub_exc:
+                logger.warning("registry event publish failed for %s: %s", broker_type.value, _pub_exc)
+        else:
+            for _cb in list(self._broker_registered_callbacks):
+                try:
+                    _cb(broker)
+                except Exception as _cb_exc:
+                    logger.warning("broker_registered callback failed for %s: %s", broker_type.value, _cb_exc)
+
     def register_platform_broker_instance(
         self,
         broker_type: BrokerType,
@@ -482,19 +501,7 @@ class MultiAccountBrokerManager:
         
         # Register the broker instance
         self._platform_brokers[broker_type] = broker
-        self._registry_version += 1
-        self._last_update_ts = time.time()
-        if self._event_bus is not None and hasattr(self._event_bus, "publish"):
-            try:
-                self._event_bus.publish("broker_registered", broker)
-            except Exception as _pub_exc:
-                logger.warning("registry event publish failed for %s: %s", broker_type.value, _pub_exc)
-        else:
-            for _cb in list(self._broker_registered_callbacks):
-                try:
-                    _cb(broker)
-                except Exception as _cb_exc:
-                    logger.warning("broker_registered callback failed for %s: %s", broker_type.value, _cb_exc)
+        self._record_broker_registration(broker_type, broker)
         # Pre-create the readiness Event before advancing the state machine.
         # This guarantees that any thread which calls _get_or_create_platform_event()
         # (directly or via wait_for_platform_ready()) always gets the same Event
@@ -722,6 +729,72 @@ class MultiAccountBrokerManager:
             with self._capital_state_lock:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+    def enforce_trading_bootstrap_contract(
+        self,
+        max_attempts: int = 3,
+        retry_delay_s: float = 1.0,
+    ) -> Dict[str, float]:
+        """Fail-closed bootstrap contract for singleton/registry/capital readiness."""
+        last_snapshot: Dict[str, float] = {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+        self._bootstrap_contract_ok = False
+        self._bootstrap_contract_last_error = ""
+
+        for attempt in range(1, max(1, int(max_attempts)) + 1):
+            try:
+                if self is not get_broker_manager():
+                    self._bootstrap_contract_last_error = "singleton_mismatch"
+                    logger.critical(
+                        "[BootstrapContract] attempt=%d/%d failed: singleton mismatch",
+                        attempt, max_attempts,
+                    )
+                    time.sleep(max(0.0, float(retry_delay_s)))
+                    continue
+
+                self.refresh_registry()
+                last_snapshot = self.refresh_capital_authority(
+                    trigger=f"bootstrap_contract:{attempt}"
+                )
+                ready = bool(last_snapshot.get("ready", 0.0))
+                valid_brokers = int(last_snapshot.get("valid_brokers", 0.0))
+                total_capital = float(last_snapshot.get("total_capital", 0.0))
+
+                if ready and valid_brokers > 0 and total_capital > 0.0:
+                    self._bootstrap_contract_ok = True
+                    self._bootstrap_contract_last_error = ""
+                    with self._capital_state_lock:
+                        self._trading_halted_due_to_capital = False
+                    logger.info(
+                        "[BootstrapContract] satisfied on attempt %d/%d "
+                        "(valid_brokers=%d total_capital=$%.2f ready=%s)",
+                        attempt, max_attempts, valid_brokers, total_capital, ready,
+                    )
+                    return last_snapshot
+
+                self._bootstrap_contract_last_error = (
+                    f"capital_not_ready(valid_brokers={valid_brokers}, total_capital={total_capital:.2f}, ready={ready})"
+                )
+                logger.warning(
+                    "[BootstrapContract] attempt=%d/%d not ready: %s",
+                    attempt, max_attempts, self._bootstrap_contract_last_error,
+                )
+            except Exception as exc:
+                self._bootstrap_contract_last_error = f"exception:{exc}"
+                logger.error(
+                    "[BootstrapContract] attempt=%d/%d error: %s",
+                    attempt, max_attempts, exc,
+                )
+
+            if attempt < max_attempts:
+                time.sleep(max(0.0, float(retry_delay_s)))
+
+        with self._capital_state_lock:
+            self._trading_halted_due_to_capital = True
+        logger.critical(
+            "[BootstrapContract] FAILED after %d attempts — trading remains halted. last_error=%s",
+            max_attempts, self._bootstrap_contract_last_error or "unknown",
+        )
+        return last_snapshot
 
     def _is_broker_ready_for_capital_refresh(
         self,
@@ -996,19 +1069,7 @@ class MultiAccountBrokerManager:
             # ❌ DO NOT call broker.connect() here
             # ❌ DO NOT trigger reconnect or validate connection
             self._platform_brokers[broker_type] = broker
-            self._registry_version += 1
-            self._last_update_ts = time.time()
-            if self._event_bus is not None and hasattr(self._event_bus, "publish"):
-                try:
-                    self._event_bus.publish("broker_registered", broker)
-                except Exception as _pub_exc:
-                    logger.warning("registry event publish failed for %s: %s", broker_type.value, _pub_exc)
-            else:
-                for _cb in list(self._broker_registered_callbacks):
-                    try:
-                        _cb(broker)
-                    except Exception as _cb_exc:
-                        logger.warning("broker_registered callback failed for %s: %s", broker_type.value, _cb_exc)
+            self._record_broker_registration(broker_type, broker)
             self._platform_state[broker_type.value] = ConnectionState.NOT_STARTED
             # Pre-create the readiness event so wait_for_platform_ready() always
             # blocks on the same object that begin_platform_connection() + connect() will set.
@@ -3179,8 +3240,9 @@ class MultiAccountBrokerManager:
         # Startup ordering invariant:
         # 1) brokers connect, 2) balances fetched, 3) CapitalAuthority built,
         # 4) readiness marked, 5) trading engines may proceed.
-        _startup_cap = self.resolve_startup_capital_invariant(
-            trigger="initialize_platform_brokers"
+        _startup_cap = self.enforce_trading_bootstrap_contract(
+            max_attempts=3,
+            retry_delay_s=1.0,
         )
         if bool(_startup_cap.get("ready", 0.0)):
             logger.info(
@@ -3211,6 +3273,13 @@ def get_broker_manager() -> MultiAccountBrokerManager:
     if _GLOBAL_BROKER_MANAGER is None:
         _GLOBAL_BROKER_MANAGER = MultiAccountBrokerManager()
     return _GLOBAL_BROKER_MANAGER
+
+
+def reset_broker_manager_singleton() -> None:
+    """Clear the cached MultiAccountBrokerManager singleton (cold-start helper)."""
+    global _GLOBAL_BROKER_MANAGER
+    _GLOBAL_BROKER_MANAGER = None
+    logger.warning("MultiAccountBrokerManager singleton cache cleared")
 
 
 # Backward-compatible module export
