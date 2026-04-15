@@ -3309,6 +3309,24 @@ class CoinbaseBroker(BaseBroker):
         """
         return self._balance_fetch_errors
 
+    def _normalize_kraken_asset_code(self, asset_code: str) -> str:
+        """
+        Normalize Kraken asset codes (e.g. XXBT/XETH/ZUSD) to standard symbols.
+        """
+        token = str(asset_code or "").strip().upper()
+        if not token:
+            return ""
+
+        # Kraken prefixes many assets with X/Z namespace characters.
+        while len(token) > 3 and token[0] in {"X", "Z"}:
+            token = token[1:]
+
+        alias_map = {
+            "XBT": "BTC",
+            "XDG": "DOGE",
+        }
+        return alias_map.get(token, token)
+
     def get_total_capital(self, include_positions: bool = True) -> Dict:
         """
         Get total capital including both free balance and open position values.
@@ -8464,7 +8482,8 @@ class KrakenBroker(BaseBroker):
                 # appear as phantom zero capital.
                 non_usd_assets = {}
                 for currency, amount in result.items():
-                    if currency in ['ZUSD', 'USDT']:
+                    normalized_asset = self._normalize_kraken_asset_code(currency)
+                    if normalized_asset in {"USD", "USDT", "USDC", "EUR"}:
                         continue
                     try:
                         qty = float(amount)
@@ -8472,7 +8491,7 @@ class KrakenBroker(BaseBroker):
                         continue
                     if qty <= 0:
                         continue
-                    non_usd_assets[currency] = qty
+                    non_usd_assets[normalized_asset] = qty
 
                 logger.info(
                     "[KrakenBalancePipeline] non_usd_assets account=%s count=%d assets=%s",
@@ -8484,9 +8503,7 @@ class KrakenBroker(BaseBroker):
                 non_usd_usd_value = 0.0
                 if non_usd_assets:
                     for currency, qty in non_usd_assets.items():
-                        clean_asset = currency.removeprefix('Z').removeprefix('X')
-                        if clean_asset == 'XBT':
-                            clean_asset = 'BTC'
+                        clean_asset = self._normalize_kraken_asset_code(currency)
                         if not clean_asset:
                             continue
                         price_source = "USD"
@@ -8686,9 +8703,10 @@ class KrakenBroker(BaseBroker):
                 # Get crypto holdings (exclude USD and USDT)
                 crypto_holdings = {}
                 for currency, amount in result.items():
-                    if currency not in ['ZUSD', 'USDT'] and float(amount) > 0:
-                        # Strip the 'Z' or 'X' prefix Kraken uses for some currencies
-                        clean_currency = currency.lstrip('ZX')
+                    clean_currency = self._normalize_kraken_asset_code(currency)
+                    if clean_currency in {"USD", "USDT", "USDC", "EUR"}:
+                        continue
+                    if float(amount) > 0:
                         crypto_holdings[clean_currency] = float(amount)
 
                 trading_balance = usd_balance + usdt_balance
