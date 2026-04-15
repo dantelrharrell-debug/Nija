@@ -236,9 +236,7 @@ def _category_label(key: str) -> str:
 
 def _is_secret_var(key: str) -> bool:
     """Return True when a variable should be treated as secret."""
-    if key in _SECRET_VARS:
-        return True
-    return any(
+    return key in _SECRET_VARS or any(
         key.endswith(suffix)
         for suffix in ("_API_KEY", "_API_SECRET")
     )

@@ -141,7 +141,13 @@ class CredentialHealthMonitor:
 
     @staticmethod
     def _build_user_credential_names(broker_prefix: str, user_id: str, first_name: str) -> Set[str]:
-        """Build the short and full-name credential env vars for a user."""
+        """Build short/full-name credential env vars.
+
+        Args:
+            broker_prefix: Broker env prefix (e.g., 'KRAKEN', 'ALPACA').
+            user_id: Full configured user_id (e.g., 'tania_gilbert').
+            first_name: Uppercased first-name token from user_id (e.g., 'TANIA').
+        """
         names = {
             f'{broker_prefix}_USER_{first_name}_API_KEY',
             f'{broker_prefix}_USER_{first_name}_API_SECRET',
