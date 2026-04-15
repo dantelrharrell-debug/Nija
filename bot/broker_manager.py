@@ -8484,13 +8484,15 @@ class KrakenBroker(BaseBroker):
                 non_usd_usd_value = 0.0
                 if non_usd_assets:
                     for currency, qty in non_usd_assets.items():
-                        clean_asset = currency.lstrip('ZX')
+                        clean_asset = currency.removeprefix('Z').removeprefix('X')
                         if clean_asset == 'XBT':
                             clean_asset = 'BTC'
                         if not clean_asset:
                             continue
+                        price_source = "USD"
                         price_usd = self.get_current_price(f"{clean_asset}-USD")
                         if price_usd is None:
+                            price_source = "USDT"
                             price_usd = self.get_current_price(f"{clean_asset}-USDT")
                         if price_usd is None or price_usd <= 0:
                             logger.warning(
@@ -8504,12 +8506,13 @@ class KrakenBroker(BaseBroker):
                         non_usd_usd_value += converted
                         logger.info(
                             "[KrakenBalancePipeline] usd_conversion account=%s asset=%s qty=%.8f "
-                            "price=%.8f usd_value=%.8f",
+                            "price=%.8f usd_value=%.8f source=%s",
                             self.account_identifier,
                             currency,
                             qty,
                             float(price_usd),
                             converted,
+                            price_source,
                         )
 
                 # Also get TradeBalance to see held funds
