@@ -232,6 +232,15 @@ class CapitalAuthority:
         if not startup_window_open:
             assert registry_hydrated, \
                 "FATAL: Broker registry not hydrated via primary pipeline"
+        if not broker_map:
+            if startup_window_open:
+                logger.warning(
+                    "⏳ CapitalAuthority refresh deferred during startup: no registered broker payload sources yet"
+                )
+                return
+            raise AssertionError(
+                "FATAL: CapitalAuthority refresh called with empty broker_map after startup window"
+            )
 
         new_balances: Dict[str, float] = {}
 

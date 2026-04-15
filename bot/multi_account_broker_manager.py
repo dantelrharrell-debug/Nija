@@ -506,7 +506,7 @@ class MultiAccountBrokerManager:
         Raises:
             RuntimeError: If platform brokers are locked
         """
-        target_manager = self._get_registration_target_manager()
+        target_manager = self._get_registration_target_manager(broker_type)
         if target_manager is not self:
             return target_manager.register_platform_broker_instance(
                 broker_type=broker_type,
@@ -556,24 +556,37 @@ class MultiAccountBrokerManager:
         if isinstance(broker_type, BrokerType):
             broker_enum = broker_type
         else:
-            broker_key = str(broker_type).strip().lower()
-            try:
-                broker_enum = BrokerType(broker_key)
-            except ValueError as exc:
-                raise ValueError(f"Unsupported broker type for platform registration: {broker_type}") from exc
+            broker_key = str(broker_type).strip()
+            broker_key_lower = broker_key.lower()
+            broker_enum = None
+            for candidate in BrokerType:
+                if candidate.value.lower() == broker_key_lower or candidate.name.lower() == broker_key_lower:
+                    broker_enum = candidate
+                    break
+            if broker_enum is None:
+                raise ValueError(f"Unsupported broker type for platform registration: {broker_type}")
         return self.register_platform_broker_instance(
             broker_type=broker_enum,
             broker=broker,
             mark_connected_state=bool(getattr(broker, "connected", False)),
         )
 
-    def _get_registration_target_manager(self) -> "MultiAccountBrokerManager":
+    def _get_registration_target_manager(
+        self, broker_type: Optional[Union[str, BrokerType]] = None
+    ) -> "MultiAccountBrokerManager":
         """Return canonical registration target manager and log when redirecting."""
         canonical_manager = get_broker_manager()
         if self is canonical_manager:
             return self
+        broker_label = (
+            broker_type.value if isinstance(broker_type, BrokerType) else str(broker_type or "unknown")
+        )
         logger.warning(
-            "Redirecting platform broker registration to canonical manager instance"
+            "Redirecting platform broker registration to canonical manager instance "
+            "(broker=%s source_manager_id=%s canonical_manager_id=%s)",
+            broker_label,
+            hex(id(self)),
+            hex(id(canonical_manager)),
         )
         return canonical_manager
 
@@ -1158,7 +1171,7 @@ class MultiAccountBrokerManager:
             RuntimeError: If platform brokers are locked or broker already registered
         """
         try:
-            target_manager = self._get_registration_target_manager()
+            target_manager = self._get_registration_target_manager(broker_type)
             if target_manager is not self:
                 return target_manager.add_platform_broker(broker_type)
 
