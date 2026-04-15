@@ -52,6 +52,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -188,12 +189,48 @@ class CapitalAuthority:
             raise RuntimeError("BROKER MANAGER INSTANCE MISMATCH (CRITICAL)")
         assert self.broker_manager is canonical_broker_manager, \
             "BROKER MANAGER INSTANCE MISMATCH (CRITICAL)"
-        try:
-            self.broker_manager.refresh_registry()
-        except Exception as exc:
-            raise RuntimeError(
-                "CapitalAuthority refresh could not rehydrate broker registry (CRITICAL)"
-            ) from exc
+        has_registered_sources = False
+        if hasattr(self.broker_manager, "has_registered_sources"):
+            try:
+                has_registered_sources = bool(self.broker_manager.has_registered_sources())
+            except Exception as exc:
+                logger.warning("CapitalAuthority could not verify broker registry source hydration: %s", exc)
+        used_hydration_fallback = False
+        if not has_registered_sources:
+            try:
+                self.broker_manager.refresh_registry()
+                used_hydration_fallback = True
+            except Exception as exc:
+                raise RuntimeError(
+                    "CapitalAuthority refresh could not rehydrate broker registry (CRITICAL)"
+                ) from exc
+
+        startup_barrier_started_at = getattr(
+            self.broker_manager,
+            "_capital_bootstrap_barrier_started_at",
+            None,
+        )
+        startup_timeout_s = float(
+            getattr(self.broker_manager, "capital_startup_invariant_timeout_s", 0.0) or 0.0
+        )
+        startup_window_open = False
+        if startup_barrier_started_at is not None and startup_timeout_s > 0.0:
+            startup_window_open = (
+                (time.monotonic() - float(startup_barrier_started_at)) < startup_timeout_s
+            )
+
+        registry_hydrated = bool(
+            self.broker_manager.has_registered_sources()
+        ) if hasattr(self.broker_manager, "has_registered_sources") else bool(broker_map)
+        if used_hydration_fallback:
+            logger.warning("⚠️ CapitalAuthority using fallback hydration — registry pipeline broken")
+            if not startup_window_open:
+                raise AssertionError(
+                    "FATAL: CapitalAuthority fallback hydration invoked after startup window"
+                )
+        if not startup_window_open:
+            assert registry_hydrated, \
+                "FATAL: Broker registry not hydrated via primary pipeline"
 
         new_balances: Dict[str, float] = {}
 

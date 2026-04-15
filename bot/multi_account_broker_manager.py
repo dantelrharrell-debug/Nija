@@ -244,6 +244,7 @@ class MultiAccountBrokerManager:
         self._platform_brokers: Dict[BrokerType, BaseBroker] = {}
         self._platform_brokers_locked: bool = False
         self._registry_version: int = 0
+        self._primary_registration_count: int = 0
         self._last_update_ts: float = time.time()
         self._event_bus: Optional[Any] = None
         self._broker_registered_callbacks: List[Callable[[BaseBroker], None]] = []
@@ -455,10 +456,18 @@ class MultiAccountBrokerManager:
             self._registry_version += 1
             self._last_update_ts = time.time()
 
+    def has_registered_sources(self) -> bool:
+        """Return True when primary broker-registration pipeline has hydrated registry sources."""
+        with self._registry_meta_lock:
+            source_count = len(self._platform_brokers)
+            primary_registrations = int(self._primary_registration_count)
+        return source_count > 0 and primary_registrations > 0
+
     def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
         """Propagate broker-registration metadata and notifications."""
         with self._registry_meta_lock:
             self._registry_version += 1
+            self._primary_registration_count += 1
             self._last_update_ts = time.time()
             callbacks = list(self._broker_registered_callbacks)
             event_bus = self._event_bus
