@@ -12,7 +12,13 @@ from pathlib import Path
 from threading import Thread
 from typing import Dict, Optional, Tuple
 from datetime import datetime, timezone
-from dotenv import load_dotenv
+# dotenv is optional in some runtime environments (e.g., platform-injected env vars only).
+# Fallback keeps imports from crashing when python-dotenv is absent.
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs):
+        return False
 from enum import Enum
 import pandas as pd
 
