@@ -53,6 +53,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -242,12 +243,39 @@ class CapitalAuthority:
                 "FATAL: CapitalAuthority refresh called with empty broker_map after startup window"
             )
 
+        def normalize_broker_identifier(identifier: Any) -> str:
+            """Normalize enum-backed or string broker identifiers to plain strings."""
+            if hasattr(identifier, "value"):
+                return str(identifier.value)
+            return str(identifier)
+
+        effective_broker_map: Dict[str, Any] = dict(broker_map or {})
+        if not effective_broker_map:
+            try:
+                platform_brokers = getattr(canonical_broker_manager, "platform_brokers", None) or {}
+                if isinstance(platform_brokers, Mapping):
+                    for broker_identifier, broker in platform_brokers.items():
+                        if broker is None:
+                            continue
+                        broker_key = normalize_broker_identifier(broker_identifier)
+                        effective_broker_map[broker_key] = broker
+                if effective_broker_map:
+                    logger.info(
+                        "[CapitalAuthority] refresh hydrated source graph from broker registry: brokers=%s",
+                        sorted(effective_broker_map.keys()),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[CapitalAuthority] refresh failed to hydrate broker sources from registry: %s",
+                    exc,
+                )
+
         new_balances: Dict[str, float] = {}
 
-        for broker_id, broker in broker_map.items():
+        for broker_id, broker in effective_broker_map.items():
             if broker is None:
                 continue
-            broker_key = str(broker_id)
+            broker_key = normalize_broker_identifier(broker_id)
             with self._lock:
                 previous = float(self._broker_balances.get(broker_key, 0.0))
                 if self.last_updated is not None:
