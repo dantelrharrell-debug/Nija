@@ -1498,21 +1498,40 @@ class BaseBroker(ABC):
         """
         Single-source readiness contract for capital eligibility.
 
-        Ready means: physically connected AND has balance payload.
-        Kraken additionally requires a non-terminal/usable FSM state.
+        A broker is eligible to contribute capital when it has a balance
+        payload — i.e. it has completed at least one successful balance fetch
+        this session.
+
+        **Why ``self.connected`` is intentionally NOT checked here:**
+        The PLATFORM KrakenBroker sets ``connected = False`` until
+        ``mark_connected()`` fires (which only happens *after* the capital
+        authority confirms a non-zero balance).  Requiring ``connected = True``
+        here creates a circular deadlock:
+
+            connect()
+              └─▶ resolve_startup_capital_invariant()
+                    └─▶ _is_broker_ready_for_capital()  # needs connected=True
+                          └─▶ is_ready_for_capital()   # connected=False → False
+                                ← broker excluded from broker_map
+                                ← total_capital = $0
+                                ← NOT READY → timeout → trading halted
+
+        Balance-payload presence is the correct gate: if the broker fetched a
+        balance (even a zero balance), it is alive and can contribute to the
+        capital picture.  The ``connected`` flag is separately gated by the
+        trading execution layers and does not need to be duplicated here.
+
+        Kraken additionally requires a non-terminal FSM state so that a
+        permanently failed / revoked-key broker cannot accidentally contribute
+        stale cached capital.
         """
-        if not self.connected:
-            return False
         if not self.has_balance_payload_for_capital():
             return False
         if self.broker_type != BrokerType.KRAKEN:
             return True
-        # Eligibility rule (not final readiness): when Kraken is physically connected and has a
-        # valid balance payload, allow capital readiness in:
-        # - CONNECTED: fully booted steady state
-        # - CONNECTING: startup fetches can already produce balance payloads
-        # - FAILED: allows capital ingestion needed to escape FAILED loops;
-        #           final "system ready" still requires bootstrap FSM exit.
+        # Kraken eligibility: allow capital ingestion in CONNECTING (startup
+        # balance fetch in flight), CONNECTED (steady state), and even FAILED
+        # (lets the refresh escape a FAILED loop while the broker is alive).
         return (
             _KRAKEN_STARTUP_FSM.is_connected
             or _KRAKEN_STARTUP_FSM.is_connecting
@@ -2311,28 +2330,34 @@ class CoinbaseBroker(BaseBroker):
             import time
 
             # Get credentials from environment — support per-user overrides for USER accounts
+            # and both secret variable conventions:
+            # - COINBASE_API_SECRET or COINBASE_PEM_CONTENT (platform)
+            # - COINBASE_USER_{ID}_API_SECRET or COINBASE_USER_{ID}_PEM_CONTENT (user)
             if self.account_type == AccountType.USER and self.user_id:
-                # Per-user Coinbase credentials: COINBASE_USER_{USERID}_API_KEY / _API_SECRET
+                # Per-user Coinbase credentials:
+                # COINBASE_USER_{USERID}_API_KEY + (_API_SECRET or _PEM_CONTENT)
                 _short_env, _full_env = _user_env_prefix(self.user_id)
                 api_key = os.getenv(f"COINBASE_USER_{_short_env}_API_KEY", "")
                 api_secret = os.getenv(f"COINBASE_USER_{_short_env}_API_SECRET", "")
+                api_secret = api_secret or os.getenv(f"COINBASE_USER_{_short_env}_PEM_CONTENT", "")
                 # Fallback: try full user_id in uppercase (e.g. COINBASE_USER_TANIA_GILBERT_API_KEY)
                 if (not api_key or not api_secret) and _full_env != _short_env:
                     api_key = api_key or os.getenv(f"COINBASE_USER_{_full_env}_API_KEY", "")
                     api_secret = api_secret or os.getenv(f"COINBASE_USER_{_full_env}_API_SECRET", "")
+                    api_secret = api_secret or os.getenv(f"COINBASE_USER_{_full_env}_PEM_CONTENT", "")
                 if not api_key or not api_secret:
                     logging.info(
                         "ℹ️  Coinbase USER credentials not configured for %s "
-                        "(checked COINBASE_USER_%s_API_KEY / _API_SECRET) — skipping",
+                        "(checked COINBASE_USER_%s_API_KEY + _API_SECRET/_PEM_CONTENT) — skipping",
                         self.user_id, _short_env,
                     )
                     return False
             else:
                 api_key = os.getenv("COINBASE_API_KEY")
-                api_secret = os.getenv("COINBASE_API_SECRET")
+                api_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT")
 
             if not api_key or not api_secret:
-                logging.error("❌ Coinbase API credentials not found")
+                logging.error("❌ Coinbase API credentials not found (need COINBASE_API_KEY + COINBASE_API_SECRET/COINBASE_PEM_CONTENT)")
                 return False
 
             # Normalize PEM key: Railway/Docker env vars may store newlines as
@@ -2456,7 +2481,7 @@ class CoinbaseBroker(BaseBroker):
                     # 401 Unauthorized means invalid credentials — retrying is pointless
                     if is_401_unauthorized:
                         logging.error("❌ Coinbase authentication failed (401 Unauthorized)")
-                        logging.error("   Your COINBASE_API_KEY or COINBASE_API_SECRET is invalid.")
+                        logging.error("   Your COINBASE_API_KEY or Coinbase PEM secret is invalid.")
                         logging.error("   Possible causes:")
                         logging.error("   1. API key was revoked or expired")
                         logging.error("   2. Wrong key/secret values in environment")
@@ -3462,10 +3487,10 @@ class CoinbaseBroker(BaseBroker):
                 from cryptography.hazmat.primitives import serialization
 
                 api_key = os.getenv("COINBASE_API_KEY")
-                api_secret = os.getenv("COINBASE_API_SECRET")
+                api_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT")
 
                 if not api_secret:
-                    raise ValueError("COINBASE_API_SECRET environment variable not set")
+                    raise ValueError("COINBASE_API_SECRET/COINBASE_PEM_CONTENT environment variable not set")
 
                 # Normalize PEM
                 if '\\n' in api_secret:

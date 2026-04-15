@@ -31,7 +31,7 @@ except ImportError:
 def _check_credentials() -> tuple:
     """Return (api_key, api_secret) or print an error and exit."""
     api_key = os.getenv("COINBASE_API_KEY")
-    api_secret = os.getenv("COINBASE_API_SECRET")
+    api_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT")
 
     if not api_key or not api_secret:
         print()
@@ -41,6 +41,8 @@ def _check_credentials() -> tuple:
         print()
         print('   export COINBASE_API_KEY="organizations/YOUR-ORG-ID/apiKeys/YOUR-KEY-ID"')
         print('   export COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----\\nYOUR_KEY\\n-----END EC PRIVATE KEY-----\\n"')
+        print('   # or:')
+        print('   export COINBASE_PEM_CONTENT="-----BEGIN EC PRIVATE KEY-----\\nYOUR_KEY\\n-----END EC PRIVATE KEY-----\\n"')
         print()
         print("   Or create a .env file in the project root with the above values.")
         print("   See .env.example for the full configuration template.")
