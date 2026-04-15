@@ -8520,21 +8520,25 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                     logger.info(f"   💵 Total Available: ${total:.2f}")
 
-                # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
-                # Cold-start guard: if asset pricing coverage is temporarily 0 during
-                # startup, rely on Kraken TradeBalance equivalent-balance (eb) so
-                # capital readiness doesn't deadlock on an un-warmed price cache.
+                # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken.
+                # Use the larger of:
+                #   1) local valuation (cash + held + priced non-USD assets), and
+                #   2) Kraken TradeBalance equivalent balance (eb).
+                # This ensures startup capital doesn't collapse to $0 when local
+                # asset pricing coverage is temporarily cold while Kraken already
+                # reports a valid equivalent-balance snapshot.
                 total_funds = max(
                     total + held_amount + non_usd_usd_value,
                     trade_balance_equity_usd,
                 )
                 logger.info(
                     "[KrakenBalancePipeline] total_funds account=%s cash=%.8f held=%.8f "
-                    "non_usd_usd=%.8f total=%.8f",
+                    "non_usd_usd=%.8f eb=%.8f total=%.8f",
                     self.account_identifier,
                     total,
                     held_amount,
                     non_usd_usd_value,
+                    trade_balance_equity_usd,
                     total_funds,
                 )
 

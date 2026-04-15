@@ -210,6 +210,7 @@ class MultiAccountBrokerManager:
     MIN_STARTUP_CAPITAL_POLL_S = 0.1
     MIN_STARTUP_CAPITAL_SLEEP_S = 0.05
     BOOTSTRAP_REFRESH_TRIGGER_PREFIXES = ("platform_connect:", "initialize_platform_brokers")
+    WATCHDOG_REFRESH_TRIGGER = "watchdog"
     BOOTSTRAP_CONNECTED_ELIGIBLE_STATES = (
         CapitalBootstrapState.WAIT_PLATFORM,
         CapitalBootstrapState.REFRESH_REQUESTED,
@@ -648,7 +649,10 @@ class MultiAccountBrokerManager:
     ) -> bool:
         if is_platform_ready:
             return False
-        if not (self._is_bootstrap_refresh_trigger(trigger) or trigger == "watchdog"):
+        if not (
+            self._is_bootstrap_refresh_trigger(trigger)
+            or trigger == self.WATCHDOG_REFRESH_TRIGGER
+        ):
             return False
         if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
             return False
@@ -777,7 +781,7 @@ class MultiAccountBrokerManager:
                     if authority is not None and authority.is_stale(ttl_s=self.capital_stale_timeout_s):
                         needs_refresh = True
                     if needs_refresh:
-                        self.refresh_capital_authority(trigger="watchdog")
+                        self.refresh_capital_authority(trigger=self.WATCHDOG_REFRESH_TRIGGER)
 
                     healthy_connected = any(
                         self.is_platform_connected(bt) and getattr(b, "connected", False)
