@@ -1474,9 +1474,8 @@ class BaseBroker(ABC):
         """
         try:
             ts_getter = getattr(self, "get_balance_fetch_timestamp", None)
-            if callable(ts_getter):
-                if ts_getter() is not None:
-                    return True
+            if callable(ts_getter) and ts_getter() is not None:
+                return True
         except Exception:
             pass
 
@@ -1501,6 +1500,7 @@ class BaseBroker(ABC):
             return True
         # Recovery/boot rule: when Kraken is physically connected and has a
         # valid balance payload, allow capital readiness in:
+        # - CONNECTED: fully booted steady state
         # - CONNECTING: startup fetches can already produce balance payloads
         # - FAILED: lets the capital pipeline ingest fresh balances and recover
         #           from a prior failed bootstrap without deadlocking at $0.

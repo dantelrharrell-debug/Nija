@@ -549,21 +549,20 @@ class MultiAccountBrokerManager:
             )
             bootstrap_exited_failed = True
             if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
-                bootstrap_exited_failed = (
-                    self._capital_bootstrap_fsm.state != CapitalBootstrapState.FAILED
-                )
+                boot_state = self._capital_bootstrap_fsm.state
+                bootstrap_exited_failed = boot_state != CapitalBootstrapState.FAILED
                 if (
-                    not bootstrap_exited_failed
+                    boot_state == CapitalBootstrapState.FAILED
                     and kraken_connected_layer
                     and kraken_included
                     and (kraken_capital > 0.0)
                     and assets_priced_ok
                 ):
-                    self._capital_bootstrap_fsm.transition(
+                    transitioned = self._capital_bootstrap_fsm.transition(
                         CapitalBootstrapState.REFRESH_REQUESTED,
                         f"{trigger}:kraken_recovery_ready",
                     )
-                    bootstrap_exited_failed = (
+                    bootstrap_exited_failed = transitioned and (
                         self._capital_bootstrap_fsm.state != CapitalBootstrapState.FAILED
                     )
             kraken_ready = (
