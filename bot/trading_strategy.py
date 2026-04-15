@@ -7064,8 +7064,11 @@ class TradingStrategy:
             logger.warning("[NIJA] _init_advanced_features blocked by BSM: %s", _bsm_err)
             self._advanced_features_initialized = False  # allow retry once BSM advances
             return
-        except Exception:
-            pass  # graceful degradation when BSM not yet available
+        except Exception as _bsm_exc:
+            logger.debug(
+                "[NIJA] _init_advanced_features: BSM not yet available (%s) — proceeding",
+                _bsm_exc,
+            )
 
         # CRITICAL SAFETY: Check LIVE_CAPITAL_VERIFIED first
         # This is the MASTER safety switch that must be explicitly enabled

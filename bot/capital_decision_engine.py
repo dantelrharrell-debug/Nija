@@ -161,10 +161,14 @@ class CapitalDecisionEngine:
             except ImportError:
                 from bootstrap_state_machine import get_bootstrap_fsm, BootstrapInvariantError  # type: ignore[import]
             get_bootstrap_fsm().assert_invariant_i11_strategy_arm()
-        except Exception:
+        except BootstrapInvariantError:
+            raise  # surface the invariant violation to the caller
+        except Exception as exc:
             # Graceful degradation — if BSM is not yet available we allow
             # construction so the engine can still be used in test contexts.
-            pass
+            logger.debug(
+                "[CapitalDecisionEngine] BSM check unavailable (%s) — proceeding", exc
+            )
 
     # ------------------------------------------------------------------
     # Advisory module accessors (lazy, graceful)
@@ -183,19 +187,12 @@ class CapitalDecisionEngine:
 
     @staticmethod
     def _get_allocator_brain():
-        """Return the CapitalAllocationBrain advisory singleton, or None."""
+        """Return a CapitalAllocationBrain advisory instance, or None."""
         try:
             try:
                 from bot.capital_allocation_brain import CapitalAllocationBrain
             except ImportError:
                 from capital_allocation_brain import CapitalAllocationBrain  # type: ignore[import]
-            # The brain is instantiated per-use-site; use the module singleton
-            # pattern if a shared instance exists, otherwise create a fresh one.
-            try:
-                from bot.capital_allocation_brain import _get_shared_brain  # type: ignore[attr-defined]
-                return _get_shared_brain()
-            except (ImportError, AttributeError):
-                pass
             return CapitalAllocationBrain()
         except Exception:
             return None

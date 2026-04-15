@@ -447,13 +447,18 @@ def _capital_readiness_gate() -> tuple:
     """
     failures = []
 
-    # ── a. CAPITAL_AUTHORITY_READY ─────────────────────────────────────────
-    try:
+    # ── Shared helper: import CapitalAuthority once for sub-checks a and b ──
+    def _get_ca():
         try:
-            from bot.capital_authority import get_capital_authority
+            from bot.capital_authority import get_capital_authority as _f
         except ImportError:
-            from capital_authority import get_capital_authority  # type: ignore[import]
-        authority = get_capital_authority()
+            from capital_authority import get_capital_authority as _f  # type: ignore[import]
+        return _f()
+
+    # ── a. CAPITAL_AUTHORITY_READY ─────────────────────────────────────────
+    authority = None
+    try:
+        authority = _get_ca()
         if authority.is_stale():
             failures.append(
                 "CAPITAL_AUTHORITY_READY=false: CapitalAuthority data is stale "
@@ -469,16 +474,13 @@ def _capital_readiness_gate() -> tuple:
                 "_capital_readiness_gate: CAPITAL_AUTHORITY_READY ✅ "
                 "usable=%.2f", authority.get_usable_capital()
             )
-    except Exception as exc:
+    except (ImportError, AttributeError, Exception) as exc:
         logger.debug("_capital_readiness_gate: CapitalAuthority unavailable (%s) — skipping", exc)
 
     # ── b. BROKER_BALANCE_CONFIRMED ────────────────────────────────────────
     try:
-        try:
-            from bot.capital_authority import get_capital_authority as _get_ca2
-        except ImportError:
-            from capital_authority import get_capital_authority as _get_ca2  # type: ignore[import]
-        real = _get_ca2().get_real_capital()
+        ca = authority if authority is not None else _get_ca()
+        real = ca.get_real_capital()
         if real <= 0.0:
             failures.append(
                 f"BROKER_BALANCE_CONFIRMED=false: no broker has reported a "
@@ -488,7 +490,7 @@ def _capital_readiness_gate() -> tuple:
             logger.debug(
                 "_capital_readiness_gate: BROKER_BALANCE_CONFIRMED ✅ real=%.2f", real
             )
-    except Exception as exc:
+    except (ImportError, AttributeError, Exception) as exc:
         logger.debug("_capital_readiness_gate: broker balance check unavailable (%s) — skipping", exc)
 
     # ── c. EXECUTION_PIPELINE_HEALTHY ──────────────────────────────────────
@@ -512,7 +514,7 @@ def _capital_readiness_gate() -> tuple:
                 "_capital_readiness_gate: EXECUTION_PIPELINE_HEALTHY ✅ "
                 "venues=%d failed=%d", registered, failed
             )
-    except Exception as exc:
+    except (ImportError, AttributeError, Exception) as exc:
         logger.debug("_capital_readiness_gate: ExecutionRouter unavailable (%s) — skipping", exc)
 
     if failures:
