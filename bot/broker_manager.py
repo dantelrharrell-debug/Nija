@@ -2312,8 +2312,8 @@ class CoinbaseBroker(BaseBroker):
 
             # Get credentials from environment — support per-user overrides for USER accounts
             # and both secret variable conventions:
-            # - COINBASE_*_API_SECRET
-            # - COINBASE_*_PEM_CONTENT
+            # - COINBASE_API_SECRET or COINBASE_PEM_CONTENT (platform)
+            # - COINBASE_USER_{ID}_API_SECRET or COINBASE_USER_{ID}_PEM_CONTENT (user)
             if self.account_type == AccountType.USER and self.user_id:
                 # Per-user Coinbase credentials:
                 # COINBASE_USER_{USERID}_API_KEY + (_API_SECRET or _PEM_CONTENT)
