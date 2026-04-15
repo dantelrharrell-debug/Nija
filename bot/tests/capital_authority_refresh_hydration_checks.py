@@ -36,11 +36,16 @@ def _patch_get_broker_manager(stub_manager: _StubBrokerManager):
     for module_name in target_modules:
         try:
             import_module(module_name)
-            patcher = patch(f"{module_name}.get_broker_manager", return_value=stub_manager)
-            patcher.start()
-            patchers.append(patcher)
         except ModuleNotFoundError:
             continue
+        patcher = patch(f"{module_name}.get_broker_manager", return_value=stub_manager)
+        try:
+            patcher.start()
+            patchers.append(patcher)
+        except Exception:
+            for active in patchers:
+                active.stop()
+            raise
     return patchers
 
 

@@ -52,6 +52,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -196,6 +197,7 @@ class CapitalAuthority:
             ) from exc
 
         def normalize_broker_identifier(identifier: Any) -> str:
+            """Normalize enum-backed or string broker identifiers to plain strings."""
             if hasattr(identifier, "value"):
                 return str(identifier.value)
             return str(identifier)
@@ -204,7 +206,7 @@ class CapitalAuthority:
         if not effective_broker_map:
             try:
                 platform_brokers = getattr(canonical_broker_manager, "platform_brokers", None) or {}
-                if hasattr(platform_brokers, "items"):
+                if isinstance(platform_brokers, Mapping):
                     for broker_identifier, broker in platform_brokers.items():
                         if broker is None:
                             continue
