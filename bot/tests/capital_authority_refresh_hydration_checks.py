@@ -1,5 +1,6 @@
 import os
 import sys
+from importlib import import_module
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,15 +32,14 @@ class _StubBrokerManager:
 
 def _patch_get_broker_manager(stub_manager: _StubBrokerManager):
     patchers = []
-    for target in (
-        "bot.multi_account_broker_manager.get_broker_manager",
-        "multi_account_broker_manager.get_broker_manager",
-    ):
+    target_modules = ("bot.multi_account_broker_manager", "multi_account_broker_manager")
+    for module_name in target_modules:
         try:
-            patcher = patch(target, return_value=stub_manager)
+            import_module(module_name)
+            patcher = patch(f"{module_name}.get_broker_manager", return_value=stub_manager)
             patcher.start()
             patchers.append(patcher)
-        except Exception:
+        except ModuleNotFoundError:
             continue
     return patchers
 

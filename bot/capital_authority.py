@@ -197,7 +197,7 @@ class CapitalAuthority:
 
         def normalize_broker_identifier(identifier: Any) -> str:
             if hasattr(identifier, "value"):
-                return str(getattr(identifier, "value"))
+                return str(identifier.value)
             return str(identifier)
 
         effective_broker_map: Dict[str, Any] = dict(broker_map or {})
