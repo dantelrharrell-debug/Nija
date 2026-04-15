@@ -61,7 +61,7 @@ DEFAULT_FEE_PCT: float = 0.006
 DEFAULT_SLIPPAGE_PCT: float = 0.003
 # Minimum: profit target must be at least this many times the round-trip cost
 # env: NET_PROFIT_SAFETY_MULTIPLE — override (e.g. 1.3 for HF Flip Mode)
-DEFAULT_SAFETY_MULTIPLE: float = _env_float("NET_PROFIT_SAFETY_MULTIPLE", 1.2)
+DEFAULT_SAFETY_MULTIPLE: float = _env_float("NET_PROFIT_SAFETY_MULTIPLE", 1.05)
 # Minimum absolute profit target we'll ever allow (even if multiple passes)
 # env: NET_PROFIT_MIN_TARGET_PCT — override as a fraction (e.g. 0.004 = 0.4%)
 MIN_PROFIT_TARGET_PCT: float = _env_float("NET_PROFIT_MIN_TARGET_PCT", 0.012)

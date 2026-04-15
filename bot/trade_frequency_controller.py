@@ -26,8 +26,8 @@ Configuration via environment variables (all optional):
     MIN_TRADES_PER_HOUR=2.0        # default: 2.0 (~48/day pace)
     MIN_TRADES_PER_DAY=20.0       # default: 20.0 (lower bound of 20-50 target)
     MAX_TRADES_PER_DAY=50.0       # default: 50.0 (upper bound — tighten above this)
-    FREQ_LOOSEN_STEP=0.06         # per-cycle confidence nudge (subtracted)
-    FREQ_TIGHTEN_STEP=0.02        # per-cycle confidence nudge (added)
+    FREQ_LOOSEN_STEP=0.08         # per-cycle confidence nudge (subtracted)
+    FREQ_TIGHTEN_STEP=0.015       # per-cycle confidence nudge (added)
     FREQ_MAX_DELTA=0.25           # max |confidence_delta| allowed
     DROUGHT_WINDOW_HOURS=0.5      # hours without a trade → drought mode (30 min)
     DROUGHT_ADX_REDUCTION=5.0     # ADX points removed in drought
@@ -59,8 +59,8 @@ logger = logging.getLogger("nija.trade_frequency_controller")
 _DEFAULT_MIN_TRADES_PER_HOUR: float = 2.0
 _DEFAULT_MIN_TRADES_PER_DAY: float = 20.0   # Lower bound of the 20-50 trades/day target band
 _DEFAULT_MAX_TRADES_PER_DAY: float = 50.0   # Upper bound — tighten confidence gate above this level
-_DEFAULT_LOOSEN_STEP: float = 0.06
-_DEFAULT_TIGHTEN_STEP: float = 0.02
+_DEFAULT_LOOSEN_STEP: float = 0.08
+_DEFAULT_TIGHTEN_STEP: float = 0.015
 _DEFAULT_MAX_DELTA: float = 0.25
 
 # Drought safeguard defaults
