@@ -108,6 +108,7 @@ class CapitalAuthority:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self.broker_manager: Optional[Any] = None
         self._reserve_pct: float = float(
             os.environ.get("NIJA_CAPITAL_RESERVE_PCT", str(_DEFAULT_RESERVE_PCT))
         )
@@ -166,6 +167,34 @@ class CapitalAuthority:
             Sum of all open-position notional values in USD.  Pass 0.0 (or
             omit) when the caller does not yet have position data.
         """
+        try:
+            from bot.multi_account_broker_manager import get_broker_manager
+        except ImportError:
+            try:
+                from multi_account_broker_manager import get_broker_manager  # type: ignore
+            except Exception as exc:
+                raise RuntimeError(
+                    "CapitalAuthority refresh requires get_broker_manager() for broker registry integrity"
+                ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                "CapitalAuthority refresh failed while resolving get_broker_manager() (unexpected import error)"
+            ) from exc
+
+        canonical_broker_manager = get_broker_manager()
+        if self.broker_manager is None:
+            self.broker_manager = canonical_broker_manager
+        if self.broker_manager is not canonical_broker_manager:
+            raise RuntimeError("BROKER MANAGER INSTANCE MISMATCH (CRITICAL)")
+        assert self.broker_manager is canonical_broker_manager, \
+            "BROKER MANAGER INSTANCE MISMATCH (CRITICAL)"
+        try:
+            self.broker_manager.refresh_registry()
+        except Exception as exc:
+            raise RuntimeError(
+                "CapitalAuthority refresh could not rehydrate broker registry (CRITICAL)"
+            ) from exc
+
         new_balances: Dict[str, float] = {}
 
         for broker_id, broker in broker_map.items():
@@ -722,3 +751,11 @@ def get_capital_authority() -> CapitalAuthority:
                 _authority_instance = CapitalAuthority()
                 logger.debug("[CapitalAuthority] singleton created")
     return _authority_instance
+
+
+def reset_capital_authority_singleton() -> None:
+    """Clear the cached CapitalAuthority singleton (cold-start helper)."""
+    global _authority_instance
+    with _authority_lock:
+        _authority_instance = None
+    logger.warning("[CapitalAuthority] singleton cache cleared")

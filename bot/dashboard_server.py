@@ -164,16 +164,19 @@ def _get_account_manager():
         MultiAccountBrokerManager instance
     """
     try:
-        from bot.multi_account_broker_manager import MultiAccountBrokerManager
+        from bot.multi_account_broker_manager import get_broker_manager
+        manager = get_broker_manager()
 
         # Check if there's a global instance in the running bot
         if 'nija_bot' in sys.modules:
             nija_bot = sys.modules['nija_bot']
             if hasattr(nija_bot, 'account_manager'):
-                return nija_bot.account_manager
+                if nija_bot.account_manager is not manager:
+                    logger.warning("Rebinding nija_bot.account_manager to singleton get_broker_manager() instance")
+                    nija_bot.account_manager = manager
+                return manager
 
-        # Create new instance
-        return MultiAccountBrokerManager()
+        return manager
     except Exception as e:
         logger.debug(f"Could not get account manager: {e}")
         return None
