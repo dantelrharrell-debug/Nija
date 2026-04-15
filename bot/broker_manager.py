@@ -869,6 +869,8 @@ class KrakenStartupFSM:
                 self._connecting = True
                 # Keep nonce issuance OPEN during bootstrap so auth + balance
                 # fetch private calls can complete before CAPITAL_READY.
+                # Safety: trading remains blocked by platform/capital gates, and
+                # mark_failed()/reset() still revoke nonce issuance on failures.
                 if authorize_nonce_issuance is not None:
                     authorize_nonce_issuance()
                     logger.info(
