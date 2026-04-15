@@ -25,6 +25,8 @@ Date: January 30, 2026
 """
 
 import logging
+import threading
+import time
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple, Any
@@ -192,6 +194,13 @@ class CapitalAllocationBrain:
         # Performance tracking
         self.allocation_history: List[AllocationPlan] = []
         self.performance_history: List[Dict] = []
+        self._authority_bootstrap_thread: Optional[threading.Thread] = None
+        self._authority_bootstrap_attempts = max(
+            1, int(self.config.get("authority_bootstrap_attempts", 30))
+        )
+        self._authority_bootstrap_interval_s = max(
+            0.25, float(self.config.get("authority_bootstrap_interval_s", 1.0))
+        )
 
         # Best-effort startup sync from CapitalAuthority for non-explicit configs.
         # This reduces race-window false negatives where authority has not yet been
@@ -206,6 +215,7 @@ class CapitalAllocationBrain:
                     "— allocations blocked until authority is refreshed.",
                     startup_total,
                 )
+                self._start_async_authority_bootstrap()
         
         logger.info(
             f"🧠 Capital Allocation Brain initialized: "
@@ -281,6 +291,49 @@ class CapitalAllocationBrain:
             self.total_capital = total_capital
 
         return max(0.0, total_capital)
+
+    def _start_async_authority_bootstrap(self) -> None:
+        """
+        Start a short-lived background refresh loop to close startup timing gaps.
+
+        This prevents the brain from staying at 0 when CapitalAuthority is polled
+        before brokers complete connection and initial balance publication.
+        """
+        if self._explicit_total_capital:
+            return
+        if (
+            self._authority_bootstrap_thread is not None
+            and self._authority_bootstrap_thread.is_alive()
+        ):
+            return
+
+        self._authority_bootstrap_thread = threading.Thread(
+            target=self._authority_bootstrap_worker,
+            name="capital-authority-bootstrap",
+            daemon=True,
+        )
+        self._authority_bootstrap_thread.start()
+
+    def _authority_bootstrap_worker(self) -> None:
+        """Retry CapitalAuthority refresh until non-zero capital is observed."""
+        for attempt in range(1, self._authority_bootstrap_attempts + 1):
+            latest_total = self.refresh_authority()
+            if latest_total > 0.0:
+                logger.info(
+                    "[CapitalAllocationBrain] async CapitalAuthority bootstrap succeeded "
+                    "attempt=%d total=$%.2f",
+                    attempt,
+                    latest_total,
+                )
+                return
+            if attempt < self._authority_bootstrap_attempts:
+                time.sleep(self._authority_bootstrap_interval_s)
+        logger.warning(
+            "[CapitalAllocationBrain] async CapitalAuthority bootstrap exhausted "
+            "attempts=%d (capital remains $%.2f)",
+            self._authority_bootstrap_attempts,
+            self.total_capital,
+        )
 
     # Backward-compatible aliases requested by ops runbooks
     def _rebuild_capital_authority(self) -> float:
