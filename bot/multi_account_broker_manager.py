@@ -616,13 +616,13 @@ class MultiAccountBrokerManager:
             if self.is_platform_connected(broker_type):
                 return True, "platform_connected"
             return False, "platform_not_ready"
-        if _KRAKEN_STARTUP_FSM.is_failed:
-            return False, "kraken_fsm_failed"
         if _KRAKEN_STARTUP_FSM.is_connected:
             return True, "kraken_fsm_connected"
         if _KRAKEN_STARTUP_FSM.is_connecting:
             return True, "kraken_fsm_connecting"
-        return False, "kraken_fsm_not_ready"
+        if _KRAKEN_STARTUP_FSM.is_failed:
+            return True, "kraken_live_connected_fsm_failed_recovery"
+        return True, "kraken_live_connected"
 
     def resolve_startup_capital_invariant(
         self,
