@@ -480,6 +480,9 @@ class MultiAccountBrokerManager:
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
         try:
+            bootstrap_trigger = trigger.startswith("platform_connect:") or trigger.startswith(
+                "initialize_platform_brokers"
+            )
             broker_map: Dict[str, BaseBroker] = {}
             for broker_type, broker in self._platform_brokers.items():
                 if broker is None or not getattr(broker, "connected", False):
@@ -489,13 +492,41 @@ class MultiAccountBrokerManager:
                         broker_type.value,
                     )
                     continue
-                if not self.is_platform_connected(broker_type):
+                is_platform_ready = self.is_platform_connected(broker_type)
+                allow_bootstrap_connected = (
+                    bootstrap_trigger
+                    and not is_platform_ready
+                    and _CAPITAL_FSM_AVAILABLE
+                    and self._capital_bootstrap_fsm is not None
+                    and self._capital_bootstrap_fsm.state in (
+                        CapitalBootstrapState.WAIT_PLATFORM,
+                        CapitalBootstrapState.REFRESH_REQUESTED,
+                        CapitalBootstrapState.REFRESH_IN_FLIGHT,
+                        CapitalBootstrapState.SNAPSHOT_EVALUATING,
+                        CapitalBootstrapState.DEGRADED,
+                        CapitalBootstrapState.FAILED,
+                    )
+                )
+                if not (is_platform_ready or allow_bootstrap_connected):
                     logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready",
+                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready "
+                        "(bootstrap_trigger=%s state=%s)",
+                        trigger,
+                        broker_type.value,
+                        bootstrap_trigger,
+                        (
+                            self._capital_bootstrap_fsm.state.value
+                            if (_CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None)
+                            else "n/a"
+                        ),
+                    )
+                    continue
+                if allow_bootstrap_connected:
+                    logger.info(
+                        "[CapitalAuthorityRefresh] trigger=%s include broker=%s reason=bootstrap_connected",
                         trigger,
                         broker_type.value,
                     )
-                    continue
                 broker_map[broker_type.value] = broker
 
             logger.info(
