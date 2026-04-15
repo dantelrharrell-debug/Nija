@@ -52,6 +52,7 @@ _RED    = "\033[31m"
 _CYAN   = "\033[36m"
 _DIM    = "\033[2m"
 _RESET  = "\033[0m"
+_SECRET_SUFFIXES = ("_API_KEY", "_API_SECRET")
 
 def _c(color: str, text: str) -> str:
     return f"{color}{text}{_RESET}"
@@ -238,7 +239,7 @@ def _is_secret_var(key: str) -> bool:
     """Return True when a variable should be treated as secret."""
     return key in _SECRET_VARS or any(
         key.endswith(suffix)
-        for suffix in ("_API_KEY", "_API_SECRET")
+        for suffix in _SECRET_SUFFIXES
     )
 
 
