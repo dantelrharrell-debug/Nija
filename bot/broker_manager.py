@@ -7310,56 +7310,20 @@ class KrakenBroker(BaseBroker):
 
             # Gateway-only connect success: private execution is delegated to
             # gateway, and this local broker never receives private credentials.
+            # IMPORTANT: Do not fail/mark_failed here if CapitalAuthority is still
+            # bootstrapping; allow upstream broker registration first so startup
+            # capital refresh can converge on the next invariant pass.
             self.credentials_configured = True
-            # Avoid a connected/ready mismatch for PLATFORM startup: connection
-            # is only marked true after capital readiness is validated.
-            self.connected = self.account_type != AccountType.PLATFORM  # PLATFORM waits for capital-ready gate
+            self.connected = True
             if self.account_type == AccountType.PLATFORM:
-                _capital_ready = False
-                _cap_total = 0.0
-                _valid = 0
-                _capital_resolver_error = None
-                try:
-                    try:
-                        from bot.multi_account_broker_manager import (
-                            multi_account_broker_manager as _mabm_startup,
-                        )
-                    except ImportError:
-                        from multi_account_broker_manager import (  # type: ignore[import]
-                            multi_account_broker_manager as _mabm_startup,
-                        )
-                    if _mabm_startup is not None:
-                        _cap = _mabm_startup.resolve_startup_capital_invariant(
-                            trigger="kraken_platform_gateway_connect"
-                        )
-                        _capital_ready = bool(_cap.get("ready", 0.0))
-                        _cap_total = float(_cap.get("total_capital", 0.0))
-                        _valid = int(_cap.get("valid_brokers", 0.0))
-                except Exception as _cap_err:
-                    _capital_resolver_error = str(_cap_err)
-                    logger.warning(
-                        "⚠️ CapitalAuthority startup resolver unavailable (gateway mode): %s",
-                        _cap_err,
-                    )
-
-                if _capital_ready:
-                    _KRAKEN_STARTUP_FSM.mark_connected()
-                else:
-                    self.connected = False
-                    _KRAKEN_STARTUP_FSM.mark_failed()
-                    self.last_connection_error = (
-                        "CapitalAuthority not ready after platform connection in gateway-only mode "
-                        f"(valid_brokers={_valid}, total_capital={_cap_total:.2f}, "
-                        f"resolver_error={_capital_resolver_error or 'none'})"
-                    )
-                    logger.error(
-                        "⛔ PLATFORM Kraken gateway-only connect blocked: capital authority NOT READY "
-                        "(valid_brokers=%d total=$%.2f resolver_error=%s) — startup gated",
-                        _valid,
-                        _cap_total,
-                        _capital_resolver_error or "none",
-                    )
-                    return False
+                # Intentional: nonce readiness can be true before capital readiness.
+                # USER connect attempts still remain blocked because the startup
+                # FSM unblocks wait_connected() only after mark_connected(), which
+                # is set only when capital authority is ready.
+                _KRAKEN_STARTUP_FSM.mark_nonce_ready()
+                logger.info(
+                    "⏳ PLATFORM Kraken gateway-only connected — awaiting CapitalAuthority ready before releasing user-connect gate"
+                )
             logger.info(
                 "✅ Kraken gateway-only mode active (%s) — direct credentials disabled, "
                 "private execution delegated to %s",
@@ -8164,18 +8128,21 @@ class KrakenBroker(BaseBroker):
                                     _valid, _cap_total,
                                 )
                             else:
-                                self.connected = False
-                                _KRAKEN_STARTUP_FSM.mark_failed()
+                                # Decouple physical connectivity from capital readiness:
+                                # keep broker connected so CapitalAuthority can ingest
+                                # upstream sources on subsequent refresh attempts.
+                                self.connected = True
+                                # Intentional: nonce calibration is complete, but
+                                # mark_connected() remains blocked until capital ready.
+                                _KRAKEN_STARTUP_FSM.mark_nonce_ready()
                                 self.last_connection_error = (
-                                    "CapitalAuthority not ready after platform connect "
-                                    f"(valid_brokers={_valid}, total_capital={_cap_total:.2f})"
+                                    "Waiting for CapitalAuthority readiness after successful Kraken connection"
                                 )
-                                logger.error(
-                                    "⛔ PLATFORM Kraken connected but capital authority NOT READY "
-                                    "(valid_brokers=%d total=$%.2f) — startup gated",
+                                logger.warning(
+                                    "⏳ PLATFORM Kraken connected; CapitalAuthority not ready yet "
+                                    "(valid_brokers=%d total=$%.2f) — awaiting bootstrap convergence",
                                     _valid, _cap_total,
                                 )
-                                return False
                             # If the platform was previously quarantined due to nonce poisoning
                             # and has now successfully reconnected (implying a key rotation + resync
                             # completed), automatically lift the quarantine so new entries are
