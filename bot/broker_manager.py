@@ -1471,6 +1471,11 @@ class BaseBroker(ABC):
 
         Contract: this is a payload-presence check, not a positivity check; a
         legitimate zero balance is still a valid payload.
+
+        Payload sources (in precedence order):
+            1) ``get_balance_fetch_timestamp()`` when the broker exposes it
+            2) ``_last_known_balance`` cache populated by balance fetch paths
+            3) ``_balance_cache`` payload cache used by some broker adapters
         """
         try:
             ts_getter = getattr(self, "get_balance_fetch_timestamp", None)
@@ -1498,12 +1503,12 @@ class BaseBroker(ABC):
             return False
         if self.broker_type != BrokerType.KRAKEN:
             return True
-        # Recovery/boot rule: when Kraken is physically connected and has a
+        # Eligibility rule (not final readiness): when Kraken is physically connected and has a
         # valid balance payload, allow capital readiness in:
         # - CONNECTED: fully booted steady state
         # - CONNECTING: startup fetches can already produce balance payloads
-        # - FAILED: lets the capital pipeline ingest fresh balances and recover
-        #           from a prior failed bootstrap without deadlocking at $0.
+        # - FAILED: allows capital ingestion needed to escape FAILED loops;
+        #           final "system ready" still requires bootstrap FSM exit.
         return (
             _KRAKEN_STARTUP_FSM.is_connected
             or _KRAKEN_STARTUP_FSM.is_connecting

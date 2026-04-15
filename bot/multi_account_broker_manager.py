@@ -545,7 +545,7 @@ class MultiAccountBrokerManager:
             assets_priced_ok = (
                 float(getattr(snapshot, "assets_priced_success_pct", 0.0)) > 0.0
                 if snapshot is not None
-                else (kraken_capital > 0.0)
+                else False
             )
             bootstrap_exited_failed = True
             if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
