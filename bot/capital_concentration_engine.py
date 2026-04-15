@@ -630,6 +630,45 @@ class CapitalConcentrationEngine:
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
+    # ── Advisory interface for CapitalDecisionEngine ─────────────────────────
+
+    def advise(self, usable_capital: float) -> Dict:
+        """
+        Advisory-only interface consumed by :class:`CapitalDecisionEngine`.
+
+        Returns a read-only advice dict without writing any budgets directly.
+        Callers must not use this to size positions — only
+        ``CapitalDecisionEngine`` translates the advice into final budgets.
+
+        Args:
+            usable_capital: Current usable capital from CapitalAuthority.
+
+        Returns:
+            Dict with keys:
+                ``account_multipliers``  – {account_id: float}  (1.0 = neutral)
+                ``ranked_accounts``      – list[str] sorted best-first by P&L
+                ``top_account``          – account_id with highest P&L (or None)
+        """
+        try:
+            ranked = self.get_ranked_accounts()
+            with self._lock:
+                multipliers = {
+                    aid: state.allocation_multiplier
+                    for aid, state in self._accounts.items()
+                }
+            return {
+                "account_multipliers": multipliers,
+                "ranked_accounts": [r.account_id for r in ranked],
+                "top_account": ranked[0].account_id if ranked else None,
+            }
+        except Exception as exc:
+            logger.debug("[CCEngine] advise() error: %s", exc)
+            return {
+                "account_multipliers": {},
+                "ranked_accounts": [],
+                "top_account": None,
+            }
+
 
 # ---------------------------------------------------------------------------
 # Singleton
@@ -642,19 +681,20 @@ _ENGINE_LOCK = threading.Lock()
 def get_capital_concentration_engine(
     config: Optional[ConcentrationConfig] = None,
 ) -> CapitalConcentrationEngine:
-    """Return the process-wide ``CapitalConcentrationEngine`` singleton."""
+    """Return the process-wide ``CapitalConcentrationEngine`` singleton (double-checked locking)."""
     global _ENGINE
-    with _ENGINE_LOCK:
-        if _ENGINE is None:
-            _ENGINE = CapitalConcentrationEngine(config=config)
-            logger.info(
-                "[CCEngine] singleton created "
-                "(win_rate_threshold=%.0f%%, kill_drawdown=%.0f%%, max_boost=%.1fx) — "
-                "concentration + ranking + kill-weak + live-verify + Kelly + dashboard active",
-                WIN_RATE_THRESHOLD * 100,
-                KILL_DRAWDOWN_THRESHOLD * 100,
-                MAX_CONCENTRATION_BOOST,
-            )
+    if _ENGINE is None:
+        with _ENGINE_LOCK:
+            if _ENGINE is None:
+                _ENGINE = CapitalConcentrationEngine(config=config)
+                logger.info(
+                    "[CCEngine] singleton created "
+                    "(win_rate_threshold=%.0f%%, kill_drawdown=%.0f%%, max_boost=%.1fx) — "
+                    "concentration + ranking + kill-weak + live-verify + Kelly + dashboard active",
+                    WIN_RATE_THRESHOLD * 100,
+                    KILL_DRAWDOWN_THRESHOLD * 100,
+                    MAX_CONCENTRATION_BOOST,
+                )
     return _ENGINE
 
 

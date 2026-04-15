@@ -1202,13 +1202,36 @@ class SelfHealingStartup:
             if current == TradingState.EMERGENCY_STOP:
                 lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower()
                 if lcv in ("true", "1", "yes", "enabled"):
+                    # Check three-condition capital readiness before resetting
+                    try:
+                        from trading_state_machine import _capital_readiness_gate
+                    except ImportError:
+                        try:
+                            from bot.trading_state_machine import _capital_readiness_gate  # type: ignore[import]
+                        except ImportError:
+                            _capital_readiness_gate = None  # type: ignore[assignment]
+
+                    cap_ready, cap_reason = (
+                        _capital_readiness_gate()
+                        if _capital_readiness_gate is not None
+                        else (True, "gate unavailable — skipping")
+                    )
+                    if not cap_ready:
+                        logger.warning(
+                            "SelfHealingStartup: EMERGENCY_STOP + LIVE_CAPITAL_VERIFIED=true "
+                            "but capital readiness gate not satisfied: %s — "
+                            "leaving in EMERGENCY_STOP until capital is ready",
+                            cap_reason,
+                        )
+                        return
                     logger.warning(
                         "SelfHealingStartup: state machine is EMERGENCY_STOP + "
-                        "LIVE_CAPITAL_VERIFIED=true — auto-resetting to OFF"
+                        "LIVE_CAPITAL_VERIFIED=true + capital ready — auto-resetting to OFF"
                     )
                     sm.transition_to(
                         TradingState.OFF,
                         "Auto-reset by SelfHealingStartup: LIVE_CAPITAL_VERIFIED=true, "
+                        "capital readiness confirmed, "
                         "EMERGENCY_STOP was set by a prior test trigger",
                     )
                     sm.maybe_auto_activate()

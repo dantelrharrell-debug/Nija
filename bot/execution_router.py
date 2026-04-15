@@ -733,15 +733,16 @@ _instance_lock = threading.Lock()
 
 def get_execution_router(**kwargs) -> ExecutionRouter:
     """
-    Return the process-wide ``ExecutionRouter`` singleton.
+    Return the process-wide ``ExecutionRouter`` singleton (double-checked locking).
 
     Keyword arguments are forwarded to the constructor on first call only.
     """
     global _instance
-    with _instance_lock:
-        if _instance is None:
-            _instance = ExecutionRouter(**kwargs)
-        return _instance
+    if _instance is None:
+        with _instance_lock:
+            if _instance is None:
+                _instance = ExecutionRouter(**kwargs)
+    return _instance
 
 
 __all__ = [

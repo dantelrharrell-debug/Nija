@@ -97,6 +97,11 @@ class MetaAIEvolutionEngine:
         """
         Initialize the evolution engine and create initial population
         """
+        # Idempotency guard — prevents double-init if called more than once.
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
+
         if not self.enabled:
             logger.info("⚠️  Meta-AI Evolution Engine is disabled")
             return
