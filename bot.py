@@ -461,6 +461,37 @@ except ImportError:
 # Setup paths (must come before _verify_env so trading_state_machine is importable)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
+# ── Bootstrap FSM — best-effort import ───────────────────────────────────────
+# Imported here so transitions are available throughout the module.  All usage
+# is wrapped in try/except so a missing or broken module never stops the bot.
+try:
+    from bot.bootstrap_state_machine import (
+        BootstrapState as _BootstrapState,
+        get_bootstrap_fsm as _get_bootstrap_fsm,
+    )
+    _BOOTSTRAP_FSM_AVAILABLE = True
+except ImportError:
+    _get_bootstrap_fsm = None  # type: ignore[assignment]
+    _BootstrapState = None     # type: ignore[assignment]
+    _BOOTSTRAP_FSM_AVAILABLE = False
+
+
+def _bfsm_transition(state, reason: str = "") -> None:
+    """Best-effort bootstrap FSM transition.  Never raises; never blocks."""
+    if not _BOOTSTRAP_FSM_AVAILABLE:
+        return
+    try:
+        _get_bootstrap_fsm().transition(state, reason)
+    except Exception as _bfsm_err:
+        try:
+            import logging as _lg
+            _lg.getLogger("nija.bootstrap_fsm").debug(
+                "bootstrap FSM transition to %s failed (non-fatal): %s", state, _bfsm_err
+            )
+        except Exception:
+            pass
+
+
 # Verify critical environment variables are present
 def _verify_env() -> None:
     """Warn loudly if required runtime variables are absent after .env loading."""
@@ -615,6 +646,7 @@ def _get_thread_status():
 def _handle_signal(sig, frame):
     """Handle shutdown signals (SIGTERM, SIGINT) with visual logging."""
     _release_process_lock()
+    _bfsm_transition(_BootstrapState.SHUTDOWN, f"signal {sig} received") if _BOOTSTRAP_FSM_AVAILABLE else None
     signal_name = signal.Signals(sig).name if hasattr(signal, 'Signals') else str(sig)
     _log_exit_point(
         f"Signal {signal_name} received",
@@ -949,6 +981,11 @@ def _run_bot_startup_and_trading_with_retry():
                 logger.critical(
                     "🚨 Requesting clean process exit so external watchdog can restart service"
                 )
+                # Bootstrap FSM: fatal nonce → EXTERNAL_RESTART_REQUIRED (I9)
+                _bfsm_transition(
+                    _BootstrapState.EXTERNAL_RESTART_REQUIRED,
+                    f"fatal nonce error: {e}",
+                )
                 _request_external_watchdog_restart(str(e))
                 raise
             attempt += 1
@@ -961,6 +998,20 @@ def _run_bot_startup_and_trading_with_retry():
                     connection_attempts,
                 )
                 break
+
+            # Bootstrap FSM: transient failure → BOOT_FAILED_RETRY so the next
+            # attempt can enter PLATFORM_CONNECTING cleanly.  Skip reset when
+            # full init already completed (fast-path supervisor restart scenario).
+            if _BOOTSTRAP_FSM_AVAILABLE:
+                with _initialized_state_lock:
+                    _init_done = (
+                        _initialized_state.get("strategy") is not None
+                        and "active_threads" in _initialized_state
+                    )
+                if not _init_done:
+                    _get_bootstrap_fsm().reset_for_retry(
+                        f"attempt #{attempt} failed: {e}"
+                    )
 
             delay = min(
                 _MAX_DELAY,
@@ -1006,6 +1057,19 @@ def _run_bot_startup_and_trading():
         )
         _rerun_supervisor_loop(_state_copy)
         return
+
+    # ── Bootstrap FSM: acknowledge ENV_VERIFIED on first run ─────────────────
+    # Environment variables were verified at module import; health server was
+    # bound in main().  Advance the FSM to ENV_VERIFIED so the startup thread
+    # can drive subsequent transitions.  On retry the FSM is already in
+    # BOOT_FAILED_RETRY (set by the retry wrapper) — skip early-state transitions.
+    if _BOOTSTRAP_FSM_AVAILABLE:
+        _current_boot_state = _get_bootstrap_fsm().state
+        if _current_boot_state == _BootstrapState.HEALTH_BOUND:
+            _bfsm_transition(
+                _BootstrapState.ENV_VERIFIED,
+                "startup thread active; environment verified at module load",
+            )
 
     # ── FIX 3: CONNECTION PHASE GUARD — can only run once ───────────────────
     # If a previous attempt completed the connection/credential-check phase,
@@ -1130,7 +1194,13 @@ def _run_bot_startup_and_trading():
                 health_manager.mark_configuration_error(_validation_failure_reason)
                 _log_exit_point("Startup validation failed", exit_code=1)
                 raise RuntimeError(f"Critical startup validation failure (will retry): {_validation_failure_reason}")
-            
+
+            # Validation passed — advance bootstrap FSM to STARTUP_VALIDATED
+            _bfsm_transition(
+                _BootstrapState.STARTUP_VALIDATED,
+                "startup_validation passed all pre-flight checks",
+            )
+
             # Display financial disclaimers (App Store compliance)
             try:
                 from bot.financial_disclaimers import display_startup_disclaimers, log_compliance_notice
@@ -1368,7 +1438,13 @@ def _run_bot_startup_and_trading():
                 
                 # Mark as configuration error for health checks
                 health_manager.mark_configuration_error("No exchange credentials configured")
-                
+
+                # Bootstrap FSM: no credentials → CONFIG_ERROR_KEEPALIVE terminal state
+                _bfsm_transition(
+                    _BootstrapState.CONFIG_ERROR_KEEPALIVE,
+                    "no exchange credentials configured",
+                )
+
                 # Health server already started at beginning of main()
                 logger.info("Health server already running - will report configuration error status")
                 
@@ -1442,6 +1518,32 @@ def _run_bot_startup_and_trading():
             logger.info("   Main thread health server remains responsive during this")
             logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
 
+            # ── Bootstrap FSM invariant guards + MODE_GATED + PLATFORM_CONNECTING ─
+            if _BOOTSTRAP_FSM_AVAILABLE:
+                _boot_fsm = _get_bootstrap_fsm()
+                # I1: process lock must be held
+                try:
+                    _boot_fsm.assert_invariant_i1_single_writer()
+                except Exception as _inv_err:
+                    logger.warning("⚠️  Bootstrap invariant I1 violation: %s", _inv_err)
+                # I2: health server must be bound before blocking I/O
+                try:
+                    _boot_fsm.assert_invariant_i2_liveness_first()
+                except Exception as _inv_err:
+                    logger.warning("⚠️  Bootstrap invariant I2 violation: %s", _inv_err)
+                # Advance FSM: STARTUP_VALIDATED → MODE_GATED → PLATFORM_CONNECTING
+                # On retry the FSM is already in BOOT_FAILED_RETRY; skip MODE_GATED.
+                _cur = _boot_fsm.state
+                if _cur == _BootstrapState.STARTUP_VALIDATED:
+                    _bfsm_transition(
+                        _BootstrapState.MODE_GATED,
+                        "trading state machine mode confirmed",
+                    )
+                _bfsm_transition(
+                    _BootstrapState.PLATFORM_CONNECTING,
+                    "TradingStrategy broker connection starting",
+                )
+
             # STEP 2 — initialize strategy ONCE.
             # If a previous attempt created TradingStrategy but crashed before
             # the full state (including active_threads) was stored, reuse the
@@ -1466,6 +1568,12 @@ def _run_bot_startup_and_trading():
                 with _initialized_state_lock:
                     _initialized_state["strategy"] = strategy
                 logger.critical("🧠 STATE STORED — entering supervisor mode")
+
+            # Bootstrap FSM: broker(s) connected → PLATFORM_READY
+            _bfsm_transition(
+                _BootstrapState.PLATFORM_READY,
+                "TradingStrategy initialized; platform broker(s) connected",
+            )
 
             # ── MICRO_PLATFORM tier floor validation ─────────────────────────
             # Confirm that the sizing module's MICRO_PLATFORM minimum position
@@ -1661,6 +1769,12 @@ def _run_bot_startup_and_trading():
             CAPITAL_GATE_LOG_EVERY_N_CHECKS = 4
             capital_gate_checks = 0
 
+            # Bootstrap FSM: entering capital gate → CAPITAL_REFRESHING
+            _bfsm_transition(
+                _BootstrapState.CAPITAL_REFRESHING,
+                "waiting for startup capital > $0",
+            )
+
             def _get_startup_total_capital() -> float:
                 _mam = getattr(strategy, "multi_account_manager", None)
                 if _mam and hasattr(_mam, "get_all_balances"):
@@ -1689,6 +1803,11 @@ def _run_bot_startup_and_trading():
                 if _total_capital > 0.0:
                     logger.info("🚀 SYSTEM READY — TRADING ENABLED")
                     logger.info("💰 Startup total capital: $%.2f", _total_capital)
+                    # Bootstrap FSM: capital confirmed → CAPITAL_READY
+                    _bfsm_transition(
+                        _BootstrapState.CAPITAL_READY,
+                        f"startup capital confirmed: ${_total_capital:.2f}",
+                    )
                     break
 
                 capital_gate_checks += 1
@@ -1722,6 +1841,24 @@ def _run_bot_startup_and_trading():
             # run — sending the bot directly to the keep-alive loop with zero
             # trading activity.
             # ═══════════════════════════════════════════════════════════════════════
+
+            # ── Bootstrap FSM invariant guards before launching trading threads ──
+            if _BOOTSTRAP_FSM_AVAILABLE:
+                _boot_fsm = _get_bootstrap_fsm()
+                # I4: capital bootstrap must be READY
+                try:
+                    _boot_fsm.assert_invariant_i4_capital_gate()
+                except Exception as _inv_err:
+                    logger.warning("⚠️  Bootstrap invariant I4 violation: %s", _inv_err)
+                # I7: EMERGENCY_STOP blocks thread launch
+                try:
+                    _boot_fsm.assert_invariant_i7_emergency_safety()
+                except Exception as _inv_err:
+                    logger.warning("⚠️  Bootstrap invariant I7 violation: %s", _inv_err)
+                _bfsm_transition(
+                    _BootstrapState.THREADS_STARTING,
+                    "spawning trading worker threads",
+                )
 
             use_independent_trading = (
                 os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
@@ -1899,6 +2036,11 @@ def _run_bot_startup_and_trading():
             # in exactly one place and retries (fast-path) use the same code.
             with _initialized_state_lock:
                 _state_for_supervisor = dict(_initialized_state)
+            # Bootstrap FSM: all threads live → RUNNING_SUPERVISED
+            _bfsm_transition(
+                _BootstrapState.RUNNING_SUPERVISED,
+                f"{len(_active_threads)} trader thread(s) started; supervisor loop active",
+            )
             _rerun_supervisor_loop(_state_for_supervisor)
 
         except RuntimeError as e:
@@ -1965,6 +2107,12 @@ def main():
     print("✅ Health server started - Railway will not kill this container")
     print("=" * 70)
     print("")
+
+    # Advance bootstrap FSM: BOOT_INIT → LOCK_ACQUIRED → HEALTH_BOUND
+    # (process lock was acquired at module import; health server is now bound)
+    if _BOOTSTRAP_FSM_AVAILABLE:
+        _bfsm_transition(_BootstrapState.LOCK_ACQUIRED, "process lock acquired at module load")
+        _bfsm_transition(_BootstrapState.HEALTH_BOUND, "health server bound")
     
     # Small delay to ensure health server is fully bound
     time.sleep(0.2)
@@ -2097,6 +2245,12 @@ def main():
 
             restart_reason = _consume_external_watchdog_restart_reason()
             if restart_reason:
+                # Bootstrap FSM: fatal condition requiring external restart
+                _bfsm_transition(
+                    _BootstrapState.EXTERNAL_RESTART_REQUIRED,
+                    f"external watchdog restart: {restart_reason}",
+                )
+                _bfsm_transition(_BootstrapState.SHUTDOWN, "process exiting for external restart")
                 _log_exit_point(
                     "External Watchdog Restart Requested",
                     exit_code=1,

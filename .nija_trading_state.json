@@ -1,5 +1,5 @@
 {
-  "current_state": "OFF",
+  "current_state": "EMERGENCY_STOP",
   "history": [
     {
       "from": "EMERGENCY_STOP",
@@ -42,7 +42,13 @@
       "to": "EMERGENCY_STOP",
       "reason": "Kill switch activated: PortfolioGate: Test trigger",
       "timestamp": "2026-04-08T22:09:50.804837"
+    },
+    {
+      "from": "OFF",
+      "to": "EMERGENCY_STOP",
+      "reason": "Kill switch activated: PortfolioGate: Test trigger",
+      "timestamp": "2026-04-15T06:26:39.151413"
     }
   ],
-  "last_updated": "2026-04-10T12:21:12.694484"
+  "last_updated": "2026-04-15T06:26:39.151421"
 }
