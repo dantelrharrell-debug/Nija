@@ -146,11 +146,11 @@ class CredentialHealthMonitor:
             f'{broker_prefix}_USER_{first_name}_API_KEY',
             f'{broker_prefix}_USER_{first_name}_API_SECRET',
         }
-        full_name = user_id.upper()
-        if full_name != first_name:
+        upper_user_id = user_id.upper()
+        if upper_user_id != first_name:
             names.update({
-                f'{broker_prefix}_USER_{full_name}_API_KEY',
-                f'{broker_prefix}_USER_{full_name}_API_SECRET',
+                f'{broker_prefix}_USER_{upper_user_id}_API_KEY',
+                f'{broker_prefix}_USER_{upper_user_id}_API_SECRET',
             })
         return names
 
