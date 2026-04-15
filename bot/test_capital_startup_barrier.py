@@ -43,6 +43,9 @@ class _MockBroker(BaseBroker):
     def has_balance_payload(self) -> bool:
         return bool(self._has_payload)
 
+    def has_balance_payload_for_capital(self) -> bool:
+        return bool(self._has_payload)
+
 
 class TestCapitalStartupBarrier(unittest.TestCase):
     def tearDown(self):

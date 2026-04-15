@@ -457,10 +457,10 @@ class MultiAccountBrokerManager:
             self._last_update_ts = time.time()
 
     def has_registered_sources(self) -> bool:
-        """Return True when primary broker-registration pipeline has hydrated registry sources."""
+        """Return True when at least one primary registration exists and at least one platform source is present."""
         with self._registry_meta_lock:
             source_count = len(self._platform_brokers)
-            primary_registrations = int(self._primary_registration_count)
+            primary_registrations = self._primary_registration_count
         return source_count > 0 and primary_registrations > 0
 
     def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
@@ -927,8 +927,21 @@ class MultiAccountBrokerManager:
         # Once bootstrap reaches READY, strict gating resumes automatically.
         if is_platform_ready:
             return False
-        has_payload_attr = getattr(broker, "has_balance_payload", None)
-        has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
+        has_payload = False
+        has_payload_for_capital_attr = getattr(broker, "has_balance_payload_for_capital", None)
+        if callable(has_payload_for_capital_attr):
+            try:
+                has_payload = bool(has_payload_for_capital_attr())
+            except Exception as exc:
+                logger.debug(
+                    "[CapitalAuthorityRefresh] broker=%s has_balance_payload_for_capital raised: %s",
+                    getattr(getattr(broker, "broker_type", None), "value", "unknown"),
+                    exc,
+                )
+                has_payload = False
+        elif hasattr(broker, "has_balance_payload"):
+            has_payload_attr = getattr(broker, "has_balance_payload", None)
+            has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
         if not has_payload:
             return False
         if not (
