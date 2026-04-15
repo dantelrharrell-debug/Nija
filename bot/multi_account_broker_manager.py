@@ -431,7 +431,8 @@ class MultiAccountBrokerManager:
 
     def set_registry_event_bus(self, event_bus: Any) -> None:
         """Attach an optional event bus exposing ``publish(event_name, payload)``."""
-        self._event_bus = event_bus
+        with self._registry_meta_lock:
+            self._event_bus = event_bus
 
     def register_broker_registered_callback(self, callback: Callable[[BaseBroker], None]) -> None:
         """Register a direct callback used when no event bus is attached."""
@@ -440,8 +441,10 @@ class MultiAccountBrokerManager:
 
     def refresh_registry(self) -> None:
         """Rehydrate registry mirrors from the current platform broker map."""
+        with self._registry_meta_lock:
+            broker_items = list(self._platform_brokers.items())
         with _PLATFORM_BROKER_REGISTRY_LOCK:
-            for broker_type, broker in self._platform_brokers.items():
+            for broker_type, broker in broker_items:
                 _PLATFORM_BROKER_INSTANCES[broker_type.value] = broker
                 connected = bool(getattr(broker, "connected", False))
                 GLOBAL_PLATFORM_BROKERS[broker_type.value] = connected
@@ -754,8 +757,9 @@ class MultiAccountBrokerManager:
                         "[BootstrapContract] attempt=%d/%d failed: singleton mismatch",
                         attempt, max_attempts,
                     )
-                    time.sleep(max(0.0, float(retry_delay_s)))
-                    continue
+                    with self._capital_state_lock:
+                        self._trading_halted_due_to_capital = True
+                    return last_snapshot
 
                 self.refresh_registry()
                 last_snapshot = self.refresh_capital_authority(
@@ -765,7 +769,7 @@ class MultiAccountBrokerManager:
                 valid_brokers = int(last_snapshot.get("valid_brokers", 0.0))
                 total_capital = float(last_snapshot.get("total_capital", 0.0))
 
-                if ready and valid_brokers > 0 and total_capital > 0.0:
+                if ready and valid_brokers > 0 and total_capital > 1e-6:
                     self._bootstrap_contract_ok = True
                     self._bootstrap_contract_last_error = ""
                     with self._capital_state_lock:
