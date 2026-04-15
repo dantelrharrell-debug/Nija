@@ -8498,6 +8498,7 @@ class KrakenBroker(BaseBroker):
                 balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                 trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
                 held_amount = 0.0
+                trade_balance_equity_usd = 0.0
 
                 if trade_balance and 'result' in trade_balance:
                     tb_result = trade_balance['result']
@@ -8506,6 +8507,7 @@ class KrakenBroker(BaseBroker):
                     # held = eb - tb
                     eb = float(tb_result.get('eb', 0))
                     tb = float(tb_result.get('tb', 0))
+                    trade_balance_equity_usd = max(0.0, eb)
                     held_amount = eb - tb if eb > tb else 0.0
 
                 # Enhanced balance logging with clear breakdown (Jan 19, 2026)
@@ -8519,7 +8521,13 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   💵 Total Available: ${total:.2f}")
 
                 # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
-                total_funds = total + held_amount + non_usd_usd_value
+                # Cold-start guard: if asset pricing coverage is temporarily 0 during
+                # startup, rely on Kraken TradeBalance equivalent-balance (eb) so
+                # capital readiness doesn't deadlock on an un-warmed price cache.
+                total_funds = max(
+                    total + held_amount + non_usd_usd_value,
+                    trade_balance_equity_usd,
+                )
                 logger.info(
                     "[KrakenBalancePipeline] total_funds account=%s cash=%.8f held=%.8f "
                     "non_usd_usd=%.8f total=%.8f",

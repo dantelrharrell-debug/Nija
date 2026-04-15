@@ -572,7 +572,8 @@ class MultiAccountBrokerManager:
             kraken_connected = "kraken" in broker_map
             # Unified readiness should reflect aggregate usable capital, not require
             # a specific venue to hold funds.
-            ready = bool(broker_map) and (total_capital > 0.0)
+            has_connected_brokers = bool(broker_map)
+            ready = has_connected_brokers and (total_capital > 0.0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
@@ -589,6 +590,13 @@ class MultiAccountBrokerManager:
 
             if ready:
                 logger.info("CAPITAL_READY")
+                for broker_type, broker in self._platform_brokers.items():
+                    if (
+                        broker_type.value in broker_map
+                        and getattr(broker, "connected", False)
+                        and not self.is_platform_connected(broker_type)
+                    ):
+                        self._mark_platform_connected(broker_type)
                 if kraken_connected:
                     try:
                         _KRAKEN_STARTUP_FSM.mark_capital_ready()
@@ -638,7 +646,9 @@ class MultiAccountBrokerManager:
         trigger: str,
         is_platform_ready: bool,
     ) -> bool:
-        if is_platform_ready or not self._is_bootstrap_refresh_trigger(trigger):
+        if is_platform_ready:
+            return False
+        if not (self._is_bootstrap_refresh_trigger(trigger) or trigger == "watchdog"):
             return False
         if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
             return False
@@ -2923,11 +2933,9 @@ class MultiAccountBrokerManager:
                 else:
                     with _PLATFORM_BROKER_REGISTRY_LOCK:
                         _PLATFORM_BROKER_CONNECTED[key] = False
-                        setattr(broker, "connected", False)
-                    self.mark_platform_failed(broker_type)
                     logger.error(
-                        "   ⛔ Platform %s connected but capital not ready "
-                        "(valid_brokers=%d total=$%.2f) — gating trading",
+                        "   ⏳ Platform %s connected but capital not ready yet "
+                        "(valid_brokers=%d total=$%.2f) — waiting for re-evaluation",
                         key.upper(),
                         int(_cap.get("valid_brokers", 0.0)),
                         float(_cap.get("total_capital", 0.0)),
