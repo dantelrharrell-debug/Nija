@@ -824,6 +824,21 @@ def _coinbase_sdk_is_available() -> bool:
         return False
 
 
+def _resolve_kraken_startup_credentials() -> tuple:
+    """Resolve Kraken startup credentials from supported sources in priority order."""
+    key = (
+        os.getenv("KRAKEN_PLATFORM_API_KEY")
+        or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_KEY")
+        or os.getenv("KRAKEN_API_KEY")
+    )
+    secret = (
+        os.getenv("KRAKEN_PLATFORM_API_SECRET")
+        or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_SECRET")
+        or os.getenv("KRAKEN_API_SECRET")
+    )
+    return key, secret
+
+
 def _verify_startup_truth_conditions(
     strategy,
     active_threads: dict,
@@ -1188,16 +1203,7 @@ def _run_bot_startup_and_trading():
     # skip it entirely on retry so we never loop back through broker init.
     with _initialized_state_lock:
         _connection_already_complete = _initialized_state.get("connection_complete", False)
-    _resolved_kraken_key = (
-        os.getenv("KRAKEN_PLATFORM_API_KEY")
-        or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_KEY")
-        or os.getenv("KRAKEN_API_KEY")
-    )
-    _resolved_kraken_secret = (
-        os.getenv("KRAKEN_PLATFORM_API_SECRET")
-        or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_SECRET")
-        or os.getenv("KRAKEN_API_SECRET")
-    )
+    _resolved_kraken_key, _resolved_kraken_secret = _resolve_kraken_startup_credentials()
     _kraken_credentials_valid = bool(_resolved_kraken_key and _resolved_kraken_secret)
     _coinbase_sdk_available = _coinbase_sdk_is_available()
     try:
@@ -1437,16 +1443,7 @@ def _run_bot_startup_and_trading():
                 logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
 
             _startup_blockers = []
-            _resolved_kraken_key = (
-                os.getenv("KRAKEN_PLATFORM_API_KEY")
-                or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_KEY")
-                or os.getenv("KRAKEN_API_KEY")
-            )
-            _resolved_kraken_secret = (
-                os.getenv("KRAKEN_PLATFORM_API_SECRET")
-                or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_SECRET")
-                or os.getenv("KRAKEN_API_SECRET")
-            )
+            _resolved_kraken_key, _resolved_kraken_secret = _resolve_kraken_startup_credentials()
             if not _resolved_kraken_key or not _resolved_kraken_secret:
                 _startup_blockers.append(
                     "Missing Kraken credentials (all sources exhausted): "
