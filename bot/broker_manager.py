@@ -8751,7 +8751,8 @@ class KrakenBroker(BaseBroker):
         token = token.split(".", 1)[0]
 
         # Strip a single Kraken leading namespace prefix.
-        # Examples: XXBT -> XBT -> BTC, ZUSD -> USD, XETH -> ETH, ZUSDT -> USDT
+        # Full chain examples: XXBT.M -> XXBT -> XBT -> BTC, ZUSD -> USD,
+        # XETH -> ETH, ZUSDT -> USDT.
         if len(token) > 3 and token[0] in {"X", "Z"}:
             token = token[1:]
 

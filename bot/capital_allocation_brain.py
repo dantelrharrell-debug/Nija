@@ -39,6 +39,22 @@ import json
 logger = logging.getLogger("nija.capital_brain")
 
 
+def _safe_int(value: Any, default: int) -> int:
+    """Parse int config values safely with fallback."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float) -> float:
+    """Parse float config values safely with fallback."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class AllocationMethod(Enum):
     """Capital allocation methods"""
     EQUAL_WEIGHT = "equal_weight"  # 1/N allocation
@@ -198,10 +214,11 @@ class CapitalAllocationBrain:
         self._capital_sync_lock = threading.Lock()
         self._authority_bootstrap_thread: Optional[threading.Thread] = None
         self._authority_bootstrap_attempts = max(
-            1, int(self.config.get("authority_bootstrap_attempts", 30))
+            1, _safe_int(self.config.get("authority_bootstrap_attempts", 30), 30)
         )
         self._authority_bootstrap_interval_s = max(
-            0.25, float(self.config.get("authority_bootstrap_interval_s", 1.0))
+            0.25,
+            _safe_float(self.config.get("authority_bootstrap_interval_s", 1.0), 1.0),
         )
 
         # Best-effort startup sync from CapitalAuthority for non-explicit configs.
