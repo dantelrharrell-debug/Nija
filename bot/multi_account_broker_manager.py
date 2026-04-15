@@ -741,6 +741,15 @@ class MultiAccountBrokerManager:
 
         This is intentionally state-driven only; trigger names do not influence
         broker eligibility.
+
+        Args:
+            broker_type: Platform broker type being evaluated.
+            broker: Platform broker instance (may be None).
+
+        Returns:
+            Tuple[bool, str]:
+                - bool: Whether this broker is eligible to contribute capital now.
+                - str: Eligibility reason code for observability/logging.
         """
         if broker is None:
             return False, "missing_broker"
