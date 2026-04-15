@@ -202,8 +202,11 @@ class CapitalAuthority:
                 for broker_identifier, broker in platform_brokers.items():
                     if broker is None:
                         continue
-                    broker_key = getattr(broker_identifier, "value", str(broker_identifier))
-                    effective_broker_map[str(broker_key)] = broker
+                    if hasattr(broker_identifier, "value"):
+                        broker_key = str(getattr(broker_identifier, "value"))
+                    else:
+                        broker_key = str(broker_identifier)
+                    effective_broker_map[broker_key] = broker
                 if effective_broker_map:
                     logger.info(
                         "[CapitalAuthority] refresh hydrated source graph from broker registry: brokers=%s",
