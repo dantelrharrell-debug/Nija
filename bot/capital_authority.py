@@ -178,7 +178,7 @@ class CapitalAuthority:
                 ) from exc
         except Exception as exc:
             raise RuntimeError(
-                "CapitalAuthority refresh requires get_broker_manager() for broker registry integrity"
+                "CapitalAuthority refresh failed while resolving get_broker_manager() (unexpected import error)"
             ) from exc
 
         canonical_broker_manager = get_broker_manager()

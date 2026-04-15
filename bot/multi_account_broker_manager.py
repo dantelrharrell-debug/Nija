@@ -247,6 +247,7 @@ class MultiAccountBrokerManager:
         self._last_update_ts: float = time.time()
         self._event_bus: Optional[Any] = None
         self._broker_registered_callbacks: List[Callable[[BaseBroker], None]] = []
+        self._registry_meta_lock: threading.Lock = threading.Lock()
 
         # Connection state machine for platform brokers
         # Tracks each broker through NOT_STARTED → CONNECTING → CONNECTED / FAILED
@@ -434,7 +435,8 @@ class MultiAccountBrokerManager:
 
     def register_broker_registered_callback(self, callback: Callable[[BaseBroker], None]) -> None:
         """Register a direct callback used when no event bus is attached."""
-        self._broker_registered_callbacks.append(callback)
+        with self._registry_meta_lock:
+            self._broker_registered_callbacks.append(callback)
 
     def refresh_registry(self) -> None:
         """Rehydrate registry mirrors from the current platform broker map."""
@@ -451,16 +453,19 @@ class MultiAccountBrokerManager:
 
     def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
         """Propagate broker-registration metadata and notifications."""
-        self._registry_version += 1
-        self._last_update_ts = time.time()
+        with self._registry_meta_lock:
+            self._registry_version += 1
+            self._last_update_ts = time.time()
+            callbacks = list(self._broker_registered_callbacks)
+            event_bus = self._event_bus
         logger.info("broker_registered: %s", broker_type.value.title())
-        if self._event_bus is not None and hasattr(self._event_bus, "publish"):
+        if event_bus is not None and hasattr(event_bus, "publish"):
             try:
-                self._event_bus.publish("broker_registered", broker)
+                event_bus.publish("broker_registered", broker)
             except Exception as _pub_exc:
                 logger.warning("registry event publish failed for %s: %s", broker_type.value, _pub_exc)
         else:
-            for _cb in list(self._broker_registered_callbacks):
+            for _cb in callbacks:
                 try:
                     _cb(broker)
                 except Exception as _cb_exc:
@@ -742,7 +747,8 @@ class MultiAccountBrokerManager:
 
         for attempt in range(1, max(1, int(max_attempts)) + 1):
             try:
-                if self is not get_broker_manager():
+                canonical_manager = get_broker_manager()
+                if self is not canonical_manager:
                     self._bootstrap_contract_last_error = "singleton_mismatch"
                     logger.critical(
                         "[BootstrapContract] attempt=%d/%d failed: singleton mismatch",
