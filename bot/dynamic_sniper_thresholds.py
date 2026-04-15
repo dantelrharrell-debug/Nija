@@ -80,6 +80,14 @@ except ImportError:
         _SNIPER_AVAILABLE = True
     except ImportError:
         _SNIPER_AVAILABLE = False
+except Exception as exc:
+    logger.warning("DynamicSniperThresholds: sniper import failed — hard disabling sniper dependency: %s", exc)
+    _SNIPER_AVAILABLE = False
+
+if not _SNIPER_AVAILABLE:
+    SniperConfig = None  # type: ignore
+    SniperFilter = None  # type: ignore
+    SniperResult = None  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -355,10 +363,12 @@ class DynamicSniperThresholds:
         Returns the ``SniperResult``, or ``None`` when the sniper_filter
         module is unavailable.
         """
-        if not _SNIPER_AVAILABLE:
+        if not _SNIPER_AVAILABLE or SniperFilter is None:
             return None
 
         adjusted_config = self.get_adjusted_config(current_adx=current_adx)
+        if adjusted_config is None:
+            return None
         _filter = SniperFilter(config=adjusted_config)
         return _filter.check(
             symbol=symbol,

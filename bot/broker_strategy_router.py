@@ -12,8 +12,8 @@ Architecture
 
     BrokerStrategyRouter.get_optimizer(broker_name)
         │
-        ├─ "kraken"   → KrakenParamsOptimizer   (scalp, fee=0.62%, min_move=0.8%)
-        ├─ "coinbase" → CoinbaseParamsOptimizer  (swing, fee=1.40%, min_move=1.5%)
+        ├─ "kraken"   → KrakenParamsOptimizer   (scalp, fee=0.62%, min_move=0.6%)
+        ├─ "coinbase" → CoinbaseParamsOptimizer  (swing, fee=1.40%, min_move=1.0%)
         ├─ "binance"  → BinanceParamsOptimizer   (scalp, fee=0.28%, min_move=0.5%)
         └─ default    → falls back to KrakenParamsOptimizer
 
@@ -21,8 +21,8 @@ Architecture
         │
         └─ True when expected_move_pct < BROKER_PROFILES[broker]["min_move"]
            Prevents:
-             • Coinbase overtrading on marginal moves (1.5 % threshold)
-             • Kraken undertrading on genuine but small moves (0.8 % threshold)
+             • Coinbase overtrading on marginal moves (1.0 % threshold)
+             • Kraken undertrading on genuine but small moves (0.6 % threshold)
              • Binance missing fast scalps (0.5 % threshold)
 
 BROKER_PROFILES
@@ -81,9 +81,9 @@ BROKER_PROFILES: Dict[str, Dict[str, Any]] = {
         # Low fees enable fast scalp trades
         "style": "scalp",
         # Minimum expected gross price move to justify entry (must clear fees + buffer)
-        # 1.0% = 0.62% round-trip + 0.38% net-profit floor
+        # 0.6% enables Kraken micro-scalps while still filtering noise
         # (~$0.38 net on a $100 position, above the $0.30 minimum growth threshold)
-        "min_move": 0.010,
+        "min_move": 0.006,
         # Kraken offers good liquidity and fast execution — medium scan cadence
         "speed": "medium",
         # Slightly easier confidence gate — low fees make borderline trades viable
@@ -94,8 +94,8 @@ BROKER_PROFILES: Dict[str, Dict[str, Any]] = {
         "fee": 0.0140,
         # High fees demand wide swings — only swing-style moves clear fee overhead
         "style": "swing",
-        # Minimum expected gross price move: 1.5% = 1.4% fees + 0.1% net-profit floor
-        "min_move": 0.015,
+        # Minimum expected gross price move: 1.0% for broader scalp/swing participation
+        "min_move": 0.010,
         # Coinbase fee pressure → trade less frequently, wait for quality setups
         "speed": "slow",
         # Harder confidence gate — high fees demand only the best signals

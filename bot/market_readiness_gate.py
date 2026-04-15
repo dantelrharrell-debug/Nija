@@ -94,11 +94,11 @@ class MarketReadinessGate:
     Market Readiness Gate - Guards entries based on market quality
     
     AGGRESSIVE MODE (Full trading):
-    - ATR ≥ 0.6%
-    - ADX ≥ 25
-    - Volume percentile ≥ 60%
+    - ATR ≥ 0.25%
+    - ADX ≥ 14
+    - Volume percentile ≥ 30%
     - Spread ≤ 0.15%
-    - Win rate (24h rolling) ≥ 45%
+    - Win rate (24h rolling) ≥ 40%
     → Full position sizing allowed
     
     CAUTIOUS MODE (Limited trading):
@@ -118,11 +118,11 @@ class MarketReadinessGate:
     
     # Thresholds for AGGRESSIVE mode (all must be true)
     # RELAXED (Apr 2026): Lowered to allow entries in more market conditions
-    AGGRESSIVE_ATR_MIN = 0.004        # 0.4% (was 0.6%) — more coins qualify
-    AGGRESSIVE_ADX_MIN = 18.0         # 18 (was 25) — includes moderate trends
-    AGGRESSIVE_VOLUME_PERCENTILE_MIN = 40.0  # 40% (was 60%) — normal volume qualifies
+    AGGRESSIVE_ATR_MIN = 0.0025       # 0.25% (was 0.4%) — more realistic intraday readiness
+    AGGRESSIVE_ADX_MIN = 14.0         # 14 (was 18) — includes softer but tradable trends
+    AGGRESSIVE_VOLUME_PERCENTILE_MIN = 30.0  # 30% (was 40%) — normal intraday volume qualifies
     AGGRESSIVE_SPREAD_MAX = 0.0015    # 0.15%
-    AGGRESSIVE_WIN_RATE_MIN = 0.45    # 45%
+    AGGRESSIVE_WIN_RATE_MIN = 0.40    # 40%
     
     # Thresholds for CAUTIOUS mode (some conditions met)
     # RELAXED (Apr 2026): Expanded ATR range, lowered ADX/volume requirements
