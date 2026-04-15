@@ -240,7 +240,7 @@ def _is_secret_var(key: str) -> bool:
         return True
     return any(
         key.endswith(suffix)
-        for suffix in ("_API_KEY", "_API_SECRET", "_SECRET")
+        for suffix in ("_API_KEY", "_API_SECRET")
     )
 
 
