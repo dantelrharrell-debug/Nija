@@ -8747,8 +8747,14 @@ class KrakenBroker(BaseBroker):
         token = str(asset_code or "").strip().upper()
         if not token:
             return ""
-        if len(token) > 3 and token[0] in {"X", "Z"}:
+        # Kraken may append class/suffix markers (e.g. ".S", ".M") on some assets.
+        token = token.split(".", 1)[0]
+
+        # Strip Kraken's leading namespace prefixes while keeping normal 3-letter symbols.
+        # Examples: XXBT -> XBT -> BTC, ZUSD -> USD, XETH -> ETH, ZUSDT -> USDT
+        while len(token) > 3 and token[0] in {"X", "Z"}:
             token = token[1:]
+
         return {"XBT": "BTC", "XDG": "DOGE"}.get(token, token)
 
     def _get_asset_usd_price(self, symbol: str):
