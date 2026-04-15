@@ -540,7 +540,7 @@ class MultiAccountBrokerManager:
                 )
 
             kraken_in_refresh_scope = "kraken" in broker_map
-            ready = (total_capital > 0.0) and (valid_brokers > 0)
+            ready = (total_capital > 0) and (valid_brokers > 0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
@@ -613,11 +613,9 @@ class MultiAccountBrokerManager:
         if not getattr(broker, "connected", False):
             return False, "not_connected"
         if broker_type != BrokerType.KRAKEN:
-            return (
-                (True, "platform_connected")
-                if self.is_platform_connected(broker_type)
-                else (False, "platform_not_ready")
-            )
+            if self.is_platform_connected(broker_type):
+                return True, "platform_connected"
+            return False, "platform_not_ready"
         if _KRAKEN_STARTUP_FSM.is_failed:
             return False, "kraken_fsm_failed"
         if _KRAKEN_STARTUP_FSM.is_connected:
