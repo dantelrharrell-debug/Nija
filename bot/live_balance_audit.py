@@ -47,7 +47,7 @@ except ImportError as e:
 # Try to import broker modules
 try:
     from broker_manager import BrokerType, AccountType, BaseBroker
-    from multi_account_broker_manager import MultiAccountBrokerManager
+    from multi_account_broker_manager import get_broker_manager
     BROKER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Broker modules not available: {e}")
@@ -79,7 +79,7 @@ class LiveBalanceAuditor:
         # Try to initialize broker manager
         if BROKER_AVAILABLE:
             try:
-                self.broker_manager = MultiAccountBrokerManager()
+                self.broker_manager = get_broker_manager()
                 logger.info("✅ Broker manager loaded")
             except Exception as e:
                 logger.warning(f"⚠️ Could not load broker manager: {e}")

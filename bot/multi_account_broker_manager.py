@@ -3150,5 +3150,17 @@ class MultiAccountBrokerManager:
         return results
 
 
-# Global instance
-multi_account_broker_manager = MultiAccountBrokerManager()
+# Global singleton guard + accessor (hard containment for registry integrity)
+_GLOBAL_BROKER_MANAGER: Optional[MultiAccountBrokerManager] = None
+
+
+def get_broker_manager() -> MultiAccountBrokerManager:
+    """Return the process-wide MultiAccountBrokerManager singleton."""
+    global _GLOBAL_BROKER_MANAGER
+    if _GLOBAL_BROKER_MANAGER is None:
+        _GLOBAL_BROKER_MANAGER = MultiAccountBrokerManager()
+    return _GLOBAL_BROKER_MANAGER
+
+
+# Backward-compatible module export
+multi_account_broker_manager = get_broker_manager()
