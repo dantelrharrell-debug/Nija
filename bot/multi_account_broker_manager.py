@@ -611,7 +611,11 @@ class MultiAccountBrokerManager:
             broker_map: Dict[str, BaseBroker] = {}
             registered_sources = len(self._platform_brokers)
             for broker_type, broker in self._platform_brokers.items():
-                broker_ready, reason = self._is_broker_ready_for_capital_refresh(broker_type, broker)
+                broker_ready, reason = self._is_broker_ready_for_capital_refresh(
+                    broker_type,
+                    broker,
+                    trigger=trigger,
+                )
                 if not broker_ready:
                     logger.info(
                         "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=%s",
@@ -912,6 +916,7 @@ class MultiAccountBrokerManager:
         self,
         broker_type: BrokerType,
         broker: Optional[BaseBroker],
+        trigger: str = "manual",
     ) -> Tuple[bool, str]:
         """
         Unified broker-readiness gate for capital refresh.
@@ -935,6 +940,15 @@ class MultiAccountBrokerManager:
             try:
                 if bool(ready_getter()):
                     return True, "broker_ready_for_capital"
+                has_payload = False
+                has_payload_for_capital_attr = getattr(broker, "has_balance_payload_for_capital", None)
+                if callable(has_payload_for_capital_attr):
+                    has_payload = bool(has_payload_for_capital_attr())
+                elif hasattr(broker, "has_balance_payload"):
+                    has_payload_attr = getattr(broker, "has_balance_payload", None)
+                    has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
+                if has_payload and self._is_bootstrap_trigger(trigger):
+                    return True, "bootstrap_balance_payload_ready"
                 return False, "broker_not_ready_for_capital"
             except Exception as exc:
                 logger.debug(
