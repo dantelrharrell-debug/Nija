@@ -65,6 +65,7 @@ Author: NIJA Trading Systems
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
 import time
@@ -986,3 +987,315 @@ class CapitalRefreshCoordinator:
             trigger,
         )
         return snapshot
+
+
+# ---------------------------------------------------------------------------
+# Per-broker balance-payload bootstrap FSM
+# ---------------------------------------------------------------------------
+
+
+class BrokerPayloadState(str, Enum):
+    """
+    Per-broker balance-payload bootstrap lifecycle.
+
+    Every broker that is registered with the MABM starts in ``REGISTERED``
+    and is driven forward by :meth:`BrokerPayloadFSM.probe_and_advance`.
+
+    Terminal states
+    ---------------
+    ``PAYLOAD_READY``
+        The broker has a confirmed ``_last_known_balance`` value (even 0.0 is
+        a valid payload — it means the account exists but is unfunded).
+        Only brokers in this state are eligible to contribute capital to the
+        ``CapitalAuthority`` during the bootstrap phase.
+
+    ``EXHAUSTED``
+        :meth:`probe_and_advance` was called ``max_probe_attempts`` times
+        without success.  The broker is permanently excluded from capital
+        calculations until :meth:`reset` is called (e.g. on reconnect).
+
+    This design makes the ``bootstrap_missing_balance_payload`` deadlock
+    impossible: instead of silently skipping a broker and hoping a payload
+    appears later, every registered broker is *actively probed* up to a
+    bounded number of times, after which it is explicitly exhausted.
+    """
+
+    REGISTERED    = "REGISTERED"     # in _platform_brokers; payload not yet confirmed
+    PROBING       = "PROBING"        # get_account_balance() call in progress
+    PAYLOAD_READY = "PAYLOAD_READY"  # _last_known_balance is set; eligible for capital
+    EXHAUSTED     = "EXHAUSTED"      # max probe attempts exceeded; excluded from capital
+
+
+class BrokerPayloadFSM:
+    """
+    Strict per-broker state machine that **guarantees convergence** to
+    ``PAYLOAD_READY`` or ``EXHAUSTED``.
+
+    Convergence guarantee
+    ---------------------
+    :meth:`probe_and_advance` is the **only** path that advances a broker
+    past ``REGISTERED`` during bootstrap.  Every call either:
+
+    * **succeeds** → ``PAYLOAD_READY``  (broker contributes capital)
+    * **fails**    → ``REGISTERED`` (retry allowed) or ``EXHAUSTED`` (terminal)
+
+    ``EXHAUSTED`` is reached after exactly *max_probe_attempts* consecutive
+    failures, so the machine **never loops forever**.  A broker can recover
+    from ``EXHAUSTED`` only via an explicit :meth:`reset` call (e.g. issued
+    by the reconnect path), which restores ``REGISTERED`` and clears the
+    attempt counter.
+
+    Fast-path shortcut
+    ------------------
+    If ``connect()`` successfully seeds ``_last_known_balance`` before the
+    bootstrap polling loop starts, call :meth:`mark_payload_ready` to skip
+    probing entirely.
+
+    Thread-safety
+    -------------
+    All public methods are protected by ``self._lock``.
+    :meth:`probe_and_advance` releases the lock *during* the blocking
+    ``get_account_balance()`` call so the rest of the system stays responsive.
+    Only one probe can be in flight at a time (a concurrent call returns
+    ``False`` immediately without incrementing the attempt counter).
+
+    Valid transitions
+    -----------------
+    ::
+
+        REGISTERED → PROBING          (probe_and_advance, attempt < max)
+        REGISTERED → PAYLOAD_READY    (mark_payload_ready shortcut)
+        PROBING    → PAYLOAD_READY    (probe succeeded)
+        PROBING    → REGISTERED       (probe failed, retries remain)
+        PROBING    → EXHAUSTED        (probe failed, no retries remain)
+        PAYLOAD_READY → REGISTERED    (reset — reconnect cycle)
+        EXHAUSTED     → REGISTERED    (reset — explicit retry)
+    """
+
+    #: Default maximum consecutive probe failures before ``EXHAUSTED``.
+    #: Override via ``NIJA_BALANCE_PROBE_MAX_ATTEMPTS`` environment variable.
+    DEFAULT_MAX_PROBE_ATTEMPTS: int = 5
+
+    _VALID_TRANSITIONS: Dict[BrokerPayloadState, List[BrokerPayloadState]] = {
+        BrokerPayloadState.REGISTERED: [
+            BrokerPayloadState.PROBING,
+            BrokerPayloadState.PAYLOAD_READY,
+        ],
+        BrokerPayloadState.PROBING: [
+            BrokerPayloadState.PAYLOAD_READY,
+            BrokerPayloadState.REGISTERED,
+            BrokerPayloadState.EXHAUSTED,
+        ],
+        BrokerPayloadState.PAYLOAD_READY: [BrokerPayloadState.REGISTERED],
+        BrokerPayloadState.EXHAUSTED:     [BrokerPayloadState.REGISTERED],
+    }
+
+    def __init__(
+        self,
+        broker_id: str,
+        max_probe_attempts: Optional[int] = None,
+    ) -> None:
+        self.broker_id = broker_id
+        self._max_probe_attempts: int = (
+            max_probe_attempts
+            if max_probe_attempts is not None
+            else int(
+                os.getenv(
+                    "NIJA_BALANCE_PROBE_MAX_ATTEMPTS",
+                    str(self.DEFAULT_MAX_PROBE_ATTEMPTS),
+                )
+            )
+        )
+        self._state: BrokerPayloadState = BrokerPayloadState.REGISTERED
+        self._probe_attempts: int = 0
+        self._lock = threading.Lock()
+        self._log = logging.getLogger(f"nija.capital_bootstrap.{broker_id}")
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def state(self) -> BrokerPayloadState:
+        with self._lock:
+            return self._state
+
+    @property
+    def probe_attempts(self) -> int:
+        with self._lock:
+            return self._probe_attempts
+
+    @property
+    def max_probe_attempts(self) -> int:
+        return self._max_probe_attempts
+
+    @property
+    def is_payload_ready(self) -> bool:
+        """``True`` only when ``PAYLOAD_READY`` — the sole eligibility gate."""
+        return self.state == BrokerPayloadState.PAYLOAD_READY
+
+    @property
+    def is_exhausted(self) -> bool:
+        """``True`` only when ``EXHAUSTED`` — broker excluded from capital."""
+        return self.state == BrokerPayloadState.EXHAUSTED
+
+    @property
+    def can_probe(self) -> bool:
+        """``True`` if a probe attempt is allowed right now."""
+        with self._lock:
+            return (
+                self._state == BrokerPayloadState.REGISTERED
+                and self._probe_attempts < self._max_probe_attempts
+            )
+
+    # ------------------------------------------------------------------
+    # State transitions
+    # ------------------------------------------------------------------
+
+    def _transition(self, new_state: BrokerPayloadState) -> bool:
+        """Internal guarded transition. Must be called **with** ``self._lock``."""
+        allowed = self._VALID_TRANSITIONS.get(self._state, [])
+        if new_state not in allowed:
+            self._log.warning(
+                "[BrokerPayloadFSM] broker=%s invalid transition %s → %s (ignored)",
+                self.broker_id,
+                self._state.value,
+                new_state.value,
+            )
+            return False
+        self._log.debug(
+            "[BrokerPayloadFSM] broker=%s %s → %s",
+            self.broker_id,
+            self._state.value,
+            new_state.value,
+        )
+        self._state = new_state
+        return True
+
+    def mark_payload_ready(self) -> None:
+        """
+        Externally advance to ``PAYLOAD_READY`` without probing.
+
+        Call this when ``connect()`` already seeded ``_last_known_balance``
+        so the FSM immediately reflects the current reality and the bootstrap
+        polling loop can skip the probing round-trip.
+
+        No-op when already ``PAYLOAD_READY`` or ``EXHAUSTED``.
+        """
+        with self._lock:
+            if self._state == BrokerPayloadState.EXHAUSTED:
+                return
+            if self._state == BrokerPayloadState.PAYLOAD_READY:
+                return
+            self._transition(BrokerPayloadState.PAYLOAD_READY)
+
+    def reset(self) -> None:
+        """
+        Reset to ``REGISTERED`` for a fresh reconnect cycle.
+
+        Clears the probe counter so the broker gets a full
+        *max_probe_attempts* budget on the next connect attempt.
+        Allowed from any state (idempotent from ``REGISTERED``).
+        """
+        with self._lock:
+            self._probe_attempts = 0
+            self._state = BrokerPayloadState.REGISTERED
+        self._log.info(
+            "[BrokerPayloadFSM] broker=%s reset to REGISTERED (probe counter cleared)",
+            self.broker_id,
+        )
+
+    def probe_and_advance(self, broker: Any) -> bool:
+        """
+        Call ``broker.get_account_balance()`` and advance the FSM.
+
+        This is the **only** way to advance a broker past ``REGISTERED``
+        during bootstrap.  It is safe to call multiple times:
+
+        * Once ``PAYLOAD_READY`` it is an immediate no-op returning ``True``.
+        * Once ``EXHAUSTED`` it is an immediate no-op returning ``False``.
+        * If a probe is already in-flight (``PROBING``) the call returns
+          ``False`` without incrementing the attempt counter.
+
+        Parameters
+        ----------
+        broker:
+            Live broker instance.  Must expose ``get_account_balance()``.
+
+        Returns
+        -------
+        bool
+            ``True`` if the broker is now in ``PAYLOAD_READY``.
+        """
+        with self._lock:
+            if self._state == BrokerPayloadState.PAYLOAD_READY:
+                return True
+            if self._state == BrokerPayloadState.EXHAUSTED:
+                return False
+            if self._state == BrokerPayloadState.PROBING:
+                # Another caller is already probing — skip without counting.
+                return False
+            if self._probe_attempts >= self._max_probe_attempts:
+                self._transition(BrokerPayloadState.EXHAUSTED)
+                self._log.error(
+                    "[BrokerPayloadFSM] broker=%s EXHAUSTED after %d probe "
+                    "attempts — excluded from capital until reconnect",
+                    self.broker_id,
+                    self._probe_attempts,
+                )
+                return False
+            self._transition(BrokerPayloadState.PROBING)
+            self._probe_attempts += 1
+            attempt = self._probe_attempts
+
+        # ── Balance fetch (outside the lock so the system stays responsive) ──
+        self._log.info(
+            "[BrokerPayloadFSM] broker=%s probing balance (attempt %d/%d)",
+            self.broker_id,
+            attempt,
+            self._max_probe_attempts,
+        )
+        try:
+            broker.get_account_balance()
+        except Exception as exc:
+            self._log.warning(
+                "[BrokerPayloadFSM] broker=%s probe attempt %d/%d raised: %s",
+                self.broker_id,
+                attempt,
+                self._max_probe_attempts,
+                exc,
+            )
+
+        # ── Evaluate result (re-acquire lock) ─────────────────────────────────
+        lkb = getattr(broker, "_last_known_balance", None)
+        with self._lock:
+            if lkb is not None:
+                self._transition(BrokerPayloadState.PAYLOAD_READY)
+                self._log.info(
+                    "[BrokerPayloadFSM] broker=%s PAYLOAD_READY "
+                    "(balance=%.2f) after %d probe attempt(s)",
+                    self.broker_id,
+                    float(lkb),
+                    attempt,
+                )
+                return True
+            # Payload not yet present.
+            if self._probe_attempts >= self._max_probe_attempts:
+                self._transition(BrokerPayloadState.EXHAUSTED)
+                self._log.error(
+                    "[BrokerPayloadFSM] broker=%s EXHAUSTED — "
+                    "no payload after %d probes",
+                    self.broker_id,
+                    self._probe_attempts,
+                )
+                return False
+            # Retries remain — return to REGISTERED so the next call can probe.
+            self._transition(BrokerPayloadState.REGISTERED)
+            self._log.info(
+                "[BrokerPayloadFSM] broker=%s probe %d/%d failed — "
+                "will retry on next bootstrap iteration",
+                self.broker_id,
+                self._probe_attempts,
+                self._max_probe_attempts,
+            )
+            return False

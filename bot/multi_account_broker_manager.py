@@ -111,6 +111,8 @@ except ImportError:
 # Import deterministic capital-flow infrastructure (coordinator + FSMs)
 try:
     from bot.capital_flow_state_machine import (
+        BrokerPayloadFSM,
+        BrokerPayloadState,
         CapitalBootstrapState,
         CapitalBootstrapStateMachine,
         CapitalEvent,
@@ -125,6 +127,8 @@ try:
 except ImportError:
     try:
         from capital_flow_state_machine import (  # type: ignore[no-redef]
+            BrokerPayloadFSM,
+            BrokerPayloadState,
             CapitalBootstrapState,
             CapitalBootstrapStateMachine,
             CapitalEvent,
@@ -137,6 +141,8 @@ except ImportError:
         )
         _CAPITAL_FSM_AVAILABLE = True
     except ImportError:
+        BrokerPayloadFSM = None   # type: ignore[assignment,misc]
+        BrokerPayloadState = None  # type: ignore[assignment]
         _CAPITAL_FSM_AVAILABLE = False
 
 logger = logging.getLogger('nija.multi_account')
@@ -406,6 +412,15 @@ class MultiAccountBrokerManager:
             self._capital_runtime_fsm = None  # type: ignore[assignment]
             self._capital_coordinator = None  # type: ignore[assignment]
 
+        # ── Per-broker balance-payload bootstrap FSMs ──────────────────────────
+        # One BrokerPayloadFSM per registered platform broker.
+        # These replace the scattered `has_balance_payload_for_capital()` +
+        # `_last_known_balance is not None` eligibility checks with a strict,
+        # bounded state machine that guarantees convergence to PAYLOAD_READY
+        # or EXHAUSTED for every broker — making infinite eligibility loops
+        # structurally impossible.
+        self._broker_payload_fsm: Dict[BrokerType, "BrokerPayloadFSM"] = {}
+
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
@@ -547,6 +562,30 @@ class MultiAccountBrokerManager:
             # by BROKER_DEFAULT_CRITICALITY (OKX/Binance/Alpaca = OPTIONAL, Kraken = CRITICAL).
             # Forcing CRITICAL on every platform broker caused OKX failures to trigger
             # the HARD BLOCK and block Kraken/Coinbase user connections.
+
+        # ── Create BrokerPayloadFSM for this broker ────────────────────────────
+        # Each registered platform broker gets its own strict state machine that
+        # drives it to PAYLOAD_READY or EXHAUSTED during bootstrap.  This
+        # replaces the scattered `has_balance_payload_for_capital()` eligibility
+        # checks that could leave a broker permanently stuck with no payload.
+        if _CAPITAL_FSM_AVAILABLE and BrokerPayloadFSM is not None:
+            if broker_type not in self._broker_payload_fsm:
+                self._broker_payload_fsm[broker_type] = BrokerPayloadFSM(
+                    broker_id=broker_type.value
+                )
+                logger.debug(
+                    "[BrokerPayloadFSM] created for broker=%s", broker_type.value
+                )
+            # Fast-path: if connect() already seeded _last_known_balance, advance
+            # the FSM to PAYLOAD_READY immediately so no probing round-trip is needed.
+            if getattr(broker, "_last_known_balance", None) is not None:
+                self._broker_payload_fsm[broker_type].mark_payload_ready()
+                logger.debug(
+                    "[BrokerPayloadFSM] broker=%s PAYLOAD_READY at registration "
+                    "(balance already seeded by connect())",
+                    broker_type.value,
+                )
+
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
@@ -611,6 +650,81 @@ class MultiAccountBrokerManager:
             broker_map: Dict[str, BaseBroker] = {}
             registered_sources = len(self._platform_brokers)
             for broker_type, broker in self._platform_brokers.items():
+
+                # ── Bootstrap path: BrokerPayloadFSM-driven eligibility ────────
+                # During startup triggers, the FSM is the sole eligibility gate.
+                # It actively probes brokers that are registered but have no
+                # payload yet, advancing them to PAYLOAD_READY or EXHAUSTED in a
+                # bounded number of attempts.  This eliminates the class of
+                # failure where connect() failed before seeding _last_known_balance
+                # (logged as reason=bootstrap_missing_balance_payload in prior code),
+                # leaving the broker permanently stuck with no payload and capital
+                # frozen at $0 indefinitely.
+                if bootstrap_trigger and _CAPITAL_FSM_AVAILABLE and BrokerPayloadFSM is not None:
+                    payload_fsm = self._broker_payload_fsm.get(broker_type)
+                    if payload_fsm is None:
+                        # FSM not yet created (late-registered broker) — create it now.
+                        payload_fsm = BrokerPayloadFSM(broker_id=broker_type.value)
+                        self._broker_payload_fsm[broker_type] = payload_fsm
+                        # Check if balance is already present on the broker object.
+                        if getattr(broker, "_last_known_balance", None) is not None:
+                            payload_fsm.mark_payload_ready()
+
+                    if payload_fsm.is_exhausted:
+                        logger.warning(
+                            "[CapitalAuthorityRefresh] trigger=%s skip broker=%s "
+                            "reason=payload_fsm_exhausted (probe_attempts=%d/%d)",
+                            trigger,
+                            broker_type.value,
+                            payload_fsm.probe_attempts,
+                            payload_fsm.max_probe_attempts,
+                        )
+                        continue
+
+                    if not payload_fsm.is_payload_ready:
+                        # Synchronise FSM with any balance that connect() may have
+                        # seeded after the FSM was last checked.
+                        if getattr(broker, "_last_known_balance", None) is not None:
+                            payload_fsm.mark_payload_ready()
+                        else:
+                            # Actively probe the broker to break the chicken-and-egg:
+                            # broker needs a payload to enter broker_map, but the only
+                            # call that sets the payload (get_account_balance via
+                            # CapitalAuthority.refresh) only runs for brokers that are
+                            # already in broker_map.  probe_and_advance() calls
+                            # get_account_balance() directly, resolving the deadlock.
+                            logger.info(
+                                "[CapitalAuthorityRefresh] trigger=%s broker=%s "
+                                "FSM=%s — probing balance to seed payload",
+                                trigger,
+                                broker_type.value,
+                                payload_fsm.state.value,
+                            )
+                            payload_fsm.probe_and_advance(broker)
+
+                    if not payload_fsm.is_payload_ready:
+                        logger.info(
+                            "[CapitalAuthorityRefresh] trigger=%s skip broker=%s "
+                            "reason=payload_fsm_not_ready (state=%s attempts=%d/%d)",
+                            trigger,
+                            broker_type.value,
+                            payload_fsm.state.value,
+                            payload_fsm.probe_attempts,
+                            payload_fsm.max_probe_attempts,
+                        )
+                        continue
+
+                    # FSM is PAYLOAD_READY — include unconditionally during bootstrap.
+                    logger.debug(
+                        "[CapitalAuthorityRefresh] trigger=%s include broker=%s "
+                        "reason=payload_fsm_ready",
+                        trigger,
+                        broker_type.value,
+                    )
+                    broker_map[broker_type.value] = broker
+                    continue
+
+                # ── Non-bootstrap path: legacy readiness checks ────────────────
                 broker_ready, reason = self._is_broker_ready_for_capital_refresh(
                     broker_type,
                     broker,
@@ -1766,6 +1880,20 @@ class MultiAccountBrokerManager:
                 "without this broker.  Fix credentials or network when possible.",
                 broker_type.value.upper(),
             )
+
+        # Reset the BrokerPayloadFSM so a reconnect attempt starts with a clean
+        # probe counter rather than inheriting exhausted state from a prior
+        # failed connect().  The FSM will re-probe during the next bootstrap
+        # refresh loop iteration.
+        payload_fsm = self._broker_payload_fsm.get(broker_type)
+        if payload_fsm is not None:
+            payload_fsm.reset()
+            logger.debug(
+                "[BrokerPayloadFSM] broker=%s reset after connection failure "
+                "— probe counter cleared for reconnect",
+                broker_type.value,
+            )
+
         # Record failure with broker failure manager — this increments the
         # per-broker error counter so the circuit breaker can disable only this
         # broker without affecting Kraken or other healthy venues.
@@ -3297,6 +3425,29 @@ class MultiAccountBrokerManager:
             except Exception as exc:
                 logger.error("❌ Platform %s connect() raised: %s", key.upper(), exc)
                 connected = False
+
+            # ── Sync BrokerPayloadFSM immediately after connect() ──────────────
+            # If connect() successfully seeded _last_known_balance, advance the
+            # FSM to PAYLOAD_READY so the bootstrap resolver does not need to
+            # wait for a probe round-trip.  If connect() failed or did not seed
+            # the balance, the FSM stays in REGISTERED — the probing loop inside
+            # refresh_capital_authority will converge it to PAYLOAD_READY or
+            # EXHAUSTED with a bounded number of attempts.
+            _payload_fsm = self._broker_payload_fsm.get(broker_type)
+            if _payload_fsm is not None:
+                if getattr(broker, "_last_known_balance", None) is not None:
+                    _payload_fsm.mark_payload_ready()
+                    logger.info(
+                        "[BrokerPayloadFSM] broker=%s PAYLOAD_READY "
+                        "(connect() seeded balance=%.2f)",
+                        broker_type.value,
+                        float(getattr(broker, "_last_known_balance", 0.0)),
+                    )
+                elif not connected:
+                    # connect() failed — reset so reconnect attempts get a full
+                    # probe budget rather than continuing from a prior counter.
+                    _payload_fsm.reset()
+
             if connected:
                 # Event-driven capital refresh: any successful platform connect
                 # immediately revalidates unified capital readiness.
