@@ -8781,10 +8781,11 @@ class KrakenBroker(BaseBroker):
             return parsed if parsed > 0.0 else None
 
         def _get_cached_pair_price(symbol_code: str) -> Optional[float]:
-            if not hasattr(self, "_price_cache") or not isinstance(self._price_cache, dict):
+            price_cache = getattr(self, "_price_cache", {})
+            if not isinstance(price_cache, dict):
                 return None
             for pair in (f"{symbol_code}-USD", f"{symbol_code}-USDT"):
-                cached = self._price_cache.get(pair)
+                cached = price_cache.get(pair)
                 cached_price = cached.get("price") if isinstance(cached, dict) else None
                 parsed_cached_price = _to_positive_float(cached_price)
                 if parsed_cached_price is not None:
@@ -8828,7 +8829,7 @@ class KrakenBroker(BaseBroker):
                 continue
             price = price_lookup(symbol)
             parsed_price = _to_positive_float(price)
-            if parsed_price is None and hasattr(self, "_get_asset_usd_price"):
+            if parsed_price is None:
                 # Secondary lookup path to avoid zeroing non-fiat holdings when the
                 # injected price_lookup is unavailable/intermittent.
                 parsed_price = _to_positive_float(self._get_asset_usd_price(symbol))
