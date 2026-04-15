@@ -195,17 +195,21 @@ class CapitalAuthority:
                 "CapitalAuthority refresh could not rehydrate broker registry (CRITICAL)"
             ) from exc
 
+        def _normalize_broker_key(identifier: Any) -> str:
+            if hasattr(identifier, "value"):
+                return str(getattr(identifier, "value"))
+            return str(identifier)
+
         effective_broker_map: Dict[str, Any] = dict(broker_map or {})
         if not effective_broker_map:
             try:
                 platform_brokers = getattr(canonical_broker_manager, "platform_brokers", {})
+                if not hasattr(platform_brokers, "items"):
+                    platform_brokers = {}
                 for broker_identifier, broker in platform_brokers.items():
                     if broker is None:
                         continue
-                    if hasattr(broker_identifier, "value"):
-                        broker_key = str(getattr(broker_identifier, "value"))
-                    else:
-                        broker_key = str(broker_identifier)
+                    broker_key = _normalize_broker_key(broker_identifier)
                     effective_broker_map[broker_key] = broker
                 if effective_broker_map:
                     logger.info(
@@ -223,7 +227,7 @@ class CapitalAuthority:
         for broker_id, broker in effective_broker_map.items():
             if broker is None:
                 continue
-            broker_key = str(broker_id)
+            broker_key = _normalize_broker_key(broker_id)
             with self._lock:
                 previous = float(self._broker_balances.get(broker_key, 0.0))
                 if self.last_updated is not None:
