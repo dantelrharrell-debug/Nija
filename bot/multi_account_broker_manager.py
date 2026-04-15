@@ -504,6 +504,7 @@ class MultiAccountBrokerManager:
                 allow_bootstrap_connected = self._can_include_bootstrap_connected_broker(
                     trigger=trigger,
                     is_platform_ready=is_platform_ready,
+                    broker=broker,
                 )
                 if not (is_platform_ready or allow_bootstrap_connected):
                     logger.info(
@@ -591,13 +592,7 @@ class MultiAccountBrokerManager:
 
             if ready:
                 logger.info("CAPITAL_READY")
-                for broker_type, broker in self._platform_brokers.items():
-                    if (
-                        broker_type.value in broker_map
-                        and getattr(broker, "connected", False)
-                        and not self.is_platform_connected(broker_type)
-                    ):
-                        self._mark_platform_connected(broker_type)
+                self._sync_platform_connection_states(broker_map)
                 if kraken_connected:
                     try:
                         _KRAKEN_STARTUP_FSM.mark_capital_ready()
@@ -646,8 +641,15 @@ class MultiAccountBrokerManager:
         self,
         trigger: str,
         is_platform_ready: bool,
+        broker: BaseBroker,
     ) -> bool:
+        # Bootstrap-only relaxation: include connected brokers that already
+        # produced a balance payload, even before platform-ready flips true.
+        # Once bootstrap reaches READY, strict gating resumes automatically.
         if is_platform_ready:
+            return False
+        has_payload = bool(getattr(broker, "has_balance_payload", lambda: False)())
+        if not has_payload:
             return False
         if not (
             self._is_bootstrap_refresh_trigger(trigger)
@@ -657,6 +659,16 @@ class MultiAccountBrokerManager:
         if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
             return False
         return self._capital_bootstrap_fsm.state in self.BOOTSTRAP_CONNECTED_ELIGIBLE_STATES
+
+    def _sync_platform_connection_states(self, broker_map: Dict[str, BaseBroker]) -> None:
+        """Mark connected platform brokers as CONNECTED after capital becomes ready."""
+        for broker_type, broker in self._platform_brokers.items():
+            if (
+                broker_type.value in broker_map
+                and getattr(broker, "connected", False)
+                and not self.is_platform_connected(broker_type)
+            ):
+                self._mark_platform_connected(broker_type)
 
     def resolve_startup_capital_invariant(
         self,
@@ -2937,7 +2949,7 @@ class MultiAccountBrokerManager:
                 else:
                     with _PLATFORM_BROKER_REGISTRY_LOCK:
                         _PLATFORM_BROKER_CONNECTED[key] = False
-                    logger.error(
+                    logger.warning(
                         "   ⏳ Platform %s connected but capital not ready yet "
                         "(valid_brokers=%d total=$%.2f) — waiting for re-evaluation",
                         key.upper(),

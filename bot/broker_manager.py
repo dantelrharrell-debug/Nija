@@ -1411,6 +1411,7 @@ class BaseBroker(ABC):
         self.last_connection_error = None  # Track last connection error for troubleshooting
         self.exit_only_mode = False  # Default: not in exit-only mode (can be overridden by subclasses)
         self.mode = "ACTIVE"  # Broker deployment mode: "ACTIVE" = tradable, "PASSIVE" = track-only (balance below deployable threshold)
+        self._has_balance_payload = False
 
         # ── Quarantine state (broker-instance level) ─────────────────────────
         # Set by clear_kraken_broker_quarantine() / _on_kraken_nonce_quarantine().
@@ -1464,6 +1465,10 @@ class BaseBroker(ABC):
         if self.circuit_breaker:
             return self.circuit_breaker.get_status()
         return None
+
+    def has_balance_payload(self) -> bool:
+        """Return whether this broker has observed a real balance payload this session."""
+        return bool(self._has_balance_payload)
 
     @abstractmethod
     def connect(self) -> bool:
@@ -7900,6 +7905,7 @@ class KrakenBroker(BaseBroker):
                                 return False
 
                     if balance and 'result' in balance:
+                        self._has_balance_payload = True
                         # Avoid a transient connected/ready mismatch for PLATFORM:
                         # keep connected False until startup capital gate is ready.
                         self.connected = self.account_type != AccountType.PLATFORM
@@ -8451,6 +8457,7 @@ class KrakenBroker(BaseBroker):
                     return 0.0
 
             if balance and 'result' in balance:
+                self._has_balance_payload = True
                 result = balance['result']
                 logger.info(
                     "[KrakenBalancePipeline] raw_balance_keys account=%s keys=%s",
@@ -8529,7 +8536,7 @@ class KrakenBroker(BaseBroker):
                 # reports a valid equivalent-balance snapshot.
                 total_funds = max(
                     total + held_amount + non_usd_usd_value,
-                    trade_balance_equity_usd,
+                    trade_balance_equity_usd,  # fallback when local pricing is incomplete
                 )
                 logger.info(
                     "[KrakenBalancePipeline] total_funds account=%s cash=%.8f held=%.8f "
