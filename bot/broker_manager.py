@@ -1499,6 +1499,9 @@ class BaseBroker(ABC):
             return False
         if self.broker_type != BrokerType.KRAKEN:
             return True
+        # Recovery rule: when Kraken is physically connected and has a valid
+        # balance payload, we still allow capital readiness in FSM FAILED so the
+        # capital pipeline can ingest fresh balances and bootstrap can recover.
         return (
             _KRAKEN_STARTUP_FSM.is_connected
             or _KRAKEN_STARTUP_FSM.is_connecting

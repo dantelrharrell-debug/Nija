@@ -540,7 +540,7 @@ class MultiAccountBrokerManager:
                 )
 
             kraken_in_refresh_scope = "kraken" in broker_map
-            ready = (total_capital > 0.0) and (valid_brokers > 0)
+            ready = (total_capital > 0.0) and (valid_brokers > 0.0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
@@ -624,24 +624,15 @@ class MultiAccountBrokerManager:
             try:
                 if bool(ready_getter()):
                     return True, "broker_ready_for_capital"
+                return False, "broker_not_ready_for_capital"
             except Exception as exc:
                 logger.debug(
                     "[CapitalAuthorityRefresh] broker=%s is_ready_for_capital raised: %s",
                     broker_type.value,
                     exc,
                 )
-        if not getattr(broker, "connected", False):
-            return False, "not_connected"
-        payload_getter = getattr(broker, "has_balance_payload_for_capital", None)
-        if callable(payload_getter):
-            try:
-                if not bool(payload_getter()):
-                    return False, "missing_balance_payload"
-            except Exception:
-                return False, "balance_payload_check_error"
-        if broker_type == BrokerType.KRAKEN:
-            return False, "kraken_fsm_not_ready"
-        return False, "broker_not_ready_for_capital"
+                return False, "capital_readiness_error"
+        return False, "capital_readiness_unavailable"
 
     def resolve_startup_capital_invariant(
         self,
