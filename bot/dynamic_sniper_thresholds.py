@@ -74,15 +74,13 @@ except ImportError:
 try:
     from bot.sniper_filter import SniperConfig, SniperFilter, SniperResult
     _SNIPER_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError, NameError, AttributeError):
     try:
         from sniper_filter import SniperConfig, SniperFilter, SniperResult  # type: ignore
         _SNIPER_AVAILABLE = True
-    except ImportError:
+    except (ImportError, ModuleNotFoundError, NameError, AttributeError) as exc:
+        logger.warning("DynamicSniperThresholds: sniper import failed — hard disabling sniper dependency: %s", exc)
         _SNIPER_AVAILABLE = False
-except (ImportError, ModuleNotFoundError, NameError, AttributeError) as exc:
-    logger.warning("DynamicSniperThresholds: sniper import failed — hard disabling sniper dependency: %s", exc)
-    _SNIPER_AVAILABLE = False
 
 if not _SNIPER_AVAILABLE:
     SniperConfig = None  # type: ignore
