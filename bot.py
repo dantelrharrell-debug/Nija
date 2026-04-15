@@ -1311,11 +1311,18 @@ def _run_bot_startup_and_trading():
                 _log_exit_point("Startup validation failed", exit_code=1)
                 raise RuntimeError(f"Critical startup validation failure (will retry): {_validation_failure_reason}")
 
-            # Validation passed — advance bootstrap FSM to STARTUP_VALIDATED
-            _bfsm_transition(
-                _BootstrapState.STARTUP_VALIDATED,
-                "startup_validation passed all pre-flight checks",
-            )
+            # Validation passed — advance bootstrap FSM.
+            # Retry path must move BOOT_FAILED_RETRY -> PLATFORM_CONNECTING.
+            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm().state == _BootstrapState.BOOT_FAILED_RETRY:
+                _bfsm_transition(
+                    _BootstrapState.PLATFORM_CONNECTING,
+                    "startup_validation passed during retry; re-enter platform connecting",
+                )
+            else:
+                _bfsm_transition(
+                    _BootstrapState.STARTUP_VALIDATED,
+                    "startup_validation passed all pre-flight checks",
+                )
 
             # Display financial disclaimers (App Store compliance)
             try:
@@ -1825,6 +1832,8 @@ def _run_bot_startup_and_trading():
             if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
                 for broker_type, broker in strategy.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
+                        broker_name = broker_type.value
+                        logger.info(f"✅ BROKER CONNECTED: {broker_name}")
                         connected_platform_brokers.append(broker_type.value.upper())
 
             # CRITICAL FIX: Check for brokers with credentials configured but failed to connect
@@ -2195,6 +2204,7 @@ def _run_bot_startup_and_trading():
                 _BootstrapState.RUNNING_SUPERVISED,
                 f"{len(_active_threads)} trader thread(s) started; supervisor loop active",
             )
+            logger.info("🚀 FSM STATE: RUNNING_SUPERVISED")
 
             # Enforce startup truth conditions before supervised execution.
             _verify_startup_truth_conditions(
