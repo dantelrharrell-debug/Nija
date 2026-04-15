@@ -967,3 +967,43 @@ class CapitalAllocationBrain:
             'last_rebalance': self.last_rebalance.isoformat() if self.last_rebalance else None,
             'rebalancing_needed': self.should_rebalance(),
         }
+
+    # ── Advisory interface for CapitalDecisionEngine ─────────────────────────
+
+    def advise(self, usable_capital: float) -> Dict:
+        """
+        Advisory-only interface consumed by :class:`CapitalDecisionEngine`.
+
+        Returns a read-only advice dict without writing any budgets directly.
+        Callers must not use this to size positions — only
+        ``CapitalDecisionEngine`` translates the advice into final budgets.
+
+        Args:
+            usable_capital: Current usable capital from CapitalAuthority.
+
+        Returns:
+            Dict with keys:
+                ``strategy_weights``  – {strategy_id: fraction}
+                ``allocation_pcts``   – {target_id: pct}   (from current plan)
+                ``method``            – allocation method name
+                ``rebalance_needed``  – bool
+        """
+        try:
+            if self.current_plan is not None:
+                return {
+                    "strategy_weights": {
+                        tid: pct
+                        for tid, pct in self.current_plan.allocation_pcts.items()
+                    },
+                    "allocation_pcts": dict(self.current_plan.allocation_pcts),
+                    "method": self.current_plan.method.value,
+                    "rebalance_needed": self.should_rebalance(),
+                }
+        except Exception as exc:
+            logger.debug("[CapitalAllocationBrain] advise() error: %s", exc)
+        return {
+            "strategy_weights": {},
+            "allocation_pcts": {},
+            "method": "unavailable",
+            "rebalance_needed": False,
+        }

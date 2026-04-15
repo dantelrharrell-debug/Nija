@@ -7046,6 +7046,27 @@ class TradingStrategy:
         Args:
             total_capital: Live capital from broker connections (default: 0.0)
         """
+        # Idempotency guard — safe to call multiple times (e.g. after BOOT_FAILED_RETRY).
+        if getattr(self, "_advanced_features_initialized", False):
+            logger.debug("[NIJA] _init_advanced_features: already initialized — skipping")
+            return
+        self._advanced_features_initialized = True
+
+        # P2 — Bootstrap state machine pre-check: advanced features must not arm
+        # before CAPITAL_READY has been confirmed by the bootstrap FSM.
+        try:
+            try:
+                from bot.bootstrap_state_machine import get_bootstrap_fsm, BootstrapInvariantError
+            except ImportError:
+                from bootstrap_state_machine import get_bootstrap_fsm, BootstrapInvariantError  # type: ignore[import]
+            get_bootstrap_fsm().assert_invariant_i11_strategy_arm()
+        except BootstrapInvariantError as _bsm_err:
+            logger.warning("[NIJA] _init_advanced_features blocked by BSM: %s", _bsm_err)
+            self._advanced_features_initialized = False  # allow retry once BSM advances
+            return
+        except Exception:
+            pass  # graceful degradation when BSM not yet available
+
         # CRITICAL SAFETY: Check LIVE_CAPITAL_VERIFIED first
         # This is the MASTER safety switch that must be explicitly enabled
         # to allow advanced trading features with real capital.

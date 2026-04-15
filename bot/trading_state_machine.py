@@ -328,9 +328,17 @@ class TradingStateMachine:
         Auto-transition from OFF → LIVE_ACTIVE when all safety gates pass.
 
         Gates (all must be true):
-          1. Current state is OFF
-          2. Environment variable LIVE_CAPITAL_VERIFIED is truthy
-          3. No active kill switch
+          Gate 0. Current state is OFF
+          Gate 1. Environment variable LIVE_CAPITAL_VERIFIED is truthy
+                  (operator master switch — kept for backward compatibility)
+          Gate 2. ``_capital_readiness_gate()`` passes:
+                  a. CAPITAL_AUTHORITY_READY  — CapitalAuthority not stale
+                                                AND usable capital > 0
+                  b. BROKER_BALANCE_CONFIRMED — at least one broker returned
+                                                a non-zero balance recently
+                  c. EXECUTION_PIPELINE_HEALTHY — ExecutionRouter has no
+                                                   circuit-breaking session failures
+          Gate 3. No active kill switch
 
         Returns:
             True  if the transition was performed (or already LIVE_ACTIVE)
@@ -348,7 +356,7 @@ class TradingStateMachine:
             )
             return False
 
-        # Gate 1: LIVE_CAPITAL_VERIFIED
+        # Gate 1: LIVE_CAPITAL_VERIFIED (operator master switch)
         lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
         if lcv not in ("true", "1", "yes", "enabled"):
             logger.info(
@@ -358,7 +366,13 @@ class TradingStateMachine:
             )
             return False
 
-        # Gate 2: kill switch must be inactive
+        # Gate 2: three-condition capital readiness check
+        ready, reason = _capital_readiness_gate()
+        if not ready:
+            logger.info("🔒 Auto-activate blocked by capital readiness gate: %s", reason)
+            return False
+
+        # Gate 3: kill switch must be inactive
         try:
             from kill_switch import get_kill_switch
             if get_kill_switch().is_active():
@@ -373,7 +387,8 @@ class TradingStateMachine:
         try:
             self.transition_to(
                 TradingState.LIVE_ACTIVE,
-                "Auto-activated: LIVE_CAPITAL_VERIFIED=true and no kill switch active",
+                "Auto-activated: LIVE_CAPITAL_VERIFIED=true, capital readiness confirmed, "
+                "no kill switch active",
             )
             logger.info("✅ Auto-activated: state transitioned OFF → LIVE_ACTIVE")
             return True
@@ -399,6 +414,111 @@ class TradingStateMachine:
                 'recent_history': self.get_state_history(5)
             }
             
+
+# ---------------------------------------------------------------------------
+# Capital readiness gate — three-condition check used by maybe_auto_activate
+# and self_healing_startup._step_state_machine
+# ---------------------------------------------------------------------------
+
+def _capital_readiness_gate() -> tuple:
+    """
+    Check the three sub-conditions required for LIVE_ACTIVE.
+
+    Returns:
+        (bool, str) — (all_passed, human-readable reason / "ok")
+
+    Sub-conditions
+    --------------
+    a. CAPITAL_AUTHORITY_READY
+       CapitalAuthority singleton exists, is not stale, and reports
+       usable_capital > 0.
+
+    b. BROKER_BALANCE_CONFIRMED
+       At least one broker has contributed a non-zero balance to the
+       CapitalAuthority (i.e. ``get_real_capital() > 0``).
+
+    c. EXECUTION_PIPELINE_HEALTHY
+       ExecutionRouter singleton exists and has no failed session venues
+       that would block order dispatch.
+
+    Any sub-condition that cannot be evaluated because the relevant module
+    is not yet imported is treated as **passing** (graceful degradation) so
+    that systems without a particular module are not permanently locked.
+    """
+    failures = []
+
+    # ── a. CAPITAL_AUTHORITY_READY ─────────────────────────────────────────
+    try:
+        try:
+            from bot.capital_authority import get_capital_authority
+        except ImportError:
+            from capital_authority import get_capital_authority  # type: ignore[import]
+        authority = get_capital_authority()
+        if authority.is_stale():
+            failures.append(
+                "CAPITAL_AUTHORITY_READY=false: CapitalAuthority data is stale "
+                "(call authority.refresh(broker_map) first)"
+            )
+        elif authority.get_usable_capital() <= 0.0:
+            failures.append(
+                f"CAPITAL_AUTHORITY_READY=false: usable_capital="
+                f"{authority.get_usable_capital():.2f} (must be > 0)"
+            )
+        else:
+            logger.debug(
+                "_capital_readiness_gate: CAPITAL_AUTHORITY_READY ✅ "
+                "usable=%.2f", authority.get_usable_capital()
+            )
+    except Exception as exc:
+        logger.debug("_capital_readiness_gate: CapitalAuthority unavailable (%s) — skipping", exc)
+
+    # ── b. BROKER_BALANCE_CONFIRMED ────────────────────────────────────────
+    try:
+        try:
+            from bot.capital_authority import get_capital_authority as _get_ca2
+        except ImportError:
+            from capital_authority import get_capital_authority as _get_ca2  # type: ignore[import]
+        real = _get_ca2().get_real_capital()
+        if real <= 0.0:
+            failures.append(
+                f"BROKER_BALANCE_CONFIRMED=false: no broker has reported a "
+                f"non-zero balance (real_capital={real:.2f})"
+            )
+        else:
+            logger.debug(
+                "_capital_readiness_gate: BROKER_BALANCE_CONFIRMED ✅ real=%.2f", real
+            )
+    except Exception as exc:
+        logger.debug("_capital_readiness_gate: broker balance check unavailable (%s) — skipping", exc)
+
+    # ── c. EXECUTION_PIPELINE_HEALTHY ──────────────────────────────────────
+    try:
+        try:
+            from bot.execution_router import get_execution_router
+        except ImportError:
+            from execution_router import get_execution_router  # type: ignore[import]
+        router = get_execution_router()
+        # If all registered venues have failed this session, the pipeline is broken.
+        status = router.get_status()
+        registered = status.get("registered_venues", 1)
+        failed = len(status.get("session_failed_venues", []))
+        if registered > 0 and failed >= registered:
+            failures.append(
+                f"EXECUTION_PIPELINE_HEALTHY=false: all {registered} venue(s) "
+                f"have failed this session ({failed} failed)"
+            )
+        else:
+            logger.debug(
+                "_capital_readiness_gate: EXECUTION_PIPELINE_HEALTHY ✅ "
+                "venues=%d failed=%d", registered, failed
+            )
+    except Exception as exc:
+        logger.debug("_capital_readiness_gate: ExecutionRouter unavailable (%s) — skipping", exc)
+
+    if failures:
+        return False, "; ".join(failures)
+    return True, "ok"
+
 
 # Global singleton instance
 _state_machine: Optional[TradingStateMachine] = None

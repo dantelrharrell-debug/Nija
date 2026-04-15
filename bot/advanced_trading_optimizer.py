@@ -186,6 +186,11 @@ class AdvancedTradingOptimizer:
     
     def _initialize_components(self):
         """Initialize optimization components"""
+        # Idempotency guard — prevents double-init after BOOT_FAILED_RETRY cycles.
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
+
         # Signal scorer
         if self.config.enable_signal_scoring and EnhancedEntryScorer:
             self.signal_scorer = EnhancedEntryScorer()

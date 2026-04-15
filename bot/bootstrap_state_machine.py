@@ -69,6 +69,8 @@ Global invariants
                              EXTERNAL_RESTART_REQUIRED.
   I10 Capital writer         only CapitalRefreshCoordinator (WRITER_ID) may
                              publish capital snapshots.
+  I11 Strategy arm           strategy engine arming is illegal before
+                             BootstrapStateMachine reaches CAPITAL_READY.
 """
 
 from __future__ import annotations
@@ -111,6 +113,16 @@ class BootstrapState(str, Enum):
     BOOT_FAILED_RETRY = "BOOT_FAILED_RETRY"
     EXTERNAL_RESTART_REQUIRED = "EXTERNAL_RESTART_REQUIRED"
     SHUTDOWN = "SHUTDOWN"
+
+
+# ---------------------------------------------------------------------------
+# Strategy-arm gate — states from which engine arming is permitted (I11)
+# ---------------------------------------------------------------------------
+_STRATEGY_ARM_ALLOWED_STATES = frozenset({
+    BootstrapState.CAPITAL_READY,
+    BootstrapState.THREADS_STARTING,
+    BootstrapState.RUNNING_SUPERVISED,
+})
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +497,24 @@ class BootstrapStateMachine:
                 f"Only {_CAPITAL_WRITER_ID!r} is permitted.",
             )
 
+    def assert_invariant_i11_strategy_arm(self) -> None:
+        """I11 — strategy engine arming is illegal before CAPITAL_READY.
+
+        Raises :class:`BootstrapInvariantError` when the bootstrap FSM has not
+        yet reached :attr:`BootstrapState.CAPITAL_READY`.  Trading strategy
+        engines, :class:`CapitalDecisionEngine`, and any module that begins
+        live capital computation must call this before constructing itself.
+        """
+        state = self.state
+        if state not in _STRATEGY_ARM_ALLOWED_STATES:
+            raise BootstrapInvariantError(
+                "I11_STRATEGY_ARM",
+                f"Strategy engine arming attempted before CAPITAL_READY "
+                f"(current bootstrap state={state.value}). "
+                "Wait for BootstrapStateMachine to reach CAPITAL_READY "
+                "before initialising trading engines.",
+            )
+
     # ------------------------------------------------------------------
     # Convenience dispatcher
     # ------------------------------------------------------------------
@@ -496,7 +526,7 @@ class BootstrapStateMachine:
         Parameters
         ----------
         invariant_id:
-            One of ``"I1"`` through ``"I10"``.
+            One of ``"I1"`` through ``"I11"``.
         **kwargs:
             Extra context for static invariant methods:
 
@@ -519,6 +549,7 @@ class BootstrapStateMachine:
             "I6": self.assert_invariant_i6_mode_safety,
             "I7": self.assert_invariant_i7_emergency_safety,
             "I8": self.assert_invariant_i8_supervisor_ownership,
+            "I11": self.assert_invariant_i11_strategy_arm,
         }
         if invariant_id in _dispatch:
             _dispatch[invariant_id]()
@@ -555,4 +586,5 @@ __all__ = [
     "BootstrapInvariantError",
     "BootstrapStateMachine",
     "get_bootstrap_fsm",
+    "_STRATEGY_ARM_ALLOWED_STATES",
 ]

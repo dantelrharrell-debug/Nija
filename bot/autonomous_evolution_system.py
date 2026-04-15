@@ -184,6 +184,11 @@ class AutonomousEvolutionSystem:
     
     def initialize(self):
         """Initialize the system and create initial population"""
+        # Idempotency guard — prevents double-init if called more than once.
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
+
         if not self.enabled:
             logger.warning("⚠️  Autonomous Evolution System is disabled")
             return

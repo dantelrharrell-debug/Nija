@@ -240,6 +240,34 @@ class AICapitalAllocator:
         with self._lock:
             return self._last_updated
 
+    # ── Advisory interface for CapitalDecisionEngine ─────────────────────────
+
+    def advise(self, usable_capital: float) -> Dict:
+        """
+        Advisory-only interface consumed by :class:`CapitalDecisionEngine`.
+
+        Returns a read-only advice dict without writing any budgets directly.
+        Callers must not use this to size positions — only
+        ``CapitalDecisionEngine`` translates the advice into final budgets.
+
+        Args:
+            usable_capital: Current usable capital from CapitalAuthority.
+
+        Returns:
+            Dict with keys:
+                ``broker_weights``  – {account_id: fraction}
+                ``best_account``    – account_id with highest weight (or None)
+                ``last_updated``    – ISO timestamp of last weight computation
+        """
+        weights = self.get_weights()
+        with self._lock:
+            best = max(weights, key=lambda k: weights[k]) if weights else None
+            return {
+                "broker_weights": weights,
+                "best_account": best,
+                "last_updated": self._last_updated,
+            }
+
 
 # ---------------------------------------------------------------------------
 # Singleton
@@ -250,16 +278,17 @@ _ALLOCATOR_LOCK = threading.Lock()
 
 
 def get_ai_capital_allocator() -> AICapitalAllocator:
-    """Return the process-wide AICapitalAllocator singleton."""
+    """Return the process-wide AICapitalAllocator singleton (double-checked locking)."""
     global _ALLOCATOR
-    with _ALLOCATOR_LOCK:
-        if _ALLOCATOR is None:
-            _ALLOCATOR = AICapitalAllocator()
-            logger.info(
-                "[AIAllocator] singleton created "
-                "(EMA alpha=%.0f%%, min_weight=%.0f%%) — "
-                "auto capital shift to best performers enabled",
-                EMA_ALPHA * 100,
-                MIN_WEIGHT * 100,
-            )
+    if _ALLOCATOR is None:
+        with _ALLOCATOR_LOCK:
+            if _ALLOCATOR is None:
+                _ALLOCATOR = AICapitalAllocator()
+                logger.info(
+                    "[AIAllocator] singleton created "
+                    "(EMA alpha=%.0f%%, min_weight=%.0f%%) — "
+                    "auto capital shift to best performers enabled",
+                    EMA_ALPHA * 100,
+                    MIN_WEIGHT * 100,
+                )
     return _ALLOCATOR
