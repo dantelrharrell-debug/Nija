@@ -1160,6 +1160,12 @@ def _run_bot_startup_and_trading():
         _rerun_supervisor_loop(_state_copy)
         return
 
+    # TEMPORARY OPERATIONAL HOTFIX:
+    # Disable Coinbase completely so startup/trading depends only on Kraken readiness.
+    if not _is_truthy_env("NIJA_DISABLE_COINBASE", "false"):
+        os.environ["NIJA_DISABLE_COINBASE"] = "true"
+        logger.warning("⛔ TEMPORARY MODE: Coinbase disabled (NIJA_DISABLE_COINBASE=true)")
+
     # ── Bootstrap FSM: acknowledge ENV_VERIFIED on first run ─────────────────
     # Environment variables were verified at module import; health server was
     # bound in main().  Advance the FSM to ENV_VERIFIED so the startup thread
@@ -1827,7 +1833,11 @@ def _run_bot_startup_and_trading():
                 failed_platform_brokers.append('KRAKEN')
 
             # Check if Coinbase was expected but didn't connect
-            if coinbase_configured and 'COINBASE' not in connected_platform_brokers:
+            if (
+                coinbase_configured
+                and not _is_truthy_env("NIJA_DISABLE_COINBASE", "false")
+                and 'COINBASE' not in connected_platform_brokers
+            ):
                 failed_platform_brokers.append('COINBASE')
 
             # Track if Kraken credentials were not configured at all
