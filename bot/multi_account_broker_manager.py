@@ -640,14 +640,14 @@ class MultiAccountBrokerManager:
                 logger.info("CAPITAL_READY")
                 self._sync_platform_connection_states(broker_map)
                 if kraken_connected:
-                if kraken_included:
-                    try:
-                        _KRAKEN_STARTUP_FSM.mark_capital_ready()
-                    except Exception as exc:
-                        logger.warning(
-                            "[CapitalAuthorityRefresh] Failed to mark Kraken capital ready: %s",
-                            exc,
-                        )
+                    if kraken_included:
+                        try:
+                            _KRAKEN_STARTUP_FSM.mark_capital_ready()
+                        except Exception as exc:
+                            logger.warning(
+                                "[CapitalAuthorityRefresh] Failed to mark Kraken capital ready: %s",
+                                exc,
+                            )
                 with self._capital_state_lock:
                     was_halted = self._trading_halted_due_to_capital
                 if was_halted:
