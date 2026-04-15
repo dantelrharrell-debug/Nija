@@ -6622,6 +6622,7 @@ class KrakenBroker(BaseBroker):
     # without requiring a shared dict or a global reference.
     _live_instances: "ClassVar[List[weakref.ref]]" = []
     _instances_lock: "ClassVar[threading.Lock]" = threading.Lock()
+    _FIAT_ASSETS = {"USD", "USDT", "USDC", "EUR"}
 
     @classmethod
     def _register_instance(cls, instance: "KrakenBroker") -> None:
@@ -8408,6 +8409,11 @@ class KrakenBroker(BaseBroker):
             # Use MONITORING category for balance checks (conservative rate limiting)
             balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
             balance = self._kraken_private_call('Balance', category=balance_category)
+            logger.info(
+                "[KrakenBalancePipeline] raw_balance_response account=%s type=%s",
+                self.account_identifier,
+                type(balance).__name__,
+            )
 
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -8437,12 +8443,46 @@ class KrakenBroker(BaseBroker):
 
             if balance and 'result' in balance:
                 result = balance['result']
+                logger.info(
+                    "[KrakenBalancePipeline] raw_balance_keys account=%s keys=%s",
+                    self.account_identifier,
+                    sorted(result.keys()),
+                )
 
                 # Kraken uses ZUSD for USD and USDT for Tether
                 usd_balance = float(result.get('ZUSD', 0))
                 usdt_balance = float(result.get('USDT', 0))
 
                 total = usd_balance + usdt_balance
+                logger.info(
+                    "[KrakenBalancePipeline] parsed_cash account=%s usd=%.8f usdt=%.8f",
+                    self.account_identifier,
+                    usd_balance,
+                    usdt_balance,
+                )
+
+                non_usd_assets = []
+                for asset, amount in result.items():
+                    try:
+                        qty = float(amount)
+                    except (TypeError, ValueError):
+                        continue
+                    if qty <= 0.0:
+                        continue
+                    normalized = self._normalize_kraken_asset_code(asset)
+                    if normalized in self._FIAT_ASSETS:
+                        continue
+                    non_usd_assets.append(normalized)
+                non_usd_assets = sorted(set(non_usd_assets))
+                logger.info(
+                    "[KrakenBalancePipeline] non_usd_assets account=%s count=%d assets=%s",
+                    self.account_identifier,
+                    len(non_usd_assets),
+                    non_usd_assets,
+                )
+
+                all_assets_usd = self.compute_total_usd_balance(result, self._get_asset_usd_price)
+                non_usd_usd_value = max(0.0, all_assets_usd - total)
 
                 # Also get TradeBalance to see held funds
                 # Use MONITORING category for balance checks (conservative rate limiting)
@@ -8470,7 +8510,16 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   💵 Total Available: ${total:.2f}")
 
                 # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
-                total_funds = total + held_amount
+                total_funds = total + held_amount + non_usd_usd_value
+                logger.info(
+                    "[KrakenBalancePipeline] total_funds account=%s cash=%.8f held=%.8f "
+                    "non_usd_usd=%.8f total=%.8f",
+                    self.account_identifier,
+                    total,
+                    held_amount,
+                    non_usd_usd_value,
+                    total_funds,
+                )
 
                 if verbose:
                     if held_amount > 0:
@@ -8606,10 +8655,15 @@ class KrakenBroker(BaseBroker):
                 # Get crypto holdings (exclude USD and USDT)
                 crypto_holdings = {}
                 for currency, amount in result.items():
-                    if currency not in ['ZUSD', 'USDT'] and float(amount) > 0:
-                        # Strip the 'Z' or 'X' prefix Kraken uses for some currencies
-                        clean_currency = currency.lstrip('ZX')
-                        crypto_holdings[clean_currency] = float(amount)
+                    clean_currency = self._normalize_kraken_asset_code(currency)
+                    if clean_currency in self._FIAT_ASSETS:
+                        continue
+                    try:
+                        qty = float(amount)
+                    except (TypeError, ValueError):
+                        continue
+                    if qty > 0:
+                        crypto_holdings[clean_currency] = qty
 
                 trading_balance = usd_balance + usdt_balance
 
@@ -8687,6 +8741,69 @@ class KrakenBroker(BaseBroker):
             int: Number of consecutive errors
         """
         return self._balance_fetch_errors
+
+    def _normalize_kraken_asset_code(self, asset_code: str) -> str:
+        """Normalize Kraken asset codes (e.g. XXBT/XETH/ZUSD) to standard symbols."""
+        token = str(asset_code or "").strip().upper()
+        if not token:
+            return ""
+        if len(token) > 3 and token[0] in {"X", "Z"}:
+            token = token[1:]
+        return {"XBT": "BTC", "XDG": "DOGE"}.get(token, token)
+
+    def _get_asset_usd_price(self, symbol: str):
+        """Resolve asset price in USD with USDT fallback."""
+        price = self.get_current_price(f"{symbol}-USD")
+        if price is not None and price > 0:
+            return price
+        fallback = self.get_current_price(f"{symbol}-USDT")
+        if fallback is not None and fallback > 0:
+            logger.info(
+                "[KrakenBalancePipeline] usd_conversion_fallback account=%s symbol=%s source=USDT",
+                self.account_identifier,
+                symbol,
+            )
+        return fallback
+
+    def compute_total_usd_balance(self, balance: dict, price_lookup) -> float:
+        """Convert all balance assets to total USD value."""
+        total = 0.0
+        for asset, amount in (balance or {}).items():
+            try:
+                qty = float(amount)
+            except (TypeError, ValueError):
+                continue
+            if qty <= 0.0:
+                continue
+            symbol = self._normalize_kraken_asset_code(asset)
+            if symbol == "USD":
+                total += qty
+                continue
+            if symbol in {"USDT", "USDC"}:
+                stable_price = price_lookup(symbol)
+                if stable_price and stable_price > 0.0:
+                    total += qty * float(stable_price)
+                else:
+                    logger.warning(
+                        "[KrakenBalancePipeline] stablecoin_price_fallback account=%s asset=%s "
+                        "qty=%.8f assumed_price=1.0",
+                        self.account_identifier,
+                        symbol,
+                        qty,
+                    )
+                    total += qty
+                continue
+            price = price_lookup(symbol)
+            if price is not None and float(price) > 0.0:
+                total += qty * float(price)
+            else:
+                logger.warning(
+                    "[KrakenBalancePipeline] usd_conversion_missing account=%s asset=%s qty=%.8f",
+                    self.account_identifier,
+                    symbol,
+                    qty,
+                )
+        return total
 
     def get_current_price(self, symbol: str) -> Optional[float]:
         """

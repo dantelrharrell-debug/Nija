@@ -119,6 +119,8 @@ class CapitalAuthority:
         self._broker_roles: Dict[str, str] = {}
         # Registered open-position exposure in USD (updated by callers)
         self._open_exposure_usd: float = 0.0
+        # Last total explicitly provided through update(total_capital).
+        self._last_updated_total: float = 0.0
         # Timestamp of most-recent successful refresh
         self.last_updated: Optional[datetime] = None
         # Minimum number of brokers that must have contributed a non-zero balance
@@ -182,7 +184,20 @@ class CapitalAuthority:
                 previous > 0.0 and previous_age_s <= self._preserve_nonzero_ttl_s
             )
             try:
+                logger.info("[CapitalAuthority] Fetching balance for broker=%s", broker_id)
                 raw = broker.get_account_balance()
+                if isinstance(raw, dict):
+                    logger.info(
+                        "[CapitalAuthority] broker=%s raw balance fetched (dict keys=%s)",
+                        broker_id,
+                        sorted(raw.keys()),
+                    )
+                else:
+                    logger.info(
+                        "[CapitalAuthority] broker=%s raw balance fetched (scalar=%s)",
+                        broker_id,
+                        raw,
+                    )
                 if isinstance(raw, dict):
                     # Prefer trading_balance; fall back to usd + usdc
                     balance = float(
@@ -195,6 +210,11 @@ class CapitalAuthority:
                     balance = float(raw)
                 else:
                     balance = 0.0
+                logger.info(
+                    "[CapitalAuthority] broker=%s parsed balance=$%.2f",
+                    broker_id,
+                    balance,
+                )
 
                 if balance > 0.0:
                     new_balances[broker_key] = balance
@@ -263,6 +283,22 @@ class CapitalAuthority:
             len(new_balances),
             dict(new_balances),
         )
+
+    def update(self, total_capital: float) -> None:
+        """
+        Explicitly update the aggregate capital snapshot.
+
+        Parameters
+        ----------
+        total_capital:
+            Aggregate account capital in USD after broker-level balance refresh
+            and conversion.
+        """
+        total = max(0.0, float(total_capital))
+        with self._lock:
+            self._last_updated_total = total
+            self.last_updated = datetime.now(timezone.utc)
+        logger.info("CapitalAuthority updated: $%.2f", total)
 
     # ------------------------------------------------------------------
     # Open-exposure registry (call each cycle before reading risk_capital)
@@ -556,6 +592,7 @@ class CapitalAuthority:
                 "broker_balances": dict(self._broker_balances),
                 "broker_count": len(self._broker_balances),
                 "expected_brokers": self._expected_brokers,
+                "updated_total_capital": self._last_updated_total,
                 "last_updated": self.last_updated.isoformat()
                 if self.last_updated
                 else None,

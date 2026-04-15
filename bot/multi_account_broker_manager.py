@@ -423,17 +423,33 @@ class MultiAccountBrokerManager:
             broker_map: Dict[str, BaseBroker] = {}
             for broker_type, broker in self._platform_brokers.items():
                 if broker is None or not getattr(broker, "connected", False):
+                    logger.info(
+                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=not_connected",
+                        trigger,
+                        broker_type.value,
+                    )
                     continue
                 if not self.is_platform_connected(broker_type):
+                    logger.info(
+                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready",
+                        trigger,
+                        broker_type.value,
+                    )
                     continue
                 broker_map[broker_type.value] = broker
 
+            logger.info(
+                "[CapitalAuthorityRefresh] trigger=%s eligible_brokers=%s",
+                trigger,
+                sorted(broker_map.keys()),
+            )
             if broker_map:
                 authority.refresh(broker_map, open_exposure_usd=0.0)
             else:
                 authority.refresh({}, open_exposure_usd=0.0)
 
             total_capital = float(authority.get_real_capital())
+            authority.update(total_capital)
             valid_brokers = len(broker_map)
             # Hard capital-truth contract:
             # If Kraken is connected, Kraken's balance is the startup/readiness
@@ -449,8 +465,27 @@ class MultiAccountBrokerManager:
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
+            logger.info(
+                "[CapitalAuthorityRefresh] trigger=%s ready=%s total=$%.2f valid_brokers=%d "
+                "kraken_connected=%s kraken_capital=$%.2f",
+                trigger,
+                ready,
+                total_capital,
+                valid_brokers,
+                kraken_connected,
+                kraken_capital,
+            )
 
             if ready:
+                logger.info("CAPITAL_READY")
+                if kraken_connected:
+                    try:
+                        _KRAKEN_STARTUP_FSM.mark_capital_ready()
+                    except Exception as exc:
+                        logger.warning(
+                            "[CapitalAuthorityRefresh] Failed to mark Kraken capital ready: %s",
+                            exc,
+                        )
                 with self._capital_state_lock:
                     was_halted = self._trading_halted_due_to_capital
                 if was_halted:
