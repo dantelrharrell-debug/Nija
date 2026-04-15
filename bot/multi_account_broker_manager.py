@@ -209,7 +209,11 @@ class MultiAccountBrokerManager:
     MIN_STARTUP_CAPITAL_TIMEOUT_S = 1.0
     MIN_STARTUP_CAPITAL_POLL_S = 0.1
     MIN_STARTUP_CAPITAL_SLEEP_S = 0.05
-    BOOTSTRAP_REFRESH_TRIGGER_PREFIXES = ("platform_connect:", "initialize_platform_brokers")
+    BOOTSTRAP_TRIGGERS = {
+        "platform_connect",
+        "initialize_platform_brokers",
+        "capital_allocation_brain",
+    }
     BOOTSTRAP_CONNECTED_ELIGIBLE_STATES = (
         CapitalBootstrapState.WAIT_PLATFORM,
         CapitalBootstrapState.REFRESH_REQUESTED,
@@ -569,19 +573,27 @@ class MultiAccountBrokerManager:
                     else 0.0
                 )
 
-            kraken_connected = "kraken" in broker_map
+            kraken_in_refresh_scope = "kraken" in broker_map
+            kraken_broker = self._platform_brokers.get(BrokerType.KRAKEN)
+            kraken_broker_connected = bool(getattr(kraken_broker, "connected", False))
+            kraken_platform_connected = self.is_platform_connected(BrokerType.KRAKEN)
+            kraken_connected = kraken_platform_connected and kraken_broker_connected
             ready = (kraken_capital > 0.0) if kraken_connected else (total_capital > 0.0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s ready=%s total=$%.2f valid_brokers=%d "
-                "kraken_connected=%s kraken_capital=$%.2f",
+                "kraken_connected=%s kraken_broker_connected=%s kraken_platform_connected=%s "
+                "kraken_in_refresh_scope=%s kraken_capital=$%.2f",
                 trigger,
                 ready,
                 total_capital,
                 valid_brokers,
                 kraken_connected,
+                kraken_broker_connected,
+                kraken_platform_connected,
+                kraken_in_refresh_scope,
                 kraken_capital,
             )
 
@@ -607,8 +619,16 @@ class MultiAccountBrokerManager:
             else:
                 logger.error(
                     "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f "
-                    "kraken_connected=%s kraken_capital=$%.2f",
-                    trigger, valid_brokers, total_capital, kraken_connected, kraken_capital,
+                    "kraken_connected=%s kraken_broker_connected=%s kraken_platform_connected=%s "
+                    "kraken_in_refresh_scope=%s kraken_capital=$%.2f",
+                    trigger,
+                    valid_brokers,
+                    total_capital,
+                    kraken_connected,
+                    kraken_broker_connected,
+                    kraken_platform_connected,
+                    kraken_in_refresh_scope,
+                    kraken_capital,
                 )
 
             return {
@@ -624,7 +644,7 @@ class MultiAccountBrokerManager:
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
     def _is_bootstrap_refresh_trigger(self, trigger: str) -> bool:
-        return trigger.startswith(self.BOOTSTRAP_REFRESH_TRIGGER_PREFIXES)
+        return trigger.split(":", 1)[0] in self.BOOTSTRAP_TRIGGERS
 
     def _get_bootstrap_state_value(self) -> str:
         if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
