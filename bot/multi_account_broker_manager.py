@@ -21,7 +21,7 @@ import threading
 import time
 from types import MappingProxyType
 import traceback
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from enum import Enum
 
 # Import broker classes
@@ -243,6 +243,10 @@ class MultiAccountBrokerManager:
         # Platform account brokers - registered once globally and marked immutable
         self._platform_brokers: Dict[BrokerType, BaseBroker] = {}
         self._platform_brokers_locked: bool = False
+        self._registry_version: int = 0
+        self._last_update_ts: float = time.time()
+        self._event_bus: Optional[Any] = None
+        self._broker_registered_callbacks: List[Callable[[BaseBroker], None]] = []
 
         # Connection state machine for platform brokers
         # Tracks each broker through NOT_STARTED → CONNECTING → CONNECTED / FAILED
@@ -422,6 +426,27 @@ class MultiAccountBrokerManager:
         self._platform_brokers_locked = True
         logger.info("🔒 Platform brokers locked (immutable)")
 
+    def set_registry_event_bus(self, event_bus: Any) -> None:
+        """Attach an optional event bus exposing ``publish(event_name, payload)``."""
+        self._event_bus = event_bus
+
+    def register_broker_registered_callback(self, callback: Callable[[BaseBroker], None]) -> None:
+        """Register a direct callback used when no event bus is attached."""
+        self._broker_registered_callbacks.append(callback)
+
+    def refresh_registry(self) -> None:
+        """Rehydrate registry mirrors from the current platform broker map."""
+        with _PLATFORM_BROKER_REGISTRY_LOCK:
+            for broker_type, broker in self._platform_brokers.items():
+                _PLATFORM_BROKER_INSTANCES[broker_type.value] = broker
+                connected = bool(getattr(broker, "connected", False))
+                GLOBAL_PLATFORM_BROKERS[broker_type.value] = connected
+                self._platform_connected[broker_type.value] = connected
+                if broker_registry is not None:
+                    broker_registry[broker_type.value]["platform"] = True
+            self._registry_version += 1
+            self._last_update_ts = time.time()
+
     def register_platform_broker_instance(
         self,
         broker_type: BrokerType,
@@ -457,6 +482,19 @@ class MultiAccountBrokerManager:
         
         # Register the broker instance
         self._platform_brokers[broker_type] = broker
+        self._registry_version += 1
+        self._last_update_ts = time.time()
+        if self._event_bus is not None and hasattr(self._event_bus, "publish"):
+            try:
+                self._event_bus.publish("broker_registered", broker)
+            except Exception as _pub_exc:
+                logger.warning("registry event publish failed for %s: %s", broker_type.value, _pub_exc)
+        else:
+            for _cb in list(self._broker_registered_callbacks):
+                try:
+                    _cb(broker)
+                except Exception as _cb_exc:
+                    logger.warning("broker_registered callback failed for %s: %s", broker_type.value, _cb_exc)
         # Pre-create the readiness Event before advancing the state machine.
         # This guarantees that any thread which calls _get_or_create_platform_event()
         # (directly or via wait_for_platform_ready()) always gets the same Event
@@ -958,6 +996,19 @@ class MultiAccountBrokerManager:
             # ❌ DO NOT call broker.connect() here
             # ❌ DO NOT trigger reconnect or validate connection
             self._platform_brokers[broker_type] = broker
+            self._registry_version += 1
+            self._last_update_ts = time.time()
+            if self._event_bus is not None and hasattr(self._event_bus, "publish"):
+                try:
+                    self._event_bus.publish("broker_registered", broker)
+                except Exception as _pub_exc:
+                    logger.warning("registry event publish failed for %s: %s", broker_type.value, _pub_exc)
+            else:
+                for _cb in list(self._broker_registered_callbacks):
+                    try:
+                        _cb(broker)
+                    except Exception as _cb_exc:
+                        logger.warning("broker_registered callback failed for %s: %s", broker_type.value, _cb_exc)
             self._platform_state[broker_type.value] = ConnectionState.NOT_STARTED
             # Pre-create the readiness event so wait_for_platform_ready() always
             # blocks on the same object that begin_platform_connection() + connect() will set.

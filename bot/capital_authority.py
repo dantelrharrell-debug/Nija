@@ -168,10 +168,14 @@ class CapitalAuthority:
             omit) when the caller does not yet have position data.
         """
         try:
+            from bot.multi_account_broker_manager import get_broker_manager
+        except ImportError:
             try:
-                from bot.multi_account_broker_manager import get_broker_manager
-            except ImportError:
                 from multi_account_broker_manager import get_broker_manager  # type: ignore
+            except Exception as exc:
+                raise RuntimeError(
+                    "CapitalAuthority refresh requires get_broker_manager() for broker registry integrity"
+                ) from exc
         except Exception as exc:
             raise RuntimeError(
                 "CapitalAuthority refresh requires get_broker_manager() for broker registry integrity"
@@ -180,8 +184,16 @@ class CapitalAuthority:
         canonical_broker_manager = get_broker_manager()
         if self.broker_manager is None:
             self.broker_manager = canonical_broker_manager
+        if self.broker_manager is not canonical_broker_manager:
+            raise RuntimeError("BROKER MANAGER INSTANCE MISMATCH (CRITICAL)")
         assert self.broker_manager is canonical_broker_manager, \
             "BROKER MANAGER INSTANCE MISMATCH (CRITICAL)"
+        try:
+            self.broker_manager.refresh_registry()
+        except Exception as exc:
+            raise RuntimeError(
+                "CapitalAuthority refresh could not rehydrate broker registry (CRITICAL)"
+            ) from exc
 
         new_balances: Dict[str, float] = {}
 
