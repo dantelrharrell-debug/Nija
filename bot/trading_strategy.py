@@ -12,7 +12,11 @@ from pathlib import Path
 from threading import Thread
 from typing import Dict, Optional, Tuple
 from datetime import datetime, timezone
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs):
+        return False
 from enum import Enum
 import pandas as pd
 
