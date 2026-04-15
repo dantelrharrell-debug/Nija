@@ -1,0 +1,558 @@
+"""NIJA Composite Bootstrap State Machine
+=========================================
+
+Single source of truth for the entire NIJA system bootstrap sequence.
+
+Maps the entire startup flow into a deterministic finite state machine with
+explicit invariants and legally-allowed transitions.  Every component action
+that advances the boot sequence must call :meth:`BootstrapStateMachine.transition`;
+illegal transitions are rejected and logged instead of propagating as silent
+side-effects.
+
+States (16 total)
+-----------------
+  BOOT_INIT              – initial state when the process starts
+  LOCK_ACQUIRED          – process/distributed writer lock held
+  HEALTH_BOUND           – HTTP health server bound and accepting connections
+  ENV_VERIFIED           – environment variables checked; ≥1 credential present
+  STARTUP_VALIDATED      – startup_validation.py passed all pre-flight checks
+  MODE_GATED             – trading state machine confirmed a legal mode
+  PLATFORM_CONNECTING    – platform broker connection(s) in progress
+  PLATFORM_READY         – at least one platform broker connected
+  CAPITAL_REFRESHING     – capital authority refresh in progress
+  CAPITAL_READY          – capital > 0 confirmed; trading gate open
+  THREADS_STARTING       – trading worker threads being spawned
+  RUNNING_SUPERVISED     – trading threads live; supervisor loop active (resumable)
+  CONFIG_ERROR_KEEPALIVE – no exchange credentials; process alive for monitoring
+  BOOT_FAILED_RETRY      – transient failure; retry from PLATFORM_CONNECTING
+  EXTERNAL_RESTART_REQUIRED – fatal condition; only clean process restart resolves
+  SHUTDOWN               – process exiting gracefully (terminal)
+
+Allowed transitions
+-------------------
+  BOOT_INIT              → LOCK_ACQUIRED
+  LOCK_ACQUIRED          → HEALTH_BOUND
+  HEALTH_BOUND           → ENV_VERIFIED
+  ENV_VERIFIED           → STARTUP_VALIDATED | CONFIG_ERROR_KEEPALIVE
+  STARTUP_VALIDATED      → MODE_GATED | BOOT_FAILED_RETRY
+  MODE_GATED             → PLATFORM_CONNECTING
+  PLATFORM_CONNECTING    → PLATFORM_READY | BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED
+  PLATFORM_READY         → CAPITAL_REFRESHING
+  CAPITAL_REFRESHING     → CAPITAL_READY | BOOT_FAILED_RETRY
+  CAPITAL_READY          → THREADS_STARTING
+  THREADS_STARTING       → RUNNING_SUPERVISED | BOOT_FAILED_RETRY
+  RUNNING_SUPERVISED     → BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED | SHUTDOWN
+  BOOT_FAILED_RETRY      → PLATFORM_CONNECTING | EXTERNAL_RESTART_REQUIRED
+  CONFIG_ERROR_KEEPALIVE → SHUTDOWN
+  EXTERNAL_RESTART_REQUIRED → SHUTDOWN
+  SHUTDOWN               → (none — terminal)
+
+Global invariants
+-----------------
+  I1  Single-writer          process lock must be held (state ≥ LOCK_ACQUIRED)
+                             before any broker initialisation.
+  I2  Liveness-first         health server must be bound (state ≥ HEALTH_BOUND)
+                             before any blocking startup I/O.
+  I3  Platform-first         user Kraken activity is illegal unless
+                             KrakenStartupFSM is CONNECTED or FAILED.
+  I4  Capital gate           trading thread start is illegal unless capital
+                             bootstrap FSM is READY and capital > 0.
+  I5  Readiness gate         trading loops are illegal before
+                             StartupReadinessGate is open.
+  I6  Mode safety            real order placement is illegal unless
+                             TradingStateMachine is LIVE_ACTIVE.
+  I7  Emergency safety       EMERGENCY_STOP mode blocks all activity except
+                             the reset-to-OFF path.
+  I8  Supervisor ownership   worker-thread restarts are only legal in the
+                             RUNNING_SUPERVISED state.
+  I9  Fail-closed nonce      fatal nonce RuntimeErrors must force
+                             EXTERNAL_RESTART_REQUIRED.
+  I10 Capital writer         only CapitalRefreshCoordinator (WRITER_ID) may
+                             publish capital snapshots.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("nija.bootstrap_fsm")
+
+# ---------------------------------------------------------------------------
+# Capital writer constant — mirrors capital_flow_state_machine.WRITER_ID
+# ---------------------------------------------------------------------------
+_CAPITAL_WRITER_ID: str = "mabm_capital_refresh_coordinator"
+
+# ---------------------------------------------------------------------------
+# State enumeration
+# ---------------------------------------------------------------------------
+
+
+class BootstrapState(str, Enum):
+    """Top-level bootstrap states for the composite NIJA system FSM."""
+
+    BOOT_INIT = "BOOT_INIT"
+    LOCK_ACQUIRED = "LOCK_ACQUIRED"
+    HEALTH_BOUND = "HEALTH_BOUND"
+    ENV_VERIFIED = "ENV_VERIFIED"
+    STARTUP_VALIDATED = "STARTUP_VALIDATED"
+    MODE_GATED = "MODE_GATED"
+    PLATFORM_CONNECTING = "PLATFORM_CONNECTING"
+    PLATFORM_READY = "PLATFORM_READY"
+    CAPITAL_REFRESHING = "CAPITAL_REFRESHING"
+    CAPITAL_READY = "CAPITAL_READY"
+    THREADS_STARTING = "THREADS_STARTING"
+    RUNNING_SUPERVISED = "RUNNING_SUPERVISED"
+    CONFIG_ERROR_KEEPALIVE = "CONFIG_ERROR_KEEPALIVE"
+    BOOT_FAILED_RETRY = "BOOT_FAILED_RETRY"
+    EXTERNAL_RESTART_REQUIRED = "EXTERNAL_RESTART_REQUIRED"
+    SHUTDOWN = "SHUTDOWN"
+
+
+# ---------------------------------------------------------------------------
+# Transition table — the only legal moves
+# ---------------------------------------------------------------------------
+_VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
+    BootstrapState.BOOT_INIT: [
+        BootstrapState.LOCK_ACQUIRED,
+    ],
+    BootstrapState.LOCK_ACQUIRED: [
+        BootstrapState.HEALTH_BOUND,
+    ],
+    BootstrapState.HEALTH_BOUND: [
+        BootstrapState.ENV_VERIFIED,
+    ],
+    BootstrapState.ENV_VERIFIED: [
+        BootstrapState.STARTUP_VALIDATED,
+        BootstrapState.CONFIG_ERROR_KEEPALIVE,
+    ],
+    BootstrapState.STARTUP_VALIDATED: [
+        BootstrapState.MODE_GATED,
+        BootstrapState.BOOT_FAILED_RETRY,
+    ],
+    BootstrapState.MODE_GATED: [
+        BootstrapState.PLATFORM_CONNECTING,
+    ],
+    BootstrapState.PLATFORM_CONNECTING: [
+        BootstrapState.PLATFORM_READY,
+        BootstrapState.BOOT_FAILED_RETRY,
+        BootstrapState.EXTERNAL_RESTART_REQUIRED,
+    ],
+    BootstrapState.PLATFORM_READY: [
+        BootstrapState.CAPITAL_REFRESHING,
+    ],
+    BootstrapState.CAPITAL_REFRESHING: [
+        BootstrapState.CAPITAL_READY,
+        BootstrapState.BOOT_FAILED_RETRY,
+    ],
+    BootstrapState.CAPITAL_READY: [
+        BootstrapState.THREADS_STARTING,
+    ],
+    BootstrapState.THREADS_STARTING: [
+        BootstrapState.RUNNING_SUPERVISED,
+        BootstrapState.BOOT_FAILED_RETRY,
+    ],
+    BootstrapState.RUNNING_SUPERVISED: [
+        BootstrapState.BOOT_FAILED_RETRY,
+        BootstrapState.EXTERNAL_RESTART_REQUIRED,
+        BootstrapState.SHUTDOWN,
+    ],
+    BootstrapState.BOOT_FAILED_RETRY: [
+        BootstrapState.PLATFORM_CONNECTING,
+        BootstrapState.EXTERNAL_RESTART_REQUIRED,
+    ],
+    BootstrapState.CONFIG_ERROR_KEEPALIVE: [
+        BootstrapState.SHUTDOWN,
+    ],
+    BootstrapState.EXTERNAL_RESTART_REQUIRED: [
+        BootstrapState.SHUTDOWN,
+    ],
+    BootstrapState.SHUTDOWN: [],  # terminal — no further transitions
+}
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class BootstrapInvariantError(RuntimeError):
+    """Raised when a global boot invariant is violated."""
+
+    def __init__(self, invariant_id: str, message: str) -> None:
+        super().__init__(f"[{invariant_id}] {message}")
+        self.invariant_id = invariant_id
+
+
+# ---------------------------------------------------------------------------
+# Composite Bootstrap State Machine
+# ---------------------------------------------------------------------------
+
+
+class BootstrapStateMachine:
+    """
+    Composite Bootstrap State Machine — single source of truth for NIJA's
+    system boot sequence.
+
+    Thread-safe via a single ``threading.Lock``.  Every transition is recorded
+    in an in-memory audit trail with wall-clock timestamps.
+
+    Sub-machines referenced by invariant checks are imported lazily so this
+    module never creates circular import cycles at load time.
+    """
+
+    def __init__(self) -> None:
+        self._state: BootstrapState = BootstrapState.BOOT_INIT
+        self._lock = threading.Lock()
+        self._history: List[Dict[str, Any]] = []
+
+    # ------------------------------------------------------------------
+    # State access
+    # ------------------------------------------------------------------
+
+    @property
+    def state(self) -> BootstrapState:
+        """Current bootstrap state (thread-safe, non-blocking)."""
+        with self._lock:
+            return self._state
+
+    def get_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return the most recent *limit* transition records."""
+        with self._lock:
+            return list(self._history[-limit:])
+
+    def get_status(self) -> Dict[str, Any]:
+        """Serialisable snapshot suitable for a /status health endpoint."""
+        with self._lock:
+            return {
+                "state": self._state.value,
+                "history": list(self._history[-10:]),
+            }
+
+    # ------------------------------------------------------------------
+    # Transition
+    # ------------------------------------------------------------------
+
+    def transition(
+        self,
+        new_state: BootstrapState,
+        reason: str = "",
+        *,
+        raise_on_invalid: bool = False,
+    ) -> bool:
+        """
+        Attempt a transition to *new_state*.
+
+        Parameters
+        ----------
+        new_state:
+            Target state.
+        reason:
+            Human-readable description of why this transition is happening.
+        raise_on_invalid:
+            If ``True``, raise :class:`BootstrapInvariantError` on an illegal
+            transition instead of returning ``False``.  Defaults to ``False``
+            so the FSM never crashes the boot process.
+
+        Returns
+        -------
+        bool
+            ``True`` if the transition was applied; ``False`` if illegal.
+        """
+        with self._lock:
+            current = self._state
+            allowed = _VALID_TRANSITIONS.get(current, [])
+            if new_state not in allowed:
+                msg = (
+                    f"Illegal transition {current.value} → {new_state.value} "
+                    f"(reason={reason!r}). "
+                    f"Allowed from {current.value}: "
+                    f"{[s.value for s in allowed]}"
+                )
+                logger.error("❌ [BootstrapFSM] %s", msg)
+                if raise_on_invalid:
+                    raise BootstrapInvariantError("FSM_TRANSITION", msg)
+                return False
+
+            record: Dict[str, Any] = {
+                "from": current.value,
+                "to": new_state.value,
+                "reason": reason or "—",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            self._history.append(record)
+            self._state = new_state
+
+        logger.info(
+            "🔄 [BootstrapFSM] %s → %s  reason=%s",
+            current.value,
+            new_state.value,
+            reason or "—",
+        )
+        return True
+
+    def reset_for_retry(self, reason: str = "retry") -> None:
+        """
+        Force state to :attr:`~BootstrapState.BOOT_FAILED_RETRY` from any
+        non-terminal state so a new boot attempt can begin.
+
+        No-op when already in SHUTDOWN or EXTERNAL_RESTART_REQUIRED (those
+        states cannot be walked back).
+        """
+        with self._lock:
+            current = self._state
+            if current in (
+                BootstrapState.SHUTDOWN,
+                BootstrapState.EXTERNAL_RESTART_REQUIRED,
+            ):
+                logger.warning(
+                    "[BootstrapFSM] reset_for_retry called from terminal state %s — ignored",
+                    current.value,
+                )
+                return
+            record: Dict[str, Any] = {
+                "from": current.value,
+                "to": BootstrapState.BOOT_FAILED_RETRY.value,
+                "reason": f"reset_for_retry: {reason}",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            self._history.append(record)
+            self._state = BootstrapState.BOOT_FAILED_RETRY
+
+        logger.warning(
+            "⚠️  [BootstrapFSM] reset_for_retry: %s → BOOT_FAILED_RETRY  reason=%s",
+            current.value,
+            reason,
+        )
+
+    # ------------------------------------------------------------------
+    # Invariant assertions
+    # ------------------------------------------------------------------
+
+    def assert_invariant_i1_single_writer(self) -> None:
+        """I1 — process lock must be held before any broker initialisation."""
+        state = self.state
+        if state == BootstrapState.BOOT_INIT:
+            raise BootstrapInvariantError(
+                "I1_SINGLE_WRITER",
+                f"Broker initialisation attempted before process lock acquired "
+                f"(state={state.value}). Acquire the process lock first.",
+            )
+
+    def assert_invariant_i2_liveness_first(self) -> None:
+        """I2 — health server must be bound before any blocking I/O."""
+        state = self.state
+        _pre_health = {BootstrapState.BOOT_INIT, BootstrapState.LOCK_ACQUIRED}
+        if state in _pre_health:
+            raise BootstrapInvariantError(
+                "I2_LIVENESS_FIRST",
+                f"Blocking startup I/O attempted before health server is bound "
+                f"(state={state.value}). Start the health server first.",
+            )
+
+    def assert_invariant_i3_platform_first(self) -> None:
+        """I3 — user Kraken activity illegal unless platform FSM is CONNECTED or FAILED."""
+        try:
+            from bot.broker_manager import _KRAKEN_STARTUP_FSM
+        except ImportError:
+            try:
+                from broker_manager import _KRAKEN_STARTUP_FSM  # type: ignore[import]
+            except ImportError:
+                logger.debug("[BootstrapFSM] I3: KrakenStartupFSM unavailable — skipping check")
+                return
+        if not (_KRAKEN_STARTUP_FSM.is_connected or _KRAKEN_STARTUP_FSM.is_failed):
+            raise BootstrapInvariantError(
+                "I3_PLATFORM_FIRST",
+                "User Kraken activity attempted before platform Kraken FSM reached "
+                "CONNECTED or FAILED state. Wait for the platform boot to complete.",
+            )
+
+    def assert_invariant_i4_capital_gate(self) -> None:
+        """I4 — trading threads illegal until capital bootstrap is READY."""
+        try:
+            from bot.capital_flow_state_machine import get_capital_bootstrap_fsm
+        except ImportError:
+            try:
+                from capital_flow_state_machine import get_capital_bootstrap_fsm  # type: ignore[import]
+            except ImportError:
+                logger.debug("[BootstrapFSM] I4: CapitalBootstrapFSM unavailable — skipping check")
+                return
+        boot_fsm = get_capital_bootstrap_fsm()
+        if not boot_fsm.is_ready:
+            raise BootstrapInvariantError(
+                "I4_CAPITAL_GATE",
+                f"Trading threads requested but capital bootstrap FSM is not READY "
+                f"(state={boot_fsm.state.value}). Wait for the capital refresh.",
+            )
+
+    def assert_invariant_i5_readiness_gate(self) -> None:
+        """I5 — trading loops illegal before StartupReadinessGate is open."""
+        try:
+            from bot.startup_readiness_gate import get_startup_readiness_gate
+        except ImportError:
+            try:
+                from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
+            except ImportError:
+                logger.debug("[BootstrapFSM] I5: StartupReadinessGate unavailable — skipping check")
+                return
+        gate = get_startup_readiness_gate()
+        if not gate.is_ready():
+            raise BootstrapInvariantError(
+                "I5_READINESS_GATE",
+                "Trading loops requested but StartupReadinessGate is not open. "
+                "Wait for all registered components to signal ready.",
+            )
+
+    def assert_invariant_i6_mode_safety(self) -> None:
+        """I6 — real order placement illegal unless TradingStateMachine is LIVE_ACTIVE."""
+        try:
+            from bot.trading_state_machine import get_state_machine
+        except ImportError:
+            try:
+                from trading_state_machine import get_state_machine  # type: ignore[import]
+            except ImportError:
+                logger.debug("[BootstrapFSM] I6: TradingStateMachine unavailable — skipping check")
+                return
+        sm = get_state_machine()
+        if not sm.is_live_trading_active():
+            raise BootstrapInvariantError(
+                "I6_MODE_SAFETY",
+                f"Real order placement attempted but trading mode is "
+                f"{sm.get_current_state().value} (must be LIVE_ACTIVE).",
+            )
+
+    def assert_invariant_i7_emergency_safety(self) -> None:
+        """I7 — EMERGENCY_STOP mode blocks all activity except the reset path."""
+        try:
+            from bot.trading_state_machine import get_state_machine
+        except ImportError:
+            try:
+                from trading_state_machine import get_state_machine  # type: ignore[import]
+            except ImportError:
+                logger.debug("[BootstrapFSM] I7: TradingStateMachine unavailable — skipping check")
+                return
+        sm = get_state_machine()
+        if sm.is_emergency_stopped():
+            raise BootstrapInvariantError(
+                "I7_EMERGENCY_SAFETY",
+                "System is in EMERGENCY_STOP mode. All activity blocked. "
+                "Transition TradingStateMachine to OFF before proceeding.",
+            )
+
+    def assert_invariant_i8_supervisor_ownership(self) -> None:
+        """I8 — worker-thread restarts only legal in RUNNING_SUPERVISED state."""
+        state = self.state
+        if state != BootstrapState.RUNNING_SUPERVISED:
+            raise BootstrapInvariantError(
+                "I8_SUPERVISOR_OWNERSHIP",
+                f"Worker-thread restart attempted outside RUNNING_SUPERVISED state "
+                f"(current state={state.value}).",
+            )
+
+    @staticmethod
+    def assert_invariant_i9_fail_closed_nonce(exc: BaseException) -> None:
+        """I9 — fatal nonce errors must force EXTERNAL_RESTART_REQUIRED.
+
+        Call this from the exception handler whenever a nonce-related
+        RuntimeError is caught to verify it is the fatal variant that requires
+        a clean process restart.
+
+        Raises :class:`BootstrapInvariantError` if *exc* is a fatal nonce error
+        (so the caller knows to transition to EXTERNAL_RESTART_REQUIRED).
+        """
+        _fatal_fragments = (
+            "nonce not authorized",
+            "invalid nonce spike detected",
+        )
+        msg = str(exc).lower()
+        if any(frag in msg for frag in _fatal_fragments):
+            raise BootstrapInvariantError(
+                "I9_FAIL_CLOSED_NONCE",
+                f"Fatal nonce error detected: {exc}. "
+                "Transition to EXTERNAL_RESTART_REQUIRED and request process restart.",
+            )
+
+    @staticmethod
+    def assert_invariant_i10_capital_writer(writer_id: str) -> None:
+        """I10 — only the canonical writer may publish capital snapshots."""
+        if writer_id != _CAPITAL_WRITER_ID:
+            raise BootstrapInvariantError(
+                "I10_CAPITAL_WRITER",
+                f"Capital snapshot published by unauthorised writer {writer_id!r}. "
+                f"Only {_CAPITAL_WRITER_ID!r} is permitted.",
+            )
+
+    # ------------------------------------------------------------------
+    # Convenience dispatcher
+    # ------------------------------------------------------------------
+
+    def check_invariant(self, invariant_id: str, **kwargs: Any) -> None:
+        """
+        Dispatch a named invariant check.
+
+        Parameters
+        ----------
+        invariant_id:
+            One of ``"I1"`` through ``"I10"``.
+        **kwargs:
+            Extra context for static invariant methods:
+
+            - ``exc`` — for I9 (the exception object to classify)
+            - ``writer_id`` — for I10
+
+        Raises
+        ------
+        BootstrapInvariantError
+            If the invariant is violated.
+        ValueError
+            If *invariant_id* is not recognised.
+        """
+        _dispatch = {
+            "I1": self.assert_invariant_i1_single_writer,
+            "I2": self.assert_invariant_i2_liveness_first,
+            "I3": self.assert_invariant_i3_platform_first,
+            "I4": self.assert_invariant_i4_capital_gate,
+            "I5": self.assert_invariant_i5_readiness_gate,
+            "I6": self.assert_invariant_i6_mode_safety,
+            "I7": self.assert_invariant_i7_emergency_safety,
+            "I8": self.assert_invariant_i8_supervisor_ownership,
+        }
+        if invariant_id in _dispatch:
+            _dispatch[invariant_id]()
+        elif invariant_id == "I9":
+            exc = kwargs.get("exc")
+            if exc is not None:
+                self.assert_invariant_i9_fail_closed_nonce(exc)
+        elif invariant_id == "I10":
+            writer_id = kwargs.get("writer_id", "")
+            self.assert_invariant_i10_capital_writer(writer_id)
+        else:
+            raise ValueError(f"Unknown invariant id: {invariant_id!r}")
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton
+# ---------------------------------------------------------------------------
+_bootstrap_fsm: Optional[BootstrapStateMachine] = None
+_bootstrap_fsm_lock = threading.Lock()
+
+
+def get_bootstrap_fsm() -> BootstrapStateMachine:
+    """Return the process-wide :class:`BootstrapStateMachine` singleton."""
+    global _bootstrap_fsm
+    if _bootstrap_fsm is None:
+        with _bootstrap_fsm_lock:
+            if _bootstrap_fsm is None:
+                _bootstrap_fsm = BootstrapStateMachine()
+    return _bootstrap_fsm
+
+
+__all__ = [
+    "BootstrapState",
+    "BootstrapInvariantError",
+    "BootstrapStateMachine",
+    "get_bootstrap_fsm",
+]
