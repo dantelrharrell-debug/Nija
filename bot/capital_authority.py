@@ -282,6 +282,19 @@ class CapitalAuthority:
             dict(new_balances),
         )
 
+    def update(
+        self,
+        broker_map: Dict[str, Any],
+        open_exposure_usd: float = 0.0,
+    ) -> None:
+        """
+        Backward-compatible explicit update entrypoint for CapitalAuthority.
+
+        This delegates to :meth:`refresh` and emits an explicit completion marker.
+        """
+        self.refresh(broker_map=broker_map, open_exposure_usd=open_exposure_usd)
+        logger.info("CapitalAuthority updated: $%.2f", self.get_real_capital())
+
     # ------------------------------------------------------------------
     # Open-exposure registry (call each cycle before reading risk_capital)
     # ------------------------------------------------------------------

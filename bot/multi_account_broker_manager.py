@@ -444,9 +444,9 @@ class MultiAccountBrokerManager:
                 sorted(broker_map.keys()),
             )
             if broker_map:
-                authority.refresh(broker_map, open_exposure_usd=0.0)
+                authority.update(broker_map, open_exposure_usd=0.0)
             else:
-                authority.refresh({}, open_exposure_usd=0.0)
+                authority.update({}, open_exposure_usd=0.0)
 
             total_capital = float(authority.get_real_capital())
             valid_brokers = len(broker_map)
@@ -476,6 +476,7 @@ class MultiAccountBrokerManager:
             )
 
             if ready:
+                logger.info("CAPITAL_READY")
                 with self._capital_state_lock:
                     was_halted = self._trading_halted_due_to_capital
                 if was_halted:

@@ -8408,6 +8408,11 @@ class KrakenBroker(BaseBroker):
             # Use MONITORING category for balance checks (conservative rate limiting)
             balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
             balance = self._kraken_private_call('Balance', category=balance_category)
+            logger.info(
+                "[KrakenBalancePipeline] raw_balance_response account=%s type=%s",
+                self.account_identifier,
+                type(balance).__name__,
+            )
 
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -8437,12 +8442,75 @@ class KrakenBroker(BaseBroker):
 
             if balance and 'result' in balance:
                 result = balance['result']
+                logger.info(
+                    "[KrakenBalancePipeline] raw_balance_keys account=%s keys=%s",
+                    self.account_identifier,
+                    sorted(result.keys()),
+                )
 
                 # Kraken uses ZUSD for USD and USDT for Tether
                 usd_balance = float(result.get('ZUSD', 0))
                 usdt_balance = float(result.get('USDT', 0))
 
                 total = usd_balance + usdt_balance
+                logger.info(
+                    "[KrakenBalancePipeline] parsed_cash account=%s usd=%.8f usdt=%.8f",
+                    self.account_identifier,
+                    usd_balance,
+                    usdt_balance,
+                )
+
+                # Include non-USD asset value in USD so crypto-only accounts do not
+                # appear as phantom zero capital.
+                non_usd_assets = {}
+                for currency, amount in result.items():
+                    if currency in ['ZUSD', 'USDT']:
+                        continue
+                    try:
+                        qty = float(amount)
+                    except (TypeError, ValueError):
+                        continue
+                    if qty <= 0:
+                        continue
+                    non_usd_assets[currency] = qty
+
+                logger.info(
+                    "[KrakenBalancePipeline] non_usd_assets account=%s count=%d assets=%s",
+                    self.account_identifier,
+                    len(non_usd_assets),
+                    sorted(non_usd_assets.keys()),
+                )
+
+                non_usd_usd_value = 0.0
+                if non_usd_assets:
+                    for currency, qty in non_usd_assets.items():
+                        clean_asset = currency.lstrip('ZX')
+                        if clean_asset == 'XBT':
+                            clean_asset = 'BTC'
+                        if not clean_asset:
+                            continue
+                        price_usd = self.get_current_price(f"{clean_asset}-USD")
+                        if price_usd is None or price_usd <= 0:
+                            price_usd = self.get_current_price(f"{clean_asset}-USDT")
+                        if price_usd is None or price_usd <= 0:
+                            logger.warning(
+                                "[KrakenBalancePipeline] usd_conversion_missing account=%s asset=%s qty=%.8f",
+                                self.account_identifier,
+                                currency,
+                                qty,
+                            )
+                            continue
+                        converted = qty * float(price_usd)
+                        non_usd_usd_value += converted
+                        logger.info(
+                            "[KrakenBalancePipeline] usd_conversion account=%s asset=%s qty=%.8f "
+                            "price=%.8f usd_value=%.8f",
+                            self.account_identifier,
+                            currency,
+                            qty,
+                            float(price_usd),
+                            converted,
+                        )
 
                 # Also get TradeBalance to see held funds
                 # Use MONITORING category for balance checks (conservative rate limiting)
@@ -8470,7 +8538,16 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   💵 Total Available: ${total:.2f}")
 
                 # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken
-                total_funds = total + held_amount
+                total_funds = total + held_amount + non_usd_usd_value
+                logger.info(
+                    "[KrakenBalancePipeline] total_funds account=%s cash=%.8f held=%.8f "
+                    "non_usd_usd=%.8f total=%.8f",
+                    self.account_identifier,
+                    total,
+                    held_amount,
+                    non_usd_usd_value,
+                    total_funds,
+                )
 
                 if verbose:
                     if held_amount > 0:
