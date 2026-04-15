@@ -219,9 +219,10 @@ class CapitalAuthority:
                 (time.monotonic() - float(startup_barrier_started_at)) < startup_timeout_s
             )
 
-        registry_hydrated = has_registered_sources or bool(broker_map)
         if hasattr(self.broker_manager, "has_registered_sources"):
             registry_hydrated = bool(self.broker_manager.has_registered_sources())
+        else:
+            registry_hydrated = has_registered_sources or bool(broker_map)
         if used_hydration_fallback:
             logger.warning("⚠️ CapitalAuthority using fallback hydration — registry pipeline broken")
             if not startup_window_open:

@@ -941,7 +941,15 @@ class MultiAccountBrokerManager:
                 has_payload = False
         elif hasattr(broker, "has_balance_payload"):
             has_payload_attr = getattr(broker, "has_balance_payload", None)
-            has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
+            try:
+                has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
+            except Exception as exc:
+                logger.debug(
+                    "[CapitalAuthorityRefresh] broker=%s has_balance_payload raised: %s",
+                    getattr(getattr(broker, "broker_type", None), "value", "unknown"),
+                    exc,
+                )
+                has_payload = False
         if not has_payload:
             return False
         if not (
