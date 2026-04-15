@@ -80,7 +80,7 @@ except ImportError:
         _SNIPER_AVAILABLE = True
     except ImportError:
         _SNIPER_AVAILABLE = False
-except Exception as exc:
+except (ImportError, ModuleNotFoundError, NameError, AttributeError) as exc:
     logger.warning("DynamicSniperThresholds: sniper import failed — hard disabling sniper dependency: %s", exc)
     _SNIPER_AVAILABLE = False
 

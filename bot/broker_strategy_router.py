@@ -81,7 +81,8 @@ BROKER_PROFILES: Dict[str, Dict[str, Any]] = {
         # Low fees enable fast scalp trades
         "style": "scalp",
         # Minimum expected gross price move to justify entry (must clear fees + buffer)
-        # 0.6% enables Kraken micro-scalps while still filtering noise
+        # 0.6% enables early scalp participation; profitability is still guarded
+        # by downstream NetProfitGate (fees/slippage/spread safety checks)
         # (~$0.38 net on a $100 position, above the $0.30 minimum growth threshold)
         "min_move": 0.006,
         # Kraken offers good liquidity and fast execution — medium scan cadence
