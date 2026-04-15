@@ -108,6 +108,7 @@ class CapitalAuthority:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self.broker_manager: Optional[Any] = None
         self._reserve_pct: float = float(
             os.environ.get("NIJA_CAPITAL_RESERVE_PCT", str(_DEFAULT_RESERVE_PCT))
         )
@@ -166,6 +167,22 @@ class CapitalAuthority:
             Sum of all open-position notional values in USD.  Pass 0.0 (or
             omit) when the caller does not yet have position data.
         """
+        try:
+            try:
+                from bot.multi_account_broker_manager import get_broker_manager
+            except ImportError:
+                from multi_account_broker_manager import get_broker_manager  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "CapitalAuthority refresh requires get_broker_manager() for broker registry integrity"
+            ) from exc
+
+        canonical_broker_manager = get_broker_manager()
+        if self.broker_manager is None:
+            self.broker_manager = canonical_broker_manager
+        assert self.broker_manager is canonical_broker_manager, \
+            "BROKER MANAGER INSTANCE MISMATCH (CRITICAL)"
+
         new_balances: Dict[str, float] = {}
 
         for broker_id, broker in broker_map.items():
