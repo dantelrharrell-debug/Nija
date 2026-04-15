@@ -727,7 +727,7 @@ def validate_credentials() -> dict:
         fail("COINBASE_API_SECRET  — NOT SET or empty")
 
     # Optional JWT fields (used by some Coinbase SDK versions)
-    for var in ("COINBASE_JWT_ISSUER", "COINBASE_JWT_KID"):
+    for var in ("COINBASE_ORG_ID", "COINBASE_JWT_ISSUER", "COINBASE_JWT_KID"):
         is_set, prev = _check_var(var)
         if is_set:
             info(f"{var} = {prev}  (optional — present)")

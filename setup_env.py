@@ -73,8 +73,9 @@ def main():
 To complete the setup, you need to configure your API credentials:
 
 1. **Coinbase (Required for basic trading)**
-   - Get credentials from: https://www.coinbase.com/
-   - Set in .env: COINBASE_ORG_ID, COINBASE_JWT_PEM, COINBASE_JWT_KID, COINBASE_JWT_ISSUER
+   - Get credentials from: https://portal.cdp.coinbase.com/
+   - Set in .env: COINBASE_API_KEY, COINBASE_API_SECRET
+   - Optional metadata: COINBASE_ORG_ID, COINBASE_JWT_KID, COINBASE_JWT_ISSUER
 
 2. **Kraken Platform Account (Optional - for Kraken trading)**
    - Get credentials from: https://www.kraken.com/u/security/api
@@ -89,6 +90,8 @@ To complete the setup, you need to configure your API credentials:
    For User #2 (Tania Gilbert):
    - Get credentials from: https://www.kraken.com/u/security/api
    - Set in .env: KRAKEN_USER_TANIA_API_KEY, KRAKEN_USER_TANIA_API_SECRET
+   - Full-name fallback also supported:
+     KRAKEN_USER_TANIA_GILBERT_API_KEY, KRAKEN_USER_TANIA_GILBERT_API_SECRET
 
 4. **Open .env in your editor and fill in the values:**
    ```
