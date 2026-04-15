@@ -7392,7 +7392,7 @@ class KrakenBroker(BaseBroker):
             # Without this, the bootstrap balance check (_last_known_balance is not None)
             # never fires for gateway-only brokers, permanently blocking capital readiness.
             try:
-                _gw_balance = self.get_account_balance(verbose=False)
+                gw_balance = self.get_account_balance(verbose=False)
                 if self._last_known_balance is not None:
                     logger.info(
                         "[BrokerBalance] broker=kraken balance=$%.2f source=API",
@@ -7402,19 +7402,20 @@ class KrakenBroker(BaseBroker):
                     logger.warning(
                         "⚠️ [BrokerBalance] broker=kraken gateway balance fetch returned %.2f "
                         "but _last_known_balance is still None — CapitalAuthority may block",
-                        _gw_balance,
+                        gw_balance,
                     )
-            except Exception as _gw_bal_exc:
+            except Exception as gw_bal_exc:
                 logger.warning(
                     "⚠️ [BrokerBalance] broker=kraken gateway balance fetch failed: %s — "
                     "CapitalAuthority may block until next refresh",
-                    _gw_bal_exc,
+                    gw_bal_exc,
                 )
 
-            assert self._last_known_balance is not None, (
-                "FATAL: Kraken broker connected (gateway-only) but no balance payload — "
-                "CapitalAuthority invariant violated"
-            )
+            if self._last_known_balance is None:
+                raise RuntimeError(
+                    "FATAL: Kraken broker connected (gateway-only) but no balance payload — "
+                    "CapitalAuthority invariant violated"
+                )
 
             return True
 
@@ -8492,9 +8493,7 @@ class KrakenBroker(BaseBroker):
                 # are routed through _gateway_url instead.  Allow the balance fetch to
                 # proceed to the _kraken_private_call path below so _last_known_balance
                 # can be seeded and CapitalAuthority's invariant can be satisfied.
-                if getattr(self, "_gateway_url", ""):
-                    pass  # fall through to _kraken_private_call which routes via gateway
-                else:
+                if not getattr(self, "_gateway_url", ""):
                     # FIX #2: Not connected - log warning and use last known balance
                     # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
                     self._balance_fetch_errors += 1
@@ -8516,6 +8515,7 @@ class KrakenBroker(BaseBroker):
                         self._is_available = False
                         self.kraken_health = "ERROR"
                         return 0.0
+                # else: _gateway_url is set — fall through to _kraken_private_call (gateway route)
 
             # ── TTL cache check: skip API call if balance was recently fetched ──────
             if (self._last_known_balance is not None
