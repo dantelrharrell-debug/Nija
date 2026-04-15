@@ -209,6 +209,11 @@ class MultiAccountBrokerManager:
     MIN_STARTUP_CAPITAL_TIMEOUT_S = 1.0
     MIN_STARTUP_CAPITAL_POLL_S = 0.1
     MIN_STARTUP_CAPITAL_SLEEP_S = 0.05
+    BOOTSTRAP_TRIGGERS = {
+        "platform_connect",
+        "initialize_platform_brokers",
+        "capital_allocation_brain",
+    }
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
     # Problem: Sequential balance calls cause 1-1.2s delay per user
@@ -479,6 +484,7 @@ class MultiAccountBrokerManager:
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
         try:
+            bootstrap_trigger = self._is_bootstrap_trigger(trigger)
             broker_map: Dict[str, BaseBroker] = {}
             for broker_type, broker in self._platform_brokers.items():
                 broker_ready, reason = self._is_broker_ready_for_capital_refresh(broker_type, broker)
@@ -579,7 +585,7 @@ class MultiAccountBrokerManager:
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s ready=%s total=$%.2f valid_brokers=%d "
                 "kraken_connected_layer=%s kraken_included=%s assets_priced_ok=%s "
-                "bootstrap_exited_failed=%s kraken_capital=$%.2f",
+                "bootstrap_trigger=%s bootstrap_exited_failed=%s kraken_capital=$%.2f",
                 trigger,
                 ready,
                 total_capital,
@@ -587,6 +593,7 @@ class MultiAccountBrokerManager:
                 kraken_connected_layer,
                 kraken_included,
                 assets_priced_ok,
+                bootstrap_trigger,
                 bootstrap_exited_failed,
                 kraken_capital,
             )
@@ -614,13 +621,14 @@ class MultiAccountBrokerManager:
                 logger.error(
                     "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f "
                     "kraken_connected_layer=%s kraken_included=%s assets_priced_ok=%s "
-                    "bootstrap_exited_failed=%s kraken_capital=$%.2f",
+                    "bootstrap_trigger=%s bootstrap_exited_failed=%s kraken_capital=$%.2f",
                     trigger,
                     valid_brokers,
                     total_capital,
                     kraken_connected_layer,
                     kraken_included,
                     assets_priced_ok,
+                    bootstrap_trigger,
                     bootstrap_exited_failed,
                     kraken_capital,
                 )
@@ -673,6 +681,9 @@ class MultiAccountBrokerManager:
                 )
                 return False, "capital_readiness_error"
         return False, "capital_readiness_unavailable"
+
+    def _is_bootstrap_trigger(self, trigger: str) -> bool:
+        return trigger.split(":", 1)[0] in self.BOOTSTRAP_TRIGGERS
 
     def resolve_startup_capital_invariant(
         self,
