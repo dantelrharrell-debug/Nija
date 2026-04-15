@@ -539,25 +539,25 @@ class MultiAccountBrokerManager:
                     else 0.0
                 )
 
-            kraken_in_refresh_scope = "kraken" in broker_map
-            ready = (total_capital > 0.0) and (valid_brokers > 0.0)
+            kraken_included = "kraken" in broker_map
+            ready = total_capital > 0.0
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s ready=%s total=$%.2f valid_brokers=%d "
-                "kraken_in_refresh_scope=%s kraken_capital=$%.2f",
+                "kraken_included=%s kraken_capital=$%.2f",
                 trigger,
                 ready,
                 total_capital,
                 valid_brokers,
-                kraken_in_refresh_scope,
+                kraken_included,
                 kraken_capital,
             )
 
             if ready:
                 logger.info("CAPITAL_READY")
-                if kraken_in_refresh_scope:
+                if kraken_included:
                     try:
                         _KRAKEN_STARTUP_FSM.mark_capital_ready()
                     except Exception as exc:
@@ -577,11 +577,11 @@ class MultiAccountBrokerManager:
             else:
                 logger.error(
                     "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f "
-                    "kraken_in_refresh_scope=%s kraken_capital=$%.2f",
+                    "kraken_included=%s kraken_capital=$%.2f",
                     trigger,
                     valid_brokers,
                     total_capital,
-                    kraken_in_refresh_scope,
+                    kraken_included,
                     kraken_capital,
                 )
 
