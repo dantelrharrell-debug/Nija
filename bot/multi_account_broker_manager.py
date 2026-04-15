@@ -540,7 +540,7 @@ class MultiAccountBrokerManager:
                 )
 
             kraken_in_refresh_scope = "kraken" in broker_map
-            ready = (total_capital > 0) and (valid_brokers > 0)
+            ready = (total_capital > 0.0) and (valid_brokers > 0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
@@ -622,7 +622,7 @@ class MultiAccountBrokerManager:
             return True, "kraken_fsm_connecting"
         if _KRAKEN_STARTUP_FSM.is_failed:
             return True, "kraken_live_connected_fsm_failed_recovery"
-        return True, "kraken_live_connected"
+        return False, "kraken_fsm_not_ready"
 
     def resolve_startup_capital_invariant(
         self,
