@@ -119,6 +119,8 @@ class CapitalAuthority:
         self._broker_roles: Dict[str, str] = {}
         # Registered open-position exposure in USD (updated by callers)
         self._open_exposure_usd: float = 0.0
+        # Last aggregate total explicitly reported via update(total_capital).
+        self._last_reported_total: float = 0.0
         # Timestamp of most-recent successful refresh
         self.last_updated: Optional[datetime] = None
         # Minimum number of brokers that must have contributed a non-zero balance
@@ -282,18 +284,21 @@ class CapitalAuthority:
             dict(new_balances),
         )
 
-    def update(
-        self,
-        broker_map: Dict[str, Any],
-        open_exposure_usd: float = 0.0,
-    ) -> None:
+    def update(self, total_capital: float) -> None:
         """
-        Backward-compatible explicit update entrypoint for CapitalAuthority.
+        Explicitly update the aggregate capital snapshot.
 
-        This delegates to :meth:`refresh` and emits an explicit completion marker.
+        Parameters
+        ----------
+        total_capital:
+            Aggregate account capital in USD after broker-level balance refresh
+            and conversion.
         """
-        self.refresh(broker_map=broker_map, open_exposure_usd=open_exposure_usd)
-        logger.info("CapitalAuthority updated: $%.2f", self.get_real_capital())
+        total = max(0.0, float(total_capital))
+        with self._lock:
+            self._last_reported_total = total
+            self.last_updated = datetime.now(timezone.utc)
+        logger.info("CapitalAuthority updated: $%.2f", total)
 
     # ------------------------------------------------------------------
     # Open-exposure registry (call each cycle before reading risk_capital)

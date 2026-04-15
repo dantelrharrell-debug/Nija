@@ -444,11 +444,12 @@ class MultiAccountBrokerManager:
                 sorted(broker_map.keys()),
             )
             if broker_map:
-                authority.update(broker_map, open_exposure_usd=0.0)
+                authority.refresh(broker_map, open_exposure_usd=0.0)
             else:
-                authority.update({}, open_exposure_usd=0.0)
+                authority.refresh({}, open_exposure_usd=0.0)
 
             total_capital = float(authority.get_real_capital())
+            authority.update(total_capital)
             valid_brokers = len(broker_map)
             # Hard capital-truth contract:
             # If Kraken is connected, Kraken's balance is the startup/readiness
@@ -477,6 +478,14 @@ class MultiAccountBrokerManager:
 
             if ready:
                 logger.info("CAPITAL_READY")
+                if kraken_connected:
+                    try:
+                        _KRAKEN_STARTUP_FSM.mark_capital_ready()
+                    except Exception as exc:
+                        logger.warning(
+                            "[CapitalAuthorityRefresh] Failed to mark Kraken capital ready: %s",
+                            exc,
+                        )
                 with self._capital_state_lock:
                     was_halted = self._trading_halted_due_to_capital
                 if was_halted:

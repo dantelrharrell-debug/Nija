@@ -8490,7 +8490,7 @@ class KrakenBroker(BaseBroker):
                         if not clean_asset:
                             continue
                         price_usd = self.get_current_price(f"{clean_asset}-USD")
-                        if price_usd is None or price_usd <= 0:
+                        if price_usd is None:
                             price_usd = self.get_current_price(f"{clean_asset}-USDT")
                         if price_usd is None or price_usd <= 0:
                             logger.warning(

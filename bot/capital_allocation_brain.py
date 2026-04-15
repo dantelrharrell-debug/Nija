@@ -237,9 +237,9 @@ class CapitalAllocationBrain:
                 logger.info(
                     "[CapitalAllocationBrain] MABM refresh result: ready=%s total=$%.2f "
                     "valid_brokers=%d kraken_capital=$%.2f",
-                    bool(_snapshot.get("ready", 0.0)),
+                    bool(_snapshot.get("ready", False)),
                     float(_snapshot.get("total_capital", 0.0)),
-                    int(_snapshot.get("valid_brokers", 0.0)),
+                    int(_snapshot.get("valid_brokers", 0)),
                     float(_snapshot.get("kraken_capital", 0.0)),
                 )
         except Exception as exc:
