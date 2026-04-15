@@ -807,6 +807,107 @@ def _start_single_broker_thread(strategy, cycle_secs):
     return t, stop_flag
 
 
+def _is_truthy_env(var_name: str, default: str = "false") -> bool:
+    """Return True when an env var is set to a truthy string."""
+    return os.environ.get(var_name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _coinbase_sdk_is_available() -> bool:
+    """Return True if Coinbase SDK import path is available."""
+    try:
+        import importlib.util as _iutil
+        return _iutil.find_spec("coinbase.rest") is not None
+    except Exception:
+        return False
+
+
+def _verify_startup_truth_conditions(
+    strategy,
+    active_threads: dict,
+    *,
+    kraken_credentials_valid: bool,
+) -> None:
+    """
+    Enforce startup truth conditions before entering supervised loop.
+    Raises RuntimeError when any required condition is not met.
+    """
+    # Condition A — Kraken credentials valid (loaded + structurally valid)
+    if not kraken_credentials_valid:
+        raise RuntimeError(
+            "Condition A failed: Kraken credentials are not valid/loaded. "
+            "Set valid KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET (or legacy pair)."
+        )
+
+    # Condition A — Kraken operational (connection succeeded and no permission cache failure)
+    _kraken_connected = False
+    _mam = getattr(strategy, "multi_account_manager", None)
+    if _mam and hasattr(_mam, "platform_brokers"):
+        for _bt, _broker in (_mam.platform_brokers or {}).items():
+            _name = getattr(_bt, "value", str(_bt)).lower()
+            if _name == "kraken" and bool(getattr(_broker, "connected", False)):
+                _kraken_connected = True
+                break
+    if not _kraken_connected:
+        raise RuntimeError(
+            "Condition A failed: Kraken broker is not operational. "
+            "Verify API key permissions include query + trade."
+        )
+
+    try:
+        from bot.broker_manager import KrakenBroker as _KB
+        if "PLATFORM" in getattr(_KB, "_permission_failed_accounts", set()):
+            raise RuntimeError(
+                "Condition A failed: Kraken PLATFORM permission check previously failed. "
+                "Fix API key permissions (query + trade)."
+            )
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+
+    # Required by new requirement: BrokerManager initialized
+    if getattr(strategy, "broker_manager", None) is None:
+        raise RuntimeError("Startup verification failed: BrokerManager did not initialize.")
+
+    # Condition B — threads alive
+    _dead_threads = [
+        _key for _key, _entry in (active_threads or {}).items()
+        if not (_entry.get("thread") is not None and _entry["thread"].is_alive())
+    ]
+    if _dead_threads:
+        raise RuntimeError(
+            f"Condition B failed: trader thread(s) not alive immediately after startup: {_dead_threads}"
+        )
+
+    # Condition B — FSM must be RUNNING_SUPERVISED (implies not in retry state)
+    if _BOOTSTRAP_FSM_AVAILABLE:
+        _state = _get_bootstrap_fsm().state
+        if _state != _BootstrapState.RUNNING_SUPERVISED:
+            raise RuntimeError(
+                f"Condition B failed: bootstrap FSM state is {_state}, expected RUNNING_SUPERVISED."
+            )
+
+    # New requirement — relaxed market gates must pass
+    _mrg = getattr(strategy, "market_readiness_gate", None)
+    if _mrg is None:
+        raise RuntimeError("Startup verification failed: MarketReadinessGate not initialized.")
+    try:
+        _mode, _conditions, _details = _mrg.check_market_readiness(
+            atr=float(_mrg.AGGRESSIVE_ATR_MIN),
+            current_price=100.0,
+            adx=float(_mrg.AGGRESSIVE_ADX_MIN),
+            volume_percentile=float(_mrg.AGGRESSIVE_VOLUME_PERCENTILE_MIN),
+            spread_pct=float(_mrg.AGGRESSIVE_SPREAD_MAX),
+            entry_score=float(getattr(_mrg, "CAUTIOUS_MIN_SCORE", 45.0)),
+        )
+    except Exception as _gate_err:
+        raise RuntimeError(f"Startup verification failed: market readiness gate probe error: {_gate_err}")
+    if _mode == MarketMode.IDLE:
+        raise RuntimeError(
+            f"Startup verification failed: relaxed market gate probe returned IDLE ({_details.get('message')})."
+        )
+
+
 def _rerun_supervisor_loop(state: dict) -> None:
     """
     Re-enter the supervisor loop using a previously initialised bot state.
@@ -1076,6 +1177,8 @@ def _run_bot_startup_and_trading():
     # skip it entirely on retry so we never loop back through broker init.
     with _initialized_state_lock:
         _connection_already_complete = _initialized_state.get("connection_complete", False)
+    _kraken_credentials_valid = False
+    _coinbase_sdk_available = _coinbase_sdk_is_available()
     try:
         # Import here to ensure logging is set up
         from bot.health_check import get_health_manager
@@ -1092,6 +1195,8 @@ def _run_bot_startup_and_trading():
             kraken_platform_configured = _cred_snap.get("kraken_platform_configured", False)
             coinbase_configured = _cred_snap.get("coinbase_configured", False)
             exchanges_configured = _cred_snap.get("exchanges_configured", 0)
+            _kraken_credentials_valid = _cred_snap.get("kraken_credentials_valid", False)
+            _coinbase_sdk_available = _cred_snap.get("coinbase_sdk_available", _coinbase_sdk_available)
         else:
             logger.info("=" * 70)
             logger.info("🧵 STARTUP THREAD: Beginning bot initialization")
@@ -1260,6 +1365,10 @@ def _run_bot_startup_and_trading():
 
                     _cv_configured = sum(1 for r in _cv_results if r["configured"])
                     _cv_errors     = sum(1 for r in _cv_results if r["configured"] and not r["valid"])
+                    _cv_by_broker = {r.get("broker", "").lower(): r for r in _cv_results}
+                    _kraken_credentials_valid = bool(
+                        (_cv_by_broker.get("kraken (platform)") or {}).get("valid", False)
+                    )
 
                     for _r in _cv_results:
                         if not _r["configured"]:
@@ -1298,6 +1407,19 @@ def _run_bot_startup_and_trading():
                     logger.warning("⚠️  validate_broker_credentials.py not found — skipping validation")
             except Exception as _cv_err:
                 logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
+
+            if not _kraken_credentials_valid:
+                raise RuntimeError(
+                    "Kraken credentials are missing/invalid. "
+                    "Fix KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET (or legacy pair)."
+                )
+
+            _coinbase_disabled = _is_truthy_env("NIJA_DISABLE_COINBASE", "false")
+            if not _coinbase_disabled and not _coinbase_sdk_available:
+                raise RuntimeError(
+                    "Coinbase SDK is not installed but Coinbase is enabled. "
+                    "Install coinbase-advanced-py or set NIJA_DISABLE_COINBASE=true."
+                )
 
             # ═══════════════════════════════════════════════════════════════════════
             # KRAKEN PRE-CONNECTION NONCE RESET
@@ -1363,7 +1485,8 @@ def _run_bot_startup_and_trading():
 
             # Check Kraken Platform
             kraken_platform_configured = bool(
-                os.getenv("KRAKEN_PLATFORM_API_KEY") and os.getenv("KRAKEN_PLATFORM_API_SECRET")
+                (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
+                and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
             )
             if kraken_platform_configured:
                 exchanges_configured += 1
@@ -1505,6 +1628,8 @@ def _run_bot_startup_and_trading():
                 _initialized_state["kraken_platform_configured"] = kraken_platform_configured
                 _initialized_state["coinbase_configured"] = coinbase_configured
                 _initialized_state["exchanges_configured"] = exchanges_configured
+                _initialized_state["kraken_credentials_valid"] = _kraken_credentials_valid
+                _initialized_state["coinbase_sdk_available"] = _coinbase_sdk_available
 
             logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
 
@@ -2041,6 +2166,14 @@ def _run_bot_startup_and_trading():
                 _BootstrapState.RUNNING_SUPERVISED,
                 f"{len(_active_threads)} trader thread(s) started; supervisor loop active",
             )
+
+            # Enforce startup truth conditions before supervised execution.
+            _verify_startup_truth_conditions(
+                strategy,
+                _active_threads,
+                kraken_credentials_valid=_kraken_credentials_valid,
+            )
+
             _rerun_supervisor_loop(_state_for_supervisor)
 
         except RuntimeError as e:
