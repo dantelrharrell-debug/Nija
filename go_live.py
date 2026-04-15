@@ -511,7 +511,7 @@ class GoLiveValidator:
                     name="Coinbase Platform Connection",
                     passed=False,
                     message="Unable to connect to Coinbase platform account",
-                    remediation="Verify COINBASE_API_KEY and COINBASE_API_SECRET/COINBASE_PEM_CONTENT are correct.",
+                    remediation="Verify COINBASE_API_KEY and COINBASE_API_SECRET/COINBASE_PEM_CONTENT are correct",
                     critical=False
                 ))
                 self.warnings += 1
