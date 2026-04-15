@@ -167,23 +167,7 @@ class CapitalAllocationBrain:
         # not supply an explicit total_capital in config.  Falls back to 0.0
         # (instead of a synthetic $10 k) so misconfigured callers fail visibly
         # rather than silently trading against a fake baseline.
-        _ca_total: float = 0.0
-        try:
-            from capital_authority import get_capital_authority as _get_ca_cab
-            _ca_cab_inst = _get_ca_cab()
-            _ca_total = float(_ca_cab_inst.get_real_capital())
-            if _ca_total <= 0.0:
-                logger.warning(
-                    "[CapitalAllocationBrain] CapitalAuthority has non-positive total_capital=%.2f "
-                    "— allocations blocked until authority is refreshed.",
-                    _ca_total,
-                )
-        except Exception as exc:
-            logger.warning(
-                "[CapitalAllocationBrain] Initial CapitalAuthority read failed: %s",
-                exc,
-            )
-        self.total_capital = self.config.get("total_capital", _ca_total)
+        self.total_capital = self.config.get("total_capital", 0.0)
         self.reserve_pct = self.config.get('reserve_pct', 0.1)  # 10% reserve
         self.rebalance_threshold = self.config.get('rebalance_threshold', 0.05)  # 5%
         self.rebalance_frequency_hours = self.config.get('rebalance_frequency_hours', 24)
@@ -208,6 +192,20 @@ class CapitalAllocationBrain:
         # Performance tracking
         self.allocation_history: List[AllocationPlan] = []
         self.performance_history: List[Dict] = []
+
+        # Best-effort startup sync from CapitalAuthority for non-explicit configs.
+        # This reduces race-window false negatives where authority has not yet been
+        # refreshed at construction time.
+        if not self._explicit_total_capital:
+            startup_total = self.refresh_authority()
+            if startup_total > 0.0:
+                self.total_capital = startup_total
+            else:
+                logger.warning(
+                    "[CapitalAllocationBrain] CapitalAuthority has non-positive total_capital=%.2f "
+                    "— allocations blocked until authority is refreshed.",
+                    startup_total,
+                )
         
         logger.info(
             f"🧠 Capital Allocation Brain initialized: "
