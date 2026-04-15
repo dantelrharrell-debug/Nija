@@ -1469,6 +1469,55 @@ class BaseBroker(ABC):
     def has_balance_payload(self) -> bool:
         """Return whether this broker has observed a real balance payload this session."""
         return bool(self._has_balance_payload)
+    def has_balance_payload_for_capital(self) -> bool:
+        """
+        Return True when a usable balance payload exists for capital accounting.
+
+        Contract: this is a payload-presence check, not a positivity check; a
+        legitimate zero balance is still a valid payload.
+
+        Payload sources (in precedence order):
+            1) ``get_balance_fetch_timestamp()`` when the broker exposes it
+            2) ``_last_known_balance`` cache populated by balance fetch paths
+            3) ``_balance_cache`` payload cache used by some broker adapters
+        """
+        try:
+            ts_getter = getattr(self, "get_balance_fetch_timestamp", None)
+            if callable(ts_getter) and ts_getter() is not None:
+                return True
+        except Exception:
+            pass
+
+        if getattr(self, "_last_known_balance", None) is not None:
+            return True
+        if getattr(self, "_balance_cache", None) is not None:
+            return True
+        return False
+
+    def is_ready_for_capital(self) -> bool:
+        """
+        Single-source readiness contract for capital eligibility.
+
+        Ready means: physically connected AND has balance payload.
+        Kraken additionally requires a non-terminal/usable FSM state.
+        """
+        if not self.connected:
+            return False
+        if not self.has_balance_payload_for_capital():
+            return False
+        if self.broker_type != BrokerType.KRAKEN:
+            return True
+        # Eligibility rule (not final readiness): when Kraken is physically connected and has a
+        # valid balance payload, allow capital readiness in:
+        # - CONNECTED: fully booted steady state
+        # - CONNECTING: startup fetches can already produce balance payloads
+        # - FAILED: allows capital ingestion needed to escape FAILED loops;
+        #           final "system ready" still requires bootstrap FSM exit.
+        return (
+            _KRAKEN_STARTUP_FSM.is_connected
+            or _KRAKEN_STARTUP_FSM.is_connecting
+            or _KRAKEN_STARTUP_FSM.is_failed
+        )
 
     @abstractmethod
     def connect(self) -> bool:

@@ -220,6 +220,11 @@ class MultiAccountBrokerManager:
         CapitalBootstrapState.FAILED,
     )
 
+    BOOTSTRAP_TRIGGERS = {
+        "platform_connect",
+        "initialize_platform_brokers",
+        "capital_allocation_brain",
+    }
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
     # Problem: Sequential balance calls cause 1-1.2s delay per user
@@ -490,14 +495,16 @@ class MultiAccountBrokerManager:
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
         try:
-            bootstrap_trigger = self._is_bootstrap_refresh_trigger(trigger)
+            bootstrap_trigger = self._is_bootstrap_trigger(trigger)
             broker_map: Dict[str, BaseBroker] = {}
             for broker_type, broker in self._platform_brokers.items():
-                if broker is None or not getattr(broker, "connected", False):
+                broker_ready, reason = self._is_broker_ready_for_capital_refresh(broker_type, broker)
+                if not broker_ready:
                     logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=not_connected",
+                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=%s",
                         trigger,
                         broker_type.value,
+                        reason,
                     )
                     continue
                 is_platform_ready = self.is_platform_connected(broker_type)
@@ -576,17 +583,56 @@ class MultiAccountBrokerManager:
             # a specific venue to hold funds.
             has_connected_brokers = bool(broker_map)
             ready = has_connected_brokers and (total_capital > 0.0)
+            kraken_broker = self._platform_brokers.get(BrokerType.KRAKEN)
+            kraken_connected_layer = bool(getattr(kraken_broker, "connected", False))
+            kraken_included = "kraken" in broker_map
+            assets_priced_ok = (
+                float(getattr(snapshot, "assets_priced_success_pct", 0.0)) > 0.0
+                if snapshot is not None
+                else False
+            )
+            bootstrap_exited_failed = True
+            if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
+                boot_state = self._capital_bootstrap_fsm.state
+                bootstrap_exited_failed = boot_state != CapitalBootstrapState.FAILED
+                if (
+                    boot_state == CapitalBootstrapState.FAILED
+                    and kraken_connected_layer
+                    and kraken_included
+                    and (kraken_capital > 0.0)
+                    and assets_priced_ok
+                ):
+                    transitioned = self._capital_bootstrap_fsm.transition(
+                        CapitalBootstrapState.REFRESH_REQUESTED,
+                        f"{trigger}:kraken_recovery_ready",
+                    )
+                    bootstrap_exited_failed = transitioned and (
+                        self._capital_bootstrap_fsm.state != CapitalBootstrapState.FAILED
+                    )
+            kraken_ready = (
+                kraken_connected_layer
+                and kraken_included
+                and (kraken_capital > 0.0)
+                and assets_priced_ok
+                and bootstrap_exited_failed
+            )
+            ready = kraken_ready if kraken_connected_layer else (total_capital > 0.0)
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s ready=%s total=$%.2f valid_brokers=%d "
-                "kraken_connected=%s kraken_capital=$%.2f",
+                "kraken_connected_layer=%s kraken_included=%s assets_priced_ok=%s "
+                "bootstrap_trigger=%s bootstrap_exited_failed=%s kraken_capital=$%.2f",
                 trigger,
                 ready,
                 total_capital,
                 valid_brokers,
-                kraken_connected,
+                kraken_connected_layer,
+                kraken_included,
+                assets_priced_ok,
+                bootstrap_trigger,
+                bootstrap_exited_failed,
                 kraken_capital,
             )
 
@@ -594,6 +640,7 @@ class MultiAccountBrokerManager:
                 logger.info("CAPITAL_READY")
                 self._sync_platform_connection_states(broker_map)
                 if kraken_connected:
+                if kraken_included:
                     try:
                         _KRAKEN_STARTUP_FSM.mark_capital_ready()
                     except Exception as exc:
@@ -613,8 +660,17 @@ class MultiAccountBrokerManager:
             else:
                 logger.error(
                     "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f "
-                    "kraken_connected=%s kraken_capital=$%.2f",
-                    trigger, valid_brokers, total_capital, kraken_connected, kraken_capital,
+                    "kraken_connected_layer=%s kraken_included=%s assets_priced_ok=%s "
+                    "bootstrap_trigger=%s bootstrap_exited_failed=%s kraken_capital=$%.2f",
+                    trigger,
+                    valid_brokers,
+                    total_capital,
+                    kraken_connected_layer,
+                    kraken_included,
+                    assets_priced_ok,
+                    bootstrap_trigger,
+                    bootstrap_exited_failed,
+                    kraken_capital,
                 )
 
             return {
@@ -629,13 +685,16 @@ class MultiAccountBrokerManager:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
-    def _is_bootstrap_refresh_trigger(self, trigger: str) -> bool:
-        return trigger.startswith(self.BOOTSTRAP_REFRESH_TRIGGER_PREFIXES)
+    def _is_broker_ready_for_capital_refresh(
+        self,
+        broker_type: BrokerType,
+        broker: Optional[BaseBroker],
+    ) -> Tuple[bool, str]:
+        """
+        Unified broker-readiness gate for capital refresh.
 
-    def _get_bootstrap_state_value(self) -> str:
-        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
-            return "n/a"
-        return self._capital_bootstrap_fsm.state.value
+        This is intentionally state-driven only; trigger names do not influence
+        broker eligibility.
 
     def _can_include_bootstrap_connected_broker(
         self,
@@ -660,6 +719,34 @@ class MultiAccountBrokerManager:
         if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
             return False
         return self._capital_bootstrap_fsm.state in self.BOOTSTRAP_CONNECTED_ELIGIBLE_STATES
+        Args:
+            broker_type: Platform broker type being evaluated.
+            broker: Platform broker instance (may be None).
+
+        Returns:
+            Tuple[bool, str]:
+                - bool: Whether this broker is eligible to contribute capital now.
+                - str: Eligibility reason code for observability/logging.
+        """
+        if broker is None:
+            return False, "missing_broker"
+        ready_getter = getattr(broker, "is_ready_for_capital", None)
+        if callable(ready_getter):
+            try:
+                if bool(ready_getter()):
+                    return True, "broker_ready_for_capital"
+                return False, "broker_not_ready_for_capital"
+            except Exception as exc:
+                logger.debug(
+                    "[CapitalAuthorityRefresh] broker=%s is_ready_for_capital raised: %s",
+                    broker_type.value,
+                    exc,
+                )
+                return False, "capital_readiness_error"
+        return False, "capital_readiness_unavailable"
+
+    def _is_bootstrap_trigger(self, trigger: str) -> bool:
+        return trigger.split(":", 1)[0] in self.BOOTSTRAP_TRIGGERS
 
     def _sync_platform_connection_states(self, broker_map: Dict[str, BaseBroker]) -> None:
         """Mark connected platform brokers as CONNECTED after capital becomes ready."""
