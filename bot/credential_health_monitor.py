@@ -120,27 +120,17 @@ class CredentialHealthMonitor:
                 category = f'user_{user_id}_{broker_type.lower()}'
 
                 if broker_type == 'KRAKEN':
-                    creds[category] = {
-                        f'KRAKEN_USER_{first_name}_API_KEY',
-                        f'KRAKEN_USER_{first_name}_API_SECRET'
-                    }
-                    full_name = user_id.upper()
-                    if full_name != first_name:
-                        creds[category].update({
-                            f'KRAKEN_USER_{full_name}_API_KEY',
-                            f'KRAKEN_USER_{full_name}_API_SECRET'
-                        })
+                    creds[category] = self._build_user_credential_names(
+                        broker_prefix='KRAKEN',
+                        user_id=user_id,
+                        first_name=first_name,
+                    )
                 elif broker_type == 'ALPACA':
-                    creds[category] = {
-                        f'ALPACA_USER_{first_name}_API_KEY',
-                        f'ALPACA_USER_{first_name}_API_SECRET'
-                    }
-                    full_name = user_id.upper()
-                    if full_name != first_name:
-                        creds[category].update({
-                            f'ALPACA_USER_{full_name}_API_KEY',
-                            f'ALPACA_USER_{full_name}_API_SECRET'
-                        })
+                    creds[category] = self._build_user_credential_names(
+                        broker_prefix='ALPACA',
+                        user_id=user_id,
+                        first_name=first_name,
+                    )
         except Exception as e:
             logger.debug(f"Could not load user credentials for monitoring: {e}")
 
@@ -148,6 +138,21 @@ class CredentialHealthMonitor:
         logger.debug(f"Monitoring {len(creds)} credential categories (platform + users)")
 
         return creds
+
+    @staticmethod
+    def _build_user_credential_names(broker_prefix: str, user_id: str, first_name: str) -> Set[str]:
+        """Build the short and full-name credential env vars for a user."""
+        names = {
+            f'{broker_prefix}_USER_{first_name}_API_KEY',
+            f'{broker_prefix}_USER_{first_name}_API_SECRET',
+        }
+        full_name = user_id.upper()
+        if full_name != first_name:
+            names.update({
+                f'{broker_prefix}_USER_{full_name}_API_KEY',
+                f'{broker_prefix}_USER_{full_name}_API_SECRET',
+            })
+        return names
 
     def _hash_value(self, value: str) -> str:
         """

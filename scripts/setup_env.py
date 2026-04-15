@@ -238,7 +238,10 @@ def _is_secret_var(key: str) -> bool:
     """Return True when a variable should be treated as secret."""
     if key in _SECRET_VARS:
         return True
-    return key.endswith("_API_KEY") or key.endswith("_API_SECRET") or key.endswith("_SECRET")
+    return any(
+        key.endswith(suffix)
+        for suffix in ("_API_KEY", "_API_SECRET", "_SECRET")
+    )
 
 
 # ── Main logic ─────────────────────────────────────────────────────────────────
