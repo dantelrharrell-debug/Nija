@@ -8747,8 +8747,15 @@ class KrakenBroker(BaseBroker):
         token = str(asset_code or "").strip().upper()
         if not token:
             return ""
+        # Kraken may append class/suffix markers (e.g., "XXBT.M", "ETH.S").
+        token = token.split(".", 1)[0]
+
+        # Strip a single Kraken leading namespace prefix.
+        # Full chain examples: XXBT.M -> XXBT -> XBT -> BTC, ZUSD -> USD,
+        # XETH -> ETH, ZUSDT -> USDT.
         if len(token) > 3 and token[0] in {"X", "Z"}:
             token = token[1:]
+
         return {"XBT": "BTC", "XDG": "DOGE"}.get(token, token)
 
     def _get_asset_usd_price(self, symbol: str):
@@ -8767,6 +8774,33 @@ class KrakenBroker(BaseBroker):
 
     def compute_total_usd_balance(self, balance: dict, price_lookup) -> float:
         """Convert all balance assets to total USD value."""
+        def _to_positive_float(value) -> Optional[float]:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed > 0.0 else None
+
+        def _get_cached_pair_price(symbol_code: str) -> Optional[float]:
+            price_cache = getattr(self, "_price_cache", {})
+            if not isinstance(price_cache, dict):
+                return None
+            for pair in (f"{symbol_code}-USD", f"{symbol_code}-USDT"):
+                cached = price_cache.get(pair)
+                cached_price = cached.get("price") if isinstance(cached, dict) else None
+                parsed_cached_price = _to_positive_float(cached_price)
+                if parsed_cached_price is not None:
+                    logger.info(
+                        "[KrakenBalancePipeline] usd_conversion_cache_fallback account=%s asset=%s "
+                        "pair=%s price=%.8f",
+                        self.account_identifier,
+                        symbol_code,
+                        pair,
+                        parsed_cached_price,
+                    )
+                    return parsed_cached_price
+            return None
+
         total = 0.0
         for asset, amount in (balance or {}).items():
             try:
@@ -8781,8 +8815,9 @@ class KrakenBroker(BaseBroker):
                 continue
             if symbol in {"USDT", "USDC"}:
                 stable_price = price_lookup(symbol)
-                if stable_price and stable_price > 0.0:
-                    total += qty * float(stable_price)
+                parsed_stable_price = _to_positive_float(stable_price)
+                if parsed_stable_price is not None:
+                    total += qty * parsed_stable_price
                 else:
                     logger.warning(
                         "[KrakenBalancePipeline] stablecoin_price_fallback account=%s asset=%s "
@@ -8794,8 +8829,15 @@ class KrakenBroker(BaseBroker):
                     total += qty
                 continue
             price = price_lookup(symbol)
-            if price is not None and float(price) > 0.0:
-                total += qty * float(price)
+            parsed_price = _to_positive_float(price)
+            if parsed_price is None:
+                # Secondary lookup path to avoid zeroing non-fiat holdings when the
+                # injected price_lookup is unavailable/intermittent.
+                parsed_price = _to_positive_float(self._get_asset_usd_price(symbol))
+            if parsed_price is None:
+                parsed_price = _get_cached_pair_price(symbol)
+            if parsed_price is not None:
+                total += qty * parsed_price
             else:
                 logger.warning(
                     "[KrakenBalancePipeline] usd_conversion_missing account=%s asset=%s qty=%.8f",
