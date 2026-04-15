@@ -7257,7 +7257,9 @@ class KrakenBroker(BaseBroker):
             # Gateway-only connect success: private execution is delegated to
             # gateway, and this local broker never receives private credentials.
             self.credentials_configured = True
-            self.connected = True
+            # Avoid a connected/ready mismatch for PLATFORM startup: connection
+            # is only marked true after capital readiness is validated.
+            self.connected = self.account_type != AccountType.PLATFORM
             if self.account_type == AccountType.PLATFORM:
                 _capital_ready = False
                 _cap_total = 0.0
@@ -7898,7 +7900,9 @@ class KrakenBroker(BaseBroker):
                                 return False
 
                     if balance and 'result' in balance:
-                        self.connected = True
+                        # Avoid a transient connected/ready mismatch for PLATFORM:
+                        # keep connected False until startup capital gate is ready.
+                        self.connected = self.account_type != AccountType.PLATFORM
 
                         # Record success — resets the consecutive-error counter
                         self._record_nonce_success()
@@ -8095,6 +8099,7 @@ class KrakenBroker(BaseBroker):
                                 )
 
                             if _capital_ready:
+                                self.connected = True
                                 _KRAKEN_STARTUP_FSM.mark_nonce_ready()
                                 _KRAKEN_STARTUP_FSM.mark_capital_ready()
                                 _KRAKEN_STARTUP_FSM.mark_connected()
