@@ -4999,7 +4999,18 @@ class TradingStrategy:
                     # whenever fewer brokers than this have contributed a balance.
                     if _ca_broker_map:
                         _ca_startup.set_expected_brokers(len(_ca_broker_map))
-                    _ca_startup.refresh(_ca_broker_map)
+                    # Route through the single-writer coordinator when available;
+                    # fall back to the legacy direct refresh otherwise.
+                    _ca_startup_coordinator = getattr(
+                        self.multi_account_manager, "_capital_coordinator", None
+                    )
+                    if _ca_startup_coordinator is not None and _ca_broker_map:
+                        _ca_startup_coordinator.execute_refresh(
+                            broker_map=_ca_broker_map,
+                            trigger="trading_strategy_startup",
+                        )
+                    else:
+                        _ca_startup.refresh(_ca_broker_map)
                     self._capital_authority = _ca_startup
                     logger.info(
                         "✅ CapitalAuthority initialized: real=$%.2f usable=$%.2f risk=$%.2f "
@@ -9653,7 +9664,22 @@ class TradingStrategy:
                                 )
                             except Exception:
                                 pass
-                        _ca_cycle.refresh(_ca_cycle_map, open_exposure_usd=_ca_open_exp)
+                        # Route through the single-writer coordinator when available.
+                        # Falls back to the legacy direct refresh so a missing coordinator
+                        # never blocks a cycle.
+                        _ca_coordinator = getattr(
+                            getattr(self, "multi_account_manager", None),
+                            "_capital_coordinator",
+                            None,
+                        )
+                        if _ca_coordinator is not None:
+                            _ca_coordinator.execute_refresh(
+                                broker_map=_ca_cycle_map,
+                                trigger="trading_strategy_cycle",
+                                open_exposure_usd=_ca_open_exp,
+                            )
+                        else:
+                            _ca_cycle.refresh(_ca_cycle_map, open_exposure_usd=_ca_open_exp)
             except Exception:
                 pass  # Capital Authority refresh is advisory; never block a cycle
 

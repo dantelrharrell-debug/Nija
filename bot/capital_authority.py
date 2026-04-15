@@ -138,6 +138,9 @@ class CapitalAuthority:
         self._preserve_nonzero_ttl_s: float = float(
             os.environ.get("NIJA_CAPITAL_PRESERVE_TTL_S", "180.0")
         )
+        # Last typed snapshot published via publish_snapshot().  None until
+        # the coordinator has run at least once.
+        self._last_typed_snapshot: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -566,6 +569,101 @@ class CapitalAuthority:
         logger.debug(
             "[CapitalAuthority] expected_brokers set to %d", self._expected_brokers
         )
+
+    # ------------------------------------------------------------------
+    # Read-only properties for the coordinator (avoid accessing privates)
+    # ------------------------------------------------------------------
+
+    @property
+    def reserve_pct(self) -> float:
+        """The configured capital reserve fraction (e.g. 0.02 = 2 %)."""
+        with self._lock:
+            return self._reserve_pct
+
+    @property
+    def expected_brokers(self) -> int:
+        """Minimum broker count required for :meth:`is_fresh` to return ``True``."""
+        with self._lock:
+            return self._expected_brokers
+
+    # ------------------------------------------------------------------
+    # Single-writer publish gate
+    # ------------------------------------------------------------------
+
+    #: The only writer_id that publish_snapshot() accepts.
+    #: Must match ``capital_flow_state_machine.WRITER_ID``.
+    _AUTHORIZED_WRITER_ID: str = "mabm_capital_refresh_coordinator"
+
+    def publish_snapshot(self, snapshot: Any, writer_id: str) -> bool:
+        """
+        Atomically replace the internal capital state with data from *snapshot*.
+
+        This is the **only** write path accepted after the coordinator is active.
+        Any call whose *writer_id* does not match :attr:`_AUTHORIZED_WRITER_ID`
+        is rejected and returns ``False`` — the authority state is unchanged.
+
+        Parameters
+        ----------
+        snapshot:
+            A :class:`~capital_flow_state_machine.CapitalSnapshot` instance
+            (duck-typed to avoid circular imports).
+        writer_id:
+            Must equal ``"mabm_capital_refresh_coordinator"``.
+
+        Returns
+        -------
+        bool
+            ``True`` if the snapshot was accepted and applied; ``False`` if
+            the writer_id was not authorised.
+        """
+        if writer_id != self._AUTHORIZED_WRITER_ID:
+            logger.error(
+                "[CapitalAuthority] publish_snapshot REJECTED — "
+                "unauthorized writer_id=%r (expected %r)",
+                writer_id,
+                self._AUTHORIZED_WRITER_ID,
+            )
+            return False
+
+        new_balances = dict(getattr(snapshot, "broker_balances", {}))
+        open_exp = float(getattr(snapshot, "open_exposure_usd", 0.0))
+        computed_at = getattr(snapshot, "computed_at", datetime.now(timezone.utc))
+
+        with self._lock:
+            self._broker_balances = new_balances
+            self._open_exposure_usd = max(0.0, open_exp)
+            self.last_updated = computed_at
+            # Auto-raise expected_brokers if the new snapshot brought more brokers.
+            if len(new_balances) > self._expected_brokers:
+                self._expected_brokers = len(new_balances)
+            self._last_typed_snapshot = snapshot
+
+        logger.info(
+            "[CapitalAuthority] snapshot published — real=$%.2f  "
+            "confidence=%.3f(%s)  brokers=%d",
+            sum(new_balances.values()),
+            getattr(
+                getattr(snapshot, "confidence", None),
+                "confidence_score",
+                float("nan"),
+            ),
+            getattr(
+                getattr(snapshot, "confidence", None),
+                "band",
+                "?",
+            ),
+            len(new_balances),
+        )
+        return True
+
+    def get_typed_snapshot(self) -> Optional[Any]:
+        """
+        Return the most-recently published
+        :class:`~capital_flow_state_machine.CapitalSnapshot`, or ``None``
+        if the coordinator has not yet run.
+        """
+        with self._lock:
+            return self._last_typed_snapshot
 
     # ------------------------------------------------------------------
     # Diagnostics
