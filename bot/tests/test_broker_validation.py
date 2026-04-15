@@ -10,7 +10,7 @@ Tests the new execute_order method with:
 import sys
 sys.path.insert(0, '.')
 
-from bot.broker_manager import BaseBroker, BrokerType
+from bot.broker_manager import BaseBroker, BrokerType, KrakenBroker
 
 
 class MockBroker(BaseBroker):
@@ -195,6 +195,31 @@ def test_combined_validation():
     print()
 
 
+def test_kraken_asset_normalization_and_usd_conversion():
+    """Regression tests for Kraken asset normalization and USD valuation fallback."""
+    print("=" * 70)
+    print("TEST 6: Kraken Asset Normalization + USD Conversion Fallback")
+    print("=" * 70)
+
+    broker = KrakenBroker.__new__(KrakenBroker)
+    broker.account_identifier = "test_kraken_balance"
+    broker.api = None
+    broker._price_cache = {"BTC-USD": {"price": 70000.0, "ts": 0.0}}
+
+    # Normalization should correctly handle Kraken-prefixed assets.
+    assert broker._normalize_kraken_asset_code("XXBT") == "BTC"
+    assert broker._normalize_kraken_asset_code("ZUSD") == "USD"
+
+    # If primary lookup fails, compute_total_usd_balance should still use cache fallback.
+    total_usd = broker.compute_total_usd_balance(
+        {"XXBT": "0.002", "ZUSD": "0.00"},
+        lambda _symbol: None,
+    )
+    assert total_usd == 140.0, f"Expected 140.0 from cached BTC price, got {total_usd}"
+    print("✅ Test 6 PASSED: Cached-price fallback prevents zero USD valuation")
+    print()
+
+
 def run_all_tests():
     """Run all validation tests"""
     print("\n")
@@ -209,6 +234,7 @@ def run_all_tests():
         test_minimum_trade_size()
         test_broker_specific_minimums()
         test_combined_validation()
+        test_kraken_asset_normalization_and_usd_conversion()
 
         print("=" * 70)
         print("✅ ALL TESTS PASSED")
@@ -220,6 +246,7 @@ def run_all_tests():
         print("  - Minimum trade size validation: ✅")
         print("  - Broker-specific minimums: ✅")
         print("  - Combined validation: ✅")
+        print("  - Kraken normalization + USD fallback: ✅")
         print()
 
         return 0

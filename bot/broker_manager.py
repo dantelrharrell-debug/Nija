@@ -8800,6 +8800,26 @@ class KrakenBroker(BaseBroker):
                     total += qty
                 continue
             price = price_lookup(symbol)
+            if (price is None or float(price) <= 0.0) and hasattr(self, "_get_asset_usd_price"):
+                # Secondary lookup path to avoid zeroing non-fiat holdings when the
+                # injected price_lookup is unavailable/intermittent.
+                price = self._get_asset_usd_price(symbol)
+            if (price is None or float(price) <= 0.0) and hasattr(self, "_price_cache"):
+                # Final fallback: use last cached symbol price (if any), even if stale.
+                for pair in (f"{symbol}-USD", f"{symbol}-USDT"):
+                    cached = self._price_cache.get(pair) if isinstance(self._price_cache, dict) else None
+                    cached_price = cached.get("price") if isinstance(cached, dict) else None
+                    if cached_price is not None and float(cached_price) > 0.0:
+                        price = float(cached_price)
+                        logger.info(
+                            "[KrakenBalancePipeline] usd_conversion_cache_fallback account=%s asset=%s "
+                            "pair=%s price=%.8f",
+                            self.account_identifier,
+                            symbol,
+                            pair,
+                            price,
+                        )
+                        break
             if price is not None and float(price) > 0.0:
                 total += qty * float(price)
             else:
