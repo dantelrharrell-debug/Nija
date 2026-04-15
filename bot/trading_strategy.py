@@ -9869,6 +9869,13 @@ class TradingStrategy:
             else:
                 total_capital = self._get_total_capital_across_all_accounts()
 
+            if total_capital <= 0.0:
+                logger.critical(
+                    "🛑 TRADING BLOCKED: total_capital <= 0.0 (total_capital=$%.2f)",
+                    total_capital,
+                )
+                return
+
             _ca_health = _ca_cycle
             _broker_health = self._collect_platform_broker_health(_ca_health)
             _healthy_count = sum(1 for _h in _broker_health.values() if _h.get("healthy"))

@@ -2324,6 +2324,14 @@ class CoinbaseBroker(BaseBroker):
         # Guard: skip reconnect if already connected — prevents repeated "Connected" log spam
         if self.connected:
             return True
+        if self.account_type == AccountType.PLATFORM:
+            try:
+                from bot.multi_account_broker_manager import get_broker_manager
+            except ImportError:
+                from multi_account_broker_manager import get_broker_manager  # type: ignore[import]
+            manager = get_broker_manager()
+            manager.register_broker("coinbase", self)
+            assert len(get_broker_manager().platform_brokers) > 0, "FATAL: No brokers registered"
         try:
             from coinbase.rest import RESTClient
             import os
@@ -5723,6 +5731,14 @@ class AlpacaBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        if self.account_type == AccountType.PLATFORM:
+            try:
+                from bot.multi_account_broker_manager import get_broker_manager
+            except ImportError:
+                from multi_account_broker_manager import get_broker_manager  # type: ignore[import]
+            manager = get_broker_manager()
+            manager.register_broker("alpaca", self)
+            assert len(get_broker_manager().platform_brokers) > 0, "FATAL: No brokers registered"
         try:
             from alpaca.trading.client import TradingClient
             import time
@@ -6220,6 +6236,14 @@ class BinanceBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        if self.account_type == AccountType.PLATFORM:
+            try:
+                from bot.multi_account_broker_manager import get_broker_manager
+            except ImportError:
+                from multi_account_broker_manager import get_broker_manager  # type: ignore[import]
+            manager = get_broker_manager()
+            manager.register_broker("binance", self)
+            assert len(get_broker_manager().platform_brokers) > 0, "FATAL: No brokers registered"
         try:
             from binance.client import Client
             import time
@@ -7247,6 +7271,14 @@ class KrakenBroker(BaseBroker):
         if _already_done:
             logger.debug(f"[KrakenBroker:{_label}] Connection already established — skipping reconnect routine")
             return True
+        if self.account_type == AccountType.PLATFORM:
+            try:
+                from bot.multi_account_broker_manager import get_broker_manager
+            except ImportError:
+                from multi_account_broker_manager import get_broker_manager  # type: ignore[import]
+            manager = get_broker_manager()
+            manager.register_broker("kraken", self)
+            assert len(get_broker_manager().platform_brokers) > 0, "FATAL: No brokers registered"
 
         # ── PLATFORM-FIRST GATE (USER accounts only) ─────────────────────────
         # Kraken is extremely sensitive to clock drift and nonce ordering.
@@ -10657,6 +10689,14 @@ class OKXBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        if self.account_type == AccountType.PLATFORM:
+            try:
+                from bot.multi_account_broker_manager import get_broker_manager
+            except ImportError:
+                from multi_account_broker_manager import get_broker_manager  # type: ignore[import]
+            manager = get_broker_manager()
+            manager.register_broker("okx", self)
+            assert len(get_broker_manager().platform_brokers) > 0, "FATAL: No brokers registered"
         try:
             from okx.api import Account, Market, Trade
             import time

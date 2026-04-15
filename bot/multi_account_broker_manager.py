@@ -21,7 +21,7 @@ import threading
 import time
 from types import MappingProxyType
 import traceback
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from enum import Enum
 
 # Import broker classes
@@ -244,6 +244,7 @@ class MultiAccountBrokerManager:
         self._platform_brokers: Dict[BrokerType, BaseBroker] = {}
         self._platform_brokers_locked: bool = False
         self._registry_version: int = 0
+        self._primary_registration_count: int = 0
         self._last_update_ts: float = time.time()
         self._event_bus: Optional[Any] = None
         self._broker_registered_callbacks: List[Callable[[BaseBroker], None]] = []
@@ -455,10 +456,18 @@ class MultiAccountBrokerManager:
             self._registry_version += 1
             self._last_update_ts = time.time()
 
+    def has_registered_sources(self) -> bool:
+        """Return True when at least one primary registration exists and at least one platform source is present."""
+        with self._registry_meta_lock:
+            source_count = len(self._platform_brokers)
+            primary_registrations = self._primary_registration_count
+        return source_count > 0 and primary_registrations > 0
+
     def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
         """Propagate broker-registration metadata and notifications."""
         with self._registry_meta_lock:
             self._registry_version += 1
+            self._primary_registration_count += 1
             self._last_update_ts = time.time()
             callbacks = list(self._broker_registered_callbacks)
             event_bus = self._event_bus
@@ -497,6 +506,14 @@ class MultiAccountBrokerManager:
         Raises:
             RuntimeError: If platform brokers are locked
         """
+        target_manager = self._get_registration_target_manager(broker_type)
+        if target_manager is not self:
+            return target_manager.register_platform_broker_instance(
+                broker_type=broker_type,
+                broker=broker,
+                mark_connected_state=mark_connected_state,
+            )
+
         # Enforce immutability: Cannot add brokers after locking
         if self._platform_brokers_locked:
             error_msg = f"❌ INVARIANT VIOLATION: Cannot register platform broker {broker_type.value} - platform brokers are locked (immutable)"
@@ -533,6 +550,45 @@ class MultiAccountBrokerManager:
         logger.info(f"✅ Platform broker instance registered: {broker_type.value}")
         logger.info(f"   Platform broker registered once, globally")
         return True
+
+    def register_broker(self, broker_type: Union[str, BrokerType], broker: BaseBroker) -> bool:
+        """Canonical broker registration entrypoint used by broker connect() paths."""
+        if isinstance(broker_type, BrokerType):
+            broker_enum = broker_type
+        else:
+            broker_key = str(broker_type).strip()
+            broker_key_lower = broker_key.lower()
+            broker_enum = None
+            for candidate in BrokerType:
+                if candidate.value.lower() == broker_key_lower or candidate.name.lower() == broker_key_lower:
+                    broker_enum = candidate
+                    break
+            if broker_enum is None:
+                raise ValueError(f"Unsupported broker type for platform registration: {broker_type}")
+        return self.register_platform_broker_instance(
+            broker_type=broker_enum,
+            broker=broker,
+            mark_connected_state=bool(getattr(broker, "connected", False)),
+        )
+
+    def _get_registration_target_manager(
+        self, broker_type: Optional[Union[str, BrokerType]] = None
+    ) -> "MultiAccountBrokerManager":
+        """Return canonical registration target manager and log when redirecting."""
+        canonical_manager = get_broker_manager()
+        if self is canonical_manager:
+            return self
+        broker_label = (
+            broker_type.value if isinstance(broker_type, BrokerType) else str(broker_type or "unknown")
+        )
+        logger.warning(
+            "Redirecting platform broker registration to canonical manager instance "
+            "(broker=%s source_manager_id=%s canonical_manager_id=%s)",
+            broker_label,
+            hex(id(self)),
+            hex(id(canonical_manager)),
+        )
+        return canonical_manager
 
     def refresh_capital_authority(self, trigger: str = "manual") -> Dict[str, float]:
         """
@@ -900,8 +956,29 @@ class MultiAccountBrokerManager:
         # Once bootstrap reaches READY, strict gating resumes automatically.
         if is_platform_ready:
             return False
-        has_payload_attr = getattr(broker, "has_balance_payload", None)
-        has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
+        has_payload = False
+        has_payload_for_capital_attr = getattr(broker, "has_balance_payload_for_capital", None)
+        if callable(has_payload_for_capital_attr):
+            try:
+                has_payload = bool(has_payload_for_capital_attr())
+            except Exception as exc:
+                logger.debug(
+                    "[CapitalAuthorityRefresh] broker=%s has_balance_payload_for_capital raised: %s",
+                    getattr(getattr(broker, "broker_type", None), "value", "unknown"),
+                    exc,
+                )
+                has_payload = False
+        elif hasattr(broker, "has_balance_payload"):
+            has_payload_attr = getattr(broker, "has_balance_payload", None)
+            try:
+                has_payload = bool(has_payload_attr()) if callable(has_payload_attr) else False
+            except Exception as exc:
+                logger.debug(
+                    "[CapitalAuthorityRefresh] broker=%s has_balance_payload raised: %s",
+                    getattr(getattr(broker, "broker_type", None), "value", "unknown"),
+                    exc,
+                )
+                has_payload = False
         if not has_payload:
             return False
         if not (
@@ -1094,6 +1171,10 @@ class MultiAccountBrokerManager:
             RuntimeError: If platform brokers are locked or broker already registered
         """
         try:
+            target_manager = self._get_registration_target_manager(broker_type)
+            if target_manager is not self:
+                return target_manager.add_platform_broker(broker_type)
+
             # Enforce immutability: Cannot add brokers after locking
             if self._platform_brokers_locked:
                 error_msg = f"❌ INVARIANT VIOLATION: Cannot add platform broker {broker_type.value} - platform brokers are locked (immutable)"
