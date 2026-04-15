@@ -182,7 +182,20 @@ class CapitalAuthority:
                 previous > 0.0 and previous_age_s <= self._preserve_nonzero_ttl_s
             )
             try:
+                logger.info("[CapitalAuthority] Fetching balance for broker=%s", broker_id)
                 raw = broker.get_account_balance()
+                if isinstance(raw, dict):
+                    logger.info(
+                        "[CapitalAuthority] broker=%s raw balance fetched (dict keys=%s)",
+                        broker_id,
+                        sorted(raw.keys()),
+                    )
+                else:
+                    logger.info(
+                        "[CapitalAuthority] broker=%s raw balance fetched (scalar=%s)",
+                        broker_id,
+                        raw,
+                    )
                 if isinstance(raw, dict):
                     # Prefer trading_balance; fall back to usd + usdc
                     balance = float(
@@ -195,6 +208,11 @@ class CapitalAuthority:
                     balance = float(raw)
                 else:
                     balance = 0.0
+                logger.info(
+                    "[CapitalAuthority] broker=%s parsed balance=$%.2f",
+                    broker_id,
+                    balance,
+                )
 
                 if balance > 0.0:
                     new_balances[broker_key] = balance

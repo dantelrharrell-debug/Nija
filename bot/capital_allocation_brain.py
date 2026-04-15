@@ -178,8 +178,11 @@ class CapitalAllocationBrain:
                     "— allocations blocked until authority is refreshed.",
                     _ca_total,
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "[CapitalAllocationBrain] Initial CapitalAuthority read failed: %s",
+                exc,
+            )
         self.total_capital = self.config.get("total_capital", _ca_total)
         self.reserve_pct = self.config.get('reserve_pct', 0.1)  # 10% reserve
         self.rebalance_threshold = self.config.get('rebalance_threshold', 0.05)  # 5%
@@ -227,9 +230,23 @@ class CapitalAllocationBrain:
             except ImportError:
                 from multi_account_broker_manager import multi_account_broker_manager as _mabm  # type: ignore[import]
             if _mabm is not None and hasattr(_mabm, "refresh_capital_authority"):
-                _mabm.refresh_capital_authority(trigger="capital_allocation_brain")
-        except Exception:
-            pass
+                logger.info(
+                    "[CapitalAllocationBrain] Triggering CapitalAuthority refresh via MABM"
+                )
+                _snapshot = _mabm.refresh_capital_authority(trigger="capital_allocation_brain")
+                logger.info(
+                    "[CapitalAllocationBrain] MABM refresh result: ready=%s total=$%.2f "
+                    "valid_brokers=%d kraken_capital=$%.2f",
+                    bool(_snapshot.get("ready", 0.0)),
+                    float(_snapshot.get("total_capital", 0.0)),
+                    int(_snapshot.get("valid_brokers", 0.0)),
+                    float(_snapshot.get("kraken_capital", 0.0)),
+                )
+        except Exception as exc:
+            logger.warning(
+                "[CapitalAllocationBrain] MABM CapitalAuthority refresh failed: %s",
+                exc,
+            )
 
         try:
             from capital_authority import get_capital_authority as _get_ca
@@ -244,7 +261,15 @@ class CapitalAllocationBrain:
 
         try:
             total_capital = float(_get_ca().get_real_capital())
-        except Exception:
+            logger.info(
+                "[CapitalAllocationBrain] CapitalAuthority total_capital read: $%.2f",
+                total_capital,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[CapitalAllocationBrain] CapitalAuthority total_capital read failed: %s",
+                exc,
+            )
             total_capital = 0.0
 
         # Auto-sync runtime capital unless the caller explicitly pinned a value.
