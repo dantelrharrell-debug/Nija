@@ -372,10 +372,20 @@ class CapitalAllocationBrain:
 
         # Gate on CA hydration, not on the capital value.  total_capital == 0
         # is ambiguous — it could mean "not yet initialised" OR "genuinely
-        # empty account".  Only once _hydrated is True can we trust the value.
-        if not ca.is_hydrated:
+        # empty account".  Only once CAPITAL_SYSTEM_READY is set (i.e. the MABM
+        # coordinator has published at least one confirmed snapshot) can we trust
+        # the value.  Fall back to ca.is_hydrated if the gate import fails.
+        try:
+            try:
+                from bot.capital_authority import get_capital_system_gate as _get_csg
+            except ImportError:
+                from capital_authority import get_capital_system_gate as _get_csg  # type: ignore[import]
+            _system_ready = _get_csg().is_set()
+        except Exception:
+            _system_ready = ca.is_hydrated
+        if not _system_ready:
             logger.warning(
-                "[CapitalAllocationBrain] CA not hydrated yet — deferring bootstrap validation"
+                "[CapitalAllocationBrain] CAPITAL_SYSTEM_READY not set — deferring bootstrap validation"
             )
             return 0.0
 

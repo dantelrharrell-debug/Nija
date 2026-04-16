@@ -278,6 +278,29 @@ class CapitalDecisionEngine:
         self, broker_map: Optional[Dict[str, Any]]
     ) -> AllocationDecision:
         """Internal: gather advisory signals and assemble AllocationDecision."""
+        # ── 0. Capital System Gate — refuse to compute until the MABM coordinator
+        #       has published at least one confirmed snapshot.  Without this check
+        #       the engine would silently produce a $0-usable decision and
+        #       downstream systems would incorrectly treat zero as "no capital".
+        try:
+            try:
+                from bot.capital_authority import get_capital_system_gate as _get_csg_cde
+            except ImportError:
+                from capital_authority import get_capital_system_gate as _get_csg_cde  # type: ignore[import]
+            if not _get_csg_cde().is_set():
+                logger.debug(
+                    "[CapitalDecisionEngine] CAPITAL_SYSTEM_READY not set — returning INITIALIZING decision"
+                )
+                return AllocationDecision(
+                    usable_capital=0.0,
+                    strategy_budgets={},
+                    broker_weights={},
+                    account_multipliers={},
+                    advisory_metadata={"status": "INITIALIZING"},
+                )
+        except Exception as _csg_exc:
+            logger.debug("[CapitalDecisionEngine] capital system gate check failed: %s", _csg_exc)
+
         # ── 1. Pull usable capital from the single authoritative source ──────
         usable_capital = 0.0
         authority = self._get_capital_authority()
