@@ -88,6 +88,44 @@ BROKER_ROLE_UNKNOWN = "unknown"
 _DEFAULT_FRESHNESS_TTL_S: float = 90.0
 
 # ---------------------------------------------------------------------------
+# Capital System Gate — process-wide readiness event
+# ---------------------------------------------------------------------------
+
+# Set exactly once, the first time CapitalAuthority confirms it holds a valid
+# snapshot from the MABM coordinator (is_hydrated → True).  Dependent systems
+# check this event to distinguish "not yet initialised" from "confirmed capital
+# state" without polling or blocking.
+#
+# Usage (in any dependent module):
+#
+#     from capital_authority import get_capital_system_gate
+#
+#     if not get_capital_system_gate().is_set():
+#         return "INITIALIZING"
+#
+CAPITAL_SYSTEM_READY: threading.Event = threading.Event()
+
+
+def get_capital_system_gate() -> threading.Event:
+    """Return the process-wide ``CAPITAL_SYSTEM_READY`` :class:`threading.Event`.
+
+    The event transitions from *unset* to *set* exactly once: the first time
+    :meth:`CapitalAuthority.publish_snapshot` succeeds and marks the authority
+    as hydrated.  It is **never** cleared after being set.
+
+    Callers that only need a non-blocking check should use::
+
+        if not get_capital_system_gate().is_set():
+            return "INITIALIZING"
+
+    Callers that want to block until the gate opens should use::
+
+        get_capital_system_gate().wait(timeout=30)
+    """
+    return CAPITAL_SYSTEM_READY
+
+
+# ---------------------------------------------------------------------------
 # Singleton state
 # ---------------------------------------------------------------------------
 
@@ -1031,6 +1069,11 @@ class CapitalAuthority:
             # that callers can distinguish "not yet initialised" from "initialised
             # with a zero balance" without relying on total_capital == 0.
             self._hydrated = True
+            # Signal the global Capital System Gate on the first confirmed snapshot
+            # (whether the balance is zero or non-zero — both are valid confirmed
+            # states from the MABM coordinator).  set() is idempotent and
+            # thread-safe so calling it repeatedly after the first time is harmless.
+            CAPITAL_SYSTEM_READY.set()
             # Feed timestamps for the push path (_broker_feed_timestamps) are
             # intentionally left untouched here.  The coordinator's monotonic
             # guard operates on authority-level last_updated; the per-broker
@@ -1161,6 +1204,12 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     * ``CapitalAuthority.has_registered_sources()`` — the authority holds
       real post-refresh data rather than its empty zero-balance initial state.
 
+    Implementation note: first waits on :data:`CAPITAL_SYSTEM_READY` (set by
+    :meth:`CapitalAuthority.publish_snapshot` on first hydration) so that this
+    function blocks efficiently without polling.  After the gate opens, the
+    remaining ``total_capital > 0`` check falls through with a 0.5 s poll so
+    that a confirmed-empty-capital account can still be detected and raise.
+
     Parameters
     ----------
     timeout:
@@ -1190,7 +1239,19 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
         brain = CapitalAllocationBrain()  # guaranteed non-zero capital
     """
     start = time.time()
-    while time.time() - start < timeout:
+    # Fast path: wait on the event rather than spinning; this unblocks as soon
+    # as publish_snapshot() signals the gate for the first time.
+    # Event.wait() returns True if the event was set before the timeout, False otherwise.
+    if not CAPITAL_SYSTEM_READY.wait(timeout=timeout):
+        raise RuntimeError(
+            f"❌ CapitalAuthority never became ready after {timeout:.0f}s "
+            "(no broker balances or real capital is zero)"
+        )
+    # Gate is set — poll for a positive balance (the gate fires on any
+    # confirmed snapshot, including zero-balance; we still need total_capital > 0
+    # for trading to proceed).
+    remaining = timeout - (time.time() - start)
+    while remaining > 0:
         ca = get_capital_authority()
         # Use registered_broker_count >= 1 instead of has_registered_sources() so
         # the check is satisfied as soon as at least one broker has posted a
@@ -1200,6 +1261,7 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
             logger.info("✅ CapitalAuthority READY — proceeding")
             return True
         time.sleep(0.5)
+        remaining = timeout - (time.time() - start)
     raise RuntimeError(
         f"❌ CapitalAuthority never became ready after {timeout:.0f}s "
         "(no broker balances or real capital is zero)"
