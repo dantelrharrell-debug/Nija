@@ -878,10 +878,13 @@ class MultiAccountBrokerManager:
                 if snapshot is not None
                 else False
             )
-            bootstrap_exited_failed = True
+            # bootstrap_ok: True  = bootstrap is NOT in FAILED state (proceed)
+            #               False = bootstrap is in FAILED state (block kraken_ready)
+            # Default True so that when no FSM is registered we do not block.
+            bootstrap_ok = True
             if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
                 boot_state = self._capital_bootstrap_fsm.state
-                bootstrap_exited_failed = boot_state != CapitalBootstrapState.FAILED
+                bootstrap_ok = boot_state != CapitalBootstrapState.FAILED
                 if (
                     boot_state == CapitalBootstrapState.FAILED
                     and kraken_connected_layer
@@ -893,7 +896,7 @@ class MultiAccountBrokerManager:
                         CapitalBootstrapState.REFRESH_REQUESTED,
                         f"{trigger}:kraken_recovery_ready",
                     )
-                    bootstrap_exited_failed = transitioned and (
+                    bootstrap_ok = transitioned and (
                         self._capital_bootstrap_fsm.state != CapitalBootstrapState.FAILED
                     )
             kraken_ready = (
@@ -901,7 +904,7 @@ class MultiAccountBrokerManager:
                 and kraken_included
                 and (kraken_capital > 0.0)
                 and assets_priced_ok
-                and bootstrap_exited_failed
+                and bootstrap_ok
             )
             ready = kraken_ready if kraken_connected_layer else (total_capital > 0.0)
             with self._capital_state_lock:
@@ -910,7 +913,7 @@ class MultiAccountBrokerManager:
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s ready=%s total=$%.2f valid_brokers=%d "
                 "kraken_connected_layer=%s kraken_included=%s assets_priced_ok=%s "
-                "bootstrap_trigger=%s bootstrap_exited_failed=%s kraken_capital=$%.2f",
+                "bootstrap_trigger=%s bootstrap_ok=%s kraken_capital=$%.2f",
                 trigger,
                 ready,
                 total_capital,
@@ -919,7 +922,7 @@ class MultiAccountBrokerManager:
                 kraken_included,
                 assets_priced_ok,
                 bootstrap_trigger,
-                bootstrap_exited_failed,
+                bootstrap_ok,
                 kraken_capital,
             )
 
@@ -949,7 +952,7 @@ class MultiAccountBrokerManager:
                 logger.error(
                     "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f "
                     "kraken_connected_layer=%s kraken_included=%s assets_priced_ok=%s "
-                    "bootstrap_trigger=%s bootstrap_exited_failed=%s kraken_capital=$%.2f",
+                    "bootstrap_trigger=%s bootstrap_ok=%s kraken_capital=$%.2f",
                     trigger,
                     valid_brokers,
                     total_capital,
@@ -957,7 +960,7 @@ class MultiAccountBrokerManager:
                     kraken_included,
                     assets_priced_ok,
                     bootstrap_trigger,
-                    bootstrap_exited_failed,
+                    bootstrap_ok,
                     kraken_capital,
                 )
 

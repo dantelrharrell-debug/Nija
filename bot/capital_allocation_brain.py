@@ -206,13 +206,34 @@ class CapitalAllocationBrain:
         # When true, caller explicitly pinned total_capital in config and runtime
         # auto-sync from CapitalAuthority must not overwrite that value.
         self._explicit_total_capital = "total_capital" in self.config
-        
+
+        # Acquire the CapitalAuthority singleton once at construction time so
+        # every subsequent read goes to the same object that the coordinator
+        # and broker-manager are updating.  Storing the reference here makes
+        # the instance_id visible in logs / assertions and avoids the
+        # "different CA instance" bug where a dynamic _get_ca() call returned
+        # a newly-created (empty) singleton instead of the already-hydrated one.
+        try:
+            from bot.capital_authority import get_capital_authority as _get_ca_init
+        except ImportError:
+            try:
+                from capital_authority import get_capital_authority as _get_ca_init  # type: ignore[import]
+            except ImportError as exc:
+                raise ImportError(
+                    "CapitalAllocationBrain: cannot import get_capital_authority — "
+                    "ensure capital_authority.py is on sys.path"
+                ) from exc
+        self.capital_authority = _get_ca_init()
+        logger.info("[CapitalAllocationBrain] acquired CA instance_id=%d", id(self.capital_authority))
+
+        # When the caller explicitly pins a capital value (testing / paper-trade
+        # overrides), store it here.  The total_capital property returns this
+        # value instead of reading from the CA so the pinned figure is stable.
+        self._pinned_capital: Optional[float] = (
+            float(self.config["total_capital"]) if self._explicit_total_capital else None
+        )
+
         # Allocation parameters
-        # Use the Capital Authority's live observed equity when the caller does
-        # not supply an explicit total_capital in config.  Falls back to 0.0
-        # (instead of a synthetic $10 k) so misconfigured callers fail visibly
-        # rather than silently trading against a fake baseline.
-        self.total_capital = self.config.get("total_capital", 0.0)
         self.reserve_pct = self.config.get('reserve_pct', 0.1)  # 10% reserve
         self.rebalance_threshold = self.config.get('rebalance_threshold', 0.05)  # 5%
         self.rebalance_frequency_hours = self.config.get('rebalance_frequency_hours', 24)
@@ -238,7 +259,6 @@ class CapitalAllocationBrain:
         self.allocation_history: List[AllocationPlan] = []
         self.performance_history: List[Dict] = []
         self._authority_bootstrap_lock = threading.Lock()
-        self._capital_sync_lock = threading.Lock()
         self._authority_bootstrap_thread: Optional[threading.Thread] = None
         self._authority_bootstrap_attempts = max(
             1, _safe_int(self.config.get("authority_bootstrap_attempts", 30), 30)
@@ -266,22 +286,38 @@ class CapitalAllocationBrain:
                     "(e.g. delayed broker connect).",
                     exc,
                 )
-                # NOTE: initialization continues with total_capital=0 in this
-                # branch.  The async bootstrap thread below will update
-                # self.total_capital once the authority eventually becomes ready.
-                # Callers that require a hard guarantee (no $0 capital) should
-                # treat this path as an error.
+                # NOTE: initialization continues with $0 capital in this
+                # branch.  The async bootstrap thread will retry until the
+                # authority becomes ready.  Callers that require a hard
+                # guarantee (no $0 capital) should treat this path as an error.
                 self._start_async_authority_bootstrap()
             else:
-                startup_total = self.refresh_authority()
-                if startup_total > 0.0:
-                    self.total_capital = startup_total
+                self.refresh_authority()
         
         logger.info(
             f"🧠 Capital Allocation Brain initialized: "
             f"capital=${self.total_capital:,.2f}, "
             f"method={self.default_method.value}"
         )
+
+    @property
+    def total_capital(self) -> float:
+        """
+        Live total capital — always read directly from CapitalAuthority.
+
+        When the caller explicitly pinned a capital value in *config*
+        (``_pinned_capital is not None``) that fixed value is returned so
+        tests and paper-trade overrides remain stable.  In all other cases
+        the value is read from the CapitalAuthority singleton, which is the
+        single source of truth for every live trading module.
+
+        No caching is performed here: every read goes straight to
+        ``self.capital_authority.total_capital`` to prevent stale-value bugs
+        where a locally-cached copy diverges from the authoritative figure.
+        """
+        if self._pinned_capital is not None:
+            return self._pinned_capital
+        return self.capital_authority.total_capital
 
     def refresh_authority(self) -> float:
         """
@@ -322,38 +358,21 @@ class CapitalAllocationBrain:
                 exc,
             )
 
-        try:
-            from capital_authority import get_capital_authority as _get_ca
-        except ImportError:
-            try:
-                from bot.capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
-            except ImportError:
-                _get_ca = None  # type: ignore[assignment]
-
-        if _get_ca is None:
-            return max(0.0, float(self.total_capital))
-
-        try:
-            ca = _get_ca()
-            logger.info("[CABrain] using CA instance_id=%d", id(ca))
-            total_capital = float(ca.get_real_capital())
-            logger.info(
-                "[CapitalAllocationBrain] CapitalAuthority total_capital read: $%.2f",
-                total_capital,
+        # Now read capital from the persistent CA reference.  Using
+        # self.capital_authority (set once at __init__) guarantees we are
+        # reading from the same singleton instance that the coordinator and
+        # broker-manager are writing to.
+        ca = self.capital_authority
+        capital = ca.total_capital
+        logger.info(
+            f"[CapitalAllocationBrain] CapitalAuthority total_capital read: ${capital:.2f}"
+        )
+        if capital <= 0:
+            raise ValueError(
+                f"[CABrain] Invalid capital read: {capital} "
+                f"(CA id={id(ca)})"
             )
-        except Exception as exc:
-            logger.warning(
-                "[CapitalAllocationBrain] CapitalAuthority total_capital read failed: %s",
-                exc,
-            )
-            total_capital = 0.0
-
-        # Auto-sync runtime capital unless the caller explicitly pinned a value.
-        if total_capital > 0.0 and not self._explicit_total_capital:
-            with self._capital_sync_lock:
-                self.total_capital = total_capital
-
-        return max(0.0, total_capital)
+        return capital
 
     def _start_async_authority_bootstrap(self) -> None:
         """
@@ -381,7 +400,15 @@ class CapitalAllocationBrain:
     def _authority_bootstrap_worker(self) -> None:
         """Retry CapitalAuthority refresh until non-zero capital is observed."""
         for attempt in range(1, self._authority_bootstrap_attempts + 1):
-            latest_total = self.refresh_authority()
+            try:
+                latest_total = self.refresh_authority()
+            except ValueError as exc:
+                logger.warning(
+                    "[CapitalAllocationBrain] bootstrap attempt=%d CA validation error: %s",
+                    attempt,
+                    exc,
+                )
+                latest_total = 0.0
             if latest_total > 0.0:
                 logger.info(
                     "[CapitalAllocationBrain] async CapitalAuthority bootstrap succeeded "
@@ -394,9 +421,10 @@ class CapitalAllocationBrain:
                 time.sleep(self._authority_bootstrap_interval_s)
         logger.warning(
             "[CapitalAllocationBrain] async CapitalAuthority bootstrap exhausted "
-            "attempts=%d (capital remains $%.2f)",
+            "attempts=%d (CA id=%d capital=$%.2f)",
             self._authority_bootstrap_attempts,
-            float(self.total_capital),
+            id(self.capital_authority),
+            self.capital_authority.total_capital,
         )
 
     # Backward-compatible aliases requested by ops runbooks
@@ -792,9 +820,18 @@ class CapitalAllocationBrain:
             AllocationPlan
         """
         # Critical guard: never allocate when total capital is non-positive.
-        latest_total = self.refresh_authority()
-        if latest_total > 0.0 and not self._explicit_total_capital:
-            self.total_capital = latest_total
+        # refresh_authority() triggers a broker-manager refresh cycle so the
+        # CA snapshot is up-to-date before we read self.total_capital below.
+        try:
+            self.refresh_authority()
+        except ValueError as exc:
+            logger.error(
+                "⛔ Capital allocation blocked: CA validation error — %s", exc
+            )
+            return AllocationPlan(
+                total_capital=0.0,
+                method=method or self.default_method,
+            )
 
         method = method or self.default_method
 
