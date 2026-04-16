@@ -1857,6 +1857,45 @@ class MultiAccountBrokerManager:
             broker_type.value.upper(),
         )
 
+    def on_broker_ready(self, broker_id: str, balance_feed: Callable[[], Any]) -> None:
+        """Deterministic broker-readiness hook — call once per broker when connected.
+
+        This is the single authoritative hook that wires a newly-connected broker
+        into :class:`~bot.capital_authority.CapitalAuthority`.  It must be called
+        **exactly once** per broker, immediately after ``broker.connect()`` returns
+        ``True``.
+
+        What it does
+        ------------
+        1. Calls ``CapitalAuthority.register_source(broker_id, balance_feed)``
+           which (a) stores the feed callable and (b) immediately seeds the
+           broker's initial balance — so ``has_registered_sources()`` flips to
+           ``True`` without waiting for the next coordinator cycle.
+
+        Parameters
+        ----------
+        broker_id:
+            Logical broker key (e.g. ``"kraken"`` or ``"alpaca"``).
+        balance_feed:
+            Zero-argument callable that returns the current balance for this
+            broker (typically ``broker.get_account_balance``).
+        """
+        if get_capital_authority is None:
+            logger.warning(
+                "[MABM] on_broker_ready: CapitalAuthority unavailable — skipping register_source for broker=%s",
+                broker_id,
+            )
+            return
+        try:
+            authority = get_capital_authority()
+            authority.register_source(broker_id, balance_feed)
+        except Exception as exc:
+            logger.warning(
+                "[MABM] on_broker_ready: register_source failed for broker=%s: %s",
+                broker_id,
+                exc,
+            )
+
     def _mark_platform_connected(self, broker_type: BrokerType) -> None:
         """Advance the state machine to CONNECTED and record the timestamp.
 
@@ -3499,6 +3538,15 @@ class MultiAccountBrokerManager:
                     _payload_fsm.reset()
 
             if connected:
+                # Broker-readiness hook: register the balance feed with CapitalAuthority
+                # exactly once, immediately after connect() succeeds.  This is the single
+                # deterministic seeding point required by the capital-authority contract.
+                # All platform broker implementations expose get_account_balance() per the
+                # BaseBroker contract defined in broker_integration.py.
+                try:
+                    self.on_broker_ready(key, broker.get_account_balance)
+                except Exception as _exc:
+                    logger.warning("[MABM] on_broker_ready call failed for %s: %s", key, _exc)
                 # Event-driven capital refresh: any successful platform connect
                 # immediately revalidates unified capital readiness.
                 _cap = self.resolve_startup_capital_invariant(trigger=f"platform_connect:{key}")
