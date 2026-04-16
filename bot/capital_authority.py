@@ -1241,8 +1241,8 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     start = time.time()
     # Fast path: wait on the event rather than spinning; this unblocks as soon
     # as publish_snapshot() signals the gate for the first time.
-    CAPITAL_SYSTEM_READY.wait(timeout=timeout)
-    if not CAPITAL_SYSTEM_READY.is_set():
+    # Event.wait() returns True if the event was set before the timeout, False otherwise.
+    if not CAPITAL_SYSTEM_READY.wait(timeout=timeout):
         raise RuntimeError(
             f"❌ CapitalAuthority never became ready after {timeout:.0f}s "
             "(no broker balances or real capital is zero)"

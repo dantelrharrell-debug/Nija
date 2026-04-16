@@ -299,7 +299,17 @@ class CapitalDecisionEngine:
                     advisory_metadata={"status": "INITIALIZING"},
                 )
         except Exception as _csg_exc:
-            logger.debug("[CapitalDecisionEngine] capital system gate check failed: %s", _csg_exc)
+            logger.warning(
+                "[CapitalDecisionEngine] capital system gate check failed — returning INITIALIZING decision: %s",
+                _csg_exc,
+            )
+            return AllocationDecision(
+                usable_capital=0.0,
+                strategy_budgets={},
+                broker_weights={},
+                account_multipliers={},
+                advisory_metadata={"status": "INITIALIZING"},
+            )
 
         # ── 1. Pull usable capital from the single authoritative source ──────
         usable_capital = 0.0
