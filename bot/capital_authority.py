@@ -1031,7 +1031,6 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     start = time.time()
     while time.time() - start < timeout:
         ca = get_capital_authority()
-        if ca.is_ready():
         # Use registered_broker_count >= 1 instead of has_registered_sources() so
         # the check is satisfied as soon as at least one broker has posted a
         # balance, independently of the broker_manager registry state.
