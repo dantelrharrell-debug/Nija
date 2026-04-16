@@ -568,6 +568,27 @@ class CapitalAuthority:
         with self._lock:
             return any(v > 0.0 for v in self._broker_balances.values())
 
+    def is_ready(self) -> bool:
+        """
+        Return ``True`` when the authority holds at least one usable broker
+        balance entry **and** the sum of those balances is positive.
+
+        This is the canonical readiness invariant used by
+        :func:`wait_for_capital_ready`.  It is stricter than
+        :meth:`has_registered_sources` because it requires both a non-empty
+        ``_broker_balances`` dict (broker was registered **and** its payload
+        was ingested) **and** a strictly positive real-capital sum (the
+        registered balance is non-zero and therefore usable).
+
+        The dual check eliminates the "empty-but-registered" state that
+        :meth:`has_registered_sources` cannot detect: a broker entry with a
+        zero balance increments ``len(_broker_balances)`` but does not pass
+        the ``get_real_capital() > 0`` guard, so the authority stays "not
+        ready" until at least one source reports real funds.
+        """
+        with self._lock:
+            return len(self._broker_balances) > 0 and sum(self._broker_balances.values()) > 0
+
     def get_real_capital(self) -> float:
         """
         Gross observed equity across all registered brokers (USD + USDC).
@@ -1000,11 +1021,11 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     start = time.time()
     while time.time() - start < timeout:
         ca = get_capital_authority()
-        if ca.total_capital > 0 and ca.has_registered_sources():
+        if ca.is_ready():
             logger.info("✅ CapitalAuthority READY — proceeding")
             return True
         time.sleep(0.5)
     raise RuntimeError(
         f"❌ CapitalAuthority never became ready after {timeout:.0f}s "
-        "(total_capital=0 or no registered broker sources)"
+        "(no broker balances or real capital is zero)"
     )
