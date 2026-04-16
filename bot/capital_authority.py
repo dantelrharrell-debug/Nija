@@ -55,6 +55,7 @@ import threading
 import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("nija.capital_authority")
@@ -106,19 +107,57 @@ _DEFAULT_FRESHNESS_TTL_S: float = 90.0
 CAPITAL_SYSTEM_READY: threading.Event = threading.Event()
 
 
+# ---------------------------------------------------------------------------
+# Capital lifecycle state machine — explicit 3-phase enum
+# ---------------------------------------------------------------------------
+
+
+class CapitalLifecycleState(str, Enum):
+    """Explicit 3-phase capital lifecycle state consumed by allocation decisions.
+
+    Phases
+    ------
+    INITIALIZING
+        No snapshot has been published yet.  ``total_capital`` is ``0.0`` but
+        is meaningless — the authority has not seen real broker data.
+
+    HYDRATED_ZERO_CAPITAL
+        At least one snapshot has been published by the coordinator, but the
+        confirmed balance is zero.  The system is initialised and the data is
+        real; the account is simply empty.
+
+    ACTIVE_CAPITAL
+        The coordinator has published at least one snapshot with a positive
+        ``real_capital`` value **and** all expected brokers have contributed
+        (no partial aggregation in flight).  Trading decisions may proceed.
+    """
+
+    INITIALIZING = "INITIALIZING"
+    HYDRATED_ZERO_CAPITAL = "HYDRATED_ZERO_CAPITAL"
+    ACTIVE_CAPITAL = "ACTIVE_CAPITAL"
+
+
 def get_capital_system_gate() -> threading.Event:
     """Return the process-wide ``CAPITAL_SYSTEM_READY`` :class:`threading.Event`.
 
     The event transitions from *unset* to *set* exactly once: the first time
-    :meth:`CapitalAuthority.publish_snapshot` succeeds and marks the authority
-    as hydrated.  It is **never** cleared after being set.
+    :meth:`CapitalAuthority.publish_snapshot` receives a snapshot whose
+    ``real_capital > 0`` **and** whose ``broker_count`` meets or exceeds
+    ``expected_brokers`` (confirming no partial broker aggregation is in
+    flight).  It is **never** cleared after being set.
+
+    This means the event corresponds to the
+    :attr:`CapitalLifecycleState.ACTIVE_CAPITAL` state, not merely to the
+    first hydration.  Callers that need to detect the earlier
+    :attr:`CapitalLifecycleState.HYDRATED_ZERO_CAPITAL` state should check
+    :attr:`CapitalAuthority.is_hydrated` directly.
 
     Callers that only need a non-blocking check should use::
 
         if not get_capital_system_gate().is_set():
-            return "INITIALIZING"
+            return CapitalLifecycleState.INITIALIZING
 
-    Callers that want to block until the gate opens should use::
+    Callers that want to block until active capital is confirmed::
 
         get_capital_system_gate().wait(timeout=30)
     """
@@ -745,25 +784,34 @@ class CapitalAuthority:
         return self._hydrated
 
     @property
-    def state(self) -> str:
-        """Human-readable readiness label.
+    def state(self) -> CapitalLifecycleState:
+        """Capital lifecycle state — explicit 3-phase enum.
 
-        * ``"INITIALIZING"`` — no snapshot received yet (``_hydrated`` is
-          ``False``); :attr:`total_capital` returns ``0.0`` but is meaningless.
-        * ``"HYDRATED"``     — at least one snapshot received; balance may be
-          zero.
-        * ``"READY"``        — hydrated **and** ``total_capital > 0``; trading
-          can proceed.
+        Returns
+        -------
+        CapitalLifecycleState.INITIALIZING
+            No snapshot received yet (``_hydrated`` is ``False``);
+            :attr:`total_capital` returns ``0.0`` but is meaningless.
+        CapitalLifecycleState.HYDRATED_ZERO_CAPITAL
+            At least one snapshot received; confirmed balance is zero.
+        CapitalLifecycleState.ACTIVE_CAPITAL
+            Hydrated **and** ``total_capital > 0``; allocation decisions may
+            proceed.
+
+        Because :class:`CapitalLifecycleState` inherits from ``str``, existing
+        code that compares the return value as a string continues to work
+        (e.g. ``authority.state == "ACTIVE_CAPITAL"``).
 
         Callers that only need a boolean gate should prefer :attr:`is_hydrated`
-        or :meth:`is_ready` over comparing this string directly.
+        (phase ≥ HYDRATED_ZERO_CAPITAL) or :meth:`is_ready` (ACTIVE_CAPITAL)
+        over inspecting this property directly.
         """
         if not self._hydrated:
-            return "INITIALIZING"
+            return CapitalLifecycleState.INITIALIZING
         with self._lock:
             if sum(self._broker_balances.values()) > 0:
-                return "READY"
-        return "HYDRATED"
+                return CapitalLifecycleState.ACTIVE_CAPITAL
+        return CapitalLifecycleState.HYDRATED_ZERO_CAPITAL
 
     @property
     def registered_broker_count(self) -> int:
@@ -1069,11 +1117,24 @@ class CapitalAuthority:
             # that callers can distinguish "not yet initialised" from "initialised
             # with a zero balance" without relying on total_capital == 0.
             self._hydrated = True
-            # Signal the global Capital System Gate on the first confirmed snapshot
-            # (whether the balance is zero or non-zero — both are valid confirmed
-            # states from the MABM coordinator).  set() is idempotent and
-            # thread-safe so calling it repeatedly after the first time is harmless.
-            CAPITAL_SYSTEM_READY.set()
+            # Signal CAPITAL_SYSTEM_READY only when the lifecycle reaches
+            # ACTIVE_CAPITAL — i.e. all three conditions are satisfied:
+            #   1. hydrated   — guaranteed by reaching this branch
+            #   2. real_capital > 0 — confirmed non-zero balance
+            #   3. broker_count >= expected_brokers — all expected brokers have
+            #      contributed to this snapshot; no partial aggregation in flight
+            #
+            # This means the event maps precisely to
+            # CapitalLifecycleState.ACTIVE_CAPITAL rather than to the earlier
+            # HYDRATED_ZERO_CAPITAL phase.  set() is idempotent and thread-safe
+            # so calling it on every subsequent healthy snapshot is harmless.
+            snapshot_broker_count = int(getattr(snapshot, "broker_count", 0))
+            snapshot_real_capital = float(getattr(snapshot, "real_capital", 0.0))
+            if (
+                snapshot_real_capital > 0.0
+                and snapshot_broker_count >= max(1, self._expected_brokers)
+            ):
+                CAPITAL_SYSTEM_READY.set()
             # Feed timestamps for the push path (_broker_feed_timestamps) are
             # intentionally left untouched here.  The coordinator's monotonic
             # guard operates on authority-level last_updated; the per-broker
@@ -1138,6 +1199,13 @@ class CapitalAuthority:
                 if self.last_updated is not None
                 else float("inf")
             )
+            # Compute lifecycle state inline (lock already held).
+            if not self._hydrated:
+                lifecycle = CapitalLifecycleState.INITIALIZING
+            elif real > 0:
+                lifecycle = CapitalLifecycleState.ACTIVE_CAPITAL
+            else:
+                lifecycle = CapitalLifecycleState.HYDRATED_ZERO_CAPITAL
             return {
                 "real_capital": real,
                 "usable_capital": real * (1.0 - self._reserve_pct),
@@ -1158,6 +1226,9 @@ class CapitalAuthority:
                 "is_fresh": self.is_fresh(),  # uses _DEFAULT_FRESHNESS_TTL_S
                 # kept for backwards-compat with any existing dashboard consumers
                 "is_stale_60s": age > 60.0,
+                # explicit lifecycle state — consumers should read this instead
+                # of inferring the economic condition from individual fields
+                "capital_lifecycle_state": lifecycle.value,
             }
 
 
@@ -1195,20 +1266,20 @@ def reset_capital_authority_singleton() -> None:
 
 def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     """
-    Block the calling thread until :class:`CapitalAuthority` is ready.
+    Block the calling thread until :class:`CapitalAuthority` reaches
+    :attr:`~CapitalLifecycleState.ACTIVE_CAPITAL`.
 
-    "Ready" means **both** of the following are true:
+    "Active" means the coordinator has published at least one snapshot where:
 
-    * ``CapitalAuthority.total_capital > 0`` — at least one broker has
-      reported a positive balance.
-    * ``CapitalAuthority.has_registered_sources()`` — the authority holds
-      real post-refresh data rather than its empty zero-balance initial state.
+    * ``real_capital > 0`` — at least one broker reports a positive balance.
+    * ``broker_count >= expected_brokers`` — all expected brokers contributed;
+      no partial broker aggregation was in flight at publish time.
 
-    Implementation note: first waits on :data:`CAPITAL_SYSTEM_READY` (set by
-    :meth:`CapitalAuthority.publish_snapshot` on first hydration) so that this
-    function blocks efficiently without polling.  After the gate opens, the
-    remaining ``total_capital > 0`` check falls through with a 0.5 s poll so
-    that a confirmed-empty-capital account can still be detected and raise.
+    Implementation note: blocks on :data:`CAPITAL_SYSTEM_READY`, which is set
+    by :meth:`CapitalAuthority.publish_snapshot` only when both conditions
+    above are satisfied.  Because the event now maps directly to
+    :attr:`CapitalLifecycleState.ACTIVE_CAPITAL`, no additional polling is
+    required after the event fires.
 
     Parameters
     ----------
@@ -1223,8 +1294,8 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     Raises
     ------
     RuntimeError
-        When *timeout* elapses without the authority becoming ready.  Callers
-        that treat :class:`~bot.capital_allocation_brain.CapitalAllocationBrain`
+        When *timeout* elapses without the authority reaching ACTIVE_CAPITAL.
+        Callers that treat :class:`~bot.capital_allocation_brain.CapitalAllocationBrain`
         as optional (e.g. advisory use in ``capital_decision_engine``) should
         wrap the call in a try/except and handle the failure gracefully.
 
@@ -1238,31 +1309,14 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
         wait_for_capital_ready()          # blocks up to 30 s
         brain = CapitalAllocationBrain()  # guaranteed non-zero capital
     """
-    start = time.time()
-    # Fast path: wait on the event rather than spinning; this unblocks as soon
-    # as publish_snapshot() signals the gate for the first time.
-    # Event.wait() returns True if the event was set before the timeout, False otherwise.
+    # Block on the event; it is set only when capital is confirmed active
+    # (real_capital > 0 AND broker_count >= expected_brokers), so once the
+    # event fires we are already in ACTIVE_CAPITAL — no polling required.
     if not CAPITAL_SYSTEM_READY.wait(timeout=timeout):
         raise RuntimeError(
-            f"❌ CapitalAuthority never became ready after {timeout:.0f}s "
-            "(no broker balances or real capital is zero)"
+            f"❌ CapitalAuthority never reached ACTIVE_CAPITAL after {timeout:.0f}s "
+            "(real capital is zero or broker aggregation is incomplete)"
         )
-    # Gate is set — poll for a positive balance (the gate fires on any
-    # confirmed snapshot, including zero-balance; we still need total_capital > 0
-    # for trading to proceed).
-    remaining = timeout - (time.time() - start)
-    while remaining > 0:
-        ca = get_capital_authority()
-        # Use registered_broker_count >= 1 instead of has_registered_sources() so
-        # the check is satisfied as soon as at least one broker has posted a
-        # balance, independently of the broker_manager registry state.
-        # total_capital > 0 separately guards against a registered-but-zero edge case.
-        if ca.total_capital > 0 and ca.registered_broker_count >= 1:
-            logger.info("✅ CapitalAuthority READY — proceeding")
-            return True
-        time.sleep(0.5)
-        remaining = timeout - (time.time() - start)
-    raise RuntimeError(
-        f"❌ CapitalAuthority never became ready after {timeout:.0f}s "
-        "(no broker balances or real capital is zero)"
-    )
+    logger.info("✅ CapitalAuthority ACTIVE_CAPITAL confirmed — proceeding")
+    return True
+
