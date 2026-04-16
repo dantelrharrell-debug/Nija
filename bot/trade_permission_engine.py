@@ -409,6 +409,15 @@ class TradePermissionEngine:
             market_regime=regime_label,
         )
 
+        logger.warning(
+            f"""
+TRADE DECISION:
+signal={decision.signal}
+score={decision.signal_score}
+passed_gate={decision.final_decision == "EXECUTE"}
+reason_blocked={decision.block_reason}
+"""
+        )
         self._emit_trace(decision)
         self._record_stat(final)
         return decision
