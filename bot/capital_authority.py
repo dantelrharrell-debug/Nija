@@ -516,6 +516,56 @@ class CapitalAuthority:
             sum(self._broker_balances.values()),
         )
 
+    def force_accept_feed(
+        self,
+        broker_key: str,
+        balance: float,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """
+        Force-accept a balance feed during bootstrap, bypassing the
+        monotonic-timestamp guard in :meth:`feed_broker_balance`.
+
+        FIX 2 / FIX 4 — Bootstrap bypass
+        ------------------------------------
+        The single-writer contract (``CapitalRefreshCoordinator``) is preserved
+        for steady-state operation.  This method is *only* called by
+        :class:`~bot.balance_service.BalanceService` during the bootstrap phase
+        (i.e. when ``get_raw_per_broker(broker_key) == 0.0``) to guarantee that
+        the very first successful balance fetch ALWAYS seeds the authority,
+        regardless of coordinator readiness or FSM gate ordering.
+
+        Parameters
+        ----------
+        broker_key:
+            Logical broker identifier (same key used in feed_broker_balance).
+        balance:
+            Raw USD balance (positive values only; zero/negative are ignored).
+        timestamp:
+            Wall-clock time of the observation.  Defaults to ``now(UTC)``.
+        """
+        key = str(broker_key)
+        balance = float(balance)
+        if balance <= 0.0:
+            logger.debug(
+                "[CapitalAuthority] force_accept_feed: broker=%s balance=$%.2f — ignored",
+                key,
+                balance,
+            )
+            return
+        ts = _ensure_utc(timestamp) if timestamp is not None else datetime.now(timezone.utc)
+        with self._lock:
+            self._broker_balances[key] = balance
+            self._broker_feed_timestamps[key] = ts
+            self.last_updated = datetime.now(timezone.utc)
+        logger.info(
+            "[CapitalAuthority] force_accept_feed ACCEPTED broker=%s balance=$%.2f "
+            "(bootstrap bypass, real=$%.2f)",
+            key,
+            balance,
+            sum(self._broker_balances.values()),
+        )
+
     def set_broker_role(self, broker_id: str, role: str) -> None:
         """
         Tag a broker as ``"primary"`` (Kraken/authoritative) or

@@ -190,11 +190,30 @@ class BalanceService:
                     cls._last_logged[broker_key] = scalar
                 else:
                     logger.debug("[BalanceService] %s → $%.2f (no significant change)", broker_key, scalar)
-                # The CapitalAuthority is updated exclusively by the
-                # CapitalRefreshCoordinator (single-writer contract).
-                # BalanceService no longer feeds the authority directly to
-                # prevent concurrent-write races.
-                pass
+                # FIX 2: Bootstrap seeding — directly feed CapitalAuthority on the
+                # first successful balance fetch for this broker so that capital
+                # readiness is never blocked by FSM / coordinator gate ordering.
+                # The single-writer contract (CapitalRefreshCoordinator) is preserved
+                # for steady-state; this path only fires when get_raw_per_broker()
+                # returns 0.0 (broker has never been seeded in CA).  Once seeded,
+                # all subsequent updates flow exclusively through the coordinator.
+                try:
+                    _ca = _get_capital_authority() if _get_capital_authority else None
+                    if _ca is not None and _ca.get_raw_per_broker(broker_key) == 0.0:
+                        _ca.force_accept_feed(broker_key, scalar)
+                        logger.info(
+                            "[BalanceService] %s: bootstrap seed → CA $%.2f",
+                            broker_key,
+                            scalar,
+                        )
+                except Exception as _seed_exc:
+                    # Non-critical: CA may not be initialised yet during very early
+                    # startup.  The coordinator pipeline will seed it on its next run.
+                    logger.debug(
+                        "[BalanceService] %s: bootstrap CA seed skipped (%s)",
+                        broker_key,
+                        _seed_exc,
+                    )
             else:
                 # Still update the timestamp so the TTL gate prevents immediate retry
                 # storms when the exchange legitimately returns $0 (e.g. unfunded account).
