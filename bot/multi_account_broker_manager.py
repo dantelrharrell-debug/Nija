@@ -230,6 +230,10 @@ class MultiAccountBrokerManager:
         "platform_connect",
         "initialize_platform_brokers",
         "capital_allocation_brain",
+        # FIX 3: watchdog fires before bootstrap is READY; include it so the
+        # watchdog path uses BrokerPayloadFSM probe logic instead of the strict
+        # is_ready_for_capital() gate that blocks startup.
+        "watchdog",
     }
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
@@ -1064,12 +1068,20 @@ class MultiAccountBrokerManager:
         ready_getter = getattr(broker, "is_ready_for_capital", None)
         if callable(ready_getter):
             try:
-                # STRICT MODE (normal operation)
-                if not self._is_bootstrap_trigger(trigger):
+                # FIX 1: STRICT MODE only after bootstrap is fully complete (FSM == READY).
+                # Before READY, fall through to the payload-based check so that
+                # watchdog / manual triggers during startup never produce the
+                # broker_not_ready_for_capital hard block.  The circular dependency
+                # (broker needs _last_known_balance to pass is_ready_for_capital, but
+                # _last_known_balance is only set by a refresh that already includes the
+                # broker) is broken by always using payload-based gating until READY.
+                # Re-uses is_bootstrap_phase to avoid duplicating the FSM state check.
+                if not self._is_bootstrap_trigger(trigger) and not self.is_bootstrap_phase:
+                    # STRICT MODE (normal steady-state operation post-bootstrap)
                     is_ready = bool(ready_getter())
                     return is_ready, "broker_ready_for_capital" if is_ready else "broker_not_ready_for_capital"
 
-                # BOOTSTRAP MODE (payload-driven only)
+                # BOOTSTRAP / PRE-READY MODE (payload-driven only)
                 has_payload = (
                     getattr(broker, "has_balance_payload_for_capital", lambda: False)()
                     or getattr(broker, "has_balance_payload", lambda: False)()
@@ -1251,6 +1263,19 @@ class MultiAccountBrokerManager:
         """Return True only when unified capital is ready for trading gates."""
         with self._capital_state_lock:
             return bool(self._capital_ready)
+
+    @property
+    def is_bootstrap_phase(self) -> bool:
+        """True while the capital bootstrap FSM has not yet reached READY.
+
+        FIX 4 bootstrap bypass: callers may check this flag to decide whether
+        to call ``force_accept_feed()`` on CapitalAuthority directly instead of
+        waiting for the coordinator pipeline to complete.
+        """
+        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
+            # No FSM available — assume bootstrap until proven otherwise.
+            return True
+        return self._capital_bootstrap_fsm.state != CapitalBootstrapState.READY
 
     def is_trading_halted_due_to_capital(self) -> bool:
         """Return True when all brokers failed / zero-capital invariant is active."""
