@@ -493,13 +493,12 @@ class CapitalAuthority:
         with self._lock:
             existing_ts = self._broker_feed_timestamps.get(key)
             if existing_ts is not None and ts <= existing_ts:
-                # Out-of-order or duplicate feed — drop silently.
+                # Out-of-order or duplicate feed — drop.
                 # Equal timestamps are treated as duplicates: clock jitter or
                 # a rapid double-write of the same observation is not an
                 # authoritative update and should not overwrite the recorded value.
                 logger.debug(
-                    "[CapitalAuthority] feed_broker_balance: broker=%s out-of-order feed "
-                    "(ts=%s <= existing=%s) — dropped",
+                    "[CapitalAuthority] feed DROPPED broker=%s ts=%s existing_ts=%s",
                     key,
                     ts.isoformat(),
                     existing_ts.isoformat(),
@@ -510,10 +509,10 @@ class CapitalAuthority:
             self._broker_feed_timestamps[key] = ts
             self.last_updated = datetime.now(timezone.utc)
         logger.debug(
-            "[CapitalAuthority] %s broker=%s balance=$%.2f (real=$%.2f)",
-            "registered" if is_new else "updated",
+            "[CapitalAuthority] feed ACCEPTED broker=%s balance=$%.2f ts=%s (real=$%.2f)",
             key,
             balance,
+            ts.isoformat(),
             sum(self._broker_balances.values()),
         )
 
@@ -567,6 +566,18 @@ class CapitalAuthority:
         """
         with self._lock:
             return any(v > 0.0 for v in self._broker_balances.values())
+
+    @property
+    def registered_broker_count(self) -> int:
+        """Number of brokers that have posted at least one balance feed.
+
+        Unlike :meth:`has_registered_sources`, this is a simple count that
+        does not re-evaluate individual balance magnitudes, making it suitable
+        as a registration-only readiness gate when ``total_capital`` is used
+        separately to guard the capital-magnitude requirement.
+        """
+        with self._lock:
+            return len(self._broker_balances)
 
     def get_real_capital(self) -> float:
         """
@@ -1000,7 +1011,11 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     start = time.time()
     while time.time() - start < timeout:
         ca = get_capital_authority()
-        if ca.total_capital > 0 and ca.has_registered_sources():
+        # Use registered_broker_count >= 1 instead of has_registered_sources() so
+        # the check is satisfied as soon as at least one broker has posted a
+        # balance, independently of the broker_manager registry state.
+        # total_capital > 0 separately guards against a registered-but-zero edge case.
+        if ca.total_capital > 0 and ca.registered_broker_count >= 1:
             logger.info("✅ CapitalAuthority READY — proceeding")
             return True
         time.sleep(0.5)

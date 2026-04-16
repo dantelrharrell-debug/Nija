@@ -7,6 +7,8 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import datetime as _dt_module
+from datetime import datetime, timezone
 import functools
 import json
 import logging
@@ -798,12 +800,23 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
-def _feed_capital_authority(broker_key: str, balance: float) -> None:
+def _feed_capital_authority(broker_key: str, balance: float, timestamp=None) -> None:
     """Feed a freshly-fetched balance into CapitalAuthority.
 
     Uses a deferred local import to avoid circular-import issues (capital_authority
     imports multi_account_broker_manager which imports broker_manager).  Any
     failure is logged as a warning so a transient import error never stops trading.
+
+    Parameters
+    ----------
+    broker_key:
+        Logical broker identifier (e.g. ``"kraken"`` or ``"coinbase"``).
+    balance:
+        Raw USD balance (positive values only).
+    timestamp:
+        Optional ``datetime`` observation timestamp forwarded to
+        ``CapitalAuthority.feed_broker_balance``.  Defaults to *now* when
+        omitted so callers can pin an explicit wall-clock instant.
     """
     if balance <= 0:
         return
@@ -812,7 +825,22 @@ def _feed_capital_authority(broker_key: str, balance: float) -> None:
             from bot.capital_authority import get_capital_authority as _get_ca
         except ImportError:
             from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
-        _get_ca().feed_broker_balance(broker_key, balance)
+        _get_ca().feed_broker_balance(broker_key, balance, timestamp=timestamp)
+        # Collapse eventual-consistency delay: signal the capital manager so it
+        # can refresh synchronously on the feed event rather than waiting for
+        # the next scheduled scan cycle.
+        try:
+            try:
+                from bot.multi_account_broker_manager import get_broker_manager as _get_bm
+            except ImportError:
+                from multi_account_broker_manager import get_broker_manager as _get_bm  # type: ignore[import]
+            _get_bm().refresh_capital_authority(trigger="feed_event")
+        except Exception as _mabm_exc:
+            logger.debug(
+                "[CapitalHook] refresh_capital_authority skipped broker=%s: %s",
+                broker_key,
+                _mabm_exc,
+            )
     except Exception as _exc:
         logger.warning(
             "⚠️ [CapitalHook] failed to register capital source broker=%s: %s",
@@ -8636,6 +8664,14 @@ class KrakenBroker(BaseBroker):
                     usd_balance,
                     usdt_balance,
                 )
+                # Hard guarantee: feed available cash into CapitalAuthority before
+                # any async handoff (e.g. TradeBalance RPC).  This ensures the
+                # authority is never left at $0 if the subsequent call is slow or
+                # fails, and that the feed timestamp reflects the true observation
+                # time rather than the end of the full parse pipeline.
+                if total > 0:
+                    _now = datetime.now(timezone.utc)
+                    _feed_capital_authority("kraken", total, timestamp=_now)
 
                 non_usd_assets = []
                 for asset, amount in result.items():
