@@ -369,29 +369,28 @@ class CapitalAllocationBrain:
         # reading from the same singleton instance that the coordinator and
         # broker-manager are writing to.
         ca = self.capital_authority
-        capital = ca.total_capital
-        logger.info(
-            f"[CapitalAllocationBrain] CapitalAuthority total_capital read: ${capital:.2f}"
-        )
-        if capital <= 0:
-            raise ValueError(
-                f"[CABrain] Invalid capital read: {capital} "
-                f"(CA id={id(ca)})"
-            )
-            total_capital = 0.0
 
-        # Auto-sync runtime capital unless the caller explicitly pinned a value.
-        if total_capital > 0.0 and not self._explicit_total_capital:
-            with self._capital_sync_lock:
-                self.total_capital = total_capital
+        # Gate on CA hydration, not on the capital value.  total_capital == 0
+        # is ambiguous — it could mean "not yet initialised" OR "genuinely
+        # empty account".  Only once _hydrated is True can we trust the value.
+        if not ca._hydrated:
+            logger.warning(
+                "[CapitalAllocationBrain] CA not hydrated yet — deferring bootstrap validation"
+            )
+            return 0.0
+
+        total_capital = ca.total_capital
+        logger.info(
+            "[CapitalAllocationBrain] CapitalAuthority total_capital read: $%.2f",
+            total_capital,
+        )
 
         # ------------------------------------------------------------------ #
         # DEBUG: surface exactly what snapshot / pin state produced this value.
         # Remove once the capital-read discrepancy is confirmed resolved.
         # ------------------------------------------------------------------ #
         try:
-            _ca_debug = _get_ca() if _get_ca is not None else None
-            _snapshot_debug = getattr(_ca_debug, "_last_typed_snapshot", None)
+            _snapshot_debug = getattr(ca, "_last_typed_snapshot", None)
             logger.info(
                 "[CABrain DEBUG] "
                 "pinned=%s | "
@@ -401,13 +400,12 @@ class CapitalAllocationBrain:
                 self._explicit_total_capital,
                 _snapshot_debug is not None,
                 getattr(_snapshot_debug, "real_capital", None),
-                getattr(_ca_debug, "total_capital", None),
+                ca.total_capital,
             )
         except Exception as _dbg_exc:
             logger.debug("[CABrain DEBUG] introspection failed: %s", _dbg_exc)
 
         return max(0.0, total_capital)
-        return capital
 
     def _start_async_authority_bootstrap(self) -> None:
         """
