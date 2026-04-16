@@ -649,6 +649,17 @@ class MultiAccountBrokerManager:
                 self._capital_bootstrap_barrier_started_at = time.monotonic()
             broker_map: Dict[str, BaseBroker] = {}
             registered_sources = len(self._platform_brokers)
+            # Fix 4: Hard assertion — a globally connected broker must appear in MABM
+            # registered sources.  Fires as a loud AssertionError (caught by the outer
+            # except and surfaced as an ERROR log) instead of silently producing $0
+            # capital and blocking all trading indefinitely.
+            _kraken_broker_connected = (
+                _KRAKEN_STARTUP_FSM is not None and _KRAKEN_STARTUP_FSM.is_connected
+            )
+            assert not (_kraken_broker_connected and registered_sources == 0), (
+                "Capital source registration failure: "
+                "Kraken broker connected but not registered with capital manager"
+            )
             for broker_type, broker in self._platform_brokers.items():
 
                 # ── Bootstrap path: BrokerPayloadFSM-driven eligibility ────────
@@ -1262,7 +1273,18 @@ class MultiAccountBrokerManager:
                     if authority is not None and authority.is_stale(ttl_s=self.capital_stale_timeout_s):
                         needs_refresh = True
                     if needs_refresh:
-                        self.refresh_capital_authority(trigger=self.WATCHDOG_REFRESH_TRIGGER)
+                        # Fix 3: Refresh backoff — skip the refresh entirely when no
+                        # capital sources have been registered yet.  Calling
+                        # refresh_capital_authority with zero registered sources
+                        # produces a log storm of "pending / no_registered_sources"
+                        # messages every watchdog cycle without ever making progress.
+                        if not self.has_registered_sources():
+                            logger.debug(
+                                "[CapitalWatchdog] skipping refresh — "
+                                "no registered capital sources yet"
+                            )
+                        else:
+                            self.refresh_capital_authority(trigger=self.WATCHDOG_REFRESH_TRIGGER)
 
                     healthy_connected = any(
                         self.is_platform_connected(bt) and getattr(b, "connected", False)
