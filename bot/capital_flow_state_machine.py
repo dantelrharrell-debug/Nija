@@ -218,7 +218,9 @@ class CapitalSnapshot:
     confidence: CapitalConfidence
 
     # ── Validity flags ─────────────────────────────────────────────────────
-    is_fresh: bool   # True  ↔ broker_count ≥ expected_brokers AND age ≤ TTL
+    is_fresh: bool   # True  ↔ broker threshold met AND age ≤ TTL AND real > 0
+                     #   normal mode:       broker_count ≥ expected_brokers
+                     #   opportunistic mode: broker_count ≥ 1
     is_stale: bool   # True  ↔ not is_fresh
 
     # ------------------------------------------------------------------
@@ -915,6 +917,9 @@ class CapitalRefreshCoordinator:
         # =================================================================
         reserve_pct = authority.reserve_pct
         expected = authority.expected_brokers
+        # In opportunistic mode only 1 broker is required for freshness; in
+        # normal mode all expected_brokers must be present.
+        broker_threshold = 1 if authority.opportunistic else max(1, expected)
         real = sum(new_balances.values())
         usable = real * (1.0 - reserve_pct)
         risk = max(0.0, usable - max(0.0, float(open_exposure_usd)))
@@ -930,7 +935,7 @@ class CapitalRefreshCoordinator:
         )
 
         is_fresh = (
-            len(new_balances) >= max(1, expected)
+            len(new_balances) >= broker_threshold
             and prior_age_s <= FRESHNESS_TTL_S
             and real > 0.0
         )

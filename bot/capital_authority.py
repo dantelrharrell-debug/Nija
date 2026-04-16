@@ -234,6 +234,16 @@ class CapitalAuthority:
         self._expected_brokers: int = int(
             os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "1")
         )
+        # Opportunistic mode: when True, ACTIVE_CAPITAL is reached (and
+        # CAPITAL_SYSTEM_READY is set) as soon as ≥1 broker reports a positive
+        # balance, without waiting for all expected_brokers to connect.
+        # Useful when broker connectivity is unreliable at startup — trading
+        # begins with a partial (but positive) capital picture.
+        # Set via env var NIJA_CAPITAL_OPPORTUNISTIC (accepted: "1", "true", "yes")
+        # or programmatically via set_opportunistic().
+        self._opportunistic: bool = os.environ.get(
+            "NIJA_CAPITAL_OPPORTUNISTIC", "false"
+        ).strip().lower() in ("1", "true", "yes")
         # Maximum age for retaining a previous non-zero balance when a refresh
         # call returns zero/errors (prevents indefinite stale-capital retention).
         self._preserve_nonzero_ttl_s: float = float(
@@ -1057,6 +1067,10 @@ class CapitalAuthority:
         2. At least ``_expected_brokers`` brokers contributed a non-zero
            balance (prevents partial-aggregation silently passing as valid).
 
+        When :attr:`opportunistic` mode is active, condition 2 is relaxed to
+        require only **1** broker with a non-zero balance, allowing trading to
+        start faster when not all expected brokers have connected yet.
+
         This is the preferred freshness gate for live-trading code paths.
         Unlike ``is_stale(ttl_s=float('inf'))``, a snapshot that was once
         populated but has since gone stale will correctly return ``False``.
@@ -1073,7 +1087,8 @@ class CapitalAuthority:
             age = (datetime.now(timezone.utc) - self.last_updated).total_seconds()
             if age > ttl_s:
                 return False
-            if len(self._broker_balances) < self._expected_brokers:
+            min_brokers = 1 if self._opportunistic else self._expected_brokers
+            if len(self._broker_balances) < min_brokers:
                 return False
             return True
 
@@ -1112,6 +1127,35 @@ class CapitalAuthority:
         """Minimum broker count required for :meth:`is_fresh` to return ``True``."""
         with self._lock:
             return self._expected_brokers
+
+    @property
+    def opportunistic(self) -> bool:
+        """Whether opportunistic mode is active.
+
+        When ``True``, :attr:`CAPITAL_SYSTEM_READY` is set (and
+        :meth:`is_fresh` returns ``True``) as soon as **at least one** broker
+        reports a positive balance, regardless of ``expected_brokers``.
+
+        This allows trading to start faster when some brokers are slow to
+        connect, at the cost of a less complete initial capital picture.
+        """
+        return self._opportunistic
+
+    def set_opportunistic(self, enabled: bool) -> None:
+        """Enable or disable opportunistic mode at runtime.
+
+        Parameters
+        ----------
+        enabled:
+            Pass ``True`` to allow :attr:`~CapitalLifecycleState.ACTIVE_CAPITAL`
+            with only 1 connected broker; ``False`` to restore strict
+            ``expected_brokers`` enforcement.
+        """
+        self._opportunistic = bool(enabled)
+        logger.info(
+            "[CapitalAuthority] opportunistic mode %s",
+            "ENABLED" if self._opportunistic else "DISABLED",
+        )
 
     # ------------------------------------------------------------------
     # Single-writer publish gate
@@ -1197,23 +1241,31 @@ class CapitalAuthority:
             # that callers can distinguish "not yet initialised" from "initialised
             # with a zero balance" without relying on total_capital == 0.
             self._hydrated = True
-            # Signal CAPITAL_SYSTEM_READY only when the lifecycle reaches
-            # ACTIVE_CAPITAL — i.e. all three conditions are satisfied:
-            #   1. hydrated   — guaranteed by reaching this branch
+            # Signal CAPITAL_SYSTEM_READY when the lifecycle reaches
+            # ACTIVE_CAPITAL — i.e. the following conditions are satisfied:
+            #   1. hydrated       — guaranteed by reaching this branch
             #   2. real_capital > 0 — confirmed non-zero balance
-            #   3. broker_count >= expected_brokers — all expected brokers have
-            #      contributed to this snapshot; no partial aggregation in flight
+            #   3. broker threshold met — in normal mode: broker_count >=
+            #      expected_brokers (no partial aggregation in flight); in
+            #      opportunistic mode: broker_count >= 1 (trading may start
+            #      with a partial capital picture).
             #
-            # This means the event maps precisely to
-            # CapitalLifecycleState.ACTIVE_CAPITAL rather than to the earlier
-            # HYDRATED_ZERO_CAPITAL phase.  set() is idempotent and thread-safe
-            # so calling it on every subsequent healthy snapshot is harmless.
+            # set() is idempotent and thread-safe so calling it on every
+            # subsequent healthy snapshot is harmless.
             snapshot_broker_count = int(getattr(snapshot, "broker_count", 0))
             snapshot_real_capital = float(getattr(snapshot, "real_capital", 0.0))
+            broker_threshold = 1 if self._opportunistic else max(1, self._expected_brokers)
             if (
                 snapshot_real_capital > 0.0
-                and snapshot_broker_count >= max(1, self._expected_brokers)
+                and snapshot_broker_count >= broker_threshold
             ):
+                if self._opportunistic and snapshot_broker_count < self._expected_brokers:
+                    logger.warning(
+                        "[CapitalAuthority] opportunistic ACTIVE_CAPITAL — "
+                        "only %d/%d brokers connected; capital picture is partial",
+                        snapshot_broker_count,
+                        self._expected_brokers,
+                    )
                 CAPITAL_SYSTEM_READY.set()
             # Feed timestamps for the push path (_broker_feed_timestamps) are
             # intentionally left untouched here.  The coordinator's monotonic
@@ -1352,12 +1404,15 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     "Active" means the coordinator has published at least one snapshot where:
 
     * ``real_capital > 0`` — at least one broker reports a positive balance.
-    * ``broker_count >= expected_brokers`` — all expected brokers contributed;
-      no partial broker aggregation was in flight at publish time.
+    * Broker threshold met — in **normal** mode: ``broker_count >= expected_brokers``
+      (all expected brokers contributed; no partial aggregation in flight).
+      In **opportunistic** mode (see :attr:`CapitalAuthority.opportunistic`):
+      ``broker_count >= 1``, allowing trading to start with a partial capital
+      picture when not all expected brokers have connected yet.
 
     Implementation note: blocks on :data:`CAPITAL_SYSTEM_READY`, which is set
-    by :meth:`CapitalAuthority.publish_snapshot` only when both conditions
-    above are satisfied.  Because the event now maps directly to
+    by :meth:`CapitalAuthority.publish_snapshot` when the conditions above are
+    satisfied.  Because the event maps directly to
     :attr:`CapitalLifecycleState.ACTIVE_CAPITAL`, no additional polling is
     required after the event fires.
 
@@ -1389,9 +1444,9 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
         wait_for_capital_ready()          # blocks up to 30 s
         brain = CapitalAllocationBrain()  # guaranteed non-zero capital
     """
-    # Block on the event; it is set only when capital is confirmed active
-    # (real_capital > 0 AND broker_count >= expected_brokers), so once the
-    # event fires we are already in ACTIVE_CAPITAL — no polling required.
+    # Block on the event; it is set when capital is confirmed active
+    # (real_capital > 0 AND broker threshold met), so once the event fires
+    # we are already in ACTIVE_CAPITAL — no polling required.
     if not CAPITAL_SYSTEM_READY.wait(timeout=timeout):
         raise RuntimeError(
             f"❌ CapitalAuthority never reached ACTIVE_CAPITAL after {timeout:.0f}s "
