@@ -35,7 +35,7 @@ Solution
 
 Alternatively, subscribe to be notified when the gate opens without blocking::
 
-    gate.register_on_open(lambda: logger.info("Gate opened — starting work"))
+    gate.register_on_open(lambda: logger.info("Gate opened - starting work"))
 
 Components are registered with ``register_component(name)`` before
 initialisation starts. Once *all* registered components have called

@@ -1004,9 +1004,37 @@ class CapitalRefreshCoordinator:
 
         # ── Drive runtime FSM based on the published snapshot ─────────────────
         # Force the FSM into RUN_REFRESHING so on_snapshot_received can
-        # complete the cycle.  RUN_READY and RUN_STALE allow this transition;
-        # RUN_REFRESHING is a no-op; RUN_HALTED is deliberately excluded to
-        # prevent recovery without an explicit request_recovery() call.
+        # complete the cycle.  RUN_READY and RUN_STALE allow this transition
+        # directly.  RUN_REFRESHING is a no-op (already in target state).
+        #
+        # Capital/state mismatch guard: if the FSM is in RUN_HALTED *and* the
+        # freshly-published snapshot shows positive capital at acceptable
+        # confidence, auto-call request_recovery() so the coordinator pipeline
+        # can advance the state.  Without this, the pipeline would silently
+        # discard every subsequent healthy snapshot and trading would remain
+        # blocked indefinitely even after capital is confirmed healthy.
+        if self._runtime.state == CapitalRuntimeState.RUN_HALTED:
+            if (
+                snapshot.real_capital > 0.0
+                and confidence.band in (
+                    CapitalConfidenceBand.HIGH,
+                    CapitalConfidenceBand.MEDIUM,
+                )
+            ):
+                logger.info(
+                    "[Coordinator] RUN_HALTED + healthy snapshot → auto-recovering "
+                    "via request_recovery() (real=$%.2f  confidence=%s)",
+                    snapshot.real_capital,
+                    confidence.band.value,
+                )
+                self._runtime.request_recovery()
+            else:
+                logger.warning(
+                    "[Coordinator] RUN_HALTED but snapshot not healthy enough to "
+                    "auto-recover (real=$%.2f  confidence=%s) — remaining halted",
+                    snapshot.real_capital,
+                    confidence.band.value,
+                )
         self._runtime.transition(CapitalRuntimeState.RUN_REFRESHING, "coordinator_publish")
         self._runtime.on_snapshot_received(snapshot, self._bus)
 
