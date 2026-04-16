@@ -627,13 +627,24 @@ class CapitalAuthority:
     @property
     def total_capital(self) -> float:
         """
-        Total observed equity across all registered brokers (alias for
-        :meth:`get_real_capital`).
+        Total observed equity across all registered brokers.
 
-        Provided so callers can use ``ca.total_capital`` as a simple
-        readiness check without calling the full accessor.
+        When the coordinator has published at least one snapshot, returns
+        ``_last_typed_snapshot.real_capital`` — the authoritative value
+        computed by the coordinator at publish time — so this property and
+        the snapshot are always in sync.  Before the first
+        :meth:`publish_snapshot` call (i.e. while
+        ``_last_typed_snapshot is None``) it returns 0.0.
+
+        This makes the snapshot the single source of truth and eliminates
+        any drift that could arise when
+        :meth:`feed_broker_balance` updates ``_broker_balances`` between
+        coordinator cycles.
         """
-        return self.get_real_capital()
+        with self._lock:
+            if self._last_typed_snapshot is None:
+                return 0.0
+            return float(getattr(self._last_typed_snapshot, "real_capital", 0.0))
 
     def has_registered_sources(self) -> bool:
         """
@@ -976,10 +987,25 @@ class CapitalAuthority:
             # fetch (T1) and its publish step (T3), even though that T2 feed
             # carries newer data than the coordinator's T1 fetch.
 
+            # Invariant: _last_typed_snapshot.real_capital must equal the value
+            # that total_capital will now return.  Checked while the lock is still
+            # held so no concurrent publish can invalidate the comparison.
+            snapshot_real = float(snapshot.real_capital)
+            assert abs(float(self._last_typed_snapshot.real_capital) - snapshot_real) < 1e-6, (
+                f"CapitalAuthority state divergence detected — "
+                f"stored real_capital={self._last_typed_snapshot.real_capital} "
+                f"!= snapshot.real_capital={snapshot_real}"
+            )
+
+        logger.debug(
+            "[CA DEBUG] snapshot.real_capital=$%.6f  total_capital=$%.6f",
+            snapshot_real,
+            self.total_capital,
+        )
         logger.info(
             "[CapitalAuthority] snapshot published — real=$%.2f  "
             "confidence=%.3f(%s)  brokers=%d",
-            sum(new_balances.values()),
+            snapshot_real,
             getattr(
                 getattr(snapshot, "confidence", None),
                 "confidence_score",
