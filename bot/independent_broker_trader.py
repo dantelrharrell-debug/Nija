@@ -156,6 +156,12 @@ STARTUP_DELAY_MIN = 30.0  # Minimum delay before first trading cycle (seconds)
 STARTUP_DELAY_MAX = 60.0  # Maximum delay before first trading cycle (seconds)
 BROKER_STAGGER_DELAY = 10.0  # Delay between starting each broker thread (seconds)
 
+# Backoff applied after a position-adoption failure in the user trading loop.
+# Without this delay the loop would spin immediately back to the top (skipping
+# the normal 150 s cycle wait), hammering the broker API and appearing silently
+# stuck to the supervisor (thread alive, zero productive work).
+ADOPTION_FAILURE_BACKOFF_S = 30.0
+
 # Error message truncation length for health status tracking
 MAX_ERROR_MESSAGE_LENGTH = 100  # Maximum length for error messages stored in health status
 
@@ -1083,9 +1089,8 @@ class IndependentBrokerTrader:
                                 }
                                 # CRITICAL: Skip trading cycle - do NOT continue
                                 logger.info("")
+                                stop_flag.wait(ADOPTION_FAILURE_BACKOFF_S)
                                 continue  # Skip to next iteration without executing run_cycle()
-                            
-                            # Additional verification using guardrail
                             if hasattr(self.trading_strategy, 'verify_position_adoption_status'):
                                 verified = self.trading_strategy.verify_position_adoption_status(
                                     account_id=account_id,
@@ -1105,8 +1110,8 @@ class IndependentBrokerTrader:
                                     }
                                     # CRITICAL: Skip trading cycle - do NOT continue
                                     logger.info("")
+                                    stop_flag.wait(ADOPTION_FAILURE_BACKOFF_S)
                                     continue  # Skip to next iteration without executing run_cycle()
-                        else:
                             # Fallback for backward compatibility (should not happen with new code)
                             logger.warning(f"   ⚠️  adopt_existing_positions() not available - using legacy method")
                             user_positions = broker.get_positions()
@@ -1135,8 +1140,8 @@ class IndependentBrokerTrader:
                         }
                         # CRITICAL: Skip trading cycle - do NOT continue
                         logger.info("")
+                        stop_flag.wait(ADOPTION_FAILURE_BACKOFF_S)
                         continue  # Skip to next iteration without executing run_cycle()
-                    
                     # USER accounts should NEVER generate signals
                     # Users only execute copy trades from master - they don't run strategy themselves
                     # This prevents users from making independent trading decisions

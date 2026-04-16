@@ -409,6 +409,8 @@ class CapitalBootstrapStateMachine:
         self._state = CapitalBootstrapState.BOOT_IDLE
         self._lock = threading.Lock()
         self._ready_event = threading.Event()
+        # Callbacks fired once when the FSM enters READY for the first time.
+        self._on_ready_callbacks: List[Callable[[], None]] = []
 
     @property
     def state(self) -> CapitalBootstrapState:
@@ -432,13 +434,46 @@ class CapitalBootstrapStateMachine:
                 return False
             old = self._state
             self._state = new_state
+            just_ready = new_state == CapitalBootstrapState.READY
+            callbacks = list(self._on_ready_callbacks) if just_ready else []
+            if just_ready:
+                self._on_ready_callbacks.clear()
         logger.info(
             "[BootstrapFSM] %s → %s  reason=%s",
             old.value, new_state.value, reason or "—",
         )
-        if new_state == CapitalBootstrapState.READY:
+        if just_ready:
             self._ready_event.set()
+            for cb in callbacks:
+                try:
+                    cb()
+                except Exception:
+                    logger.exception("on_ready callback raised an exception: %s", cb)
         return True
+
+    def register_on_ready(self, callback: Callable[[], None]) -> None:
+        """
+        Register *callback* to be called exactly once when the FSM enters READY.
+
+        If the FSM is already in READY state, *callback* is invoked immediately
+        (synchronously, in the calling thread) before this method returns.
+
+        Callbacks are fired **outside** the internal lock so they may safely
+        call :attr:`is_ready`, :meth:`wait_ready`, or any other FSM method
+        without deadlocking.  Exceptions raised by a callback are logged at
+        ERROR level but do not prevent other callbacks from running.
+        """
+        with self._lock:
+            if self._state == CapitalBootstrapState.READY:
+                fire_now = True
+            else:
+                self._on_ready_callbacks.append(callback)
+                fire_now = False
+        if fire_now:
+            try:
+                callback()
+            except Exception:
+                logger.exception("on_ready callback raised an exception: %s", callback)
 
     def wait_ready(self, timeout: Optional[float] = None) -> bool:
         """Block until the FSM reaches READY or *timeout* expires."""
@@ -969,9 +1004,37 @@ class CapitalRefreshCoordinator:
 
         # ── Drive runtime FSM based on the published snapshot ─────────────────
         # Force the FSM into RUN_REFRESHING so on_snapshot_received can
-        # complete the cycle.  RUN_READY and RUN_STALE allow this transition;
-        # RUN_REFRESHING is a no-op; RUN_HALTED is deliberately excluded to
-        # prevent recovery without an explicit request_recovery() call.
+        # complete the cycle.  RUN_READY and RUN_STALE allow this transition
+        # directly.  RUN_REFRESHING is a no-op (already in target state).
+        #
+        # Capital/state mismatch guard: if the FSM is in RUN_HALTED *and* the
+        # freshly-published snapshot shows positive capital at acceptable
+        # confidence, auto-call request_recovery() so the coordinator pipeline
+        # can advance the state.  Without this, the pipeline would silently
+        # discard every subsequent healthy snapshot and trading would remain
+        # blocked indefinitely even after capital is confirmed healthy.
+        if self._runtime.state == CapitalRuntimeState.RUN_HALTED:
+            if (
+                snapshot.real_capital > 0.0
+                and confidence.band in (
+                    CapitalConfidenceBand.HIGH,
+                    CapitalConfidenceBand.MEDIUM,
+                )
+            ):
+                logger.info(
+                    "[Coordinator] RUN_HALTED + healthy snapshot → auto-recovering "
+                    "via request_recovery() (real=$%.2f  confidence=%s)",
+                    snapshot.real_capital,
+                    confidence.band.value,
+                )
+                self._runtime.request_recovery()
+            else:
+                logger.warning(
+                    "[Coordinator] RUN_HALTED but snapshot not healthy enough to "
+                    "auto-recover (real=$%.2f  confidence=%s) — remaining halted",
+                    snapshot.real_capital,
+                    confidence.band.value,
+                )
         self._runtime.transition(CapitalRuntimeState.RUN_REFRESHING, "coordinator_publish")
         self._runtime.on_snapshot_received(snapshot, self._bus)
 
