@@ -56,7 +56,7 @@ import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger("nija.capital_authority")
 
@@ -251,6 +251,9 @@ class CapitalAuthority:
         # Monotonic guard: only advance a broker's balance when the incoming
         # feed timestamp is strictly newer than the recorded one.
         self._broker_feed_timestamps: Dict[str, datetime] = {}
+        # Registered balance-feed callables: broker_id → callable() → float|dict
+        # Populated by register_source() at broker-ready time.
+        self._balance_feeds: Dict[str, Callable[[], Any]] = {}
         # Register this instance in the module-level identity guard so that any
         # accidental second instantiation is detected by assert_singleton().
         global _EXPECTED_ID
@@ -677,6 +680,83 @@ class CapitalAuthority:
             balance,
             sum(self._broker_balances.values()),
         )
+
+    def register_source(self, broker_id: str, balance_feed: Callable[[], Any]) -> None:
+        """Register a live balance-feed callable for *broker_id*.
+
+        This is the single deterministic hook that must be called **exactly once
+        per broker** as soon as that broker's connection is confirmed (i.e. the
+        "broker-ready" event).  It records the feed so the authority can re-poll
+        it on demand, and it immediately seeds the broker's initial balance by
+        calling the feed once — guaranteeing that :meth:`has_registered_sources`
+        returns ``True`` from this point forward.
+
+        Duplicate calls (same *broker_id*) are safe and idempotent: the feed
+        callable is simply overwritten with the new one and the balance is
+        re-seeded.  This matches reconnect semantics where a fresh broker object
+        replaces a stale one.
+
+        Parameters
+        ----------
+        broker_id:
+            Logical broker key (e.g. ``"kraken"`` or ``"alpaca"``).
+        balance_feed:
+            Zero-argument callable that returns the current balance for this
+            broker.  The return value follows the same contract as
+            ``broker.get_account_balance()``: either a ``float`` or a ``dict``
+            containing a ``"trading_balance"`` / ``"usd"`` / ``"usdc"`` key.
+            All broker implementations in ``broker_integration.py`` expose
+            ``get_account_balance()``; pass it as ``broker.get_account_balance``
+            (without parentheses).
+
+        Usage
+        -----
+        ::
+
+            authority.register_source("kraken", kraken_broker.get_account_balance)
+            authority.register_source("alpaca", alpaca_broker.get_account_balance)
+        """
+        key = str(broker_id)
+        with self._lock:
+            self._balance_feeds[key] = balance_feed
+        logger.info("[CapitalAuthority] register_source: broker=%s feed registered", key)
+
+        # Seed the initial balance immediately so downstream gates do not wait
+        # for the next coordinator cycle.
+        try:
+            raw = balance_feed()
+            if isinstance(raw, dict):
+                balance = float(
+                    raw.get("trading_balance")
+                    or raw.get("total_funds")
+                    or (raw.get("usd", 0.0) + raw.get("usdc", 0.0))
+                    or 0.0
+                )
+            elif raw is not None:
+                balance = float(raw)
+            else:
+                balance = 0.0
+            if balance > 0.0:
+                self.feed_broker_balance(key, balance)
+                logger.info(
+                    "[CapitalAuthority] register_source: broker=%s seeded balance=$%.2f",
+                    key,
+                    balance,
+                )
+            else:
+                logger.warning(
+                    "[CapitalAuthority] register_source: broker=%s returned non-positive "
+                    "balance ($%.2f) — source registered but not seeded",
+                    key,
+                    balance,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[CapitalAuthority] register_source: broker=%s initial balance fetch failed: %s "
+                "— source registered without seeding",
+                key,
+                exc,
+            )
 
     def set_broker_role(self, broker_id: str, role: str) -> None:
         """
