@@ -373,7 +373,7 @@ class CapitalAllocationBrain:
         # Gate on CA hydration, not on the capital value.  total_capital == 0
         # is ambiguous — it could mean "not yet initialised" OR "genuinely
         # empty account".  Only once _hydrated is True can we trust the value.
-        if not ca._hydrated:
+        if not ca.is_hydrated:
             logger.warning(
                 "[CapitalAllocationBrain] CA not hydrated yet — deferring bootstrap validation"
             )

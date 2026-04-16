@@ -697,6 +697,12 @@ class CapitalAuthority:
         authority holds real (post-refresh) data rather than its empty initial
         state.  Use this flag to distinguish "not yet initialised" from
         "initialised with a zero balance" without inspecting :attr:`total_capital`.
+
+        Thread-safety: ``_hydrated`` transitions from ``False`` to ``True``
+        exactly once (inside ``self._lock`` in :meth:`publish_snapshot`).
+        In CPython, reading a bool attribute is atomic, so no lock is acquired
+        here.  The property is intentionally lock-free for callers that poll it
+        in hot paths.
         """
         return self._hydrated
 
