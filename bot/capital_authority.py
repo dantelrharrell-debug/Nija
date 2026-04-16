@@ -545,6 +545,29 @@ class CapitalAuthority:
     # Capital accessors
     # ------------------------------------------------------------------
 
+    @property
+    def total_capital(self) -> float:
+        """
+        Total observed equity across all registered brokers (alias for
+        :meth:`get_real_capital`).
+
+        Provided so callers can use ``ca.total_capital`` as a simple
+        readiness check without calling the full accessor.
+        """
+        return self.get_real_capital()
+
+    def has_registered_sources(self) -> bool:
+        """
+        Return ``True`` when at least one broker has contributed a
+        non-zero balance to this authority's snapshot.
+
+        Used by :func:`wait_for_capital_ready` to confirm that the
+        authority holds real (post-refresh) data rather than the empty
+        zero-balance state it starts in.
+        """
+        with self._lock:
+            return any(v > 0.0 for v in self._broker_balances.values())
+
     def get_real_capital(self) -> float:
         """
         Gross observed equity across all registered brokers (USD + USDC).
@@ -933,3 +956,55 @@ def reset_capital_authority_singleton() -> None:
     with _authority_lock:
         _authority_instance = None
     logger.warning("[CapitalAuthority] singleton cache cleared")
+
+
+def wait_for_capital_ready(timeout: float = 30.0) -> bool:
+    """
+    Block the calling thread until :class:`CapitalAuthority` is ready.
+
+    "Ready" means **both** of the following are true:
+
+    * ``CapitalAuthority.total_capital > 0`` — at least one broker has
+      reported a positive balance.
+    * ``CapitalAuthority.has_registered_sources()`` — the authority holds
+      real post-refresh data rather than its empty zero-balance initial state.
+
+    Parameters
+    ----------
+    timeout:
+        Maximum seconds to wait before giving up.  Default 30 s.
+
+    Returns
+    -------
+    bool
+        Always ``True`` when the function returns normally.
+
+    Raises
+    ------
+    RuntimeError
+        When *timeout* elapses without the authority becoming ready.  Callers
+        that treat :class:`~bot.capital_allocation_brain.CapitalAllocationBrain`
+        as optional (e.g. advisory use in ``capital_decision_engine``) should
+        wrap the call in a try/except and handle the failure gracefully.
+
+    Example
+    -------
+    ::
+
+        from bot.capital_authority import wait_for_capital_ready
+        from bot.capital_allocation_brain import CapitalAllocationBrain
+
+        wait_for_capital_ready()          # blocks up to 30 s
+        brain = CapitalAllocationBrain()  # guaranteed non-zero capital
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        ca = get_capital_authority()
+        if ca.total_capital > 0 and ca.has_registered_sources():
+            logger.info("✅ CapitalAuthority READY — proceeding")
+            return True
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"❌ CapitalAuthority never became ready after {timeout:.0f}s "
+        "(total_capital=0 or no registered broker sources)"
+    )
