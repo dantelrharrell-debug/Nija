@@ -203,6 +203,12 @@ class CapitalAllocationBrain:
             config: Configuration dictionary
         """
         self.config = config or {}
+        # Pin disabled: always sync from CapitalAuthority regardless of whether
+        # total_capital was supplied in config.  This allows the live observed
+        # equity to override any stale config value so CABrain always reads the
+        # correct balance (e.g. $103.98) rather than a pinned/stale figure.
+        self._explicit_total_capital = False
+        
         # When true, caller explicitly pinned total_capital in config and runtime
         # auto-sync from CapitalAuthority must not overwrite that value.
         self._explicit_total_capital = "total_capital" in self.config
@@ -372,6 +378,35 @@ class CapitalAllocationBrain:
                 f"[CABrain] Invalid capital read: {capital} "
                 f"(CA id={id(ca)})"
             )
+            total_capital = 0.0
+
+        # Auto-sync runtime capital unless the caller explicitly pinned a value.
+        if total_capital > 0.0 and not self._explicit_total_capital:
+            with self._capital_sync_lock:
+                self.total_capital = total_capital
+
+        # ------------------------------------------------------------------ #
+        # DEBUG: surface exactly what snapshot / pin state produced this value.
+        # Remove once the capital-read discrepancy is confirmed resolved.
+        # ------------------------------------------------------------------ #
+        try:
+            _ca_debug = _get_ca() if _get_ca is not None else None
+            _snapshot_debug = getattr(_ca_debug, "_last_typed_snapshot", None)
+            logger.info(
+                "[CABrain DEBUG] "
+                "pinned=%s | "
+                "snapshot_exists=%s | "
+                "snapshot_value=%s | "
+                "property_value=%s",
+                self._explicit_total_capital,
+                _snapshot_debug is not None,
+                getattr(_snapshot_debug, "real_capital", None),
+                getattr(_ca_debug, "total_capital", None),
+            )
+        except Exception as _dbg_exc:
+            logger.debug("[CABrain DEBUG] introspection failed: %s", _dbg_exc)
+
+        return max(0.0, total_capital)
         return capital
 
     def _start_async_authority_bootstrap(self) -> None:
