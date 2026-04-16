@@ -96,6 +96,23 @@ _authority_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Return *dt* as a timezone-aware UTC datetime.
+
+    Timezone-naive datetimes are assumed to already represent UTC and are
+    given an explicit ``timezone.utc`` tzinfo.  Aware datetimes are returned
+    unchanged.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+# ---------------------------------------------------------------------------
 # Public classes
 # ---------------------------------------------------------------------------
 
@@ -144,6 +161,10 @@ class CapitalAuthority:
         # Last typed snapshot published via publish_snapshot().  None until
         # the coordinator has run at least once.
         self._last_typed_snapshot: Optional[Any] = None
+        # Per-broker timestamps for the feed_broker_balance push path.
+        # Monotonic guard: only advance a broker's balance when the incoming
+        # feed timestamp is strictly newer than the recorded one.
+        self._broker_feed_timestamps: Dict[str, datetime] = {}
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -416,7 +437,12 @@ class CapitalAuthority:
         with self._lock:
             self._open_exposure_usd = max(0.0, float(open_exposure_usd))
 
-    def feed_broker_balance(self, broker_key: str, balance: float) -> None:
+    def feed_broker_balance(
+        self,
+        broker_key: str,
+        balance: float,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
         """
         Inject a freshly-fetched balance for a single broker directly into the
         authority without issuing an additional broker API call.
@@ -426,6 +452,17 @@ class CapitalAuthority:
         the authority current.  The authority's ``last_updated`` timestamp is
         refreshed on every call so ``is_stale()`` reflects the most recent feed.
 
+        Concurrency contract
+        --------------------
+        To prevent flicker under concurrent feeds the method enforces a
+        per-broker monotonic-timestamp rule:
+
+        * **New broker** (key not yet registered): the balance is stored
+          unconditionally and the feed timestamp is recorded.
+        * **Existing broker**: the balance is updated **only** when
+          *timestamp* is strictly newer than the stored feed timestamp.
+          Out-of-order or duplicate feeds are silently dropped.
+
         Parameters
         ----------
         broker_key:
@@ -434,6 +471,9 @@ class CapitalAuthority:
             Raw USD balance for this broker (positive values only; zero and
             negative values are silently ignored so a bad API response cannot
             wipe out a previously valid balance).
+        timestamp:
+            Wall-clock time at which the balance was observed.  Defaults to
+            ``datetime.now(timezone.utc)`` when omitted.
         """
         key = str(broker_key)
         balance = float(balance)
@@ -444,11 +484,34 @@ class CapitalAuthority:
                 balance,
             )
             return
+        # Normalize to UTC to prevent TypeError on comparison with existing
+        # timestamps (which are always timezone-aware).
+        if timestamp is not None:
+            ts: datetime = _ensure_utc(timestamp)
+        else:
+            ts = datetime.now(timezone.utc)
         with self._lock:
+            existing_ts = self._broker_feed_timestamps.get(key)
+            if existing_ts is not None and ts <= existing_ts:
+                # Out-of-order or duplicate feed — drop silently.
+                # Equal timestamps are treated as duplicates: clock jitter or
+                # a rapid double-write of the same observation is not an
+                # authoritative update and should not overwrite the recorded value.
+                logger.debug(
+                    "[CapitalAuthority] feed_broker_balance: broker=%s out-of-order feed "
+                    "(ts=%s <= existing=%s) — dropped",
+                    key,
+                    ts.isoformat(),
+                    existing_ts.isoformat(),
+                )
+                return
+            is_new = key not in self._broker_balances
             self._broker_balances[key] = balance
+            self._broker_feed_timestamps[key] = ts
             self.last_updated = datetime.now(timezone.utc)
         logger.debug(
-            "[CapitalAuthority] fed broker=%s balance=$%.2f (real=$%.2f)",
+            "[CapitalAuthority] %s broker=%s balance=$%.2f (real=$%.2f)",
+            "registered" if is_new else "updated",
             key,
             balance,
             sum(self._broker_balances.values()),
@@ -717,8 +780,14 @@ class CapitalAuthority:
         Returns
         -------
         bool
-            ``True`` if the snapshot was accepted and applied; ``False`` if
-            the writer_id was not authorised.
+            ``True`` if the snapshot was accepted and applied.
+            ``False`` in any of these cases (authority state is **not** changed):
+
+            * *writer_id* does not match :attr:`_AUTHORIZED_WRITER_ID`.
+            * The snapshot's ``computed_at`` timestamp is not strictly newer
+              than the authority's current ``last_updated`` timestamp
+              (monotonic guard — prevents a slow in-flight coordinator run
+              from clobbering a more-recent snapshot).
         """
         if writer_id != self._AUTHORIZED_WRITER_ID:
             logger.error(
@@ -731,9 +800,31 @@ class CapitalAuthority:
 
         new_balances = dict(getattr(snapshot, "broker_balances", {}))
         open_exp = float(getattr(snapshot, "open_exposure_usd", 0.0))
-        computed_at = getattr(snapshot, "computed_at", datetime.now(timezone.utc))
+        _raw_computed_at = getattr(snapshot, "computed_at", None)
+        computed_at: datetime = (
+            _ensure_utc(_raw_computed_at)
+            if isinstance(_raw_computed_at, datetime)
+            else datetime.now(timezone.utc)
+        )
 
         with self._lock:
+            # Monotonic-timestamp guard: reject snapshots whose computed_at is
+            # not strictly newer than the current authority state.  This prevents
+            # an in-flight coordinator run that started *before* a faster one from
+            # clobbering the more-recent snapshot once it finishes.
+            # Equal timestamps are treated as duplicates (same reasoning as in
+            # feed_broker_balance) and are also rejected.
+            # This is expected concurrent-operation behaviour, not an error, so
+            # we log at debug level to avoid spurious WARNING noise.
+            if self.last_updated is not None and computed_at <= self.last_updated:
+                logger.debug(
+                    "[CapitalAuthority] publish_snapshot skipped — "
+                    "snapshot not newer (computed_at=%s <= last_updated=%s)",
+                    computed_at.isoformat(),
+                    self.last_updated.isoformat(),
+                )
+                return False
+
             self._broker_balances = new_balances
             self._open_exposure_usd = max(0.0, open_exp)
             self.last_updated = computed_at
@@ -741,6 +832,14 @@ class CapitalAuthority:
             if len(new_balances) > self._expected_brokers:
                 self._expected_brokers = len(new_balances)
             self._last_typed_snapshot = snapshot
+            # Feed timestamps for the push path (_broker_feed_timestamps) are
+            # intentionally left untouched here.  The coordinator's monotonic
+            # guard operates on authority-level last_updated; the per-broker
+            # feed guard operates on _broker_feed_timestamps independently.
+            # Resetting feed timestamps to computed_at would incorrectly reject
+            # a legitimate feed that arrived between the coordinator's balance
+            # fetch (T1) and its publish step (T3), even though that T2 feed
+            # carries newer data than the coordinator's T1 fetch.
 
         logger.info(
             "[CapitalAuthority] snapshot published — real=$%.2f  "
