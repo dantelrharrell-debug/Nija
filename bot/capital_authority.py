@@ -96,6 +96,23 @@ _authority_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Return *dt* as a timezone-aware UTC datetime.
+
+    Timezone-naive datetimes are assumed to already represent UTC and are
+    given an explicit ``timezone.utc`` tzinfo.  Aware datetimes are returned
+    unchanged.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+# ---------------------------------------------------------------------------
 # Public classes
 # ---------------------------------------------------------------------------
 
@@ -467,19 +484,19 @@ class CapitalAuthority:
                 balance,
             )
             return
-        # Normalize to timezone-aware UTC to prevent TypeError on comparison.
+        # Normalize to UTC to prevent TypeError on comparison with existing
+        # timestamps (which are always timezone-aware).
         if timestamp is not None:
-            ts: datetime = (
-                timestamp.replace(tzinfo=timezone.utc)
-                if timestamp.tzinfo is None
-                else timestamp
-            )
+            ts: datetime = _ensure_utc(timestamp)
         else:
             ts = datetime.now(timezone.utc)
         with self._lock:
             existing_ts = self._broker_feed_timestamps.get(key)
             if existing_ts is not None and ts <= existing_ts:
                 # Out-of-order or duplicate feed — drop silently.
+                # Equal timestamps are treated as duplicates: clock jitter or
+                # a rapid double-write of the same observation is not an
+                # authoritative update and should not overwrite the recorded value.
                 logger.debug(
                     "[CapitalAuthority] feed_broker_balance: broker=%s out-of-order feed "
                     "(ts=%s <= existing=%s) — dropped",
@@ -784,24 +801,25 @@ class CapitalAuthority:
         new_balances = dict(getattr(snapshot, "broker_balances", {}))
         open_exp = float(getattr(snapshot, "open_exposure_usd", 0.0))
         _raw_computed_at = getattr(snapshot, "computed_at", None)
-        if _raw_computed_at is None:
-            computed_at: datetime = datetime.now(timezone.utc)
-        elif isinstance(_raw_computed_at, datetime) and _raw_computed_at.tzinfo is None:
-            # Normalize naive datetimes to UTC so comparison with last_updated
-            # (always timezone-aware) never raises a TypeError.
-            computed_at = _raw_computed_at.replace(tzinfo=timezone.utc)
-        else:
-            computed_at = _raw_computed_at
+        computed_at: datetime = (
+            _ensure_utc(_raw_computed_at)
+            if isinstance(_raw_computed_at, datetime)
+            else datetime.now(timezone.utc)
+        )
 
         with self._lock:
             # Monotonic-timestamp guard: reject snapshots whose computed_at is
             # not strictly newer than the current authority state.  This prevents
             # an in-flight coordinator run that started *before* a faster one from
             # clobbering the more-recent snapshot once it finishes.
+            # Equal timestamps are treated as duplicates (same reasoning as in
+            # feed_broker_balance) and are also rejected.
+            # This is expected concurrent-operation behaviour, not an error, so
+            # we log at debug level to avoid spurious WARNING noise.
             if self.last_updated is not None and computed_at <= self.last_updated:
-                logger.warning(
-                    "[CapitalAuthority] publish_snapshot REJECTED — "
-                    "stale snapshot (computed_at=%s <= last_updated=%s)",
+                logger.debug(
+                    "[CapitalAuthority] publish_snapshot skipped — "
+                    "snapshot not newer (computed_at=%s <= last_updated=%s)",
                     computed_at.isoformat(),
                     self.last_updated.isoformat(),
                 )
