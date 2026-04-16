@@ -33,6 +33,10 @@ Solution
         logger.error("Readiness gate timed out — aborting thread")
         return
 
+Alternatively, subscribe to be notified when the gate opens without blocking::
+
+    gate.register_on_open(lambda: logger.info("Gate opened — starting work"))
+
 Components are registered with ``register_component(name)`` before
 initialisation starts. Once *all* registered components have called
 ``signal_ready(name)``, the gate opens and all waiting threads unblock
@@ -69,7 +73,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Dict, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger("nija.startup_readiness_gate")
 
@@ -120,6 +124,11 @@ class StartupReadinessGate:
         self._registered_at: Dict[str, datetime] = {}
         self._signalled_at: Dict[str, datetime] = {}
 
+        # Callbacks fired once when the gate transitions from closed → open.
+        # Stored as a plain list; populated via register_on_open() and drained
+        # (fired then cleared) at the moment _gate_open first becomes True.
+        self._on_open_callbacks: List[Callable[[], None]] = []
+
         logger.info("✅ StartupReadinessGate initialised (timeout=%.0fs)", default_timeout_s)
 
     # ------------------------------------------------------------------
@@ -165,8 +174,19 @@ class StartupReadinessGate:
                 "✅ Component ready: %s (%d/%d)", name, len(self._ready), len(self._required)
             )
 
+            was_open = self._gate_open
             self._check_and_open()
+            just_opened = self._gate_open and not was_open
             self._cond.notify_all()
+            callbacks = list(self._on_open_callbacks) if just_opened else []
+            if just_opened:
+                self._on_open_callbacks.clear()
+
+        for cb in callbacks:
+            try:
+                cb()
+            except Exception:
+                logger.exception("on_open callback raised an exception: %s", cb)
 
     def signal_failed(self, name: str, reason: str = "") -> None:
         """
@@ -184,8 +204,47 @@ class StartupReadinessGate:
                 name,
                 reason or "no reason given",
             )
+            was_open = self._gate_open
             self._check_and_open()
+            just_opened = self._gate_open and not was_open
             self._cond.notify_all()
+            callbacks = list(self._on_open_callbacks) if just_opened else []
+            if just_opened:
+                self._on_open_callbacks.clear()
+
+        for cb in callbacks:
+            try:
+                cb()
+            except Exception:
+                logger.exception("on_open callback raised an exception: %s", cb)
+
+    # ------------------------------------------------------------------
+    # Callback registration
+    # ------------------------------------------------------------------
+
+    def register_on_open(self, callback: Callable[[], None]) -> None:
+        """
+        Register *callback* to be called exactly once when the gate opens.
+
+        If the gate is already open, *callback* is invoked immediately
+        (synchronously, in the calling thread) before this method returns.
+
+        Callbacks are fired **outside** the internal lock so they may safely
+        call :meth:`is_ready`, :meth:`get_status`, or any other gate method
+        without deadlocking.  Exceptions raised by a callback are logged at
+        ERROR level but do not prevent other callbacks from running.
+        """
+        with self._cond:
+            if self._gate_open and not self._gate_forced_closed:
+                fire_now = True
+            else:
+                self._on_open_callbacks.append(callback)
+                fire_now = False
+        if fire_now:
+            try:
+                callback()
+            except Exception:
+                logger.exception("on_open callback raised an exception: %s", callback)
 
     # ------------------------------------------------------------------
     # Waiting
@@ -263,11 +322,22 @@ class StartupReadinessGate:
         appropriate for emergency situations or unit tests.
         """
         with self._cond:
+            was_open = self._gate_open
             self._gate_forced_open = True
             self._gate_open = True
             self._opened_at = datetime.now(timezone.utc)
             self._cond.notify_all()
+            just_opened = not was_open
+            callbacks = list(self._on_open_callbacks) if just_opened else []
+            if just_opened:
+                self._on_open_callbacks.clear()
             logger.warning("⚠️  StartupReadinessGate FORCE OPENED: %s", reason)
+
+        for cb in callbacks:
+            try:
+                cb()
+            except Exception:
+                logger.exception("on_open callback raised an exception: %s", cb)
 
     def force_close(self, reason: str = "manual override") -> None:
         """
@@ -286,7 +356,8 @@ class StartupReadinessGate:
         Reset the gate to its initial (closed) state.
 
         Useful when the bot performs a warm restart without a full process
-        restart.  Clears all component registrations and signals.
+        restart.  Clears all component registrations, signals, and pending
+        callbacks.
         """
         with self._cond:
             self._required.clear()
@@ -298,6 +369,7 @@ class StartupReadinessGate:
             self._opened_at = None
             self._registered_at.clear()
             self._signalled_at.clear()
+            self._on_open_callbacks.clear()
             self._cond.notify_all()
             logger.info("🔄 StartupReadinessGate RESET")
 
