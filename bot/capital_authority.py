@@ -144,6 +144,10 @@ class CapitalAuthority:
         # Last typed snapshot published via publish_snapshot().  None until
         # the coordinator has run at least once.
         self._last_typed_snapshot: Optional[Any] = None
+        # Per-broker timestamps for the feed_broker_balance push path.
+        # Monotonic guard: only advance a broker's balance when the incoming
+        # feed timestamp is strictly newer than the recorded one.
+        self._broker_feed_timestamps: Dict[str, datetime] = {}
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -416,7 +420,12 @@ class CapitalAuthority:
         with self._lock:
             self._open_exposure_usd = max(0.0, float(open_exposure_usd))
 
-    def feed_broker_balance(self, broker_key: str, balance: float) -> None:
+    def feed_broker_balance(
+        self,
+        broker_key: str,
+        balance: float,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
         """
         Inject a freshly-fetched balance for a single broker directly into the
         authority without issuing an additional broker API call.
@@ -426,6 +435,17 @@ class CapitalAuthority:
         the authority current.  The authority's ``last_updated`` timestamp is
         refreshed on every call so ``is_stale()`` reflects the most recent feed.
 
+        Concurrency contract
+        --------------------
+        To prevent flicker under concurrent feeds the method enforces a
+        per-broker monotonic-timestamp rule:
+
+        * **New broker** (key not yet registered): the balance is stored
+          unconditionally and the feed timestamp is recorded.
+        * **Existing broker**: the balance is updated **only** when
+          *timestamp* is strictly newer than the stored feed timestamp.
+          Out-of-order or duplicate feeds are silently dropped.
+
         Parameters
         ----------
         broker_key:
@@ -434,6 +454,9 @@ class CapitalAuthority:
             Raw USD balance for this broker (positive values only; zero and
             negative values are silently ignored so a bad API response cannot
             wipe out a previously valid balance).
+        timestamp:
+            Wall-clock time at which the balance was observed.  Defaults to
+            ``datetime.now(timezone.utc)`` when omitted.
         """
         key = str(broker_key)
         balance = float(balance)
@@ -444,11 +467,26 @@ class CapitalAuthority:
                 balance,
             )
             return
+        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
         with self._lock:
+            existing_ts = self._broker_feed_timestamps.get(key)
+            if existing_ts is not None and ts <= existing_ts:
+                # Out-of-order or duplicate feed — drop silently.
+                logger.debug(
+                    "[CapitalAuthority] feed_broker_balance: broker=%s out-of-order feed "
+                    "(ts=%s <= existing=%s) — dropped",
+                    key,
+                    ts.isoformat(),
+                    existing_ts.isoformat(),
+                )
+                return
+            is_new = key not in self._broker_balances
             self._broker_balances[key] = balance
+            self._broker_feed_timestamps[key] = ts
             self.last_updated = datetime.now(timezone.utc)
         logger.debug(
-            "[CapitalAuthority] fed broker=%s balance=$%.2f (real=$%.2f)",
+            "[CapitalAuthority] %s broker=%s balance=$%.2f (real=$%.2f)",
+            "registered" if is_new else "updated",
             key,
             balance,
             sum(self._broker_balances.values()),
@@ -731,9 +769,22 @@ class CapitalAuthority:
 
         new_balances = dict(getattr(snapshot, "broker_balances", {}))
         open_exp = float(getattr(snapshot, "open_exposure_usd", 0.0))
-        computed_at = getattr(snapshot, "computed_at", datetime.now(timezone.utc))
+        computed_at = getattr(snapshot, "computed_at", None) or datetime.now(timezone.utc)
 
         with self._lock:
+            # Monotonic-timestamp guard: reject snapshots whose computed_at is
+            # not strictly newer than the current authority state.  This prevents
+            # an in-flight coordinator run that started *before* a faster one from
+            # clobbering the more-recent snapshot once it finishes.
+            if self.last_updated is not None and computed_at <= self.last_updated:
+                logger.warning(
+                    "[CapitalAuthority] publish_snapshot REJECTED — "
+                    "stale snapshot (computed_at=%s <= last_updated=%s)",
+                    computed_at.isoformat(),
+                    self.last_updated.isoformat(),
+                )
+                return False
+
             self._broker_balances = new_balances
             self._open_exposure_usd = max(0.0, open_exp)
             self.last_updated = computed_at
@@ -741,6 +792,10 @@ class CapitalAuthority:
             if len(new_balances) > self._expected_brokers:
                 self._expected_brokers = len(new_balances)
             self._last_typed_snapshot = snapshot
+            # The coordinator snapshot is now the ground-truth; reset per-broker
+            # feed timestamps so subsequent feed_broker_balance calls are accepted
+            # only when they are strictly newer than the coordinator's data.
+            self._broker_feed_timestamps = {k: computed_at for k in new_balances}
 
         logger.info(
             "[CapitalAuthority] snapshot published — real=$%.2f  "
