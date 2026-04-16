@@ -38,6 +38,26 @@ import json
 
 logger = logging.getLogger("nija.capital_brain")
 
+# ---------------------------------------------------------------------------
+# Startup barrier helper — resolved at call-time to handle both direct
+# execution (``python capital_allocation_brain.py``) and package imports
+# (``from bot.capital_allocation_brain import …``).
+# ---------------------------------------------------------------------------
+
+def _wait_for_capital_ready(timeout: float = 30.0) -> bool:
+    """Thin wrapper around :func:`capital_authority.wait_for_capital_ready`.
+
+    The import is deferred to call-time because this module may be loaded
+    before the ``bot`` package root is on sys.path in some deployment
+    configurations.  Using a deferred try/except import mirrors the
+    pattern already in use throughout this file (see ``refresh_authority``).
+    """
+    try:
+        from bot.capital_authority import wait_for_capital_ready  # type: ignore[import]
+    except ImportError:
+        from capital_authority import wait_for_capital_ready  # type: ignore[import]
+    return wait_for_capital_ready(timeout=timeout)
+
 
 def _safe_int(value: Any, default: int) -> int:
     """Parse int config values safely with fallback."""
@@ -171,7 +191,14 @@ class CapitalAllocationBrain:
     def __init__(self, config: Dict = None):
         """
         Initialize capital allocation brain
-        
+
+        CapitalAuthority must be ready (total_capital > 0 and at least one
+        registered broker source) before this brain can operate.  When the
+        caller does not supply an explicit ``total_capital`` in *config*, the
+        constructor calls :func:`~bot.capital_authority.wait_for_capital_ready`
+        which blocks until the authority is ready (up to
+        ``authority_startup_timeout_s`` seconds, default 30 s).
+
         Args:
             config: Configuration dictionary
         """
@@ -221,20 +248,34 @@ class CapitalAllocationBrain:
             _safe_float(self.config.get("authority_bootstrap_interval_s", 1.0), 1.0),
         )
 
-        # Best-effort startup sync from CapitalAuthority for non-explicit configs.
-        # This reduces race-window false negatives where authority has not yet been
-        # refreshed at construction time.
+        # Hard startup dependency barrier: CapitalAllocationBrain must NOT
+        # initialize until CapitalAuthority is ready.  Block synchronously until
+        # the authority reports positive capital AND at least one registered
+        # broker source.  This replaces the previous async bootstrap thread
+        # approach which allowed the brain to start with $0 capital.
         if not self._explicit_total_capital:
-            startup_total = self.refresh_authority()
-            if startup_total > 0.0:
-                self.total_capital = startup_total
-            else:
+            startup_timeout_s = _safe_float(
+                self.config.get("authority_startup_timeout_s", 30.0), 30.0
+            )
+            try:
+                _wait_for_capital_ready(timeout=startup_timeout_s)
+            except RuntimeError as exc:
                 logger.warning(
-                    "[CapitalAllocationBrain] CapitalAuthority has non-positive total_capital=%.2f "
-                    "— allocations blocked until authority is refreshed.",
-                    startup_total,
+                    "[CapitalAllocationBrain] %s — brain will initialize with $0 capital "
+                    "and recover asynchronously once the authority becomes ready "
+                    "(e.g. delayed broker connect).",
+                    exc,
                 )
+                # NOTE: initialization continues with total_capital=0 in this
+                # branch.  The async bootstrap thread below will update
+                # self.total_capital once the authority eventually becomes ready.
+                # Callers that require a hard guarantee (no $0 capital) should
+                # treat this path as an error.
                 self._start_async_authority_bootstrap()
+            else:
+                startup_total = self.refresh_authority()
+                if startup_total > 0.0:
+                    self.total_capital = startup_total
         
         logger.info(
             f"🧠 Capital Allocation Brain initialized: "
