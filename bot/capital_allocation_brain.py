@@ -334,7 +334,9 @@ class CapitalAllocationBrain:
             return max(0.0, float(self.total_capital))
 
         try:
-            total_capital = float(_get_ca().get_real_capital())
+            ca = _get_ca()
+            logger.info("[CABrain] using CA instance_id=%d", id(ca))
+            total_capital = float(ca.get_real_capital())
             logger.info(
                 "[CapitalAllocationBrain] CapitalAuthority total_capital read: $%.2f",
                 total_capital,

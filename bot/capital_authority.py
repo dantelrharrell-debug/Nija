@@ -94,6 +94,10 @@ _DEFAULT_FRESHNESS_TTL_S: float = 90.0
 _authority_instance: Optional["CapitalAuthority"] = None
 _authority_lock = threading.Lock()
 
+# Identity guard — set to id() of the first CapitalAuthority created so that
+# any accidental second instantiation can be detected immediately.
+_EXPECTED_ID: Optional[int] = None
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -165,6 +169,31 @@ class CapitalAuthority:
         # Monotonic guard: only advance a broker's balance when the incoming
         # feed timestamp is strictly newer than the recorded one.
         self._broker_feed_timestamps: Dict[str, datetime] = {}
+        # Register this instance in the module-level identity guard so that any
+        # accidental second instantiation is detected by assert_singleton().
+        global _EXPECTED_ID
+        if _EXPECTED_ID is None:
+            _EXPECTED_ID = id(self)
+        logger.info("[CapitalAuthority] instance_id=%d", id(self))
+
+    # ------------------------------------------------------------------
+    # Singleton identity guard
+    # ------------------------------------------------------------------
+
+    def assert_singleton(self) -> None:
+        """Raise RuntimeError if this instance is not the registered singleton.
+
+        Call this at the top of any write path (``refresh``, ``publish_snapshot``)
+        to detect silent divergence caused by accidental second instantiation.
+        """
+        global _EXPECTED_ID
+        if _EXPECTED_ID is None:
+            _EXPECTED_ID = id(self)
+        elif _EXPECTED_ID != id(self):
+            raise RuntimeError(
+                f"CapitalAuthority instance mismatch detected — "
+                f"expected id={_EXPECTED_ID}, got id={id(self)}"
+            )
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -190,6 +219,7 @@ class CapitalAuthority:
             Sum of all open-position notional values in USD.  Pass 0.0 (or
             omit) when the caller does not yet have position data.
         """
+        self.assert_singleton()
         try:
             from bot.multi_account_broker_manager import get_broker_manager
         except ImportError:
@@ -893,6 +923,7 @@ class CapitalAuthority:
               (monotonic guard — prevents a slow in-flight coordinator run
               from clobbering a more-recent snapshot).
         """
+        self.assert_singleton()
         if writer_id != self._AUTHORIZED_WRITER_ID:
             logger.error(
                 "[CapitalAuthority] publish_snapshot REJECTED — "
@@ -1033,9 +1064,10 @@ def get_capital_authority() -> CapitalAuthority:
 
 def reset_capital_authority_singleton() -> None:
     """Clear the cached CapitalAuthority singleton (cold-start helper)."""
-    global _authority_instance
+    global _authority_instance, _EXPECTED_ID
     with _authority_lock:
         _authority_instance = None
+        _EXPECTED_ID = None
     logger.warning("[CapitalAuthority] singleton cache cleared")
 
 
