@@ -178,6 +178,12 @@ class TradeDecision:
     broker_criticality: str = "UNKNOWN"   # "CRITICAL" | "OPTIONAL" | "UNKNOWN"
     broker_health: str = "UNKNOWN"        # "HEALTHY" | "DEAD" | "UNKNOWN"
 
+    # ── Extended decision context ─────────────────────────────────────────────
+    risk_allowed: bool = True             # False when risk engine blocks the trade
+    capital_allocated: float = 0.0       # Dollar amount allocated to this trade
+    market_regime: str = ""              # Normalised regime label (mirrors regime_label)
+    strategy_name: str = ""              # Strategy that generated the signal
+
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -400,6 +406,7 @@ class TradePermissionEngine:
             broker_health=broker_health_label,
             final_decision=final,
             block_reason=block_reason,
+            market_regime=regime_label,
         )
 
         self._emit_trace(decision)
@@ -681,7 +688,24 @@ class TradePermissionEngine:
             f"  {'─' * 50}\n"
             f"{verdict}"
         )
-        logger.info(trace)
+        logger.warning(f"""
+🚨 TRADE DECISION
+symbol={d.symbol}
+signal={d.signal}
+score={d.signal_score}
+
+final_decision={d.final_decision}
+passed_gate={d.final_decision == "EXECUTE"}
+
+reason_blocked={d.block_reason}
+
+risk_allowed={d.risk_allowed}
+capital_allocated={d.capital_allocated}
+broker_selected={d.broker}
+
+regime={d.market_regime}
+strategy={d.strategy_name}
+""")
 
     # ------------------------------------------------------------------
     # Stats
