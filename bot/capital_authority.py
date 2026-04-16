@@ -987,15 +987,20 @@ class CapitalAuthority:
             # fetch (T1) and its publish step (T3), even though that T2 feed
             # carries newer data than the coordinator's T1 fetch.
 
-        snapshot_real = float(getattr(snapshot, "real_capital", sum(new_balances.values())))
+            # Invariant: _last_typed_snapshot.real_capital must equal the value
+            # that total_capital will now return.  Checked while the lock is still
+            # held so no concurrent publish can invalidate the comparison.
+            snapshot_real = float(snapshot.real_capital)
+            assert abs(float(self._last_typed_snapshot.real_capital) - snapshot_real) < 1e-6, (
+                f"CapitalAuthority state divergence detected — "
+                f"stored real_capital={self._last_typed_snapshot.real_capital} "
+                f"!= snapshot.real_capital={snapshot_real}"
+            )
+
         logger.debug(
             "[CA DEBUG] snapshot.real_capital=$%.6f  total_capital=$%.6f",
             snapshot_real,
             self.total_capital,
-        )
-        assert abs(self.total_capital - snapshot_real) < 1e-6, (
-            f"CapitalAuthority state divergence detected — "
-            f"total_capital={self.total_capital} != snapshot.real_capital={snapshot_real}"
         )
         logger.info(
             "[CapitalAuthority] snapshot published — real=$%.2f  "
