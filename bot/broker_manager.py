@@ -797,6 +797,29 @@ def _float_env(name: str, default: float) -> float:
         )
         return default
 
+
+def _feed_capital_authority(broker_key: str, balance: float) -> None:
+    """Feed a freshly-fetched balance into CapitalAuthority.
+
+    Uses a deferred local import to avoid circular-import issues (capital_authority
+    imports multi_account_broker_manager which imports broker_manager).  Any
+    failure is logged as a warning so a transient import error never stops trading.
+    """
+    if balance <= 0:
+        return
+    try:
+        try:
+            from bot.capital_authority import get_capital_authority as _get_ca
+        except ImportError:
+            from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+        _get_ca().feed_broker_balance(broker_key, balance)
+    except Exception as _exc:
+        logger.warning(
+            "⚠️ [CapitalHook] failed to register capital source broker=%s: %s",
+            broker_key,
+            _exc,
+        )
+
 KRAKEN_STARTUP_DELAY_SECONDS: float = _float_env("NIJA_KRAKEN_STARTUP_DELAY_S", 1.0)
 KRAKEN_STARTUP_DELAY_JITTER:  float = _float_env("NIJA_KRAKEN_STARTUP_DELAY_JITTER_S", 1.0)
 # Minimum inter-call spacing injected in _kraken_private_call() to prevent
@@ -8068,6 +8091,11 @@ class KrakenBroker(BaseBroker):
                         self._balance_last_updated = time.time()
                         self.balance_cache["kraken"] = total_funds
 
+                        # Fix 1: Source registration hook — register balance with
+                        # CapitalAuthority immediately so the capital pipeline is never
+                        # starved of its first source on the success path.
+                        _feed_capital_authority("kraken", total_funds)
+
                         logger.info(f"   Account: {self.account_identifier}")
                         logger.info(f"   USD Balance: ${usd_balance:.2f}")
                         logger.info(f"   USDT Balance: ${usdt_balance:.2f}")
@@ -8202,6 +8230,19 @@ class KrakenBroker(BaseBroker):
                                         multi_account_broker_manager as _mabm_startup,
                                     )
                                 if _mabm_startup is not None:
+                                    # Fix 2: State transition guard — advance BrokerPayloadFSM to
+                                    # PAYLOAD_READY before resolve_startup_capital_invariant so that
+                                    # eligible_brokers = ["kraken"] is only populated after the payload
+                                    # guard is satisfied (FSM: REGISTERED → PAYLOAD_READY).
+                                    _payload_fsm = getattr(
+                                        _mabm_startup, "_broker_payload_fsm", {}
+                                    ).get(BrokerType.KRAKEN)
+                                    if _payload_fsm is not None and not _payload_fsm.is_payload_ready:
+                                        _payload_fsm.mark_payload_ready()
+                                        logger.info(
+                                            "[BrokerPayloadFSM] broker=kraken → PAYLOAD_READY "
+                                            "(balance payload confirmed in connect())"
+                                        )
                                     _cap = _mabm_startup.resolve_startup_capital_invariant(
                                         trigger="kraken_platform_connect"
                                     )
@@ -8695,6 +8736,11 @@ class KrakenBroker(BaseBroker):
                 # FIX #2: Force Kraken balance cache after success
                 self.balance_cache["kraken"] = total_funds
                 self.kraken_health = "OK"
+
+                # Fix 1: Source registration hook — keep CapitalAuthority current
+                # on every balance refresh so the capital pipeline always has a
+                # valid source even after the initial connect cycle.
+                _feed_capital_authority("kraken", total_funds)
 
                 return total_funds
 
