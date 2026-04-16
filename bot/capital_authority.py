@@ -467,7 +467,15 @@ class CapitalAuthority:
                 balance,
             )
             return
-        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
+        # Normalize to timezone-aware UTC to prevent TypeError on comparison.
+        if timestamp is not None:
+            ts: datetime = (
+                timestamp.replace(tzinfo=timezone.utc)
+                if timestamp.tzinfo is None
+                else timestamp
+            )
+        else:
+            ts = datetime.now(timezone.utc)
         with self._lock:
             existing_ts = self._broker_feed_timestamps.get(key)
             if existing_ts is not None and ts <= existing_ts:
@@ -755,8 +763,14 @@ class CapitalAuthority:
         Returns
         -------
         bool
-            ``True`` if the snapshot was accepted and applied; ``False`` if
-            the writer_id was not authorised.
+            ``True`` if the snapshot was accepted and applied.
+            ``False`` in any of these cases (authority state is **not** changed):
+
+            * *writer_id* does not match :attr:`_AUTHORIZED_WRITER_ID`.
+            * The snapshot's ``computed_at`` timestamp is not strictly newer
+              than the authority's current ``last_updated`` timestamp
+              (monotonic guard — prevents a slow in-flight coordinator run
+              from clobbering a more-recent snapshot).
         """
         if writer_id != self._AUTHORIZED_WRITER_ID:
             logger.error(
@@ -769,7 +783,15 @@ class CapitalAuthority:
 
         new_balances = dict(getattr(snapshot, "broker_balances", {}))
         open_exp = float(getattr(snapshot, "open_exposure_usd", 0.0))
-        computed_at = getattr(snapshot, "computed_at", None) or datetime.now(timezone.utc)
+        _raw_computed_at = getattr(snapshot, "computed_at", None)
+        if _raw_computed_at is None:
+            computed_at: datetime = datetime.now(timezone.utc)
+        elif isinstance(_raw_computed_at, datetime) and _raw_computed_at.tzinfo is None:
+            # Normalize naive datetimes to UTC so comparison with last_updated
+            # (always timezone-aware) never raises a TypeError.
+            computed_at = _raw_computed_at.replace(tzinfo=timezone.utc)
+        else:
+            computed_at = _raw_computed_at
 
         with self._lock:
             # Monotonic-timestamp guard: reject snapshots whose computed_at is
@@ -792,10 +814,14 @@ class CapitalAuthority:
             if len(new_balances) > self._expected_brokers:
                 self._expected_brokers = len(new_balances)
             self._last_typed_snapshot = snapshot
-            # The coordinator snapshot is now the ground-truth; reset per-broker
-            # feed timestamps so subsequent feed_broker_balance calls are accepted
-            # only when they are strictly newer than the coordinator's data.
-            self._broker_feed_timestamps = {k: computed_at for k in new_balances}
+            # Feed timestamps for the push path (_broker_feed_timestamps) are
+            # intentionally left untouched here.  The coordinator's monotonic
+            # guard operates on authority-level last_updated; the per-broker
+            # feed guard operates on _broker_feed_timestamps independently.
+            # Resetting feed timestamps to computed_at would incorrectly reject
+            # a legitimate feed that arrived between the coordinator's balance
+            # fetch (T1) and its publish step (T3), even though that T2 feed
+            # carries newer data than the coordinator's T1 fetch.
 
         logger.info(
             "[CapitalAuthority] snapshot published — real=$%.2f  "
