@@ -165,6 +165,11 @@ class CapitalAuthority:
         # Last typed snapshot published via publish_snapshot().  None until
         # the coordinator has run at least once.
         self._last_typed_snapshot: Optional[Any] = None
+        # Hydration flag — set to True after the first valid snapshot is
+        # published via publish_snapshot().  Callers that need to distinguish
+        # "authority not yet initialised" from "authority initialised with a
+        # zero balance" should check this flag before reading total_capital.
+        self._hydrated: bool = False
         # Per-broker timestamps for the feed_broker_balance push path.
         # Monotonic guard: only advance a broker's balance when the incoming
         # feed timestamp is strictly newer than the recorded one.
@@ -633,8 +638,12 @@ class CapitalAuthority:
         ``_last_typed_snapshot.real_capital`` — the authoritative value
         computed by the coordinator at publish time — so this property and
         the snapshot are always in sync.  Before the first
-        :meth:`publish_snapshot` call (i.e. while
-        ``_last_typed_snapshot is None``) it returns 0.0.
+        :meth:`publish_snapshot` call (i.e. while ``_hydrated`` is ``False``)
+        it returns ``0.0``.
+
+        Callers that need to distinguish an uninitialised authority (balance
+        truly unknown) from an initialised-but-empty account should check
+        :attr:`_hydrated` before reading this value.
 
         This makes the snapshot the single source of truth and eliminates
         any drift that could arise when
@@ -678,6 +687,46 @@ class CapitalAuthority:
         """
         with self._lock:
             return len(self._broker_balances) > 0 and sum(self._broker_balances.values()) > 0
+
+    @property
+    def is_hydrated(self) -> bool:
+        """Return ``True`` after the first valid snapshot has been published.
+
+        Unlike :meth:`is_ready`, this does **not** require a positive balance.
+        It only confirms that the coordinator has run at least once so the
+        authority holds real (post-refresh) data rather than its empty initial
+        state.  Use this flag to distinguish "not yet initialised" from
+        "initialised with a zero balance" without inspecting :attr:`total_capital`.
+
+        Thread-safety: ``_hydrated`` transitions from ``False`` to ``True``
+        exactly once (inside ``self._lock`` in :meth:`publish_snapshot`).
+        In CPython, reading a bool attribute is atomic, so no lock is acquired
+        here.  The property is intentionally lock-free for callers that poll it
+        in hot paths.
+        """
+        return self._hydrated
+
+    @property
+    def state(self) -> str:
+        """Human-readable readiness label.
+
+        * ``"INITIALIZING"`` — no snapshot received yet (``_hydrated`` is
+          ``False``); :attr:`total_capital` returns ``0.0`` but is meaningless.
+        * ``"HYDRATED"``     — at least one snapshot received; balance may be
+          zero.
+        * ``"READY"``        — hydrated **and** ``total_capital > 0``; trading
+          can proceed.
+
+        Callers that only need a boolean gate should prefer :attr:`is_hydrated`
+        or :meth:`is_ready` over comparing this string directly.
+        """
+        if not self._hydrated:
+            return "INITIALIZING"
+        with self._lock:
+            if sum(self._broker_balances.values()) > 0:
+                return "READY"
+        return "HYDRATED"
+
     @property
     def registered_broker_count(self) -> int:
         """Number of brokers that have posted at least one balance feed.
@@ -978,6 +1027,10 @@ class CapitalAuthority:
             if len(new_balances) > self._expected_brokers:
                 self._expected_brokers = len(new_balances)
             self._last_typed_snapshot = snapshot
+            # Mark the authority as hydrated on the first successful publish so
+            # that callers can distinguish "not yet initialised" from "initialised
+            # with a zero balance" without relying on total_capital == 0.
+            self._hydrated = True
             # Feed timestamps for the push path (_broker_feed_timestamps) are
             # intentionally left untouched here.  The coordinator's monotonic
             # guard operates on authority-level last_updated; the per-broker
