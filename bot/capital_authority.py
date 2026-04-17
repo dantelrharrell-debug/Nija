@@ -1350,6 +1350,10 @@ class CapitalAuthority:
                 "broker_balances": dict(self._broker_balances),
                 "broker_count": len(self._broker_balances),
                 "expected_brokers": self._expected_brokers,
+                "capital_completeness": (
+                    len(self._broker_balances) / self._expected_brokers
+                    if self._expected_brokers > 0 else 0.0
+                ),
                 "updated_total_capital": self._last_updated_total,
                 "last_updated": self.last_updated.isoformat()
                 if self.last_updated

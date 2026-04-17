@@ -224,6 +224,26 @@ class CapitalSnapshot:
     is_stale: bool   # True  ↔ not is_fresh
 
     # ------------------------------------------------------------------
+    # Derived synchronisation metric
+    # ------------------------------------------------------------------
+
+    @property
+    def capital_completeness(self) -> float:
+        """Fraction of expected brokers that contributed to this snapshot.
+
+        Returns a value in [0.0, 1.0] (or > 1.0 if broker_count exceeds
+        expected_brokers after an auto-raise).  Returns 0.0 when
+        expected_brokers is zero to avoid division-by-zero.
+
+        Examples:
+            1/3 brokers → 0.333  (degraded — partial capital picture)
+            3/3 brokers → 1.0    (fully synchronised)
+        """
+        if self.expected_brokers == 0:
+            return 0.0
+        return self.broker_count / self.expected_brokers
+
+    # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
 
@@ -238,6 +258,7 @@ class CapitalSnapshot:
             "broker_balances": dict(self.broker_balances),
             "broker_count": self.broker_count,
             "expected_brokers": self.expected_brokers,
+            "capital_completeness": self.capital_completeness,
             "computed_at": self.computed_at.isoformat(),
             "snapshot_age_s": self.snapshot_age_s,
             "kraken_response_age_s": self.kraken_response_age_s,
@@ -1045,13 +1066,17 @@ class CapitalRefreshCoordinator:
 
         logger.info(
             "[Coordinator] published  real=$%.2f  confidence=%.3f(%s)  "
-            "freshness=%.3f  pricing=%.3f  errors=%d  trigger=%s",
+            "freshness=%.3f  pricing=%.3f  errors=%d  "
+            "capital_completeness=%.3f(%d/%d)  trigger=%s",
             snapshot.real_capital,
             confidence.confidence_score,
             confidence.band.value,
             confidence.freshness_score,
             confidence.pricing_score,
             snapshot.api_error_count,
+            snapshot.capital_completeness,
+            snapshot.broker_count,
+            snapshot.expected_brokers,
             trigger,
         )
         return snapshot
