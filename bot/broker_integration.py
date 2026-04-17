@@ -1313,6 +1313,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             # ── Live fetch ────────────────────────────────────────────────────
             # Use helper method for serialized API call
             balance = self._kraken_api_call('Balance')
+            logger.warning(f"[KRAKEN] RAW BALANCE RESPONSE: {balance}")
 
             # Check for API errors
             if balance and 'error' in balance and balance['error']:

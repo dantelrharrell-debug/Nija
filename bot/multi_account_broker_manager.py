@@ -605,6 +605,8 @@ class MultiAccountBrokerManager:
             if scalar > 0.0:
                 broker_balances[broker_type.value] = scalar
 
+        logger.warning("[BOOTSTRAP] balances collected: %s", broker_balances)
+
         if not broker_balances:
             logger.info("[MABM] _force_minimal_capital_snapshot: no cached balances available")
             return None
