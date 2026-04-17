@@ -1379,7 +1379,25 @@ class CapitalAuthority:
             )
             return False
 
-        new_balances = dict(getattr(snapshot, "broker_balances", {}))
+        # Guard: reject snapshots that carry no broker data at all.  An empty
+        # broker_balances map means the snapshot is a hollow bootstrap artefact
+        # with no real data.  Accepting it would set _hydrated=True while the
+        # authority holds no meaningful state, causing dependent systems to
+        # believe the capital pipeline is initialised when it is not.
+        # NOTE: a snapshot with broker_balances present but real_capital == 0 is
+        # deliberately allowed — that represents a legitimate
+        # HYDRATED_ZERO_CAPITAL state (all brokers confirmed at zero balance).
+        _snap_broker_balances = getattr(snapshot, "broker_balances", {})
+        if not _snap_broker_balances:
+            logger.warning(
+                "[CapitalAuthority] publish_snapshot REJECTED — "
+                "snapshot has no broker data (writer_id=%r); "
+                "refusing to set hydrated=True on an empty bootstrap snapshot",
+                writer_id,
+            )
+            return False
+
+        new_balances = dict(_snap_broker_balances)
         open_exp = float(getattr(snapshot, "open_exposure_usd", 0.0))
         _raw_computed_at = getattr(snapshot, "computed_at", None)
         computed_at: datetime = (
