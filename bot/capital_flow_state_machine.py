@@ -345,6 +345,17 @@ class CapitalEventBus:
         Drain the internal queue and call all registered subscribers.
 
         Returns the number of events dispatched.  Safe to call from any thread.
+
+        Same-tick guarantee
+        -------------------
+        :class:`CapitalRefreshCoordinator` calls this method synchronously
+        at the end of every pipeline run, *before* advancing the bootstrap
+        FSM to its terminal state.  This ensures that all events enqueued
+        during the pipeline (``SNAPSHOT_PUBLISHED``, ``CAPITAL_READY``,
+        runtime-FSM events, etc.) are consumed by subscribers in the same
+        pipeline tick — i.e. before any ``register_on_ready`` callbacks
+        fire and before the ``CapitalBootstrapStateMachine.is_ready``
+        property becomes ``True``.
         """
         count = 0
         while True:
@@ -714,6 +725,30 @@ class CapitalRefreshCoordinator:
         STAGE 4 – CONFIDENCE        compute CapitalConfidence
         STAGE 5 – PUBLISH           atomic authority.publish_snapshot()
 
+    Same-tick synchronization guarantee
+    ------------------------------------
+    Every successful ``execute_refresh()`` call guarantees the following
+    four operations complete within the **same pipeline invocation**, in
+    strict order:
+
+    1. **Broker registration gate** — :meth:`~MultiAccountBrokerManager.refresh_capital_authority`
+       enforces Gates A and B so no pipeline run starts until all expected
+       brokers have been registered and their payload FSMs have reached
+       ``PAYLOAD_READY``.
+
+    2. **Capital refresh evaluation** — the five-stage pipeline computes and
+       publishes the snapshot to ``CapitalAuthority`` (Stage 5).
+
+    3. **Event consumption** — ``CapitalEventBus.dispatch_pending()`` is called
+       synchronously at the end of the pipeline, draining every event enqueued
+       during this run (``SNAPSHOT_PUBLISHED``, ``CAPITAL_READY``, runtime-FSM
+       events) before the bootstrap FSM advances.
+
+    4. **FSM READY transition** — the bootstrap FSM is advanced to its terminal
+       state (``READY`` / ``DEGRADED`` / ``FAILED``) **after** the event flush,
+       so any ``register_on_ready`` callback or ``is_ready`` observer sees a
+       fully-dispatched event queue.
+
     A per-instance ``_in_flight`` guard prevents concurrent executions.
     """
 
@@ -1016,25 +1051,42 @@ class CapitalRefreshCoordinator:
             snapshot=snapshot,
         ))
 
-        # ── Drive bootstrap FSM to terminal state ─────────────────────────────
+        # ── Determine bootstrap terminal state ────────────────────────────────
+        # Resolve the target state and enqueue the matching bus event BEFORE
+        # driving either the runtime FSM or the bootstrap FSM forward.  This
+        # preserves the strict same-tick ordering guarantee:
+        #
+        #   1. broker registration  — guaranteed by Gate A/B in refresh_capital_authority
+        #   2. capital evaluation   — completed above (snapshot built and published)
+        #   3. event emission       — all bus events enqueued in steps below
+        #   4. event consumption    — dispatch_pending() called synchronously here
+        #   5. FSM READY transition — fires _on_ready_callbacks AFTER dispatch
+        #
+        # Reversing steps 4/5 (old order: FSM transition → emit → external dispatch)
+        # caused _on_ready_callbacks to fire before CAPITAL_READY was even in the
+        # queue, breaking any callback or consumer that expected the event to have
+        # been dispatched at the moment readiness was declared.
         if snapshot.real_capital > 0.0 and confidence.band in (
             CapitalConfidenceBand.HIGH, CapitalConfidenceBand.MEDIUM
         ):
-            self._boot.transition(CapitalBootstrapState.READY, "capital_ready")
+            _boot_target = CapitalBootstrapState.READY
+            _boot_reason = "capital_ready"
             self._bus.emit(CapitalEvent(
                 event_type=CapitalEventType.CAPITAL_READY,
                 trigger=trigger,
                 snapshot=snapshot,
             ))
         elif snapshot.real_capital > 0.0:
-            self._boot.transition(CapitalBootstrapState.DEGRADED, "confidence_low")
+            _boot_target = CapitalBootstrapState.DEGRADED
+            _boot_reason = "confidence_low"
             self._bus.emit(CapitalEvent(
                 event_type=CapitalEventType.CAPITAL_DEGRADED,
                 trigger=trigger,
                 snapshot=snapshot,
             ))
         else:
-            self._boot.transition(CapitalBootstrapState.FAILED, "capital_zero")
+            _boot_target = CapitalBootstrapState.FAILED
+            _boot_reason = "capital_zero"
 
         # ── Drive runtime FSM based on the published snapshot ─────────────────
         # Force the FSM into RUN_REFRESHING so on_snapshot_received can
@@ -1070,7 +1122,22 @@ class CapitalRefreshCoordinator:
                     confidence.band.value,
                 )
         self._runtime.transition(CapitalRuntimeState.RUN_REFRESHING, "coordinator_publish")
+        # on_snapshot_received may enqueue additional CAPITAL_READY / CAPITAL_DEGRADED
+        # / CAPITAL_STALE events; they are captured in the same dispatch below.
         self._runtime.on_snapshot_received(snapshot, self._bus)
+
+        # ── Synchronous event flush (same-tick guarantee) ─────────────────────
+        # Drain every event enqueued during this pipeline run — SNAPSHOT_PUBLISHED,
+        # CAPITAL_READY / CAPITAL_DEGRADED, any runtime-FSM events — before the
+        # bootstrap FSM advances to its terminal state.  This ensures that by the
+        # time _on_ready_callbacks fire (inside transition(READY) below), all event
+        # bus subscribers have already processed the CAPITAL_READY notification.
+        self._bus.dispatch_pending()
+
+        # ── Advance bootstrap FSM to terminal state ───────────────────────────
+        # _on_ready_callbacks are fired synchronously inside transition() when
+        # _boot_target is READY.  They observe a fully-dispatched event queue.
+        self._boot.transition(_boot_target, _boot_reason)
 
         logger.info(
             "[Coordinator] published  real=$%.2f  confidence=%.3f(%s)  "

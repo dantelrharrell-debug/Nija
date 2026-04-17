@@ -187,6 +187,25 @@ _VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
 }
 
 # ---------------------------------------------------------------------------
+# Happy-path chain to CAPITAL_READY (used by advance_to_capital_ready)
+# ---------------------------------------------------------------------------
+# Ordered list of every state that must be visited, in sequence, to walk the
+# happy-path from BOOT_INIT to CAPITAL_READY.  advance_to_capital_ready()
+# iterates this list and calls transition() for each entry; states that are
+# already behind the current position return False and are silently skipped.
+_HAPPY_PATH_TO_CAPITAL_READY: List[BootstrapState] = [
+    BootstrapState.LOCK_ACQUIRED,
+    BootstrapState.HEALTH_BOUND,
+    BootstrapState.ENV_VERIFIED,
+    BootstrapState.STARTUP_VALIDATED,
+    BootstrapState.MODE_GATED,
+    BootstrapState.PLATFORM_CONNECTING,
+    BootstrapState.PLATFORM_READY,
+    BootstrapState.CAPITAL_REFRESHING,
+    BootstrapState.CAPITAL_READY,
+]
+
+# ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
 
@@ -339,6 +358,78 @@ class BootstrapStateMachine:
             current.value,
             reason,
         )
+
+    # ------------------------------------------------------------------
+    # Convenience: fast-forward to CAPITAL_READY
+    # ------------------------------------------------------------------
+
+    def advance_to_capital_ready(self, reason: str = "capital_confirmed") -> bool:
+        """
+        Fast-forward through all prerequisite happy-path states to
+        :attr:`BootstrapState.CAPITAL_READY`.
+
+        This method is the **Option A trigger**: it is called by
+        :class:`MultiAccountBrokerManager` via a
+        :meth:`~capital_flow_state_machine.CapitalBootstrapStateMachine.register_on_ready`
+        callback the moment the capital pipeline emits ``CAPITAL_READY`` and
+        the capital FSM reaches ``READY``.  After it returns, every call to
+        :meth:`assert_invariant_i11_strategy_arm` will pass, unblocking
+        ``TradingStrategy._init_advanced_features()`` and the trading loop.
+
+        Algorithm
+        ---------
+        Iterates :data:`_HAPPY_PATH_TO_CAPITAL_READY` in order and calls
+        :meth:`transition` for each step.  Steps that are already behind the
+        FSM's current position silently return ``False`` and are skipped;
+        steps that match the current allowed transition advance the FSM.
+        This is safe to call from any pre-capital happy-path state.
+
+        Returns
+        -------
+        bool
+            ``True`` if the FSM is now in ``CAPITAL_READY``,
+            ``THREADS_STARTING``, or ``RUNNING_SUPERVISED``
+            (i.e. :attr:`assert_invariant_i11_strategy_arm` will pass).
+            ``False`` if the FSM is in a terminal error state and cannot
+            advance.
+        """
+        if self.state in _STRATEGY_ARM_ALLOWED_STATES:
+            return True  # already at CAPITAL_READY or later
+
+        _error_states = {
+            BootstrapState.BOOT_FAILED_RETRY,
+            BootstrapState.EXTERNAL_RESTART_REQUIRED,
+            BootstrapState.CONFIG_ERROR_KEEPALIVE,
+            BootstrapState.SHUTDOWN,
+        }
+        if self.state in _error_states:
+            logger.warning(
+                "[BootstrapFSM] advance_to_capital_ready: FSM is in error/terminal "
+                "state %s — cannot advance to CAPITAL_READY",
+                self.state.value,
+            )
+            return False
+
+        for target in _HAPPY_PATH_TO_CAPITAL_READY:
+            if self.state in _STRATEGY_ARM_ALLOWED_STATES:
+                break
+            self.transition(target, reason)
+
+        reached = self.state in _STRATEGY_ARM_ALLOWED_STATES
+        if reached:
+            logger.info(
+                "✅ [BootstrapFSM] advance_to_capital_ready: FSM is now %s (reason=%s)",
+                self.state.value,
+                reason,
+            )
+        else:
+            logger.error(
+                "❌ [BootstrapFSM] advance_to_capital_ready: ended at %s, not CAPITAL_READY "
+                "(reason=%s) — strategy arming may still be blocked",
+                self.state.value,
+                reason,
+            )
+        return reached
 
     # ------------------------------------------------------------------
     # Invariant assertions
