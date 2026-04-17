@@ -44,7 +44,7 @@ logger = logging.getLogger("nija.capital_brain")
 # (``from bot.capital_allocation_brain import …``).
 # ---------------------------------------------------------------------------
 
-def _wait_for_capital_ready(timeout: float = 30.0) -> bool:
+def _wait_for_capital_ready(timeout: float = 60.0) -> bool:
     """Thin wrapper around :func:`capital_authority.wait_for_capital_ready`.
 
     The import is deferred to call-time because this module may be loaded
@@ -281,7 +281,7 @@ class CapitalAllocationBrain:
         # approach which allowed the brain to start with $0 capital.
         if not self._explicit_total_capital:
             startup_timeout_s = _safe_float(
-                self.config.get("authority_startup_timeout_s", 30.0), 30.0
+                self.config.get("authority_startup_timeout_s", 60.0), 60.0
             )
             try:
                 _wait_for_capital_ready(timeout=startup_timeout_s)
