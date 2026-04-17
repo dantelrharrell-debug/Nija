@@ -1,6 +1,7 @@
 import unittest
 
 from bot.broker_manager import AccountType, BaseBroker, BrokerType
+from bot.capital_authority import reset_capital_authority_singleton
 from bot.multi_account_broker_manager import (
     MultiAccountBrokerManager,
     get_broker_manager,
@@ -50,6 +51,7 @@ class _MockBroker(BaseBroker):
 class TestCapitalStartupBarrier(unittest.TestCase):
     def tearDown(self):
         reset_broker_manager_singleton()
+        reset_capital_authority_singleton()
 
     def test_pending_when_no_registered_sources(self):
         manager = get_broker_manager()
