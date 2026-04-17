@@ -917,12 +917,19 @@ class ExecutionEngine:
                             f"falling back to market order"
                         )
                         _entry_t0 = _time.monotonic()
-                        result = self.broker_client.place_market_order(
-                            symbol=symbol,
-                            side=order_side,
-                            quantity=position_size
-                        )
-                        self._emit_execution_result(symbol, order_side, result, _entry_t0)
+                        _fallback_exc: Optional[Exception] = None
+                        try:
+                            result = self.broker_client.place_market_order(
+                                symbol=symbol,
+                                side=order_side,
+                                quantity=position_size
+                            )
+                        except Exception as _fb_exc:
+                            _fallback_exc = _fb_exc
+                            result = None
+                        self._emit_execution_result(symbol, order_side, result, _entry_t0, _fallback_exc)
+                        if _fallback_exc is not None:
+                            raise _fallback_exc
                 else:
                     # Determine why market order is being used for the log message
                     if execution_plan is None:
@@ -933,15 +940,22 @@ class ExecutionEngine:
                         _order_reason = "broker does not support limit orders"
                     logger.info(f"   📊 Dynamic order type: MARKET ({_order_reason})")
                     _entry_t0 = _time.monotonic()
-                    result = self.broker_client.place_market_order(
-                        symbol=symbol,
-                        side=order_side,
-                        quantity=position_size
-                    )
-                    self._emit_execution_result(symbol, order_side, result, _entry_t0)
+                    _market_exc: Optional[Exception] = None
+                    try:
+                        result = self.broker_client.place_market_order(
+                            symbol=symbol,
+                            side=order_side,
+                            quantity=position_size
+                        )
+                    except Exception as _mk_exc:
+                        _market_exc = _mk_exc
+                        result = None
+                    self._emit_execution_result(symbol, order_side, result, _entry_t0, _market_exc)
+                    if _market_exc is not None:
+                        raise _market_exc
 
                 # Log the raw result for debugging
-                logger.debug(f"   Order result status: {result.get('status', 'N/A')}")
+                logger.debug(f"   Order result status: {result.get('status', 'N/A') if result else 'N/A'}")
 
                 # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
                 # DO NOT record trade if order failed or was rejected
@@ -1264,12 +1278,19 @@ class ExecutionEngine:
                 if self.broker_client:
                     order_side = 'sell' if position['side'] == 'long' else 'buy'
                     _exit_t0 = _time.monotonic()
-                    result = self.broker_client.place_market_order(
-                        symbol=symbol,
-                        side=order_side,
-                        quantity=exit_size
-                    )
-                    self._emit_execution_result(symbol, order_side, result, _exit_t0)
+                    _exit_exc: Optional[Exception] = None
+                    try:
+                        result = self.broker_client.place_market_order(
+                            symbol=symbol,
+                            side=order_side,
+                            quantity=exit_size
+                        )
+                    except Exception as _ex_exc:
+                        _exit_exc = _ex_exc
+                        result = None
+                    self._emit_execution_result(symbol, order_side, result, _exit_t0, _exit_exc)
+                    if _exit_exc is not None:
+                        raise _exit_exc
 
                     if result.get('status') == 'error':
                         error_msg = result.get('error')

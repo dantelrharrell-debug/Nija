@@ -91,7 +91,7 @@ except ImportError:
         _log_exec_result = None  # type: ignore
 
 # ---------------------------------------------------------------------------
-# Optional subsystem imports — each degrades gracefully if unavailable.
+# Exchange subsystem imports — each degrades gracefully if unavailable.
 # ---------------------------------------------------------------------------
 
 try:
