@@ -23,6 +23,12 @@ class MockBroker(BaseBroker):
         self.balance = balance
         self.connected = True
         self.exit_only_mode = exit_only
+        # Seed _last_known_balance so _is_broker_eligible_for_entry's BalanceService
+        # fallback reads the correct value instead of returning 0.0.
+        self._last_known_balance = balance
+        # position_tracker is checked by _is_broker_eligible_for_entry; provide a
+        # minimal stub so the capital-protection gate passes in tests.
+        self.position_tracker = {}
 
     def connect(self):
         return True
@@ -66,7 +72,7 @@ def test_broker_eligibility():
     assert "EXIT-ONLY" in reason, f"Reason should mention EXIT-ONLY: {reason}"
 
     # Test 1c: Ineligible due to insufficient balance
-    broker = MockBroker(BrokerType.COINBASE, balance=10.0, exit_only=False)
+    broker = MockBroker(BrokerType.COINBASE, balance=5.0, exit_only=False)
     is_eligible, reason = strategy._is_broker_eligible_for_entry(broker)
     print(f"✓ Test 1c: Insufficient balance - {is_eligible}, Reason: {reason}")
     assert is_eligible == False, "Should be ineligible due to insufficient balance"
@@ -104,7 +110,8 @@ def test_broker_priority_selection():
     assert broker.broker_type == BrokerType.KRAKEN, "Should select KRAKEN (highest priority)"
     assert name == "kraken", f"Name should be 'kraken', got: {name}"
 
-    # Test 2b: If KRAKEN is EXIT_ONLY, should select next priority (OKX or BINANCE)
+    # Test 2b: If KRAKEN is EXIT_ONLY, COINBASE (PRIMARY) should be selected next.
+    # BINANCE is OPTIONAL and is excluded from entry routing regardless of state.
     all_brokers = {
         BrokerType.KRAKEN: MockBroker(BrokerType.KRAKEN, balance=50.0, exit_only=True),
         BrokerType.BINANCE: MockBroker(BrokerType.BINANCE, balance=50.0, exit_only=False),
@@ -113,12 +120,12 @@ def test_broker_priority_selection():
 
     broker, name, status = strategy._select_entry_broker(all_brokers)
     print(f"✓ Test 2b: KRAKEN EXIT_ONLY - Selected: {name}")
-    assert broker.broker_type == BrokerType.BINANCE, "Should skip KRAKEN and select BINANCE"
-    assert name == "binance", f"Name should be 'binance', got: {name}"
+    assert broker.broker_type == BrokerType.COINBASE, "Should skip KRAKEN and select COINBASE (BINANCE is OPTIONAL)"
+    assert name == "coinbase", f"Name should be 'coinbase', got: {name}"
 
-    # Test 2c: COINBASE should be last priority
+    # Test 2c: COINBASE should be last priority (KRAKEN ineligible, BINANCE is OPTIONAL)
     all_brokers = {
-        BrokerType.KRAKEN: MockBroker(BrokerType.KRAKEN, balance=10.0, exit_only=False),  # Below minimum
+        BrokerType.KRAKEN: MockBroker(BrokerType.KRAKEN, balance=5.0, exit_only=False),  # Below minimum
         BrokerType.BINANCE: MockBroker(BrokerType.BINANCE, balance=5.0, exit_only=False),  # Below minimum
         BrokerType.COINBASE: MockBroker(BrokerType.COINBASE, balance=50.0, exit_only=False),
     }
@@ -129,8 +136,8 @@ def test_broker_priority_selection():
 
     # Test 2d: No eligible broker
     all_brokers = {
-        BrokerType.KRAKEN: MockBroker(BrokerType.KRAKEN, balance=10.0, exit_only=False),  # Below minimum
-        BrokerType.COINBASE: MockBroker(BrokerType.COINBASE, balance=10.0, exit_only=False),  # Below minimum
+        BrokerType.KRAKEN: MockBroker(BrokerType.KRAKEN, balance=5.0, exit_only=False),  # Below minimum
+        BrokerType.COINBASE: MockBroker(BrokerType.COINBASE, balance=5.0, exit_only=False),  # Below minimum
     }
 
     broker, name, status = strategy._select_entry_broker(all_brokers)
@@ -143,34 +150,34 @@ def test_broker_priority_selection():
 
 
 def test_coinbase_auto_downgrade():
-    """Test that Coinbase is automatically downgraded if balance < $25"""
+    """Test that Coinbase is excluded when balance is below the $10 global minimum"""
     print("=" * 70)
-    print("TEST 3: Coinbase Auto-Downgrade")
+    print("TEST 3: Coinbase Minimum Balance Enforcement")
     print("=" * 70)
 
     strategy = TradingStrategy()
 
-    # Test 3a: Coinbase with balance < $25 should not be eligible
-    broker = MockBroker(BrokerType.COINBASE, balance=20.0, exit_only=False)
+    # Test 3a: Coinbase with balance below the $10 global minimum should not be eligible
+    broker = MockBroker(BrokerType.COINBASE, balance=5.0, exit_only=False)
     is_eligible, reason = strategy._is_broker_eligible_for_entry(broker)
-    print(f"✓ Test 3a: Coinbase balance $20 - {is_eligible}, Reason: {reason}")
-    assert is_eligible == False, "Coinbase should be ineligible with balance < $25"
-    assert "$25" in reason or "25.0" in reason, f"Reason should mention $25 minimum: {reason}"
+    print(f"✓ Test 3a: Coinbase balance $5 - {is_eligible}, Reason: {reason}")
+    assert is_eligible == False, "Coinbase should be ineligible with balance < $10"
+    assert "minimum" in reason.lower(), f"Reason should mention minimum: {reason}"
 
-    # Test 3b: Coinbase with balance >= $25 should be eligible
+    # Test 3b: Coinbase with balance >= $10 should be eligible
     broker = MockBroker(BrokerType.COINBASE, balance=30.0, exit_only=False)
     is_eligible, reason = strategy._is_broker_eligible_for_entry(broker)
     print(f"✓ Test 3b: Coinbase balance $30 - {is_eligible}, Reason: {reason}")
-    assert is_eligible == True, f"Coinbase should be eligible with balance >= $25: {reason}"
+    assert is_eligible == True, f"Coinbase should be eligible with balance >= $10: {reason}"
 
-    # Test 3c: When Coinbase has $20 but Kraken has $50, Kraken should be selected
+    # Test 3c: When Coinbase has $5 but Kraken has $50, Kraken should be selected
     all_brokers = {
         BrokerType.KRAKEN: MockBroker(BrokerType.KRAKEN, balance=50.0, exit_only=False),
-        BrokerType.COINBASE: MockBroker(BrokerType.COINBASE, balance=20.0, exit_only=False),
+        BrokerType.COINBASE: MockBroker(BrokerType.COINBASE, balance=5.0, exit_only=False),
     }
 
     broker, name, status = strategy._select_entry_broker(all_brokers)
-    print(f"✓ Test 3c: Kraken $50 vs Coinbase $20 - Selected: {name}")
+    print(f"✓ Test 3c: Kraken $50 vs Coinbase $5 - Selected: {name}")
     assert broker.broker_type == BrokerType.KRAKEN, "Should select KRAKEN over underfunded COINBASE"
 
     print("✅ All Coinbase auto-downgrade tests passed!")
