@@ -120,6 +120,14 @@ _DISABLE_MARKET_FILTER: bool = (
     _os_apex.getenv("NIJA_DISABLE_MARKET_FILTER", "false").lower() in ("1", "true", "yes")
 )
 
+# NIJA_BYPASS_SMART_FILTER=true  → skip check_smart_filters() (volume, candle timing,
+#   news, chop/ADX) in analyze_market.  Allows signals through even in low-volume or
+#   choppy markets.  Step 4 diagnostic bypass: use to confirm the smart filter is the
+#   first gate that drops all signals.
+_BYPASS_SMART_FILTER: bool = (
+    _os_apex.getenv("NIJA_BYPASS_SMART_FILTER", "false").lower() in ("1", "true", "yes")
+)
+
 # NIJA_CONSOLIDATION_SCALP=true  (default) — when check_market_filter returns
 #   'none' (no clear trend), use RSI to pick a direction and attempt a scalp entry
 #   instead of immediately returning 'hold'.  RSI > _SCALP_RSI_LONG → try long;
@@ -2132,11 +2140,18 @@ class NIJAApexStrategyV71:
             current_time = datetime.now()
             filters_ok, filter_reason = self.check_smart_filters(df, current_time, symbol)
             if not filters_ok:
-                logger.debug(f"   {symbol}: Smart filter blocked - {filter_reason}")
-                return {
-                    'action': 'hold',
-                    'reason': filter_reason
-                }
+                if _BYPASS_SMART_FILTER:
+                    logger.info(
+                        "   🔓 %s: NIJA_BYPASS_SMART_FILTER active — smart filter bypassed (%s)",
+                        symbol, filter_reason,
+                    )
+                else:
+                    logger.info(f"   🔇 TRACE [smart_filter] {symbol}: {filter_reason}")
+                    return {
+                        'action': 'hold',
+                        'reason': filter_reason,
+                        'filter_stage': 'smart_filter',
+                    }
 
             # Check market filter — returns 4-tuple including market_strength
             allow_trade, trend, market_reason, _market_strength = self.check_market_filter(df, indicators)
@@ -2160,10 +2175,11 @@ class NIJAApexStrategyV71:
                 logger.info("   🔓 %s: %s", symbol, market_reason)
 
             if not allow_trade:
-                logger.debug(f"   {symbol}: Market filter blocked - {market_reason}")
+                logger.info(f"   📊 TRACE [market_filter] {symbol}: {market_reason}")
                 return {
                     'action': 'hold',
-                    'reason': market_reason
+                    'reason': market_reason,
+                    'filter_stage': 'market_filter',
                 }
 
             # ── CONSOLIDATION SCALP: RSI + volume/structure reinforcement ─────
@@ -2183,7 +2199,7 @@ class NIJAApexStrategyV71:
                         "   %s: Consolidation scalp skipped — RSI=%.1f in neutral band",
                         symbol, _cons_rsi,
                     )
-                    return {'action': 'hold', 'reason': f'No trend + RSI={_cons_rsi:.1f} neutral ({_SCALP_RSI_SHORT:.0f}-{_SCALP_RSI_LONG:.0f})'}
+                    return {'action': 'hold', 'reason': f'No trend + RSI={_cons_rsi:.1f} neutral ({_SCALP_RSI_SHORT:.0f}-{_SCALP_RSI_LONG:.0f})', 'filter_stage': 'market_filter'}
 
                 # ── Multi-factor reinforcement: RSI alone is a weak signal ────
                 # Volume: current bar vs 20-bar average (>= 0.4x = market is active;
@@ -2214,6 +2230,7 @@ class NIJAApexStrategyV71:
                             f'RSI scalp signal unconfirmed — no volume/structure '
                             f'reinforcement (RSI={_cons_rsi:.1f})'
                         ),
+                        'filter_stage': 'market_filter',
                     }
 
                 # market_strength: base 0.3 + 0.2 per confirmation (max 0.7)
@@ -2230,8 +2247,8 @@ class NIJAApexStrategyV71:
 
             # If trend is still 'none' (NIJA_CONSOLIDATION_SCALP=false or disabled path)
             if trend == 'none':
-                logger.debug(f"   {symbol}: Market filter blocked - {market_reason}")
-                return {'action': 'hold', 'reason': market_reason}
+                logger.info(f"   📊 TRACE [market_filter] {symbol}: {market_reason}")
+                return {'action': 'hold', 'reason': market_reason, 'filter_stage': 'market_filter'}
 
             # ── 4-Layer Drawdown Risk Controller (pre-entry authority) ────────
             # Runs BEFORE any position or signal checks to avoid wasted computation.
@@ -3383,11 +3400,9 @@ class NIJAApexStrategyV71:
 
             return {
                 'action': 'hold',
-                'reason': f'No entry signal ({trend})'
+                'reason': f'No entry signal ({trend})',
+                'filter_stage': 'no_entry',
             }
-
-        except Exception as e:
-            logger.error(f"Analysis error: {e}")
             return {
                 'action': 'hold',
                 'reason': f'Error: {str(e)}'

@@ -2648,6 +2648,34 @@ SPOT_ONLY = os.getenv('SPOT_ONLY', 'false').strip().lower() == 'true'
 if SPOT_ONLY:
     logger.info("🔒 SPOT_ONLY mode: short-selling disabled – only long positions permitted")
 
+# ── EXECUTION TRACE FILTER BYPASS FLAGS ──────────────────────────────────────
+# These flags are for DIAGNOSTIC USE ONLY.  Set them one at a time to identify
+# which filter in the signal pipeline is blocking all trades.  After identifying
+# the blocking filter, investigate its root cause rather than leaving bypasses on.
+#
+# Step-by-step diagnosis workflow:
+#   1. Run normally and observe "EXECUTION TRACE SUMMARY" logs for dominant filter.
+#   2. Set NIJA_BYPASS_QUALITY_FILTER=true — if trades appear, quality filter is culprit.
+#   3. Set NIJA_BYPASS_READINESS_GATE=true — if trades appear, readiness gate is culprit.
+#   4. Set NIJA_BYPASS_STRUCTURE_FILTER=true — if trades appear, structure filter is culprit.
+#   5. Set NIJA_BYPASS_SMART_FILTER=true (in .env) — if trades appear, smart filter culprit.
+#   6. Set NIJA_DISABLE_MARKET_FILTER=true (in .env) — bypasses APEX market filter entirely.
+_BYPASS_QUALITY_FILTER: bool = (
+    os.getenv('NIJA_BYPASS_QUALITY_FILTER', 'false').lower() in ('1', 'true', 'yes')
+)
+_BYPASS_READINESS_GATE: bool = (
+    os.getenv('NIJA_BYPASS_READINESS_GATE', 'false').lower() in ('1', 'true', 'yes')
+)
+_BYPASS_STRUCTURE_FILTER: bool = (
+    os.getenv('NIJA_BYPASS_STRUCTURE_FILTER', 'false').lower() in ('1', 'true', 'yes')
+)
+if _BYPASS_QUALITY_FILTER:
+    logger.warning("⚠️  NIJA_BYPASS_QUALITY_FILTER=true — pair quality gate disabled (DIAGNOSTIC MODE)")
+if _BYPASS_READINESS_GATE:
+    logger.warning("⚠️  NIJA_BYPASS_READINESS_GATE=true — market readiness gate disabled (DIAGNOSTIC MODE)")
+if _BYPASS_STRUCTURE_FILTER:
+    logger.warning("⚠️  NIJA_BYPASS_STRUCTURE_FILTER=true — market structure filter disabled (DIAGNOSTIC MODE)")
+
 # INCUBATION_MODE: activates the disciplined incubation risk profile.
 # When true, enforces 0.5%–1% risk per trade, max 5–8 positions,
 # 40% correlation cap, ATR-adjusted sizing, VaR auto-size reduction,
@@ -12387,6 +12415,18 @@ class TradingStrategy:
                         'rate_limited': 0,
                         'cache_hits': 0,
                         'sector_cap': 0,
+                        # ── Per-stage execution trace counters ──────────────
+                        # pre-APEX gates (run BEFORE analyze_market is called)
+                        'pre_apex_quality': 0,       # pair quality (spread/ATR/volume)
+                        'pre_apex_readiness': 0,     # market readiness gate (IDLE mode)
+                        'pre_apex_structure': 0,     # market structure (HH/HL+volume+RSI)
+                        # APEX internal gates (from analyze_market filter_stage)
+                        'apex_smart_filter': 0,      # smart filter (volume, timing, chop)
+                        'apex_market_filter': 0,     # market filter (VWAP/EMA/MACD/ADX)
+                        'apex_no_entry': 0,          # entry conditions not met (RSI/patterns)
+                        # post-APEX gates
+                        'post_apex_quality_gate': 0, # trade quality gate (R:R, momentum)
+                        'post_apex_win_rate': 0,     # win rate maximizer
                     }
 
                     # 📡 SIGNAL TRACE — collect near-miss signals for end-of-cycle reporting.
