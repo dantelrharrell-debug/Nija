@@ -190,30 +190,6 @@ class BalanceService:
                     cls._last_logged[broker_key] = scalar
                 else:
                     logger.debug("[BalanceService] %s → $%.2f (no significant change)", broker_key, scalar)
-                # Deterministic bootstrap contract: IF (no snapshot exists) → ALWAYS seed.
-                # The single-writer contract (CapitalRefreshCoordinator) is preserved
-                # for steady-state; this path fires exactly when the CA has never
-                # received a coordinator snapshot (_hydrated is False).  Once the
-                # coordinator publishes its first snapshot (_hydrated → True), this
-                # bypass is permanently closed and all updates flow through the
-                # coordinator exclusively.
-                try:
-                    _ca = _get_capital_authority() if _get_capital_authority else None
-                    if _ca is not None and not _ca.is_hydrated:
-                        _ca.force_accept_feed(broker_key, scalar)
-                        logger.info(
-                            "[BalanceService] %s: bootstrap seed → CA $%.2f",
-                            broker_key,
-                            scalar,
-                        )
-                except Exception as _seed_exc:
-                    # Non-critical: CA may not be initialised yet during very early
-                    # startup.  The coordinator pipeline will seed it on its next run.
-                    logger.debug(
-                        "[BalanceService] %s: bootstrap CA seed skipped (%s)",
-                        broker_key,
-                        _seed_exc,
-                    )
             else:
                 # Still update the timestamp so the TTL gate prevents immediate retry
                 # storms when the exchange legitimately returns $0 (e.g. unfunded account).
@@ -221,6 +197,33 @@ class BalanceService:
                 logger.warning(
                     "[BalanceService] %s: fetch returned $0 — retaining cached $%.2f (TTL reset)",
                     broker_key, cls._cache.get(broker_key, 0.0),
+                )
+
+            # Deterministic bootstrap contract: IF (no snapshot exists) → ALWAYS seed.
+            # The single-writer contract (CapitalRefreshCoordinator) is preserved
+            # for steady-state; this path fires exactly when the CA has never
+            # received a coordinator snapshot (_hydrated is False).  Once the
+            # coordinator publishes its first snapshot (_hydrated → True), this
+            # bypass is permanently closed and all updates flow through the
+            # coordinator exclusively.
+            # Zero-balance accounts are now included so that an unfunded but
+            # connected broker can still hydrate CA and unblock the startup gate.
+            try:
+                _ca = _get_capital_authority() if _get_capital_authority else None
+                if _ca is not None and not _ca.is_hydrated:
+                    _ca.force_accept_feed(broker_key, scalar)
+                    logger.info(
+                        "[BalanceService] %s: bootstrap seed → CA $%.2f",
+                        broker_key,
+                        scalar,
+                    )
+            except Exception as _seed_exc:
+                # Non-critical: CA may not be initialised yet during very early
+                # startup.  The coordinator pipeline will seed it on its next run.
+                logger.debug(
+                    "[BalanceService] %s: bootstrap CA seed skipped (%s)",
+                    broker_key,
+                    _seed_exc,
                 )
 
             return cls._cache.get(broker_key, 0.0)
