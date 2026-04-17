@@ -985,15 +985,33 @@ class MultiAccountBrokerManager:
         # threads may pass the outer gate before the first one sets the flag,
         # but they immediately contend on _bootstrap_seed_lock and the inner
         # check serialises them — only the first thread runs the seed block.
-        if not self._startup_lock_is_set() and not self._bootstrap_seed_done and self._is_bootstrap_trigger(trigger):
+        #
+        # is_hydrated fast-path: if CapitalAuthority is already hydrated (via
+        # the normal coordinator pipeline or a prior seed on another thread) the
+        # seed is unnecessary regardless of _startup_lock_is_set() / trigger.
+        # Checking is_hydrated first avoids taking _bootstrap_seed_lock on every
+        # call once the system is initialised — a common hot-path optimisation.
+        # _ca_for_seed may be None during very early startup if the singleton
+        # has not yet been created; in that case we allow the seed path to
+        # proceed so the system can still bootstrap normally.
+        _ca_for_seed = get_capital_authority() if get_capital_authority else None
+        if (
+            (_ca_for_seed is None or not _ca_for_seed.is_hydrated)
+            and not self._startup_lock_is_set()
+            and not self._bootstrap_seed_done
+            and self._is_bootstrap_trigger(trigger)
+        ):
             with self._bootstrap_seed_lock:
                 if not self._bootstrap_seed_done:
                     self._bootstrap_seed_done = True
                     _seed_snapshot = self._force_minimal_capital_snapshot()
                     if _seed_snapshot is not None:
-                        # Resolve authority and writer_id via the same deferred
-                        # import pattern used throughout this module.
-                        _authority = get_capital_authority() if get_capital_authority else None
+                        # Reuse the singleton reference already obtained above;
+                        # get_capital_authority() is idempotent so the same
+                        # object is returned, but reusing avoids a redundant call.
+                        _authority = _ca_for_seed if _ca_for_seed is not None else (
+                            get_capital_authority() if get_capital_authority else None
+                        )
                         _WRITER_ID: Optional[str] = None
                         for _fsm_mod in ("bot.capital_flow_state_machine", "capital_flow_state_machine"):
                             try:
