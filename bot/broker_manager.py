@@ -8767,6 +8767,11 @@ class KrakenBroker(BaseBroker):
                 # SUCCESS: Update last known balance and reset error count
                 # 🚑 FIX 4: Store and return total_funds instead of just available
                 self._last_known_balance = total_funds
+                logger.info(
+                    "[DEBUG] setting _last_known_balance=%s for broker=%s",
+                    total_funds,
+                    self.name,
+                )
                 self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
                 self._balance_fetch_errors = 0
                 self._is_available = True
