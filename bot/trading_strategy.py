@@ -4666,6 +4666,27 @@ class TradingStrategy:
             if hasattr(self.multi_account_manager, "finalize_broker_registration"):
                 self.multi_account_manager.finalize_broker_registration()
 
+            # ── HARD BOOTSTRAP TRIGGER ─────────────────────────────────────────
+            # Called once synchronously here — after broker registration is
+            # finalized (gate is open) but BEFORE any capital read,
+            # CapitalAuthority refresh, or _init_advanced_features
+            # (which creates CapitalAllocationBrain).  This guarantees the
+            # capital-authority FSM is primed before any Brain thread starts
+            # or any startup lock is evaluated.
+            if hasattr(self.multi_account_manager, "refresh_capital_authority"):
+                try:
+                    self.multi_account_manager.refresh_capital_authority(
+                        trigger="BOOTSTRAP_START"
+                    )
+                    logger.info(
+                        "✅ [BOOTSTRAP] refresh_capital_authority(BOOTSTRAP_START) complete"
+                    )
+                except Exception as _bootstrap_rca_err:
+                    logger.warning(
+                        "⚠️  [BOOTSTRAP] refresh_capital_authority(BOOTSTRAP_START) raised: %s",
+                        _bootstrap_rca_err,
+                    )
+
             if connected_brokers or user_brokers:
                 if connected_brokers:
                     logger.info(f"✅ PLATFORM ACCOUNT BROKERS: {', '.join(connected_brokers)}")
