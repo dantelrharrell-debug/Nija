@@ -374,6 +374,14 @@ class MultiAccountBrokerManager:
         # partial broker maps cannot drive allocation or halt logic.
         self._broker_registration_complete: threading.Event = threading.Event()
 
+        # ── Global startup lock — one-way latch separate from broker registration ──
+        # Set exactly once via finalize_bootstrap_ready() AFTER all of the
+        # following are confirmed: brokers registered, broker list reflected in
+        # CapitalAuthority, first feed batch processed / confirmed empty-safe,
+        # FSM initialized.  Until this flag is True, CapitalAllocationBrain
+        # evaluation and CA.refresh() (external callers) are hard-blocked.
+        self._startup_lock_released: bool = False
+
         # CapitalAuthority readiness + watchdog state (fail-safe auto-refresh loop)
         self._capital_ready: bool = False
         self._capital_last_refresh_ts: float = 0.0
@@ -547,6 +555,68 @@ class MultiAccountBrokerManager:
         except Exception as _exc:
             logger.warning(
                 "[MABM] finalize_broker_registration: could not lift CA gate: %s", _exc
+            )
+
+    def finalize_bootstrap_ready(self) -> None:
+        """Release the global startup lock after full system sync is confirmed.
+
+        This is the **final** step in the bootstrap sequence and MUST be called
+        only after ALL of the following are true:
+
+        1. All expected brokers have been registered
+           (:meth:`finalize_broker_registration` has been called).
+        2. The broker list is reflected in :class:`~bot.capital_authority.CapitalAuthority`
+           (pending feeds flushed, ``_broker_registration_complete`` set on CA).
+        3. The first feed batch has been processed (or confirmed empty-safe) —
+           i.e. :meth:`refresh_capital_authority` has returned ``ready=True``
+           at least once.
+        4. The capital bootstrap FSM has been initialised.
+
+        Contrast with :meth:`finalize_broker_registration`, which only lifts
+        the *broker-registration* gate and is called as soon as all brokers are
+        registered.  The startup lock is a **later, stricter** gate that prevents
+        :class:`~bot.capital_allocation_brain.CapitalAllocationBrain` and
+        external :meth:`~bot.capital_authority.CapitalAuthority.refresh` callers
+        from evaluating capital during the broker-stabilization window.
+
+        This method is idempotent: calling it more than once is safe.
+        It is called automatically from :meth:`refresh_capital_authority` the
+        first time ``ready=True`` is observed after broker registration.
+        """
+        if self._startup_lock_released:
+            logger.debug("[MABM] finalize_bootstrap_ready: startup lock already released — no-op")
+            return
+        # Verify prerequisite: broker registration must be complete.
+        if not self._broker_registration_complete.is_set():
+            logger.warning(
+                "[MABM] finalize_bootstrap_ready: broker registration not yet complete — aborting"
+            )
+            return
+        self._startup_lock_released = True
+        logger.info(
+            "✅ [MABM] Bootstrap ready — all prerequisites confirmed, releasing startup lock "
+            "(registered_brokers=%d)",
+            len(self._platform_brokers),
+        )
+        # Delegate to CapitalAuthority to set the module-level STARTUP_LOCK event.
+        # Use the same deferred-import pattern as finalize_broker_registration() to
+        # avoid a circular import: capital_authority.py already imports from this
+        # module, so a top-level import here would create a cycle.
+        try:
+            _gca = None
+            for _mod in ("bot.capital_authority", "capital_authority"):
+                try:
+                    _gca = importlib.import_module(_mod).get_capital_authority
+                    break
+                except (ImportError, AttributeError):
+                    continue
+            if _gca is not None:
+                _ca = _gca()
+                if _ca is not None and hasattr(_ca, "finalize_bootstrap_ready"):
+                    _ca.finalize_bootstrap_ready()
+        except Exception as _exc:
+            logger.warning(
+                "[MABM] finalize_bootstrap_ready: could not release CA startup lock: %s", _exc
             )
 
     def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
@@ -967,10 +1037,14 @@ class MultiAccountBrokerManager:
                 valid_brokers = snapshot.broker_count
             else:
                 # Coordinator not available or rejected snapshot — read CA directly.
+                # _bypass_startup_lock=True is required here: this bootstrap path
+                # BUILDS the initial snapshot, so it must bypass the startup lock
+                # that guards external/consumer callers.  finalize_bootstrap_ready()
+                # will be called below once ready=True is confirmed.
                 if broker_map:
-                    authority.refresh(broker_map, open_exposure_usd=0.0)
+                    authority.refresh(broker_map, open_exposure_usd=0.0, _bypass_startup_lock=True)
                 else:
-                    authority.refresh({}, open_exposure_usd=0.0)
+                    authority.refresh({}, open_exposure_usd=0.0, _bypass_startup_lock=True)
                 total_capital = float(authority.get_real_capital())
                 authority.update(total_capital)
                 valid_brokers = len(broker_map)
@@ -1051,6 +1125,21 @@ class MultiAccountBrokerManager:
                     )
                 with self._capital_state_lock:
                     self._trading_halted_due_to_capital = False
+                # Release the global startup lock the first time we reach READY.
+                # This is the point at which:
+                #   1. broker registration is confirmed (guard 0 already passed)
+                #   2. broker list is in CA (pending feeds flushed via finalize_broker_registration)
+                #   3. first feed batch processed (snapshot has real_capital > 0)
+                #   4. FSM initialized (bootstrap_ok confirmed above)
+                # ONLY NOW allow CapitalAllocationBrain + external refresh loops.
+                if not self._startup_lock_released:
+                    try:
+                        self.finalize_bootstrap_ready()
+                    except Exception as _slk_exc:
+                        logger.warning(
+                            "[CapitalAuthorityRefresh] finalize_bootstrap_ready failed: %s",
+                            _slk_exc,
+                        )
             else:
                 logger.error(
                     "⛔ CapitalAuthority NOT READY (trigger=%s): valid_brokers=%d total_capital=$%.2f "

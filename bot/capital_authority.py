@@ -106,6 +106,29 @@ _DEFAULT_FRESHNESS_TTL_S: float = 90.0
 #
 CAPITAL_SYSTEM_READY: threading.Event = threading.Event()
 
+# ---------------------------------------------------------------------------
+# Global Startup Lock — process-wide "NO EVALUATION BEFORE READY" latch
+# ---------------------------------------------------------------------------
+#
+# SEPARATE from broker registration.  Set exactly once via
+# finalize_bootstrap_ready() ONLY after ALL of the following are confirmed:
+#   1. All expected brokers have been registered.
+#   2. The broker list is reflected in CapitalAuthority (finalize_broker_registration
+#      has been called and any pending feeds have been flushed).
+#   3. The first feed batch has been processed (or confirmed empty-safe).
+#   4. The capital bootstrap FSM has been initialized.
+#
+# Nothing is permitted to evaluate capital (trigger refreshes, create
+# allocation plans) until this event is set.
+#
+# Usage:
+#     from capital_authority import get_startup_lock
+#
+#     if not get_startup_lock().is_set():
+#         return  # HARD BLOCK — system not yet fully synced
+#
+STARTUP_LOCK: threading.Event = threading.Event()
+
 # Maximum seconds to wait for CapitalAuthority to reach ACTIVE_CAPITAL during
 # bootstrap.  Increase this value if the broker connection is slow to confirm
 # balances (e.g. on cold-start or high-latency environments).
@@ -167,6 +190,31 @@ def get_capital_system_gate() -> threading.Event:
         get_capital_system_gate().wait(timeout=30)
     """
     return CAPITAL_SYSTEM_READY
+
+
+def get_startup_lock() -> threading.Event:
+    """Return the process-wide ``STARTUP_LOCK`` :class:`threading.Event`.
+
+    The event transitions from *unset* to *set* exactly once, via
+    :func:`finalize_bootstrap_ready` / :meth:`CapitalAuthority.finalize_bootstrap_ready`,
+    and is **never** cleared after being set.
+
+    It is SEPARATE from the broker-registration gate
+    (:attr:`CapitalAuthority._broker_registration_complete`) and from
+    :data:`CAPITAL_SYSTEM_READY`.  This lock ensures that **no capital
+    evaluation** (allocation plans, authority refreshes triggered by consumers)
+    can proceed during the broker-stabilization window — i.e. the period
+    between broker registration completing and the first confirmed stable
+    capital snapshot being published.
+
+    Usage::
+
+        from capital_authority import get_startup_lock
+
+        if not get_startup_lock().is_set():
+            return  # HARD BLOCK — startup not complete
+    """
+    return STARTUP_LOCK
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +324,13 @@ class CapitalAuthority:
         # the gate is open; they are flushed when finalize_broker_registration()
         # is called.
         self._broker_registration_complete: threading.Event = threading.Event()
+        # ── Global startup lock — "NO EVALUATION BEFORE READY" ────────────────
+        # References the module-level STARTUP_LOCK event.  Set exactly once via
+        # finalize_bootstrap_ready() AFTER all of the following are confirmed:
+        # brokers registered, broker list stable in CA, first feed batch
+        # processed, FSM initialized.  Nothing is allowed to evaluate capital
+        # (trigger refreshes, produce allocation plans) until this is set.
+        self._startup_lock: threading.Event = STARTUP_LOCK
         # Queue of (broker_key, balance, timestamp) tuples received before the
         # registration gate was lifted.  Flushed by finalize_broker_registration().
         self._pending_feeds: List[Tuple[str, float, datetime]] = []
@@ -342,6 +397,44 @@ class CapitalAuthority:
                 )
 
     # ------------------------------------------------------------------
+    # Global startup lock — full system sync gate
+    # ------------------------------------------------------------------
+
+    def finalize_bootstrap_ready(self) -> None:
+        """Release the global startup lock to permit capital evaluation.
+
+        This is the **final** step in the bootstrap sequence.  It must be
+        called ONLY after ALL of the following are confirmed:
+
+        1. All expected brokers have been registered
+           (:meth:`finalize_broker_registration` has been called).
+        2. The broker list is reflected in this :class:`CapitalAuthority`
+           (pending feeds have been flushed).
+        3. The first feed batch has been processed (or confirmed empty-safe).
+        4. The capital bootstrap FSM has been initialised.
+
+        Calling this method sets :data:`STARTUP_LOCK` which allows
+        :meth:`refresh` and :class:`~bot.capital_allocation_brain.CapitalAllocationBrain`
+        evaluation paths to proceed.  The event is a one-way latch — it is
+        **never** cleared after being set.
+
+        The canonical caller is
+        :meth:`~bot.multi_account_broker_manager.MultiAccountBrokerManager.finalize_bootstrap_ready`,
+        which verifies the above conditions before delegating here.  This
+        method may also be called directly in test scenarios.
+        """
+        if self._startup_lock.is_set():
+            logger.debug(
+                "[CapitalAuthority] finalize_bootstrap_ready: startup lock already set — no-op"
+            )
+            return
+        self._startup_lock.set()
+        logger.info(
+            "✅ [CapitalAuthority] Startup lock released — full system sync confirmed, "
+            "capital evaluation now permitted"
+        )
+
+    # ------------------------------------------------------------------
     # Core refresh
     # ------------------------------------------------------------------
 
@@ -349,6 +442,7 @@ class CapitalAuthority:
         self,
         broker_map: Dict[str, Any],
         open_exposure_usd: float = 0.0,
+        _bypass_startup_lock: bool = False,
     ) -> None:
         """
         Pull live balances from all brokers in *broker_map* and update the
@@ -364,8 +458,20 @@ class CapitalAuthority:
         open_exposure_usd:
             Sum of all open-position notional values in USD.  Pass 0.0 (or
             omit) when the caller does not yet have position data.
+        _bypass_startup_lock:
+            Internal bootstrap escape hatch.  Pass ``True`` ONLY from
+            :meth:`MultiAccountBrokerManager.refresh_capital_authority`'s
+            coordinator-unavailable fallback path, where the coordinator
+            cannot use :meth:`publish_snapshot` and must fall back to direct
+            refresh to build the initial snapshot.  All external callers must
+            leave this ``False`` (the default).
         """
         self.assert_singleton()
+        if not self._startup_lock.is_set() and not _bypass_startup_lock:
+            logger.info(
+                "[CapitalAuthority] Startup lock not released — skipping evaluation"
+            )
+            return
         try:
             from bot.multi_account_broker_manager import get_broker_manager
         except ImportError:
@@ -1462,12 +1568,20 @@ def get_capital_authority() -> CapitalAuthority:
 
 
 def reset_capital_authority_singleton() -> None:
-    """Clear the cached CapitalAuthority singleton (cold-start helper)."""
+    """Clear the cached CapitalAuthority singleton (cold-start helper).
+
+    Also clears :data:`STARTUP_LOCK` and :data:`CAPITAL_SYSTEM_READY` so that
+    the next singleton creation starts from a clean bootstrap state.  Intended
+    for use in tests and cold-start recovery only — never call this during
+    live trading.
+    """
     global _authority_instance, _EXPECTED_ID
     with _authority_lock:
         _authority_instance = None
         _EXPECTED_ID = None
-    logger.warning("[CapitalAuthority] singleton cache cleared")
+    STARTUP_LOCK.clear()
+    CAPITAL_SYSTEM_READY.clear()
+    logger.warning("[CapitalAuthority] singleton cache cleared (STARTUP_LOCK + CAPITAL_SYSTEM_READY reset)")
 
 
 def wait_for_capital_ready(timeout: float = CAPITAL_READY_TIMEOUT) -> bool:
