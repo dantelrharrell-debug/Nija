@@ -1297,6 +1297,12 @@ class MultiAccountBrokerManager:
                     or getattr(broker, "has_balance_payload_for_capital", lambda: False)()
                     or getattr(broker, "has_balance_payload", lambda: False)()
                 )
+                logger.info(
+                    "[DEBUG] eligibility check broker=%s last_known_balance=%s has_payload=%s",
+                    broker.name,
+                    getattr(broker, "_last_known_balance", None),
+                    has_payload,
+                )
                 if not has_payload:
                     logger.info(
                         "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=no_balance_payload",
