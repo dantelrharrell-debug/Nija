@@ -468,10 +468,9 @@ class CapitalAuthority:
         """
         self.assert_singleton()
         if not self._startup_lock.is_set() and not _bypass_startup_lock:
-            logger.info(
-                "[CapitalAuthority] Startup lock not released — skipping evaluation"
+            logger.warning(
+                "[CapitalAuthority] Startup lock not released — allowing refresh, blocking decisions"
             )
-            return
         try:
             from bot.multi_account_broker_manager import get_broker_manager
         except ImportError:
