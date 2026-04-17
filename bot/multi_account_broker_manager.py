@@ -407,6 +407,7 @@ class MultiAccountBrokerManager:
 
         # CapitalAuthority readiness + watchdog state (fail-safe auto-refresh loop)
         self._capital_ready: bool = False
+        self._capital_last_valid_brokers: int = 0
         self._capital_last_refresh_ts: float = 0.0
         self._capital_watchdog_started: bool = False
         self._capital_watchdog_stop: threading.Event = threading.Event()
@@ -1126,13 +1127,14 @@ class MultiAccountBrokerManager:
         with self._capital_state_lock:
             _last = self._capital_last_refresh_ts
             _ready = self._capital_ready
+            _last_vb = self._capital_last_valid_brokers
         if (time.time() - _last) < self.REFRESH_MIN_INTERVAL_S:
             logger.debug(
                 "[CapitalAuthorityRefresh] trigger=%s skipped (dedup) — last refresh %.3fs ago",
                 trigger,
                 time.time() - _last,
             )
-            return {"ready": 1.0 if _ready else 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "dedup": 1.0}
+            return {"ready": 1.0 if _ready else 0.0, "total_capital": 0.0, "valid_brokers": float(_last_vb), "dedup": 1.0}
 
         try:
             bootstrap_trigger = self._is_bootstrap_trigger(trigger)
@@ -1387,6 +1389,8 @@ class MultiAccountBrokerManager:
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
+                if valid_brokers > 0:
+                    self._capital_last_valid_brokers = valid_brokers
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s ready=%s total=$%.2f valid_brokers=%d "
                 "kraken_connected_layer=%s kraken_included=%s assets_priced_ok=%s "

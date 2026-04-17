@@ -8242,13 +8242,32 @@ class KrakenBroker(BaseBroker):
                         # event = truth: mark_connected() is the single authoritative write;
                         # all readers derive their answer from the FSM.
                         if self.account_type == AccountType.PLATFORM:
+                            # FIX: Mark connected immediately after successful private API
+                            # interaction (balance fetch above succeeded).  Calling
+                            # mark_connected() BEFORE resolve_startup_capital_invariant()
+                            # breaks the circular dependency where:
+                            #   is_platform_connected() → _KRAKEN_STARTUP_FSM.is_connected
+                            #   → False (mark_connected not yet called)
+                            #   → broker excluded from broker_map
+                            #   → valid_brokers=0 → capital_ready=False
+                            #   → mark_connected() never fires  ← deadlock
+                            # Rule: if private API works → broker IS connected.
+                            self.connected = True
+                            _KRAKEN_STARTUP_FSM.mark_nonce_ready()
+                            _KRAKEN_STARTUP_FSM.mark_connected()
+                            logger.info(
+                                "✅ PLATFORM Kraken broker marked CONNECTED "
+                                "(private API succeeded — capital resolution follows)"
+                            )
+
                             _capital_ready = False
                             _cap_total = 0.0
                             _valid = 0
                             try:
                                 # Event-driven startup gate:
-                                # refresh unified capital authority immediately and only
-                                # release nonce/trading gates when capital is READY.
+                                # resolve capital authority now that the broker is
+                                # properly marked connected so is_platform_connected()
+                                # returns True and the broker is eligible for broker_map.
                                 try:
                                     from bot.multi_account_broker_manager import (
                                         multi_account_broker_manager as _mabm_startup,
@@ -8284,26 +8303,13 @@ class KrakenBroker(BaseBroker):
                                 )
 
                             if _capital_ready:
-                                self.connected = True
-                                _KRAKEN_STARTUP_FSM.mark_nonce_ready()
                                 _KRAKEN_STARTUP_FSM.mark_capital_ready()
-                                _KRAKEN_STARTUP_FSM.mark_connected()
                                 logger.info(
                                     "✅ PLATFORM Kraken connected + capital READY "
                                     "(brokers=%d total=$%.2f) — USER accounts may now connect.",
                                     _valid, _cap_total,
                                 )
                             else:
-                                # Decouple physical connectivity from capital readiness:
-                                # keep broker connected so CapitalAuthority can ingest
-                                # upstream sources on subsequent refresh attempts.
-                                self.connected = True
-                                # Intentional: nonce calibration is complete, but
-                                # mark_connected() remains blocked until capital ready.
-                                _KRAKEN_STARTUP_FSM.mark_nonce_ready()
-                                self.last_connection_error = (
-                                    "Waiting for CapitalAuthority readiness after successful Kraken connection"
-                                )
                                 logger.warning(
                                     "⏳ PLATFORM Kraken connected; CapitalAuthority not ready yet "
                                     "(valid_brokers=%d total=$%.2f) — awaiting bootstrap convergence",
