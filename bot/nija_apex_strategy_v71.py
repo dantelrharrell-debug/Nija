@@ -124,8 +124,10 @@ _DISABLE_MARKET_FILTER: bool = (
 #   news, chop/ADX) in analyze_market.  Allows signals through even in low-volume or
 #   choppy markets.  Step 4 diagnostic bypass: use to confirm the smart filter is the
 #   first gate that drops all signals.
+#   Also activated automatically when NIJA_DEBUG_BYPASS_MODE=true.
 _BYPASS_SMART_FILTER: bool = (
     _os_apex.getenv("NIJA_BYPASS_SMART_FILTER", "false").lower() in ("1", "true", "yes")
+    or _os_apex.getenv("NIJA_DEBUG_BYPASS_MODE", "false").lower() in ("1", "true", "yes")
 )
 
 # NIJA_CONSOLIDATION_SCALP=true  (default) — when check_market_filter returns
@@ -3403,6 +3405,9 @@ class NIJAApexStrategyV71:
                 'reason': f'No entry signal ({trend})',
                 'filter_stage': 'no_entry',
             }
+
+        except Exception as e:
+            logger.error(f"Analysis error: {e}")
             return {
                 'action': 'hold',
                 'reason': f'Error: {str(e)}'
