@@ -359,16 +359,24 @@ class CapitalAllocationBrain:
         Returns:
             Latest observed total capital (>= 0).
         """
-        # HARD BLOCK — startup lock not yet released.  The bootstrap process
-        # has not confirmed full system sync; triggering a capital refresh from
-        # CapitalAllocationBrain at this point could evaluate an incomplete
-        # broker snapshot and corrupt allocation state.
+        # PHASE 2 bootstrap escape hatch: if CA is not yet hydrated, allow the
+        # refresh to proceed so that MABM can seed the initial snapshot and
+        # lift the startup lock.  Blocking here when CA is unhydrated creates a
+        # deadlock — the lock is set by finalize_bootstrap_ready() which is
+        # called from within refresh_capital_authority(), the very path we are
+        # trying to reach.
         if not self._startup_lock.is_set():
-            logger.warning(
-                "[CapitalAllocationBrain] Startup lock not released — "
-                "skipping refresh_authority (no snapshot, no refresh)"
-            )
-            return 0.0
+            if not self.capital_authority.is_hydrated:
+                logger.info(
+                    "[CapitalAllocationBrain] Startup lock not released and CA not hydrated — "
+                    "allowing refresh to bootstrap CA hydration (PHASE 2 bypass)"
+                )
+            else:
+                logger.warning(
+                    "[CapitalAllocationBrain] Startup lock not released — "
+                    "skipping refresh_authority (no snapshot, no refresh)"
+                )
+                return 0.0
         try:
             # Event-driven refresh path (preferred): ask multi-account manager to
             # rebuild authority from currently connected healthy brokers.
@@ -407,22 +415,16 @@ class CapitalAllocationBrain:
         # broker-manager are writing to.
         ca = self.capital_authority
 
-        # Gate on CA hydration, not on the capital value.  total_capital == 0
-        # is ambiguous — it could mean "not yet initialised" OR "genuinely
-        # empty account".  Only once CAPITAL_SYSTEM_READY is set (i.e. the MABM
-        # coordinator has published at least one confirmed snapshot) can we trust
-        # the value.  Fall back to ca.is_hydrated if the gate import fails.
-        try:
-            try:
-                from bot.capital_authority import get_capital_system_gate as _get_csg
-            except ImportError:
-                from capital_authority import get_capital_system_gate as _get_csg  # type: ignore[import]
-            _system_ready = _get_csg().is_set()
-        except Exception:
-            _system_ready = ca.is_hydrated
+        # PHASE 3: gate on ca.is_hydrated, not on CAPITAL_SYSTEM_READY.
+        # CAPITAL_SYSTEM_READY requires real_capital > 0 (ACTIVE_CAPITAL state),
+        # which permanently blocks the brain for genuinely empty or zero-balance
+        # accounts at startup.  is_hydrated fires as soon as any snapshot has been
+        # published — capital = 0.0 is a valid startup state and must not block
+        # Brain initialization.
+        _system_ready = ca.is_hydrated
         if not _system_ready:
             logger.warning(
-                "[CapitalAllocationBrain] CAPITAL_SYSTEM_READY not set — deferring bootstrap validation"
+                "[CapitalAllocationBrain] CA not yet hydrated — deferring bootstrap validation"
             )
             return 0.0
 

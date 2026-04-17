@@ -602,19 +602,30 @@ class MultiAccountBrokerManager:
                     scalar = float(raw)
             except (TypeError, ValueError):
                 scalar = 0.0
-            if scalar > 0.0:
-                broker_balances[broker_type.value] = scalar
+            broker_balances[broker_type.value] = scalar
 
         logger.warning("[BOOTSTRAP] balances collected: %s", broker_balances)
 
         if not broker_balances:
-            logger.info("[MABM] _force_minimal_capital_snapshot: no cached balances available")
-            return None
+            # No connected brokers returned a balance — seed a zero-balance snapshot
+            # for any registered platform brokers that ARE connected so CA hydrates
+            # immediately (PHASE 1 bootstrap escape hatch) rather than staying
+            # INITIALIZING indefinitely.  Non-connected brokers are excluded so that
+            # a completely disconnected system still returns pending=1.0 as expected.
+            with self._registry_meta_lock:
+                for _bt, _broker in self._platform_brokers.items():
+                    if getattr(_broker, "connected", False):
+                        broker_balances[_bt.value] = 0.0
+            if not broker_balances:
+                logger.info("[MABM] _force_minimal_capital_snapshot: no connected brokers available")
+                return None
+            logger.info(
+                "[MABM] _force_minimal_capital_snapshot: seeding zero-balance snapshot "
+                "for connected brokers=%s",
+                sorted(broker_balances.keys()),
+            )
 
         real = sum(broker_balances.values())
-        if real <= 0.0:
-            logger.info("[MABM] _force_minimal_capital_snapshot: total cached balance is zero")
-            return None
 
         try:
             _gca = get_capital_authority() if get_capital_authority else None
@@ -631,6 +642,7 @@ class MultiAccountBrokerManager:
             assets_priced_success_pct=1.0,
             api_error_count=0,
         )
+        _is_fresh = real > 0.0
         snapshot = CapitalSnapshot(
             real_capital=real,
             usable_capital=usable,
@@ -646,8 +658,8 @@ class MultiAccountBrokerManager:
             assets_priced_success_pct=1.0,
             api_error_count=0,
             confidence=confidence,
-            is_fresh=True,
-            is_stale=False,
+            is_fresh=_is_fresh,
+            is_stale=not _is_fresh,
         )
         logger.info(
             "[MABM] _force_minimal_capital_snapshot: built seed snapshot "
