@@ -1987,6 +1987,30 @@ def _run_bot_startup_and_trading():
                     logger.warning("[Bootstrap] Failed to import capital_authority: %s", _bms_import_err2)
             _bms_refresh_ok = False
             if _bms_mabm is not None:
+                # ── Broker-registration gates ──────────────────────────────────
+                # Never call refresh_capital_authority() until real brokers exist.
+                # Without these gates the seed path publishes a snapshot whose only
+                # entry is the "__bootstrap_seed__" phantom, hydrating the Brain
+                # before any real broker is present — the root cause of the bug.
+                _bms_gate_start = time.monotonic()
+                _bms_gate_timeout = 30.0
+                while not _bms_mabm.has_registered_brokers():
+                    if time.monotonic() - _bms_gate_start >= _bms_gate_timeout:
+                        logger.warning(
+                            "[Bootstrap] Timeout waiting for broker registration (%.0fs) — proceeding",
+                            _bms_gate_timeout,
+                        )
+                        break
+                    time.sleep(0.1)
+                while not _bms_mabm.has_attempted_connections():
+                    if time.monotonic() - _bms_gate_start >= _bms_gate_timeout:
+                        logger.warning(
+                            "[Bootstrap] Timeout waiting for connection attempts (%.0fs) — proceeding",
+                            _bms_gate_timeout,
+                        )
+                        break
+                    time.sleep(0.1)
+                # ── END broker-registration gates ──────────────────────────────
                 try:
                     _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
                     logger.info("[Bootstrap] BOOTSTRAP_START capital refresh triggered")

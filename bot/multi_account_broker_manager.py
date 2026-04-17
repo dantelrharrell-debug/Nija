@@ -531,6 +531,25 @@ class MultiAccountBrokerManager:
             primary_registrations = self._primary_registration_count
         return source_count > 0 and primary_registrations > 0
 
+    def has_registered_brokers(self) -> bool:
+        """Return True when at least one real platform broker has been registered.
+
+        Use this gate before calling :meth:`refresh_capital_authority` during
+        bootstrap to prevent the brain from hydrating with a ``__bootstrap_seed__``
+        placeholder before any real broker exists.
+        """
+        with self._registry_meta_lock:
+            return len(self._platform_brokers) > 0
+
+    def has_attempted_connections(self) -> bool:
+        """Return True when broker registration has been finalized.
+
+        :meth:`finalize_broker_registration` sets this flag once all expected
+        brokers have been registered (connected or failed).  Waiting on this
+        gate ensures the full broker map is stable before capital evaluation.
+        """
+        return self._broker_registration_complete.is_set()
+
     def _force_minimal_capital_snapshot(self) -> Optional[Any]:
         """Build a minimal :class:`~capital_flow_state_machine.CapitalSnapshot` from
         whatever broker balances are already cached in ``_last_known_balance``.
@@ -630,18 +649,23 @@ class MultiAccountBrokerManager:
                     if getattr(_broker, "connected", False):
                         broker_balances[_bt.value] = 0.0
             if not broker_balances:
-                # NEVER return None during bootstrap — seed all registered brokers
-                # at 0.0 so CA always hydrates on the first call regardless of
-                # connection state.  A zero-balance snapshot is a valid HYDRATED_ZERO
-                # state; the normal coordinator refresh will correct it on the next
-                # cycle once brokers are connected.
+                # Seed all registered brokers at 0.0 so CA hydrates on the
+                # first call regardless of connection state.  A zero-balance
+                # snapshot is a valid HYDRATED_ZERO state; the normal coordinator
+                # refresh will correct it once brokers are connected.
                 logger.warning("[BOOTSTRAP] no broker balances → seeding zero-capital snapshot")
                 with self._registry_meta_lock:
                     broker_balances = {_bt.value: 0.0 for _bt in self._platform_brokers}
                 if not broker_balances:
-                    # No registered brokers at all — use a synthetic placeholder so
-                    # publish_snapshot() can run and set CAPITAL_HYDRATED_EVENT.
-                    broker_balances = {"__bootstrap_seed__": 0.0}
+                    # No real brokers registered yet — refuse to seed a phantom
+                    # snapshot.  Allowing __bootstrap_seed__ as the sole entry
+                    # would hydrate the Brain before any broker exists, breaking
+                    # the startup invariant.  Return None so the caller retries.
+                    logger.warning(
+                        "[BOOTSTRAP] _force_minimal_capital_snapshot: no real brokers registered "
+                        "— refusing __bootstrap_seed__ phantom snapshot"
+                    )
+                    return None
             logger.info(
                 "[MABM] _force_minimal_capital_snapshot: seeding zero-balance snapshot "
                 "for brokers=%s",
@@ -1228,41 +1252,29 @@ class MultiAccountBrokerManager:
                     broker_map[broker_type.value] = broker
                     continue
 
-                # ── Non-bootstrap path: legacy readiness checks ────────────────
-                broker_ready, reason = self._is_broker_ready_for_capital_refresh(
-                    broker_type,
-                    broker,
-                    trigger=trigger,
+                # ── Non-bootstrap path ────────────────────────────────────────
+                # Inclusion Contract: connection state is irrelevant for capital
+                # inclusion.  The ONLY gate is whether the broker has a balance
+                # payload.  If it does, it MUST appear in the snapshot.
+                has_payload = (
+                    getattr(broker, "_last_known_balance", None) is not None
+                    or getattr(broker, "has_balance_payload_for_capital", lambda: False)()
+                    or getattr(broker, "has_balance_payload", lambda: False)()
                 )
-                if not broker_ready:
+                if not has_payload:
                     logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=%s",
+                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=no_balance_payload",
                         trigger,
                         broker_type.value,
-                        reason,
                     )
                     continue
-                is_platform_ready = self.is_platform_connected(broker_type)
-                allow_bootstrap_connected = self._can_include_bootstrap_connected_broker(
-                    trigger=trigger,
-                    is_platform_ready=is_platform_ready,
-                    broker=broker,
+                logger.info(
+                    "[CapitalAuthorityRefresh] trigger=%s include broker=%s reason=has_payload"
+                    " (platform_connected=%s)",
+                    trigger,
+                    broker_type.value,
+                    self.is_platform_connected(broker_type),
                 )
-                if not (is_platform_ready or allow_bootstrap_connected):
-                    logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready "
-                        "(bootstrap_trigger=%s)",
-                        trigger,
-                        broker_type.value,
-                        bootstrap_trigger,
-                    )
-                    continue
-                if allow_bootstrap_connected:
-                    logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s include broker=%s reason=bootstrap_connected",
-                        trigger,
-                        broker_type.value,
-                    )
                 broker_map[broker_type.value] = broker
 
             logger.info(
