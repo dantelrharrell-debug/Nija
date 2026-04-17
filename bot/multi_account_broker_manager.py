@@ -20,6 +20,7 @@ import queue
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from types import MappingProxyType
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -383,6 +384,15 @@ class MultiAccountBrokerManager:
         # evaluation and CA.refresh() (external callers) are hard-blocked.
         self._startup_lock_released: bool = False
 
+        # ── Forced bootstrap seed — one-shot deadlock breaker ──────────────────
+        # Guards the single forced snapshot that seeds CapitalAuthority and sets
+        # STARTUP_LOCK when the normal coordinator pipeline cannot run yet (e.g.
+        # _broker_registration_complete not yet set).  Protected by
+        # _bootstrap_seed_lock for thread-safety; checked with double-checked
+        # locking inside refresh_capital_authority().
+        self._bootstrap_seed_done: bool = False
+        self._bootstrap_seed_lock: threading.Lock = threading.Lock()
+
         # CapitalAuthority readiness + watchdog state (fail-safe auto-refresh loop)
         self._capital_ready: bool = False
         self._capital_last_refresh_ts: float = 0.0
@@ -507,6 +517,143 @@ class MultiAccountBrokerManager:
             source_count = len(self._platform_brokers)
             primary_registrations = self._primary_registration_count
         return source_count > 0 and primary_registrations > 0
+
+    def _force_minimal_capital_snapshot(self) -> Optional[Any]:
+        """Build a minimal :class:`~capital_flow_state_machine.CapitalSnapshot` from
+        whatever broker balances are already cached in ``_last_known_balance``.
+
+        This is the **seed bootstrap path** — it runs exactly once per process,
+        before the normal coordinator pipeline can execute, to break the
+        initialization deadlock where ``CapitalAllocationBrain.__init__`` blocks
+        on ``CAPITAL_SYSTEM_READY`` while the coordinator is blocked behind
+        ``_broker_registration_complete``.
+
+        Returns ``None`` when:
+        * ``capital_flow_state_machine`` is not importable.
+        * No registered broker has a cached balance yet.
+        * The total of all cached balances is zero.
+
+        The returned snapshot has confidence ``MEDIUM`` (freshness treated as
+        fresh, pricing assumed 100 % until a real fetch corrects it) so that
+        ``publish_snapshot()`` → ``CAPITAL_SYSTEM_READY.set()`` fires
+        immediately.  The normal coordinator refresh cycle will overwrite this
+        seed snapshot on the very next cycle with accurate data.
+        """
+        if not _CAPITAL_FSM_AVAILABLE:
+            return None
+
+        try:
+            from bot.capital_flow_state_machine import (  # type: ignore[import]
+                CapitalConfidence,
+                CapitalSnapshot,
+            )
+        except ImportError:
+            try:
+                from capital_flow_state_machine import (  # type: ignore[import]
+                    CapitalConfidence,
+                    CapitalSnapshot,
+                )
+            except ImportError:
+                logger.warning("[MABM] _force_minimal_capital_snapshot: cannot import CapitalSnapshot")
+                return None
+
+        broker_balances: Dict[str, float] = {}
+        with self._registry_meta_lock:
+            broker_items = list(self._platform_brokers.items())
+
+        for broker_type, broker in broker_items:
+            if not getattr(broker, "connected", False):
+                logger.debug(
+                    "[MABM] _force_minimal_capital_snapshot: skipping broker=%s "
+                    "(connected=%s last_balance=%s)",
+                    broker_type.value,
+                    getattr(broker, "connected", None),
+                    getattr(broker, "_last_known_balance", None),
+                )
+                continue
+            raw = getattr(broker, "_last_known_balance", None)
+            if raw is None:
+                # _last_known_balance not yet seeded — call get_account_balance()
+                # directly.  This is the only acceptable live API call in the
+                # seed path; it runs at most once per broker per process lifetime.
+                try:
+                    raw = broker.get_account_balance()
+                except Exception as _exc:
+                    logger.debug(
+                        "[MABM] _force_minimal_capital_snapshot: broker=%s get_account_balance raised: %s",
+                        broker_type.value,
+                        _exc,
+                    )
+                    continue
+            if raw is None:
+                continue
+            try:
+                if isinstance(raw, dict):
+                    # Use explicit None-checks so zero values (e.g. exactly 0.0
+                    # in "trading_balance") are not silently skipped.
+                    tb = raw.get("trading_balance")
+                    tf = raw.get("total_funds")
+                    scalar = float(
+                        tb if tb is not None
+                        else tf if tf is not None
+                        else (raw.get("usd", 0.0) + raw.get("usdc", 0.0))
+                    )
+                else:
+                    scalar = float(raw)
+            except (TypeError, ValueError):
+                scalar = 0.0
+            if scalar > 0.0:
+                broker_balances[broker_type.value] = scalar
+
+        if not broker_balances:
+            logger.info("[MABM] _force_minimal_capital_snapshot: no cached balances available")
+            return None
+
+        real = sum(broker_balances.values())
+        if real <= 0.0:
+            logger.info("[MABM] _force_minimal_capital_snapshot: total cached balance is zero")
+            return None
+
+        try:
+            _gca = get_capital_authority() if get_capital_authority else None
+            reserve_pct = float(getattr(_gca, "_reserve_pct", 0.02)) if _gca is not None else 0.02
+        except Exception:
+            reserve_pct = 0.02
+
+        usable = real * (1.0 - reserve_pct)
+        risk_capital = max(0.0, usable)
+        now = datetime.now(timezone.utc)
+        expected = max(1, len(broker_balances))
+        confidence = CapitalConfidence.compute(
+            kraken_response_age_s=0.0,
+            assets_priced_success_pct=1.0,
+            api_error_count=0,
+        )
+        snapshot = CapitalSnapshot(
+            real_capital=real,
+            usable_capital=usable,
+            risk_capital=risk_capital,
+            open_exposure_usd=0.0,
+            reserve_pct=reserve_pct,
+            broker_balances=broker_balances,
+            broker_count=len(broker_balances),
+            expected_brokers=expected,
+            computed_at=now,
+            snapshot_age_s=0.0,
+            kraken_response_age_s=0.0,
+            assets_priced_success_pct=1.0,
+            api_error_count=0,
+            confidence=confidence,
+            is_fresh=True,
+            is_stale=False,
+        )
+        logger.info(
+            "[MABM] _force_minimal_capital_snapshot: built seed snapshot "
+            "real=$%.2f brokers=%s",
+            real,
+            sorted(broker_balances.keys()),
+        )
+        return snapshot
 
     def finalize_broker_registration(self) -> None:
         """Signal that all expected brokers have been registered.
@@ -818,6 +965,82 @@ class MultiAccountBrokerManager:
             with self._capital_state_lock:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+        # ── Forced bootstrap seed (one-shot deadlock breaker) ─────────────────
+        # If STARTUP_LOCK has never been set and the normal coordinator pipeline
+        # is blocked behind _broker_registration_complete (Guard 0 below), a
+        # CapitalAllocationBrain.__init__ that blocks on CAPITAL_SYSTEM_READY
+        # will never unblock — a hard initialization deadlock.
+        #
+        # The seed path bypasses Guard 0 exactly once per process:
+        #   1. Read _last_known_balance from every already-registered broker.
+        #   2. Publish a minimal CapitalSnapshot → sets CAPITAL_SYSTEM_READY.
+        #   3. Lift _broker_registration_complete and finalize_bootstrap_ready()
+        #      so the normal pipeline takes over immediately afterward.
+        #
+        # Double-checked locking (DCL) pattern: the outer unsynchronised read
+        # of _bootstrap_seed_done is safe because the flag transitions
+        # monotonically False → True under _bootstrap_seed_lock and Python's
+        # GIL guarantees that a plain bool read/write is atomic.  Multiple
+        # threads may pass the outer gate before the first one sets the flag,
+        # but they immediately contend on _bootstrap_seed_lock and the inner
+        # check serialises them — only the first thread runs the seed block.
+        if not self._startup_lock_is_set() and not self._bootstrap_seed_done and self._is_bootstrap_trigger(trigger):
+            with self._bootstrap_seed_lock:
+                if not self._bootstrap_seed_done:
+                    self._bootstrap_seed_done = True
+                    _seed_snapshot = self._force_minimal_capital_snapshot()
+                    if _seed_snapshot is not None:
+                        # Resolve authority and writer_id via the same deferred
+                        # import pattern used throughout this module.
+                        _authority = get_capital_authority() if get_capital_authority else None
+                        _WRITER_ID: Optional[str] = None
+                        for _fsm_mod in ("bot.capital_flow_state_machine", "capital_flow_state_machine"):
+                            try:
+                                _WRITER_ID = __import__(
+                                    _fsm_mod, fromlist=["WRITER_ID"]
+                                ).WRITER_ID
+                                break
+                            except ImportError:
+                                continue
+                        if _authority is not None and _WRITER_ID is not None:
+                            _accepted = _authority.publish_snapshot(_seed_snapshot, writer_id=_WRITER_ID)
+                            if _accepted:
+                                logger.info(
+                                    "[MABM] bootstrap seed published: real=$%.2f brokers=%s — "
+                                    "lifting registration gate and startup lock",
+                                    _seed_snapshot.real_capital,
+                                    sorted(_seed_snapshot.broker_balances.keys()),
+                                )
+                                self.finalize_broker_registration()
+                                self.finalize_bootstrap_ready()
+                                with self._capital_state_lock:
+                                    self._capital_ready = True
+                                    self._capital_last_refresh_ts = time.time()
+                                return {
+                                    "ready": 1.0,
+                                    "total_capital": _seed_snapshot.real_capital,
+                                    "valid_brokers": float(_seed_snapshot.broker_count),
+                                    "kraken_capital": float(
+                                        _seed_snapshot.broker_balances.get("kraken", 0.0)
+                                    ),
+                                    "bootstrap_seed": 1.0,
+                                }
+                            else:
+                                logger.warning(
+                                    "[MABM] bootstrap seed publish rejected — "
+                                    "falling through to normal pipeline"
+                                )
+                        else:
+                            logger.warning(
+                                "[MABM] bootstrap seed: authority or WRITER_ID unavailable — "
+                                "falling through to normal pipeline"
+                            )
+                    else:
+                        logger.info(
+                            "[MABM] bootstrap seed: no cached balances yet — "
+                            "falling through to normal pipeline"
+                        )
 
         # ── Guard 0: broker registration hard gate ────────────────────────────
         # CRITICAL: never evaluate capital before ALL brokers are registered.
