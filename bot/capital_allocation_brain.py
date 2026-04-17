@@ -218,7 +218,27 @@ class CapitalAllocationBrain:
 
         Args:
             config: Configuration dictionary
+
+        Raises:
+            AssertionError: If no brokers have been registered in ``broker_registry``
+                before initialization is attempted.  At least one broker must be
+                registered so the capital bootstrap sequence has a data source.
         """
+        # Invariant: at least one broker must be registered in the global
+        # broker_registry before CapitalAllocationBrain can initialize.
+        # Without this guard the brain starts with no capital source, causing
+        # _force_minimal_capital_snapshot to collect an empty balance dict and
+        # log "[BOOTSTRAP] balances collected: {}".
+        try:
+            from bot.broker_registry import broker_registry as _br
+        except ImportError:
+            from broker_registry import broker_registry as _br  # type: ignore[import]
+        assert len(_br) > 0, (
+            "CapitalAllocationBrain requires at least one broker registered in "
+            "broker_registry before initialization.  Register a platform broker "
+            "via MultiAccountBrokerManager.register_platform_broker() first."
+        )
+
         self.config = config or {}
         # Pin disabled: always sync from CapitalAuthority regardless of whether
         # total_capital was supplied in config.  This allows the live observed
