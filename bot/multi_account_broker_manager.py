@@ -1298,9 +1298,17 @@ class MultiAccountBrokerManager:
                     or getattr(broker, "has_balance_payload", lambda: False)()
                 )
                 logger.info(
-                    "[DEBUG] eligibility check broker=%s last_known_balance=%s has_payload=%s",
+                    "[TRACE][MABM_ELIGIBILITY] broker=%s "
+                    "connected=%s "
+                    "_last_known_balance=%s "
+                    "has_balance_payload=%s "
+                    "has_balance_payload_for_capital=%s "
+                    "has_payload=%s",
                     broker.name,
+                    getattr(broker, "connected", None),
                     getattr(broker, "_last_known_balance", None),
+                    broker.has_balance_payload() if hasattr(broker, "has_balance_payload") else None,
+                    broker.has_balance_payload_for_capital() if hasattr(broker, "has_balance_payload_for_capital") else None,
                     has_payload,
                 )
                 if not has_payload:
