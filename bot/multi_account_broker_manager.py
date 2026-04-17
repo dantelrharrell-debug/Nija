@@ -693,23 +693,18 @@ class MultiAccountBrokerManager:
                     if getattr(_broker, "connected", False):
                         broker_balances[_bt.value] = 0.0
             if not broker_balances:
-                # Seed all registered brokers at 0.0 so CA hydrates on the
-                # first call regardless of connection state.  A zero-balance
-                # snapshot is a valid HYDRATED_ZERO state; the normal coordinator
-                # refresh will correct it once brokers are connected.
-                logger.warning("[BOOTSTRAP] no broker balances → seeding zero-capital snapshot")
-                with self._registry_meta_lock:
-                    broker_balances = {_bt.value: 0.0 for _bt in self._platform_brokers}
-                if not broker_balances:
-                    # No real brokers registered yet — refuse to seed a phantom
-                    # snapshot.  Allowing __bootstrap_seed__ as the sole entry
-                    # would hydrate the Brain before any broker exists, breaking
-                    # the startup invariant.  Return None so the caller retries.
-                    logger.warning(
-                        "[BOOTSTRAP] _force_minimal_capital_snapshot: no real brokers registered "
-                        "— refusing __bootstrap_seed__ phantom snapshot"
-                    )
-                    return None
+                # No connected broker has a balance payload yet — return None so
+                # the caller falls through to Guard 0 and returns pending=1.0.
+                # The broker registry barrier (Gate A) already guarantees at least
+                # one real broker is registered; we wait for it to connect and
+                # report a balance before seeding CapitalAuthority.  Seeding
+                # disconnected brokers at 0.0 would incorrectly hydrate the Brain
+                # and hide the fact that no capital is available.
+                logger.debug(
+                    "[BOOTSTRAP] _force_minimal_capital_snapshot: no connected broker "
+                    "has a balance — returning None (will retry on next cycle)"
+                )
+                return None
             logger.info(
                 "[MABM] _force_minimal_capital_snapshot: seeding zero-balance snapshot "
                 "for brokers=%s",
@@ -1141,12 +1136,15 @@ class MultiAccountBrokerManager:
         # ── Pre-flight broker-registration gates (A + B) ──────────────────────
         # HARD ordering barrier: do not run ANY refresh path — including the
         # bootstrap seed bypass below — until:
-        #   A. at least one real platform broker has been registered, AND
+        #   A. at least one real platform broker has been registered (broker
+        #      registry barrier).  Without this gate the seed path can hydrate
+        #      CapitalAllocationBrain before any real broker exists.
         #   B. finalize_broker_registration() has been called (full broker map
-        #      is stable).
-        # Without gate A the seed path can hydrate CapitalAllocationBrain
-        # before any real broker exists.  Without gate B it can run against a
-        # partial map while connections are still in flight.
+        #      is stable).  Applied only to non-bootstrap triggers so that the
+        #      one-shot seed path (a deadlock breaker) can run for bootstrap
+        #      triggers before finalization is complete.  The seed path itself
+        #      calls finalize_broker_registration() on success, so Gate B is
+        #      self-lifting for the bootstrap sequence.
         # Both gates are non-blocking: callers that arrive early simply receive
         # pending=1.0 and retry on the next cycle.  The blocking while-loops in
         # the bootstrap master sequence (bot.py) ensure the explicit
@@ -1157,7 +1155,7 @@ class MultiAccountBrokerManager:
                 trigger,
             )
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
-        if not self.has_attempted_connections():
+        if not self.has_attempted_connections() and not self._is_bootstrap_trigger(trigger):
             logger.debug(
                 "⏳ [CapitalAuthorityRefresh] trigger=%s skipped — broker registration not finalized",
                 trigger,
