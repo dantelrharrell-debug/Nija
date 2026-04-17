@@ -468,6 +468,18 @@ class MultiAccountBrokerManager:
             self._capital_bootstrap_fsm.transition(
                 CapitalBootstrapState.WAIT_PLATFORM, "mabm_init"
             )
+            # ── Option A: wire capital-ready → system FSM → trading loop ──────
+            # Register a one-shot callback on the capital bootstrap FSM.  When
+            # the capital pipeline reaches READY (event emitted, bus flushed,
+            # CapitalAuthority confirmed), this callback advances the composite
+            # BootstrapStateMachine through all prerequisite states to
+            # CAPITAL_READY.  That single transition unblocks:
+            #   • assert_invariant_i11_strategy_arm()  in _init_advanced_features()
+            #   • any other I11-gated code that checks get_bootstrap_fsm().state
+            # which is the final gate before the trading loop is allowed to run.
+            self._capital_bootstrap_fsm.register_on_ready(
+                self._on_capital_bootstrap_ready
+            )
         else:
             self._capital_event_bus = None  # type: ignore[assignment]
             self._capital_bootstrap_fsm = None  # type: ignore[assignment]
@@ -852,6 +864,53 @@ class MultiAccountBrokerManager:
         except Exception as _exc:
             logger.warning(
                 "[MABM] finalize_bootstrap_ready: could not release CA startup lock: %s", _exc
+            )
+
+    def _on_capital_bootstrap_ready(self) -> None:
+        """Option A trigger: advance the system BootstrapStateMachine to CAPITAL_READY.
+
+        Called exactly once, synchronously within
+        :meth:`~capital_flow_state_machine.CapitalRefreshCoordinator.execute_refresh`,
+        after all of the following have completed in the same pipeline tick:
+
+        1. ``CapitalAuthority`` holds a confirmed non-zero snapshot.
+        2. All pending ``CapitalEventBus`` events (``CAPITAL_READY``, etc.) have
+           been dispatched by ``dispatch_pending()``.
+        3. ``CapitalBootstrapStateMachine`` transitions to ``READY``.
+
+        This callback then drives the composite ``BootstrapStateMachine``
+        (``bootstrap_state_machine.py``) through all prerequisite happy-path
+        states to ``CAPITAL_READY``.  That single advance unblocks:
+
+        * ``assert_invariant_i11_strategy_arm()`` inside
+          ``TradingStrategy._init_advanced_features()``
+        * any other I11-gated module that checks ``get_bootstrap_fsm().state``
+
+        which is the final guard before the trading loop is permitted to run.
+        """
+        try:
+            try:
+                from bot.bootstrap_state_machine import get_bootstrap_fsm
+            except ImportError:
+                from bootstrap_state_machine import get_bootstrap_fsm  # type: ignore[no-redef]
+            fsm = get_bootstrap_fsm()
+            advanced = fsm.advance_to_capital_ready("capital_fsm_ready")
+            if advanced:
+                logger.info(
+                    "✅ [MABM] Option A: BootstrapStateMachine → %s "
+                    "— trading loop unblocked",
+                    fsm.state.value,
+                )
+            else:
+                logger.warning(
+                    "⚠️  [MABM] Option A: BootstrapStateMachine could not advance "
+                    "to CAPITAL_READY (current=%s) — I11 invariant may still block",
+                    fsm.state.value,
+                )
+        except Exception as _exc:
+            logger.warning(
+                "[MABM] _on_capital_bootstrap_ready: could not advance system FSM: %s",
+                _exc,
             )
 
     def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
