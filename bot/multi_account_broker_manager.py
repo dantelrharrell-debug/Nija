@@ -659,6 +659,29 @@ class MultiAccountBrokerManager:
 
         logger.warning("[BOOTSTRAP] balances collected: %s", broker_balances)
 
+        # ── Bootstrap seed bypass: Kraken connected but balance unavailable ────
+        # If Kraken reports connected=True but get_account_balance() failed (e.g.
+        # gateway connection established before API balance is reachable), its
+        # balance is absent from broker_balances.  Without this bypass the seed
+        # snapshot contains no entries and returns None, leaving
+        # CapitalAllocationBrain blocked on CAPITAL_SYSTEM_READY indefinitely.
+        #
+        # Seed Kraken at 0.0 so CA hydrates immediately.  The coordinator's
+        # normal refresh cycle will overwrite this with the real balance once
+        # Kraken's API becomes reachable.  The watchdog will detect non-zero
+        # capital at that point and flip ready=True.
+        kraken_broker_obj = self._platform_brokers.get(BrokerType.KRAKEN)
+        if (
+            kraken_broker_obj is not None
+            and getattr(kraken_broker_obj, "connected", False)
+            and "kraken" not in broker_balances
+        ):
+            broker_balances["kraken"] = 0.0
+            logger.info(
+                "[BOOTSTRAP] Kraken connected but no balance payload yet — "
+                "seeding kraken=0.0 to unblock CA hydration"
+            )
+
         if not broker_balances:
             # No connected brokers returned a balance — seed a zero-balance snapshot
             # for any registered platform brokers that ARE connected so CA hydrates
@@ -1587,7 +1610,39 @@ class MultiAccountBrokerManager:
                 and assets_priced_ok
                 and bootstrap_ok
             )
-            ready = kraken_ready if kraken_connected_layer else (total_capital > 0.0)
+            # ── Readiness fallback: exhausted Kraken FSM must not block other brokers ─
+            # If Kraken is physically connected (kraken_connected_layer=True) but its
+            # BrokerPayloadFSM is in EXHAUSTED state (all probe attempts consumed and
+            # the TTL-based auto-reset has not fired yet), the normal formula
+            #   ready = kraken_ready if kraken_connected_layer else (total_capital > 0.0)
+            # permanently evaluates to False even when other brokers supply positive
+            # capital — creating a hard deadlock.
+            #
+            # The fallback: treat a connected-but-exhausted Kraken as "temporarily
+            # unavailable" and allow other broker capital to satisfy readiness.
+            # This is safe because the auto-reset in BrokerPayloadFSM.is_exhausted
+            # will re-admit Kraken to the probe cycle after EXHAUSTED_RESET_TTL_S,
+            # and the watchdog will re-evaluate once Kraken's payload is confirmed.
+            kraken_fsm_exhausted = False
+            if (
+                kraken_connected_layer
+                and not kraken_included
+                and _CAPITAL_FSM_AVAILABLE
+            ):
+                _kfsm = self._broker_payload_fsm.get(BrokerType.KRAKEN)
+                if _kfsm is not None and _kfsm.is_exhausted:
+                    kraken_fsm_exhausted = True
+                    logger.warning(
+                        "[CapitalAuthorityRefresh] trigger=%s Kraken FSM EXHAUSTED — "
+                        "falling back to non-Kraken capital readiness (total=$%.2f)",
+                        trigger,
+                        total_capital,
+                    )
+
+            if kraken_connected_layer and not kraken_fsm_exhausted:
+                ready = kraken_ready
+            else:
+                ready = total_capital > 0.0
             with self._capital_state_lock:
                 self._capital_ready = ready
                 self._capital_last_refresh_ts = time.time()
@@ -1596,7 +1651,8 @@ class MultiAccountBrokerManager:
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s ready=%s total=$%.2f valid_brokers=%d "
                 "kraken_connected_layer=%s kraken_included=%s assets_priced_ok=%s "
-                "bootstrap_trigger=%s bootstrap_ok=%s kraken_capital=$%.2f",
+                "bootstrap_trigger=%s bootstrap_ok=%s kraken_capital=$%.2f"
+                " kraken_fsm_exhausted=%s",
                 trigger,
                 ready,
                 total_capital,
@@ -1607,6 +1663,7 @@ class MultiAccountBrokerManager:
                 bootstrap_trigger,
                 bootstrap_ok,
                 kraken_capital,
+                kraken_fsm_exhausted,
             )
 
             if ready:
@@ -4408,20 +4465,32 @@ class MultiAccountBrokerManager:
 
 # Global singleton guard + accessor (hard containment for registry integrity)
 _GLOBAL_BROKER_MANAGER: Optional[MultiAccountBrokerManager] = None
+_GLOBAL_BROKER_MANAGER_LOCK: threading.Lock = threading.Lock()
 
 
 def get_broker_manager() -> MultiAccountBrokerManager:
-    """Return the process-wide MultiAccountBrokerManager singleton."""
+    """Return the process-wide MultiAccountBrokerManager singleton.
+
+    Uses double-checked locking (DCL) — the same pattern as
+    ``get_capital_authority()`` — so concurrent callers during startup can
+    never create two independent instances.  A second instance would register
+    brokers separately from the instance that CapitalAuthority knows about,
+    making ``valid_brokers`` appear as 0 in every refresh.
+    """
     global _GLOBAL_BROKER_MANAGER
     if _GLOBAL_BROKER_MANAGER is None:
-        _GLOBAL_BROKER_MANAGER = MultiAccountBrokerManager()
+        with _GLOBAL_BROKER_MANAGER_LOCK:
+            if _GLOBAL_BROKER_MANAGER is None:
+                _GLOBAL_BROKER_MANAGER = MultiAccountBrokerManager()
+                logger.debug("[MABM] singleton created (id=%d)", id(_GLOBAL_BROKER_MANAGER))
     return _GLOBAL_BROKER_MANAGER
 
 
 def reset_broker_manager_singleton() -> None:
     """Clear the cached MultiAccountBrokerManager singleton (cold-start helper)."""
     global _GLOBAL_BROKER_MANAGER
-    _GLOBAL_BROKER_MANAGER = None
+    with _GLOBAL_BROKER_MANAGER_LOCK:
+        _GLOBAL_BROKER_MANAGER = None
     logger.warning("MultiAccountBrokerManager singleton cache cleared")
 
 

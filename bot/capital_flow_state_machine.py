@@ -1244,6 +1244,12 @@ class BrokerPayloadFSM:
     #: Override via ``NIJA_BALANCE_PROBE_MAX_ATTEMPTS`` environment variable.
     DEFAULT_MAX_PROBE_ATTEMPTS: int = 5
 
+    #: Seconds after which an ``EXHAUSTED`` FSM auto-resets to ``REGISTERED``
+    #: so the broker re-enters the probe cycle without requiring a restart.
+    #: Override via ``NIJA_BALANCE_PROBE_EXHAUSTED_RESET_TTL_S`` environment
+    #: variable.  Set to 0 to disable (historic behaviour — no auto-reset).
+    DEFAULT_EXHAUSTED_RESET_TTL_S: float = 60.0
+
     _VALID_TRANSITIONS: Dict[BrokerPayloadState, List[BrokerPayloadState]] = {
         BrokerPayloadState.REGISTERED: [
             BrokerPayloadState.PROBING,
@@ -1274,8 +1280,16 @@ class BrokerPayloadFSM:
                 )
             )
         )
+        # Seconds after exhaustion before auto-reset; 0 disables the feature.
+        self._exhausted_reset_ttl_s: float = float(
+            os.getenv(
+                "NIJA_BALANCE_PROBE_EXHAUSTED_RESET_TTL_S",
+                str(self.DEFAULT_EXHAUSTED_RESET_TTL_S),
+            )
+        )
         self._state: BrokerPayloadState = BrokerPayloadState.REGISTERED
         self._probe_attempts: int = 0
+        self._exhausted_at: Optional[float] = None  # monotonic timestamp of last EXHAUSTED entry
         self._lock = threading.Lock()
         self._log = logging.getLogger(f"nija.capital_bootstrap.{broker_id}")
 
@@ -1304,8 +1318,31 @@ class BrokerPayloadFSM:
 
     @property
     def is_exhausted(self) -> bool:
-        """``True`` only when ``EXHAUSTED`` — broker excluded from capital."""
-        return self.state == BrokerPayloadState.EXHAUSTED
+        """``True`` only when ``EXHAUSTED`` — broker excluded from capital.
+
+        If ``_exhausted_reset_ttl_s`` is non-zero and the FSM has been in
+        ``EXHAUSTED`` longer than that TTL, the FSM is automatically reset to
+        ``REGISTERED`` (probe counter cleared) so the broker re-enters the
+        probe cycle without requiring a process restart.
+        """
+        with self._lock:
+            if self._state != BrokerPayloadState.EXHAUSTED:
+                return False
+            # Auto-reset path: only applies when the TTL feature is enabled.
+            if self._exhausted_reset_ttl_s > 0.0 and self._exhausted_at is not None:
+                elapsed = time.monotonic() - self._exhausted_at
+                if elapsed >= self._exhausted_reset_ttl_s:
+                    self._probe_attempts = 0
+                    self._state = BrokerPayloadState.REGISTERED
+                    self._exhausted_at = None
+                    self._log.info(
+                        "[BrokerPayloadFSM] broker=%s EXHAUSTED→REGISTERED "
+                        "(auto-reset after %.1fs TTL)",
+                        self.broker_id,
+                        elapsed,
+                    )
+                    return False
+            return True
 
     @property
     def can_probe(self) -> bool:
@@ -1338,6 +1375,10 @@ class BrokerPayloadFSM:
             new_state.value,
         )
         self._state = new_state
+        if new_state == BrokerPayloadState.EXHAUSTED:
+            self._exhausted_at = time.monotonic()
+        elif new_state == BrokerPayloadState.REGISTERED:
+            self._exhausted_at = None
         return True
 
     def mark_payload_ready(self) -> None:
@@ -1367,6 +1408,7 @@ class BrokerPayloadFSM:
         """
         with self._lock:
             self._probe_attempts = 0
+            self._exhausted_at = None
             self._state = BrokerPayloadState.REGISTERED
         self._log.info(
             "[BrokerPayloadFSM] broker=%s reset to REGISTERED (probe counter cleared)",
