@@ -119,6 +119,7 @@ try:
         CapitalEventBus,
         CapitalEventType,
         CapitalRefreshCoordinator,
+        CapitalRuntimeState,
         CapitalRuntimeStateMachine,
         get_capital_bootstrap_fsm,
         get_capital_event_bus,
@@ -135,6 +136,7 @@ except ImportError:
             CapitalEventBus,
             CapitalEventType,
             CapitalRefreshCoordinator,
+            CapitalRuntimeState,
             CapitalRuntimeStateMachine,
             get_capital_bootstrap_fsm,
             get_capital_event_bus,
@@ -143,6 +145,7 @@ except ImportError:
     except ImportError:
         BrokerPayloadFSM = None   # type: ignore[assignment,misc]
         BrokerPayloadState = None  # type: ignore[assignment]
+        CapitalRuntimeState = None  # type: ignore[assignment]
         _CAPITAL_FSM_AVAILABLE = False
 
 logger = logging.getLogger('nija.multi_account')
@@ -217,6 +220,11 @@ class MultiAccountBrokerManager:
     MIN_STARTUP_CAPITAL_SLEEP_S = 0.05
     BOOTSTRAP_REFRESH_TRIGGER_PREFIXES = ("platform_connect:", "initialize_platform_brokers")
     WATCHDOG_REFRESH_TRIGGER = "watchdog"
+    # Minimum seconds between successive refresh_capital_authority() calls.
+    # Rapid back-to-back callers (startup loop, watchdog, connect hooks) are
+    # coalesced into a single coordinator run; the cached ready-state is
+    # returned immediately for any call that arrives within this window.
+    REFRESH_MIN_INTERVAL_S: float = 0.5
     BOOTSTRAP_CONNECTED_ELIGIBLE_STATES = (
         CapitalBootstrapState.WAIT_PLATFORM,
         CapitalBootstrapState.REFRESH_REQUESTED,
@@ -533,19 +541,19 @@ class MultiAccountBrokerManager:
                 mark_connected_state=mark_connected_state,
             )
 
-        # Enforce immutability: Cannot add brokers after locking
-        if self._platform_brokers_locked:
-            error_msg = f"❌ INVARIANT VIOLATION: Cannot register platform broker {broker_type.value} - platform brokers are locked (immutable)"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-        
-        # Enforce single registration: Check if already registered
-        if broker_type in self._platform_brokers:
-            logger.warning(f"{broker_type.value} already registered — skipping duplicate")
-            return False
-        
-        # Register the broker instance
-        self._platform_brokers[broker_type] = broker
+        # Enforce immutability and single-registration atomically under the
+        # registry lock so two concurrent callers cannot both pass the
+        # "already registered?" check and double-write the same broker.
+        with self._registry_meta_lock:
+            if self._platform_brokers_locked:
+                error_msg = f"❌ INVARIANT VIOLATION: Cannot register platform broker {broker_type.value} - platform brokers are locked (immutable)"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            if broker_type in self._platform_brokers:
+                logger.debug("%s already registered — skipping duplicate (idempotent)", broker_type.value)
+                return False
+            # Atomic write — visible to all threads once the lock is released.
+            self._platform_brokers[broker_type] = broker
         self._record_broker_registration(broker_type, broker)
         # Pre-create the readiness Event before advancing the state machine.
         # This guarantees that any thread which calls _get_or_create_platform_event()
@@ -641,11 +649,45 @@ class MultiAccountBrokerManager:
         READY condition:
             - at least one healthy connected platform broker contributes, and
             - aggregated total capital > 0.0
+
+        Return keys (all callers should treat unknown keys as informational):
+            ready           1.0 = capital ready, 0.0 = not ready
+            total_capital   aggregate USD capital from this refresh
+            valid_brokers   number of contributing brokers
+            kraken_capital  Kraken-specific capital (0.0 if not included)
+            pending         1.0 = no registered sources yet (early call)
+            dedup           1.0 = call was coalesced (within REFRESH_MIN_INTERVAL_S)
+
+        Entry guards (applied before any work):
+            1. ``has_registered_sources()`` — skip silently when no brokers are
+               registered yet (avoids log storms from early watchdog cycles).
+            2. ``REFRESH_MIN_INTERVAL_S`` dedup — coalesce rapid back-to-back calls
+               (startup loop + watchdog + connect hooks) into a single coordinator run.
         """
         if get_capital_authority is None:
             with self._capital_state_lock:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+        # ── Guard 1: no registered sources yet ────────────────────────────────
+        if not self.has_registered_sources():
+            logger.debug(
+                "[CapitalAuthorityRefresh] trigger=%s skipped — no registered capital sources yet",
+                trigger,
+            )
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
+
+        # ── Guard 2: rapid-call deduplication ─────────────────────────────────
+        with self._capital_state_lock:
+            _last = self._capital_last_refresh_ts
+            _ready = self._capital_ready
+        if (time.time() - _last) < self.REFRESH_MIN_INTERVAL_S:
+            logger.debug(
+                "[CapitalAuthorityRefresh] trigger=%s skipped (dedup) — last refresh %.3fs ago",
+                trigger,
+                time.time() - _last,
+            )
+            return {"ready": 1.0 if _ready else 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "dedup": 1.0}
 
         try:
             bootstrap_trigger = self._is_bootstrap_trigger(trigger)
@@ -824,15 +866,14 @@ class MultiAccountBrokerManager:
                     }
 
             # ── Emit REFRESH_REQUESTED event (bootstrap FSM observability) ────
+            # The event is for observability only; FSM transitions are driven
+            # by the coordinator's _pipeline() — MABM no longer advances the
+            # bootstrap FSM directly from this point.
             if _CAPITAL_FSM_AVAILABLE and self._capital_event_bus is not None:
                 self._capital_event_bus.emit(CapitalEvent(
                     event_type=CapitalEventType.REFRESH_REQUESTED,
                     trigger=trigger,
                 ))
-                # Advance bootstrap FSM: WAIT_PLATFORM → REFRESH_REQUESTED
-                self._capital_bootstrap_fsm.transition(
-                    CapitalBootstrapState.REFRESH_REQUESTED, trigger
-                )
 
             # ── Route through coordinator (single writer) ─────────────────────
             snapshot = None
@@ -877,27 +918,15 @@ class MultiAccountBrokerManager:
                 if snapshot is not None
                 else False
             )
-            # bootstrap_ok: True  = bootstrap is NOT in FAILED state (proceed)
-            #               False = bootstrap is in FAILED state (block kraken_ready)
-            # Default True so that when no FSM is registered we do not block.
+            # bootstrap_ok: True  = bootstrap FSM has not reached FAILED state.
+            # Recovery from FAILED is handled by the coordinator's _pipeline()
+            # at the start of the next refresh cycle — MABM does not drive FSM
+            # transitions here (FSM is the authority on readiness).
             bootstrap_ok = True
             if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
-                boot_state = self._capital_bootstrap_fsm.state
-                bootstrap_ok = boot_state != CapitalBootstrapState.FAILED
-                if (
-                    boot_state == CapitalBootstrapState.FAILED
-                    and kraken_connected_layer
-                    and kraken_included
-                    and (kraken_capital > 0.0)
-                    and assets_priced_ok
-                ):
-                    transitioned = self._capital_bootstrap_fsm.transition(
-                        CapitalBootstrapState.REFRESH_REQUESTED,
-                        f"{trigger}:kraken_recovery_ready",
-                    )
-                    bootstrap_ok = transitioned and (
-                        self._capital_bootstrap_fsm.state != CapitalBootstrapState.FAILED
-                    )
+                bootstrap_ok = (
+                    self._capital_bootstrap_fsm.state != CapitalBootstrapState.FAILED
+                )
             kraken_ready = (
                 kraken_connected_layer
                 and kraken_included
@@ -1193,24 +1222,17 @@ class MultiAccountBrokerManager:
 
         while True:
             attempts += 1
-            # Bootstrap loop must only request a refresh — it must NOT write
-            # capital state directly.  The coordinator handles the actual fetch
-            # and the single atomic publish to CapitalAuthority.
+            # Bootstrap loop requests a refresh via the event bus for
+            # observability, then calls refresh_capital_authority() which routes
+            # through the coordinator.  The coordinator's _pipeline() now owns
+            # the full FSM path (WAIT_PLATFORM/DEGRADED/FAILED → REFRESH_REQUESTED
+            # → REFRESH_IN_FLIGHT → … → READY/DEGRADED/FAILED) — MABM no longer
+            # drives FSM transitions here.
             if _CAPITAL_FSM_AVAILABLE and self._capital_event_bus is not None:
                 self._capital_event_bus.emit(CapitalEvent(
                     event_type=CapitalEventType.REFRESH_REQUESTED,
                     trigger=f"{trigger}:attempt_{attempts}",
                 ))
-                # Allow FSM to retry from DEGRADED / FAILED back to REFRESH_REQUESTED.
-                boot_state = self._capital_bootstrap_fsm.state
-                if boot_state in (
-                    CapitalBootstrapState.DEGRADED,
-                    CapitalBootstrapState.FAILED,
-                ):
-                    self._capital_bootstrap_fsm.transition(
-                        CapitalBootstrapState.REFRESH_REQUESTED,
-                        f"{trigger}:retry_{attempts}",
-                    )
             snapshot = self.refresh_capital_authority(trigger=f"{trigger}:attempt_{attempts}")
             total_capital = snapshot.get("total_capital", 0.0)
             if snapshot.get("ready", 0.0) > 0.0 and total_capital > 0.0:
@@ -1261,11 +1283,6 @@ class MultiAccountBrokerManager:
             )
             time.sleep(sleep_for)
 
-    def is_capital_authority_ready(self) -> bool:
-        """Return True only when unified capital is ready for trading gates."""
-        with self._capital_state_lock:
-            return bool(self._capital_ready)
-
     @property
     def is_bootstrap_phase(self) -> bool:
         """True while the capital bootstrap FSM has not yet reached READY.
@@ -1279,8 +1296,41 @@ class MultiAccountBrokerManager:
             return True
         return self._capital_bootstrap_fsm.state != CapitalBootstrapState.READY
 
+    @property
+    def bootstrap_state(self) -> str:
+        """Current CapitalBootstrapStateMachine state as a string.
+
+        FSM is the single authority on readiness — callers should read this
+        property instead of accessing the FSM directly.  Returns
+        ``"unavailable"`` when the FSM module could not be imported.
+        """
+        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
+            return "unavailable"
+        return self._capital_bootstrap_fsm.state.value
+
+    def is_capital_authority_ready(self) -> bool:
+        """Return True only when capital is ready for trading gates.
+
+        **FSM is the authority on readiness.**  The bootstrap FSM's ``READY``
+        state is the canonical signal — it is set by the coordinator after a
+        successful five-stage pipeline run and is never cleared after being
+        set.  The local ``_capital_ready`` bool is retained as a fallback for
+        deployments where the FSM module is unavailable.
+        """
+        if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
+            return self._capital_bootstrap_fsm.is_ready
+        with self._capital_state_lock:
+            return bool(self._capital_ready)
+
     def is_trading_halted_due_to_capital(self) -> bool:
-        """Return True when all brokers failed / zero-capital invariant is active."""
+        """Return True when capital is halted.
+
+        **Runtime FSM is the authority on halt state.**  The coordinator drives
+        ``RUN_HALTED`` via ``on_snapshot_received()``; this method delegates
+        to that state.  Falls back to the local bool when FSM is unavailable.
+        """
+        if _CAPITAL_FSM_AVAILABLE and self._capital_runtime_fsm is not None:
+            return self._capital_runtime_fsm.state == CapitalRuntimeState.RUN_HALTED
         with self._capital_state_lock:
             return bool(self._trading_halted_due_to_capital)
 
@@ -1295,41 +1345,36 @@ class MultiAccountBrokerManager:
             while not self._capital_watchdog_stop.wait(self.capital_watchdog_interval_s):
                 try:
                     authority = get_capital_authority() if get_capital_authority else None
-                    with self._capital_state_lock:
-                        needs_refresh = not self._capital_ready
-                    if authority is not None and authority.is_stale(ttl_s=self.capital_stale_timeout_s):
-                        needs_refresh = True
+                    # FSM is the authority on readiness — read via delegating method.
+                    capital_ready = self.is_capital_authority_ready()
+                    needs_refresh = not capital_ready
+                    if not needs_refresh and authority is not None:
+                        needs_refresh = authority.is_stale(ttl_s=self.capital_stale_timeout_s)
                     if needs_refresh:
-                        # Fix 3: Refresh backoff — skip the refresh entirely when no
-                        # capital sources have been registered yet.  Calling
-                        # refresh_capital_authority with zero registered sources
-                        # produces a log storm of "pending / no_registered_sources"
-                        # messages every watchdog cycle without ever making progress.
-                        if not self.has_registered_sources():
-                            logger.debug(
-                                "[CapitalWatchdog] skipping refresh — "
-                                "no registered capital sources yet"
-                            )
-                        else:
-                            self.refresh_capital_authority(trigger=self.WATCHDOG_REFRESH_TRIGGER)
+                        # refresh_capital_authority gates on has_registered_sources
+                        # internally — no duplicate guard needed here.
+                        self.refresh_capital_authority(trigger=self.WATCHDOG_REFRESH_TRIGGER)
+                        capital_ready = self.is_capital_authority_ready()
 
                     healthy_connected = any(
                         self.is_platform_connected(bt) and getattr(b, "connected", False)
                         for bt, b in self._platform_brokers.items()
                     )
-                    with self._capital_state_lock:
-                        capital_ready = self._capital_ready
-                        halted = self._trading_halted_due_to_capital
+                    # Runtime FSM is the authority on halt state — read via delegating method.
+                    halted = self.is_trading_halted_due_to_capital()
                     if not capital_ready and not healthy_connected:
                         if not halted:
                             logger.critical(
                                 "🛑 ALL platform brokers unavailable and capital not ready — HALTING trading until recovery"
                             )
-                        with self._capital_state_lock:
-                            self._trading_halted_due_to_capital = True
+                        # When FSM is unavailable, maintain the local fallback bool.
+                        if not (_CAPITAL_FSM_AVAILABLE and self._capital_runtime_fsm is not None):
+                            with self._capital_state_lock:
+                                self._trading_halted_due_to_capital = True
                     elif capital_ready:
-                        with self._capital_state_lock:
-                            self._trading_halted_due_to_capital = False
+                        if not (_CAPITAL_FSM_AVAILABLE and self._capital_runtime_fsm is not None):
+                            with self._capital_state_lock:
+                                self._trading_halted_due_to_capital = False
                 except Exception as exc:
                     logger.debug("Capital watchdog iteration error: %s", exc)
 
@@ -1366,13 +1411,13 @@ class MultiAccountBrokerManager:
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
             
-            # Hard-skip: broker already registered — no side effects, no exception
+            # Hard-skip: broker already registered — return existing instance (idempotent)
             if broker_type in self._platform_brokers:
                 logger.info(
-                    "%s already registered — skipping duplicate",
+                    "%s already registered — returning existing instance (idempotent)",
                     broker_type.value,
                 )
-                return False
+                return self._platform_brokers[broker_type]
             
             broker = None
 

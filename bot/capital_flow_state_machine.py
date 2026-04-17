@@ -800,6 +800,14 @@ class CapitalRefreshCoordinator:
             event_type=CapitalEventType.REFRESH_STARTED,
             trigger=trigger,
         ))
+        # Advance bootstrap FSM through any valid entry state before taking the
+        # pipeline in-flight.  Allowed origins:
+        #   WAIT_PLATFORM   → REFRESH_REQUESTED  (first-ever refresh)
+        #   DEGRADED        → REFRESH_REQUESTED  (retry after confidence failure)
+        #   FAILED          → REFRESH_REQUESTED  (recovery after capital-zero run)
+        # Already-REFRESH_REQUESTED state: transition() is a no-op (invalid from
+        # REFRESH_REQUESTED back to REFRESH_REQUESTED per the validation table).
+        self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
         self._boot.transition(CapitalBootstrapState.REFRESH_IN_FLIGHT, trigger)
 
         # Late import avoids circular dependencies at module load time.
