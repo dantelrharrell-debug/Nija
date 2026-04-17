@@ -762,11 +762,10 @@ class MultiAccountBrokerManager:
                 if not (is_platform_ready or allow_bootstrap_connected):
                     logger.info(
                         "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready "
-                        "(bootstrap_trigger=%s state=%s)",
+                        "(bootstrap_trigger=%s)",
                         trigger,
                         broker_type.value,
                         bootstrap_trigger,
-                        self._get_bootstrap_state_value(),
                     )
                     continue
                 if allow_bootstrap_connected:
