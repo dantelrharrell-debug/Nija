@@ -365,6 +365,14 @@ class MultiAccountBrokerManager:
             except Exception as _bfm_init_err:
                 logger.warning("⚠️ Could not initialize broker failure manager: %s", _bfm_init_err)
 
+        # ── Broker registration hard gate ─────────────────────────────────────
+        # Set exactly once via finalize_broker_registration() after all expected
+        # platform and user brokers have been registered.  Any capital evaluation
+        # (refresh_capital_authority, feed_broker_balance) that fires before this
+        # event is set will be skipped/queued so that $0-capital snapshots from
+        # partial broker maps cannot drive allocation or halt logic.
+        self._broker_registration_complete: threading.Event = threading.Event()
+
         # CapitalAuthority readiness + watchdog state (fail-safe auto-refresh loop)
         self._capital_ready: bool = False
         self._capital_last_refresh_ts: float = 0.0
@@ -489,6 +497,52 @@ class MultiAccountBrokerManager:
             source_count = len(self._platform_brokers)
             primary_registrations = self._primary_registration_count
         return source_count > 0 and primary_registrations > 0
+
+    def finalize_broker_registration(self) -> None:
+        """Signal that all expected brokers have been registered.
+
+        Call this once — after all platform and user brokers have been added —
+        to lift the hard gate that blocks capital evaluation.  Any call to
+        :meth:`refresh_capital_authority` or
+        :meth:`~bot.capital_authority.CapitalAuthority.feed_broker_balance` that
+        arrived before this point will have been skipped or queued.  Once the
+        gate is set those queued feeds are flushed automatically via
+        :meth:`~bot.capital_authority.CapitalAuthority.finalize_broker_registration`.
+
+        The event is idempotent: calling this method more than once is safe.
+
+        Correct startup order
+        ---------------------
+        1. Load config
+        2. Register ALL brokers (platform + users)
+        3. ``finalize_broker_registration()``  ← call this
+        4. Start CapitalAllocationBrain
+        5. Start CapitalAuthority refresh loops
+        6. Enable feed_event processing
+        """
+        if self._broker_registration_complete.is_set():
+            logger.debug("[MABM] finalize_broker_registration: already complete — no-op")
+            return
+        self._broker_registration_complete.set()
+        logger.info(
+            "✅ [MABM] Broker registration finalized — capital evaluation gates are now open "
+            "(registered_brokers=%d)",
+            len(self._platform_brokers),
+        )
+        # Also lift the gate on CapitalAuthority so feed_broker_balance() can
+        # flush any pending feeds that arrived before registration was complete.
+        try:
+            try:
+                from bot.capital_authority import get_capital_authority as _gca
+            except ImportError:
+                from capital_authority import get_capital_authority as _gca  # type: ignore[import]
+            _ca = _gca()
+            if _ca is not None and hasattr(_ca, "finalize_broker_registration"):
+                _ca.finalize_broker_registration()
+        except Exception as _exc:
+            logger.warning(
+                "[MABM] finalize_broker_registration: could not lift CA gate: %s", _exc
+            )
 
     def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
         """Propagate broker-registration metadata and notifications."""
@@ -659,6 +713,9 @@ class MultiAccountBrokerManager:
             dedup           1.0 = call was coalesced (within REFRESH_MIN_INTERVAL_S)
 
         Entry guards (applied before any work):
+            0. ``_broker_registration_complete`` — hard ordering barrier; skip
+               until :meth:`finalize_broker_registration` has been called so
+               that capital evaluation never runs against a partial broker map.
             1. ``has_registered_sources()`` — skip silently when no brokers are
                registered yet (avoids log storms from early watchdog cycles).
             2. ``REFRESH_MIN_INTERVAL_S`` dedup — coalesce rapid back-to-back calls
@@ -668,6 +725,19 @@ class MultiAccountBrokerManager:
             with self._capital_state_lock:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+        # ── Guard 0: broker registration hard gate ────────────────────────────
+        # CRITICAL: never evaluate capital before ALL brokers are registered.
+        # Without this gate a refresh triggered immediately at startup (by the
+        # watchdog or CapitalAllocationBrain.__init__) runs against a broker map
+        # that is still being populated, producing spurious $0-capital snapshots
+        # that can freeze allocation or trigger halt logic.
+        if not self._broker_registration_complete.is_set():
+            logger.info(
+                "⏳ [CapitalAuthorityRefresh] trigger=%s skipped — broker registration not complete",
+                trigger,
+            )
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
 
         # ── Guard 1: no registered sources yet ────────────────────────────────
         if not self.has_registered_sources():

@@ -269,6 +269,16 @@ class CapitalAuthority:
         # Registered balance-feed callables: broker_id → callable() → float|dict
         # Populated by register_source() at broker-ready time.
         self._balance_feeds: Dict[str, Callable[[], Any]] = {}
+        # ── Broker registration hard gate ─────────────────────────────────────
+        # Mirrors the event on MultiAccountBrokerManager.  Set exactly once via
+        # finalize_broker_registration() (called by MABM.finalize_broker_registration).
+        # feed_broker_balance() queues incoming feeds in _pending_feeds until
+        # the gate is open; they are flushed when finalize_broker_registration()
+        # is called.
+        self._broker_registration_complete: threading.Event = threading.Event()
+        # Queue of (broker_key, balance, timestamp) tuples received before the
+        # registration gate was lifted.  Flushed by finalize_broker_registration().
+        self._pending_feeds: list = []
         # Register this instance in the module-level identity guard so that any
         # accidental second instantiation is detected by assert_singleton().
         global _EXPECTED_ID
@@ -294,6 +304,41 @@ class CapitalAuthority:
                 f"CapitalAuthority instance mismatch detected — "
                 f"expected id={_EXPECTED_ID}, got id={id(self)}"
             )
+
+    # ------------------------------------------------------------------
+    # Broker registration hard gate
+    # ------------------------------------------------------------------
+
+    def finalize_broker_registration(self) -> None:
+        """Lift the broker-registration gate and flush any queued feeds.
+
+        Called automatically by
+        :meth:`~bot.multi_account_broker_manager.MultiAccountBrokerManager.finalize_broker_registration`
+        once all platform and user brokers have been registered.  May also be
+        called directly in test scenarios.
+
+        After this method returns:
+        * :meth:`feed_broker_balance` accepts live feeds immediately.
+        * Any feeds that arrived before the gate was lifted are replayed in
+          arrival order so no balance data is silently dropped.
+        """
+        if self._broker_registration_complete.is_set():
+            logger.debug("[CapitalAuthority] finalize_broker_registration: already complete — no-op")
+            return
+        self._broker_registration_complete.set()
+        logger.info("[CapitalAuthority] Broker registration gate lifted — flushing %d pending feed(s)", len(self._pending_feeds))
+        with self._lock:
+            pending = list(self._pending_feeds)
+            self._pending_feeds.clear()
+        for broker_key, balance, ts in pending:
+            try:
+                self.feed_broker_balance(broker_key, balance, ts)
+            except Exception as _exc:
+                logger.warning(
+                    "[CapitalAuthority] Error replaying pending feed for broker=%s: %s",
+                    broker_key,
+                    _exc,
+                )
 
     # ------------------------------------------------------------------
     # Core refresh
@@ -620,6 +665,24 @@ class CapitalAuthority:
             ts: datetime = _ensure_utc(timestamp)
         else:
             ts = datetime.now(timezone.utc)
+
+        # ── Broker registration hard gate ─────────────────────────────────────
+        # If the gate is not yet open (finalize_broker_registration() has not
+        # been called) queue this feed so it is not silently dropped.  Feeds
+        # queued here are replayed in order when the gate is lifted, preserving
+        # the full balance picture rather than losing early observations.
+        if not self._broker_registration_complete.is_set():
+            with self._lock:
+                self._pending_feeds.append((key, balance, ts))
+            logger.warning(
+                "[CapitalAuthority] feed_broker_balance QUEUED broker=%s balance=$%.2f "
+                "— broker registration not yet complete (%d pending)",
+                key,
+                balance,
+                len(self._pending_feeds),
+            )
+            return
+
         with self._lock:
             existing_ts = self._broker_feed_timestamps.get(key)
             if existing_ts is not None and ts <= existing_ts:
