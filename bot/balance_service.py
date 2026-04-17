@@ -190,16 +190,16 @@ class BalanceService:
                     cls._last_logged[broker_key] = scalar
                 else:
                     logger.debug("[BalanceService] %s → $%.2f (no significant change)", broker_key, scalar)
-                # FIX 2: Bootstrap seeding — directly feed CapitalAuthority on the
-                # first successful balance fetch for this broker so that capital
-                # readiness is never blocked by FSM / coordinator gate ordering.
+                # Deterministic bootstrap contract: IF (no snapshot exists) → ALWAYS seed.
                 # The single-writer contract (CapitalRefreshCoordinator) is preserved
-                # for steady-state; this path only fires when get_raw_per_broker()
-                # returns 0.0 (broker has never been seeded in CA).  Once seeded,
-                # all subsequent updates flow exclusively through the coordinator.
+                # for steady-state; this path fires exactly when the CA has never
+                # received a coordinator snapshot (_hydrated is False).  Once the
+                # coordinator publishes its first snapshot (_hydrated → True), this
+                # bypass is permanently closed and all updates flow through the
+                # coordinator exclusively.
                 try:
                     _ca = _get_capital_authority() if _get_capital_authority else None
-                    if _ca is not None and _ca.get_raw_per_broker(broker_key) == 0.0:
+                    if _ca is not None and not _ca.is_hydrated:
                         _ca.force_accept_feed(broker_key, scalar)
                         logger.info(
                             "[BalanceService] %s: bootstrap seed → CA $%.2f",
