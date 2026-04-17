@@ -259,10 +259,19 @@ class AIIntelligenceHub:
                         "[STARTUP ORDER] Broker registry empty; "
                         "forcing platform broker registration before CapitalAllocationBrain init"
                     )
-                    _mabm.initialize_platform_brokers()
+                    try:
+                        _mabm.initialize_platform_brokers()
+                    except Exception as _init_exc:
+                        logger.error(
+                            "[STARTUP ORDER] initialize_platform_brokers() raised: %s — "
+                            "CapitalAllocationBrain will be blocked by the assertion below",
+                            _init_exc,
+                        )
                 assert _mabm.has_registered_brokers(), (
                     "CapitalAllocationBrain must not be initialized until broker_registry is "
-                    "non-empty (startup order violation)"
+                    "non-empty (startup order violation). Check that platform broker credentials "
+                    "are configured and that initialize_platform_brokers() succeeds before "
+                    "AIIntelligenceHub is constructed."
                 )
             self.capital_brain = CapitalAllocationBrain(brain_config)
             logger.info("✅ [AI Hub] Capital Allocation Brain initialised (dynamic Sharpe-weighted routing)")
