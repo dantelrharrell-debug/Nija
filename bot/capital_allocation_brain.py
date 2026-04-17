@@ -298,6 +298,11 @@ class CapitalAllocationBrain:
             0.25,
             _safe_float(self.config.get("authority_bootstrap_interval_s", 1.0), 1.0),
         )
+        # Bootstrap escape-hatch phase flag: True until the first snapshot has
+        # been forced via refresh_authority()'s bootstrap path.  Set to False
+        # once CA confirms hydration so that subsequent calls skip the forced
+        # snapshot logic and follow the normal coordinator refresh path.
+        self._bootstrap_phase: bool = True
 
         # Hard startup dependency barrier: CapitalAllocationBrain must NOT
         # initialize until CapitalAuthority has been hydrated (FIX 4).
@@ -359,24 +364,42 @@ class CapitalAllocationBrain:
         Returns:
             Latest observed total capital (>= 0).
         """
-        # PHASE 2 bootstrap escape hatch: if CA is not yet hydrated, allow the
-        # refresh to proceed so that MABM can seed the initial snapshot and
-        # lift the startup lock.  Blocking here when CA is unhydrated creates a
-        # deadlock — the lock is set by finalize_bootstrap_ready() which is
-        # called from within refresh_capital_authority(), the very path we are
-        # trying to reach.
-        if not self._startup_lock.is_set():
-            if not self.capital_authority.is_hydrated:
-                logger.info(
-                    "[CapitalAllocationBrain] Startup lock not released and CA not hydrated — "
-                    "allowing refresh to bootstrap CA hydration (PHASE 2 bypass)"
-                )
-            else:
-                logger.warning(
-                    "[CapitalAllocationBrain] Startup lock not released — "
-                    "skipping refresh_authority (no snapshot, no refresh)"
-                )
-                return 0.0
+        # --- BOOTSTRAP ESCAPE HATCH (CRITICAL) ---
+        # If CA is not yet hydrated and we are still in bootstrap phase, force
+        # MABM to build and publish the initial snapshot regardless of startup
+        # lock state.  This breaks the initialization deadlock where the lock
+        # won't be set until CA is hydrated and CA won't be hydrated until the
+        # lock-gated refresh path is allowed to run.
+        if not self.capital_authority.is_hydrated and getattr(self, "_bootstrap_phase", True):
+            logger.warning(
+                "[BOOTSTRAP] CA not hydrated — forcing initial snapshot (lock bypass enabled)"
+            )
+            try:
+                try:
+                    from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm_bs
+                except ImportError:
+                    from multi_account_broker_manager import multi_account_broker_manager as _mabm_bs  # type: ignore[import]
+                if _mabm_bs is not None and hasattr(_mabm_bs, "refresh_capital_authority"):
+                    _mabm_bs.refresh_capital_authority(trigger="bootstrap_force")
+            except Exception as _bs_exc:
+                logger.warning("[BOOTSTRAP] forced snapshot attempt failed: %s", _bs_exc)
+            if self.capital_authority.is_hydrated:
+                self._bootstrap_phase = False
+                logger.info("[BOOTSTRAP] initial snapshot published → hydration unlocked")
+                return float(self.capital_authority.total_capital)
+
+        # PHASE 2/3: no lock dependency — if CA is already hydrated, proceed
+        # immediately regardless of startup lock state.  Blocking on the lock
+        # when CA is hydrated is wrong: it prevents the brain from reading a
+        # valid capital figure that the coordinator has already published.
+        # Only skip the refresh entirely when the lock is NOT set AND CA is
+        # also not hydrated (system is mid-bootstrap and snapshot seed is
+        # still in progress — allow through so MABM can complete the seed).
+        if not self._startup_lock.is_set() and not self.capital_authority.is_hydrated:
+            logger.info(
+                "[CapitalAllocationBrain] Startup lock not released and CA not hydrated — "
+                "allowing refresh to bootstrap CA hydration (PHASE 2 bypass)"
+            )
         try:
             # Event-driven refresh path (preferred): ask multi-account manager to
             # rebuild authority from currently connected healthy brokers.
@@ -901,13 +924,15 @@ class CapitalAllocationBrain:
         Returns:
             AllocationPlan
         """
-        # HARD BLOCK — startup lock not yet released.  No snapshot, no refresh;
-        # the system has not completed full bootstrap sync.  Return an empty
-        # plan so callers can detect the unready state without allocating capital
-        # against a partially-populated or stabilizing broker snapshot.
-        if not self._startup_lock.is_set():
+        # HARD BLOCK — startup lock not yet released AND CA not hydrated.
+        # Skip allocation only when both conditions are true: lock not set AND
+        # the authority has not yet published any snapshot.  If CA is hydrated,
+        # allow the plan to proceed even before the startup lock is set — the
+        # lock may be released asynchronously after the first snapshot, and
+        # blocking here when real capital data is already available is wrong.
+        if not self._startup_lock.is_set() and not self.capital_authority.is_hydrated:
             logger.info(
-                "[CapitalAllocationBrain] Startup lock not released — "
+                "[CapitalAllocationBrain] Startup lock not released and CA not hydrated — "
                 "skipping create_allocation_plan (no snapshot, no refresh)"
             )
             return AllocationPlan(

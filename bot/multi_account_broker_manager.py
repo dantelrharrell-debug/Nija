@@ -617,11 +617,21 @@ class MultiAccountBrokerManager:
                     if getattr(_broker, "connected", False):
                         broker_balances[_bt.value] = 0.0
             if not broker_balances:
-                logger.info("[MABM] _force_minimal_capital_snapshot: no connected brokers available")
-                return None
+                # NEVER return None during bootstrap — seed all registered brokers
+                # at 0.0 so CA always hydrates on the first call regardless of
+                # connection state.  A zero-balance snapshot is a valid HYDRATED_ZERO
+                # state; the normal coordinator refresh will correct it on the next
+                # cycle once brokers are connected.
+                logger.warning("[BOOTSTRAP] no broker balances → seeding zero-capital snapshot")
+                with self._registry_meta_lock:
+                    broker_balances = {_bt.value: 0.0 for _bt in self._platform_brokers}
+                if not broker_balances:
+                    # No registered brokers at all — use a synthetic placeholder so
+                    # publish_snapshot() can run and set CAPITAL_HYDRATED_EVENT.
+                    broker_balances = {"__bootstrap_seed__": 0.0}
             logger.info(
                 "[MABM] _force_minimal_capital_snapshot: seeding zero-balance snapshot "
-                "for connected brokers=%s",
+                "for brokers=%s",
                 sorted(broker_balances.keys()),
             )
 
