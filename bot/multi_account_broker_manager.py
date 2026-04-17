@@ -1014,9 +1014,19 @@ class MultiAccountBrokerManager:
             dedup           1.0 = call was coalesced (within REFRESH_MIN_INTERVAL_S)
 
         Entry guards (applied before any work):
-            0. ``_broker_registration_complete`` — hard ordering barrier; skip
-               until :meth:`finalize_broker_registration` has been called so
-               that capital evaluation never runs against a partial broker map.
+            A. ``has_registered_brokers()`` — hard pre-flight gate; return
+               ``pending=1.0`` immediately when no real platform broker has been
+               registered yet.  Prevents any refresh path — including the
+               bootstrap seed bypass — from running against an empty broker map.
+            B. ``has_attempted_connections()`` — hard pre-flight gate; return
+               ``pending=1.0`` until :meth:`finalize_broker_registration` has
+               been called.  Enforces the strict startup ordering:
+               register brokers → finalize → refresh → start Brain.
+               This gate also covers the bootstrap seed path, which previously
+               bypassed Guard 0 and could hydrate the Brain before the full
+               broker set was stable.
+            0. ``_broker_registration_complete`` — redundant after gate B but
+               retained as a defence-in-depth barrier.
             1. ``has_registered_sources()`` — skip silently when no brokers are
                registered yet (avoids log storms from early watchdog cycles).
             2. ``REFRESH_MIN_INTERVAL_S`` dedup — coalesce rapid back-to-back calls
@@ -1026,6 +1036,32 @@ class MultiAccountBrokerManager:
             with self._capital_state_lock:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+        # ── Pre-flight broker-registration gates (A + B) ──────────────────────
+        # HARD ordering barrier: do not run ANY refresh path — including the
+        # bootstrap seed bypass below — until:
+        #   A. at least one real platform broker has been registered, AND
+        #   B. finalize_broker_registration() has been called (full broker map
+        #      is stable).
+        # Without gate A the seed path can hydrate CapitalAllocationBrain
+        # before any real broker exists.  Without gate B it can run against a
+        # partial map while connections are still in flight.
+        # Both gates are non-blocking: callers that arrive early simply receive
+        # pending=1.0 and retry on the next cycle.  The blocking while-loops in
+        # the bootstrap master sequence (bot.py) ensure the explicit
+        # BOOTSTRAP_START call waits until both conditions are satisfied.
+        if not self.has_registered_brokers():
+            logger.debug(
+                "⏳ [CapitalAuthorityRefresh] trigger=%s skipped — no brokers registered yet",
+                trigger,
+            )
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
+        if not self.has_attempted_connections():
+            logger.debug(
+                "⏳ [CapitalAuthorityRefresh] trigger=%s skipped — broker registration not finalized",
+                trigger,
+            )
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
 
         # ── Forced bootstrap seed (one-shot deadlock breaker) ─────────────────
         # If STARTUP_LOCK has never been set and the normal coordinator pipeline
