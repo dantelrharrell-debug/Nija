@@ -874,17 +874,32 @@ class CapitalAuthority:
         broker_key:
             Logical broker identifier (same key used in feed_broker_balance).
         balance:
-            Raw USD balance (positive values only; zero/negative are ignored).
+            Raw USD balance.  During bootstrap (before first hydration) a zero
+            balance is accepted so that an unfunded but connected broker can
+            still seed the authority and unblock the hydration gate.  Negative
+            values are always ignored.
         timestamp:
             Wall-clock time of the observation.  Defaults to ``now(UTC)``.
         """
         key = str(broker_key)
         balance = float(balance)
-        if balance <= 0.0:
+        if balance < 0.0:
             logger.debug(
-                "[CapitalAuthority] force_accept_feed: broker=%s balance=$%.2f — ignored",
+                "[CapitalAuthority] force_accept_feed: broker=%s balance=$%.2f — negative, ignored",
                 key,
                 balance,
+            )
+            return
+        # After the authority is already hydrated, keep the positive-only contract
+        # so that a transient zero read from a funded broker cannot wipe a valid
+        # non-zero balance via this bypass path.  Before hydration, zero is a
+        # legitimate "confirmed empty account" state and must be accepted so the
+        # CAPITAL_HYDRATED_EVENT fires and downstream gates unblock.
+        if balance == 0.0 and self._hydrated:
+            logger.debug(
+                "[CapitalAuthority] force_accept_feed: broker=%s balance=$0.00 — "
+                "ignored post-hydration (use coordinator path for zero-balance updates)",
+                key,
             )
             return
         ts = _ensure_utc(timestamp) if timestamp is not None else datetime.now(timezone.utc)
@@ -1035,15 +1050,17 @@ class CapitalAuthority:
 
     def has_registered_sources(self) -> bool:
         """
-        Return ``True`` when at least one broker has contributed a
-        non-zero balance to this authority's snapshot.
+        Return ``True`` when at least one broker has been registered with
+        this authority (i.e. its balance — even $0 — has been observed).
 
-        Used by :func:`wait_for_capital_ready` to confirm that the
-        authority holds real (post-refresh) data rather than the empty
-        zero-balance state it starts in.
+        A zero balance is a valid registered source: it means the broker
+        connected and confirmed an empty account, which is distinct from
+        the authority's initial state where no broker has reported at all.
+        Callers that specifically need a positive capital total should use
+        :meth:`is_ready` or check :attr:`total_capital` directly.
         """
         with self._lock:
-            return any(v > 0.0 for v in self._broker_balances.values())
+            return len(self._broker_balances) > 0
 
     def is_ready(self) -> bool:
         """
