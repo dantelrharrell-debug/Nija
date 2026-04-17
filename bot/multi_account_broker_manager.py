@@ -245,6 +245,18 @@ class MultiAccountBrokerManager:
         # watchdog path uses BrokerPayloadFSM probe logic instead of the strict
         # is_ready_for_capital() gate that blocks startup.
         "watchdog",
+        # FIX: Kraken's own connect() calls resolve_startup_capital_invariant()
+        # with this trigger before _KRAKEN_STARTUP_FSM.mark_connected() has fired.
+        # Without this entry the trigger falls through to the non-bootstrap path,
+        # which gates on is_platform_connected(KRAKEN) == True — a condition that
+        # can never be satisfied because mark_connected() is only called after
+        # capital is READY, creating a permanent deadlock:
+        #   Kraken excluded from broker_map → capital never ready → FSM never set
+        #   → Kraken excluded from broker_map → …
+        # Adding it here routes the trigger through the BrokerPayloadFSM path,
+        # which checks _last_known_balance directly and includes Kraken in
+        # broker_map as soon as a valid balance payload exists.
+        "kraken_platform_connect",
     }
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
