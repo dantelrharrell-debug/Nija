@@ -480,15 +480,18 @@ def _capital_readiness_gate() -> tuple:
     # ── b. BROKER_BALANCE_CONFIRMED ────────────────────────────────────────
     try:
         ca = authority if authority is not None else _get_ca()
-        real = ca.get_real_capital()
-        if real <= 0.0:
+        # FIX 3: hydration means balance was fetched (even zero is valid).
+        # The old check (real_capital > 0) incorrectly blocked accounts that
+        # are genuinely empty — zero balance is a confirmed, valid state.
+        if not ca.is_hydrated:
             failures.append(
-                f"BROKER_BALANCE_CONFIRMED=false: no broker has reported a "
-                f"non-zero balance (real_capital={real:.2f})"
+                "BROKER_BALANCE_CONFIRMED=false: CapitalAuthority has not received "
+                "any broker snapshot yet (is_hydrated=False — coordinator has not run)"
             )
         else:
             logger.debug(
-                "_capital_readiness_gate: BROKER_BALANCE_CONFIRMED ✅ real=%.2f", real
+                "_capital_readiness_gate: BROKER_BALANCE_CONFIRMED ✅ "
+                "(is_hydrated=True, real_capital=%.2f)", ca.get_real_capital()
             )
     except (ImportError, AttributeError, Exception) as exc:
         logger.debug("_capital_readiness_gate: broker balance check unavailable (%s) — skipping", exc)

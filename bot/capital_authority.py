@@ -107,6 +107,20 @@ _DEFAULT_FRESHNESS_TTL_S: float = 90.0
 CAPITAL_SYSTEM_READY: threading.Event = threading.Event()
 
 # ---------------------------------------------------------------------------
+# Capital Hydrated Event — fires on first snapshot (even zero-balance)
+# ---------------------------------------------------------------------------
+#
+# Set exactly once by CapitalAuthority.publish_snapshot() the first time
+# _hydrated transitions False → True.  Unlike CAPITAL_SYSTEM_READY, this
+# event does NOT require real_capital > 0 — it only confirms that the
+# coordinator has run at least once and the authority holds real data.
+#
+# Use this gate (FIX 4) when a subsystem needs to know that balance has
+# been *fetched* (even if zero) rather than that capital is *positive*.
+#
+CAPITAL_HYDRATED_EVENT: threading.Event = threading.Event()
+
+# ---------------------------------------------------------------------------
 # Global Startup Lock — process-wide "NO EVALUATION BEFORE READY" latch
 # ---------------------------------------------------------------------------
 #
@@ -190,6 +204,21 @@ def get_capital_system_gate() -> threading.Event:
         get_capital_system_gate().wait(timeout=30)
     """
     return CAPITAL_SYSTEM_READY
+
+
+def get_capital_hydrated_gate() -> threading.Event:
+    """Return the process-wide ``CAPITAL_HYDRATED_EVENT`` :class:`threading.Event`.
+
+    The event transitions from *unset* to *set* exactly once: the first time
+    :meth:`CapitalAuthority.publish_snapshot` sets ``_hydrated = True``.
+    Unlike :data:`CAPITAL_SYSTEM_READY` this does **not** require a positive
+    balance — it fires as soon as the coordinator has published any snapshot
+    (including a zero-balance one), confirming that balance has been fetched.
+
+    Use this gate when you need to know that the capital pipeline has run at
+    least once (FIX 4), rather than that it has confirmed positive capital.
+    """
+    return CAPITAL_HYDRATED_EVENT
 
 
 def get_startup_lock() -> threading.Event:
@@ -644,8 +673,13 @@ class CapitalAuthority:
                         previous,
                     )
                 else:
+                    # FIX 3: store zero instead of skipping — zero is a valid
+                    # confirmed balance (empty account is not an error).  This
+                    # ensures the broker appears in the snapshot so that
+                    # is_hydrated / CAPITAL_HYDRATED_EVENT fire correctly.
+                    new_balances[broker_key] = 0.0
                     logger.debug(
-                        "[CapitalAuthority] broker=%s returned $0 — skipping",
+                        "[CapitalAuthority] broker=%s confirmed at $0.00 — stored as zero balance",
                         broker_id,
                     )
             except Exception as exc:
@@ -921,19 +955,21 @@ class CapitalAuthority:
                 balance = float(raw)
             else:
                 balance = 0.0
+            # FIX 3: seed even for zero balance — zero confirms balance was fetched.
+            # The previous guard (if balance > 0) incorrectly blocked hydration
+            # for accounts that are genuinely empty at startup.
+            self.feed_broker_balance(key, balance)
             if balance > 0.0:
-                self.feed_broker_balance(key, balance)
                 logger.info(
                     "[CapitalAuthority] register_source: broker=%s seeded balance=$%.2f",
                     key,
                     balance,
                 )
             else:
-                logger.warning(
-                    "[CapitalAuthority] register_source: broker=%s returned non-positive "
-                    "balance ($%.2f) — source registered but not seeded",
+                logger.info(
+                    "[CapitalAuthority] register_source: broker=%s seeded with zero balance "
+                    "(confirmed fetch — account empty at registration time)",
                     key,
-                    balance,
                 )
         except Exception as exc:
             logger.warning(
@@ -1028,7 +1064,10 @@ class CapitalAuthority:
         ready" until at least one source reports real funds.
         """
         with self._lock:
-            return len(self._broker_balances) > 0 and sum(self._broker_balances.values()) > 0
+            # FIX 3: any broker observation (even zero balance) means sources are
+            # registered.  The previous sum > 0 guard incorrectly blocked hydration
+            # for accounts that have been fetched but are genuinely empty.
+            return len(self._broker_balances) > 0
 
     @property
     def is_hydrated(self) -> bool:
@@ -1047,6 +1086,29 @@ class CapitalAuthority:
         in hot paths.
         """
         return self._hydrated
+
+    def block_until_hydrated(self, timeout: float = 30.0) -> bool:
+        """Block the calling thread until this authority is hydrated.
+
+        Hydration means the coordinator has published at least one snapshot —
+        the balance may be zero (HYDRATED_ZERO_CAPITAL) or positive
+        (ACTIVE_CAPITAL).  This is the correct gate for subsystems (FIX 4)
+        that must not start before the balance pipeline has run once.
+
+        Parameters
+        ----------
+        timeout:
+            Maximum seconds to wait before giving up.  Default 30 s.
+
+        Returns
+        -------
+        bool
+            ``True`` if already hydrated or hydration confirmed within timeout.
+            ``False`` if the timeout elapsed without hydration.
+        """
+        if self._hydrated:
+            return True
+        return CAPITAL_HYDRATED_EVENT.wait(timeout=timeout)
 
     @property
     def state(self) -> CapitalLifecycleState:
@@ -1434,7 +1496,12 @@ class CapitalAuthority:
             # Mark the authority as hydrated on the first successful publish so
             # that callers can distinguish "not yet initialised" from "initialised
             # with a zero balance" without relying on total_capital == 0.
+            _first_hydration = not self._hydrated
             self._hydrated = True
+            # FIX 4: signal CAPITAL_HYDRATED_EVENT on first hydration (even zero
+            # balance) so subsystems gated on is_hydrated can proceed immediately.
+            if _first_hydration:
+                CAPITAL_HYDRATED_EVENT.set()
             # Signal CAPITAL_SYSTEM_READY when the lifecycle reaches
             # ACTIVE_CAPITAL — i.e. the following conditions are satisfied:
             #   1. hydrated       — guaranteed by reaching this branch
@@ -1599,7 +1666,8 @@ def reset_capital_authority_singleton() -> None:
         _EXPECTED_ID = None
     STARTUP_LOCK.clear()
     CAPITAL_SYSTEM_READY.clear()
-    logger.warning("[CapitalAuthority] singleton cache cleared (STARTUP_LOCK + CAPITAL_SYSTEM_READY reset)")
+    CAPITAL_HYDRATED_EVENT.clear()
+    logger.warning("[CapitalAuthority] singleton cache cleared (STARTUP_LOCK + CAPITAL_SYSTEM_READY + CAPITAL_HYDRATED_EVENT reset)")
 
 
 def wait_for_capital_ready(timeout: float = CAPITAL_READY_TIMEOUT) -> bool:
@@ -1659,5 +1727,38 @@ def wait_for_capital_ready(timeout: float = CAPITAL_READY_TIMEOUT) -> bool:
             "(real capital is zero or broker aggregation is incomplete)"
         )
     logger.info("✅ CapitalAuthority ACTIVE_CAPITAL confirmed — proceeding")
+    return True
+
+
+def wait_for_capital_hydrated(timeout: float = 30.0) -> bool:
+    """Block until :class:`CapitalAuthority` is hydrated (any snapshot received).
+
+    Unlike :func:`wait_for_capital_ready`, this does **not** require
+    ``real_capital > 0``.  It unblocks as soon as the coordinator has
+    published its first snapshot — even if the balance is zero.  This is the
+    correct gate for subsystems (e.g. Capital Brain) that need to know the
+    balance has been *fetched* rather than that it is *positive*.
+
+    Parameters
+    ----------
+    timeout:
+        Maximum seconds to wait.  Default 30 s.
+
+    Returns
+    -------
+    bool
+        Always ``True`` when the function returns normally.
+
+    Raises
+    ------
+    RuntimeError
+        When *timeout* elapses without hydration (coordinator never ran).
+    """
+    if not CAPITAL_HYDRATED_EVENT.wait(timeout=timeout):
+        raise RuntimeError(
+            f"❌ CapitalAuthority never reached HYDRATED state after {timeout:.0f}s "
+            "(coordinator has not published any snapshot yet)"
+        )
+    logger.info("✅ CapitalAuthority HYDRATED confirmed — proceeding")
     return True
 
