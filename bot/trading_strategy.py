@@ -4611,6 +4611,15 @@ class TradingStrategy:
             # connection — this is the authoritative post-connection check.
             self._validate_platform_account()
 
+            # ── BROKER REGISTRATION HARD GATE ─────────────────────────────────
+            # All platform AND user brokers are now registered.  Lifting this
+            # gate unblocks refresh_capital_authority() and feed_broker_balance()
+            # so capital evaluation only ever runs against a complete broker map.
+            # This MUST happen before any capital read, CapitalAuthority refresh,
+            # or _init_advanced_features (which creates CapitalAllocationBrain).
+            if hasattr(self.multi_account_manager, "finalize_broker_registration"):
+                self.multi_account_manager.finalize_broker_registration()
+
             if connected_brokers or user_brokers:
                 if connected_brokers:
                     logger.info(f"✅ PLATFORM ACCOUNT BROKERS: {', '.join(connected_brokers)}")
