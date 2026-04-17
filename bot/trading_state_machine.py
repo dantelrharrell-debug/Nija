@@ -54,14 +54,14 @@ class StateTransitionError(Exception):
 class TradingStateMachine:
     """
     NIJA Trading State Machine - Absolute control over trading state.
-    
+
     This class enforces the ZERO-FAIL ZONE:
     - Restart always defaults to OFF
     - No broker operations unless LIVE_ACTIVE
     - All state changes are persisted and logged
     - Invalid transitions are blocked
     """
-    
+
     # Valid state transitions (from_state -> [allowed_to_states])
     VALID_TRANSITIONS = {
         TradingState.OFF: [
@@ -89,11 +89,11 @@ class TradingStateMachine:
             TradingState.OFF  # Can only go to OFF from emergency stop
         ]
     }
-    
+
     def __init__(self, state_file: Optional[str] = None):
         """
         Initialize trading state machine.
-        
+
         Args:
             state_file: Path to state persistence file (default: .nija_trading_state.json)
         """
@@ -104,26 +104,26 @@ class TradingStateMachine:
             ".nija_trading_state.json"
         )
         self._state_callbacks: Dict[TradingState, list] = {state: [] for state in TradingState}
-        
+
         # CRITICAL: Always start in OFF state on initialization
         # This ensures restart always defaults to OFF
         self._current_state = TradingState.OFF
         self._state_history = []
-        
+
         # Try to load persisted state, but NEVER start in LIVE_ACTIVE
         self._load_state()
-        
+
         # Validate state consistency with kill switch
         self._validate_state_consistency()
-        
+
         # Log initialization
         logger.info(f"🔒 Trading State Machine initialized in {self._current_state.value} state")
         logger.info(f"📝 State persistence: {self._state_file}")
-        
+
     def _load_state(self):
         """
         Load persisted state from disk.
-        
+
         CRITICAL SAFETY: Even if persisted state was LIVE_ACTIVE,
         we NEVER auto-resume live trading after restart.
         EMERGENCY_STOP is also cleared on restart — the kill switch
@@ -133,10 +133,10 @@ class TradingStateMachine:
             if os.path.exists(self._state_file):
                 with open(self._state_file, 'r') as f:
                     data = json.load(f)
-                    
+
                 persisted_state = TradingState(data.get('current_state', 'OFF'))
                 self._state_history = data.get('history', [])
-                
+
                 # SAFETY: Never auto-resume LIVE_ACTIVE
                 if persisted_state == TradingState.LIVE_ACTIVE:
                     logger.warning(
@@ -162,14 +162,14 @@ class TradingStateMachine:
                     self._current_state = TradingState.OFF
                 else:
                     self._current_state = persisted_state
-                    
+
                 logger.info(f"📂 Loaded state from disk: {self._current_state.value}")
             else:
                 logger.info("📂 No persisted state found, starting in OFF state")
         except Exception as e:
             logger.error(f"❌ Error loading state, defaulting to OFF: {e}")
             self._current_state = TradingState.OFF
-            
+
     def _persist_state(self):
         """Persist current state to disk"""
         try:
@@ -178,31 +178,31 @@ class TradingStateMachine:
                 'history': self._state_history,
                 'last_updated': datetime.utcnow().isoformat()
             }
-            
+
             # Ensure directory exists
             os.makedirs(os.path.dirname(self._state_file), exist_ok=True)
-            
+
             # Write atomically
             temp_file = f"{self._state_file}.tmp"
             with open(temp_file, 'w') as f:
                 json.dump(data, f, indent=2)
             os.replace(temp_file, self._state_file)
-            
+
             logger.debug(f"💾 State persisted: {self._current_state.value}")
         except Exception as e:
             logger.error(f"❌ Error persisting state: {e}")
-            
+
     def _validate_state_consistency(self):
         """
         Validate state consistency with kill switch.
-        
+
         If state is EMERGENCY_STOP but kill switch is not active,
         log a warning and suggest using safe_restore_trading.py
         """
         try:
             from kill_switch import get_kill_switch
             kill_switch = get_kill_switch()
-            
+
             if self._current_state == TradingState.EMERGENCY_STOP and not kill_switch.is_active():
                 logger.warning("=" * 80)
                 logger.warning("⚠️  STATE INCONSISTENCY DETECTED")
@@ -216,55 +216,55 @@ class TradingStateMachine:
         except Exception as e:
             # Don't fail initialization if kill switch check fails
             logger.debug(f"Could not validate state consistency: {e}")
-            
+
     def get_current_state(self) -> TradingState:
         """Get current trading state (thread-safe)"""
         with self._lock:
             return self._current_state
-            
+
     def is_trading_allowed(self) -> bool:
         """Check if trading (any kind) is allowed in current state"""
         state = self.get_current_state()
         return state in [TradingState.DRY_RUN, TradingState.LIVE_ACTIVE]
-        
+
     def is_live_trading_active(self) -> bool:
         """Check if LIVE trading with real capital is active"""
         return self.get_current_state() == TradingState.LIVE_ACTIVE
-        
+
     def is_dry_run_mode(self) -> bool:
         """Check if in dry run (simulation) mode"""
         return self.get_current_state() == TradingState.DRY_RUN
-        
+
     def is_emergency_stopped(self) -> bool:
         """Check if in emergency stop state"""
         return self.get_current_state() == TradingState.EMERGENCY_STOP
-        
+
     def can_make_broker_calls(self) -> bool:
         """
         Check if broker API calls are allowed.
-        
+
         CRITICAL: Only returns True when LIVE_ACTIVE.
         This prevents accidental real trades in other states.
         """
         return self.get_current_state() == TradingState.LIVE_ACTIVE
-        
+
     def transition_to(self, new_state: TradingState, reason: str = "") -> bool:
         """
         Attempt to transition to a new state.
-        
+
         Args:
             new_state: Target state
             reason: Human-readable reason for transition
-            
+
         Returns:
             True if transition successful, False otherwise
-            
+
         Raises:
             StateTransitionError: If transition is not allowed
         """
         with self._lock:
             current = self._current_state
-            
+
             # Check if transition is valid
             if new_state not in self.VALID_TRANSITIONS.get(current, []):
                 error_msg = (
@@ -274,7 +274,7 @@ class TradingStateMachine:
                 )
                 logger.error(f"❌ {error_msg}")
                 raise StateTransitionError(error_msg)
-                
+
             # Record transition
             transition_record = {
                 'from': current.value,
@@ -283,29 +283,29 @@ class TradingStateMachine:
                 'timestamp': datetime.utcnow().isoformat()
             }
             self._state_history.append(transition_record)
-            
+
             # Update state
             old_state = self._current_state
             self._current_state = new_state
-            
+
             # Persist
             self._persist_state()
-            
+
             # Log transition
             logger.info(
                 f"🔄 State transition: {old_state.value} -> {new_state.value} "
                 f"(Reason: {reason or 'No reason provided'})"
             )
-            
+
             # Trigger callbacks
             self._trigger_callbacks(new_state)
-            
+
             return True
-            
+
     def register_callback(self, state: TradingState, callback: Callable):
         """
         Register a callback to be called when entering a specific state.
-        
+
         Args:
             state: State to trigger callback
             callback: Function to call (takes no arguments)
@@ -313,7 +313,7 @@ class TradingStateMachine:
         with self._lock:
             self._state_callbacks[state].append(callback)
             logger.debug(f"📌 Registered callback for {state.value} state")
-            
+
     def _trigger_callbacks(self, state: TradingState):
         """Trigger all callbacks registered for a state"""
         callbacks = self._state_callbacks.get(state, [])
@@ -322,7 +322,7 @@ class TradingStateMachine:
                 callback()
             except Exception as e:
                 logger.error(f"❌ Error executing state callback: {e}")
-                
+
     def maybe_auto_activate(self) -> bool:
         """
         Auto-transition from OFF → LIVE_ACTIVE when all safety gates pass.
@@ -330,14 +330,15 @@ class TradingStateMachine:
         Gates (all must be true):
           Gate 0. Current state is OFF
           Gate 1. Environment variable LIVE_CAPITAL_VERIFIED is truthy
-                  (operator master switch — kept for backward compatibility)
+                  (operator master switch — TRADING_ENABLED concept)
           Gate 2. ``_capital_readiness_gate()`` passes:
-                  a. CAPITAL_AUTHORITY_READY  — CapitalAuthority not stale
-                                                AND usable capital > 0
-                  b. BROKER_BALANCE_CONFIRMED — at least one broker returned
-                                                a non-zero balance recently
-                  c. EXECUTION_PIPELINE_HEALTHY — ExecutionRouter has no
+                  a. CA_READY — CapitalAuthority not stale AND is_hydrated=True
+                                (system has data; balance magnitude is not checked here)
+                  b. EXECUTION_PIPELINE_HEALTHY — ExecutionRouter has no
                                                    circuit-breaking session failures
+                  NOTE: CAPITAL_ELIGIBLE (total_capital >= MINIMUM_TRADING_BALANCE)
+                  is intentionally NOT checked here — it belongs in the
+                  execution / position-sizing layer only.
           Gate 3. No active kill switch
 
         Returns:
@@ -366,7 +367,7 @@ class TradingStateMachine:
             )
             return False
 
-        # Gate 2: three-condition capital readiness check
+        # Gate 2: CA_READY + EXECUTION_PIPELINE_HEALTHY
         ready, reason = _capital_readiness_gate()
         if not ready:
             logger.info("🔒 Auto-activate blocked by capital readiness gate: %s", reason)
@@ -400,7 +401,7 @@ class TradingStateMachine:
         """Get recent state transition history"""
         with self._lock:
             return self._state_history[-limit:] if self._state_history else []
-            
+
     def get_state_summary(self) -> Dict[str, Any]:
         """Get comprehensive state summary for debugging/monitoring"""
         with self._lock:
@@ -413,31 +414,44 @@ class TradingStateMachine:
                 'can_make_broker_calls': self.can_make_broker_calls(),
                 'recent_history': self.get_state_history(5)
             }
-            
+
 
 # ---------------------------------------------------------------------------
-# Capital readiness gate — three-condition check used by maybe_auto_activate
+# Capital readiness gate — two-condition check used by maybe_auto_activate
 # and self_healing_startup._step_state_machine
 # ---------------------------------------------------------------------------
 
 def _capital_readiness_gate() -> tuple:
     """
-    Check the three sub-conditions required for LIVE_ACTIVE.
+    Check the conditions required for LIVE_ACTIVE.
 
     Returns:
         (bool, str) — (all_passed, human-readable reason / "ok")
 
-    Sub-conditions
-    --------------
-    a. CAPITAL_AUTHORITY_READY
-       CapitalAuthority singleton exists, is not stale, and reports
-       usable_capital > 0.
+    Concepts (intentionally separated)
+    -----------------------------------
+    CA_READY
+        The system has data — CapitalAuthority has received at least one
+        broker snapshot (``is_hydrated=True``).  A zero balance is a valid,
+        confirmed state; balance magnitude does NOT gate activation.
 
-    b. BROKER_BALANCE_CONFIRMED
-       At least one broker has contributed a non-zero balance to the
-       CapitalAuthority (i.e. ``get_real_capital() > 0``).
+    TRADING_ENABLED
+        Operator permission to route orders.  Enforced by Gate 1
+        (``LIVE_CAPITAL_VERIFIED`` env var) in ``maybe_auto_activate`` —
+        not re-checked here.
 
-    c. EXECUTION_PIPELINE_HEALTHY
+    CAPITAL_ELIGIBLE
+        ``total_capital >= MINIMUM_TRADING_BALANCE``.  This belongs
+        exclusively in the **execution / position-sizing layer** and must
+        never gate the trading-engine activation.
+
+    Sub-conditions evaluated here
+    ------------------------------
+    a. CA_READY
+       CapitalAuthority singleton exists and ``is_hydrated`` is True.
+       Staleness is also checked so a stale cache does not silently pass.
+
+    b. EXECUTION_PIPELINE_HEALTHY
        ExecutionRouter singleton exists and has no failed session venues
        that would block order dispatch.
 
@@ -447,7 +461,7 @@ def _capital_readiness_gate() -> tuple:
     """
     failures = []
 
-    # ── Shared helper: import CapitalAuthority once for sub-checks a and b ──
+    # ── Shared helper: import CapitalAuthority ────────────────────────────
     def _get_ca():
         try:
             from bot.capital_authority import get_capital_authority as _f
@@ -455,48 +469,33 @@ def _capital_readiness_gate() -> tuple:
             from capital_authority import get_capital_authority as _f  # type: ignore[import]
         return _f()
 
-    # ── a. CAPITAL_AUTHORITY_READY ─────────────────────────────────────────
+    # ── a. CA_READY ────────────────────────────────────────────────────────
+    # Readiness == system has data, NOT capital magnitude.
+    # is_hydrated=True means the coordinator has run and broker data exists.
+    # A zero balance is a valid, confirmed state that must not block activation.
+    # MINIMUM_TRADING_BALANCE is an execution-layer concern only (FIX C).
     authority = None
     try:
         authority = _get_ca()
         if authority.is_stale():
             failures.append(
-                "CAPITAL_AUTHORITY_READY=false: CapitalAuthority data is stale "
+                "CA_READY=false: CapitalAuthority data is stale "
                 "(call authority.refresh(broker_map) first)"
             )
-        elif authority.get_usable_capital() <= 0.0:
+        elif not authority.is_hydrated:
             failures.append(
-                f"CAPITAL_AUTHORITY_READY=false: usable_capital="
-                f"{authority.get_usable_capital():.2f} (must be > 0)"
+                "CA_READY=false: CapitalAuthority has not received any broker "
+                "snapshot yet (is_hydrated=False — coordinator has not run)"
             )
         else:
             logger.debug(
-                "_capital_readiness_gate: CAPITAL_AUTHORITY_READY ✅ "
-                "usable=%.2f", authority.get_usable_capital()
+                "_capital_readiness_gate: CA_READY ✅ "
+                "(is_hydrated=True, real_capital=%.2f)", authority.get_real_capital()
             )
     except (ImportError, AttributeError, Exception) as exc:
         logger.debug("_capital_readiness_gate: CapitalAuthority unavailable (%s) — skipping", exc)
 
-    # ── b. BROKER_BALANCE_CONFIRMED ────────────────────────────────────────
-    try:
-        ca = authority if authority is not None else _get_ca()
-        # FIX 3: hydration means balance was fetched (even zero is valid).
-        # The old check (real_capital > 0) incorrectly blocked accounts that
-        # are genuinely empty — zero balance is a confirmed, valid state.
-        if not ca.is_hydrated:
-            failures.append(
-                "BROKER_BALANCE_CONFIRMED=false: CapitalAuthority has not received "
-                "any broker snapshot yet (is_hydrated=False — coordinator has not run)"
-            )
-        else:
-            logger.debug(
-                "_capital_readiness_gate: BROKER_BALANCE_CONFIRMED ✅ "
-                "(is_hydrated=True, real_capital=%.2f)", ca.get_real_capital()
-            )
-    except (ImportError, AttributeError, Exception) as exc:
-        logger.debug("_capital_readiness_gate: broker balance check unavailable (%s) — skipping", exc)
-
-    # ── c. EXECUTION_PIPELINE_HEALTHY ──────────────────────────────────────
+    # ── b. EXECUTION_PIPELINE_HEALTHY ──────────────────────────────────────
     try:
         try:
             from bot.execution_router import get_execution_router
@@ -533,19 +532,19 @@ _instance_lock = threading.Lock()
 def get_state_machine() -> TradingStateMachine:
     """Get the global trading state machine instance (singleton)"""
     global _state_machine
-    
+
     if _state_machine is None:
         with _instance_lock:
             if _state_machine is None:
                 _state_machine = TradingStateMachine()
-                
+
     return _state_machine
 
 
 def require_state(required_state: TradingState):
     """
     Decorator to enforce that a function can only run in a specific state.
-    
+
     Usage:
         @require_state(TradingState.LIVE_ACTIVE)
         def place_real_order():
@@ -555,13 +554,13 @@ def require_state(required_state: TradingState):
         def wrapper(*args, **kwargs):
             state_machine = get_state_machine()
             current = state_machine.get_current_state()
-            
+
             if current != required_state:
                 raise StateTransitionError(
                     f"Function {func.__name__} requires state {required_state.value} "
                     f"but current state is {current.value}"
                 )
-                
+
             return func(*args, **kwargs)
         return wrapper
     return decorator
@@ -570,7 +569,7 @@ def require_state(required_state: TradingState):
 def require_live_trading():
     """
     Decorator to enforce that a function can only run when live trading is active.
-    
+
     Usage:
         @require_live_trading()
         def submit_real_order():
@@ -582,44 +581,44 @@ def require_live_trading():
 # Example usage and testing
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    
+
     # Test state machine
     sm = get_state_machine()
-    
+
     print("\n=== Trading State Machine Test ===")
     print(f"Initial state: {sm.get_current_state().value}")
     print(f"Can make broker calls: {sm.can_make_broker_calls()}")
-    
+
     # Test valid transitions
     print("\n--- Testing valid transitions ---")
     sm.transition_to(TradingState.DRY_RUN, "Testing dry run mode")
     print(f"Current state: {sm.get_current_state().value}")
-    
+
     sm.transition_to(TradingState.LIVE_PENDING_CONFIRMATION, "User wants to go live")
     print(f"Current state: {sm.get_current_state().value}")
-    
+
     sm.transition_to(TradingState.LIVE_ACTIVE, "User confirmed risk")
     print(f"Current state: {sm.get_current_state().value}")
     print(f"Can make broker calls: {sm.can_make_broker_calls()}")
-    
+
     # Test emergency stop
     print("\n--- Testing emergency stop ---")
     sm.transition_to(TradingState.EMERGENCY_STOP, "Emergency button pressed")
     print(f"Current state: {sm.get_current_state().value}")
     print(f"Can make broker calls: {sm.can_make_broker_calls()}")
-    
+
     # Test invalid transition
     print("\n--- Testing invalid transition ---")
     try:
         sm.transition_to(TradingState.LIVE_ACTIVE, "Try to go live from emergency stop")
     except StateTransitionError as e:
         print(f"Caught expected error: {e}")
-        
+
     # Show history
     print("\n--- State history ---")
     for entry in sm.get_state_history():
         print(f"  {entry['from']} -> {entry['to']}: {entry['reason']}")
-        
+
     print("\n--- State summary ---")
     summary = sm.get_state_summary()
     for key, value in summary.items():
