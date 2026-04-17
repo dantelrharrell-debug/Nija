@@ -136,7 +136,24 @@ class AllocationTarget:
 
 @dataclass
 class AllocationPlan:
-    """Capital allocation plan"""
+    """Capital allocation plan.
+
+    Note on ``total_capital == 0.0``
+    ---------------------------------
+    A plan with ``total_capital=0.0`` and an empty ``allocations`` dict can
+    mean one of three things:
+
+    1. **System not ready** — the global startup lock has not been released
+       yet (broker stabilization in progress).  :meth:`create_allocation_plan`
+       returns a zero plan in this case and logs a startup-lock message.
+    2. **Legitimately zero balance** — all registered brokers reported $0.
+    3. **No active targets** — :attr:`~CapitalAllocationBrain.targets` is
+       empty or all targets are inactive.
+
+    Callers that need to distinguish case 1 should check
+    ``get_startup_lock().is_set()`` from :mod:`bot.capital_authority` before
+    requesting a plan.
+    """
     timestamp: datetime = field(default_factory=datetime.now)
     total_capital: float = 0.0
     method: AllocationMethod = AllocationMethod.SHARPE_WEIGHTED

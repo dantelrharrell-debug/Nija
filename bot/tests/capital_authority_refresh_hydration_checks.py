@@ -102,11 +102,15 @@ def check_refresh_hydrates_from_registry_when_broker_map_empty():
         for patcher in patchers:
             patcher.stop()
 
-    # refresh_registry() was called as part of the hydration attempt.
+    # Verify refresh_registry() was invoked BEFORE the startup-window early
+    # return (proving the hydration attempt happens regardless of deferral).
     assert manager.refresh_calls == 1, (
-        f"Expected refresh_registry() to be called once; got {manager.refresh_calls}"
+        f"Expected refresh_registry() to be called exactly once before early return; "
+        f"got {manager.refresh_calls}"
     )
-    # Balances remain zero: CA returned early (startup-window deferral).
+    # Balances remain zero: CA returned early (startup-window deferral) before
+    # iterating the effective_broker_map — the registry was queried but no
+    # balance was fetched or stored.
     assert authority.get_raw_per_broker("kraken") == 0.0
     assert authority.get_raw_per_broker("coinbase") == 0.0
 

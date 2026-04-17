@@ -599,6 +599,9 @@ class MultiAccountBrokerManager:
             len(self._platform_brokers),
         )
         # Delegate to CapitalAuthority to set the module-level STARTUP_LOCK event.
+        # Use the same deferred-import pattern as finalize_broker_registration() to
+        # avoid a circular import: capital_authority.py already imports from this
+        # module, so a top-level import here would create a cycle.
         try:
             _gca = None
             for _mod in ("bot.capital_authority", "capital_authority"):
