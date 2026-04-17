@@ -106,6 +106,11 @@ _DEFAULT_FRESHNESS_TTL_S: float = 90.0
 #
 CAPITAL_SYSTEM_READY: threading.Event = threading.Event()
 
+# Maximum seconds to wait for CapitalAuthority to reach ACTIVE_CAPITAL during
+# bootstrap.  Increase this value if the broker connection is slow to confirm
+# balances (e.g. on cold-start or high-latency environments).
+CAPITAL_READY_TIMEOUT: float = 60.0
+
 
 # ---------------------------------------------------------------------------
 # Capital lifecycle state machine — explicit 3-phase enum
@@ -1400,7 +1405,7 @@ def reset_capital_authority_singleton() -> None:
     logger.warning("[CapitalAuthority] singleton cache cleared")
 
 
-def wait_for_capital_ready(timeout: float = 30.0) -> bool:
+def wait_for_capital_ready(timeout: float = CAPITAL_READY_TIMEOUT) -> bool:
     """
     Block the calling thread until :class:`CapitalAuthority` reaches
     :attr:`~CapitalLifecycleState.ACTIVE_CAPITAL`.
@@ -1423,7 +1428,7 @@ def wait_for_capital_ready(timeout: float = 30.0) -> bool:
     Parameters
     ----------
     timeout:
-        Maximum seconds to wait before giving up.  Default 30 s.
+        Maximum seconds to wait before giving up.  Default 60 s.
 
     Returns
     -------
