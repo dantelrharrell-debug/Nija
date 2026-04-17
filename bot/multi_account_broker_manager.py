@@ -657,7 +657,19 @@ class MultiAccountBrokerManager:
                 scalar = 0.0
             broker_balances[broker_type.value] = scalar
 
-        logger.warning("[BOOTSTRAP] balances collected: %s", broker_balances)
+        if broker_balances:
+            logger.warning("[BOOTSTRAP] balances collected: %s", broker_balances)
+        else:
+            connected_broker_types = [
+                bt.value for bt, b in broker_items if getattr(b, "connected", False)
+            ]
+            logger.warning(
+                "[BOOTSTRAP] balances collected: {} — no connected broker returned a balance "
+                "(registered=%d, connected=%s). "
+                "CapitalAllocationBrain must not be initialized until broker_registry is non-empty.",
+                len(broker_items),
+                connected_broker_types,
+            )
 
         # ── Bootstrap seed bypass: Kraken connected but balance unavailable ────
         # If Kraken reports connected=True but get_account_balance() failed (e.g.
