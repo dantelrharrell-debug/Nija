@@ -763,6 +763,16 @@ class MultiAccountBrokerManager:
             logger.debug("[MABM] finalize_broker_registration: already complete — no-op")
             return
         self._broker_registration_complete.set()
+        # Reset the dedup timestamp so that the very next refresh_capital_authority
+        # call unconditionally bypasses the REFRESH_MIN_INTERVAL_S guard.
+        # Without this reset, any refresh that happened within the last 0.5 s
+        # (e.g. an early probe during broker connect) would be returned as the
+        # cached result — still showing ready=False — even though the gate just
+        # opened and a real evaluation is now valid.  This is the deterministic
+        # "immediate post-registration refresh trigger": the gate opens, the
+        # timestamp clears, and the next call gets a fresh coordinator run.
+        with self._capital_state_lock:
+            self._capital_last_refresh_ts = 0.0
         logger.info(
             "✅ [MABM] Broker registration finalized — capital evaluation gates are now open "
             "(registered_brokers=%d)",
@@ -1202,6 +1212,44 @@ class MultiAccountBrokerManager:
                                 )
                                 self.finalize_broker_registration()
                                 self.finalize_bootstrap_ready()
+                                # ── Drive bootstrap FSM to READY (seed path shortcut) ────────
+                                # The coordinator's _pipeline() is the normal FSM driver, but
+                                # the seed path bypasses the coordinator entirely (it uses
+                                # cached balances and returns early).  Without advancing the
+                                # FSM here, is_capital_authority_ready() — which delegates
+                                # exclusively to the FSM — stays False even though the seed
+                                # published a valid snapshot and set _capital_ready = True.
+                                # That False-FSM gap prevents the trading gate from ever
+                                # flipping to ACTIVE:
+                                #
+                                #   seed published → _capital_ready = True
+                                #   is_capital_authority_ready() → _capital_bootstrap_fsm.is_ready
+                                #                                → WAIT_PLATFORM → False  ← BUG
+                                #
+                                # Transition the FSM through the full forward path so the
+                                # process-wide singleton matches the observed capital state.
+                                # Each transition() call is a no-op when invalid (logs DEBUG),
+                                # so this is safe to call even if a concurrent coordinator run
+                                # already advanced the FSM partway.
+                                if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
+                                    _bseed_fsm = self._capital_bootstrap_fsm
+                                    _bseed_fsm.transition(
+                                        CapitalBootstrapState.REFRESH_REQUESTED, "bootstrap_seed"
+                                    )
+                                    _bseed_fsm.transition(
+                                        CapitalBootstrapState.REFRESH_IN_FLIGHT, "bootstrap_seed"
+                                    )
+                                    _bseed_fsm.transition(
+                                        CapitalBootstrapState.SNAPSHOT_EVALUATING, "bootstrap_seed"
+                                    )
+                                    _bseed_fsm.transition(
+                                        CapitalBootstrapState.READY, "bootstrap_seed"
+                                    )
+                                    if self._capital_event_bus is not None:
+                                        self._capital_event_bus.emit(CapitalEvent(
+                                            event_type=CapitalEventType.CAPITAL_READY,
+                                            trigger="bootstrap_seed",
+                                        ))
                                 with self._capital_state_lock:
                                     self._capital_ready = True
                                     self._capital_last_refresh_ts = time.time()
@@ -1494,11 +1542,35 @@ class MultiAccountBrokerManager:
             kraken_broker = self._platform_brokers.get(BrokerType.KRAKEN)
             kraken_connected_layer = bool(getattr(kraken_broker, "connected", False))
             kraken_included = "kraken" in broker_map
-            assets_priced_ok = (
-                float(getattr(snapshot, "assets_priced_success_pct", 0.0)) > 0.0
-                if snapshot is not None
-                else False
-            )
+            # ── assets_priced_ok: resolve from best available source ──────────
+            # When the coordinator returns a snapshot, use it directly.
+            # When the coordinator returns None (in-flight concurrent call,
+            # monotonic-guard rejection, or unrecoverable exception), fall back
+            # to the most recently accepted snapshot already held by
+            # CapitalAuthority.  As a last resort, read the Kraken broker's
+            # cached pricing-coverage value (_last_pricing_coverage_pct),
+            # which defaults to 1.0 at broker init and is updated after every
+            # successful balance compute.  This prevents a transient coordinator
+            # unavailability from permanently blocking readiness when Kraken is
+            # connected: snapshot=None → assets_priced_ok=False → kraken_ready=False
+            # → ready=False even though capital exists and coverage is fine.
+            _assets_pct: float = 0.0
+            if snapshot is not None:
+                _assets_pct = float(getattr(snapshot, "assets_priced_success_pct", 0.0))
+            else:
+                if authority is not None:
+                    _ca_typed_snap = getattr(authority, "_last_typed_snapshot", None)
+                    if _ca_typed_snap is not None:
+                        _assets_pct = float(
+                            getattr(_ca_typed_snap, "assets_priced_success_pct", 0.0)
+                        )
+                if _assets_pct == 0.0:
+                    _kbkr = self._platform_brokers.get(BrokerType.KRAKEN)
+                    if _kbkr is not None:
+                        _assets_pct = float(
+                            getattr(_kbkr, "_last_pricing_coverage_pct", 1.0)
+                        )
+            assets_priced_ok = _assets_pct > 0.0
             # bootstrap_ok: True  = bootstrap FSM has not reached FAILED state.
             # Recovery from FAILED is handled by the coordinator's _pipeline()
             # at the start of the next refresh cycle — MABM does not drive FSM
