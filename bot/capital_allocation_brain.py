@@ -232,6 +232,14 @@ class CapitalAllocationBrain:
         self.capital_authority = _get_ca_init()
         logger.info("[CapitalAllocationBrain] acquired CA instance_id=%d", id(self.capital_authority))
 
+        # Acquire the process-wide startup lock so that evaluation methods can
+        # gate on it without doing a module-level import each time.
+        try:
+            from bot.capital_authority import get_startup_lock as _get_sl
+        except ImportError:
+            from capital_authority import get_startup_lock as _get_sl  # type: ignore[import]
+        self._startup_lock = _get_sl()
+
         # When the caller explicitly pins a capital value (testing / paper-trade
         # overrides), store it here.  The total_capital property returns this
         # value instead of reading from the CA so the pinned figure is stable.
@@ -332,6 +340,16 @@ class CapitalAllocationBrain:
         Returns:
             Latest observed total capital (>= 0).
         """
+        # HARD BLOCK — startup lock not yet released.  The bootstrap process
+        # has not confirmed full system sync; triggering a capital refresh from
+        # CapitalAllocationBrain at this point could evaluate an incomplete
+        # broker snapshot and corrupt allocation state.
+        if not self._startup_lock.is_set():
+            logger.warning(
+                "[CapitalAllocationBrain] Startup lock not released — "
+                "skipping refresh_authority (no snapshot, no refresh)"
+            )
+            return 0.0
         try:
             # Event-driven refresh path (preferred): ask multi-account manager to
             # rebuild authority from currently connected healthy brokers.
@@ -862,6 +880,20 @@ class CapitalAllocationBrain:
         Returns:
             AllocationPlan
         """
+        # HARD BLOCK — startup lock not yet released.  No snapshot, no refresh;
+        # the system has not completed full bootstrap sync.  Return an empty
+        # plan so callers can detect the unready state without allocating capital
+        # against a partially-populated or stabilizing broker snapshot.
+        if not self._startup_lock.is_set():
+            logger.info(
+                "[CapitalAllocationBrain] Startup lock not released — "
+                "skipping create_allocation_plan (no snapshot, no refresh)"
+            )
+            return AllocationPlan(
+                total_capital=0.0,
+                method=method or self.default_method,
+            )
+
         # Critical guard: never allocate when total capital is non-positive.
         # refresh_authority() triggers a broker-manager refresh cycle so the
         # CA snapshot is up-to-date before we read self.total_capital below.
