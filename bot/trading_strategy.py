@@ -2668,20 +2668,20 @@ if SPOT_ONLY:
 #        NIJA_BYPASS_STRUCTURE_FILTER=true   — HH/HL structure
 #        NIJA_BYPASS_SMART_FILTER=true       — smart filter (volume, timing)
 #        NIJA_DISABLE_MARKET_FILTER=true     — APEX market filter (VWAP/EMA/MACD)
-_DEBUG_BYPASS_MODE: bool = (
+DEBUG_BYPASS_MODE: bool = (
     os.getenv('NIJA_DEBUG_BYPASS_MODE', 'false').lower() in ('1', 'true', 'yes')
 )
 # Individual filter bypasses (advanced diagnosis — set one at a time)
-_BYPASS_QUALITY_FILTER: bool = _DEBUG_BYPASS_MODE or (
+_BYPASS_QUALITY_FILTER: bool = DEBUG_BYPASS_MODE or (
     os.getenv('NIJA_BYPASS_QUALITY_FILTER', 'false').lower() in ('1', 'true', 'yes')
 )
-_BYPASS_READINESS_GATE: bool = _DEBUG_BYPASS_MODE or (
+_BYPASS_READINESS_GATE: bool = DEBUG_BYPASS_MODE or (
     os.getenv('NIJA_BYPASS_READINESS_GATE', 'false').lower() in ('1', 'true', 'yes')
 )
-_BYPASS_STRUCTURE_FILTER: bool = _DEBUG_BYPASS_MODE or (
+_BYPASS_STRUCTURE_FILTER: bool = DEBUG_BYPASS_MODE or (
     os.getenv('NIJA_BYPASS_STRUCTURE_FILTER', 'false').lower() in ('1', 'true', 'yes')
 )
-if _DEBUG_BYPASS_MODE:
+if DEBUG_BYPASS_MODE:
     logger.warning(
         "⚠️  NIJA_DEBUG_BYPASS_MODE=true — quality/readiness/structure/smart/sniper/regime "
         "filters DISABLED (DIAGNOSTIC MODE — disable before production use)"
@@ -12573,39 +12573,39 @@ class TradingStrategy:
                             logger.debug(f"   ⚠️ Regime Controller init error: {regime_init_err}")
                             _regime_snapshot = None
 
+                    # ── Signal decision log helper (defined once, outside the scan loop) ──
+                    # Emits a structured "WHY DID THIS NOT TRADE" record for every signal path.
+                    # Captures cycle-level variables (cycle_count, account_balance,
+                    # _regime_result) from the enclosing scope; symbol must be passed explicitly.
+                    def _log_why_no_trade(
+                        sym,
+                        filters_failed=None,
+                        decision="REJECTED",
+                        entry_score=None,
+                        position_size_usd=None,
+                    ):
+                        _regime_name = "unknown"
+                        try:
+                            if _regime_result is not None:
+                                _regime_name = str(getattr(_regime_result, 'regime',
+                                                           getattr(_regime_result, 'decision', 'unknown')))
+                        except Exception:
+                            pass
+                        logger.info(
+                            "WHY_NO_TRADE | signal=%s-%s | score=%s | regime=%s | "
+                            "capital=$%.2f | size=%s | filters_failed=%s | decision=%s",
+                            getattr(self, 'cycle_count', 0),
+                            sym,
+                            f"{entry_score:.2f}" if entry_score is not None else "n/a",
+                            _regime_name,
+                            account_balance,
+                            f"${position_size_usd:.2f}" if position_size_usd is not None else "n/a",
+                            filters_failed or [],
+                            decision,
+                        )
+
                     for i, symbol in enumerate(markets_to_scan):
                         filter_stats['total'] += 1
-                        # ── Per-symbol signal decision log helper ────────────────────
-                        # Builds and emits a structured "WHY DID THIS NOT TRADE" record.
-                        # Call _log_why_no_trade(symbol, filters_failed, decision) at any
-                        # rejection point to get a single traceable log line.
-                        _cycle_n = getattr(self, 'cycle_count', 0)
-                        def _log_why_no_trade(
-                            _sym=symbol,
-                            filters_failed=None,
-                            decision="REJECTED",
-                            entry_score=None,
-                            position_size_usd=None,
-                        ):
-                            _regime_name = "unknown"
-                            try:
-                                if _regime_result is not None:
-                                    _regime_name = str(getattr(_regime_result, 'regime',
-                                                               getattr(_regime_result, 'decision', 'unknown')))
-                            except Exception:
-                                pass
-                            logger.info(
-                                "WHY_NO_TRADE | signal=%s-%s | score=%s | regime=%s | "
-                                "capital=$%.2f | size=%s | filters_failed=%s | decision=%s",
-                                _cycle_n,
-                                _sym,
-                                f"{entry_score:.2f}" if entry_score is not None else "n/a",
-                                _regime_name,
-                                account_balance,
-                                f"${position_size_usd:.2f}" if position_size_usd is not None else "n/a",
-                                filters_failed or [],
-                                decision,
-                            )
                         try:
                             # FIX #1: BLACKLIST CHECK - Skip disabled pairs immediately
                             if symbol in DISABLED_PAIRS:
@@ -12898,7 +12898,7 @@ class TradingStrategy:
                                     if not _bypass_market_filter and not _BYPASS_QUALITY_FILTER and not quality_check['quality_acceptable']:
                                         reasons = ', '.join(quality_check['reasons_failed'])
                                         logger.info(f"   ⛔ TRACE [pre_apex_quality] {symbol}: {reasons}")
-                                        _log_why_no_trade(filters_failed=['pre_apex_quality'], decision='DROPPED')
+                                        _log_why_no_trade(symbol, filters_failed=['pre_apex_quality'], decision='DROPPED')
                                         filter_stats['market_filter'] += 1
                                         filter_stats['pre_apex_quality'] += 1
                                         continue
@@ -12955,7 +12955,7 @@ class TradingStrategy:
                                     # Block entries in IDLE mode
                                     if not _bypass_market_filter and not _BYPASS_READINESS_GATE and mode == MarketMode.IDLE:
                                         logger.info(f"   ⏸️  TRACE [pre_apex_readiness] {symbol}: IDLE MODE - {details['message']}")
-                                        _log_why_no_trade(filters_failed=['pre_apex_readiness'], decision='DROPPED')
+                                        _log_why_no_trade(symbol, filters_failed=['pre_apex_readiness'], decision='DROPPED')
                                         filter_stats['market_filter'] += 1
                                         filter_stats['pre_apex_readiness'] += 1
                                         continue
@@ -12978,7 +12978,7 @@ class TradingStrategy:
                                             f"   ⛔ TRACE [pre_apex_structure] {symbol}: "
                                             f"HH/HL trend, volume expansion, or RSI momentum not confirmed"
                                         )
-                                        _log_why_no_trade(filters_failed=['pre_apex_structure'], decision='DROPPED')
+                                        _log_why_no_trade(symbol, filters_failed=['pre_apex_structure'], decision='DROPPED')
                                         filter_stats['market_filter'] += 1
                                         filter_stats['pre_apex_structure'] += 1
                                         # Record observation in regime snapshot before skipping
@@ -13388,7 +13388,7 @@ class TradingStrategy:
                                     and hasattr(self, 'sniper_filter')
                                     and self.sniper_filter is not None
                                     and analysis.get('action') in ('enter_long', 'enter_short')
-                                    and not _DEBUG_BYPASS_MODE  # bypass entire sniper block in debug mode
+                                    and not DEBUG_BYPASS_MODE  # bypass entire sniper block in debug mode
                                 ):
                                     try:
                                         _sf_side = (
@@ -13598,7 +13598,7 @@ class TradingStrategy:
                                             TRADE_FREQUENCY_CONTROLLER_AVAILABLE
                                             and hasattr(self, 'trade_frequency_controller')
                                             and self.trade_frequency_controller is not None
-                                            and not _DEBUG_BYPASS_MODE  # bypass freq controller in debug mode
+                                            and not DEBUG_BYPASS_MODE  # bypass freq controller in debug mode
                                         ):
                                             try:
                                                 _tfc_delta = self.trade_frequency_controller.get_confidence_delta()
@@ -13788,6 +13788,7 @@ class TradingStrategy:
                                                 symbol, _sf_result.reason,
                                             )
                                             _log_why_no_trade(
+                                                symbol,
                                                 filters_failed=['sniper_filter'],
                                                 decision='REJECTED',
                                                 entry_score=analysis.get('score'),
@@ -14038,11 +14039,12 @@ class TradingStrategy:
                                 elif _filter_stage == 'smart_filter':
                                     filter_stats['smart_filter'] += 1
                                     filter_stats['apex_smart_filter'] += 1
-                                    _log_why_no_trade(filters_failed=['apex_smart_filter'], decision='DROPPED')
+                                    _log_why_no_trade(symbol, filters_failed=['apex_smart_filter'], decision='DROPPED')
                                 elif _filter_stage == 'market_filter':
                                     filter_stats['market_filter'] += 1
                                     filter_stats['apex_market_filter'] += 1
                                     _log_why_no_trade(
+                                        symbol,
                                         filters_failed=['apex_market_filter'],
                                         decision='DROPPED',
                                         entry_score=analysis.get('score'),
@@ -14051,6 +14053,7 @@ class TradingStrategy:
                                     filter_stats['no_entry_signal'] += 1
                                     filter_stats['apex_no_entry'] += 1
                                     _log_why_no_trade(
+                                        symbol,
                                         filters_failed=['apex_no_entry'],
                                         decision='REJECTED',
                                         entry_score=analysis.get('score'),
@@ -14059,15 +14062,16 @@ class TradingStrategy:
                                 elif 'smart filter' in reason.lower() or 'volume too low' in reason.lower() or 'candle' in reason.lower():
                                     filter_stats['smart_filter'] += 1
                                     filter_stats['apex_smart_filter'] += 1
-                                    _log_why_no_trade(filters_failed=['apex_smart_filter'], decision='DROPPED')
+                                    _log_why_no_trade(symbol, filters_failed=['apex_smart_filter'], decision='DROPPED')
                                 elif 'ADX' in reason or 'Mixed signals' in reason:
                                     filter_stats['market_filter'] += 1
                                     filter_stats['apex_market_filter'] += 1
-                                    _log_why_no_trade(filters_failed=['apex_market_filter'], decision='DROPPED')
+                                    _log_why_no_trade(symbol, filters_failed=['apex_market_filter'], decision='DROPPED')
                                 else:
                                     filter_stats['no_entry_signal'] += 1
                                     filter_stats['apex_no_entry'] += 1
                                     _log_why_no_trade(
+                                        symbol,
                                         filters_failed=['apex_no_entry'],
                                         decision='REJECTED',
                                         entry_score=analysis.get('score'),
@@ -14688,7 +14692,7 @@ class TradingStrategy:
                                         and not _is_crisis
                                     )
                                     # DEBUG bypass: skip UNFAVORABLE regime block (CRISIS never bypassed)
-                                    _debug_regime_bypass = _DEBUG_BYPASS_MODE and not _is_crisis
+                                    _debug_regime_bypass = DEBUG_BYPASS_MODE and not _is_crisis
                                     if _first_trade_regime_bypass:
                                         logger.info(
                                             f"   ⚡ {symbol}: REGIME BLOCK overridden by first-trade force trigger"
@@ -14700,7 +14704,7 @@ class TradingStrategy:
                                         )
                                     elif _debug_regime_bypass:
                                         logger.info(
-                                            f"   🔓 {symbol}: REGIME BLOCK bypassed (NIJA_DEBUG_BYPASS_MODE)"
+                                            f"   🔓 {symbol}: REGIME BLOCK bypassed (NIJADEBUG_BYPASS_MODE)"
                                         )
                                     else:
                                         _regime_block_reason = (
@@ -14712,6 +14716,7 @@ class TradingStrategy:
                                             f"   🚫 TRACE [regime_filter] {symbol}: {_regime_block_reason}"
                                         )
                                         _log_why_no_trade(
+                                            symbol,
                                             filters_failed=['regime_filter'],
                                             decision='REJECTED',
                                             entry_score=analysis.get('score'),
@@ -16656,6 +16661,7 @@ class TradingStrategy:
                                     '_sft_spread': _sft_spread,
                                 })
                                 _log_why_no_trade(
+                                    symbol,
                                     filters_failed=[],
                                     decision='ACCEPTED',
                                     entry_score=entry_score,
@@ -17209,6 +17215,17 @@ class TradingStrategy:
                         'sniper_filter':       filter_stats.get('sniper_filter', 0),
                         'post_apex_win_rate':  filter_stats.get('post_apex_win_rate', 0),
                     }
+                    # Mapping from internal stage name → env var that bypasses it
+                    _stage_bypass_var = {
+                        'pre_apex_quality':   'NIJA_BYPASS_QUALITY_FILTER',
+                        'pre_apex_readiness': 'NIJA_BYPASS_READINESS_GATE',
+                        'pre_apex_structure': 'NIJA_BYPASS_STRUCTURE_FILTER',
+                        'apex_smart_filter':  'NIJA_BYPASS_SMART_FILTER',
+                        'apex_market_filter': 'NIJA_DISABLE_MARKET_FILTER',
+                        'apex_no_entry':      'NIJA_DEBUG_BYPASS_MODE',
+                        'sniper_filter':      'NIJA_DEBUG_BYPASS_MODE',
+                        'post_apex_win_rate': 'NIJA_DEBUG_BYPASS_MODE',
+                    }
                     _stage_total = sum(_per_stage.values())
                     if _stage_total > 0:
                         logger.info("   ── EXECUTION TRACE SUMMARY ─────────────────────────────")
@@ -17224,14 +17241,15 @@ class TradingStrategy:
                         _primary_blocker = max(_per_stage, key=_per_stage.get)
                         _primary_count   = _per_stage[_primary_blocker]
                         if _primary_count > 0:
+                            _bypass_var = _stage_bypass_var.get(_primary_blocker, 'NIJA_DEBUG_BYPASS_MODE')
                             logger.warning(
                                 "   🚧 PRIMARY BLOCKER: '%s' dropped %d signal(s) this cycle  "
-                                "→ set NIJA_BYPASS_%s=true to bypass (diagnostic only)",
+                                "→ set %s=true to bypass (diagnostic only)",
                                 _primary_blocker,
                                 _primary_count,
-                                _primary_blocker.upper(),
+                                _bypass_var,
                             )
-                        if _DEBUG_BYPASS_MODE:
+                        if DEBUG_BYPASS_MODE:
                             logger.warning(
                                 "   ⚠️  NIJA_DEBUG_BYPASS_MODE is ACTIVE — "
                                 "quality/readiness/structure/smart/sniper/regime filters are BYPASSED"

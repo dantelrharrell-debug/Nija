@@ -125,6 +125,11 @@ _DISABLE_MARKET_FILTER: bool = (
 #   choppy markets.  Step 4 diagnostic bypass: use to confirm the smart filter is the
 #   first gate that drops all signals.
 #   Also activated automatically when NIJA_DEBUG_BYPASS_MODE=true.
+#
+# NOTE: NIJA_DEBUG_BYPASS_MODE is intentionally re-read here rather than imported
+# from trading_strategy.py.  nija_apex_strategy_v71 is imported BY trading_strategy,
+# so a reverse import would create a circular dependency.  The env-var read is the
+# correct pattern for this architecture.
 _BYPASS_SMART_FILTER: bool = (
     _os_apex.getenv("NIJA_BYPASS_SMART_FILTER", "false").lower() in ("1", "true", "yes")
     or _os_apex.getenv("NIJA_DEBUG_BYPASS_MODE", "false").lower() in ("1", "true", "yes")
