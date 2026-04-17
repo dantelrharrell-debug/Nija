@@ -1012,9 +1012,7 @@ class MultiAccountBrokerManager:
                         # Always re-fetch the CA singleton inside the lock so that
                         # test resets, hot reloads, or multiple import paths cannot
                         # leave us holding a stale reference obtained before the lock.
-                        _authority = _ca_for_seed or (
-                            get_capital_authority() if get_capital_authority else None
-                        )
+                        _authority = _ca_for_seed or get_capital_authority()
                         _WRITER_ID: Optional[str] = None
                         for _fsm_mod in ("bot.capital_flow_state_machine", "capital_flow_state_machine"):
                             try:
