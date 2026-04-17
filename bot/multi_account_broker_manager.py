@@ -558,6 +558,16 @@ class MultiAccountBrokerManager:
                 "[MABM] finalize_broker_registration: could not lift CA gate: %s", _exc
             )
 
+    @staticmethod
+    def _startup_lock_is_set() -> bool:
+        """Return True if the module-level STARTUP_LOCK event has been set.
+
+        Using the event directly (rather than the instance flag) means that a
+        release performed by CapitalAuthority outside of this class is also seen
+        as authoritative — preventing any double-release attempt.
+        """
+        return STARTUP_LOCK is not None and STARTUP_LOCK.is_set()
+
     def finalize_bootstrap_ready(self) -> None:
         """Release the global startup lock after full system sync is confirmed.
 
@@ -589,7 +599,7 @@ class MultiAccountBrokerManager:
         # test) MABM still treats it as already done.  Sync the local bool so all
         # subsequent checks (including the inline guard in refresh_capital_authority)
         # see the consistent state without re-importing the event each time.
-        if self._startup_lock_released or (STARTUP_LOCK is not None and STARTUP_LOCK.is_set()):
+        if self._startup_lock_released or self._startup_lock_is_set():
             if not self._startup_lock_released:
                 self._startup_lock_released = True  # sync local flag to event state
             logger.debug("[MABM] finalize_bootstrap_ready: startup lock already released — no-op")
@@ -1142,7 +1152,7 @@ class MultiAccountBrokerManager:
                 # ONLY NOW allow CapitalAllocationBrain + external refresh loops.
                 # Check both the local flag and the authoritative STARTUP_LOCK event so
                 # that a direct CA release is also respected here.
-                if not self._startup_lock_released and not (STARTUP_LOCK is not None and STARTUP_LOCK.is_set()):
+                if not self._startup_lock_released and not self._startup_lock_is_set():
                     try:
                         self.finalize_bootstrap_ready()
                     except Exception as _slk_exc:
