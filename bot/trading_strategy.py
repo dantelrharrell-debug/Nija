@@ -2008,7 +2008,11 @@ except ImportError:
 
 
 def _broker_type_is_critical(broker_type: "BrokerType") -> bool:  # noqa: F821
-    """Return True when *broker_type* is a CRITICAL execution venue.
+    """Return True when *broker_type* is a CRITICAL or PRIMARY execution venue.
+
+    CRITICAL brokers (Kraken) and PRIMARY brokers (Coinbase) may both originate
+    new entries.  OPTIONAL / DEFERRED brokers are excluded so their failures
+    never block the cycle.
 
     Falls back to a hard-coded set (Kraken, Coinbase) when broker_registry
     is unavailable so the protection works even during early startup.
@@ -2016,7 +2020,11 @@ def _broker_type_is_critical(broker_type: "BrokerType") -> bool:  # noqa: F821
     if _get_broker_criticality is not None:
         try:
             crit = _get_broker_criticality(broker_type.value)
-            return getattr(crit, "value", str(crit)) == "CRITICAL"
+            # BrokerCriticality enum values are lowercase strings ("critical",
+            # "primary", …).  The comparison must be case-insensitive to avoid
+            # a silent mismatch that marks every broker as OPTIONAL.
+            crit_value = getattr(crit, "value", str(crit)).lower()
+            return crit_value in ("critical", "primary")
         except Exception:
             pass
     # Hard-coded fallback
