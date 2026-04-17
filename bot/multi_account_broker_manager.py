@@ -13,6 +13,7 @@ Each account trades independently with its own:
 - Risk limits
 """
 
+import importlib
 import logging
 import os
 import queue
@@ -535,8 +536,7 @@ class MultiAccountBrokerManager:
             _gca = None
             for _mod in ("bot.capital_authority", "capital_authority"):
                 try:
-                    import importlib as _il
-                    _gca = _il.import_module(_mod).get_capital_authority
+                    _gca = importlib.import_module(_mod).get_capital_authority
                     break
                 except (ImportError, AttributeError):
                     continue

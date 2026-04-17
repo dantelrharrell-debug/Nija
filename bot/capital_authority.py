@@ -326,10 +326,11 @@ class CapitalAuthority:
             logger.debug("[CapitalAuthority] finalize_broker_registration: already complete — no-op")
             return
         self._broker_registration_complete.set()
-        logger.info("[CapitalAuthority] Broker registration gate lifted — flushing %d pending feed(s)", len(self._pending_feeds))
         with self._lock:
             pending = list(self._pending_feeds)
+            _pending_count = len(pending)
             self._pending_feeds.clear()
+        logger.info("[CapitalAuthority] Broker registration gate lifted — flushing %d pending feed(s)", _pending_count)
         for broker_key, balance, ts in pending:
             try:
                 self.feed_broker_balance(broker_key, balance, ts)
