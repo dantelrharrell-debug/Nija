@@ -257,6 +257,15 @@ class MultiAccountBrokerManager:
         # which checks _last_known_balance directly and includes Kraken in
         # broker_map as soon as a valid balance payload exists.
         "kraken_platform_connect",
+        # FIX (Class 3): explicit bootstrap trigger used by trading_strategy.py and
+        # the recovery path after finalize_broker_registration() lifts Gate B.
+        # Without this entry the trigger falls through to the non-bootstrap path,
+        # which uses strict is_ready_for_capital() gating instead of the relaxed
+        # BrokerPayloadFSM / _last_known_balance probe logic required at startup.
+        "BOOTSTRAP_START",
+        # bootstrap_contract trigger used by enforce_trading_bootstrap_contract().
+        # Same rationale: must use FSM probe logic while bootstrap is in progress.
+        "bootstrap_contract",
     }
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
@@ -4220,8 +4229,29 @@ class MultiAccountBrokerManager:
             results["alpaca"] = {"broker": None, "connected": False, "error": str(exc)}
 
         # Startup ordering invariant:
-        # 1) brokers connect, 2) balances fetched, 3) CapitalAuthority built,
-        # 4) readiness marked, 5) trading engines may proceed.
+        # 1) brokers connect, 2) registration gate lifted, 3) balances fetched,
+        # 4) CapitalAuthority built, 5) readiness marked, 6) trading engines may proceed.
+        #
+        # CRITICAL: finalize_broker_registration() MUST be called before
+        # enforce_trading_bootstrap_contract() to break the Gate B dependency cycle:
+        #
+        #   refresh_capital_authority() has a pre-flight Gate B that blocks ALL
+        #   refresh paths (including the bootstrap seed) until finalize_broker_registration()
+        #   has been called.  But finalize_broker_registration() is only called from
+        #   INSIDE the bootstrap seed block — which Gate B prevents from running.
+        #
+        #   Without this explicit call the cycle is:
+        #     enforce_trading_bootstrap_contract()
+        #       → refresh_capital_authority()
+        #         → Gate B: has_attempted_connections() == False → return pending
+        #             ← finalize_broker_registration() never fires
+        #             ← CA never hydrates
+        #             ← CapitalAllocationBrain.__init__() blocks on CAPITAL_HYDRATED_EVENT
+        #             ← timeout → $0 capital → trading halted
+        #
+        #   This call is idempotent: if trading_strategy.py already called it via
+        #   finalize_broker_registration() the second invocation is a no-op.
+        self.finalize_broker_registration()
         _startup_cap = self.enforce_trading_bootstrap_contract(
             max_attempts=3,
             retry_delay_s=1.0,
