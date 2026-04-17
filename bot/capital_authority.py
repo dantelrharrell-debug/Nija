@@ -56,7 +56,7 @@ import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.capital_authority")
 
@@ -278,7 +278,7 @@ class CapitalAuthority:
         self._broker_registration_complete: threading.Event = threading.Event()
         # Queue of (broker_key, balance, timestamp) tuples received before the
         # registration gate was lifted.  Flushed by finalize_broker_registration().
-        self._pending_feeds: list = []
+        self._pending_feeds: List[Tuple[str, float, datetime]] = []
         # Register this instance in the module-level identity guard so that any
         # accidental second instantiation is detected by assert_singleton().
         global _EXPECTED_ID
@@ -674,12 +674,13 @@ class CapitalAuthority:
         if not self._broker_registration_complete.is_set():
             with self._lock:
                 self._pending_feeds.append((key, balance, ts))
+                _pending_count = len(self._pending_feeds)
             logger.warning(
                 "[CapitalAuthority] feed_broker_balance QUEUED broker=%s balance=$%.2f "
                 "— broker registration not yet complete (%d pending)",
                 key,
                 balance,
-                len(self._pending_feeds),
+                _pending_count,
             )
             return
 

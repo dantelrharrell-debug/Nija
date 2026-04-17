@@ -532,13 +532,18 @@ class MultiAccountBrokerManager:
         # Also lift the gate on CapitalAuthority so feed_broker_balance() can
         # flush any pending feeds that arrived before registration was complete.
         try:
-            try:
-                from bot.capital_authority import get_capital_authority as _gca
-            except ImportError:
-                from capital_authority import get_capital_authority as _gca  # type: ignore[import]
-            _ca = _gca()
-            if _ca is not None and hasattr(_ca, "finalize_broker_registration"):
-                _ca.finalize_broker_registration()
+            _gca = None
+            for _mod in ("bot.capital_authority", "capital_authority"):
+                try:
+                    import importlib as _il
+                    _gca = _il.import_module(_mod).get_capital_authority
+                    break
+                except (ImportError, AttributeError):
+                    continue
+            if _gca is not None:
+                _ca = _gca()
+                if _ca is not None and hasattr(_ca, "finalize_broker_registration"):
+                    _ca.finalize_broker_registration()
         except Exception as _exc:
             logger.warning(
                 "[MABM] finalize_broker_registration: could not lift CA gate: %s", _exc
