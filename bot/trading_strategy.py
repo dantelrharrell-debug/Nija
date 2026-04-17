@@ -2021,7 +2021,7 @@ def _broker_type_is_critical(broker_type: "BrokerType") -> bool:  # noqa: F821
         try:
             crit = _get_broker_criticality(broker_type.value)
             # BrokerCriticality enum values are lowercase strings ("critical",
-            # "primary", …).  The comparison must be case-insensitive to avoid
+            # "primary", ...).  The comparison must be case-insensitive to avoid
             # a silent mismatch that marks every broker as OPTIONAL.
             crit_value = getattr(crit, "value", str(crit)).lower()
             return crit_value in ("critical", "primary")
