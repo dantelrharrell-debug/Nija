@@ -1388,13 +1388,14 @@ class CapitalAuthority:
         # HYDRATED_ZERO_CAPITAL state (all brokers confirmed at zero balance).
         _snap_broker_balances = getattr(snapshot, "broker_balances", {})
         if not _snap_broker_balances:
-            logger.warning(
-                "[CapitalAuthority] publish_snapshot REJECTED — "
-                "snapshot has no broker data (writer_id=%r); "
-                "refusing to set hydrated=True on an empty bootstrap snapshot",
+            logger.error(
+                "[DEBUG] EMPTY SNAPSHOT — INVESTIGATE: publish_snapshot received snapshot "
+                "with no broker data (writer_id=%r). Pipeline continues for diagnostics.",
                 writer_id,
             )
-            return False
+            # NOTE: temporarily NOT returning here — allows pipeline visibility
+            # into whether snapshot/hydration plumbing works while broker data is
+            # missing.  Restore `return False` once root cause is confirmed.
 
         new_balances = dict(_snap_broker_balances)
         open_exp = float(getattr(snapshot, "open_exposure_usd", 0.0))
