@@ -102,12 +102,13 @@ except ImportError:
 
 # Import CapitalAuthority singleton for unified multi-broker capital readiness
 try:
-    from bot.capital_authority import get_capital_authority
+    from bot.capital_authority import get_capital_authority, STARTUP_LOCK
 except ImportError:
     try:
-        from capital_authority import get_capital_authority
+        from capital_authority import get_capital_authority, STARTUP_LOCK  # type: ignore[assignment]
     except ImportError:
         get_capital_authority = None  # type: ignore[assignment]
+        STARTUP_LOCK = None  # type: ignore[assignment]
 
 # Import deterministic capital-flow infrastructure (coordinator + FSMs)
 try:
@@ -583,7 +584,14 @@ class MultiAccountBrokerManager:
         It is called automatically from :meth:`refresh_capital_authority` the
         first time ``ready=True`` is observed after broker registration.
         """
-        if self._startup_lock_released:
+        # Use the module-level STARTUP_LOCK event as the authoritative source of
+        # truth so that if CapitalAuthority released the lock directly (e.g. in a
+        # test) MABM still treats it as already done.  Sync the local bool so all
+        # subsequent checks (including the inline guard in refresh_capital_authority)
+        # see the consistent state without re-importing the event each time.
+        if self._startup_lock_released or (STARTUP_LOCK is not None and STARTUP_LOCK.is_set()):
+            if not self._startup_lock_released:
+                self._startup_lock_released = True  # sync local flag to event state
             logger.debug("[MABM] finalize_bootstrap_ready: startup lock already released — no-op")
             return
         # Verify prerequisite: broker registration must be complete.
@@ -1132,7 +1140,9 @@ class MultiAccountBrokerManager:
                 #   3. first feed batch processed (snapshot has real_capital > 0)
                 #   4. FSM initialized (bootstrap_ok confirmed above)
                 # ONLY NOW allow CapitalAllocationBrain + external refresh loops.
-                if not self._startup_lock_released:
+                # Check both the local flag and the authoritative STARTUP_LOCK event so
+                # that a direct CA release is also respected here.
+                if not self._startup_lock_released and not (STARTUP_LOCK is not None and STARTUP_LOCK.is_set()):
                     try:
                         self.finalize_bootstrap_ready()
                     except Exception as _slk_exc:
