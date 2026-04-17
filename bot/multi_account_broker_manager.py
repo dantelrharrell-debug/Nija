@@ -1226,41 +1226,29 @@ class MultiAccountBrokerManager:
                     broker_map[broker_type.value] = broker
                     continue
 
-                # ── Non-bootstrap path: legacy readiness checks ────────────────
-                broker_ready, reason = self._is_broker_ready_for_capital_refresh(
-                    broker_type,
-                    broker,
-                    trigger=trigger,
+                # ── Non-bootstrap path ────────────────────────────────────────
+                # Inclusion Contract: connection state is irrelevant for capital
+                # inclusion.  The ONLY gate is whether the broker has a balance
+                # payload.  If it does, it MUST appear in the snapshot.
+                has_payload = (
+                    getattr(broker, "_last_known_balance", None) is not None
+                    or getattr(broker, "has_balance_payload_for_capital", lambda: False)()
+                    or getattr(broker, "has_balance_payload", lambda: False)()
                 )
-                if not broker_ready:
+                if not has_payload:
                     logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=%s",
+                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=no_balance_payload",
                         trigger,
                         broker_type.value,
-                        reason,
                     )
                     continue
-                is_platform_ready = self.is_platform_connected(broker_type)
-                allow_bootstrap_connected = self._can_include_bootstrap_connected_broker(
-                    trigger=trigger,
-                    is_platform_ready=is_platform_ready,
-                    broker=broker,
+                logger.info(
+                    "[CapitalAuthorityRefresh] trigger=%s include broker=%s reason=has_payload"
+                    " (platform_connected=%s)",
+                    trigger,
+                    broker_type.value,
+                    self.is_platform_connected(broker_type),
                 )
-                if not (is_platform_ready or allow_bootstrap_connected):
-                    logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s skip broker=%s reason=platform_not_ready "
-                        "(bootstrap_trigger=%s)",
-                        trigger,
-                        broker_type.value,
-                        bootstrap_trigger,
-                    )
-                    continue
-                if allow_bootstrap_connected:
-                    logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s include broker=%s reason=bootstrap_connected",
-                        trigger,
-                        broker_type.value,
-                    )
                 broker_map[broker_type.value] = broker
 
             logger.info(
