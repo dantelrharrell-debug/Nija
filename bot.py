@@ -1962,6 +1962,59 @@ def _run_bot_startup_and_trading():
                 "waiting for startup capital > $0",
             )
 
+            # ── BOOTSTRAP MASTER SEQUENCE (single authority) ──────────────────
+            # Explicitly drive the single-authority capital refresh so that the
+            # CapitalAuthority singleton is hydrated before the capital gate
+            # polling loop begins.  This eliminates the race condition where
+            # dependent systems see INITIALIZING state because no coordinator
+            # call has fired yet.
+            #
+            #   mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
+            #   while not ca.is_hydrated:
+            #       time.sleep(0.1)
+            #   startup_lock.clear()   ← finalize_bootstrap_ready() equivalent
+            _bms_mabm = getattr(strategy, "multi_account_manager", None)
+            _bms_ca = None
+            try:
+                from bot.capital_authority import get_capital_authority as _get_ca_bms
+                _bms_ca = _get_ca_bms()
+            except Exception as _bms_import_err:
+                logger.warning("[Bootstrap] Failed to import bot.capital_authority: %s", _bms_import_err)
+                try:
+                    from capital_authority import get_capital_authority as _get_ca_bms  # type: ignore[assignment]
+                    _bms_ca = _get_ca_bms()
+                except Exception as _bms_import_err2:
+                    logger.warning("[Bootstrap] Failed to import capital_authority: %s", _bms_import_err2)
+            _bms_refresh_ok = False
+            if _bms_mabm is not None:
+                try:
+                    _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
+                    logger.info("[Bootstrap] BOOTSTRAP_START capital refresh triggered")
+                    _bms_refresh_ok = True
+                except Exception as _bms_err:
+                    logger.warning("[Bootstrap] BOOTSTRAP_START refresh error: %s", _bms_err)
+            if _bms_ca is not None and _bms_refresh_ok:
+                # 60 s covers typical cold-start broker API latency; the capital gate
+                # polling loop below handles the case where we proceed without hydration.
+                _bms_hydrate_start = time.monotonic()
+                _bms_hydrate_timeout = 60.0
+                while not _bms_ca.is_hydrated:
+                    if time.monotonic() - _bms_hydrate_start >= _bms_hydrate_timeout:
+                        logger.warning(
+                            "[Bootstrap] Capital hydration timeout (%.0fs) — proceeding",
+                            _bms_hydrate_timeout,
+                        )
+                        break
+                    time.sleep(0.1)
+                if _bms_ca.is_hydrated:
+                    logger.info("[Bootstrap] CapitalAuthority hydrated — releasing startup lock")
+                    if _bms_mabm is not None:
+                        try:
+                            _bms_mabm.finalize_bootstrap_ready()
+                        except Exception as _bms_fbr_err:
+                            logger.warning("[Bootstrap] finalize_bootstrap_ready error: %s", _bms_fbr_err)
+            # ── END BOOTSTRAP MASTER SEQUENCE ─────────────────────────────────
+
             def _get_startup_total_capital() -> float:
                 _mam = getattr(strategy, "multi_account_manager", None)
                 if _mam and hasattr(_mam, "get_all_balances"):
