@@ -44,19 +44,19 @@ logger = logging.getLogger("nija.capital_brain")
 # (``from bot.capital_allocation_brain import …``).
 # ---------------------------------------------------------------------------
 
-def _wait_for_capital_ready(timeout: float = 60.0) -> bool:
-    """Thin wrapper around :func:`capital_authority.wait_for_capital_ready`.
+def _wait_for_capital_hydrated(timeout: float = 30.0) -> bool:
+    """Thin wrapper around :func:`capital_authority.wait_for_capital_hydrated`.
 
-    The import is deferred to call-time because this module may be loaded
-    before the ``bot`` package root is on sys.path in some deployment
-    configurations.  Using a deferred try/except import mirrors the
-    pattern already in use throughout this file (see ``refresh_authority``).
+    Blocks until the CapitalAuthority has received its first snapshot (even a
+    zero-balance one).  This is the correct gate for Capital Brain init (FIX 4):
+    the brain must not start before the balance pipeline has run once, but it
+    should not be permanently blocked just because the account balance is zero.
     """
     try:
-        from bot.capital_authority import wait_for_capital_ready  # type: ignore[import]
+        from bot.capital_authority import wait_for_capital_hydrated  # type: ignore[import]
     except ImportError:
-        from capital_authority import wait_for_capital_ready  # type: ignore[import]
-    return wait_for_capital_ready(timeout=timeout)
+        from capital_authority import wait_for_capital_hydrated  # type: ignore[import]
+    return wait_for_capital_hydrated(timeout=timeout)
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -300,20 +300,22 @@ class CapitalAllocationBrain:
         )
 
         # Hard startup dependency barrier: CapitalAllocationBrain must NOT
-        # initialize until CapitalAuthority is ready.  Block synchronously until
-        # the authority reports positive capital AND at least one registered
-        # broker source.  This replaces the previous async bootstrap thread
-        # approach which allowed the brain to start with $0 capital.
+        # initialize until CapitalAuthority has been hydrated (FIX 4).
+        # Block until the coordinator has published at least one snapshot —
+        # even a zero-balance snapshot qualifies, because a zero balance is a
+        # valid confirmed state.  The old gate (_wait_for_capital_ready, which
+        # required real_capital > 0) permanently blocked initialization for
+        # genuinely empty accounts.
         if not self._explicit_total_capital:
             startup_timeout_s = _safe_float(
-                self.config.get("authority_startup_timeout_s", 60.0), 60.0
+                self.config.get("authority_startup_timeout_s", 30.0), 30.0
             )
             try:
-                _wait_for_capital_ready(timeout=startup_timeout_s)
+                _wait_for_capital_hydrated(timeout=startup_timeout_s)
             except RuntimeError as exc:
                 logger.warning(
                     "[CapitalAllocationBrain] %s — brain will initialize with $0 capital "
-                    "and recover asynchronously once the authority becomes ready "
+                    "and recover asynchronously once the authority becomes hydrated "
                     "(e.g. delayed broker connect).",
                     exc,
                 )
