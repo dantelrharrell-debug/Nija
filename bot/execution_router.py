@@ -68,6 +68,32 @@ logger = logging.getLogger("nija.execution_router")
 # Optional subsystem imports — each degrades gracefully if unavailable.
 # ---------------------------------------------------------------------------
 
+# Import canonical ExecutionResult contract for standardised EXECUTION_RESULT logging
+try:
+    from execution_result import (
+        ExecutionResult as _ExecResult,
+        OrderStatus as _OrderStatus,
+        log_execution_result as _log_exec_result,
+    )
+    _EXEC_RESULT_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.execution_result import (
+            ExecutionResult as _ExecResult,
+            OrderStatus as _OrderStatus,
+            log_execution_result as _log_exec_result,
+        )
+        _EXEC_RESULT_AVAILABLE = True
+    except ImportError:
+        _EXEC_RESULT_AVAILABLE = False
+        _ExecResult = None  # type: ignore
+        _OrderStatus = None  # type: ignore
+        _log_exec_result = None  # type: ignore
+
+# ---------------------------------------------------------------------------
+# Optional subsystem imports — each degrades gracefully if unavailable.
+# ---------------------------------------------------------------------------
+
 try:
     from exchange_kill_switch import get_exchange_kill_switch_protector
     _EKS_AVAILABLE = True
@@ -376,6 +402,33 @@ class ExecutionRouter:
                     )
             except Exception as _eil_exc:
                 logger.debug("ExecutionIntegrityLayer check skipped: %s", _eil_exc)
+
+        # ── Emit canonical EXECUTION_RESULT line ──────────────────────
+        if _EXEC_RESULT_AVAILABLE:
+            _order_id = result.metadata.get("order_id") if result.metadata else None
+            if result.success:
+                _exec_status = _OrderStatus.ACCEPTED
+                _error_code = None
+            elif result.error and any(
+                tok in result.error.upper()
+                for tok in ("REJECTED", "LIQUIDITY", "KILL", "INTEGRITY")
+            ):
+                _exec_status = _OrderStatus.REJECTED
+                _error_code = result.error[:120].upper().replace(" ", "_")
+            else:
+                _exec_status = _OrderStatus.FAILED
+                _error_code = (result.error or "UNKNOWN_FAILURE")[:120].upper().replace(" ", "_")
+
+            _log_exec_result(
+                _ExecResult(
+                    status=_exec_status,
+                    symbol=result.symbol,
+                    side=result.side,
+                    exchange_order_id=str(_order_id) if _order_id else None,
+                    error_code=_error_code,
+                    latency_ms=int(result.latency_ms),
+                )
+            )
 
         return result
 

@@ -12,8 +12,31 @@ import logging
 import sys
 import os
 import threading
+import time as _time
 
 logger = logging.getLogger("nija")
+
+# Import canonical ExecutionResult contract
+try:
+    from bot.execution_result import (
+        ExecutionResult as _ExecResult,
+        OrderStatus as _OrderStatus,
+        log_execution_result as _log_exec_result,
+    )
+    _EXEC_RESULT_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_result import (
+            ExecutionResult as _ExecResult,
+            OrderStatus as _OrderStatus,
+            log_execution_result as _log_exec_result,
+        )
+        _EXEC_RESULT_AVAILABLE = True
+    except ImportError:
+        _EXEC_RESULT_AVAILABLE = False
+        _ExecResult = None  # type: ignore
+        _OrderStatus = None  # type: ignore
+        _log_exec_result = None  # type: ignore
 
 # Import Execution Intelligence Layer
 try:
@@ -569,6 +592,80 @@ class ExecutionEngine:
 
         return fee
 
+    # ── Execution Result Contract ──────────────────────────────────────────────
+
+    def _emit_execution_result(
+        self,
+        symbol: str,
+        side: str,
+        broker_response: Optional[Dict],
+        t0: float,
+        exc: Optional[Exception] = None,
+    ) -> None:
+        """
+        Build and log the canonical EXECUTION_RESULT line for a single order.
+
+        Parameters
+        ----------
+        symbol:
+            Trading pair, e.g. ``"BTC-USD"``.
+        side:
+            ``"buy"`` or ``"sell"``.
+        broker_response:
+            Raw dict returned by the broker client, or ``None`` on exception.
+        t0:
+            ``time.monotonic()`` timestamp captured just before calling the
+            broker so that latency can be calculated.
+        exc:
+            Exception raised by the broker call if any (``None`` on success).
+        """
+        if not _EXEC_RESULT_AVAILABLE:
+            return
+
+        latency_ms = int((_time.monotonic() - t0) * 1000)
+
+        if exc is not None:
+            # Broker call raised — classify as FAILED
+            result = _ExecResult(
+                status=_OrderStatus.FAILED,
+                symbol=symbol,
+                side=side,
+                exchange_order_id=None,
+                error_code=str(exc)[:120],
+                latency_ms=latency_ms,
+            )
+        elif broker_response is None or broker_response.get("status") == "error":
+            error_token = "UNKNOWN_REJECTION"
+            if broker_response:
+                raw_err = broker_response.get("error", "")
+                if raw_err:
+                    # Shorten to a compact token for the log line
+                    error_token = str(raw_err)[:120].upper().replace(" ", "_")
+            result = _ExecResult(
+                status=_OrderStatus.REJECTED,
+                symbol=symbol,
+                side=side,
+                exchange_order_id=None,
+                error_code=error_token,
+                latency_ms=latency_ms,
+            )
+        else:
+            order_id = (
+                broker_response.get("order_id")
+                or broker_response.get("id")
+                or broker_response.get("client_order_id")
+            )
+            result = _ExecResult(
+                status=_OrderStatus.ACCEPTED,
+                symbol=symbol,
+                side=side,
+                exchange_order_id=str(order_id) if order_id else None,
+                error_code=None,
+                latency_ms=latency_ms,
+            )
+
+        _log_exec_result(result)
+
     def execute_entry(self, symbol: str, side: str, position_size: float,
                      entry_price: float, stop_loss: float,
                      take_profit_levels: Dict[str, float]) -> Optional[Dict]:
@@ -795,6 +892,8 @@ class ExecutionEngine:
                         f"   📊 Dynamic order type: LIMIT @ ${_limit_price:.6f} "
                         f"(liquidity/volatility-driven, qty={_base_qty:.8f})"
                     )
+                    _entry_t0 = _time.monotonic()
+                    _entry_exc: Optional[Exception] = None
                     try:
                         result = self.broker_client.place_limit_order(
                             symbol=symbol,
@@ -807,18 +906,23 @@ class ExecutionEngine:
                             f"   ⚠️ Limit order raised exception for {symbol}: {_limit_exc}, "
                             f"falling back to market order"
                         )
+                        _entry_exc = _limit_exc
                         result = None
+                    # Emit result for the limit attempt (before fallback)
+                    self._emit_execution_result(symbol, order_side, result, _entry_t0, _entry_exc)
                     # If the limit order fails or errors, fall back to a market order
                     if result is None or result.get('status') == 'error':
                         logger.warning(
                             f"   ⚠️ Limit order failed for {symbol}, "
                             f"falling back to market order"
                         )
+                        _entry_t0 = _time.monotonic()
                         result = self.broker_client.place_market_order(
                             symbol=symbol,
                             side=order_side,
                             quantity=position_size
                         )
+                        self._emit_execution_result(symbol, order_side, result, _entry_t0)
                 else:
                     # Determine why market order is being used for the log message
                     if execution_plan is None:
@@ -828,11 +932,13 @@ class ExecutionEngine:
                     else:
                         _order_reason = "broker does not support limit orders"
                     logger.info(f"   📊 Dynamic order type: MARKET ({_order_reason})")
+                    _entry_t0 = _time.monotonic()
                     result = self.broker_client.place_market_order(
                         symbol=symbol,
                         side=order_side,
                         quantity=position_size
                     )
+                    self._emit_execution_result(symbol, order_side, result, _entry_t0)
 
                 # Log the raw result for debugging
                 logger.debug(f"   Order result status: {result.get('status', 'N/A')}")
@@ -1157,11 +1263,13 @@ class ExecutionEngine:
                 # Place exit order via broker
                 if self.broker_client:
                     order_side = 'sell' if position['side'] == 'long' else 'buy'
+                    _exit_t0 = _time.monotonic()
                     result = self.broker_client.place_market_order(
                         symbol=symbol,
                         side=order_side,
                         quantity=exit_size
                     )
+                    self._emit_execution_result(symbol, order_side, result, _exit_t0)
 
                     if result.get('status') == 'error':
                         error_msg = result.get('error')
