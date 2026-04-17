@@ -564,8 +564,11 @@ class MultiAccountBrokerManager:
         for broker_type, broker in broker_items:
             if not getattr(broker, "connected", False):
                 logger.debug(
-                    "[MABM] _force_minimal_capital_snapshot: skipping disconnected broker=%s",
+                    "[MABM] _force_minimal_capital_snapshot: skipping broker=%s "
+                    "(connected=%s last_balance=%s)",
                     broker_type.value,
+                    getattr(broker, "connected", None),
+                    getattr(broker, "_last_known_balance", None),
                 )
                 continue
             raw = getattr(broker, "_last_known_balance", None)
@@ -586,11 +589,14 @@ class MultiAccountBrokerManager:
                 continue
             try:
                 if isinstance(raw, dict):
+                    # Use explicit None-checks so zero values (e.g. exactly 0.0
+                    # in "trading_balance") are not silently skipped.
+                    tb = raw.get("trading_balance")
+                    tf = raw.get("total_funds")
                     scalar = float(
-                        raw.get("trading_balance")
-                        or raw.get("total_funds")
-                        or (raw.get("usd", 0.0) + raw.get("usdc", 0.0))
-                        or 0.0
+                        tb if tb is not None
+                        else tf if tf is not None
+                        else (raw.get("usd", 0.0) + raw.get("usdc", 0.0))
                     )
                 else:
                     scalar = float(raw)
@@ -609,13 +615,13 @@ class MultiAccountBrokerManager:
             return None
 
         try:
-            _gca = get_capital_authority() if get_capital_authority is not None else None
+            _gca = get_capital_authority() if get_capital_authority else None
             reserve_pct = float(getattr(_gca, "_reserve_pct", 0.02)) if _gca is not None else 0.02
         except Exception:
             reserve_pct = 0.02
 
         usable = real * (1.0 - reserve_pct)
-        risk = max(0.0, usable)
+        risk_capital = max(0.0, usable)
         now = datetime.now(timezone.utc)
         expected = max(1, len(broker_balances))
         confidence = CapitalConfidence.compute(
@@ -626,7 +632,7 @@ class MultiAccountBrokerManager:
         snapshot = CapitalSnapshot(
             real_capital=real,
             usable_capital=usable,
-            risk_capital=risk,
+            risk_capital=risk_capital,
             open_exposure_usd=0.0,
             reserve_pct=reserve_pct,
             broker_balances=broker_balances,
@@ -972,26 +978,31 @@ class MultiAccountBrokerManager:
         #   3. Lift _broker_registration_complete and finalize_bootstrap_ready()
         #      so the normal pipeline takes over immediately afterward.
         #
-        # Double-checked locking ensures only one thread ever executes this
-        # block.  The outer fast-path check is unsynchronised (acceptable: both
-        # booleans are written under _bootstrap_seed_lock and are monotonically
-        # False→True).
+        # Double-checked locking (DCL) pattern: the outer unsynchronised read
+        # of _bootstrap_seed_done is safe because the flag transitions
+        # monotonically False → True under _bootstrap_seed_lock and Python's
+        # GIL guarantees that a plain bool read/write is atomic.  Multiple
+        # threads may pass the outer gate before the first one sets the flag,
+        # but they immediately contend on _bootstrap_seed_lock and the inner
+        # check serialises them — only the first thread runs the seed block.
         if not self._startup_lock_is_set() and not self._bootstrap_seed_done and self._is_bootstrap_trigger(trigger):
             with self._bootstrap_seed_lock:
                 if not self._bootstrap_seed_done:
                     self._bootstrap_seed_done = True
                     _seed_snapshot = self._force_minimal_capital_snapshot()
                     if _seed_snapshot is not None:
-                        try:
-                            _authority = get_capital_authority()
-                            from bot.capital_flow_state_machine import WRITER_ID as _WRITER_ID
-                        except ImportError:
+                        # Resolve authority and writer_id via the same deferred
+                        # import pattern used throughout this module.
+                        _authority = get_capital_authority() if get_capital_authority else None
+                        _WRITER_ID: Optional[str] = None
+                        for _fsm_mod in ("bot.capital_flow_state_machine", "capital_flow_state_machine"):
                             try:
-                                from capital_flow_state_machine import WRITER_ID as _WRITER_ID  # type: ignore[import]
-                                _authority = get_capital_authority()
+                                _WRITER_ID = __import__(
+                                    _fsm_mod, fromlist=["WRITER_ID"]
+                                ).WRITER_ID
+                                break
                             except ImportError:
-                                _WRITER_ID = None
-                                _authority = None
+                                continue
                         if _authority is not None and _WRITER_ID is not None:
                             _accepted = _authority.publish_snapshot(_seed_snapshot, writer_id=_WRITER_ID)
                             if _accepted:
