@@ -83,6 +83,15 @@ except ImportError:
     CapitalAllocationBrain = None  # type: ignore
     logger.warning("CapitalAllocationBrain not available – capital allocation AI disabled")
 
+try:
+    from multi_account_broker_manager import get_broker_manager as _get_broker_manager
+except ImportError:
+    try:
+        from bot.multi_account_broker_manager import get_broker_manager as _get_broker_manager
+    except ImportError:
+        _get_broker_manager = None  # type: ignore
+        logger.warning("get_broker_manager not available – broker registry hard block disabled")
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -238,6 +247,23 @@ class AIIntelligenceHub:
         self.capital_brain: Optional[CapitalAllocationBrain] = None
         if CAPITAL_BRAIN_AVAILABLE:
             brain_config = self.config.get("capital_brain", {})
+            # Hard block: broker registry must be non-empty before initialising
+            # CapitalAllocationBrain.  An empty registry means no platform broker
+            # has been registered yet, which produces phantom $0-capital routing
+            # and false-ready trading states.  Force registration now and assert
+            # the invariant before proceeding.
+            if _get_broker_manager is not None:
+                _mabm = _get_broker_manager()
+                if not _mabm.has_registered_brokers():
+                    logger.critical(
+                        "[STARTUP ORDER] Broker registry empty; "
+                        "forcing platform broker registration before CapitalAllocationBrain init"
+                    )
+                    _mabm.initialize_platform_brokers()
+                assert _mabm.has_registered_brokers(), (
+                    "CapitalAllocationBrain must not be initialized until broker_registry is "
+                    "non-empty (startup order violation)"
+                )
             self.capital_brain = CapitalAllocationBrain(brain_config)
             logger.info("✅ [AI Hub] Capital Allocation Brain initialised (dynamic Sharpe-weighted routing)")
         else:
