@@ -1489,64 +1489,66 @@ def _run_bot_startup_and_trading():
             logger.info("=" * 70)
             try:
                 import importlib.util as _iutil
-                _cv_spec = _iutil.spec_from_file_location(
-                    "validate_broker_credentials",
-                    os.path.join(os.path.dirname(__file__), "validate_broker_credentials.py"),
-                )
-                if _cv_spec and _cv_spec.loader:
-                    _cv_mod = _iutil.module_from_spec(_cv_spec)
-                    _cv_spec.loader.exec_module(_cv_mod)
-
-                    _cv_results = [v() for v in [
-                        _cv_mod._validate_kraken_platform,
-                        _cv_mod._validate_coinbase,
-                        _cv_mod._validate_alpaca,
-                        _cv_mod._validate_binance,
-                        _cv_mod._validate_okx,
-                    ]]
-
-                    _cv_configured = sum(1 for r in _cv_results if r["configured"])
-                    _cv_errors     = sum(1 for r in _cv_results if r["configured"] and not r["valid"])
-                    _cv_by_broker = {r.get("broker", "").lower(): r for r in _cv_results}
-                    _kraken_credentials_valid = _kraken_credentials_valid and bool(
-                        (_cv_by_broker.get("kraken (platform)") or {}).get("valid", False)
-                    )
-
-                    for _r in _cv_results:
-                        if not _r["configured"]:
-                            logger.info("   ⚪ %-22s not configured (skipped)", _r["broker"])
-                            continue
-                        if _r["valid"]:
-                            logger.info("   ✅ %-22s credentials look valid", _r["broker"])
-                        else:
-                            logger.error("   ❌ %-22s CREDENTIAL ERRORS:", _r["broker"])
-                            for _issue in _r["issues"]:
-                                logger.error("      → %s", _issue)
-                        for _warn in _r.get("warnings", []):
-                            logger.warning("      ⚠️  %s", _warn)
-
-                    if _cv_configured == 0:
-                        logger.error("=" * 70)
-                        logger.error("❌ CREDENTIAL VALIDATION: No broker credentials configured")
-                        logger.error("   The bot cannot trade without at least one broker.")
-                        logger.error("   See CREDENTIAL_SETUP.md for step-by-step instructions.")
-                        logger.error("=" * 70)
-                    elif _cv_errors > 0:
-                        logger.warning("=" * 70)
-                        logger.warning(
-                            "⚠️  CREDENTIAL VALIDATION: %d broker(s) have credential errors",
-                            _cv_errors,
-                        )
-                        logger.warning("   These brokers will likely fail to connect.")
-                        logger.warning("   Common fixes:")
-                        logger.warning("     • Kraken 'EAPI:Invalid nonce'  → run reset_kraken_nonce.py")
-                        logger.warning("     • Coinbase 401 Unauthorized    → check PEM newlines in secret")
-                        logger.warning("     • Missing credentials          → see CREDENTIAL_SETUP.md")
-                        logger.warning("=" * 70)
-                    else:
-                        logger.info("✅ CREDENTIAL VALIDATION: All configured brokers passed")
-                else:
+                _cv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validate_broker_credentials.py")
+                if not os.path.isfile(_cv_path):
                     logger.info("ℹ️  validate_broker_credentials.py not found — skipping external validation")
+                else:
+                    _cv_spec = _iutil.spec_from_file_location(
+                        "validate_broker_credentials",
+                        _cv_path,
+                    )
+                    if _cv_spec and _cv_spec.loader:
+                        _cv_mod = _iutil.module_from_spec(_cv_spec)
+                        _cv_spec.loader.exec_module(_cv_mod)
+
+                        _cv_results = [v() for v in [
+                            _cv_mod._validate_kraken_platform,
+                            _cv_mod._validate_coinbase,
+                            _cv_mod._validate_alpaca,
+                            _cv_mod._validate_binance,
+                            _cv_mod._validate_okx,
+                        ]]
+
+                        _cv_configured = sum(1 for r in _cv_results if r["configured"])
+                        _cv_errors     = sum(1 for r in _cv_results if r["configured"] and not r["valid"])
+                        _cv_by_broker = {r.get("broker", "").lower(): r for r in _cv_results}
+                        _kraken_credentials_valid = _kraken_credentials_valid and bool(
+                            (_cv_by_broker.get("kraken (platform)") or {}).get("valid", False)
+                        )
+
+                        for _r in _cv_results:
+                            if not _r["configured"]:
+                                logger.info("   ⚪ %-22s not configured (skipped)", _r["broker"])
+                                continue
+                            if _r["valid"]:
+                                logger.info("   ✅ %-22s credentials look valid", _r["broker"])
+                            else:
+                                logger.error("   ❌ %-22s CREDENTIAL ERRORS:", _r["broker"])
+                                for _issue in _r["issues"]:
+                                    logger.error("      → %s", _issue)
+                            for _warn in _r.get("warnings", []):
+                                logger.warning("      ⚠️  %s", _warn)
+
+                        if _cv_configured == 0:
+                            logger.error("=" * 70)
+                            logger.error("❌ CREDENTIAL VALIDATION: No broker credentials configured")
+                            logger.error("   The bot cannot trade without at least one broker.")
+                            logger.error("   See CREDENTIAL_SETUP.md for step-by-step instructions.")
+                            logger.error("=" * 70)
+                        elif _cv_errors > 0:
+                            logger.warning("=" * 70)
+                            logger.warning(
+                                "⚠️  CREDENTIAL VALIDATION: %d broker(s) have credential errors",
+                                _cv_errors,
+                            )
+                            logger.warning("   These brokers will likely fail to connect.")
+                            logger.warning("   Common fixes:")
+                            logger.warning("     • Kraken 'EAPI:Invalid nonce'  → run reset_kraken_nonce.py")
+                            logger.warning("     • Coinbase 401 Unauthorized    → check PEM newlines in secret")
+                            logger.warning("     • Missing credentials          → see CREDENTIAL_SETUP.md")
+                            logger.warning("=" * 70)
+                        else:
+                            logger.info("✅ CREDENTIAL VALIDATION: All configured brokers passed")
             except Exception as _cv_err:
                 logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
 
@@ -1794,6 +1796,7 @@ def _run_bot_startup_and_trading():
                 _initialized_state["coinbase_sdk_available"] = _coinbase_sdk_available
 
             logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
+            logger.critical("🔥 SENTINEL A: entered INIT section")
             if _startup_buffer:
                 _startup_buffer.flush_phase("PREFLIGHT")
 
@@ -2203,8 +2206,10 @@ def _run_bot_startup_and_trading():
                 )
                 return 0.0
 
+            logger.critical("🔥 SENTINEL B: entering capital gate")
             _capital_gate_deadline = time.time() + 60
             while True:
+                logger.critical("🔥 SENTINEL C: capital loop iteration")
                 try:
                     _total_capital = _get_startup_total_capital()
                 except Exception as _cap_gate_err:
