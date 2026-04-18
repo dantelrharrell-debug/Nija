@@ -1108,6 +1108,8 @@ class SelfHealingStartup:
         self._cfg              = config or StartupConfig()
         self.pre_halt_engine   = PreHaltAlertEngine(self._cfg)
         self._broker_ctrl      = BrokerFallbackController(self._cfg)
+        self._sm_lock          = threading.Lock()
+        self._sm_started: bool = False
 
     # ── Public entry point ─────────────────────────────────────────────────
 
@@ -1122,6 +1124,8 @@ class SelfHealingStartup:
         logger.info("🚀  NIJA Self-Healing Startup — beginning boot sequence")
         logger.info("=" * 60)
 
+        # Step 1: State machine
+        self.start_state_machine()
         # Step 1: State machine — HARD REQUIREMENT: must start before anything else
         # Direct synchronous call only; never via thread, scheduler, or async fire-and-forget.
         logger.critical("BOOT: forcing state machine entry")
@@ -1243,7 +1247,7 @@ class SelfHealingStartup:
                             _ca_exc,
                         )
 
-                self._step_state_machine()
+                self.start_state_machine()
 
                 if self._is_ca_ready() or self._is_live_active():
                     logger.info("✅ CA_READY RESOLVED — exiting post-connection loop")
@@ -1261,7 +1265,7 @@ class SelfHealingStartup:
         if startup_result.ok:
             logger.info("🚀 PREFLIGHT COMPLETE → ENTERING RUNTIME BOOTSTRAP")
             for _ in range(_MAX_STATE_TRANSITION_ATTEMPTS):
-                self._step_state_machine()
+                self.start_state_machine()
                 if self._is_live_active():
                     break
             if not self._is_live_active():
@@ -1360,8 +1364,27 @@ class SelfHealingStartup:
             return True
 
         logger.warning("⚠️ CA or LIVE state degraded — forcing re-evaluation")
-        self._step_state_machine()
+        self.start_state_machine()
         return False
+
+    def start_state_machine(self) -> None:
+        """Single-authority entry point for the state machine.
+
+        Guarantees the state machine is invoked at most once per
+        :class:`SelfHealingStartup` instance.  Thread-safe: a
+        :class:`threading.Lock` prevents concurrent invocations from multiple
+        call sites from both entering :meth:`_step_state_machine` simultaneously.
+        """
+        logger.critical("BOOT: unified state machine entry")
+
+        with self._sm_lock:
+            if self._sm_started:
+                logger.critical("BOOT: state machine already started — skipping")
+                return
+
+            self._sm_started = True
+
+        self._step_state_machine()
 
     def _step_state_machine(self) -> None:
         """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
@@ -1475,7 +1498,7 @@ class SelfHealingStartup:
                 "SelfHealingStartup: CA watchdog detected stale/unready CA "
                 "— re-running state machine for self-heal"
             )
-            self._step_state_machine()
+            self.start_state_machine()
         return ready
 
     def _log_nonce_report(self, report: NoncePoisonReport) -> None:
