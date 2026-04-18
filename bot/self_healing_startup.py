@@ -1353,6 +1353,7 @@ class SelfHealingStartup:
 
     def _step_state_machine(self) -> None:
         """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
+        logger.critical("B2 ENTERING_NEXT_PREFLIGHT_STAGE")
         if not _STATE_MACHINE_AVAILABLE:
             return
 

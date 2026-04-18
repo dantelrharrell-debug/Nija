@@ -2163,6 +2163,8 @@ class KrakenNonceManager:
                 self._pid_lock_file,
                 stale_pid,
             )
+            _logger.critical("B0 AFTER_NONCE_CLEANUP_REACHED")
+            _logger.critical("B1 BEFORE_PREFLIGHT_CONTINUE")
             return True
         except FileNotFoundError:
             return True
