@@ -111,6 +111,17 @@ except ImportError:
     get_startup_readiness_gate = None  # type: ignore[assignment]
 
 try:
+    from capital_authority import get_capital_authority as _get_capital_authority
+    _CA_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.capital_authority import get_capital_authority as _get_capital_authority  # type: ignore[import]
+        _CA_AVAILABLE = True
+    except ImportError:
+        _get_capital_authority = None  # type: ignore[assignment]
+        _CA_AVAILABLE = False
+
+try:
     from broker_manager import (
         KrakenBroker,
         CoinbaseBroker,
@@ -155,6 +166,11 @@ except Exception:
     _BROKER_REGISTRY_AVAILABLE = False
 
 
+# Poll interval (seconds) used by the post-connection CA readiness loop.
+# Intentionally faster than the watchdog_interval_s (default 60 s) so startup
+# converges quickly; the background watchdog takes over once the loop exits.
+_CA_POLL_INTERVAL_S: float = 3.0
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -192,7 +208,9 @@ class StartupConfig:
     # ── Pre-halt alerting ──────────────────────────────────────────────────
     # How many seconds before a trading halt to fire the pre-halt warning
     pre_halt_warn_s: float    = float(os.environ.get("NIJA_SHS_PREHALT_WARN_S", "300"))
-    # Watchdog: poll broker health every N seconds
+    # Watchdog: poll broker health every N seconds (also used for CA-readiness
+    # watchdog — separate from the 3-second post-connection polling loop which
+    # is intentionally faster for startup convergence)
     watchdog_interval_s: float = float(os.environ.get("NIJA_SHS_WATCHDOG_S", "60"))
     # How many consecutive watchdog failures before triggering a halt warning
     watchdog_max_failures: int = int(os.environ.get("NIJA_SHS_WATCHDOG_FAILURES", "3"))
@@ -1159,6 +1177,15 @@ class SelfHealingStartup:
                 name=f"{startup_result.broker_name}_health",
                 fn=lambda: getattr(broker, "connected", True),
             )
+            # Fix #3: CA-readiness watchdog re-entry — if CA becomes stale after
+            # startup the watchdog re-runs the state machine to recover silently
+            # without requiring a full restart.
+            self.pre_halt_engine.register_watchdog(
+                name="ca_readiness",
+                fn=self._ca_watchdog_fn,
+                interval_s=self._cfg.watchdog_interval_s,
+                max_failures=1,
+            )
             self.pre_halt_engine.start()
             logger.info("PreHaltAlertEngine: watchdog started for %s", startup_result.broker_name)
 
@@ -1170,14 +1197,40 @@ class SelfHealingStartup:
             except Exception as exc:
                 logger.debug("SelfHealingStartup: readiness gate signal failed (%s)", exc)
 
-        # Step 7: Re-evaluate state machine now that the broker is connected and
-        # CapitalAuthority has been hydrated by initialize_platform_brokers() →
-        # enforce_trading_bootstrap_contract() → refresh_capital_authority().
-        # The Step-1 call runs before any broker is registered so CA is always
-        # stale there; this second call runs after CA is fresh and can actually
-        # succeed (OFF → LIVE_ACTIVE via maybe_auto_activate()).
+        # Step 7: HARD POST-CONNECTION READINESS LOOP
+        # Repeatedly refresh CapitalAuthority and step the state machine until
+        # CA is confirmed ready (or the bot is already LIVE_ACTIVE), preventing
+        # the silent stall where the broker is connected but the state machine
+        # never observes a fresh CA snapshot and sits idle forever.
         if startup_result.ok:
-            self._step_state_machine()
+            import time as _time
+
+            _ca_timeout_s = 60
+            _ca_start = _time.time()
+
+            logger.info("🔁 Post-connection CA readiness loop started")
+
+            while _time.time() - _ca_start < _ca_timeout_s:
+                # Force CA refresh before each state-machine evaluation
+                if _MABM_AVAILABLE and _mabm is not None:
+                    try:
+                        if hasattr(_mabm, "refresh_capital_authority"):
+                            _mabm.refresh_capital_authority(trigger="post_connection_gate")
+                    except Exception as _ca_exc:
+                        logger.warning(
+                            "Failed to refresh CapitalAuthority in post-connection loop: %s",
+                            _ca_exc,
+                        )
+
+                self._step_state_machine()
+
+                if self._is_ca_ready() or self._is_live_active():
+                    logger.info("✅ CA_READY RESOLVED — exiting post-connection loop")
+                    break
+
+                _time.sleep(_CA_POLL_INTERVAL_S)
+            else:
+                logger.critical("🚨 CA_READY TIMEOUT — bot stuck in pre-trade state")
 
         if startup_result.ok:
             mode = "FALLBACK" if startup_result.on_fallback else "PRIMARY"
@@ -1278,6 +1331,40 @@ class SelfHealingStartup:
                 )
         except Exception as exc:
             logger.warning("SelfHealingStartup: state machine step failed (%s)", exc)
+
+    def _is_live_active(self) -> bool:
+        """Return True if the trading state machine has reached LIVE_ACTIVE."""
+        if not _STATE_MACHINE_AVAILABLE or get_state_machine is None:
+            return False
+        try:
+            return get_state_machine().get_current_state() == TradingState.LIVE_ACTIVE
+        except Exception:
+            return False
+
+    def _is_ca_ready(self) -> bool:
+        """Return True when CapitalAuthority holds at least one usable broker balance."""
+        if not _CA_AVAILABLE or _get_capital_authority is None:
+            return False
+        try:
+            return _get_capital_authority().is_ready()
+        except Exception:
+            return False
+
+    def _ca_watchdog_fn(self) -> bool:
+        """Watchdog probe: True = CA healthy.  On failure, re-run the state machine.
+
+        Called periodically by :class:`PreHaltAlertEngine`.  When CA is not
+        ready the watchdog fires ``_step_state_machine()`` so the bot recovers
+        from a post-startup stall without requiring a manual restart.
+        """
+        ready = self._is_ca_ready() or self._is_live_active()
+        if not ready:
+            logger.warning(
+                "SelfHealingStartup: CA watchdog detected stale/unready CA "
+                "— re-running state machine for self-heal"
+            )
+            self._step_state_machine()
+        return ready
 
     def _log_nonce_report(self, report: NoncePoisonReport) -> None:
         """Log the nonce poison report at an appropriate level."""
