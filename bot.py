@@ -2171,15 +2171,36 @@ def _run_bot_startup_and_trading():
                 _mam = getattr(strategy, "multi_account_manager", None)
                 if _mam and hasattr(_mam, "get_all_balances"):
                     _all_balances = _mam.get_all_balances()
-                    _platform_total = sum((_all_balances.get("platform") or {}).values())
+                    _platform_raw = _all_balances.get("platform") or {}
+                    _users_raw = _all_balances.get("users") or {}
+                    _platform_total = sum(_platform_raw.values())
                     _users_total = sum(
                         sum((_user_balances or {}).values())
-                        for _user_balances in (_all_balances.get("users") or {}).values()
+                        for _user_balances in _users_raw.values()
+                    )
+                    logger.debug(
+                        "[CapGate] path=MAM  platform=%s platform_total=%.4f  "
+                        "users=%s users_total=%.4f",
+                        _platform_raw,
+                        _platform_total,
+                        {u: dict(v or {}) for u, v in _users_raw.items()},
+                        _users_total,
                     )
                     return float(_platform_total + _users_total)
                 _bm = getattr(strategy, "broker_manager", None)
                 if _bm and hasattr(_bm, "get_total_balance"):
-                    return float(_bm.get_total_balance())
+                    _bm_total = float(_bm.get_total_balance())
+                    logger.debug(
+                        "[CapGate] path=BM  broker_manager=%s  total=%.4f",
+                        type(_bm).__name__,
+                        _bm_total,
+                    )
+                    return _bm_total
+                logger.debug(
+                    "[CapGate] path=NONE  multi_account_manager=%s  broker_manager=%s",
+                    type(getattr(strategy, "multi_account_manager", None)).__name__,
+                    type(getattr(strategy, "broker_manager", None)).__name__,
+                )
                 return 0.0
 
             while True:
@@ -2203,16 +2224,85 @@ def _run_bot_startup_and_trading():
                     break
 
                 capital_gate_checks += 1
-                if (
+                _should_log_gate = (
                     capital_gate_checks == 1
                     or capital_gate_checks % CAPITAL_GATE_LOG_EVERY_N_CHECKS == 0
-                ):
+                )
+                if _should_log_gate:
                     logger.warning(
                         "⏳ Trading loop blocked: waiting for total capital > $0 "
-                        "(current=$%.2f, next check in %ds)",
+                        "(current=$%.2f, check=#%d, next check in %ds)",
                         _total_capital,
+                        capital_gate_checks,
                         CAPITAL_GATE_INTERVAL_S,
                     )
+                    # ── Diagnostic: report the exact execution path that returned $0 ──
+                    _diag_mam = getattr(strategy, "multi_account_manager", None)
+                    _diag_bm = getattr(strategy, "broker_manager", None)
+                    logger.warning(
+                        "[CapGate-Diag] multi_account_manager=%s  broker_manager=%s",
+                        type(_diag_mam).__name__ if _diag_mam is not None else "None",
+                        type(_diag_bm).__name__ if _diag_bm is not None else "None",
+                    )
+                    if _diag_mam is not None:
+                        try:
+                            _diag_balances = _diag_mam.get_all_balances()
+                            logger.warning(
+                                "[CapGate-Diag] MAM.get_all_balances()=%s",
+                                _diag_balances,
+                            )
+                        except Exception as _diag_bal_err:
+                            logger.warning(
+                                "[CapGate-Diag] MAM.get_all_balances() raised: %s",
+                                _diag_bal_err,
+                            )
+                        _diag_has_reg = getattr(_diag_mam, "has_registered_brokers", None)
+                        _diag_has_conn = getattr(_diag_mam, "has_attempted_connections", None)
+                        logger.warning(
+                            "[CapGate-Diag] MAM.has_registered_brokers=%s  "
+                            "MAM.has_attempted_connections=%s",
+                            _diag_has_reg() if callable(_diag_has_reg) else _diag_has_reg,
+                            _diag_has_conn() if callable(_diag_has_conn) else _diag_has_conn,
+                        )
+                    if _diag_bm is not None:
+                        try:
+                            logger.warning(
+                                "[CapGate-Diag] BM.get_total_balance()=%.4f",
+                                float(_diag_bm.get_total_balance()),
+                            )
+                        except Exception as _diag_bm_err:
+                            logger.warning(
+                                "[CapGate-Diag] BM.get_total_balance() raised: %s",
+                                _diag_bm_err,
+                            )
+                    # ── Diagnostic: CapitalAuthority hydration state ──────────────
+                    if _bms_ca is not None:
+                        try:
+                            logger.warning(
+                                "[CapGate-Diag] CapitalAuthority.is_hydrated=%s  "
+                                "state=%s  total_capital=%.4f",
+                                _bms_ca.is_hydrated,
+                                getattr(_bms_ca, "state", "N/A"),
+                                float(getattr(_bms_ca, "total_capital", 0) or 0),
+                            )
+                        except Exception as _diag_ca_err:
+                            logger.warning(
+                                "[CapGate-Diag] CapitalAuthority probe raised: %s",
+                                _diag_ca_err,
+                            )
+                    # ── Diagnostic: trading state machine current state ───────────
+                    try:
+                        from bot.trading_state_machine import get_state_machine as _get_tsm_diag
+                        _tsm_diag = _get_tsm_diag()
+                        logger.warning(
+                            "[CapGate-Diag] TradingStateMachine.state=%s",
+                            _tsm_diag.get_current_state().value,
+                        )
+                    except Exception as _diag_tsm_err:
+                        logger.warning(
+                            "[CapGate-Diag] TradingStateMachine probe raised: %s",
+                            _diag_tsm_err,
+                        )
                 time.sleep(CAPITAL_GATE_INTERVAL_S)
             logger.info("=" * 70)
             # ── B: Phase 3 → 4 (strategy engine ready; execution layer may begin) ──
