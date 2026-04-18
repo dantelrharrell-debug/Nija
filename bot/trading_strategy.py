@@ -158,12 +158,12 @@ except ImportError:
 try:
     from recovery_controller import get_recovery_controller, FailureState
     RECOVERY_CONTROLLER_AVAILABLE = True
-    logger.info("✅ Recovery Controller loaded - Capital-first safety layer active")
+    logger.debug("✅ Recovery Controller loaded - Capital-first safety layer active")
 except ImportError:
     try:
         from bot.recovery_controller import get_recovery_controller, FailureState
         RECOVERY_CONTROLLER_AVAILABLE = True
-        logger.info("✅ Recovery Controller loaded - Capital-first safety layer active")
+        logger.debug("✅ Recovery Controller loaded - Capital-first safety layer active")
     except ImportError:
         RECOVERY_CONTROLLER_AVAILABLE = False
         logger.warning("⚠️ Recovery Controller not available - safety layer disabled")
@@ -174,12 +174,12 @@ except ImportError:
 try:
     from always_trade_mode import get_always_trade_mode
     ALWAYS_TRADE_MODE_AVAILABLE = True
-    logger.info("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
+    logger.debug("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
 except ImportError:
     try:
         from bot.always_trade_mode import get_always_trade_mode
         ALWAYS_TRADE_MODE_AVAILABLE = True
-        logger.info("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
+        logger.debug("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
     except ImportError:
         ALWAYS_TRADE_MODE_AVAILABLE = False
         get_always_trade_mode = None  # type: ignore
@@ -188,12 +188,12 @@ except ImportError:
 try:
     from true_capital_scaler import get_true_capital_scaler
     TRUE_CAPITAL_SCALER_AVAILABLE = True
-    logger.info("✅ True Capital Scaling Engine loaded — structured compounding active")
+    logger.debug("✅ True Capital Scaling Engine loaded — structured compounding active")
 except ImportError:
     try:
         from bot.true_capital_scaler import get_true_capital_scaler
         TRUE_CAPITAL_SCALER_AVAILABLE = True
-        logger.info("✅ True Capital Scaling Engine loaded — structured compounding active")
+        logger.debug("✅ True Capital Scaling Engine loaded — structured compounding active")
     except ImportError:
         TRUE_CAPITAL_SCALER_AVAILABLE = False
         get_true_capital_scaler = None  # type: ignore
@@ -202,12 +202,12 @@ except ImportError:
 try:
     from market_regime_controller import get_regime_controller, MarketRegimeController, RegimeDecision
     REGIME_CONTROLLER_AVAILABLE = True
-    logger.info("✅ Market Regime Controller loaded - trade regime gating active")
+    logger.debug("✅ Market Regime Controller loaded - trade regime gating active")
 except ImportError:
     try:
         from bot.market_regime_controller import get_regime_controller, MarketRegimeController, RegimeDecision
         REGIME_CONTROLLER_AVAILABLE = True
-        logger.info("✅ Market Regime Controller loaded - trade regime gating active")
+        logger.debug("✅ Market Regime Controller loaded - trade regime gating active")
     except ImportError:
         REGIME_CONTROLLER_AVAILABLE = False
         logger.warning("⚠️ Market Regime Controller not available - regime gating disabled")
@@ -219,12 +219,12 @@ except ImportError:
 try:
     from global_risk_governor import get_global_risk_governor, GovernorConfig
     GLOBAL_RISK_GOVERNOR_AVAILABLE = True
-    logger.info("✅ Global Risk Governor loaded - cascade-loss protection active")
+    logger.debug("✅ Global Risk Governor loaded - cascade-loss protection active")
 except ImportError:
     try:
         from bot.global_risk_governor import get_global_risk_governor, GovernorConfig
         GLOBAL_RISK_GOVERNOR_AVAILABLE = True
-        logger.info("✅ Global Risk Governor loaded - cascade-loss protection active")
+        logger.debug("✅ Global Risk Governor loaded - cascade-loss protection active")
     except ImportError:
         GLOBAL_RISK_GOVERNOR_AVAILABLE = False
         logger.warning("⚠️ Global Risk Governor not available - cascade-loss protection disabled")
@@ -235,12 +235,12 @@ except ImportError:
 try:
     from global_capital_manager import get_global_capital_manager
     GLOBAL_CAPITAL_MANAGER_AVAILABLE = True
-    logger.info("✅ Global Capital Manager loaded - capital scaling & risk balancing active")
+    logger.debug("✅ Global Capital Manager loaded - capital scaling & risk balancing active")
 except ImportError:
     try:
         from bot.global_capital_manager import get_global_capital_manager
         GLOBAL_CAPITAL_MANAGER_AVAILABLE = True
-        logger.info("✅ Global Capital Manager loaded - capital scaling & risk balancing active")
+        logger.debug("✅ Global Capital Manager loaded - capital scaling & risk balancing active")
     except ImportError:
         GLOBAL_CAPITAL_MANAGER_AVAILABLE = False
         logger.warning("⚠️ Global Capital Manager not available - capital scaling disabled")
@@ -250,12 +250,12 @@ except ImportError:
 try:
     from master_strategy_router import get_master_strategy_router
     MASTER_STRATEGY_ROUTER_AVAILABLE = True
-    logger.info("✅ Master Strategy Router loaded - single master signal coordination active")
+    logger.debug("✅ Master Strategy Router loaded - single master signal coordination active")
 except ImportError:
     try:
         from bot.master_strategy_router import get_master_strategy_router
         MASTER_STRATEGY_ROUTER_AVAILABLE = True
-        logger.info("✅ Master Strategy Router loaded - single master signal coordination active")
+        logger.debug("✅ Master Strategy Router loaded - single master signal coordination active")
     except ImportError:
         MASTER_STRATEGY_ROUTER_AVAILABLE = False
         logger.warning("⚠️ Master Strategy Router not available - signal coordination disabled")
@@ -265,12 +265,12 @@ except ImportError:
 try:
     from signal_broadcaster import get_signal_broadcaster
     SIGNAL_BROADCASTER_AVAILABLE = True
-    logger.info("✅ Signal Broadcaster loaded - cross-account fan-out execution active")
+    logger.debug("✅ Signal Broadcaster loaded - cross-account fan-out execution active")
 except ImportError:
     try:
         from bot.signal_broadcaster import get_signal_broadcaster
         SIGNAL_BROADCASTER_AVAILABLE = True
-        logger.info("✅ Signal Broadcaster loaded - cross-account fan-out execution active")
+        logger.debug("✅ Signal Broadcaster loaded - cross-account fan-out execution active")
     except ImportError:
         SIGNAL_BROADCASTER_AVAILABLE = False
         logger.warning("⚠️ Signal Broadcaster not available - fan-out execution disabled")
@@ -280,12 +280,12 @@ except ImportError:
 try:
     from execution_pipeline import get_execution_pipeline
     EXECUTION_PIPELINE_AVAILABLE = True
-    logger.info("✅ Execution Pipeline loaded - full cross-account orchestration active")
+    logger.debug("✅ Execution Pipeline loaded - full cross-account orchestration active")
 except ImportError:
     try:
         from bot.execution_pipeline import get_execution_pipeline
         EXECUTION_PIPELINE_AVAILABLE = True
-        logger.info("✅ Execution Pipeline loaded - full cross-account orchestration active")
+        logger.debug("✅ Execution Pipeline loaded - full cross-account orchestration active")
     except ImportError:
         EXECUTION_PIPELINE_AVAILABLE = False
         logger.warning("⚠️ Execution Pipeline not available")
@@ -295,12 +295,12 @@ except ImportError:
 try:
     from copy_trade_engine import get_copy_engine, CopySignal
     COPY_ENGINE_AVAILABLE = True
-    logger.info("✅ Copy Trade Engine loaded - platform→user trade replication active")
+    logger.debug("✅ Copy Trade Engine loaded - platform→user trade replication active")
 except ImportError:
     try:
         from bot.copy_trade_engine import get_copy_engine, CopySignal
         COPY_ENGINE_AVAILABLE = True
-        logger.info("✅ Copy Trade Engine loaded - platform→user trade replication active")
+        logger.debug("✅ Copy Trade Engine loaded - platform→user trade replication active")
     except ImportError:
         COPY_ENGINE_AVAILABLE = False
         logger.warning("⚠️ Copy Trade Engine not available - user account replication disabled")
@@ -311,12 +311,12 @@ except ImportError:
 try:
     from account_performance_dashboard import get_account_performance_dashboard
     ACCOUNT_DASHBOARD_AVAILABLE = True
-    logger.info("✅ Account Performance Dashboard loaded - per-account metrics active")
+    logger.debug("✅ Account Performance Dashboard loaded - per-account metrics active")
 except ImportError:
     try:
         from bot.account_performance_dashboard import get_account_performance_dashboard
         ACCOUNT_DASHBOARD_AVAILABLE = True
-        logger.info("✅ Account Performance Dashboard loaded - per-account metrics active")
+        logger.debug("✅ Account Performance Dashboard loaded - per-account metrics active")
     except ImportError:
         ACCOUNT_DASHBOARD_AVAILABLE = False
         get_account_performance_dashboard = None
@@ -325,12 +325,12 @@ except ImportError:
 try:
     from profit_splitter import get_profit_splitter
     PROFIT_SPLITTER_AVAILABLE = True
-    logger.info("✅ Profit Splitter loaded - per-user profit splitting active")
+    logger.debug("✅ Profit Splitter loaded - per-user profit splitting active")
 except ImportError:
     try:
         from bot.profit_splitter import get_profit_splitter
         PROFIT_SPLITTER_AVAILABLE = True
-        logger.info("✅ Profit Splitter loaded - per-user profit splitting active")
+        logger.debug("✅ Profit Splitter loaded - per-user profit splitting active")
     except ImportError:
         PROFIT_SPLITTER_AVAILABLE = False
         get_profit_splitter = None
@@ -339,12 +339,12 @@ except ImportError:
 try:
     from profit_lock_system import get_profit_lock_system as _get_profit_lock_system
     PROFIT_LOCK_SYSTEM_AVAILABLE = True
-    logger.info("✅ Profit Lock System loaded - ratchet stops + auto-withdrawal active")
+    logger.debug("✅ Profit Lock System loaded - ratchet stops + auto-withdrawal active")
 except ImportError:
     try:
         from bot.profit_lock_system import get_profit_lock_system as _get_profit_lock_system
         PROFIT_LOCK_SYSTEM_AVAILABLE = True
-        logger.info("✅ Profit Lock System loaded - ratchet stops + auto-withdrawal active")
+        logger.debug("✅ Profit Lock System loaded - ratchet stops + auto-withdrawal active")
     except ImportError:
         PROFIT_LOCK_SYSTEM_AVAILABLE = False
         _get_profit_lock_system = None
@@ -353,12 +353,12 @@ except ImportError:
 try:
     from ai_capital_allocator import get_ai_capital_allocator
     AI_CAPITAL_ALLOCATOR_AVAILABLE = True
-    logger.info("✅ AI Capital Allocator loaded - auto capital shift to best performers active")
+    logger.debug("✅ AI Capital Allocator loaded - auto capital shift to best performers active")
 except ImportError:
     try:
         from bot.ai_capital_allocator import get_ai_capital_allocator
         AI_CAPITAL_ALLOCATOR_AVAILABLE = True
-        logger.info("✅ AI Capital Allocator loaded - auto capital shift to best performers active")
+        logger.debug("✅ AI Capital Allocator loaded - auto capital shift to best performers active")
     except ImportError:
         AI_CAPITAL_ALLOCATOR_AVAILABLE = False
         get_ai_capital_allocator = None
@@ -367,12 +367,12 @@ except ImportError:
 try:
     from capital_allocator import get_capital_allocator as _get_capital_allocator
     CAPITAL_ALLOCATOR_AVAILABLE = True
-    logger.info("✅ CapitalAllocator loaded - cycle-oriented capital budgeting active")
+    logger.debug("✅ CapitalAllocator loaded - cycle-oriented capital budgeting active")
 except ImportError:
     try:
         from bot.capital_allocator import get_capital_allocator as _get_capital_allocator
         CAPITAL_ALLOCATOR_AVAILABLE = True
-        logger.info("✅ CapitalAllocator loaded - cycle-oriented capital budgeting active")
+        logger.debug("✅ CapitalAllocator loaded - cycle-oriented capital budgeting active")
     except ImportError:
         CAPITAL_ALLOCATOR_AVAILABLE = False
         _get_capital_allocator = None
@@ -405,12 +405,12 @@ except ImportError:
 try:
     from account_level_capital_flow import get_account_level_capital_flow
     ACCOUNT_FLOW_AVAILABLE = True
-    logger.info("✅ Account-Level Capital Flow loaded - account ranking + kill-weak + AI weights connected")
+    logger.debug("✅ Account-Level Capital Flow loaded - account ranking + kill-weak + AI weights connected")
 except ImportError:
     try:
         from bot.account_level_capital_flow import get_account_level_capital_flow
         ACCOUNT_FLOW_AVAILABLE = True
-        logger.info("✅ Account-Level Capital Flow loaded - account ranking + kill-weak + AI weights connected")
+        logger.debug("✅ Account-Level Capital Flow loaded - account ranking + kill-weak + AI weights connected")
     except ImportError:
         ACCOUNT_FLOW_AVAILABLE = False
         get_account_level_capital_flow = None  # type: ignore[assignment]
@@ -419,12 +419,12 @@ except ImportError:
 try:
     from global_capital_brain import get_global_capital_brain
     GLOBAL_CAPITAL_BRAIN_AVAILABLE = True
-    logger.info("✅ Global Capital Brain loaded - capital routing + efficiency score + snowball mode active")
+    logger.debug("✅ Global Capital Brain loaded - capital routing + efficiency score + snowball mode active")
 except ImportError:
     try:
         from bot.global_capital_brain import get_global_capital_brain
         GLOBAL_CAPITAL_BRAIN_AVAILABLE = True
-        logger.info("✅ Global Capital Brain loaded - capital routing + efficiency score + snowball mode active")
+        logger.debug("✅ Global Capital Brain loaded - capital routing + efficiency score + snowball mode active")
     except ImportError:
         GLOBAL_CAPITAL_BRAIN_AVAILABLE = False
         get_global_capital_brain = None  # type: ignore[assignment]
@@ -433,12 +433,12 @@ except ImportError:
 try:
     from ai_market_regime_forecaster import get_ai_market_regime_forecaster
     AI_REGIME_FORECASTER_AVAILABLE = True
-    logger.info("✅ AI Market Regime Forecaster loaded - early regime-change prediction active")
+    logger.debug("✅ AI Market Regime Forecaster loaded - early regime-change prediction active")
 except ImportError:
     try:
         from bot.ai_market_regime_forecaster import get_ai_market_regime_forecaster
         AI_REGIME_FORECASTER_AVAILABLE = True
-        logger.info("✅ AI Market Regime Forecaster loaded - early regime-change prediction active")
+        logger.debug("✅ AI Market Regime Forecaster loaded - early regime-change prediction active")
     except ImportError:
         AI_REGIME_FORECASTER_AVAILABLE = False
         logger.warning("⚠️ AI Market Regime Forecaster not available - early warning disabled")
@@ -448,12 +448,12 @@ except ImportError:
 try:
     from risk_budget_engine import RiskBudgetEngine, RiskBudgetConfig, TradeRecord, OUTCOME_WIN, OUTCOME_LOSS
     RISK_BUDGET_ENGINE_AVAILABLE = True
-    logger.info("✅ Risk Budget Engine loaded - risk-first position sizing active")
+    logger.debug("✅ Risk Budget Engine loaded - risk-first position sizing active")
 except ImportError:
     try:
         from bot.risk_budget_engine import RiskBudgetEngine, RiskBudgetConfig, TradeRecord, OUTCOME_WIN, OUTCOME_LOSS
         RISK_BUDGET_ENGINE_AVAILABLE = True
-        logger.info("✅ Risk Budget Engine loaded - risk-first position sizing active")
+        logger.debug("✅ Risk Budget Engine loaded - risk-first position sizing active")
     except ImportError:
         RISK_BUDGET_ENGINE_AVAILABLE = False
         logger.warning("⚠️ Risk Budget Engine not available - using legacy position sizing")
@@ -467,12 +467,12 @@ except ImportError:
 try:
     from liquidity_intelligence_engine import get_liquidity_intelligence_engine, LiquidityIntelligenceEngine
     LIQUIDITY_INTELLIGENCE_AVAILABLE = True
-    logger.info("✅ Liquidity Intelligence Engine loaded - spread/volume/depth gating active")
+    logger.debug("✅ Liquidity Intelligence Engine loaded - spread/volume/depth gating active")
 except ImportError:
     try:
         from bot.liquidity_intelligence_engine import get_liquidity_intelligence_engine, LiquidityIntelligenceEngine
         LIQUIDITY_INTELLIGENCE_AVAILABLE = True
-        logger.info("✅ Liquidity Intelligence Engine loaded - spread/volume/depth gating active")
+        logger.debug("✅ Liquidity Intelligence Engine loaded - spread/volume/depth gating active")
     except ImportError:
         LIQUIDITY_INTELLIGENCE_AVAILABLE = False
         logger.warning("⚠️ Liquidity Intelligence Engine not available - liquidity gating disabled")
@@ -483,12 +483,12 @@ except ImportError:
 try:
     from cross_exchange_price_intelligence import get_cross_exchange_price_intelligence, CrossExchangePriceIntelligence
     CROSS_EXCHANGE_INTEL_AVAILABLE = True
-    logger.info("✅ Cross-Exchange Price Intelligence loaded - divergence detection active")
+    logger.debug("✅ Cross-Exchange Price Intelligence loaded - divergence detection active")
 except ImportError:
     try:
         from bot.cross_exchange_price_intelligence import get_cross_exchange_price_intelligence, CrossExchangePriceIntelligence
         CROSS_EXCHANGE_INTEL_AVAILABLE = True
-        logger.info("✅ Cross-Exchange Price Intelligence loaded - divergence detection active")
+        logger.debug("✅ Cross-Exchange Price Intelligence loaded - divergence detection active")
     except ImportError:
         CROSS_EXCHANGE_INTEL_AVAILABLE = False
         logger.warning("⚠️ Cross-Exchange Price Intelligence not available - divergence detection disabled")
@@ -503,7 +503,7 @@ try:
         TradeRecord as PerformanceTradeRecord,
     )
     PORTFOLIO_ANALYTICS_AVAILABLE = True
-    logger.info("✅ Portfolio Performance Analytics loaded - Sharpe/Sortino/Calmar tracking active")
+    logger.debug("✅ Portfolio Performance Analytics loaded - Sharpe/Sortino/Calmar tracking active")
 except ImportError:
     try:
         from bot.portfolio_performance_analytics import (
@@ -512,7 +512,7 @@ except ImportError:
             TradeRecord as PerformanceTradeRecord,
         )
         PORTFOLIO_ANALYTICS_AVAILABLE = True
-        logger.info("✅ Portfolio Performance Analytics loaded - Sharpe/Sortino/Calmar tracking active")
+        logger.debug("✅ Portfolio Performance Analytics loaded - Sharpe/Sortino/Calmar tracking active")
     except ImportError:
         PORTFOLIO_ANALYTICS_AVAILABLE = False
         logger.warning("⚠️ Portfolio Performance Analytics not available - performance tracking disabled")
@@ -539,12 +539,12 @@ except ImportError:
 try:
     from capital_growth_throttle import get_capital_growth_throttle
     CAPITAL_GROWTH_THROTTLE_AVAILABLE = True
-    logger.info("✅ Capital Growth Throttle loaded - drawdown-based position scaling active")
+    logger.debug("✅ Capital Growth Throttle loaded - drawdown-based position scaling active")
 except ImportError:
     try:
         from bot.capital_growth_throttle import get_capital_growth_throttle
         CAPITAL_GROWTH_THROTTLE_AVAILABLE = True
-        logger.info("✅ Capital Growth Throttle loaded - drawdown-based position scaling active")
+        logger.debug("✅ Capital Growth Throttle loaded - drawdown-based position scaling active")
     except ImportError:
         CAPITAL_GROWTH_THROTTLE_AVAILABLE = False
         logger.warning("⚠️ Capital Growth Throttle not available - position scaling disabled")
@@ -554,12 +554,12 @@ except ImportError:
 try:
     from slippage_protection import get_slippage_protector, SlippageProtector
     SLIPPAGE_PROTECTION_AVAILABLE = True
-    logger.info("✅ Slippage Protection loaded - pre-trade slippage gating active")
+    logger.debug("✅ Slippage Protection loaded - pre-trade slippage gating active")
 except ImportError:
     try:
         from bot.slippage_protection import get_slippage_protector, SlippageProtector
         SLIPPAGE_PROTECTION_AVAILABLE = True
-        logger.info("✅ Slippage Protection loaded - pre-trade slippage gating active")
+        logger.debug("✅ Slippage Protection loaded - pre-trade slippage gating active")
     except ImportError:
         SLIPPAGE_PROTECTION_AVAILABLE = False
         logger.warning("⚠️ Slippage Protection not available - slippage gating disabled")
@@ -570,12 +570,12 @@ except ImportError:
 try:
     from net_profit_gate import get_net_profit_gate, NetProfitGate
     NET_PROFIT_GATE_AVAILABLE = True
-    logger.info("✅ Net Profit Gate loaded")
+    logger.debug("✅ Net Profit Gate loaded")
 except ImportError:
     try:
         from bot.net_profit_gate import get_net_profit_gate, NetProfitGate
         NET_PROFIT_GATE_AVAILABLE = True
-        logger.info("✅ Net Profit Gate loaded")
+        logger.debug("✅ Net Profit Gate loaded")
     except ImportError:
         NET_PROFIT_GATE_AVAILABLE = False
         get_net_profit_gate = None
@@ -585,12 +585,12 @@ except ImportError:
 try:
     from latency_drift_guard import get_latency_drift_guard, LatencyDriftGuard
     LATENCY_DRIFT_GUARD_AVAILABLE = True
-    logger.info("✅ Latency Drift Guard loaded")
+    logger.debug("✅ Latency Drift Guard loaded")
 except ImportError:
     try:
         from bot.latency_drift_guard import get_latency_drift_guard, LatencyDriftGuard
         LATENCY_DRIFT_GUARD_AVAILABLE = True
-        logger.info("✅ Latency Drift Guard loaded")
+        logger.debug("✅ Latency Drift Guard loaded")
     except ImportError:
         LATENCY_DRIFT_GUARD_AVAILABLE = False
         get_latency_drift_guard = None
@@ -600,12 +600,12 @@ except ImportError:
 try:
     from capital_fragmentation_guard import get_fragmentation_guard, CapitalFragmentationGuard
     FRAGMENTATION_GUARD_AVAILABLE = True
-    logger.info("✅ Capital Fragmentation Guard loaded")
+    logger.debug("✅ Capital Fragmentation Guard loaded")
 except ImportError:
     try:
         from bot.capital_fragmentation_guard import get_fragmentation_guard, CapitalFragmentationGuard
         FRAGMENTATION_GUARD_AVAILABLE = True
-        logger.info("✅ Capital Fragmentation Guard loaded")
+        logger.debug("✅ Capital Fragmentation Guard loaded")
     except ImportError:
         FRAGMENTATION_GUARD_AVAILABLE = False
         get_fragmentation_guard = None
@@ -615,12 +615,12 @@ except ImportError:
 try:
     from crypto_sector_taxonomy import get_sector, get_sector_name
     SECTOR_TAXONOMY_AVAILABLE = True
-    logger.info("✅ Crypto Sector Taxonomy loaded - sector capital allocation caps active")
+    logger.debug("✅ Crypto Sector Taxonomy loaded - sector capital allocation caps active")
 except ImportError:
     try:
         from bot.crypto_sector_taxonomy import get_sector, get_sector_name
         SECTOR_TAXONOMY_AVAILABLE = True
-        logger.info("✅ Crypto Sector Taxonomy loaded - sector capital allocation caps active")
+        logger.debug("✅ Crypto Sector Taxonomy loaded - sector capital allocation caps active")
     except ImportError:
         SECTOR_TAXONOMY_AVAILABLE = False
         logger.warning("⚠️ Crypto Sector Taxonomy not available - sector allocation caps disabled")
@@ -631,12 +631,12 @@ except ImportError:
 try:
     from volatility_position_sizing import get_volatility_position_sizer, VolatilityPositionSizer
     VOLATILITY_POSITION_SIZING_AVAILABLE = True
-    logger.info("✅ Volatility Position Sizing loaded - ATR-based size scaling active")
+    logger.debug("✅ Volatility Position Sizing loaded - ATR-based size scaling active")
 except ImportError:
     try:
         from bot.volatility_position_sizing import get_volatility_position_sizer, VolatilityPositionSizer
         VOLATILITY_POSITION_SIZING_AVAILABLE = True
-        logger.info("✅ Volatility Position Sizing loaded - ATR-based size scaling active")
+        logger.debug("✅ Volatility Position Sizing loaded - ATR-based size scaling active")
     except ImportError:
         VOLATILITY_POSITION_SIZING_AVAILABLE = False
         logger.warning("⚠️ Volatility Position Sizing not available - volatility scaling disabled")
@@ -647,12 +647,12 @@ except ImportError:
 try:
     from position_sizer import calculate_position_size as _calc_position_size
     CALC_POSITION_SIZE_AVAILABLE = True
-    logger.info("✅ calculate_position_size loaded — fee-aware pre-order sizing gate active")
+    logger.debug("✅ calculate_position_size loaded — fee-aware pre-order sizing gate active")
 except ImportError:
     try:
         from bot.position_sizer import calculate_position_size as _calc_position_size
         CALC_POSITION_SIZE_AVAILABLE = True
-        logger.info("✅ calculate_position_size loaded (bot.position_sizer)")
+        logger.debug("✅ calculate_position_size loaded (bot.position_sizer)")
     except ImportError:
         CALC_POSITION_SIZE_AVAILABLE = False
         _calc_position_size = None
@@ -662,12 +662,12 @@ except ImportError:
 try:
     from bot.risk.sizing import allocate_capital as _allocate_capital
     ALLOCATE_CAPITAL_AVAILABLE = True
-    logger.info("✅ allocate_capital (TRE wrapper) loaded — canonical sizing path active")
+    logger.debug("✅ allocate_capital (TRE wrapper) loaded — canonical sizing path active")
 except ImportError:
     try:
         from risk.sizing import allocate_capital as _allocate_capital
         ALLOCATE_CAPITAL_AVAILABLE = True
-        logger.info("✅ allocate_capital (TRE wrapper) loaded (risk.sizing)")
+        logger.debug("✅ allocate_capital (TRE wrapper) loaded (risk.sizing)")
     except ImportError:
         ALLOCATE_CAPITAL_AVAILABLE = False
         _allocate_capital = None
@@ -677,12 +677,12 @@ except ImportError:
 try:
     from cross_broker_arbitrage_monitor import get_arb_monitor, ArbSignalStrength
     CROSS_BROKER_ARB_AVAILABLE = True
-    logger.info("✅ Cross-Broker Arbitrage Monitor loaded - multi-venue price divergence active")
+    logger.debug("✅ Cross-Broker Arbitrage Monitor loaded - multi-venue price divergence active")
 except ImportError:
     try:
         from bot.cross_broker_arbitrage_monitor import get_arb_monitor, ArbSignalStrength
         CROSS_BROKER_ARB_AVAILABLE = True
-        logger.info("✅ Cross-Broker Arbitrage Monitor loaded - multi-venue price divergence active")
+        logger.debug("✅ Cross-Broker Arbitrage Monitor loaded - multi-venue price divergence active")
     except ImportError:
         CROSS_BROKER_ARB_AVAILABLE = False
         logger.warning("⚠️ Cross-Broker Arbitrage Monitor not available - single-venue mode")
@@ -693,12 +693,12 @@ except ImportError:
 try:
     from arb_best_execution_router import get_arb_best_execution_router
     ARB_BEST_EXEC_AVAILABLE = True
-    logger.info("✅ Arb & Best-Execution Router loaded - multi-broker arbitrage routing active")
+    logger.debug("✅ Arb & Best-Execution Router loaded - multi-broker arbitrage routing active")
 except ImportError:
     try:
         from bot.arb_best_execution_router import get_arb_best_execution_router
         ARB_BEST_EXEC_AVAILABLE = True
-        logger.info("✅ Arb & Best-Execution Router loaded - multi-broker arbitrage routing active")
+        logger.debug("✅ Arb & Best-Execution Router loaded - multi-broker arbitrage routing active")
     except ImportError:
         ARB_BEST_EXEC_AVAILABLE = False
         logger.warning("⚠️ Arb & Best-Execution Router not available - single-venue mode")
@@ -708,12 +708,12 @@ except ImportError:
 try:
     from volatility_weighted_capital_router import get_volatility_router
     VOLATILITY_CAPITAL_ROUTER_AVAILABLE = True
-    logger.info("✅ Volatility-Weighted Capital Router loaded - inverse-vol sizing active")
+    logger.debug("✅ Volatility-Weighted Capital Router loaded - inverse-vol sizing active")
 except ImportError:
     try:
         from bot.volatility_weighted_capital_router import get_volatility_router
         VOLATILITY_CAPITAL_ROUTER_AVAILABLE = True
-        logger.info("✅ Volatility-Weighted Capital Router loaded - inverse-vol sizing active")
+        logger.debug("✅ Volatility-Weighted Capital Router loaded - inverse-vol sizing active")
     except ImportError:
         VOLATILITY_CAPITAL_ROUTER_AVAILABLE = False
         logger.warning("⚠️ Volatility-Weighted Capital Router not available")
@@ -723,12 +723,12 @@ except ImportError:
 try:
     from regime_capital_allocator import get_regime_capital_allocator
     REGIME_CAPITAL_ALLOCATOR_AVAILABLE = True
-    logger.info("✅ Regime Capital Allocator loaded - regime→allocation mapping active")
+    logger.debug("✅ Regime Capital Allocator loaded - regime→allocation mapping active")
 except ImportError:
     try:
         from bot.regime_capital_allocator import get_regime_capital_allocator
         REGIME_CAPITAL_ALLOCATOR_AVAILABLE = True
-        logger.info("✅ Regime Capital Allocator loaded - regime→allocation mapping active")
+        logger.debug("✅ Regime Capital Allocator loaded - regime→allocation mapping active")
     except ImportError:
         REGIME_CAPITAL_ALLOCATOR_AVAILABLE = False
         logger.warning("⚠️ Regime Capital Allocator not available - regime allocation disabled")
@@ -738,12 +738,12 @@ except ImportError:
 try:
     from market_regime_engine import get_market_regime_engine, Regime as RegimeEngineRegime
     MARKET_REGIME_ENGINE_AVAILABLE = True
-    logger.info("✅ Market Regime Engine loaded - bull/chop/crash aggression active")
+    logger.debug("✅ Market Regime Engine loaded - bull/chop/crash aggression active")
 except ImportError:
     try:
         from bot.market_regime_engine import get_market_regime_engine, Regime as RegimeEngineRegime
         MARKET_REGIME_ENGINE_AVAILABLE = True
-        logger.info("✅ Market Regime Engine loaded - bull/chop/crash aggression active")
+        logger.debug("✅ Market Regime Engine loaded - bull/chop/crash aggression active")
     except ImportError:
         MARKET_REGIME_ENGINE_AVAILABLE = False
         logger.warning("⚠️ Market Regime Engine not available - regime aggression disabled")
@@ -766,12 +766,12 @@ except (ImportError, SyntaxError):
 try:
     from global_drawdown_circuit_breaker import get_global_drawdown_cb, ProtectionLevel
     GLOBAL_DRAWDOWN_CB_AVAILABLE = True
-    logger.info("✅ Global Drawdown Circuit Breaker loaded - system-wide halt active")
+    logger.debug("✅ Global Drawdown Circuit Breaker loaded - system-wide halt active")
 except ImportError:
     try:
         from bot.global_drawdown_circuit_breaker import get_global_drawdown_cb, ProtectionLevel
         GLOBAL_DRAWDOWN_CB_AVAILABLE = True
-        logger.info("✅ Global Drawdown Circuit Breaker loaded - system-wide halt active")
+        logger.debug("✅ Global Drawdown Circuit Breaker loaded - system-wide halt active")
     except ImportError:
         GLOBAL_DRAWDOWN_CB_AVAILABLE = False
         logger.warning("⚠️ Global Drawdown Circuit Breaker not available - system drawdown halt disabled")
@@ -782,12 +782,12 @@ except ImportError:
 try:
     from dynamic_stop_loss_tightener import get_dynamic_stop_tightener
     DYNAMIC_STOP_TIGHTENER_AVAILABLE = True
-    logger.info("✅ Phase 3: Dynamic Stop-Loss Tightener loaded")
+    logger.debug("✅ Phase 3: Dynamic Stop-Loss Tightener loaded")
 except ImportError:
     try:
         from bot.dynamic_stop_loss_tightener import get_dynamic_stop_tightener
         DYNAMIC_STOP_TIGHTENER_AVAILABLE = True
-        logger.info("✅ Phase 3: Dynamic Stop-Loss Tightener loaded")
+        logger.debug("✅ Phase 3: Dynamic Stop-Loss Tightener loaded")
     except ImportError:
         DYNAMIC_STOP_TIGHTENER_AVAILABLE = False
         get_dynamic_stop_tightener = None  # type: ignore
@@ -797,12 +797,12 @@ except ImportError:
 try:
     from partial_tp_ladder import get_partial_tp_ladder
     PARTIAL_TP_LADDER_AVAILABLE = True
-    logger.info("✅ Phase 3: Partial TP Ladder loaded")
+    logger.debug("✅ Phase 3: Partial TP Ladder loaded")
 except ImportError:
     try:
         from bot.partial_tp_ladder import get_partial_tp_ladder
         PARTIAL_TP_LADDER_AVAILABLE = True
-        logger.info("✅ Phase 3: Partial TP Ladder loaded")
+        logger.debug("✅ Phase 3: Partial TP Ladder loaded")
     except ImportError:
         PARTIAL_TP_LADDER_AVAILABLE = False
         get_partial_tp_ladder = None  # type: ignore
@@ -812,12 +812,12 @@ except ImportError:
 try:
     from news_volatility_filter import get_news_volatility_filter
     NEWS_VOLATILITY_FILTER_AVAILABLE = True
-    logger.info("✅ Phase 3: News/Event Volatility Filter loaded")
+    logger.debug("✅ Phase 3: News/Event Volatility Filter loaded")
 except ImportError:
     try:
         from bot.news_volatility_filter import get_news_volatility_filter
         NEWS_VOLATILITY_FILTER_AVAILABLE = True
-        logger.info("✅ Phase 3: News/Event Volatility Filter loaded")
+        logger.debug("✅ Phase 3: News/Event Volatility Filter loaded")
     except ImportError:
         NEWS_VOLATILITY_FILTER_AVAILABLE = False
         get_news_volatility_filter = None  # type: ignore
@@ -827,12 +827,12 @@ except ImportError:
 try:
     from multi_timeframe_confirmation import get_mtf_confirmation
     MTF_CONFIRMATION_AVAILABLE = True
-    logger.info("✅ Phase 3: Multi-Timeframe Confirmation AI loaded")
+    logger.debug("✅ Phase 3: Multi-Timeframe Confirmation AI loaded")
 except ImportError:
     try:
         from bot.multi_timeframe_confirmation import get_mtf_confirmation
         MTF_CONFIRMATION_AVAILABLE = True
-        logger.info("✅ Phase 3: Multi-Timeframe Confirmation AI loaded")
+        logger.debug("✅ Phase 3: Multi-Timeframe Confirmation AI loaded")
     except ImportError:
         MTF_CONFIRMATION_AVAILABLE = False
         get_mtf_confirmation = None  # type: ignore
@@ -842,12 +842,12 @@ except ImportError:
 try:
     from abnormal_market_kill_switch import get_abnormal_market_ks
     ABNORMAL_MARKET_KS_AVAILABLE = True
-    logger.info("✅ Phase 3: Abnormal Market Kill Switch loaded")
+    logger.debug("✅ Phase 3: Abnormal Market Kill Switch loaded")
 except ImportError:
     try:
         from bot.abnormal_market_kill_switch import get_abnormal_market_ks
         ABNORMAL_MARKET_KS_AVAILABLE = True
-        logger.info("✅ Phase 3: Abnormal Market Kill Switch loaded")
+        logger.debug("✅ Phase 3: Abnormal Market Kill Switch loaded")
     except ImportError:
         ABNORMAL_MARKET_KS_AVAILABLE = False
         get_abnormal_market_ks = None  # type: ignore
@@ -857,12 +857,12 @@ except ImportError:
 try:
     from execution_risk_firewall import get_execution_risk_firewall, ExecutionMode
     EXEC_FIREWALL_AVAILABLE = True
-    logger.info("✅ Execution Risk Firewall loaded — slippage/health/anomaly/safe-mode active")
+    logger.debug("✅ Execution Risk Firewall loaded — slippage/health/anomaly/safe-mode active")
 except ImportError:
     try:
         from bot.execution_risk_firewall import get_execution_risk_firewall, ExecutionMode
         EXEC_FIREWALL_AVAILABLE = True
-        logger.info("✅ Execution Risk Firewall loaded — slippage/health/anomaly/safe-mode active")
+        logger.debug("✅ Execution Risk Firewall loaded — slippage/health/anomaly/safe-mode active")
     except ImportError:
         EXEC_FIREWALL_AVAILABLE = False
         get_execution_risk_firewall = None  # type: ignore
@@ -873,12 +873,12 @@ except ImportError:
 try:
     from sniper_filter import get_sniper_filter, SNIPER_BORDERLINE_POSITION_MULTIPLIER
     SNIPER_FILTER_AVAILABLE = True
-    logger.info("✅ Sniper Filter loaded — Tiered Pass System + weighted risk scaling active")
+    logger.debug("✅ Sniper Filter loaded — Tiered Pass System + weighted risk scaling active")
 except ImportError:
     try:
         from bot.sniper_filter import get_sniper_filter, SNIPER_BORDERLINE_POSITION_MULTIPLIER  # type: ignore
         SNIPER_FILTER_AVAILABLE = True
-        logger.info("✅ Sniper Filter loaded — Tiered Pass System + weighted risk scaling active")
+        logger.debug("✅ Sniper Filter loaded — Tiered Pass System + weighted risk scaling active")
     except ImportError:
         SNIPER_FILTER_AVAILABLE = False
         get_sniper_filter = None  # type: ignore
@@ -894,12 +894,12 @@ SCALP_REGIME_COOLDOWN_MULTIPLIER: float = 0.50  # re-entry cooldown × this fact
 try:
     from auto_tuning_ai_layer import get_auto_tuning_ai_layer
     AUTO_TUNING_AI_AVAILABLE = True
-    logger.info("✅ Auto-Tuning AI Layer loaded — self-adjusting thresholds active")
+    logger.debug("✅ Auto-Tuning AI Layer loaded — self-adjusting thresholds active")
 except ImportError:
     try:
         from bot.auto_tuning_ai_layer import get_auto_tuning_ai_layer
         AUTO_TUNING_AI_AVAILABLE = True
-        logger.info("✅ Auto-Tuning AI Layer loaded — self-adjusting thresholds active")
+        logger.debug("✅ Auto-Tuning AI Layer loaded — self-adjusting thresholds active")
     except ImportError:
         AUTO_TUNING_AI_AVAILABLE = False
         get_auto_tuning_ai_layer = None  # type: ignore
@@ -909,12 +909,12 @@ except ImportError:
 try:
     from nija_ai_engine import get_nija_ai_engine, NijaAIEngine
     NIJA_AI_ENGINE_AVAILABLE = True
-    logger.info("✅ Nija AI Engine loaded")
+    logger.debug("✅ Nija AI Engine loaded")
 except ImportError:
     try:
         from bot.nija_ai_engine import get_nija_ai_engine, NijaAIEngine
         NIJA_AI_ENGINE_AVAILABLE = True
-        logger.info("✅ Nija AI Engine loaded")
+        logger.debug("✅ Nija AI Engine loaded")
     except ImportError:
         NIJA_AI_ENGINE_AVAILABLE = False
         get_nija_ai_engine = None  # type: ignore
@@ -1035,13 +1035,13 @@ try:
     from nija_core_loop import get_nija_core_loop, NijaCoreLoop
     import nija_core_loop as _nija_core_loop_module
     NIJA_CORE_LOOP_AVAILABLE = True
-    logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
+    logger.debug("✅ Nija Core Loop loaded — clean single-pass loop active")
 except ImportError:
     try:
         from bot.nija_core_loop import get_nija_core_loop, NijaCoreLoop
         import bot.nija_core_loop as _nija_core_loop_module
         NIJA_CORE_LOOP_AVAILABLE = True
-        logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
+        logger.debug("✅ Nija Core Loop loaded — clean single-pass loop active")
     except ImportError:
         NIJA_CORE_LOOP_AVAILABLE = False
         get_nija_core_loop = None  # type: ignore
@@ -1052,12 +1052,12 @@ except ImportError:
 try:
     from win_rate_frequency_tuner import get_win_rate_frequency_tuner
     WIN_RATE_FREQUENCY_TUNER_AVAILABLE = True
-    logger.info("✅ Win-Rate/Frequency Tuner loaded — EV-per-hour optimisation active")
+    logger.debug("✅ Win-Rate/Frequency Tuner loaded — EV-per-hour optimisation active")
 except ImportError:
     try:
         from bot.win_rate_frequency_tuner import get_win_rate_frequency_tuner
         WIN_RATE_FREQUENCY_TUNER_AVAILABLE = True
-        logger.info("✅ Win-Rate/Frequency Tuner loaded — EV-per-hour optimisation active")
+        logger.debug("✅ Win-Rate/Frequency Tuner loaded — EV-per-hour optimisation active")
     except ImportError:
         WIN_RATE_FREQUENCY_TUNER_AVAILABLE = False
         get_win_rate_frequency_tuner = None  # type: ignore
@@ -1067,12 +1067,12 @@ except ImportError:
 try:
     from stable_profit_mode import get_stable_profit_mode
     STABLE_PROFIT_MODE_AVAILABLE = True
-    logger.info("✅ Stable Profit Mode loaded — daily range lock + overtrading guard active")
+    logger.debug("✅ Stable Profit Mode loaded — daily range lock + overtrading guard active")
 except ImportError:
     try:
         from bot.stable_profit_mode import get_stable_profit_mode
         STABLE_PROFIT_MODE_AVAILABLE = True
-        logger.info("✅ Stable Profit Mode loaded — daily range lock + overtrading guard active")
+        logger.debug("✅ Stable Profit Mode loaded — daily range lock + overtrading guard active")
     except ImportError:
         STABLE_PROFIT_MODE_AVAILABLE = False
         get_stable_profit_mode = None  # type: ignore
@@ -1082,12 +1082,12 @@ except ImportError:
 try:
     from safe_profit_mode import get_safe_profit_mode
     SAFE_PROFIT_MODE_AVAILABLE = True
-    logger.info("✅ Safe Profit Mode loaded — locks entries once daily profit secured")
+    logger.debug("✅ Safe Profit Mode loaded — locks entries once daily profit secured")
 except ImportError:
     try:
         from bot.safe_profit_mode import get_safe_profit_mode
         SAFE_PROFIT_MODE_AVAILABLE = True
-        logger.info("✅ Safe Profit Mode loaded — locks entries once daily profit secured")
+        logger.debug("✅ Safe Profit Mode loaded — locks entries once daily profit secured")
     except ImportError:
         SAFE_PROFIT_MODE_AVAILABLE = False
         get_safe_profit_mode = None  # type: ignore
@@ -1097,12 +1097,12 @@ except ImportError:
 try:
     from aggression_mode_controller import get_aggression_mode_controller
     AGGRESSION_MODE_CONTROLLER_AVAILABLE = True
-    logger.info("✅ Aggression Mode Controller loaded — SAFE/BALANCED/AGGRESSIVE modes active")
+    logger.debug("✅ Aggression Mode Controller loaded — SAFE/BALANCED/AGGRESSIVE modes active")
 except ImportError:
     try:
         from bot.aggression_mode_controller import get_aggression_mode_controller
         AGGRESSION_MODE_CONTROLLER_AVAILABLE = True
-        logger.info("✅ Aggression Mode Controller loaded — SAFE/BALANCED/AGGRESSIVE modes active")
+        logger.debug("✅ Aggression Mode Controller loaded — SAFE/BALANCED/AGGRESSIVE modes active")
     except ImportError:
         AGGRESSION_MODE_CONTROLLER_AVAILABLE = False
         get_aggression_mode_controller = None  # type: ignore
@@ -1112,12 +1112,12 @@ except ImportError:
 try:
     from trade_frequency_controller import get_trade_frequency_controller
     TRADE_FREQUENCY_CONTROLLER_AVAILABLE = True
-    logger.info("✅ Trade Frequency Controller loaded — minimum trades/hr targeting active")
+    logger.debug("✅ Trade Frequency Controller loaded — minimum trades/hr targeting active")
 except ImportError:
     try:
         from bot.trade_frequency_controller import get_trade_frequency_controller
         TRADE_FREQUENCY_CONTROLLER_AVAILABLE = True
-        logger.info("✅ Trade Frequency Controller loaded — minimum trades/hr targeting active")
+        logger.debug("✅ Trade Frequency Controller loaded — minimum trades/hr targeting active")
     except ImportError:
         TRADE_FREQUENCY_CONTROLLER_AVAILABLE = False
         get_trade_frequency_controller = None  # type: ignore
@@ -1127,12 +1127,12 @@ except ImportError:
 try:
     from pnl_analytics_layer import get_pnl_analytics_layer
     PNL_ANALYTICS_LAYER_AVAILABLE = True
-    logger.info("✅ PnL Analytics Layer loaded — win rate and per-pair analytics active")
+    logger.debug("✅ PnL Analytics Layer loaded — win rate and per-pair analytics active")
 except ImportError:
     try:
         from bot.pnl_analytics_layer import get_pnl_analytics_layer
         PNL_ANALYTICS_LAYER_AVAILABLE = True
-        logger.info("✅ PnL Analytics Layer loaded — win rate and per-pair analytics active")
+        logger.debug("✅ PnL Analytics Layer loaded — win rate and per-pair analytics active")
     except ImportError:
         PNL_ANALYTICS_LAYER_AVAILABLE = False
         get_pnl_analytics_layer = None  # type: ignore
@@ -1190,12 +1190,12 @@ except ImportError:
 try:
     from auto_capital_scaler import get_auto_capital_scaler
     AUTO_CAPITAL_SCALER_AVAILABLE = True
-    logger.info("✅ Auto Capital Scaler loaded — risk scales automatically with balance")
+    logger.debug("✅ Auto Capital Scaler loaded — risk scales automatically with balance")
 except ImportError:
     try:
         from bot.auto_capital_scaler import get_auto_capital_scaler
         AUTO_CAPITAL_SCALER_AVAILABLE = True
-        logger.info("✅ Auto Capital Scaler loaded — risk scales automatically with balance")
+        logger.debug("✅ Auto Capital Scaler loaded — risk scales automatically with balance")
     except ImportError:
         AUTO_CAPITAL_SCALER_AVAILABLE = False
         get_auto_capital_scaler = None  # type: ignore
@@ -1205,12 +1205,12 @@ except ImportError:
 try:
     from auto_dust_sweeper import get_auto_dust_sweeper, RECYCLER_TARGET
     AUTO_DUST_SWEEPER_AVAILABLE = True
-    logger.info("✅ Auto Dust Sweeper loaded — dust consolidation to single asset active")
+    logger.debug("✅ Auto Dust Sweeper loaded — dust consolidation to single asset active")
 except ImportError:
     try:
         from bot.auto_dust_sweeper import get_auto_dust_sweeper, RECYCLER_TARGET
         AUTO_DUST_SWEEPER_AVAILABLE = True
-        logger.info("✅ Auto Dust Sweeper loaded — dust consolidation to single asset active")
+        logger.debug("✅ Auto Dust Sweeper loaded — dust consolidation to single asset active")
     except ImportError:
         AUTO_DUST_SWEEPER_AVAILABLE = False
         get_auto_dust_sweeper = None  # type: ignore
@@ -1221,12 +1221,12 @@ except ImportError:
 try:
     from capital_tier_hierarchy import get_max_positions_for_balance as _tier_get_max_positions
     CAPITAL_TIER_HIERARCHY_AVAILABLE = True
-    logger.info("✅ Capital Tier Hierarchy loaded — position cap scales with balance")
+    logger.debug("✅ Capital Tier Hierarchy loaded — position cap scales with balance")
 except ImportError:
     try:
         from bot.capital_tier_hierarchy import get_max_positions_for_balance as _tier_get_max_positions
         CAPITAL_TIER_HIERARCHY_AVAILABLE = True
-        logger.info("✅ Capital Tier Hierarchy loaded (bot.*) — position cap scales with balance")
+        logger.debug("✅ Capital Tier Hierarchy loaded (bot.*) — position cap scales with balance")
     except ImportError:
         CAPITAL_TIER_HIERARCHY_AVAILABLE = False
         _tier_get_max_positions = None  # type: ignore
@@ -1236,12 +1236,12 @@ except ImportError:
 try:
     from profit_priority_cleanup import get_profit_priority_cleanup
     PROFIT_PRIORITY_CLEANUP_AVAILABLE = True
-    logger.info("✅ Profit Priority Cleanup loaded — losers-first cleanup active")
+    logger.debug("✅ Profit Priority Cleanup loaded — losers-first cleanup active")
 except ImportError:
     try:
         from bot.profit_priority_cleanup import get_profit_priority_cleanup
         PROFIT_PRIORITY_CLEANUP_AVAILABLE = True
-        logger.info("✅ Profit Priority Cleanup loaded — losers-first cleanup active")
+        logger.debug("✅ Profit Priority Cleanup loaded — losers-first cleanup active")
     except ImportError:
         PROFIT_PRIORITY_CLEANUP_AVAILABLE = False
         get_profit_priority_cleanup = None  # type: ignore
@@ -1251,12 +1251,12 @@ except ImportError:
 try:
     from smart_position_consolidator import get_smart_position_consolidator
     SMART_CONSOLIDATOR_AVAILABLE = True
-    logger.info("✅ Smart Position Consolidator loaded — fragment→winner merging active")
+    logger.debug("✅ Smart Position Consolidator loaded — fragment→winner merging active")
 except ImportError:
     try:
         from bot.smart_position_consolidator import get_smart_position_consolidator
         SMART_CONSOLIDATOR_AVAILABLE = True
-        logger.info("✅ Smart Position Consolidator loaded — fragment→winner merging active")
+        logger.debug("✅ Smart Position Consolidator loaded — fragment→winner merging active")
     except ImportError:
         SMART_CONSOLIDATOR_AVAILABLE = False
         get_smart_position_consolidator = None  # type: ignore
@@ -1266,12 +1266,12 @@ except ImportError:
 try:
     from dynamic_sniper_thresholds import get_dynamic_sniper_thresholds
     DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE = True
-    logger.info("✅ Dynamic Sniper Thresholds loaded — adaptive entry gates active")
+    logger.debug("✅ Dynamic Sniper Thresholds loaded — adaptive entry gates active")
 except ImportError:
     try:
         from bot.dynamic_sniper_thresholds import get_dynamic_sniper_thresholds
         DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE = True
-        logger.info("✅ Dynamic Sniper Thresholds loaded — adaptive entry gates active")
+        logger.debug("✅ Dynamic Sniper Thresholds loaded — adaptive entry gates active")
     except ImportError:
         DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE = False
         get_dynamic_sniper_thresholds = None  # type: ignore
@@ -1281,12 +1281,12 @@ except ImportError:
 try:
     from dynamic_min_entry_sizer import get_dynamic_min_entry_sizer
     DYNAMIC_MIN_ENTRY_SIZER_AVAILABLE = True
-    logger.info("✅ Dynamic Min Entry Sizer loaded — volatility+fee floor active")
+    logger.debug("✅ Dynamic Min Entry Sizer loaded — volatility+fee floor active")
 except ImportError:
     try:
         from bot.dynamic_min_entry_sizer import get_dynamic_min_entry_sizer
         DYNAMIC_MIN_ENTRY_SIZER_AVAILABLE = True
-        logger.info("✅ Dynamic Min Entry Sizer loaded — volatility+fee floor active")
+        logger.debug("✅ Dynamic Min Entry Sizer loaded — volatility+fee floor active")
     except ImportError:
         DYNAMIC_MIN_ENTRY_SIZER_AVAILABLE = False
         get_dynamic_min_entry_sizer = None  # type: ignore
@@ -1296,12 +1296,12 @@ except ImportError:
 try:
     from exchange_order_validator import get_exchange_order_validator, validate_order as eov_validate_order
     EXCHANGE_ORDER_VALIDATOR_AVAILABLE = True
-    logger.info("✅ Exchange Order Validator loaded — PERMANENT_DUST_UNSELLABLE filtering active")
+    logger.debug("✅ Exchange Order Validator loaded — PERMANENT_DUST_UNSELLABLE filtering active")
 except ImportError:
     try:
         from bot.exchange_order_validator import get_exchange_order_validator, validate_order as eov_validate_order
         EXCHANGE_ORDER_VALIDATOR_AVAILABLE = True
-        logger.info("✅ Exchange Order Validator loaded — PERMANENT_DUST_UNSELLABLE filtering active")
+        logger.debug("✅ Exchange Order Validator loaded — PERMANENT_DUST_UNSELLABLE filtering active")
     except ImportError:
         EXCHANGE_ORDER_VALIDATOR_AVAILABLE = False
         get_exchange_order_validator = None  # type: ignore
@@ -1312,12 +1312,12 @@ except ImportError:
 try:
     from ai_trade_quality_filter import get_ai_trade_quality_filter, TradeFeatures as AITradeFeatures
     AI_TRADE_QUALITY_FILTER_AVAILABLE = True
-    logger.info("✅ AI Trade Quality Filter loaded — ML scalp quality gate active")
+    logger.debug("✅ AI Trade Quality Filter loaded — ML scalp quality gate active")
 except ImportError:
     try:
         from bot.ai_trade_quality_filter import get_ai_trade_quality_filter, TradeFeatures as AITradeFeatures
         AI_TRADE_QUALITY_FILTER_AVAILABLE = True
-        logger.info("✅ AI Trade Quality Filter loaded — ML scalp quality gate active")
+        logger.debug("✅ AI Trade Quality Filter loaded — ML scalp quality gate active")
     except ImportError:
         AI_TRADE_QUALITY_FILTER_AVAILABLE = False
         get_ai_trade_quality_filter = None  # type: ignore
@@ -1328,12 +1328,12 @@ except ImportError:
 try:
     from profit_compounding_engine import get_profit_compounding_engine
     PROFIT_COMPOUNDING_ENGINE_AVAILABLE = True
-    logger.info("✅ Profit Compounding Engine loaded — auto-compounding position sizing active")
+    logger.debug("✅ Profit Compounding Engine loaded — auto-compounding position sizing active")
 except ImportError:
     try:
         from bot.profit_compounding_engine import get_profit_compounding_engine
         PROFIT_COMPOUNDING_ENGINE_AVAILABLE = True
-        logger.info("✅ Profit Compounding Engine loaded — auto-compounding position sizing active")
+        logger.debug("✅ Profit Compounding Engine loaded — auto-compounding position sizing active")
     except ImportError:
         PROFIT_COMPOUNDING_ENGINE_AVAILABLE = False
         get_profit_compounding_engine = None  # type: ignore
@@ -1343,12 +1343,12 @@ except ImportError:
 try:
     from compounding_engine import get_compounding_engine, TradeResult as CompoundingTradeResult
     ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE = True
-    logger.info("✅ Adaptive Compounding Engine loaded — tier-based compounding with milestone locking active")
+    logger.debug("✅ Adaptive Compounding Engine loaded — tier-based compounding with milestone locking active")
 except ImportError:
     try:
         from bot.compounding_engine import get_compounding_engine, TradeResult as CompoundingTradeResult
         ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE = True
-        logger.info("✅ Adaptive Compounding Engine loaded — tier-based compounding with milestone locking active")
+        logger.debug("✅ Adaptive Compounding Engine loaded — tier-based compounding with milestone locking active")
     except ImportError:
         ADAPTIVE_COMPOUNDING_ENGINE_AVAILABLE = False
         get_compounding_engine = None  # type: ignore
@@ -1359,12 +1359,12 @@ except ImportError:
 try:
     from correlation_risk_engine import get_correlation_risk_engine
     CORRELATION_RISK_ENGINE_AVAILABLE = True
-    logger.info("✅ Correlation Risk Engine loaded — portfolio correlation gating active")
+    logger.debug("✅ Correlation Risk Engine loaded — portfolio correlation gating active")
 except ImportError:
     try:
         from bot.correlation_risk_engine import get_correlation_risk_engine
         CORRELATION_RISK_ENGINE_AVAILABLE = True
-        logger.info("✅ Correlation Risk Engine loaded — portfolio correlation gating active")
+        logger.debug("✅ Correlation Risk Engine loaded — portfolio correlation gating active")
     except ImportError:
         CORRELATION_RISK_ENGINE_AVAILABLE = False
         get_correlation_risk_engine = None  # type: ignore
@@ -1374,12 +1374,12 @@ except ImportError:
 try:
     from strategy_robustness_layer import get_strategy_robustness_layer
     STRATEGY_ROBUSTNESS_AVAILABLE = True
-    logger.info("✅ Strategy Robustness Layer loaded — regime edge survival gating active")
+    logger.debug("✅ Strategy Robustness Layer loaded — regime edge survival gating active")
 except ImportError:
     try:
         from bot.strategy_robustness_layer import get_strategy_robustness_layer
         STRATEGY_ROBUSTNESS_AVAILABLE = True
-        logger.info("✅ Strategy Robustness Layer loaded — regime edge survival gating active")
+        logger.debug("✅ Strategy Robustness Layer loaded — regime edge survival gating active")
     except ImportError:
         STRATEGY_ROBUSTNESS_AVAILABLE = False
         get_strategy_robustness_layer = None  # type: ignore
@@ -1389,12 +1389,12 @@ except ImportError:
 try:
     from profit_optimizer import get_profit_optimizer
     PROFIT_OPTIMIZER_AVAILABLE = True
-    logger.info("✅ Profit Optimizer loaded — confidence sizing, trade ranking, acceleration active")
+    logger.debug("✅ Profit Optimizer loaded — confidence sizing, trade ranking, acceleration active")
 except ImportError:
     try:
         from bot.profit_optimizer import get_profit_optimizer
         PROFIT_OPTIMIZER_AVAILABLE = True
-        logger.info("✅ Profit Optimizer loaded — confidence sizing, trade ranking, acceleration active")
+        logger.debug("✅ Profit Optimizer loaded — confidence sizing, trade ranking, acceleration active")
     except ImportError:
         PROFIT_OPTIMIZER_AVAILABLE = False
         get_profit_optimizer = None  # type: ignore
@@ -1404,12 +1404,12 @@ except ImportError:
 try:
     from profit_mode_optimizer import get_profit_mode_optimizer
     PROFIT_MODE_OPTIMIZER_AVAILABLE = True
-    logger.info("✅ Profit Mode Optimizer loaded — dynamic TP, win-rate auto-adjust, pair ranking active")
+    logger.debug("✅ Profit Mode Optimizer loaded — dynamic TP, win-rate auto-adjust, pair ranking active")
 except ImportError:
     try:
         from bot.profit_mode_optimizer import get_profit_mode_optimizer
         PROFIT_MODE_OPTIMIZER_AVAILABLE = True
-        logger.info("✅ Profit Mode Optimizer loaded — dynamic TP, win-rate auto-adjust, pair ranking active")
+        logger.debug("✅ Profit Mode Optimizer loaded — dynamic TP, win-rate auto-adjust, pair ranking active")
     except ImportError:
         PROFIT_MODE_OPTIMIZER_AVAILABLE = False
         get_profit_mode_optimizer = None  # type: ignore
@@ -1419,12 +1419,12 @@ except ImportError:
 try:
     from portfolio_profit_engine import get_portfolio_profit_engine
     PORTFOLIO_PROFIT_ENGINE_AVAILABLE = True
-    logger.info("✅ Portfolio Profit Engine loaded — total portfolio P&L tracking active")
+    logger.debug("✅ Portfolio Profit Engine loaded — total portfolio P&L tracking active")
 except ImportError:
     try:
         from bot.portfolio_profit_engine import get_portfolio_profit_engine
         PORTFOLIO_PROFIT_ENGINE_AVAILABLE = True
-        logger.info("✅ Portfolio Profit Engine loaded — total portfolio P&L tracking active")
+        logger.debug("✅ Portfolio Profit Engine loaded — total portfolio P&L tracking active")
     except ImportError:
         PORTFOLIO_PROFIT_ENGINE_AVAILABLE = False
         get_portfolio_profit_engine = None  # type: ignore
@@ -1433,12 +1433,12 @@ except ImportError:
 try:
     from auto_reinvest_engine import get_auto_reinvest_engine
     AUTO_REINVEST_ENGINE_AVAILABLE = True
-    logger.info("✅ Auto-Reinvest Engine loaded — profit reinvestment routing active")
+    logger.debug("✅ Auto-Reinvest Engine loaded — profit reinvestment routing active")
 except ImportError:
     try:
         from bot.auto_reinvest_engine import get_auto_reinvest_engine
         AUTO_REINVEST_ENGINE_AVAILABLE = True
-        logger.info("✅ Auto-Reinvest Engine loaded — profit reinvestment routing active")
+        logger.debug("✅ Auto-Reinvest Engine loaded — profit reinvestment routing active")
     except ImportError:
         AUTO_REINVEST_ENGINE_AVAILABLE = False
         get_auto_reinvest_engine = None  # type: ignore
@@ -1447,12 +1447,12 @@ except ImportError:
 try:
     from smart_drawdown_recovery import get_smart_drawdown_recovery
     SMART_DRAWDOWN_RECOVERY_AVAILABLE = True
-    logger.info("✅ Smart Drawdown Recovery loaded — structured drawdown recovery active")
+    logger.debug("✅ Smart Drawdown Recovery loaded — structured drawdown recovery active")
 except ImportError:
     try:
         from bot.smart_drawdown_recovery import get_smart_drawdown_recovery
         SMART_DRAWDOWN_RECOVERY_AVAILABLE = True
-        logger.info("✅ Smart Drawdown Recovery loaded — structured drawdown recovery active")
+        logger.debug("✅ Smart Drawdown Recovery loaded — structured drawdown recovery active")
     except ImportError:
         SMART_DRAWDOWN_RECOVERY_AVAILABLE = False
         get_smart_drawdown_recovery = None  # type: ignore
@@ -1461,12 +1461,12 @@ except ImportError:
 try:
     from performance_tracker import get_performance_tracker as _get_perf_tracker_ts, PERF_LOG_CYCLE_INTERVAL
     PERFORMANCE_TRACKER_AVAILABLE = True
-    logger.info("✅ Performance Tracker loaded — fee/slippage-aware trade stats active")
+    logger.debug("✅ Performance Tracker loaded — fee/slippage-aware trade stats active")
 except ImportError:
     try:
         from bot.performance_tracker import get_performance_tracker as _get_perf_tracker_ts, PERF_LOG_CYCLE_INTERVAL
         PERFORMANCE_TRACKER_AVAILABLE = True
-        logger.info("✅ Performance Tracker loaded — fee/slippage-aware trade stats active")
+        logger.debug("✅ Performance Tracker loaded — fee/slippage-aware trade stats active")
     except ImportError:
         PERFORMANCE_TRACKER_AVAILABLE = False
         _get_perf_tracker_ts = None  # type: ignore
@@ -1477,12 +1477,12 @@ except ImportError:
 try:
     from true_profit_tracker import get_true_profit_tracker as _get_true_profit_tracker
     TRUE_PROFIT_TRACKER_AVAILABLE = True
-    logger.info("✅ True Profit Tracker loaded — net profit (after fees) tracking active")
+    logger.debug("✅ True Profit Tracker loaded — net profit (after fees) tracking active")
 except ImportError:
     try:
         from bot.true_profit_tracker import get_true_profit_tracker as _get_true_profit_tracker
         TRUE_PROFIT_TRACKER_AVAILABLE = True
-        logger.info("✅ True Profit Tracker loaded — net profit (after fees) tracking active")
+        logger.debug("✅ True Profit Tracker loaded — net profit (after fees) tracking active")
     except ImportError:
         TRUE_PROFIT_TRACKER_AVAILABLE = False
         _get_true_profit_tracker = None  # type: ignore
@@ -1493,12 +1493,12 @@ except ImportError:
 try:
     from hf_flip_mode import get_hf_flip_mode as _get_hf_flip_mode
     HF_FLIP_MODE_AVAILABLE = True
-    logger.info("✅ HF Flip Mode loaded — fast daily profit mode available (set HF_FLIP_MODE=1)")
+    logger.debug("✅ HF Flip Mode loaded — fast daily profit mode available (set HF_FLIP_MODE=1)")
 except ImportError:
     try:
         from bot.hf_flip_mode import get_hf_flip_mode as _get_hf_flip_mode
         HF_FLIP_MODE_AVAILABLE = True
-        logger.info("✅ HF Flip Mode loaded — fast daily profit mode available (set HF_FLIP_MODE=1)")
+        logger.debug("✅ HF Flip Mode loaded — fast daily profit mode available (set HF_FLIP_MODE=1)")
     except ImportError:
         HF_FLIP_MODE_AVAILABLE = False
         _get_hf_flip_mode = None  # type: ignore
@@ -1516,12 +1516,12 @@ if HF_FLIP_MODE_AVAILABLE and _get_hf_flip_mode is not None:
 try:
     from hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode
     HF_SCALPING_AVAILABLE = True
-    logger.info("✅ HF Scalping Mode loaded — high-frequency micro scalping available (set HF_SCALP_MODE=1)")
+    logger.debug("✅ HF Scalping Mode loaded — high-frequency micro scalping available (set HF_SCALP_MODE=1)")
 except ImportError:
     try:
         from bot.hf_scalping_mode import get_hf_scalping_mode as _get_hf_scalping_mode
         HF_SCALPING_AVAILABLE = True
-        logger.info("✅ HF Scalping Mode loaded — high-frequency micro scalping available (set HF_SCALP_MODE=1)")
+        logger.debug("✅ HF Scalping Mode loaded — high-frequency micro scalping available (set HF_SCALP_MODE=1)")
     except ImportError:
         HF_SCALPING_AVAILABLE = False
         _get_hf_scalping_mode = None  # type: ignore
@@ -1548,7 +1548,7 @@ try:
         MICRO_CAP_COOLDOWN_VOLATILITY_FACTOR,
     )
     MICRO_CAP_COMPOUNDING_AVAILABLE = True
-    logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
+    logger.debug("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
 except ImportError:
     try:
         from bot.micro_capital_config import (
@@ -1570,7 +1570,7 @@ except ImportError:
             MICRO_CAP_COOLDOWN_VOLATILITY_FACTOR,
         )
         MICRO_CAP_COMPOUNDING_AVAILABLE = True
-        logger.info("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
+        logger.debug("✅ Micro-Cap Compounding Config loaded - balance-gated compounding mode active")
     except ImportError:
         MICRO_CAP_COMPOUNDING_AVAILABLE = False
         MICRO_CAP_TRADE_COOLDOWN = 60   # 60s cooldown — TUNE 5 (was 300s/5 min)
@@ -1598,12 +1598,12 @@ except ImportError:
 try:
     from minimum_notional_gate import get_minimum_notional_gate
     MINIMUM_NOTIONAL_GATE_AVAILABLE = True
-    logger.info("✅ Minimum Notional Gate loaded — notional-aware entry dust prevention active")
+    logger.debug("✅ Minimum Notional Gate loaded — notional-aware entry dust prevention active")
 except ImportError:
     try:
         from bot.minimum_notional_gate import get_minimum_notional_gate
         MINIMUM_NOTIONAL_GATE_AVAILABLE = True
-        logger.info("✅ Minimum Notional Gate loaded — notional-aware entry dust prevention active")
+        logger.debug("✅ Minimum Notional Gate loaded — notional-aware entry dust prevention active")
     except ImportError:
         MINIMUM_NOTIONAL_GATE_AVAILABLE = False
         get_minimum_notional_gate = None  # type: ignore
@@ -1613,12 +1613,12 @@ except ImportError:
 try:
     from log_rate_limiter import get_log_rate_limiter
     LOG_RATE_LIMITER_AVAILABLE = True
-    logger.info("✅ Log Rate Limiter loaded — high-frequency log throttling active")
+    logger.debug("✅ Log Rate Limiter loaded — high-frequency log throttling active")
 except ImportError:
     try:
         from bot.log_rate_limiter import get_log_rate_limiter
         LOG_RATE_LIMITER_AVAILABLE = True
-        logger.info("✅ Log Rate Limiter loaded — high-frequency log throttling active")
+        logger.debug("✅ Log Rate Limiter loaded — high-frequency log throttling active")
     except ImportError:
         LOG_RATE_LIMITER_AVAILABLE = False
         get_log_rate_limiter = None  # type: ignore
@@ -1628,12 +1628,12 @@ except ImportError:
 try:
     from first_trade_observer import get_first_trade_observer as _get_first_trade_observer
     FIRST_TRADE_OBSERVER_AVAILABLE = True
-    logger.info("✅ FirstTradeObserver loaded — signal→fill chain observability active")
+    logger.debug("✅ FirstTradeObserver loaded — signal→fill chain observability active")
 except ImportError:
     try:
         from bot.first_trade_observer import get_first_trade_observer as _get_first_trade_observer
         FIRST_TRADE_OBSERVER_AVAILABLE = True
-        logger.info("✅ FirstTradeObserver loaded — signal→fill chain observability active")
+        logger.debug("✅ FirstTradeObserver loaded — signal→fill chain observability active")
     except ImportError:
         FIRST_TRADE_OBSERVER_AVAILABLE = False
         _get_first_trade_observer = None  # type: ignore
@@ -1643,12 +1643,12 @@ except ImportError:
 try:
     from capital_scaling_engine import get_capital_engine
     CAPITAL_SCALING_ENGINE_AVAILABLE = True
-    logger.info("✅ Capital Scaling Engine loaded - auto-deposit compounding active")
+    logger.debug("✅ Capital Scaling Engine loaded - auto-deposit compounding active")
 except ImportError:
     try:
         from bot.capital_scaling_engine import get_capital_engine
         CAPITAL_SCALING_ENGINE_AVAILABLE = True
-        logger.info("✅ Capital Scaling Engine loaded - auto-deposit compounding active")
+        logger.debug("✅ Capital Scaling Engine loaded - auto-deposit compounding active")
     except ImportError:
         CAPITAL_SCALING_ENGINE_AVAILABLE = False
         get_capital_engine = None
@@ -1658,12 +1658,12 @@ except ImportError:
 try:
     from investor_mode import get_investor_mode_engine
     INVESTOR_MODE_AVAILABLE = True
-    logger.info("✅ External Capital Mode (Investor Mode) loaded - multi-investor tracking active")
+    logger.debug("✅ External Capital Mode (Investor Mode) loaded - multi-investor tracking active")
 except ImportError:
     try:
         from bot.investor_mode import get_investor_mode_engine
         INVESTOR_MODE_AVAILABLE = True
-        logger.info("✅ External Capital Mode (Investor Mode) loaded - multi-investor tracking active")
+        logger.debug("✅ External Capital Mode (Investor Mode) loaded - multi-investor tracking active")
     except ImportError:
         INVESTOR_MODE_AVAILABLE = False
         get_investor_mode_engine = None
@@ -1673,12 +1673,12 @@ except ImportError:
 try:
     from core.tiered_risk_engine import TieredRiskEngine
     TIERED_RISK_ENGINE_AVAILABLE = True
-    logger.info("✅ Tiered Risk Engine loaded - conservative/aggressive capital pool gating active")
+    logger.debug("✅ Tiered Risk Engine loaded - conservative/aggressive capital pool gating active")
 except ImportError:
     try:
         from tiered_risk_engine import TieredRiskEngine
         TIERED_RISK_ENGINE_AVAILABLE = True
-        logger.info("✅ Tiered Risk Engine loaded - conservative/aggressive capital pool gating active")
+        logger.debug("✅ Tiered Risk Engine loaded - conservative/aggressive capital pool gating active")
     except ImportError:
         TIERED_RISK_ENGINE_AVAILABLE = False
         TieredRiskEngine = None
@@ -1688,12 +1688,12 @@ except ImportError:
 try:
     from ai_strategy_evolution_engine import get_ai_strategy_evolution_engine
     AI_STRATEGY_EVOLUTION_AVAILABLE = True
-    logger.info("✅ AI Strategy Evolution Engine loaded - autonomous strategy mutation active")
+    logger.debug("✅ AI Strategy Evolution Engine loaded - autonomous strategy mutation active")
 except ImportError:
     try:
         from bot.ai_strategy_evolution_engine import get_ai_strategy_evolution_engine
         AI_STRATEGY_EVOLUTION_AVAILABLE = True
-        logger.info("✅ AI Strategy Evolution Engine loaded - autonomous strategy mutation active")
+        logger.debug("✅ AI Strategy Evolution Engine loaded - autonomous strategy mutation active")
     except ImportError:
         AI_STRATEGY_EVOLUTION_AVAILABLE = False
         get_ai_strategy_evolution_engine = None
@@ -1708,7 +1708,7 @@ try:
         AdaptiveProfitTargetEngine,
     )
     ADAPTIVE_TP_AVAILABLE = True
-    logger.info("✅ Adaptive TP Engine loaded — dynamic profit-target scaling active")
+    logger.debug("✅ Adaptive TP Engine loaded — dynamic profit-target scaling active")
 except ImportError:
     try:
         from bot.adaptive_profit_target_engine import (
@@ -1716,7 +1716,7 @@ except ImportError:
             AdaptiveProfitTargetEngine,
         )
         ADAPTIVE_TP_AVAILABLE = True
-        logger.info("✅ Adaptive TP Engine loaded — dynamic profit-target scaling active")
+        logger.debug("✅ Adaptive TP Engine loaded — dynamic profit-target scaling active")
     except ImportError:
         ADAPTIVE_TP_AVAILABLE = False
         get_adaptive_profit_engine = None
@@ -1729,12 +1729,12 @@ except ImportError:
 try:
     from trade_cluster_engine import get_trade_cluster_engine, TradeClusterEngine
     TRADE_CLUSTER_AVAILABLE = True
-    logger.info("✅ Trade Cluster Engine loaded — trend-stacking active")
+    logger.debug("✅ Trade Cluster Engine loaded — trend-stacking active")
 except ImportError:
     try:
         from bot.trade_cluster_engine import get_trade_cluster_engine, TradeClusterEngine
         TRADE_CLUSTER_AVAILABLE = True
-        logger.info("✅ Trade Cluster Engine loaded — trend-stacking active")
+        logger.debug("✅ Trade Cluster Engine loaded — trend-stacking active")
     except ImportError:
         TRADE_CLUSTER_AVAILABLE = False
         get_trade_cluster_engine = None
@@ -1747,12 +1747,12 @@ except ImportError:
 try:
     from ai_trade_confidence_engine import get_ai_trade_confidence_engine
     AI_CONFIDENCE_SIZING_AVAILABLE = True
-    logger.info("✅ AI Confidence Engine loaded — confidence-based position sizing active")
+    logger.debug("✅ AI Confidence Engine loaded — confidence-based position sizing active")
 except ImportError:
     try:
         from bot.ai_trade_confidence_engine import get_ai_trade_confidence_engine
         AI_CONFIDENCE_SIZING_AVAILABLE = True
-        logger.info("✅ AI Confidence Engine loaded — confidence-based position sizing active")
+        logger.debug("✅ AI Confidence Engine loaded — confidence-based position sizing active")
     except ImportError:
         AI_CONFIDENCE_SIZING_AVAILABLE = False
         get_ai_trade_confidence_engine = None
@@ -1767,7 +1767,7 @@ try:
         ShiftPolicy,
     )
     AUTO_BROKER_SHIFTER_AVAILABLE = True
-    logger.info("✅ Auto Broker Capital Shifter loaded — multi-broker routing active")
+    logger.debug("✅ Auto Broker Capital Shifter loaded — multi-broker routing active")
 except ImportError:
     try:
         from bot.auto_broker_capital_shifter import (
@@ -1775,7 +1775,7 @@ except ImportError:
             ShiftPolicy,
         )
         AUTO_BROKER_SHIFTER_AVAILABLE = True
-        logger.info("✅ Auto Broker Capital Shifter loaded — multi-broker routing active")
+        logger.debug("✅ Auto Broker Capital Shifter loaded — multi-broker routing active")
     except ImportError:
         AUTO_BROKER_SHIFTER_AVAILABLE = False
         get_auto_broker_capital_shifter = None
@@ -1789,7 +1789,7 @@ try:
         KrakenOptParams,
     )
     KRAKEN_PARAMS_OPTIMIZER_AVAILABLE = True
-    logger.info("✅ Kraken Params Optimizer loaded — low-fee target optimisation active")
+    logger.debug("✅ Kraken Params Optimizer loaded — low-fee target optimisation active")
 except ImportError:
     try:
         from bot.kraken_params_optimizer import (
@@ -1797,7 +1797,7 @@ except ImportError:
             KrakenOptParams,
         )
         KRAKEN_PARAMS_OPTIMIZER_AVAILABLE = True
-        logger.info("✅ Kraken Params Optimizer loaded — low-fee target optimisation active")
+        logger.debug("✅ Kraken Params Optimizer loaded — low-fee target optimisation active")
     except ImportError:
         KRAKEN_PARAMS_OPTIMIZER_AVAILABLE = False
         get_kraken_params_optimizer = None  # type: ignore
@@ -1811,7 +1811,7 @@ try:
         BROKER_PROFILES,
     )
     BROKER_STRATEGY_ROUTER_AVAILABLE = True
-    logger.info("✅ Broker Strategy Router loaded — per-broker trade filtering active")
+    logger.debug("✅ Broker Strategy Router loaded — per-broker trade filtering active")
 except ImportError:
     try:
         from bot.broker_strategy_router import (
@@ -1819,7 +1819,7 @@ except ImportError:
             BROKER_PROFILES,
         )
         BROKER_STRATEGY_ROUTER_AVAILABLE = True
-        logger.info("✅ Broker Strategy Router loaded — per-broker trade filtering active")
+        logger.debug("✅ Broker Strategy Router loaded — per-broker trade filtering active")
     except ImportError:
         BROKER_STRATEGY_ROUTER_AVAILABLE = False
         get_broker_strategy_router = None  # type: ignore
@@ -1830,12 +1830,12 @@ except ImportError:
 try:
     from broker_performance_scorer import get_broker_performance_scorer
     BROKER_PERFORMANCE_SCORER_AVAILABLE = True
-    logger.info("✅ Broker Performance Scorer loaded — fill-rate / latency scoring active")
+    logger.debug("✅ Broker Performance Scorer loaded — fill-rate / latency scoring active")
 except ImportError:
     try:
         from bot.broker_performance_scorer import get_broker_performance_scorer
         BROKER_PERFORMANCE_SCORER_AVAILABLE = True
-        logger.info("✅ Broker Performance Scorer loaded — fill-rate / latency scoring active")
+        logger.debug("✅ Broker Performance Scorer loaded — fill-rate / latency scoring active")
     except ImportError:
         BROKER_PERFORMANCE_SCORER_AVAILABLE = False
         get_broker_performance_scorer = None  # type: ignore
@@ -1845,12 +1845,12 @@ except ImportError:
 try:
     from capital_efficiency_mode import get_capital_efficiency_mode
     CAPITAL_EFFICIENCY_MODE_AVAILABLE = True
-    logger.info("✅ Capital Efficiency Mode loaded — account-size-aware thresholds active")
+    logger.debug("✅ Capital Efficiency Mode loaded — account-size-aware thresholds active")
 except ImportError:
     try:
         from bot.capital_efficiency_mode import get_capital_efficiency_mode
         CAPITAL_EFFICIENCY_MODE_AVAILABLE = True
-        logger.info("✅ Capital Efficiency Mode loaded — account-size-aware thresholds active")
+        logger.debug("✅ Capital Efficiency Mode loaded — account-size-aware thresholds active")
     except ImportError:
         CAPITAL_EFFICIENCY_MODE_AVAILABLE = False
         get_capital_efficiency_mode = None  # type: ignore
@@ -1860,12 +1860,12 @@ except ImportError:
 try:
     from kill_bad_symbols import get_kill_bad_symbols
     KILL_BAD_SYMBOLS_AVAILABLE = True
-    logger.info("✅ Kill Bad Symbols Memory loaded — losing coin exposure reduction active")
+    logger.debug("✅ Kill Bad Symbols Memory loaded — losing coin exposure reduction active")
 except ImportError:
     try:
         from bot.kill_bad_symbols import get_kill_bad_symbols
         KILL_BAD_SYMBOLS_AVAILABLE = True
-        logger.info("✅ Kill Bad Symbols Memory loaded — losing coin exposure reduction active")
+        logger.debug("✅ Kill Bad Symbols Memory loaded — losing coin exposure reduction active")
     except ImportError:
         KILL_BAD_SYMBOLS_AVAILABLE = False
         get_kill_bad_symbols = None  # type: ignore
@@ -1875,12 +1875,12 @@ except ImportError:
 try:
     from session_awareness import get_session_awareness
     SESSION_AWARENESS_AVAILABLE = True
-    logger.info("✅ Session Awareness loaded — time-based entry adjustments active")
+    logger.debug("✅ Session Awareness loaded — time-based entry adjustments active")
 except ImportError:
     try:
         from bot.session_awareness import get_session_awareness
         SESSION_AWARENESS_AVAILABLE = True
-        logger.info("✅ Session Awareness loaded — time-based entry adjustments active")
+        logger.debug("✅ Session Awareness loaded — time-based entry adjustments active")
     except ImportError:
         SESSION_AWARENESS_AVAILABLE = False
         get_session_awareness = None  # type: ignore
@@ -1890,12 +1890,12 @@ except ImportError:
 try:
     from pattern_win_tracker import get_pattern_win_tracker, Pattern as EntryPattern
     PATTERN_WIN_TRACKER_AVAILABLE = True
-    logger.info("✅ Pattern Win Tracker loaded — pattern analytics + daily profit target active")
+    logger.debug("✅ Pattern Win Tracker loaded — pattern analytics + daily profit target active")
 except ImportError:
     try:
         from bot.pattern_win_tracker import get_pattern_win_tracker, Pattern as EntryPattern
         PATTERN_WIN_TRACKER_AVAILABLE = True
-        logger.info("✅ Pattern Win Tracker loaded — pattern analytics + daily profit target active")
+        logger.debug("✅ Pattern Win Tracker loaded — pattern analytics + daily profit target active")
     except ImportError:
         PATTERN_WIN_TRACKER_AVAILABLE = False
         get_pattern_win_tracker = None  # type: ignore
@@ -3253,13 +3253,11 @@ class TradingStrategy:
                 )
         logger.info("Initializing TradingStrategy (APEX v7.1 - Multi-Broker Mode)...")
 
-        # ── HF Flip Mode — attach the pre-created singleton for later patching ──
-        self._hf_flip_mode = None
-        if HF_FLIP_MODE_AVAILABLE and _get_hf_flip_mode is not None:
-            try:
-                self._hf_flip_mode = _get_hf_flip_mode()
-            except Exception:
-                pass
+        # ── HF Flip Mode — reuse the module-level pre-created singleton ──
+        # _hf_flip_mode_instance is initialized at module import time (above).
+        # Calling _get_hf_flip_mode() again would be a duplicate singleton call;
+        # just reference the already-constructed instance directly.
+        self._hf_flip_mode = _hf_flip_mode_instance
 
         # Last Evaluated Trade Tracking (for UI panel)
         self.last_evaluated_trade = {

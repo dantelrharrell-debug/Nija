@@ -208,6 +208,9 @@ def _confidence_score(confidence: float, cfg: SniperConfig) -> float:
     Architecture: everything contributes → nothing hard-blocks.
     """
     return min(confidence * 10, 2.0)
+
+
+class SniperFilter:
     """
     All-in-one pre-execution quality gate.
 
