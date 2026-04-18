@@ -1170,6 +1170,15 @@ class SelfHealingStartup:
             except Exception as exc:
                 logger.debug("SelfHealingStartup: readiness gate signal failed (%s)", exc)
 
+        # Step 7: Re-evaluate state machine now that the broker is connected and
+        # CapitalAuthority has been hydrated by initialize_platform_brokers() →
+        # enforce_trading_bootstrap_contract() → refresh_capital_authority().
+        # The Step-1 call runs before any broker is registered so CA is always
+        # stale there; this second call runs after CA is fresh and can actually
+        # succeed (OFF → LIVE_ACTIVE via maybe_auto_activate()).
+        if startup_result.ok:
+            self._step_state_machine()
+
         if startup_result.ok:
             mode = "FALLBACK" if startup_result.on_fallback else "PRIMARY"
             logger.info(
@@ -1194,6 +1203,23 @@ class SelfHealingStartup:
         """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
         if not _STATE_MACHINE_AVAILABLE:
             return
+
+        # Pre-warm: if brokers are already registered, refresh CapitalAuthority
+        # so the CA_READY gate sees a fresh snapshot rather than a stale one.
+        # This is a no-op when called before any broker has been registered
+        # (refresh_capital_authority gates on has_registered_brokers()), and a
+        # genuine refresh when called after broker connection — the intended use.
+        if _MABM_AVAILABLE and _mabm is not None:
+            try:
+                if hasattr(_mabm, "has_registered_brokers") and _mabm.has_registered_brokers():
+                    logger.info(
+                        "SelfHealingStartup: refreshing CapitalAuthority before state machine step"
+                    )
+                    _mabm.refresh_capital_authority(trigger="state_machine_gate")
+            except Exception as exc:
+                logger.debug(
+                    "SelfHealingStartup: CA pre-warm before state machine step failed (%s)", exc
+                )
 
         try:
             sm      = get_state_machine()
