@@ -826,6 +826,18 @@ def _start_single_broker_thread(strategy, cycle_secs):
     """
     stop_flag = threading.Event()
 
+    def _is_live_active() -> bool:
+        """Return True if the trading state machine is in LIVE_ACTIVE state."""
+        try:
+            from bot.trading_state_machine import get_state_machine as _gsm, TradingState as _TS
+            return _gsm().get_current_state() == _TS.LIVE_ACTIVE
+        except Exception:
+            try:
+                from trading_state_machine import get_state_machine as _gsm, TradingState as _TS  # type: ignore[import]
+                return _gsm().get_current_state() == _TS.LIVE_ACTIVE
+            except Exception:
+                return False  # fail-closed: block execution if state machine is unavailable
+
     def _runner():
         logger.info(
             "🚀 [Orchestrator] Single-broker trading thread started (%ds cadence)",
@@ -836,8 +848,21 @@ def _start_single_broker_thread(strategy, cycle_secs):
             try:
                 cycle += 1
                 logger.info("🔁 [Orchestrator] Single-broker cycle #%d", cycle)
+                # FIX 3: EXECUTION LOOP ASSERTION — prevent silent startup stalls.
+                # If LIVE_ACTIVE is not confirmed the cycle is skipped and retried
+                # after the normal back-off so the thread never silently stalls.
+                assert _is_live_active(), "Execution loop started without LIVE_ACTIVE"
                 strategy.run_cycle()
                 stop_flag.wait(cycle_secs)
+            except AssertionError as _assert_err:
+                if stop_flag.is_set():
+                    break
+                logger.error(
+                    "❌ [Orchestrator] Single-broker cycle #%d LIVE_ACTIVE assertion failed: %s — retrying in 10s",
+                    cycle,
+                    _assert_err,
+                )
+                stop_flag.wait(10)
             except Exception as _cycle_err:
                 if stop_flag.is_set():
                     break
@@ -2374,6 +2399,58 @@ def _run_bot_startup_and_trading():
                     "mode": "single",
                 }
                 logger.info("   ✅ Self-healing single-broker thread started")
+
+            # ── FIX 2: RUNTIME START CONFIRMATION ──────────────────────────────────
+            # Emit the definitive "RUNTIME MODE ACTIVE" log ONLY when all three
+            # conditions are met: LIVE_ACTIVE state, CA_READY, and execution engine
+            # initialized.  This provides an unambiguous proof that the trading loop
+            # has actually begun; its absence in logs means a stall occurred.
+            try:
+                from bot.trading_state_machine import get_state_machine as _gsm, TradingState as _TS
+                _sm_state = _gsm().get_current_state()
+            except Exception:
+                try:
+                    from trading_state_machine import get_state_machine as _gsm, TradingState as _TS
+                    _sm_state = _gsm().get_current_state()
+                except Exception:
+                    _sm_state = None
+                    _TS = None
+
+            _ca_ready_flag = False
+            try:
+                from bot.capital_authority import get_capital_authority as _gca
+                _ca_ready_flag = _gca().is_ready()
+            except Exception:
+                try:
+                    from capital_authority import get_capital_authority as _gca  # type: ignore[import]
+                    _ca_ready_flag = _gca().is_ready()
+                except Exception:
+                    _ca_ready_flag = False  # fail-closed: block confirmation if CA unavailable
+
+            _exec_engine_ready = (
+                hasattr(strategy, "execution_engine")
+                and strategy.execution_engine is not None
+            )
+
+            if (
+                _sm_state is not None
+                and _TS is not None
+                and _sm_state == _TS.LIVE_ACTIVE
+                and _ca_ready_flag
+                and _exec_engine_ready
+            ):
+                logger.info(
+                    "✅ RUNTIME MODE ACTIVE — market loop starting "
+                    "(CA_READY=True, LIVE_ACTIVE=True, execution_engine=initialized)"
+                )
+            else:
+                logger.warning(
+                    "⚠️ RUNTIME START: one or more readiness conditions not met — "
+                    "LIVE_ACTIVE=%s CA_READY=%s execution_engine=%s",
+                    _sm_state == _TS.LIVE_ACTIVE if (_sm_state and _TS) else "unknown",
+                    _ca_ready_flag,
+                    _exec_engine_ready,
+                )
 
             # ═══════════════════════════════════════════════════════════════════════
             # SUPERVISOR LOOP — monitors every 10 s, restarts dead threads
