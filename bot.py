@@ -38,6 +38,13 @@ except Exception:
 _initialized_state: dict = {}
 _initialized_state_lock = threading.Lock()
 
+# Single-owner bootstrap kernel lock.
+# Only one bootstrap execution sequence may run at a time.  The BotStartup
+# thread acquires this non-blocking before entering the retry loop.  If another
+# concurrent call sneaks in (e.g. a second spawn from an unexpected code path)
+# it is rejected immediately instead of racing through shared init state.
+_BOOTSTRAP_SINGLE_OWNER_LOCK = threading.Lock()
+
 
 @dataclass
 class _ExternalWatchdogRestartState:
@@ -1104,86 +1111,113 @@ def _rerun_supervisor_loop(state: dict) -> None:
 
 def _run_bot_startup_and_trading_with_retry():
     """
-    Wrapper function that implements startup retry logic.
+    Bootstrap kernel entry point — retries on transient failures.
+
+    Enforces the single-owner invariant: only one instance of this function
+    may be executing at any time.  A concurrent call (e.g. a stale code path
+    spawning a second BotStartup thread) is rejected immediately so it can
+    never race through shared initialisation state.
+
+    Claims FSM bootstrap ownership so that any other thread attempting to
+    drive the FSM forward will produce an observable warning log.
 
     Retries indefinitely with exponential backoff (capped at 60 s) so that
     transient errors (Kraken nonce, network blip, etc.) never kill the thread
     permanently.  Only a clean KeyboardInterrupt stops the loop.
     """
-    import time
+    # ── Single-owner bootstrap kernel ────────────────────────────────────────
+    if not _BOOTSTRAP_SINGLE_OWNER_LOCK.acquire(blocking=False):
+        logger.error(
+            "[Bootstrap] Concurrent bootstrap execution detected — "
+            "another bootstrap kernel sequence is already running on this process. "
+            "This indicates a bug: BotStartup should never be spawned twice. "
+            "Rejecting this call."
+        )
+        return
+    try:
+        # Claim FSM ownership: from this point forward, only this thread should
+        # drive the bootstrap FSM forward.  Non-owner transitions will be
+        # logged as warnings so races are immediately visible.
+        if _BOOTSTRAP_FSM_AVAILABLE:
+            _get_bootstrap_fsm().claim_bootstrap_ownership()
 
-    _INITIAL_DELAY_SECONDS = 5
-    _BACKOFF_MULTIPLIER = 2
-    _MAX_BACKOFF_EXPONENT = 6   # caps delay at 5 * 2^6 = 320 → clamped to _MAX_DELAY
-    _MAX_DELAY = 60             # seconds — keeps retries responsive
-    _MAX_CONNECTION_ATTEMPTS = 3  # FIX 4: anti-loop kill switch
+        import time
 
-    attempt = 0
-    connection_attempts = 0
+        _INITIAL_DELAY_SECONDS = 5
+        _BACKOFF_MULTIPLIER = 2
+        _MAX_BACKOFF_EXPONENT = 6   # caps delay at 5 * 2^6 = 320 → clamped to _MAX_DELAY
+        _MAX_DELAY = 60             # seconds — keeps retries responsive
+        _MAX_CONNECTION_ATTEMPTS = 3  # FIX 4: anti-loop kill switch
 
-    while True:
-        try:
-            # Attempt to start the bot
-            _run_bot_startup_and_trading()
-            # Normal exit — supervisor loop inside returned cleanly
-            return
+        attempt = 0
+        connection_attempts = 0
 
-        except KeyboardInterrupt:
-            # Clean shutdown — do not retry
-            logger.info("Received KeyboardInterrupt — stopping startup thread")
-            raise
+        while True:
+            try:
+                # Attempt to start the bot
+                _run_bot_startup_and_trading()
+                # Normal exit — supervisor loop inside returned cleanly
+                return
 
-        except Exception as e:
-            if _is_fatal_nonce_restart_error(e):
-                logger.critical(
-                    "🚨 Fatal nonce authorization/desync error detected: %s",
-                    e,
-                    exc_info=True,
-                )
-                logger.critical(
-                    "🚨 Requesting clean process exit so external watchdog can restart service"
-                )
-                # Bootstrap FSM: fatal nonce → EXTERNAL_RESTART_REQUIRED (I9)
-                _bfsm_transition(
-                    _BootstrapState.EXTERNAL_RESTART_REQUIRED,
-                    f"fatal nonce error: {e}",
-                )
-                _request_external_watchdog_restart(str(e))
+            except KeyboardInterrupt:
+                # Clean shutdown — do not retry
+                logger.info("Received KeyboardInterrupt — stopping startup thread")
                 raise
-            attempt += 1
-            connection_attempts += 1  # FIX 4: track connection attempts
 
-            # FIX 4: anti-loop kill switch — abort if connection keeps looping
-            if connection_attempts > _MAX_CONNECTION_ATTEMPTS:
-                logger.critical(
-                    "🚨 CONNECTION LOOP DETECTED — FORCING EXIT after %d attempts",
-                    connection_attempts,
+            except Exception as e:
+                if _is_fatal_nonce_restart_error(e):
+                    logger.critical(
+                        "🚨 Fatal nonce authorization/desync error detected: %s",
+                        e,
+                        exc_info=True,
+                    )
+                    logger.critical(
+                        "🚨 Requesting clean process exit so external watchdog can restart service"
+                    )
+                    # Bootstrap FSM: fatal nonce → EXTERNAL_RESTART_REQUIRED (I9)
+                    _bfsm_transition(
+                        _BootstrapState.EXTERNAL_RESTART_REQUIRED,
+                        f"fatal nonce error: {e}",
+                    )
+                    _request_external_watchdog_restart(str(e))
+                    raise
+                attempt += 1
+                connection_attempts += 1  # FIX 4: track connection attempts
+
+                # FIX 4: anti-loop kill switch — abort if connection keeps looping
+                if connection_attempts > _MAX_CONNECTION_ATTEMPTS:
+                    logger.critical(
+                        "🚨 CONNECTION LOOP DETECTED — FORCING EXIT after %d attempts",
+                        connection_attempts,
+                    )
+                    break
+
+                # Bootstrap FSM: transient failure → BOOT_FAILED_RETRY so the next
+                # attempt can enter PLATFORM_CONNECTING cleanly.  Skip reset when
+                # full init already completed (fast-path supervisor restart scenario).
+                if _BOOTSTRAP_FSM_AVAILABLE:
+                    with _initialized_state_lock:
+                        _init_done = (
+                            _initialized_state.get("strategy") is not None
+                            and "active_threads" in _initialized_state
+                        )
+                    if not _init_done:
+                        _get_bootstrap_fsm().reset_for_retry(
+                            f"attempt #{attempt} failed: {e}"
+                        )
+
+                delay = min(
+                    _MAX_DELAY,
+                    _INITIAL_DELAY_SECONDS * (_BACKOFF_MULTIPLIER ** min(attempt - 1, _MAX_BACKOFF_EXPONENT)),
                 )
-                break
+                logger.error(
+                    "💥 [Startup] Attempt #%d failed: %s — retrying in %ds",
+                    attempt, e, delay, exc_info=True,
+                )
+                time.sleep(delay)
 
-            # Bootstrap FSM: transient failure → BOOT_FAILED_RETRY so the next
-            # attempt can enter PLATFORM_CONNECTING cleanly.  Skip reset when
-            # full init already completed (fast-path supervisor restart scenario).
-            if _BOOTSTRAP_FSM_AVAILABLE:
-                with _initialized_state_lock:
-                    _init_done = (
-                        _initialized_state.get("strategy") is not None
-                        and "active_threads" in _initialized_state
-                    )
-                if not _init_done:
-                    _get_bootstrap_fsm().reset_for_retry(
-                        f"attempt #{attempt} failed: {e}"
-                    )
-
-            delay = min(
-                _MAX_DELAY,
-                _INITIAL_DELAY_SECONDS * (_BACKOFF_MULTIPLIER ** min(attempt - 1, _MAX_BACKOFF_EXPONENT)),
-            )
-            logger.error(
-                "💥 [Startup] Attempt #%d failed: %s — retrying in %ds",
-                attempt, e, delay, exc_info=True,
-            )
-            time.sleep(delay)
+    finally:
+        _BOOTSTRAP_SINGLE_OWNER_LOCK.release()
 
 
 def _run_bot_startup_and_trading():
@@ -2560,7 +2594,7 @@ def main():
     logger.info("=" * 70)
     
     startup_thread = threading.Thread(
-        target=_run_bot_startup_and_trading,  # TEMP: no retry wrapper (diagnostic mode)
+        target=_run_bot_startup_and_trading_with_retry,  # single-owner kernel, always with retry
         daemon=False,  # NOT daemon - we want this to keep running
         name="BotStartup"
     )
@@ -2586,12 +2620,13 @@ def main():
     # while the startup thread does all the work
     
     _log_lifecycle_banner(
-        "🔒 ENTERING SUPERVISOR MODE",
+        "🔒 ENTERING SUPERVISOR MODE (observer-only)",
         [
-            "Main thread will monitor background threads",
+            "Main thread observes background threads — does NOT restart them",
+            "Bootstrap kernel (BotStartup) owns all retry logic internally",
             "Health server: ✅ Running (always responds to Railway)",
             "Heartbeat thread: ✅ Running (updates every 10s)",
-            "Startup thread: ✅ Running (initializing bot)",
+            "Startup thread: ✅ Running (bootstrap kernel active)",
             f"Status logging every {KEEP_ALIVE_SLEEP_INTERVAL_SECONDS}s",
             "To shutdown: Use SIGTERM or SIGINT (handled by signal handlers)"
         ]
@@ -2621,19 +2656,27 @@ def main():
                 )
                 raise RuntimeError(f"External watchdog restart requested: {restart_reason}")
 
-            # Check if startup thread is still alive — restart if not
+            # Observer-only: BotStartup owns its own retry loop via the single-
+            # owner kernel.  If the thread exits it means the kernel itself
+            # terminated (clean shutdown, fatal nonce, or connection-loop
+            # kill-switch).  Spawning a second BotStartup here would create a
+            # concurrent bootstrap sequence — exactly the race we eliminated.
+            # Instead, exit and let the external watchdog restart the process
+            # with a clean slate.
             if not startup_thread.is_alive():
                 logger.critical(
-                    "💥 [Supervisor] BotStartup thread has exited unexpectedly — restarting in 5s"
+                    "💥 [Supervisor] Bootstrap kernel (BotStartup) thread has exited — "
+                    "terminating process so an external process manager (Railway, systemd, "
+                    "Docker restart policy) can restart with a clean state. "
+                    "If no external watchdog is configured the process will stay stopped."
                 )
-                time.sleep(5)
-                startup_thread = threading.Thread(
-                    target=_run_bot_startup_and_trading_with_retry,
-                    daemon=False,
-                    name="BotStartup",
-                )
-                startup_thread.start()
-                logger.info("✅ [Supervisor] BotStartup thread restarted")
+                if _BOOTSTRAP_FSM_AVAILABLE:
+                    _bfsm_transition(
+                        _BootstrapState.SHUTDOWN,
+                        "bootstrap kernel thread exited",
+                    )
+                _release_process_lock()
+                sys.exit(1)
             
             # Log periodic status
             if supervisor_cycle % 12 == 0:  # Every hour at 300s intervals
