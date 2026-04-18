@@ -1859,6 +1859,7 @@ def _run_bot_startup_and_trading():
                         "init_once_guard: TradingStrategy creation attempted more than once — "
                         "likely a retry-loop bug."
                     )
+                logger.critical("🔥 A1: before get_state_machine")
                 logger.critical("🚀 CREATING TradingStrategy INSTANCE")
                 strategy = TradingStrategy()
                 if strategy is None:
@@ -1869,6 +1870,7 @@ def _run_bot_startup_and_trading():
                     )
                 with _initialized_state_lock:
                     _initialized_state["strategy"] = strategy
+                logger.critical("🔥 A2: after get_state_machine")
                 logger.critical("🧠 STATE STORED — entering supervisor mode")
 
             # Bootstrap FSM: broker(s) connected → PLATFORM_READY
@@ -2097,6 +2099,7 @@ def _run_bot_startup_and_trading():
             #       time.sleep(0.1)
             #   startup_lock.clear()   ← finalize_bootstrap_ready() equivalent
             _bms_mabm = getattr(strategy, "multi_account_manager", None)
+            logger.critical("🔥 A3: before CapitalAuthority fetch")
             _bms_ca = None
             try:
                 from bot.capital_authority import get_capital_authority as _get_ca_bms
@@ -2139,6 +2142,7 @@ def _run_bot_startup_and_trading():
                     from bot.startup_phase_gate import get_phase_gate as _get_pg2, Phase as _PhaseCheck2
                     _get_pg2().require(_PhaseCheck2.CAPITAL_BRAIN)
                 try:
+                    logger.critical("🔥 A4: before nonce-related call")
                     _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
                     logger.info("[Bootstrap] BOOTSTRAP_START capital refresh triggered")
                     _bms_refresh_ok = True
@@ -2206,6 +2210,7 @@ def _run_bot_startup_and_trading():
                 )
                 return 0.0
 
+            logger.critical("🔥 A5: before SENTINEL B")
             logger.critical("🔥 SENTINEL B: entering capital gate")
             _capital_gate_deadline = time.time() + 60
             while True:
