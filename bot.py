@@ -2203,6 +2203,7 @@ def _run_bot_startup_and_trading():
                 )
                 return 0.0
 
+            _capital_gate_deadline = time.time() + 60
             while True:
                 try:
                     _total_capital = _get_startup_total_capital()
@@ -2214,6 +2215,16 @@ def _run_bot_startup_and_trading():
                     _total_capital = 0.0
 
                 ca = _bms_ca
+                # Per-pass diagnostic — tells exactly which field is stuck
+                if ca is not None:
+                    logger.warning(
+                        "[CapGate] hydrated=%s state=%s total=%s ready=%s",
+                        ca.is_hydrated,
+                        ca.state,
+                        ca.total_capital,
+                        ca.is_ready(),
+                    )
+
                 if ca and ca.is_ready():
                     logger.critical(
                         "✅ CAPITAL GATE PASSED — CA hydrated with registered broker balances"
@@ -2226,6 +2237,11 @@ def _run_bot_startup_and_trading():
                         f"startup capital confirmed: ${_total_capital:.2f}",
                     )
                     break
+
+                if time.time() > _capital_gate_deadline:
+                    raise RuntimeError(
+                        "INIT FAILED: CapitalAuthority never became ready"
+                    )
 
                 capital_gate_checks += 1
                 _should_log_gate = (
@@ -2307,7 +2323,7 @@ def _run_bot_startup_and_trading():
                             "[CapGate-Diag] TradingStateMachine probe raised: %s",
                             _diag_tsm_err,
                         )
-                time.sleep(CAPITAL_GATE_INTERVAL_S)
+                time.sleep(3)
             logger.info("=" * 70)
             # ── B: Phase 3 → 4 (strategy engine ready; execution layer may begin) ──
             _advance_phase(_Phase.EXECUTION_LAYER, reason="startup capital confirmed; strategy engine ready")
