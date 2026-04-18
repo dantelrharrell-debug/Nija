@@ -1108,6 +1108,8 @@ class SelfHealingStartup:
         self._cfg              = config or StartupConfig()
         self.pre_halt_engine   = PreHaltAlertEngine(self._cfg)
         self._broker_ctrl      = BrokerFallbackController(self._cfg)
+        self._sm_lock          = threading.Lock()
+        self._sm_started: bool = False
 
     # ── Public entry point ─────────────────────────────────────────────────
 
@@ -1355,16 +1357,19 @@ class SelfHealingStartup:
         """Single-authority entry point for the state machine.
 
         Guarantees the state machine is invoked at most once per
-        :class:`SelfHealingStartup` instance, preventing concurrent or
-        duplicate executions triggered from multiple call sites.
+        :class:`SelfHealingStartup` instance.  Thread-safe: a
+        :class:`threading.Lock` prevents concurrent invocations from multiple
+        call sites from both entering :meth:`_step_state_machine` simultaneously.
         """
         logger.critical("BOOT: unified state machine entry")
 
-        if getattr(self, "_sm_started", False):
-            logger.critical("BOOT: state machine already started — skipping")
-            return
+        with self._sm_lock:
+            if self._sm_started:
+                logger.critical("BOOT: state machine already started — skipping")
+                return
 
-        self._sm_started = True
+            self._sm_started = True
+
         self._step_state_machine()
 
     def _step_state_machine(self) -> None:
