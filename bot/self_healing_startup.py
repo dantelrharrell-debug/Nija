@@ -1123,7 +1123,7 @@ class SelfHealingStartup:
         logger.info("=" * 60)
 
         # Step 1: State machine
-        self._step_state_machine()
+        self.start_state_machine()
 
         # Step 2: Nonce poison detection
         nonce_report = NoncePoisonDetector(self._cfg).detect()
@@ -1231,7 +1231,7 @@ class SelfHealingStartup:
                             _ca_exc,
                         )
 
-                self._step_state_machine()
+                self.start_state_machine()
 
                 if self._is_ca_ready() or self._is_live_active():
                     logger.info("✅ CA_READY RESOLVED — exiting post-connection loop")
@@ -1249,7 +1249,7 @@ class SelfHealingStartup:
         if startup_result.ok:
             logger.info("🚀 PREFLIGHT COMPLETE → ENTERING RUNTIME BOOTSTRAP")
             for _ in range(_MAX_STATE_TRANSITION_ATTEMPTS):
-                self._step_state_machine()
+                self.start_state_machine()
                 if self._is_live_active():
                     break
             if not self._is_live_active():
@@ -1348,8 +1348,24 @@ class SelfHealingStartup:
             return True
 
         logger.warning("⚠️ CA or LIVE state degraded — forcing re-evaluation")
-        self._step_state_machine()
+        self.start_state_machine()
         return False
+
+    def start_state_machine(self) -> None:
+        """Single-authority entry point for the state machine.
+
+        Guarantees the state machine is invoked at most once per
+        :class:`SelfHealingStartup` instance, preventing concurrent or
+        duplicate executions triggered from multiple call sites.
+        """
+        logger.critical("BOOT: unified state machine entry")
+
+        if getattr(self, "_sm_started", False):
+            logger.critical("BOOT: state machine already started — skipping")
+            return
+
+        self._sm_started = True
+        self._step_state_machine()
 
     def _step_state_machine(self) -> None:
         """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
@@ -1463,7 +1479,7 @@ class SelfHealingStartup:
                 "SelfHealingStartup: CA watchdog detected stale/unready CA "
                 "— re-running state machine for self-heal"
             )
-            self._step_state_machine()
+            self.start_state_machine()
         return ready
 
     def _log_nonce_report(self, report: NoncePoisonReport) -> None:
