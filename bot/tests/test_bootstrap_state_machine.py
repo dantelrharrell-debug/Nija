@@ -558,5 +558,132 @@ class TestThreadSafety(unittest.TestCase):
         self.assertEqual(fsm.state, BootstrapState.LOCK_ACQUIRED)
 
 
+# ---------------------------------------------------------------------------
+# Single-owner bootstrap kernel — ownership enforcement
+# ---------------------------------------------------------------------------
+
+class TestOwnershipEnforcement(unittest.TestCase):
+    """Verify the single-owner bootstrap kernel invariant."""
+
+    def test_claim_sets_owner_to_caller(self):
+        """claim_bootstrap_ownership() records the calling thread's ID."""
+        fsm = _fresh()
+        self.assertIsNone(fsm._owner_thread_id)
+        fsm.claim_bootstrap_ownership()
+        self.assertEqual(fsm._owner_thread_id, threading.get_ident())
+
+    def test_claim_idempotent_same_thread(self):
+        """Calling claim_bootstrap_ownership() twice from the same thread is safe."""
+        fsm = _fresh()
+        fsm.claim_bootstrap_ownership()
+        owner_after_first = fsm._owner_thread_id
+        fsm.claim_bootstrap_ownership()
+        self.assertEqual(fsm._owner_thread_id, owner_after_first)
+
+    def test_claim_updates_to_new_owner(self):
+        """A second thread can take ownership (claim replaces the old owner)."""
+        fsm = _fresh()
+        fsm.claim_bootstrap_ownership()
+        new_owner_id: list = []
+
+        def _claim():
+            fsm.claim_bootstrap_ownership()
+            new_owner_id.append(threading.get_ident())
+
+        t = threading.Thread(target=_claim)
+        t.start()
+        t.join()
+
+        self.assertEqual(len(new_owner_id), 1)
+        self.assertEqual(fsm._owner_thread_id, new_owner_id[0])
+
+    def test_owner_thread_transition_has_no_warning(self):
+        """Owner-thread transitions must NOT emit the non-owner warning."""
+        fsm = _fresh()
+        fsm.claim_bootstrap_ownership()
+
+        with self.assertLogs("nija.bootstrap_fsm", level="WARNING") as cm:
+            # Drive a valid transition from the owner thread; the only log
+            # should be the INFO-level transition record, not a WARNING.
+            # assertLogs requires at least one log record, so we force one by
+            # doing an *illegal* (SHUTDOWN from BOOT_INIT) transition which
+            # always emits an ERROR — confirming the channel works.
+            fsm.transition(BootstrapState.SHUTDOWN, "illegal — triggers logger")
+
+        # No "Non-owner" warning should appear.
+        warning_msgs = [r for r in cm.output if "Non-owner" in r]
+        self.assertEqual(warning_msgs, [])
+
+    def test_non_owner_thread_logs_warning(self):
+        """A non-owner thread driving a transition must emit the warning."""
+        fsm = _fresh()
+        fsm.claim_bootstrap_ownership()  # main test thread is owner
+        warning_seen: list = []
+
+        def _non_owner_transition():
+            with self.assertLogs("nija.bootstrap_fsm", level="WARNING") as cm:
+                # Attempt any transition from a different thread.
+                # Use an illegal one so we get at least one log entry (ERROR)
+                # that satisfies assertLogs even if the warning fires too.
+                fsm.transition(BootstrapState.SHUTDOWN, "non-owner attempt")
+            non_owner_warns = [r for r in cm.output if "Non-owner" in r]
+            warning_seen.extend(non_owner_warns)
+
+        t = threading.Thread(target=_non_owner_transition)
+        t.start()
+        t.join()
+
+        self.assertGreater(len(warning_seen), 0, "Expected non-owner warning log")
+
+    def test_no_owner_set_allows_any_thread(self):
+        """When no owner is registered, transitions from any thread are silent."""
+        fsm = _fresh()
+        # No ownership claimed — non-owner check should be skipped.
+        results: list = []
+
+        def _transition():
+            # A valid transition from a non-owner (no owner registered).
+            r = fsm.transition(BootstrapState.LOCK_ACQUIRED, "no owner set")
+            results.append(r)
+
+        t = threading.Thread(target=_transition)
+        t.start()
+        t.join()
+
+        self.assertEqual(results, [True])
+        self.assertEqual(fsm.state, BootstrapState.LOCK_ACQUIRED)
+
+    def test_get_status_includes_owner_thread_id(self):
+        """get_status() must expose owner_thread_id for observability."""
+        fsm = _fresh()
+        status_before = fsm.get_status()
+        self.assertIn("owner_thread_id", status_before)
+        self.assertIsNone(status_before["owner_thread_id"])
+
+        fsm.claim_bootstrap_ownership()
+        status_after = fsm.get_status()
+        self.assertEqual(status_after["owner_thread_id"], threading.get_ident())
+
+    def test_transitions_still_succeed_from_non_owner(self):
+        """Non-owner transitions are fail-open: they warn but still apply."""
+        fsm = _fresh()
+        fsm.claim_bootstrap_ownership()  # this thread owns it
+
+        applied: list = []
+
+        def _non_owner():
+            # Drive a *valid* transition (BOOT_INIT → LOCK_ACQUIRED) from a
+            # non-owner thread; it should succeed (fail-open) despite the warning.
+            r = fsm.transition(BootstrapState.LOCK_ACQUIRED, "non-owner valid")
+            applied.append(r)
+
+        t = threading.Thread(target=_non_owner)
+        t.start()
+        t.join()
+
+        self.assertEqual(applied, [True])
+        self.assertEqual(fsm.state, BootstrapState.LOCK_ACQUIRED)
+
+
 if __name__ == "__main__":
     unittest.main()

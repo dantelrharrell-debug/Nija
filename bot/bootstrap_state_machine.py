@@ -239,6 +239,9 @@ class BootstrapStateMachine:
         self._state: BootstrapState = BootstrapState.BOOT_INIT
         self._lock = threading.Lock()
         self._history: List[Dict[str, Any]] = []
+        # Single-owner kernel: only the designated thread may drive transitions.
+        # None until claim_bootstrap_ownership() is called.
+        self._owner_thread_id: Optional[int] = None
 
     # ------------------------------------------------------------------
     # State access
@@ -261,7 +264,35 @@ class BootstrapStateMachine:
             return {
                 "state": self._state.value,
                 "history": list(self._history[-10:]),
+                "owner_thread_id": self._owner_thread_id,
             }
+
+    # ------------------------------------------------------------------
+    # Single-owner bootstrap kernel
+    # ------------------------------------------------------------------
+
+    def claim_bootstrap_ownership(self) -> None:
+        """Designate the calling thread as the sole owner of bootstrap transitions.
+
+        The single-owner kernel invariant: exactly one thread drives the bootstrap
+        DAG forward.  Any other thread that calls :meth:`transition` while an
+        owner is registered produces a warning log so the violation is immediately
+        visible.  Transitions from non-owner threads are still applied (fail-open)
+        so the bot never deadlocks on a stale owner ID, but the warning surface
+        makes races obvious in both development and production logs.
+
+        Idempotent: safe to call multiple times from the same thread.
+        """
+        caller_id = threading.get_ident()
+        with self._lock:
+            prev_owner = self._owner_thread_id
+            self._owner_thread_id = caller_id
+        if prev_owner != caller_id:
+            logger.info(
+                "🔑 [BootstrapFSM] Bootstrap ownership claimed by thread %d (%s)",
+                caller_id,
+                threading.current_thread().name,
+            )
 
     # ------------------------------------------------------------------
     # Transition
@@ -294,6 +325,24 @@ class BootstrapStateMachine:
             ``True`` if the transition was applied; ``False`` if illegal.
         """
         with self._lock:
+            # Single-owner enforcement: warn when a non-owner thread drives a
+            # transition.  Supervisor threads must be observer-only; only the
+            # bootstrap kernel thread should advance the FSM.
+            _caller_id = threading.get_ident()
+            if (
+                self._owner_thread_id is not None
+                and _caller_id != self._owner_thread_id
+            ):
+                logger.warning(
+                    "⚠️  [BootstrapFSM] Non-owner thread %d (%s) driving transition"
+                    " → %s (bootstrap owner=%d). Supervisor threads must be"
+                    " observer-only.",
+                    _caller_id,
+                    threading.current_thread().name,
+                    new_state.value if hasattr(new_state, "value") else str(new_state),
+                    self._owner_thread_id,
+                )
+
             current = self._state
             allowed = _VALID_TRANSITIONS.get(current, [])
             if new_state not in allowed:
