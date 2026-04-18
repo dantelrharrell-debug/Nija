@@ -492,8 +492,20 @@ def _capital_readiness_gate() -> tuple:
                 "_capital_readiness_gate: CA_READY=true "
                 "(is_hydrated=True, real_capital=%.2f)", authority.get_real_capital()
             )
-    except (ImportError, AttributeError, Exception) as exc:
-        logger.debug("_capital_readiness_gate: CapitalAuthority unavailable (%s) — skipping", exc)
+    except ImportError as exc:
+        # Module not present in this deployment — treat as passing (graceful degradation).
+        logger.debug("_capital_readiness_gate: CapitalAuthority module unavailable (%s) — skipping", exc)
+    except (AttributeError, Exception) as exc:
+        # Module loaded but check itself raised — the CA state is unknown; block activation.
+        logger.warning(
+            "_capital_readiness_gate: CA_READY=unknown — unexpected %s while checking CapitalAuthority: %s"
+            " — treating as not-ready to prevent silent false-positive",
+            type(exc).__name__, exc,
+        )
+        failures.append(
+            f"CA_READY=unknown: unexpected exception during CapitalAuthority check "
+            f"({type(exc).__name__}: {exc})"
+        )
 
     # ── b. EXECUTION_PIPELINE_HEALTHY ──────────────────────────────────────
     try:
