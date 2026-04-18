@@ -1368,12 +1368,12 @@ class BrokerPayloadFSM:
                 new_state.value,
             )
             return False
-        # PAYLOAD_READY is a key observability event — log at INFO so it shows
-        # in production logs (the user wants to "watch payload hydration").
+        # PAYLOAD_READY is a key observability event — log at WARNING so it shows
+        # prominently in production logs even when INFO is filtered.
         # All other transitions remain at DEBUG to avoid routine noise.
         if new_state == BrokerPayloadState.PAYLOAD_READY:
-            self._log.info(
-                "[BrokerPayloadFSM] broker=%s %s → PAYLOAD_READY (capital payload hydrated)",
+            self._log.warning(
+                "✅ [BrokerPayloadFSM] broker=%s %s → PAYLOAD_READY (capital payload hydrated)",
                 self.broker_id,
                 self._state.value,
             )
@@ -1491,8 +1491,8 @@ class BrokerPayloadFSM:
         with self._lock:
             if lkb is not None:
                 self._transition(BrokerPayloadState.PAYLOAD_READY)
-                self._log.info(
-                    "[BrokerPayloadFSM] broker=%s PAYLOAD_READY "
+                self._log.warning(
+                    "✅ [BrokerPayloadFSM] broker=%s PAYLOAD_READY "
                     "(balance=%.2f) after %d probe attempt(s)",
                     self.broker_id,
                     float(lkb),

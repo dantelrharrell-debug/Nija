@@ -458,8 +458,8 @@ class CapitalAuthority:
             )
             return
         self._startup_lock.set()
-        logger.info(
-            "✅ [CapitalAuthority] Startup lock released — full system sync confirmed, "
+        logger.warning(
+            "✅ [CapitalAuthority] STARTUP LOCK RELEASED — full system sync confirmed, "
             "capital evaluation now permitted"
         )
 

@@ -880,8 +880,8 @@ class MultiAccountBrokerManager:
             )
             return
         self._startup_lock_released = True
-        logger.info(
-            "✅ [MABM] Bootstrap ready — all prerequisites confirmed, releasing startup lock "
+        logger.warning(
+            "✅ [MABM] STARTUP LOCK RELEASING — all prerequisites confirmed "
             "(registered_brokers=%d)",
             len(self._platform_brokers),
         )
