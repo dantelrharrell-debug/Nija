@@ -2213,7 +2213,11 @@ def _run_bot_startup_and_trading():
                     )
                     _total_capital = 0.0
 
-                if _total_capital > 0.0:
+                ca = _bms_ca
+                if ca and ca.is_ready():
+                    logger.critical(
+                        "✅ CAPITAL GATE PASSED — CA hydrated with registered broker balances"
+                    )
                     logger.info("🚀 SYSTEM READY — TRADING ENABLED")
                     logger.info("💰 Startup total capital: $%.2f", _total_capital)
                     # Bootstrap FSM: capital confirmed → CAPITAL_READY
@@ -2314,28 +2318,20 @@ def _run_bot_startup_and_trading():
             # maybe_auto_activate() was attempted at module-load time (inside
             # _verify_env) but CapitalAuthority was not yet hydrated, so Gate 2
             # (CA_READY) blocked the OFF → LIVE_ACTIVE transition.  Now that the
-            # capital gate has confirmed total_capital > $0 and CapitalAuthority IS
+            # capital gate has confirmed CapitalAuthority is_ready() and IS
             # hydrated, retry the transition so trading threads are allowed to execute.
             # Without this call the state machine stays in OFF forever and no trades
             # are ever placed — the state machine handoff failure described in FIX #1.
-            try:
-                from bot.trading_state_machine import get_state_machine as _get_tsm_init
-                _tsm_init = _get_tsm_init()
-                _tsm_state_before = _tsm_init.get_current_state().value
-                if _tsm_init.maybe_auto_activate():
-                    logger.critical(
-                        "✅ INIT PHASE: trading state machine %s → LIVE_ACTIVE "
-                        "(CA_READY confirmed, capital > $0)",
-                        _tsm_state_before,
-                    )
-                else:
-                    logger.warning(
-                        "⚠️  INIT PHASE: state machine auto-activate blocked — "
-                        "state=%s (verify LIVE_CAPITAL_VERIFIED=true and CA_READY)",
-                        _tsm_init.get_current_state().value,
-                    )
-            except Exception as _tsm_init_err:
-                logger.warning("⚠️  INIT PHASE: could not activate trading state machine: %s", _tsm_init_err)
+            from bot.trading_state_machine import get_state_machine as _get_tsm_init
+            _tsm_init = _get_tsm_init()
+            if _tsm_init.maybe_auto_activate():
+                logger.critical(
+                    "✅ INIT PHASE: state machine transitioned to LIVE_ACTIVE"
+                )
+            else:
+                raise RuntimeError(
+                    "INIT FAILED: maybe_auto_activate() blocked after CA_READY"
+                )
             # ── END CONNECTION → INIT HANDOFF ────────────────────────────────────
 
             # ═══════════════════════════════════════════════════════════════════════
@@ -2373,6 +2369,12 @@ def _run_bot_startup_and_trading():
                     _BootstrapState.THREADS_STARTING,
                     "spawning trading worker threads",
                 )
+
+            # ── LIVE_ACTIVE guard: no state machine → no threads ──────────────────
+            from bot.trading_state_machine import get_state_machine as _get_tsm_assert
+            assert _get_tsm_assert().get_current_state().value == "LIVE_ACTIVE", (
+                "INIT FAILED: state machine is not LIVE_ACTIVE before thread launch"
+            )
 
             use_independent_trading = (
                 os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
