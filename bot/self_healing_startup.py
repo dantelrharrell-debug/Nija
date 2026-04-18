@@ -1126,6 +1126,19 @@ class SelfHealingStartup:
 
         # Step 1: State machine
         self.start_state_machine()
+        # Step 1: State machine — HARD REQUIREMENT: must start before anything else
+        # Direct synchronous call only; never via thread, scheduler, or async fire-and-forget.
+        logger.critical("BOOT: forcing state machine entry")
+        _started = False
+        try:
+            logger.critical("BOOT: entering state machine")
+            self._step_state_machine()
+            _started = True
+        except Exception as _boot_sm_err:
+            logger.critical("BOOT: state machine failed: %s", _boot_sm_err)
+            raise
+        if not _started:
+            raise RuntimeError("STATE MACHINE DID NOT START")
 
         # Step 2: Nonce poison detection
         nonce_report = NoncePoisonDetector(self._cfg).detect()
@@ -1188,6 +1201,7 @@ class SelfHealingStartup:
             self.pre_halt_engine.register_watchdog(
                 name="ca_live_health",
                 fn=self._ca_watchdog_fn,
+            )
             # Fix #3: CA-readiness watchdog re-entry — if CA becomes stale after
             # startup the watchdog re-runs the state machine to recover silently
             # without requiring a full restart.
