@@ -171,6 +171,11 @@ except Exception:
 # converges quickly; the background watchdog takes over once the loop exits.
 _CA_POLL_INTERVAL_S: float = 3.0
 
+# Maximum number of state-machine step attempts in the post-preflight transition
+# guarantee loop (FIX 1).  Three attempts cover the common EMERGENCY_STOP → OFF →
+# LIVE_ACTIVE two-step transition while keeping the hot path cheap.
+_MAX_STATE_TRANSITION_ATTEMPTS: int = 3
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -1235,6 +1240,24 @@ class SelfHealingStartup:
                 _time.sleep(_CA_POLL_INTERVAL_S)
             else:
                 logger.critical("🚨 CA_READY TIMEOUT — bot stuck in pre-trade state")
+
+        # ── FIX 1: HARD POST-PREFLIGHT TRANSITION GUARANTEE ────────────────
+        # After the CA readiness loop completes (or times out), force a
+        # deterministic push through the state machine so the bot cannot silently
+        # stall between PREFLIGHT and RUNTIME.  Up to three attempts are made;
+        # the loop short-circuits as soon as LIVE_ACTIVE is confirmed.
+        if startup_result.ok:
+            logger.info("🚀 PREFLIGHT COMPLETE → ENTERING RUNTIME BOOTSTRAP")
+            for _ in range(_MAX_STATE_TRANSITION_ATTEMPTS):
+                self._step_state_machine()
+                if self._is_live_active():
+                    break
+            if not self._is_live_active():
+                logger.warning(
+                    "⚠️ Not LIVE_ACTIVE after PREFLIGHT — "
+                    "state machine could not complete transition; "
+                    "watchdog will retry"
+                )
 
         if startup_result.ok:
             mode = "FALLBACK" if startup_result.on_fallback else "PRIMARY"
