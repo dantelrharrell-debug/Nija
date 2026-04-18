@@ -2371,8 +2371,8 @@ def _run_bot_startup_and_trading():
                 )
 
             # ── LIVE_ACTIVE guard: no state machine → no threads ──────────────────
-            from bot.trading_state_machine import get_state_machine as _get_tsm_assert
-            assert _get_tsm_assert().get_current_state().value == "LIVE_ACTIVE", (
+            from bot.trading_state_machine import get_state_machine as _get_tsm_assert, TradingState as _TradingState
+            assert _get_tsm_assert().get_current_state() == _TradingState.LIVE_ACTIVE, (
                 "INIT FAILED: state machine is not LIVE_ACTIVE before thread launch"
             )
 
