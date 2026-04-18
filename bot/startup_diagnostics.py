@@ -89,26 +89,40 @@ def display_feature_flag_banner():
     except (ImportError, AttributeError):
         flags['Fee-Aware Profit Calculations'] = False
     
-    # Display results with special highlighting for dry-run mode
-    for feature_name, is_enabled in flags.items():
-        if feature_name == 'Dry-Run Mode (Paper Trading)':
-            # Special formatting for dry-run mode
-            if is_enabled:
-                status_icon = "🟡"
-                status_text = "ENABLED (SIMULATION)"
+    # D: structured snapshot — one INFO line instead of N per-flag INFO lines
+    try:
+        from bot.startup_event_buffer import StartupSnapshot
+        _snap = StartupSnapshot("Feature Flags")
+        for _fname, _fenabled in flags.items():
+            _key = (
+                _fname.lower()
+                .replace(" (", "_").replace(")", "")
+                .replace(" ", "_").replace("-", "_")
+                .replace("/", "_")
+            )
+            _snap.record(_key, bool(_fenabled))
+        enabled_count = sum(1 for v in flags.values() if v)
+        total_count = len(flags)
+        logger.info("=" * 70)
+        logger.info("🏁 FEATURE FLAGS STATUS")
+        _snap.emit(logger)
+        logger.info("📊 %d/%d features enabled", enabled_count, total_count)
+        logger.info("=" * 70)
+    except ImportError:
+        # Fallback: per-line output when startup_event_buffer is unavailable
+        for feature_name, is_enabled in flags.items():
+            if feature_name == 'Dry-Run Mode (Paper Trading)':
+                status_icon = "🟡" if is_enabled else "⚪"
+                status_text = "ENABLED (SIMULATION)" if is_enabled else "DISABLED (LIVE)"
             else:
-                status_icon = "⚪"
-                status_text = "DISABLED (LIVE)"
-        else:
-            status_icon = "✅" if is_enabled else "⚪"
-            status_text = "ENABLED" if is_enabled else "DISABLED"
-        logger.info(f"   {status_icon} {feature_name}: {status_text}")
-    
-    enabled_count = sum(1 for v in flags.values() if v)
-    total_count = len(flags)
-    logger.info("=" * 70)
-    logger.info(f"📊 {enabled_count}/{total_count} features enabled")
-    logger.info("=" * 70)
+                status_icon = "✅" if is_enabled else "⚪"
+                status_text = "ENABLED" if is_enabled else "DISABLED"
+            logger.info(f"   {status_icon} {feature_name}: {status_text}")
+        enabled_count = sum(1 for v in flags.values() if v)
+        total_count = len(flags)
+        logger.info("=" * 70)
+        logger.info(f"📊 {enabled_count}/{total_count} features enabled")
+        logger.info("=" * 70)
 
 
 def verify_trading_capability() -> Tuple[bool, List[str]]:
@@ -169,24 +183,35 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
         checks.append(("Position Manager", False, str(e)))
         issues.append(f"Position manager import failed: {e}")
     
-    # Display results
-    for check_name, passed, error in checks:
-        if passed:
-            logger.info(f"   ✅ {check_name}: OK")
-        else:
-            logger.warning(f"   ❌ {check_name}: FAILED")
-            if error:
-                logger.warning(f"      Error: {error}")
-    
     all_passed = len(issues) == 0
-    
-    logger.info("=" * 70)
+
+    # D: structured snapshot — one INFO line instead of N per-check INFO lines
+    try:
+        from bot.startup_event_buffer import StartupSnapshot
+        _snap = StartupSnapshot("Trading Capability")
+        for _cname, _passed, _error in checks:
+            _key = (
+                _cname.lower()
+                .replace(" (", "_").replace(")", "")
+                .replace(" ", "_").replace(".", "_")
+            )
+            _snap.record(_key, _passed, detail=_error or "")
+        logger.info("=" * 70)
+        _snap.emit(logger)
+    except ImportError:
+        logger.info("=" * 70)
+        for check_name, passed, error in checks:
+            if passed:
+                logger.info(f"   ✅ {check_name}: OK")
+            else:
+                logger.warning(f"   ❌ {check_name}: FAILED")
+                if error:
+                    logger.warning(f"      Error: {error}")
+
     if all_passed:
-        logger.info("✅ All trading capability checks passed")
-        logger.info("   Bot is ready to execute trades")
+        logger.info("✅ Trading capability verified — bot ready to execute trades")
     else:
-        logger.warning(f"⚠️  {len(issues)} critical check(s) failed")
-        logger.warning("   Bot may not be able to execute trades properly")
+        logger.warning("⚠️  %d critical check(s) failed — bot may not trade properly", len(issues))
     logger.info("=" * 70)
     
     return all_passed, issues
