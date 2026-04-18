@@ -488,8 +488,8 @@ def _capital_readiness_gate() -> tuple:
                 "snapshot yet (is_hydrated=False — coordinator has not run)"
             )
         else:
-            logger.debug(
-                "_capital_readiness_gate: CA_READY ✅ "
+            logger.info(
+                "_capital_readiness_gate: CA_READY=true "
                 "(is_hydrated=True, real_capital=%.2f)", authority.get_real_capital()
             )
     except (ImportError, AttributeError, Exception) as exc:
