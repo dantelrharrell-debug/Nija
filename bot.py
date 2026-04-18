@@ -1609,16 +1609,14 @@ def _run_bot_startup_and_trading():
                     # ── Sentinel A0.1: entering nonce-manager init ──────────────
                     logger.critical("A0.1 before nonce manager")
 
-                    def _nonce_timeout_handler(signum, frame):
-                        raise RuntimeError("Nonce init hung — get_global_nonce_manager() exceeded 10 s")
+                    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeoutError
 
-                    _prev_handler = signal.signal(signal.SIGALRM, _nonce_timeout_handler)
-                    signal.alarm(10)
-                    try:
-                        _nonce_mgr = get_global_nonce_manager()
-                    finally:
-                        signal.alarm(0)
-                        signal.signal(signal.SIGALRM, _prev_handler)
+                    with ThreadPoolExecutor(max_workers=1) as _ex:
+                        _future = _ex.submit(get_global_nonce_manager)
+                        try:
+                            _nonce_mgr = _future.result(timeout=10)
+                        except _FuturesTimeoutError:
+                            raise RuntimeError("Nonce init hung (>10s)")
 
                     # ── Sentinel A0.2: nonce manager obtained ───────────────────
                     logger.critical("A0.2 after nonce manager")
