@@ -21,6 +21,16 @@ except ImportError:
 logger = logging.getLogger("nija")
 
 
+def _snap_key(label: str) -> str:
+    """Normalise a human-readable label to a snake_case snapshot key."""
+    return (
+        label.lower()
+        .replace(" (", "_").replace(")", "")
+        .replace(" ", "_").replace("-", "_")
+        .replace("/", "_").replace(".", "_")
+    )
+
+
 def display_feature_flag_banner():
     """
     Display a banner showing which features are enabled/disabled at startup.
@@ -94,13 +104,7 @@ def display_feature_flag_banner():
         from bot.startup_event_buffer import StartupSnapshot
         _snap = StartupSnapshot("Feature Flags")
         for _fname, _fenabled in flags.items():
-            _key = (
-                _fname.lower()
-                .replace(" (", "_").replace(")", "")
-                .replace(" ", "_").replace("-", "_")
-                .replace("/", "_")
-            )
-            _snap.record(_key, bool(_fenabled))
+            _snap.record(_snap_key(_fname), bool(_fenabled))
         enabled_count = sum(1 for v in flags.values() if v)
         total_count = len(flags)
         logger.info("=" * 70)
@@ -190,12 +194,7 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
         from bot.startup_event_buffer import StartupSnapshot
         _snap = StartupSnapshot("Trading Capability")
         for _cname, _passed, _error in checks:
-            _key = (
-                _cname.lower()
-                .replace(" (", "_").replace(")", "")
-                .replace(" ", "_").replace(".", "_")
-            )
-            _snap.record(_key, _passed, detail=_error or "")
+            _snap.record(_snap_key(_cname), _passed, detail=_error or "")
         logger.info("=" * 70)
         _snap.emit(logger)
     except ImportError:

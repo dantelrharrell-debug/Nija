@@ -1626,10 +1626,12 @@ def _run_bot_startup_and_trading():
                 _ex_snap.record("okx", bool(os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET")))
                 _ex_snap.record("binance", bool(os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET")))
                 _ex_snap.record("alpaca", bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET")))
-                _ex_snap.emit(logger, logging.INFO if exchanges_configured > 0 else logging.WARNING)
+                _ex_snap.emit(logger)
             except ImportError:
                 for status in exchange_status:
                     logger.info(f"   {status}")
+            if exchanges_configured == 0:
+                logger.warning("⚠️  No exchange credentials configured")
             logger.info("Total exchanges configured: %d", exchanges_configured)
             logger.info("=" * 70)
 

@@ -230,7 +230,7 @@ class StartupSnapshot:
 
             {icon} {LayerName} Ready {json_payload}
         """
-        icon = "✅" if self.all_ok() else "⚠️ "
+        icon = "✅" if self.all_ok() else "⚠️"
         payload = json.dumps(self._components, separators=(", ", ": "))
         log.log(level, "%s %s Ready %s", icon, self._name, payload)
 
