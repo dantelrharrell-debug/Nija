@@ -1368,12 +1368,22 @@ class BrokerPayloadFSM:
                 new_state.value,
             )
             return False
-        self._log.debug(
-            "[BrokerPayloadFSM] broker=%s %s → %s",
-            self.broker_id,
-            self._state.value,
-            new_state.value,
-        )
+        # PAYLOAD_READY is a key observability event — log at INFO so it shows
+        # in production logs (the user wants to "watch payload hydration").
+        # All other transitions remain at DEBUG to avoid routine noise.
+        if new_state == BrokerPayloadState.PAYLOAD_READY:
+            self._log.info(
+                "[BrokerPayloadFSM] broker=%s %s → PAYLOAD_READY (capital payload hydrated)",
+                self.broker_id,
+                self._state.value,
+            )
+        else:
+            self._log.debug(
+                "[BrokerPayloadFSM] broker=%s %s → %s",
+                self.broker_id,
+                self._state.value,
+                new_state.value,
+            )
         self._state = new_state
         if new_state == BrokerPayloadState.EXHAUSTED:
             self._exhausted_at = time.monotonic()

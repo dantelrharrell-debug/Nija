@@ -6757,8 +6757,10 @@ class TradingStrategy:
         """
         self.failed_brokers[BrokerType.KRAKEN] = kraken_broker
         self.broker_manager.add_broker(kraken_broker)
-        # Register in multi_account_manager using proper method to enforce invariant
-        self.multi_account_manager.register_platform_broker_instance(BrokerType.KRAKEN, kraken_broker)
+        # NOTE: MABM already pre-registered this broker instance via
+        # _connect_and_register() before calling connect().  A second call to
+        # register_platform_broker_instance() here would be an idempotent
+        # (same-instance) duplicate and is intentionally omitted.
         logger.info("   ✅ Kraken registered for background connection retry")
 
     def _get_total_capital_across_all_accounts(self) -> float:
@@ -8030,7 +8032,7 @@ class TradingStrategy:
 
         # Log rotation progress
         rotation_pct = (self.market_rotation_offset / total_markets) * 100
-        logger.info(f"   📊 Market rotation: scanning batch {start_idx}-{min(end_idx, total_markets)} of {total_markets} ({rotation_pct:.0f}% through cycle)")
+        logger.debug(f"   📊 Market rotation: scanning batch {start_idx}-{min(end_idx, total_markets)} of {total_markets} ({rotation_pct:.0f}% through cycle)")
 
         return batch
 
@@ -8462,7 +8464,7 @@ class TradingStrategy:
             return
         # ══════════════════════════════════════════════════════════════════════
 
-        logger.info("🧠 Trading loop tick — scanning markets...")
+        logger.debug("🧠 Trading loop tick — scanning markets...")
 
         # ✅ HARDENING: Validate broker liveness at execution time to prevent
         # orders being sent on a stale or disconnected reference.  If the broker
@@ -8937,7 +8939,7 @@ class TradingStrategy:
             mode_label = "PLATFORM (entries blocked by safety checks)"
         else:
             mode_label = "MASTER (full strategy)"
-        logger.info(f"🔄 Trading cycle mode: {mode_label}")
+        logger.debug(f"🔄 Trading cycle mode: {mode_label}")
 
         # 🔄 BACKGROUND PLATFORM RECONNECT — self-heal disconnected platform brokers.
         # Only runs in MASTER mode (not user mode) and only on every 5th cycle to avoid
@@ -10451,7 +10453,7 @@ class TradingStrategy:
                             # Safely get broker label (handles both enum and string)
                             broker_label = position_broker_type.value.upper() if (position_broker_type and hasattr(position_broker_type, 'value')) else "UNKNOWN"
 
-                            logger.info(f"   Analyzing {symbol} on {broker_label}...")
+                            logger.debug(f"   Analyzing {symbol} on {broker_label}...")
 
                             # Get current price from the position's broker
                             current_price = position_broker.get_current_price(symbol)
@@ -10501,7 +10503,7 @@ class TradingStrategy:
                                 continue
                             # ─────────────────────────────────────────────────────────────────
 
-                            logger.info(f"   {symbol} ({broker_label}): {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
+                            logger.debug(f"   {symbol} ({broker_label}): {quantity:.8f} @ ${current_price:.2f} = ${position_value:.2f}")
 
                             # PROFITABILITY MODE: Aggressive exit on weak markets
                             # Exit positions when market conditions deteriorate to prevent bleeding
@@ -12283,7 +12285,7 @@ class TradingStrategy:
             else:
                 account_balance = float(account_balance or 0.0)
             if not user_mode and not entries_blocked and len(current_positions) < effective_max_positions and can_enter:
-                logger.info(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{effective_max_positions}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
+                logger.debug(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{effective_max_positions}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
 
                 # Get top market candidates (limit scan to prevent timeouts)
                 try:
@@ -12399,7 +12401,7 @@ class TradingStrategy:
                         entry_broker_name.upper() if entry_broker_name else "unknown",
                         scan_limit,
                     )
-                    logger.info(f"   Scanning {scan_limit} markets (batch rotation mode)...")
+                    logger.debug(f"   Scanning {scan_limit} markets (batch rotation mode)...")
 
                     # ⏱️ Record the scan-only start time so the per-market cycle cap
                     # is measured from HERE — not from the overall cycle_start_time

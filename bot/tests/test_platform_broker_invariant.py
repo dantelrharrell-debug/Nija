@@ -10,8 +10,18 @@ Tests that platform brokers are:
 import sys
 sys.path.insert(0, '.')
 
-from bot.multi_account_broker_manager import MultiAccountBrokerManager
+from bot.multi_account_broker_manager import (
+    MultiAccountBrokerManager,
+    get_broker_manager,
+    reset_broker_manager_singleton,
+)
 from bot.broker_manager import BrokerType, BaseBroker, AccountType
+
+
+def _fresh_canonical() -> MultiAccountBrokerManager:
+    """Reset and return a fresh canonical manager singleton for test isolation."""
+    reset_broker_manager_singleton()
+    return get_broker_manager()
 
 
 class MockBroker(BaseBroker):
@@ -48,7 +58,7 @@ def test_duplicate_registration_prevention():
     print("TEST 1: Duplicate Registration Prevention")
     print("=" * 70)
 
-    manager = MultiAccountBrokerManager()
+    manager = _fresh_canonical()
     
     # Create and register a broker
     broker1 = MockBroker(BrokerType.KRAKEN)
@@ -81,7 +91,7 @@ def test_immutability_after_lock():
     print("TEST 2: Immutability After Lock")
     print("=" * 70)
 
-    manager = MultiAccountBrokerManager()
+    manager = _fresh_canonical()
     
     # Register a broker
     broker1 = MockBroker(BrokerType.KRAKEN)
@@ -115,7 +125,7 @@ def test_read_only_property():
     print("TEST 3: Read-Only Property Access")
     print("=" * 70)
 
-    manager = MultiAccountBrokerManager()
+    manager = _fresh_canonical()
     
     # Register a broker
     broker1 = MockBroker(BrokerType.KRAKEN)
@@ -153,7 +163,7 @@ def test_single_registration_globally():
     print("TEST 4: Single Registration Globally")
     print("=" * 70)
 
-    manager = MultiAccountBrokerManager()
+    manager = _fresh_canonical()
     
     # Register multiple different broker types
     broker_types = [BrokerType.KRAKEN, BrokerType.OKX, BrokerType.ALPACA]
@@ -181,20 +191,22 @@ def test_retrieval_methods():
     print("TEST 5: Broker Retrieval Methods")
     print("=" * 70)
 
-    manager = MultiAccountBrokerManager()
+    manager = _fresh_canonical()
     
-    # Register a broker
-    broker = MockBroker(BrokerType.KRAKEN)
+    # Register a broker — use COINBASE to avoid the Kraken FSM startup gate
+    # (is_platform_connected for Kraken checks _KRAKEN_STARTUP_FSM.is_connected
+    # which is never set in unit tests).
+    broker = MockBroker(BrokerType.COINBASE)
     broker.connect()
-    manager.register_platform_broker_instance(BrokerType.KRAKEN, broker)
+    manager.register_platform_broker_instance(BrokerType.COINBASE, broker)
     
     # Test get_platform_broker
-    retrieved = manager.get_platform_broker(BrokerType.KRAKEN)
+    retrieved = manager.get_platform_broker(BrokerType.COINBASE)
     assert retrieved is broker, "get_platform_broker should return registered instance"
     print("✅ Test 5a PASSED: get_platform_broker returns correct instance")
     
     # Test is_platform_connected
-    assert manager.is_platform_connected(BrokerType.KRAKEN) == True, "Should report connected"
+    assert manager.is_platform_connected(BrokerType.COINBASE) == True, "Should report connected"
     print("✅ Test 5b PASSED: is_platform_connected reports correct status")
     
     # Test for non-existent broker
@@ -214,7 +226,7 @@ def test_bootstrap_refresh_includes_connected_platform_broker_before_ready_state
     print("TEST 6: Bootstrap Refresh Includes Connected Broker")
     print("=" * 70)
 
-    manager = MultiAccountBrokerManager()
+    manager = _fresh_canonical()
 
     # Simulate a broker that has connected but has not yet been marked
     # platform-ready in the connection state machine.

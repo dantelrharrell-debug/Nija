@@ -1013,8 +1013,23 @@ class MultiAccountBrokerManager:
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
             if broker_type in self._platform_brokers:
-                logger.debug("%s already registered — skipping duplicate (idempotent)", broker_type.value)
-                return False
+                if self._platform_brokers[broker_type] is broker:
+                    # Same instance re-registering (e.g. broker.connect() called after
+                    # MABM pre-registered it) — idempotent, no error.
+                    logger.debug(
+                        "%s already registered (same instance) — skipping duplicate (idempotent)",
+                        broker_type.value,
+                    )
+                    return False
+                # Different instance for the same broker type — this is an invariant
+                # violation: platform brokers must be registered exactly once.
+                error_msg = (
+                    f"❌ INVARIANT VIOLATION: {broker_type.value} already registered "
+                    f"with a different broker instance — platform brokers must be "
+                    f"registered exactly once globally"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
             # Atomic write — visible to all threads once the lock is released.
             self._platform_brokers[broker_type] = broker
         self._record_broker_registration(broker_type, broker)
