@@ -430,6 +430,16 @@ _FORCE_PERSISTED_NONCE_SOURCE = os.environ.get(
     "NIJA_FORCE_PERSISTED_NONCE_SOURCE", "1"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
+# How long (seconds) to retry PID lock acquisition at startup before entering
+# degraded mode.  Handles the Railway rolling deployment window where the old
+# container is still running when the new one starts.  The new container retries
+# with exponential back-off (2 s → 4 s → 8 s … capped at 10 s) until the old
+# container stops and releases the lock, or the timeout expires.
+# Set to 0 to restore the old immediate-fail behaviour.
+_PID_LOCK_STARTUP_TIMEOUT_S: float = float(
+    os.environ.get("NIJA_PID_LOCK_STARTUP_TIMEOUT_S", "60")
+)
+
 # Fast stabilisation guard: enforce a single persisted nonce source.
 # Timestamp mode bypasses persisted state and is disabled until incident recovery
 # is complete.
@@ -1056,42 +1066,75 @@ class KrakenNonceManager:
         # Hard rule: ONE API KEY = ONE WRITER.
         # Policy:
         #   - FAIL_CLOSED=true  -> startup raises RuntimeError immediately
-        #   - default           -> degraded read-only-safe mode + auto-reacquire
-        self._pid_lock_fh = self._try_acquire_pid_lock()
-        self._pid_lock_acquired = self._pid_lock_fh is not None
+        #   - default           -> retry loop up to _PID_LOCK_STARTUP_TIMEOUT_S,
+        #                          then degraded read-only-safe mode; the existing
+        #                          try_reacquire_pid_lock() mechanism continues to
+        #                          attempt reacquisition on each can_issue_nonce() call
+        #                          so the bot recovers automatically once the duplicate
+        #                          process finally exits.
+        #
+        # The retry loop handles Railway rolling deployments where the old container
+        # is briefly still running when the new one starts.  Rather than immediately
+        # entering degraded mode (which blocks all trading), we wait up to
+        # _PID_LOCK_STARTUP_TIMEOUT_S seconds for the old container to stop and
+        # release the lock.
+        self._pid_lock_fh = None
         if not _FCNTL_AVAILABLE:
             _logger.warning(
                 "KrakenNonceManager: fcntl unavailable on this platform; "
                 "cannot hard-enforce process-lifetime single-writer locking."
             )
-        elif self._pid_lock_fh is None:
-            if _PID_LOCK_FAIL_CLOSED:
-                raise RuntimeError(
-                    "Kraken nonce writer lock not acquired. "
-                    "FAIL_CLOSED=true requires immediate crash on PID-lock failure."
+        else:
+            deadline = time.monotonic() + _PID_LOCK_STARTUP_TIMEOUT_S
+            attempt = 0
+            while True:
+                self._pid_lock_fh = self._try_acquire_pid_lock()
+                if self._pid_lock_fh is not None:
+                    break  # lock acquired — proceed normally
+                remaining = deadline - time.monotonic()
+                if _PID_LOCK_FAIL_CLOSED:
+                    raise RuntimeError(
+                        "Kraken nonce writer lock not acquired. "
+                        "FAIL_CLOSED=true requires immediate crash on PID-lock failure."
+                    )
+                if remaining <= 0:
+                    break  # timeout exhausted — fall through to degraded mode
+                # Exponential backoff: 2 s → 4 s → 8 s … capped at 10 s,
+                # never overshooting the remaining deadline.
+                sleep_duration = min(10.0, 2.0 ** (attempt + 1), remaining)
+                _logger.warning(
+                    "KrakenNonceManager: PID lock not yet acquired for key=%s "
+                    "(attempt %d, %.0fs remaining) — waiting %.0fs for duplicate "
+                    "process to exit before retrying.",
+                    self._key_id or "platform",
+                    attempt + 1,
+                    remaining,
+                    sleep_duration,
                 )
-            _logger.critical(
-                "Kraken nonce writer lock not acquired for key=%s. "
-                "Entering degraded read-only-safe mode: nonce issuance for trading "
-                "must remain blocked until PID lock is held.",
-                self._key_id or "platform",
-            )
-            _pid_lock_failure_message = (
-                "Kraken nonce writer lock not acquired. "
-                "Hard rule violation: ONE API KEY = ONE WRITER "
-                "(no multi-container, no multi-region, no independent nonce writers). "
-                "Likely causes: another NIJA process already running or lock-file permissions. "
-                "Stop all duplicate deployments/processes and restart a single writer."
-            )
-            if _FAIL_CLOSED_ON_PID_LOCK_MISS:
-                raise RuntimeError(_pid_lock_failure_message)
-            _logger.critical(
-                "Continuing in degraded mode because "
-                "NIJA_NONCE_FAIL_CLOSED_ON_PID_LOCK_MISS is not enabled; "
-                "per-operation nonce lock checks remain active. "
-                "Original lock error: %s",
-                _pid_lock_failure_message,
-            )
+                time.sleep(sleep_duration)
+                attempt += 1
+
+            if self._pid_lock_fh is None:
+                _pid_lock_failure_message = (
+                    "Kraken nonce writer lock not acquired after %.0fs. "
+                    "Hard rule violation: ONE API KEY = ONE WRITER "
+                    "(no multi-container, no multi-region, no independent nonce writers). "
+                    "Likely causes: another NIJA process already running or lock-file permissions. "
+                    "Stop all duplicate deployments/processes and restart a single writer."
+                ) % _PID_LOCK_STARTUP_TIMEOUT_S
+                if _FAIL_CLOSED_ON_PID_LOCK_MISS:
+                    raise RuntimeError(_pid_lock_failure_message)
+                _logger.critical(
+                    "Kraken nonce writer lock not acquired for key=%s after %.0fs. "
+                    "Entering degraded read-only-safe mode: nonce issuance for trading "
+                    "must remain blocked until PID lock is held. "
+                    "Original lock error: %s",
+                    self._key_id or "platform",
+                    _PID_LOCK_STARTUP_TIMEOUT_S,
+                    _pid_lock_failure_message,
+                )
+
+        self._pid_lock_acquired = self._pid_lock_fh is not None
 
         # Hard rule: disallow the LEGACY NIJA_NONCE_BACKEND=redis path.
         # Redis nonce support is now exclusively through DistributedNonceManager
@@ -2137,12 +2180,20 @@ class KrakenNonceManager:
 
         Safety rule: delete only after taking an exclusive non-blocking lock on
         the file descriptor in this process.
+
+        Also handles corrupt / zero-PID files: if the file exists but contains
+        no valid PID, we still attempt a non-blocking LOCK_EX to confirm no live
+        process holds it, then delete it so it cannot permanently block startup.
         """
         if not _FCNTL_AVAILABLE:
             return
         stale_pid = self._read_pid_from_pid_lock()
-        if stale_pid <= 0 or self._is_process_alive(stale_pid):
+        # If we got a valid PID and that process is still alive, nothing to clean.
+        if stale_pid > 0 and self._is_process_alive(stale_pid):
             return
+        # For stale_pid == 0 (corrupt/empty file) or a dead PID, attempt to
+        # acquire the lock non-blockingly.  If we get it, the file is safe to
+        # delete.  If we cannot get it, a live process holds it — leave it alone.
         try:
             with open(self._pid_lock_file, "a") as _stale_fh:
                 _fcntl.flock(_stale_fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
