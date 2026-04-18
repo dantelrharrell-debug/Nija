@@ -2213,7 +2213,11 @@ def _run_bot_startup_and_trading():
                     )
                     _total_capital = 0.0
 
-                if _total_capital > 0.0:
+                ca = _bms_ca
+                if ca and ca.is_ready():
+                    logger.critical(
+                        "✅ CAPITAL GATE PASSED — CA hydrated with registered broker balances"
+                    )
                     logger.info("🚀 SYSTEM READY — TRADING ENABLED")
                     logger.info("💰 Startup total capital: $%.2f", _total_capital)
                     # Bootstrap FSM: capital confirmed → CAPITAL_READY
@@ -2314,7 +2318,7 @@ def _run_bot_startup_and_trading():
             # maybe_auto_activate() was attempted at module-load time (inside
             # _verify_env) but CapitalAuthority was not yet hydrated, so Gate 2
             # (CA_READY) blocked the OFF → LIVE_ACTIVE transition.  Now that the
-            # capital gate has confirmed total_capital > $0 and CapitalAuthority IS
+            # capital gate has confirmed CapitalAuthority is_ready() and IS
             # hydrated, retry the transition so trading threads are allowed to execute.
             # Without this call the state machine stays in OFF forever and no trades
             # are ever placed — the state machine handoff failure described in FIX #1.
