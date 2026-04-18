@@ -1217,8 +1217,10 @@ class SelfHealingStartup:
                     )
                     _mabm.refresh_capital_authority(trigger="state_machine_gate")
             except Exception as exc:
-                logger.debug(
-                    "SelfHealingStartup: CA pre-warm before state machine step failed (%s)", exc
+                logger.warning(
+                    "SelfHealingStartup: CA pre-warm before state machine step failed (%s: %s)"
+                    " — state machine will evaluate CA_READY against potentially stale data",
+                    type(exc).__name__, exc,
                 )
 
         try:

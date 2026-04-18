@@ -1468,13 +1468,12 @@ class CapitalAuthority:
         _snap_broker_balances = getattr(snapshot, "broker_balances", {})
         if not _snap_broker_balances:
             logger.error(
-                "[DEBUG] EMPTY SNAPSHOT — INVESTIGATE: publish_snapshot received snapshot "
-                "with no broker data (writer_id=%r). Pipeline continues for diagnostics.",
+                "EMPTY SNAPSHOT REJECTED: publish_snapshot received snapshot "
+                "with no broker data (writer_id=%r). "
+                "Returning False to prevent hollow hydration.",
                 writer_id,
             )
-            # NOTE: temporarily NOT returning here — allows pipeline visibility
-            # into whether snapshot/hydration plumbing works while broker data is
-            # missing.  Restore `return False` once root cause is confirmed.
+            return False
 
         new_balances = dict(_snap_broker_balances)
         open_exp = float(getattr(snapshot, "open_exposure_usd", 0.0))
