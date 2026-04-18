@@ -1605,12 +1605,32 @@ def _run_bot_startup_and_trading():
                         get_global_nonce_manager,
                         jump_global_kraken_nonce_forward,
                     )
-                    _nonce_mgr = get_global_nonce_manager()
+
+                    # ── Sentinel A0.1: entering nonce-manager init ──────────────
+                    logger.critical("A0.1 before nonce manager")
+
+                    def _nonce_timeout_handler(signum, frame):
+                        raise RuntimeError("Nonce init hung — get_global_nonce_manager() exceeded 10 s")
+
+                    _prev_handler = signal.signal(signal.SIGALRM, _nonce_timeout_handler)
+                    signal.alarm(10)
+                    try:
+                        _nonce_mgr = get_global_nonce_manager()
+                    finally:
+                        signal.alarm(0)
+                        signal.signal(signal.SIGALRM, _prev_handler)
+
+                    # ── Sentinel A0.2: nonce manager obtained ───────────────────
+                    logger.critical("A0.2 after nonce manager")
 
                     # Jump 60 seconds forward (in milliseconds) to skip any nonces
                     # Kraken may still have cached from the previous session.
                     _jump_ms  = 60 * 1000  # 60 seconds in milliseconds
                     _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
+
+                    # ── Sentinel A0.3: nonce reset complete ─────────────────────
+                    logger.critical("A0.3 after nonce reset")
+
                     logger.info(
                         "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
                         _new_nonce,
