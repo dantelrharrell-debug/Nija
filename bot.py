@@ -592,6 +592,44 @@ if not logger.hasHandlers():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
+# ── A. Startup Event Buffer ───────────────────────────────────────────────────
+# Intercepts the console handler during startup so all log records are batched
+# and flushed once per phase.  The file handler keeps writing immediately —
+# nothing is lost.  Eliminates Railway log-throttle bursts.
+_startup_buffer = None
+try:
+    from bot.startup_event_buffer import install_startup_buffer as _install_seb
+    for _h in list(logger.handlers):
+        if isinstance(_h, logging.StreamHandler) and getattr(_h, "stream", None) is sys.stdout:
+            _startup_buffer = _install_seb(logger, _h)
+            break
+    if _startup_buffer is None:
+        print("⚠️  Startup event buffer: no stdout handler found — buffer inactive")
+except Exception as _seb_err:
+    print(f"⚠️  Startup event buffer unavailable (non-fatal): {_seb_err}")
+
+# ── B. Phase Gate  +  C. Init-Once Registry ───────────────────────────────────
+# Import the hard-gate enforcement layer.  A minimal fallback class is used
+# when the module is unavailable so bot.py never crashes due to missing infra.
+try:
+    from bot.startup_phase_gate import Phase as _Phase, advance_phase as _advance_phase
+    from bot.init_once_guard import check_init_once as _check_init_once
+    _PHASE_GATE_AVAILABLE = True
+except Exception as _pg_err:
+    print(f"⚠️  Phase gate / init-once guard unavailable (non-fatal): {_pg_err}")
+    _PHASE_GATE_AVAILABLE = False
+
+    class _Phase:  # type: ignore[no-redef]
+        ENV_VALIDATION = BROKER_REGISTRY = CAPITAL_BRAIN = 0
+        STRATEGY_ENGINE = EXECUTION_LAYER = LIVE_ENABLE = 0
+
+    def _advance_phase(*_a, **_kw) -> None:  # type: ignore[misc]
+        pass
+
+    def _check_init_once(_n: str) -> bool:  # type: ignore[misc]
+        return True
+
+
 def _log_lifecycle_banner(title, details=None):
     """
     Log a visual lifecycle banner for major state transitions.
@@ -1301,7 +1339,9 @@ def _run_bot_startup_and_trading():
             logger.info(f"Python version: {sys.version.split()[0]}")
             logger.info(f"Log file: {LOG_FILE}")
             logger.info(f"Working directory: {os.getcwd()}")
-            
+            if _startup_buffer:
+                _startup_buffer.flush_phase("INIT")
+
             # ═══════════════════════════════════════════════════════════════════════
             # CRITICAL: Startup Validation (addresses subtle risks)
             # ═══════════════════════════════════════════════════════════════════════
@@ -1372,6 +1412,11 @@ def _run_bot_startup_and_trading():
                     logger.warning("   Bot may not function correctly")
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
+
+            # ── B: Phase 0 → 1 (ENV_VALIDATION complete; broker registry may begin) ─
+            _advance_phase(_Phase.BROKER_REGISTRY, reason="startup validation and feature-flag checks passed")
+            if _startup_buffer:
+                _startup_buffer.flush_phase("ENV_VALIDATION")
 
             # ═══════════════════════════════════════════════════════════════════════
             # CREDENTIAL VALIDATION — run before any broker connection attempt
@@ -1445,6 +1490,9 @@ def _run_bot_startup_and_trading():
                     logger.info("ℹ️  validate_broker_credentials.py not found — skipping external validation")
             except Exception as _cv_err:
                 logger.warning("⚠️  Credential validation error (non-fatal): %s", _cv_err)
+
+            if _startup_buffer:
+                _startup_buffer.flush_phase("CREDENTIALS")
 
             _startup_blockers = []
             _resolved_kraken_key, _resolved_kraken_secret = _resolve_kraken_startup_credentials()
@@ -1533,10 +1581,8 @@ def _run_bot_startup_and_trading():
             if coinbase_configured:
                 exchanges_configured += 1
                 exchange_status.append("✅ Coinbase")
-                logger.info("✅ Coinbase credentials detected")
             else:
                 exchange_status.append("❌ Coinbase")
-                logger.warning("⚠️  Coinbase credentials not configured")
 
             # Check Kraken Platform
             # Prefer platform keys; legacy KRAKEN_API_* pair remains supported for backward compatibility.
@@ -1547,45 +1593,46 @@ def _run_bot_startup_and_trading():
             if kraken_platform_configured:
                 exchanges_configured += 1
                 exchange_status.append("✅ Kraken (Platform)")
-                logger.info("✅ Kraken Platform credentials detected")
             else:
                 exchange_status.append("❌ Kraken (Platform)")
-                logger.warning("⚠️  Kraken Platform credentials not configured")
 
             # Check OKX
             if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
                 exchanges_configured += 1
                 exchange_status.append("✅ OKX")
-                logger.info("✅ OKX credentials detected")
             else:
                 exchange_status.append("❌ OKX")
-                logger.warning("⚠️  OKX credentials not configured")
 
             # Check Binance
             if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
                 exchanges_configured += 1
                 exchange_status.append("✅ Binance")
-                logger.info("✅ Binance credentials detected")
             else:
                 exchange_status.append("❌ Binance")
-                logger.warning("⚠️  Binance credentials not configured")
 
             # Check Alpaca Platform
             if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"):
                 exchanges_configured += 1
                 exchange_status.append("✅ Alpaca (Platform)")
-                logger.info("✅ Alpaca Platform credentials detected")
             else:
                 exchange_status.append("❌ Alpaca (Platform)")
-                logger.warning("⚠️  Alpaca Platform credentials not configured")
 
-            logger.info("=" * 70)
-            logger.info("CREDENTIAL CHECK SUMMARY")
-            logger.info("=" * 70)
-            for status in exchange_status:
-                logger.info(f"   {status}")
-            logger.info("=" * 70)
-            logger.info(f"Total exchanges configured: {exchanges_configured}")
+            # D: single structured snapshot instead of N per-exchange log lines
+            try:
+                from bot.startup_event_buffer import StartupSnapshot as _ExSnap
+                _ex_snap = _ExSnap("Exchange Credentials")
+                _ex_snap.record("coinbase", coinbase_configured)
+                _ex_snap.record("kraken_platform", kraken_platform_configured)
+                _ex_snap.record("okx", bool(os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET")))
+                _ex_snap.record("binance", bool(os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET")))
+                _ex_snap.record("alpaca", bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET")))
+                _ex_snap.emit(logger)
+            except ImportError:
+                for status in exchange_status:
+                    logger.info(f"   {status}")
+            if exchanges_configured == 0:
+                logger.warning("⚠️  No exchange credentials configured")
+            logger.info("Total exchanges configured: %d", exchanges_configured)
             logger.info("=" * 70)
 
             if exchanges_configured == 0:
@@ -1688,6 +1735,8 @@ def _run_bot_startup_and_trading():
                 _initialized_state["coinbase_sdk_available"] = _coinbase_sdk_available
 
             logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
+            if _startup_buffer:
+                _startup_buffer.flush_phase("PREFLIGHT")
 
         # ═══════════════════════════════════════════════════════════════════════
         # BOT INITIALIZATION - This is where Kraken connection happens
@@ -1738,6 +1787,16 @@ def _run_bot_startup_and_trading():
                 logger.info("♻️  Reusing existing TradingStrategy instance from previous attempt")
                 strategy = _existing_strategy
             else:
+                # ── B: enforce ordering — env must be validated before broker init ──
+                if _PHASE_GATE_AVAILABLE:
+                    from bot.startup_phase_gate import get_phase_gate as _get_pg, Phase as _PhaseCheck
+                    _get_pg().require(_PhaseCheck.BROKER_REGISTRY)
+                # ── C: guard against duplicate TradingStrategy creation ─────────────
+                if not _check_init_once("trading_strategy"):
+                    raise RuntimeError(
+                        "init_once_guard: TradingStrategy creation attempted more than once — "
+                        "likely a retry-loop bug."
+                    )
                 logger.critical("🚀 CREATING TradingStrategy INSTANCE")
                 strategy = TradingStrategy()
                 if strategy is None:
@@ -1755,6 +1814,8 @@ def _run_bot_startup_and_trading():
                 _BootstrapState.PLATFORM_READY,
                 "TradingStrategy initialized; platform broker(s) connected",
             )
+            # ── B: Phase 1 → 2 (brokers registered; capital brain may begin) ────────
+            _advance_phase(_Phase.CAPITAL_BRAIN, reason="TradingStrategy initialised; platform brokers connected")
 
             # ── MICRO_PLATFORM tier floor validation ─────────────────────────
             # Confirm that the sizing module's MICRO_PLATFORM minimum position
@@ -2011,6 +2072,10 @@ def _run_bot_startup_and_trading():
                         break
                     time.sleep(0.1)
                 # ── END broker-registration gates ──────────────────────────────
+                # ── B: enforce ordering — capital brain requires brokers registered ─
+                if _PHASE_GATE_AVAILABLE:
+                    from bot.startup_phase_gate import get_phase_gate as _get_pg2, Phase as _PhaseCheck2
+                    _get_pg2().require(_PhaseCheck2.CAPITAL_BRAIN)
                 try:
                     _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
                     logger.info("[Bootstrap] BOOTSTRAP_START capital refresh triggered")
@@ -2038,6 +2103,10 @@ def _run_bot_startup_and_trading():
                         except Exception as _bms_fbr_err:
                             logger.warning("[Bootstrap] finalize_bootstrap_ready error: %s", _bms_fbr_err)
             # ── END BOOTSTRAP MASTER SEQUENCE ─────────────────────────────────
+            # ── B: Phase 2 → 3 (capital brain hydrated; strategy engine ready) ──
+            _advance_phase(_Phase.STRATEGY_ENGINE, reason="CapitalAuthority hydrated; capital data available")
+            if _startup_buffer:
+                _startup_buffer.flush_phase("BROKER_REGISTRY")
 
             def _get_startup_total_capital() -> float:
                 _mam = getattr(strategy, "multi_account_manager", None)
@@ -2087,6 +2156,10 @@ def _run_bot_startup_and_trading():
                     )
                 time.sleep(CAPITAL_GATE_INTERVAL_S)
             logger.info("=" * 70)
+            # ── B: Phase 3 → 4 (strategy engine ready; execution layer may begin) ──
+            _advance_phase(_Phase.EXECUTION_LAYER, reason="startup capital confirmed; strategy engine ready")
+            if _startup_buffer:
+                _startup_buffer.flush_phase("CAPITAL_BRAIN")
 
             # ═══════════════════════════════════════════════════════════════════════
             # BULLETPROOF TRADING ORCHESTRATOR
@@ -2314,6 +2387,13 @@ def _run_bot_startup_and_trading():
                 kraken_credentials_valid=_kraken_credentials_valid,
             )
 
+            # ── B: Phase 4 → 5 (execution layer live; live trading enabled) ─────────
+            _advance_phase(_Phase.LIVE_ENABLE, reason="trading threads running; supervisor loop starting")
+            # ── A: flush remaining startup output; restore per-line console logging ──
+            if _startup_buffer:
+                _startup_buffer.flush_phase("EXECUTION_LAYER")
+                _startup_buffer.uninstall()
+
             _rerun_supervisor_loop(_state_for_supervisor)
 
         except RuntimeError as e:
@@ -2357,6 +2437,12 @@ def _run_bot_startup_and_trading():
     except Exception as e:
         logger.exception(f"🧵 ❌ Fatal error in startup thread outer handler: {e}")
         raise
+    finally:
+        # A: Guarantee the startup buffer is uninstalled on every exit path
+        # (success, error, KeyboardInterrupt) so no records are silently lost
+        # after startup completes or fails.  uninstall() is idempotent.
+        if _startup_buffer:
+            _startup_buffer.uninstall()
 
 
 def main():
