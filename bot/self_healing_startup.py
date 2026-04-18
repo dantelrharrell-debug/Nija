@@ -1170,14 +1170,37 @@ class SelfHealingStartup:
             except Exception as exc:
                 logger.debug("SelfHealingStartup: readiness gate signal failed (%s)", exc)
 
-        # Step 7: Re-evaluate state machine now that the broker is connected and
-        # CapitalAuthority has been hydrated by initialize_platform_brokers() →
-        # enforce_trading_bootstrap_contract() → refresh_capital_authority().
-        # The Step-1 call runs before any broker is registered so CA is always
-        # stale there; this second call runs after CA is fresh and can actually
-        # succeed (OFF → LIVE_ACTIVE via maybe_auto_activate()).
+        # Step 7: HARD POST-CONNECTION READINESS LOOP
+        # Repeatedly refresh CapitalAuthority and step the state machine until
+        # CA is confirmed ready (or the bot is already LIVE_ACTIVE), preventing
+        # the silent stall where the broker is connected but the state machine
+        # never observes a fresh CA snapshot and sits idle forever.
         if startup_result.ok:
-            self._step_state_machine()
+            import time as _time
+
+            _ca_timeout_s = 60
+            _ca_start = _time.time()
+
+            logger.info("🔁 Post-connection CA readiness loop started")
+
+            while _time.time() - _ca_start < _ca_timeout_s:
+                # Force CA refresh before each state-machine evaluation
+                if _MABM_AVAILABLE and _mabm is not None:
+                    try:
+                        if hasattr(_mabm, "refresh_capital_authority"):
+                            _mabm.refresh_capital_authority(trigger="post_connection_gate")
+                    except Exception as _ca_exc:
+                        logger.warning("CA refresh attempt failed: %s", _ca_exc)
+
+                self._step_state_machine()
+
+                if getattr(self, "CA_READY", False) or self._is_live_active():
+                    logger.info("✅ CA_READY RESOLVED — exiting post-connection loop")
+                    break
+
+                _time.sleep(3)
+            else:
+                logger.critical("🚨 CA_READY TIMEOUT — bot stuck in pre-trade state")
 
         if startup_result.ok:
             mode = "FALLBACK" if startup_result.on_fallback else "PRIMARY"
@@ -1278,6 +1301,15 @@ class SelfHealingStartup:
                 )
         except Exception as exc:
             logger.warning("SelfHealingStartup: state machine step failed (%s)", exc)
+
+    def _is_live_active(self) -> bool:
+        """Return True if the trading state machine has reached LIVE_ACTIVE."""
+        if not _STATE_MACHINE_AVAILABLE or get_state_machine is None:
+            return False
+        try:
+            return get_state_machine().get_current_state() == TradingState.LIVE_ACTIVE
+        except Exception:
+            return False
 
     def _log_nonce_report(self, report: NoncePoisonReport) -> None:
         """Log the nonce poison report at an appropriate level."""
