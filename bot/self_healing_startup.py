@@ -1177,6 +1177,10 @@ class SelfHealingStartup:
                 name=f"{startup_result.broker_name}_health",
                 fn=lambda: getattr(broker, "connected", True),
             )
+            # CA/LIVE health watchdog — LIVE_ACTIVE never bypasses CA checks.
+            self.pre_halt_engine.register_watchdog(
+                name="ca_live_health",
+                fn=self._ca_watchdog_fn,
             # Fix #3: CA-readiness watchdog re-entry — if CA becomes stale after
             # startup the watchdog re-runs the state machine to recover silently
             # without requiring a full restart.
@@ -1251,6 +1255,78 @@ class SelfHealingStartup:
         return startup_result
 
     # ── Private helpers ────────────────────────────────────────────────────
+
+    def _is_live_active(self) -> bool:
+        """Return True if the trading state machine is currently LIVE_ACTIVE."""
+        if not _STATE_MACHINE_AVAILABLE:
+            return False
+        try:
+            sm = get_state_machine()
+            return sm.get_current_state() == TradingState.LIVE_ACTIVE
+        except Exception as exc:
+            logger.debug("SelfHealingStartup._is_live_active: state machine query failed (%s)", exc)
+            return False
+
+    def _is_ca_ready(self) -> bool:
+        """Return True if CapitalAuthority passes the capital readiness gate.
+
+        Module absence is treated as passing (graceful degradation) so that
+        deployments without the capital_authority module are not permanently
+        locked out.  Any other exception is treated as not-ready to prevent
+        a silent false-positive.
+        """
+        _capital_readiness_gate = None
+        for _module in ("trading_state_machine", "bot.trading_state_machine"):
+            try:
+                import importlib
+                mod = importlib.import_module(_module)
+                _capital_readiness_gate = getattr(mod, "_capital_readiness_gate", None)
+                if _capital_readiness_gate is not None:
+                    break
+            except ImportError:
+                continue
+
+        if _capital_readiness_gate is None:
+            # Module unavailable — treat as passing (graceful degradation).
+            return True
+
+        try:
+            ready, _ = _capital_readiness_gate()
+            return ready
+        except Exception as exc:
+            logger.warning(
+                "SelfHealingStartup._is_ca_ready: CA gate check failed (%s: %s)"
+                " — treating as not-ready to prevent silent false-positive",
+                type(exc).__name__, exc,
+            )
+            return False
+
+    def _ca_watchdog_fn(self) -> bool:
+        """Watchdog function for CapitalAuthority / LIVE state health.
+
+        CRITICAL: LIVE_ACTIVE **never** bypasses CA checks.  CA readiness is
+        evaluated unconditionally — a degraded CA while in LIVE_ACTIVE still
+        triggers re-evaluation via :meth:`_step_state_machine`.
+
+        Separating health from readiness:
+
+        * **Readiness** (CA_READY) — the system has fresh broker data and the
+          execution pipeline is healthy.  This is checked unconditionally.
+        * **Health** (LIVE_ACTIVE) — the state machine is in the live-trading
+          state.  This is a *downstream* outcome, not a gate that can skip the
+          CA check in the reverse direction.
+
+        Returns:
+            True  when CA is ready (system is healthy).
+            False when CA is degraded; :meth:`_step_state_machine` is invoked
+            to force re-evaluation before returning.
+        """
+        if self._is_ca_ready():
+            return True
+
+        logger.warning("⚠️ CA or LIVE state degraded — forcing re-evaluation")
+        self._step_state_machine()
+        return False
 
     def _step_state_machine(self) -> None:
         """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
