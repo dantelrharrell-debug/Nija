@@ -701,6 +701,12 @@ class CapitalAuthority:
                         exc,
                     )
 
+        if not new_balances:
+            logger.warning(
+                "[CapitalAuthority] refresh produced no broker balances; keeping prior state and staying stale"
+            )
+            return
+
         with self._lock:
             self._broker_balances = new_balances
             self._open_exposure_usd = max(0.0, float(open_exposure_usd))
