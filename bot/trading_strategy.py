@@ -5518,7 +5518,7 @@ class TradingStrategy:
                 logger.info("   Purpose: Verify connectivity and trading functionality")
                 logger.info("   Action: Bot will auto-disable after heartbeat completes")
                 logger.info("=" * 70)
-                self._execute_heartbeat_trade()
+                self._execute_heartbeat_trade(broker=self.broker)
                 logger.info("=" * 70)
                 logger.info("✅ HEARTBEAT TRADE COMPLETE - BOT SHUTTING DOWN")
                 logger.info("=" * 70)
@@ -8196,6 +8196,8 @@ class TradingStrategy:
         """
         if not HEARTBEAT_TRADE_ENABLED:
             return False
+        
+        broker = broker or self.broker
         
         current_time = time.time()
         
