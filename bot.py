@@ -1487,12 +1487,34 @@ def _run_bot_startup_and_trading():
             logger.info("=" * 70)
             logger.info("🔐 CREDENTIAL VALIDATION")
             logger.info("=" * 70)
-            try:
-                import importlib.util as _iutil
-                _cv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validate_broker_credentials.py")
-                if not os.path.isfile(_cv_path):
-                    logger.info("ℹ️  validate_broker_credentials.py not found — skipping external validation")
+            
+            # Check if credentials validator exists
+            import importlib.util as _iutil
+            _cv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validate_broker_credentials.py")
+            _live_capital_verified = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower() in ('true', '1', 'yes')
+            
+            if not os.path.isfile(_cv_path):
+                if _live_capital_verified:
+                    # HARD FAIL: Do not allow live capital mode without credential validation
+                    logger.critical("=" * 70)
+                    logger.critical("❌ FATAL: CREDENTIAL VALIDATION DISABLED IN LIVE CAPITAL MODE")
+                    logger.critical("=" * 70)
+                    logger.critical("LIVE_CAPITAL_VERIFIED=true but validate_broker_credentials.py is MISSING")
+                    logger.critical("")
+                    logger.critical("This is a critical safety violation. Silent credential skipping in")
+                    logger.critical("live capital mode is how systems enter false-ready states.")
+                    logger.critical("")
+                    logger.critical("Action required:")
+                    logger.critical("  1. Restore validate_broker_credentials.py to bot/ directory")
+                    logger.critical("  2. OR set LIVE_CAPITAL_VERIFIED=false to disable live trading")
+                    logger.critical("  3. Re-run bot startup")
+                    logger.critical("=" * 70)
+                    sys.exit(1)
                 else:
+                    logger.info("ℹ️  validate_broker_credentials.py not found — skipping external validation")
+            
+            try:
+                if os.path.isfile(_cv_path):
                     _cv_spec = _iutil.spec_from_file_location(
                         "validate_broker_credentials",
                         _cv_path,
