@@ -316,8 +316,26 @@ class CapitalDecisionEngine:
         authority = self._get_capital_authority()
         if authority is not None:
             try:
-                if authority.is_stale() and broker_map:
-                    authority.refresh(broker_map)
+                broker_keys = list(broker_map.keys()) if broker_map else []
+                logger.critical(
+                    "[CapitalDecisionEngine] CapitalAuthority refresh state: stale=%s broker_map keys=%s",
+                    authority.is_stale(),
+                    broker_keys,
+                )
+                if authority.is_stale():
+                    if broker_map:
+                        authority.refresh(broker_map)
+                        logger.info(
+                            "[CapitalDecisionEngine] CapitalAuthority refresh succeeded; "
+                            "CA_READY=%s is_hydrated=%s",
+                            authority.is_ready(),
+                            authority.is_hydrated,
+                        )
+                    else:
+                        logger.warning(
+                            "[CapitalDecisionEngine] CapitalAuthority is stale but broker_map is empty; "
+                            "refresh skipped",
+                        )
                 usable_capital = authority.get_usable_capital()
             except Exception as exc:
                 logger.warning("[CapitalDecisionEngine] CapitalAuthority read failed: %s", exc)

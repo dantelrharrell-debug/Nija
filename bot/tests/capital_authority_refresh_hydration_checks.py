@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from capital_authority import CapitalAuthority, STARTUP_LOCK, reset_capital_authority_singleton
+from capital_authority import CapitalAuthority, STARTUP_LOCK, CAPITAL_HYDRATED_EVENT, reset_capital_authority_singleton
 
 
 def _reset_state():
@@ -156,8 +156,27 @@ def check_refresh_prefers_explicit_broker_map_over_registry_hydration():
     assert authority.get_raw_per_broker("kraken") == 0.0
 
 
+def check_refresh_hydrates_zero_balance():
+    """A refresh with confirmed zero balances should hydrate the authority."""
+    _reset_state()
+    manager = _StubBrokerManagerReady({"coinbase": _StubBroker(0.0)})
+    authority = CapitalAuthority()
+    patchers = _patch_get_broker_manager(manager)
+    try:
+        authority.refresh({"coinbase": _StubBroker(0.0)}, _bypass_startup_lock=True)
+    finally:
+        for patcher in patchers:
+            patcher.stop()
+
+    assert authority.is_hydrated is True
+    assert authority.is_ready() is True
+    assert authority.get_raw_per_broker("coinbase") == 0.0
+    assert CAPITAL_HYDRATED_EVENT.is_set() is True
+
+
 if __name__ == "__main__":
     check_refresh_hydrates_from_registry_when_broker_map_empty()
     check_refresh_hydration_skips_none_brokers()
     check_refresh_prefers_explicit_broker_map_over_registry_hydration()
+    check_refresh_hydrates_zero_balance()
     print("✅ capital_authority_refresh_hydration_checks passed")

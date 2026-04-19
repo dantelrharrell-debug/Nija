@@ -710,6 +710,31 @@ class CapitalAuthority:
             if len(new_balances) > self._expected_brokers:
                 self._expected_brokers = len(new_balances)
 
+            # First successful refresh should hydrate the authority so that
+            # CA_READY checks can distinguish "snapshot not yet received"
+            # from "snapshot received with zero capital".
+            if not self._hydrated and len(new_balances) > 0:
+                self._hydrated = True
+                CAPITAL_HYDRATED_EVENT.set()
+                logger.info(
+                    "[CapitalAuthority] refresh committed hydration — "
+                    "is_hydrated=%s",
+                    self._hydrated,
+                )
+
+            # Signal ACTIVE_CAPITAL readiness when the refreshed state meets
+            # the same conditions used by publish_snapshot().
+            snapshot_real_capital = self.get_real_capital()
+            snapshot_broker_count = len(new_balances)
+            broker_threshold = 1 if self._opportunistic else max(1, self._expected_brokers)
+            if snapshot_real_capital > 0.0 and snapshot_broker_count >= broker_threshold:
+                CAPITAL_SYSTEM_READY.set()
+                logger.info(
+                    "[CapitalAuthority] refresh reached ACTIVE_CAPITAL; "
+                    "CAPITAL_SYSTEM_READY=%s",
+                    CAPITAL_SYSTEM_READY.is_set(),
+                )
+
         logger.info(
             "[CapitalAuthority] refreshed — real=$%.2f usable=$%.2f risk=$%.2f "
             "(brokers=%d reserve=%.0f%%)",
