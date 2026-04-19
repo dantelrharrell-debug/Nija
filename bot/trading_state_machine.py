@@ -475,13 +475,40 @@ def _capital_readiness_gate() -> tuple:
     # A zero balance is a valid, confirmed state that must not block activation.
     # MINIMUM_TRADING_BALANCE is an execution-layer concern only (FIX C).
     authority = None
+    broker_map = {}
+
+    def _get_broker_map():
+        try:
+            try:
+                from bot.multi_account_broker_manager import get_broker_manager
+            except ImportError:
+                from multi_account_broker_manager import get_broker_manager  # type: ignore[import]
+            manager = get_broker_manager()
+            return getattr(manager, "brokers", None) or getattr(manager, "platform_brokers", None) or {}
+        except Exception:
+            return {}
+
     try:
         authority = _get_ca()
+        broker_map = _get_broker_map() or {}
         if authority.is_stale():
-            failures.append(
-                "CA_READY=false: CapitalAuthority data is stale "
-                "(call authority.refresh(broker_map) first)"
-            )
+            if broker_map:
+                try:
+                    logger.info(
+                        "[TradingStateMachine] CA stale before auto-activate; refreshing broker_map keys=%s",
+                        [str(key) for key in broker_map.keys()],
+                    )
+                    authority.refresh(broker_map)
+                except Exception as exc:
+                    logger.warning(
+                        "[TradingStateMachine] CA refresh before auto-activate failed: %s",
+                        exc,
+                    )
+            if authority.is_stale():
+                failures.append(
+                    "CA_READY=false: CapitalAuthority data is stale "
+                    "(call authority.refresh(broker_map) first)"
+                )
         elif not authority.is_hydrated:
             failures.append(
                 "CA_READY=false: CapitalAuthority has not received any broker "
