@@ -491,6 +491,13 @@ def _capital_readiness_gate() -> tuple:
     try:
         authority = _get_ca()
         broker_map = _get_broker_map() or {}
+        logger.info(
+            "[TradingStateMachine] _capital_readiness_gate: CA state check - "
+            "is_stale=%s, is_hydrated=%s, broker_map_keys=%s",
+            authority.is_stale(),
+            authority.is_hydrated,
+            list(broker_map.keys()) if broker_map else [],
+        )
         if authority.is_stale():
             if broker_map:
                 try:
@@ -499,11 +506,20 @@ def _capital_readiness_gate() -> tuple:
                         [str(key) for key in broker_map.keys()],
                     )
                     authority.refresh(broker_map)
+                    logger.info(
+                        "[TradingStateMachine] CA refresh completed; now is_stale=%s, is_hydrated=%s",
+                        authority.is_stale(),
+                        authority.is_hydrated,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "[TradingStateMachine] CA refresh before auto-activate failed: %s",
                         exc,
                     )
+            else:
+                logger.warning(
+                    "[TradingStateMachine] CA is stale but broker_map is empty - cannot refresh"
+                )
             if authority.is_stale():
                 failures.append(
                     "CA_READY=false: CapitalAuthority data is stale "
@@ -545,6 +561,11 @@ def _capital_readiness_gate() -> tuple:
         status = router.get_status()
         registered = status.get("registered_venues", 1)
         failed = len(status.get("session_failed_venues", []))
+        logger.info(
+            "[TradingStateMachine] _capital_readiness_gate: Execution pipeline - "
+            "registered_venues=%d, session_failed_venues=%d",
+            registered, failed
+        )
         if registered > 0 and failed >= registered:
             failures.append(
                 f"EXECUTION_PIPELINE_HEALTHY=false: all {registered} venue(s) "
