@@ -491,6 +491,19 @@ def _capital_readiness_gate() -> tuple:
     try:
         authority = _get_ca()
         broker_map = _get_broker_map() or {}
+
+        # FIX 2: hard fallback when primary broker_map lookup returns nothing.
+        # _get_broker_map() already checks platform_brokers via the MABM
+        # property, but if the registry hasn't been populated yet (e.g. called
+        # before broker connection), the map will be empty.  Log a CRITICAL
+        # diagnostic so this condition is never silent.
+        if not broker_map:
+            logger.critical(
+                "[TradingStateMachine] STARTUP WARNING: broker_map is empty — "
+                "no brokers registered yet. CA cannot be refreshed until brokers "
+                "load. Ensure brokers are connected before calling maybe_auto_activate()."
+            )
+
         logger.info(
             "[TradingStateMachine] _capital_readiness_gate: CA state check - "
             "is_stale=%s, is_hydrated=%s, broker_map_keys=%s",
@@ -526,10 +539,38 @@ def _capital_readiness_gate() -> tuple:
                     "(call authority.refresh(broker_map) first)"
                 )
         elif not authority.is_hydrated:
-            failures.append(
-                "CA_READY=false: CapitalAuthority has not received any broker "
-                "snapshot yet (is_hydrated=False — coordinator has not run)"
-            )
+            # FIX 1: force a synchronous CA refresh before reporting failure.
+            # When the gate runs before the coordinator has published a snapshot
+            # (is_hydrated=False) but brokers are already connected, we can
+            # deterministically hydrate CA here instead of waiting for the next
+            # coordinator cycle or stalling indefinitely.
+            if broker_map:
+                try:
+                    logger.info(
+                        "[TradingStateMachine] CA not hydrated — forcing refresh, "
+                        "broker_map keys=%s",
+                        [str(k) for k in broker_map.keys()],
+                    )
+                    authority.refresh(broker_map)
+                    logger.info(
+                        "[TradingStateMachine] Forced CA refresh completed; "
+                        "now is_hydrated=%s",
+                        authority.is_hydrated,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[TradingStateMachine] Forced CA refresh failed: %s", exc
+                    )
+            if not authority.is_hydrated:
+                logger.critical(
+                    "[TradingStateMachine] EXECUTION BLOCKED: CA_READY=false, "
+                    "is_hydrated=false, broker_map=%s — coordinator has not run",
+                    list(broker_map.keys()) if broker_map else [],
+                )
+                failures.append(
+                    "CA_READY=false: CapitalAuthority has not received any broker "
+                    "snapshot yet (is_hydrated=False — coordinator has not run)"
+                )
         else:
             logger.info(
                 "_capital_readiness_gate: CA_READY=true "

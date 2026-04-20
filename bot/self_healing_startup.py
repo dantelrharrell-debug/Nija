@@ -1236,7 +1236,10 @@ class SelfHealingStartup:
             logger.info("🔁 Post-connection CA readiness loop started")
 
             while _time.time() - _ca_start < _ca_timeout_s:
-                # Force CA refresh before each state-machine evaluation
+                # FIX 3: Force CA refresh before each state-machine evaluation.
+                # Must call _step_state_machine() directly (not start_state_machine())
+                # so maybe_auto_activate() is re-evaluated on every iteration — the
+                # once-only guard in start_state_machine() would make it a no-op here.
                 if _MABM_AVAILABLE and _mabm is not None:
                     try:
                         if hasattr(_mabm, "refresh_capital_authority"):
@@ -1247,7 +1250,7 @@ class SelfHealingStartup:
                             _ca_exc,
                         )
 
-                self.start_state_machine()
+                self._step_state_machine()
 
                 if self._is_ca_ready() or self._is_live_active():
                     logger.info("✅ CA_READY RESOLVED — exiting post-connection loop")
@@ -1257,15 +1260,18 @@ class SelfHealingStartup:
             else:
                 logger.critical("🚨 CA_READY TIMEOUT — bot stuck in pre-trade state")
 
-        # ── FIX 1: HARD POST-PREFLIGHT TRANSITION GUARANTEE ────────────────
+        # ── HARD POST-PREFLIGHT TRANSITION GUARANTEE ───────────────────────
         # After the CA readiness loop completes (or times out), force a
         # deterministic push through the state machine so the bot cannot silently
         # stall between PREFLIGHT and RUNTIME.  Up to three attempts are made;
         # the loop short-circuits as soon as LIVE_ACTIVE is confirmed.
+        # FIX 3: use _step_state_machine() directly so maybe_auto_activate() is
+        # called on every attempt (start_state_machine() is a no-op after the
+        # first call due to its once-only guard).
         if startup_result.ok:
             logger.info("🚀 PREFLIGHT COMPLETE → ENTERING RUNTIME BOOTSTRAP")
             for _ in range(_MAX_STATE_TRANSITION_ATTEMPTS):
-                self.start_state_machine()
+                self._step_state_machine()
                 if self._is_live_active():
                     break
             if not self._is_live_active():
@@ -1458,6 +1464,29 @@ class SelfHealingStartup:
                         "Set LIVE_CAPITAL_VERIFIED=true and run scripts/reset_state_machine.py"
                     )
             elif current == TradingState.OFF:
+                # FIX 4: hard diagnostic log so a CA-blocked startup is never silent.
+                if _CA_AVAILABLE and _get_capital_authority is not None:
+                    try:
+                        _ca = _get_capital_authority()
+                        if not _ca.is_ready():
+                            _broker_keys: list[str] = []
+                            if _MABM_AVAILABLE and _mabm is not None:
+                                try:
+                                    _broker_keys = list(
+                                        getattr(_mabm, "platform_brokers", {}).keys()
+                                    )
+                                except Exception:
+                                    pass
+                            logger.critical(
+                                "EXECUTION BLOCKED: CA_READY=%s, is_hydrated=%s, brokers=%s — "
+                                "ensure brokers are registered and CA is refreshed before "
+                                "maybe_auto_activate()",
+                                _ca.is_ready(),
+                                _ca.is_hydrated,
+                                _broker_keys,
+                            )
+                    except Exception:
+                        pass
                 sm.maybe_auto_activate()
             else:
                 logger.info(
