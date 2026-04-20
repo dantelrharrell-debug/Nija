@@ -1995,9 +1995,17 @@ def _run_bot_startup_and_trading():
                 strategy = _existing_strategy
             else:
                 # ── B: enforce ordering — env must be validated before broker init ──
+                # Non-blocking observable check: warn and continue with degraded
+                # readiness rather than hard-raising.  The phase may not have
+                # propagated yet when a retry reuses the same singleton, or when
+                # the advance() fired before this listener was attached.
                 if _PHASE_GATE_AVAILABLE:
                     from bot.startup_phase_gate import get_phase_gate as _get_pg, Phase as _PhaseCheck
-                    _get_pg().require(_PhaseCheck.BROKER_REGISTRY)
+                    if not _get_pg().is_at_least(_PhaseCheck.BROKER_REGISTRY):
+                        logger.warning(
+                            "[PhaseGate] BROKER_REGISTRY phase not reached yet — "
+                            "continuing with degraded readiness"
+                        )
                 # ── C: guard against duplicate TradingStrategy creation ─────────────
                 if not _check_init_once("trading_strategy"):
                     raise RuntimeError(
@@ -2286,9 +2294,17 @@ def _run_bot_startup_and_trading():
                     time.sleep(0.1)
                 # ── END broker-registration gates ──────────────────────────────
                 # ── B: enforce ordering — capital brain requires brokers registered ─
+                # Non-blocking observable check: warn and continue with degraded
+                # readiness rather than hard-raising.  The phase may not have
+                # propagated yet when a retry reuses the same singleton, or when
+                # the advance() fired before this listener was attached.
                 if _PHASE_GATE_AVAILABLE:
                     from bot.startup_phase_gate import get_phase_gate as _get_pg2, Phase as _PhaseCheck2
-                    _get_pg2().require(_PhaseCheck2.CAPITAL_BRAIN)
+                    if not _get_pg2().is_at_least(_PhaseCheck2.CAPITAL_BRAIN):
+                        logger.warning(
+                            "[PhaseGate] CAPITAL_BRAIN phase not reached yet — "
+                            "continuing with degraded readiness"
+                        )
                 try:
                     logger.critical("🔥 A4: before nonce-related call")
                     _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
