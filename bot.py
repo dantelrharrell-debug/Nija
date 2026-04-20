@@ -2895,6 +2895,27 @@ def _run_bot_startup_and_trading():
             )
             logger.info("🚀 FSM STATE: RUNNING_SUPERVISED")
 
+            # FIX OPTION A: Force activation check AFTER INIT completes.
+            # maybe_auto_activate() was called earlier (during the capital gate
+            # phase) but the full bootstrap (threads started, _initialized_state
+            # populated) had not yet completed at that point.  Any race condition
+            # or concurrent reset between that call and here would leave the state
+            # machine in OFF / EMERGENCY_STOP with no recovery path.  Calling
+            # force_post_init_state_machine_step() ensures the trading state machine
+            # is checked — and re-activated if needed — once the bootstrap sequence
+            # is truly complete.
+            try:
+                from bot.self_healing_startup import force_post_init_state_machine_step
+                force_post_init_state_machine_step()
+                logger.critical(
+                    "✅ POST-INIT: state machine step complete after bootstrap"
+                )
+            except Exception as _post_init_sm_err:
+                logger.warning(
+                    "POST-INIT: state machine step failed after bootstrap: %s",
+                    _post_init_sm_err,
+                )
+
             # Enforce startup truth conditions before supervised execution.
             _verify_startup_truth_conditions(
                 strategy,
