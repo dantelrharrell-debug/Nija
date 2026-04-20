@@ -282,6 +282,7 @@ class MultiAccountBrokerManager:
 
     def __init__(self):
         """Initialize multi-account broker manager."""
+        logger.info("[MABM-M1] __init__ entered — starting field initialisation")
         # Platform account brokers - registered once globally and marked immutable
         self._platform_brokers: Dict[BrokerType, BaseBroker] = {}
         self._platform_brokers_locked: bool = False
@@ -360,6 +361,7 @@ class MultiAccountBrokerManager:
         # Expected value: False (copy trading module doesn't exist)
         self.kraken_copy_trading_active: bool = False
 
+        logger.info("[MABM-M2] field init complete — importing optional managers (portfolio, isolation, BFM)")
         # FIX #3: Initialize portfolio manager for user portfolio states
         try:
             from portfolio_state import get_portfolio_manager
@@ -446,6 +448,7 @@ class MultiAccountBrokerManager:
         )
 
         # ── Deterministic capital-flow infrastructure ──────────────────────────
+        logger.info("[MABM-M3] optional managers done — constructing CapitalFSM / coordinator")
         # The coordinator is the **single writer** for CapitalAuthority.  All
         # balance fetches, snapshot computations, and authority publishes go
         # through it.  The bootstrap / runtime FSMs track readiness state.
@@ -487,6 +490,7 @@ class MultiAccountBrokerManager:
             self._capital_coordinator = None  # type: ignore[assignment]
 
         # ── Per-broker balance-payload bootstrap FSMs ──────────────────────────
+        logger.info("[MABM-M4] CapitalFSM/coordinator wired — initialising per-broker payload FSMs")
         # One BrokerPayloadFSM per registered platform broker.
         # These replace the scattered `has_balance_payload_for_capital()` +
         # `_last_known_balance is not None` eligibility checks with a strict,
