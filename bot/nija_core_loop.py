@@ -77,6 +77,7 @@ except ImportError:
             SCAN_STARTED = "SCAN_STARTED"
             ENTRY_VETOED = "ENTRY_VETOED"
             ORDER_PLACED = "ORDER_PLACED"
+            ORDER_REJECTED = "ORDER_REJECTED"
             SCAN_COMPLETE_NO_SIGNAL = "SCAN_COMPLETE_NO_SIGNAL"
 
         def emit_cycle_trace(outcome, **kwargs):  # type: ignore[misc]
@@ -127,6 +128,11 @@ _RELAXATION_SCHEDULE: Tuple[float, ...] = (0.0, 0.15, 0.25, 0.40)
 # all quality floors are ignored and the top-ranked available candidate is
 # accepted unconditionally.  Lowered 40 → 10 → 8 → 5 → 3 → 2.
 HARD_BYPASS_STREAK_THRESHOLD: int = int(os.environ.get("NIJA_HARD_BYPASS_STREAK", "2"))
+
+# How often (in cycles) to emit the execution KPI summary line.
+# Covers: placed, rejected, vetoed, no_signal, entry_conversion_rate, signal_utilization.
+# Override via NIJA_CYCLE_SUMMARY_INTERVAL env var.
+CYCLE_SUMMARY_INTERVAL: int = int(os.environ.get("NIJA_CYCLE_SUMMARY_INTERVAL", "10"))
 
 # One-shot manual forced-entry flag.
 # Set to True externally to force the top-scored candidate in the very next
@@ -308,6 +314,14 @@ class NijaCoreLoop:
         # the progressive relaxation mechanism — see FORCED_ENTRY_STREAK_THRESHOLD).
         self._zero_signal_streak: int = 0
 
+        # ── Session-level execution KPI counters ─────────────────────────────
+        # Incremented at each emit_cycle_trace call so the periodic summary
+        # reflects exact outcome distribution since startup.
+        self._total_cycles: int = 0     # SCAN_STARTED emits
+        self._n_placed: int = 0         # ORDER_PLACED emits
+        self._n_rejected: int = 0       # ORDER_REJECTED emits (broker rejection or execution failure)
+        self._n_vetoed: int = 0         # ENTRY_VETOED emits
+        self._n_no_signal: int = 0      # SCAN_COMPLETE_NO_SIGNAL emits
         # Veto / rejection reason histograms.
         # veto_reason_counts   — portfolio-level pre-scan blocks (position cap,
         #                        safety gate, user_mode, …)
@@ -325,6 +339,36 @@ class NijaCoreLoop:
         )
 
     # ------------------------------------------------------------------
+    # Execution KPI summary
+    # ------------------------------------------------------------------
+
+    def _log_execution_kpis(self) -> None:
+        """Log a one-line execution KPI summary with throughput ratios.
+
+        entry_conversion_rate = placed / (placed + rejected)
+            Fraction of broker submissions that succeeded.
+
+        signal_utilization = placed / total_cycles
+            Orders placed per cycle — measures realized throughput.
+        """
+        placed = self._n_placed
+        rejected = self._n_rejected
+        vetoed = self._n_vetoed
+        no_signal = self._n_no_signal
+        total = self._total_cycles
+
+        submitted = placed + rejected
+        entry_conversion_rate = placed / submitted if submitted > 0 else 0.0
+        signal_utilization = placed / total if total > 0 else 0.0
+
+        logger.info(
+            "📊 [CYCLE_KPI] placed=%d rejected=%d vetoed=%d no_signal=%d "
+            "| entry_conversion_rate=%.3f signal_utilization=%.3f "
+            "(total_cycles=%d)",
+            placed, rejected, vetoed, no_signal,
+            entry_conversion_rate, signal_utilization,
+            total,
+        )
     # Veto / rejection histogram helpers
     # ------------------------------------------------------------------
 
@@ -454,6 +498,7 @@ class NijaCoreLoop:
             open_positions=open_positions_count,
             symbols=len(symbols),
         )
+        self._total_cycles += 1
 
         # ── Phase 1: Safety gate ──────────────────────────────────────────
         can_enter, safety_reason = self._phase1_safety(broker, balance)
@@ -514,7 +559,9 @@ class NijaCoreLoop:
                         CycleOutcome.SCAN_COMPLETE_NO_SIGNAL,
                         symbols_scored=scored,
                     )
-                # ORDER_PLACED traces are emitted per entry inside _phase3_scan_and_enter
+                    self._n_no_signal += 1
+                # ORDER_PLACED / ORDER_REJECTED traces are emitted (and their
+                # counters incremented) per entry inside _phase3_scan_and_enter
 
             else:
                 logger.info(
@@ -528,6 +575,7 @@ class NijaCoreLoop:
                     CycleOutcome.ENTRY_VETOED,
                     reason=_cap_reason,
                 )
+                self._n_vetoed += 1
                 self._record_veto(_cap_reason)
         else:
             logger.info("🔒 Core loop: entries blocked (user_mode)")
@@ -542,6 +590,7 @@ class NijaCoreLoop:
                 CycleOutcome.ENTRY_VETOED,
                 reason=_prescan_reason,
             )
+            self._n_vetoed += 1
             self._record_veto(_prescan_reason)
 
         # ── Increment summary cycle counter and maybe emit histogram ─────
@@ -564,6 +613,11 @@ class NijaCoreLoop:
             elapsed_ms,
             result.next_interval,
         )
+
+        # ── Periodic execution KPI summary ───────────────────────────────
+        if self._total_cycles % CYCLE_SUMMARY_INTERVAL == 0:
+            self._log_execution_kpis()
+
         return result
 
     # ------------------------------------------------------------------
@@ -1061,6 +1115,7 @@ class NijaCoreLoop:
                                 CycleOutcome.ENTRY_VETOED,
                                 reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
                             )
+                            self._n_vetoed += 1
                             self._record_reject(_tpe_reason)
                             continue
                     except Exception as _tpe_err:
@@ -1121,8 +1176,16 @@ class NijaCoreLoop:
                         side=sig.side,
                         score=round(sig.composite_score, 1),
                     )
+                    self._n_placed += 1
                 else:
                     blocked += 1
+                    # ── Entry-to-Order Trace: ORDER_REJECTED ─────────────
+                    emit_cycle_trace(
+                        CycleOutcome.ORDER_REJECTED,
+                        symbol=sig.symbol,
+                        reason="execute_action_returned_false",
+                    )
+                    self._n_rejected += 1
 
             except Exception as exec_err:
                 logger.warning("Phase3 execute error for %s: %s", sig.symbol, exec_err)
